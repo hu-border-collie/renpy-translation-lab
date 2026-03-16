@@ -1,0 +1,12 @@
+{
+  "api_keys": [
+    "your-gemini-api-key-here"
+  ],
+  "models": [
+    "gemini-2.5-flash"
+  ],
+  "batch_size": 10,
+  "max_chars": 4000,
+  "include_files": [],
+  "include_prefixes": []
+}
