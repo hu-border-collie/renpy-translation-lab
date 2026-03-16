@@ -125,6 +125,8 @@ python gemini_translate_batch.py apply
 - `probe` 会用同步请求做最小 smoke test
 - `check` 是干跑校验，不会修改 `.rpy`
 - `apply` 只会写回通过校验的结果
+- 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包
+- 当前不建议并行 `apply` 到同一个本地 RAG store；共享 `history.jsonl` 的写入保护还不算完整产品化
 
 ## 环境要求
 
@@ -142,6 +144,7 @@ python gemini_translate_batch.py apply
 - Excel / HTML 协作流
 - 面向普通用户的零配置体验
 - 完整的游戏解包 / 打包一体化发布流程
+- 面向超大项目的完整 RAG 生产工作流（例如全项目 bootstrap 建库、严格的波次式回灌编排、并发写保护）
 
 ## 项目状态
 
@@ -155,6 +158,7 @@ python gemini_translate_batch.py apply
 - 目前不承诺及时处理 issue、兼容性问题或长期更新
 - 当前更推荐使用 Batch 脚本；同步脚本保留用于直接运行和实验，但其底层 SDK 迁移尚未完成
 - Batch / RAG 是当前主要验证方向；同步脚本更适合补译、局部修复和 smoke test
+- 当前的 RAG 能力更适合“小包验证 + 逐步扩展”，还不应被表述为已经完成的大项目生产级方案
 
 执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。
 
