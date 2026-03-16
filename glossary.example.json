@@ -1,9 +1,9 @@
 {
   "preserve_terms": [
-    "MC",
-    "HP",
-    "MP",
-    "Blackwood Academy"
+    "CharacterName",
+    "FactionName",
+    "LocationName",
+    "ItemName"
   ],
   "non_translatable_exact": [
     "OK",
