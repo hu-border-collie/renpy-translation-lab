@@ -196,6 +196,25 @@ def _coerce_str_list(value):
     return cleaned
 
 
+def _is_placeholder_api_key(value):
+    if not isinstance(value, str):
+        return False
+    text = value.strip().lower()
+    if not text:
+        return True
+    placeholder_markers = (
+        "your-key",
+        "your api key",
+        "your-api-key",
+        "your_gemini_api_key",
+        "your-gemini-api-key",
+        "paste-key",
+        "paste-api-key",
+        "replace-me",
+    )
+    return any(marker in text for marker in placeholder_markers)
+
+
 def _coerce_bool(value, default):
     if isinstance(value, bool):
         return value
@@ -399,7 +418,10 @@ def load_config():
                 include_prefixes = config.get("include_prefixes")
                 
                 if keys:
-                    API_KEYS = [k for k in keys if k and "your-key" not in k]
+                    API_KEYS = [
+                        k for k in keys
+                        if isinstance(k, str) and k.strip() and not _is_placeholder_api_key(k)
+                    ]
                     print(f"Loaded {len(API_KEYS)} API keys from config file.")
                 
                 if not custom_models and single_model:

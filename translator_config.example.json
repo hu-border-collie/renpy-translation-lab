@@ -1,5 +1,5 @@
 {
-  "game_root": "C:/path/to/YourGame/work",
+  "game_root": "C:/games/Game_Example/work",
   "glossary_file": "glossary.json",
   "tl_subdir": "game/tl/schinese",
   "prepare": {

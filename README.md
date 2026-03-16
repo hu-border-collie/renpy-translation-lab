@@ -20,10 +20,10 @@
 
 ## 核心能力
 
-- 扫描 `game/tl/<lang>` 下的 `.rpy` 文件
+- 扫描 `game/tl/schinese` 下的 `.rpy` 文件
 - 抽取待翻译条目并跳过 `old`
 - 构造带上下文的 Gemini 请求
-- 自动预处理项目，包括提取脚本和生成 `tl/<lang>` 模板
+- 自动预处理项目，包括提取脚本和生成 `tl/schinese` 模板
 - 生成 Batch 请求包并执行完整的 `build / submit / status / download / check / apply / split / repair` 流程
 - 使用本地 history store 做轻量 RAG 检索
 - 将历史译文注入后续请求，提升术语和语气一致性
@@ -72,7 +72,7 @@ pip install -r requirements.txt
 脚本默认假设你最终指向的是某个游戏的 `work` 目录，典型结构如下：
 
 ```text
-YourGame/
+Game_Example/
 ├─ original/
 ├─ work/
 │  └─ game/
@@ -85,7 +85,7 @@ YourGame/
 
 - 默认目标语言是 `schinese`
 - 可以通过 `translator_config.json` 里的 `tl_subdir` 和 `prepare.language` 调整
-- 如果启用了 `prepare`，脚本会尝试从 `original/game` 提取脚本并自动生成 `tl/<lang>` 模板
+- 如果启用了 `prepare`，脚本会尝试从 `original/game` 提取脚本并自动生成 `tl/schinese` 模板
 
 ### 4. 运行
 
@@ -119,7 +119,7 @@ python gemini_translate_batch.py apply
 - `google-generativeai`，供同步脚本使用
 - `google-genai`，供 Batch 脚本使用
 - 有效的 Gemini API Key
-- Ren'Py 项目中的 `game/tl/<lang>` 翻译目录
+- Ren'Py 项目中的 `game/tl/schinese` 翻译目录
 
 ## 当前边界
 
@@ -161,7 +161,7 @@ python gemini_translate_batch.py apply
 更适合下面这类使用者：
 
 - 已经熟悉 Ren'Py 项目目录结构
-- 能自行准备 `work/game/tl/<lang>` 或理解 `prepare` 行为
+- 能自行准备 `work/game/tl/schinese` 或理解 `prepare` 行为
 - 能阅读 Python 脚本并按需修改本地配置
 - 接受这是实验性工具，而不是稳定打包好的最终产品
 
