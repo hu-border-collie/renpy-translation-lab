@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import argparse
 import os
 import io
 import ast
@@ -14,7 +15,6 @@ import shutil
 import subprocess
 import zlib
 from datetime import datetime
-import google.generativeai as genai
 from typing import Any, cast
 
 # Configuration
@@ -51,8 +51,7 @@ LOG_DIR = os.path.join(ROOT_DIR, "logs")
 FAILED_LOG = os.path.join(LOG_DIR, "translation_failures_v2.jsonl")
 PROGRESS_LOG = os.path.join(LOG_DIR, "translation_progress_v2.json")
 CONSOLE_LOG = os.path.join(LOG_DIR, "translation_console_output.log")
-
-os.makedirs(LOG_DIR, exist_ok=True)
+GENAI_MODULE = None
 
 class DualLogger(object):
     """Duplicates stdout to a file."""
@@ -68,9 +67,6 @@ class DualLogger(object):
     def flush(self):
         self.terminal.flush()
         self.log.flush()
-
-# Redirect stdout to logger
-sys.stdout = DualLogger(CONSOLE_LOG)
 
 # Model definitions (Priority Order)
 MODELS = [
@@ -157,6 +153,26 @@ FILE_EXTENSIONS = (
 FILE_EXTENSION_PATTERN = "|".join(FILE_EXTENSIONS)
 FILE_NAME_PATTERN = re.compile(rf"^[\w.-]+\.({FILE_EXTENSION_PATTERN})$", re.IGNORECASE)
 EFFECT_MAX_LENGTH = 12
+
+
+def initialize_runtime_logging():
+    if isinstance(sys.stdout, DualLogger):
+        return
+    os.makedirs(LOG_DIR, exist_ok=True)
+    sys.stdout = DualLogger(CONSOLE_LOG)
+
+
+def get_genai_module():
+    global GENAI_MODULE
+    if GENAI_MODULE is None:
+        try:
+            import google.generativeai as imported_genai
+        except ImportError as exc:
+            raise SystemExit(
+                "Missing dependency: google-generativeai. Install with `pip install -r requirements.txt`."
+            ) from exc
+        GENAI_MODULE = imported_genai
+    return GENAI_MODULE
 
 
 def _normalize_rel_path(value):
@@ -904,10 +920,12 @@ def rotate_model():
 
 def configure_genai():
     """Configures the genai library with the current key."""
+    genai = get_genai_module()
     cast(Any, genai).configure(api_key=get_current_api_key())
 
 
 def create_model(model_name: str):
+    genai = get_genai_module()
     return cast(Any, genai).GenerativeModel(model_name)
 
 def get_random_delay():
@@ -1454,7 +1472,7 @@ def collect_tasks(lines, skip_translated=True):
             
     return tasks
 
-def main():
+def run_translation():
     load_config()
     load_translator_settings()
     load_glossary()
@@ -1572,5 +1590,19 @@ def main():
 
         print(f"  Done with {filename}.")
 
+
+def build_arg_parser():
+    return argparse.ArgumentParser(
+        description="Synchronous translator for Ren'Py tl files using the Gemini SDK."
+    )
+
+
+def main(argv=None):
+    parser = build_arg_parser()
+    parser.parse_args(argv)
+    initialize_runtime_logging()
+    run_translation()
+    return 0
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
