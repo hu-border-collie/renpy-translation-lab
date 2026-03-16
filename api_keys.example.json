@@ -3,7 +3,7 @@
     "your-key-here"
   ],
   "models": [
-    "gemini-2.5-flash"
+    "gemini-3-flash-preview"
   ],
   "batch_size": 10,
   "max_chars": 4000,
