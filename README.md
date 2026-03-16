@@ -4,7 +4,7 @@
 
 ## 这是什么
 
-这个仓库当前只保留 3 个非 GUI 核心脚本：
+这个仓库有三个核心脚本：
 
 - `gemini_translate.py`
   - Ren'Py 主翻译脚本
@@ -164,30 +164,3 @@ python gemini_translate_batch.py apply
 - 能自行准备 `work/game/tl/schinese` 或理解 `prepare` 行为
 - 能阅读 Python 脚本并按需修改本地配置
 - 接受这是实验性工具，而不是稳定打包好的最终产品
-
-## 目录结构（示例）
-
-```text
-.
-├─ gemini_translate.py
-├─ gemini_translate_batch.py
-├─ rag_memory.py
-├─ api_keys.example.json
-├─ translator_config.example.json
-├─ glossary.example.json
-├─ macro_setting.example.md
-├─ requirements.txt
-├─ README.md
-├─ LICENSE
-├─ .gitignore
-├─ docs/
-│  └─ roadmap.md
-```
-
-## 路线图
-
-详见 `docs/roadmap.md`。
-
-## License
-
-见 `LICENSE` 文件。
