@@ -15,7 +15,6 @@ import shutil
 import subprocess
 import zlib
 from datetime import datetime
-from typing import Any, cast
 
 # Configuration
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -166,10 +165,10 @@ def get_genai_module():
     global GENAI_MODULE
     if GENAI_MODULE is None:
         try:
-            import google.generativeai as imported_genai
+            from google import genai as imported_genai
         except ImportError as exc:
             raise SystemExit(
-                "Missing dependency: google-generativeai. Install with `pip install -r requirements.txt`."
+                "Missing dependency: google-genai. Install with `pip install google-genai`."
             ) from exc
         GENAI_MODULE = imported_genai
     return GENAI_MODULE
@@ -919,14 +918,13 @@ def rotate_model():
     return False
 
 def configure_genai():
-    """Configures the genai library with the current key."""
-    genai = get_genai_module()
-    cast(Any, genai).configure(api_key=get_current_api_key())
+    """Ensures the google-genai library is available."""
+    get_genai_module()
 
 
-def create_model(model_name: str):
+def create_genai_client(api_key=None):
     genai = get_genai_module()
-    return cast(Any, genai).GenerativeModel(model_name)
+    return genai.Client(api_key=api_key or get_current_api_key())
 
 def get_random_delay():
     return random.uniform(MIN_DELAY, MAX_DELAY)
@@ -1238,65 +1236,191 @@ def build_prompt(items):
         "1.1 Keep all person names in English; do not translate names.\n"
         "2. Preserve Ren'Py tags like {i}, {/i}, {color=...}, [name], %s.\n"
         "3. Output plain Chinese text. No markdown, no Pinyin, no explanations.\n"
-        "4. Return ONLY a JSON array of objects with 'id' and 'translation' keys.\n"
-        "5. Example Input: [{\"id\":\"1\", \"text\":\"Hello\"}]\n"
-        "6. Example Output: [{\"id\":\"1\", \"translation\":\"你好\"}]\n"
+        "4. Return ONLY a JSON array matching the requested id/translation structure.\n"
         f"Input JSON:\n{payload}"
     )
 
-def call_gemini_sdk(prompt):
-    """Calls Gemini using the official SDK."""
+def get_nested(source, *candidates):
+    for candidate in candidates:
+        if source is None:
+            continue
+        if isinstance(source, dict) and candidate in source:
+            return source.get(candidate)
+        if hasattr(source, candidate):
+            return getattr(source, candidate)
+    return None
+
+
+def serialize_unknown(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): serialize_unknown(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [serialize_unknown(item) for item in value]
+    for method_name in ("model_dump", "dict"):
+        method = getattr(value, method_name, None)
+        if callable(method):
+            try:
+                return serialize_unknown(method())
+            except Exception:
+                pass
+    if hasattr(value, "__dict__"):
+        return serialize_unknown(vars(value))
+    return str(value)
+
+
+def extract_text_from_response_payload(response_payload):
+    payload = response_payload
+    if not isinstance(payload, dict):
+        return ""
+
+    nested_response = payload.get("response")
+    if isinstance(nested_response, dict):
+        payload = nested_response
+
+    candidates = payload.get("candidates")
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            content = candidate.get("content") if isinstance(candidate, dict) else None
+            parts = content.get("parts") if isinstance(content, dict) else None
+            if not isinstance(parts, list):
+                continue
+            texts = []
+            for part in parts:
+                if isinstance(part, dict) and part.get("text"):
+                    texts.append(part["text"])
+            if texts:
+                return "".join(texts)
+
+    text = payload.get("text")
+    return text if isinstance(text, str) else ""
+
+
+def extract_finish_reason(response_payload):
+    payload = response_payload if isinstance(response_payload, dict) else {}
+    nested_response = payload.get("response")
+    if isinstance(nested_response, dict):
+        payload = nested_response
+
+    candidates = payload.get("candidates")
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if isinstance(candidate, dict) and candidate.get("finishReason"):
+                return str(candidate["finishReason"])
+    return ""
+
+
+def extract_prompt_feedback(response_payload):
+    payload = response_payload if isinstance(response_payload, dict) else {}
+    nested_response = payload.get("response")
+    if isinstance(nested_response, dict):
+        payload = nested_response
+
+    prompt_feedback = payload.get("promptFeedback")
+    return prompt_feedback if isinstance(prompt_feedback, dict) else {}
+
+
+def build_response_json_schema(items):
+    target_ids = [item["id"] for item in items]
+    return {
+        "type": "array",
+        "minItems": len(items),
+        "maxItems": len(items),
+        "items": {
+            "type": "object",
+            "required": ["id", "translation"],
+            "additionalProperties": False,
+            "properties": {
+                "id": {"type": "string", "enum": target_ids},
+                "translation": {"type": "string"},
+            },
+        },
+    }
+
+
+def parse_json_payload(text):
+    if not text:
+        raise ValueError("Empty response text")
+
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("[")
+        end = cleaned.rfind("]")
+        if start >= 0 and end > start:
+            return json.loads(cleaned[start:end + 1])
+        raise
+
+
+def normalize_result_items(payload):
+    data = payload
+    if isinstance(data, dict):
+        if isinstance(data.get("items"), list):
+            data = data["items"]
+        elif isinstance(data.get("translations"), list):
+            data = data["translations"]
+
+    if not isinstance(data, list):
+        raise ValueError(f"Response JSON is not a list: {type(data)}")
+
+    normalized = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        item_id = item.get("id")
+        translation = item.get("translation")
+        if item_id is None or translation is None:
+            continue
+        normalized.append({"id": str(item_id), "translation": str(translation)})
+    return normalized
+
+
+def call_gemini_sdk(prompt, items):
+    """Calls Gemini using the current google-genai SDK."""
     configure_genai()
     model_name = get_current_model()
     
     try:
-        model = create_model(model_name)
+        client = create_genai_client()
         
         # Generation config
         generation_config = {
             "temperature": 0.2,
-            "max_output_tokens": 8192, # Increased for JSON safety
-            "response_mime_type": "application/json" # Force JSON output if supported by model
+            "max_output_tokens": 8192,
+            "response_mime_type": "application/json",
+            "response_json_schema": build_response_json_schema(items),
         }
-        
-        # Disable all safety filters
-        safety_settings = [
-            {
-                "category": "HARM_CATEGORY_HARASSMENT",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_HATE_SPEECH",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "threshold": "BLOCK_NONE"
-            },
-        ]
-        
-        response = model.generate_content(
-            prompt,
-            generation_config=cast(Any, generation_config),
-            safety_settings=safety_settings
+
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=generation_config,
         )
-        
-        # Handle cases where response is blocked or empty
-        try:
-            return json.loads(response.text)
-        except Exception:
-            # Check if it was blocked
-            if response.prompt_feedback:
-                print(f"  [API Feedback] Prompt blocked: {response.prompt_feedback}")
-            elif response.candidates and response.candidates[0].finish_reason != 1: # 1 is STOP
-                print(f"  [API Feedback] Finish reason: {response.candidates[0].finish_reason}")
-                # print(f"  Safety ratings: {response.candidates[0].safety_ratings}")
-            
-            raise ValueError(f"Invalid response from API. Text access failed.")
+
+        parsed = get_nested(response, "parsed")
+        if parsed is not None:
+            return normalize_result_items(serialize_unknown(parsed))
+
+        response_payload = serialize_unknown(response)
+        response_text = extract_text_from_response_payload(response_payload)
+        if response_text:
+            return normalize_result_items(parse_json_payload(response_text))
+
+        prompt_feedback = extract_prompt_feedback(response_payload)
+        finish_reason = extract_finish_reason(response_payload)
+        diagnostics = []
+        if prompt_feedback:
+            diagnostics.append(f"Prompt feedback: {prompt_feedback}")
+        if finish_reason:
+            diagnostics.append(f"Finish reason: {finish_reason}")
+        detail = f" ({'; '.join(diagnostics)})" if diagnostics else ""
+        raise ValueError(f"Invalid response from API. Missing structured text{detail}.")
 
     except Exception as e:
         # Re-raise to be handled by retry logic
@@ -1306,7 +1430,7 @@ def process_batch(batch, replacements):
     prompt = build_prompt(batch)
     
     # Call API (SDK handles connection details)
-    results = call_gemini_sdk(prompt)
+    results = call_gemini_sdk(prompt, batch)
     
     if not isinstance(results, list):
         raise RuntimeError(f"API returned {type(results)} instead of list")
@@ -1593,7 +1717,7 @@ def run_translation():
 
 def build_arg_parser():
     return argparse.ArgumentParser(
-        description="Synchronous translator for Ren'Py tl files using the Gemini SDK."
+        description="Synchronous translator for Ren'Py tl files using the google-genai SDK."
     )
 
 
@@ -1603,6 +1727,7 @@ def main(argv=None):
     initialize_runtime_logging()
     run_translation()
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
