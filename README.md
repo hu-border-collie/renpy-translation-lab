@@ -12,7 +12,7 @@
 - `gemini_translate_batch.py`
   - 当前更推荐的公开入口
   - Batch 异步批处理脚本
-  - 负责 `build / submit / status / download / check / apply / split / repair`
+  - 负责 `build / submit / status / probe / download / check / apply / split / repair`
 - `rag_memory.py`
   - 轻量 RAG / history store 模块
   - 提供本地 JSON 历史库存储、文本哈希和相似度检索
@@ -25,9 +25,10 @@
 - 抽取待翻译条目并跳过 `old`
 - 构造带上下文的 Gemini 请求
 - 自动预处理项目，包括提取脚本和生成 `tl/schinese` 模板
-- 生成 Batch 请求包并执行完整的 `build / submit / status / download / check / apply / split / repair` 流程
+- 生成 Batch 请求包并执行完整的 `build / submit / status / probe / download / check / apply / split / repair` 流程
 - 使用本地 history store 做轻量 RAG 检索
 - 将历史译文注入后续请求，提升术语和语气一致性
+- 允许已知术语按规则保留英文，不再把这类结果一律判成失败
 
 ## 快速开始
 
@@ -90,7 +91,13 @@ Game_Example/
 
 ### 4. 运行
 
-当前更推荐优先使用 Batch 模式；同步模式仍可用，但依赖的是已弃用的 `google-generativeai` SDK，后续会再迁移。
+当前更推荐优先使用 Batch 模式；同步模式仍可用，但依赖的是已弃用的 `google-generativeai` SDK。
+
+当前模型建议：
+
+- 正式 Batch 默认优先使用 `gemini-2.5-flash`
+- `gemini-3-flash-preview` 仍是目标模型，但 Batch 通道仍建议继续做小包稳定性验证
+- RAG 当前默认搭配 `gemini-embedding-001`
 
 同步模式：
 
@@ -104,6 +111,7 @@ Batch 模式：
 python gemini_translate_batch.py build
 python gemini_translate_batch.py submit
 python gemini_translate_batch.py status
+python gemini_translate_batch.py probe
 python gemini_translate_batch.py download
 python gemini_translate_batch.py check
 python gemini_translate_batch.py apply
@@ -114,6 +122,7 @@ python gemini_translate_batch.py apply
 - `python gemini_translate.py --help` 会显示同步脚本的最小 CLI 帮助
 - 不带子命令直接运行 `gemini_translate_batch.py` 时，默认等价于 `submit`
 - Batch 产物默认会写到本地 `logs/` 目录
+- `probe` 会用同步请求做最小 smoke test
 - `check` 是干跑校验，不会修改 `.rpy`
 - `apply` 只会写回通过校验的结果
 
@@ -145,6 +154,7 @@ python gemini_translate_batch.py apply
 - 项目开发过程中使用了 AI 辅助生成代码，整体方向、功能取舍、测试验证与集成决策由作者负责
 - 目前不承诺及时处理 issue、兼容性问题或长期更新
 - 当前更推荐使用 Batch 脚本；同步脚本保留用于直接运行和实验，但其底层 SDK 迁移尚未完成
+- Batch / RAG 是当前主要验证方向；同步脚本更适合补译、局部修复和 smoke test
 
 执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。
 
