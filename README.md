@@ -10,6 +10,7 @@
   - Ren'Py 主翻译脚本
   - 负责加载配置、预处理项目、扫描待翻译文本、调用 Gemini 并写回结果
 - `gemini_translate_batch.py`
+  - 当前更推荐的公开入口
   - Batch 异步批处理脚本
   - 负责 `build / submit / status / download / check / apply / split / repair`
 - `rag_memory.py`
@@ -89,6 +90,8 @@ Game_Example/
 
 ### 4. 运行
 
+当前更推荐优先使用 Batch 模式；同步模式仍可用，但依赖的是已弃用的 `google-generativeai` SDK，后续会再迁移。
+
 同步模式：
 
 ```bash
@@ -108,6 +111,7 @@ python gemini_translate_batch.py apply
 
 说明：
 
+- `python gemini_translate.py --help` 会显示同步脚本的最小 CLI 帮助
 - 不带子命令直接运行 `gemini_translate_batch.py` 时，默认等价于 `submit`
 - Batch 产物默认会写到本地 `logs/` 目录
 - `check` 是干跑校验，不会修改 `.rpy`
@@ -116,7 +120,7 @@ python gemini_translate_batch.py apply
 ## 环境要求
 
 - Python 3.11+
-- `google-generativeai`，供同步脚本使用
+- `google-generativeai`，供同步脚本使用；该 SDK 已被官方弃用，但当前同步脚本在已安装依赖的环境里仍可运行
 - `google-genai`，供 Batch 脚本使用
 - 有效的 Gemini API Key
 - Ren'Py 项目中的 `game/tl/schinese` 翻译目录
@@ -139,6 +143,7 @@ python gemini_translate_batch.py apply
 - 更适合作为思路实现、代码快照和进一步改造的基础
 - 项目开发过程中使用了 AI 辅助生成代码，整体方向、功能取舍、测试验证与集成决策由作者负责
 - 目前不承诺及时处理 issue、兼容性问题或长期更新
+- 当前更推荐使用 Batch 脚本；同步脚本保留用于直接运行和实验，但其底层 SDK 迁移尚未完成
 
 执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。
 
