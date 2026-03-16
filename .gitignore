@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Build / cache
+build/
+dist/
+.cache/
+.pytest_cache/
+.mypy_cache/
+
+# Local config / secrets
+/api_keys.json
+/translator_config.json
+/glossary*.json
+!/glossary.example.json
+/macro_setting*.md
+!/macro_setting.example.md
+
+# Generated outputs
+logs/
+tmp/
+outputs/
+batch_runs/
+artifacts/
+downloads/
+*.log
+*.tmp
+*.bak
+*.orig
+
+# RAG / memory
+rag_store/
+history_store/
+*.jsonl.bak
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

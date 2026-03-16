@@ -1,0 +1,5 @@
+# Sync translator
+google-generativeai
+
+# Batch translator
+google-genai

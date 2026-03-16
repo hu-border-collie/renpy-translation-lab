@@ -1,0 +1,38 @@
+{
+  "game_root": "C:/path/to/YourGame/work",
+  "glossary_file": "glossary.json",
+  "tl_subdir": "game/tl/schinese",
+  "prepare": {
+    "enabled": true,
+    "source_game_dir": "../original/game",
+    "unpack_rpa": true,
+    "generate_template": true,
+    "language": "schinese",
+    "python_exe": ""
+  },
+  "batch": {
+    "model": "gemini-2.5-flash",
+    "chunk_size": 10,
+    "context_before": 30,
+    "context_after": 10,
+    "max_output_tokens": 1024,
+    "temperature": 0.4,
+    "display_name_prefix": "renpy-translate",
+    "macro_setting_file": "macro_setting.md",
+    "thinking_level": "medium",
+    "rag": {
+      "enabled": true,
+      "embedding_model": "text-embedding-004",
+      "query_task_type": "RETRIEVAL_QUERY",
+      "document_task_type": "RETRIEVAL_DOCUMENT",
+      "output_dimensionality": 768,
+      "top_k_history": 8,
+      "top_k_terms": 20,
+      "min_similarity": 0.5,
+      "segment_lines": 80,
+      "bootstrap_on_build": true,
+      "history_char_limit": 220,
+      "store_dir": ""
+    }
+  }
+}

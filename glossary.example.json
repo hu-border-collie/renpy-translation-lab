@@ -1,0 +1,17 @@
+{
+  "preserve_terms": [
+    "MC",
+    "HP",
+    "MP",
+    "Blackwood Academy"
+  ],
+  "non_translatable_exact": [
+    "OK",
+    "NG",
+    "BGM",
+    "SE"
+  ],
+  "normalize_map": {
+    "...": "……"
+  }
+}

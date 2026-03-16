@@ -1,0 +1,2848 @@
+# -*- coding: utf-8 -*-
+import argparse
+import ast
+import hashlib
+import importlib.util
+import io
+import json
+import os
+import re
+import sys
+import time
+import tokenize
+import warnings
+from datetime import datetime
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from rag_memory import JsonRagStore, hash_text, truncate_text
+
+try:
+    from google import genai
+    from google.genai import types as genai_types
+except ImportError:
+    genai = None
+    genai_types = None
+
+
+def load_legacy_module():
+    original_stdout = sys.stdout
+    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gemini_translate.py')
+    spec = importlib.util.spec_from_file_location('legacy_gemini_translate', script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f'Unable to load legacy translator: {script_path}')
+    module = importlib.util.module_from_spec(spec)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', FutureWarning)
+        spec.loader.exec_module(module)
+    sys.stdout = original_stdout
+    return module
+
+
+legacy = load_legacy_module()
+
+LOG_DIR = legacy.LOG_DIR
+FAILED_LOG = os.path.join(LOG_DIR, 'translation_failures_batch.jsonl')
+PROGRESS_LOG = os.path.join(LOG_DIR, 'translation_progress_batch.json')
+CONSOLE_LOG = os.path.join(LOG_DIR, 'translation_batch_console_output.log')
+BATCH_JOBS_DIR = os.path.join(LOG_DIR, 'batch_jobs')
+LATEST_MANIFEST_FILE = os.path.join(BATCH_JOBS_DIR, 'latest_manifest.txt')
+
+os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(BATCH_JOBS_DIR, exist_ok=True)
+REPAIR_RUNS_DIR = os.path.join(LOG_DIR, 'repair_runs')
+os.makedirs(REPAIR_RUNS_DIR, exist_ok=True)
+
+
+class DualLogger(object):
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, 'a', encoding='utf-8')
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+
+sys.stdout = DualLogger(CONSOLE_LOG)
+
+BATCH_MODEL = 'gemini-3-flash-preview'
+BATCH_TARGET_SIZE = 4
+BATCH_CONTEXT_BEFORE = 8
+BATCH_CONTEXT_AFTER = 4
+BATCH_MAX_OUTPUT_TOKENS = 4096
+BATCH_TEMPERATURE = 0.2
+BATCH_THINKING_LEVEL = 'minimal'
+BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
+BATCH_MACRO_SETTING = (
+    '???? Ren\'Py ???????????????????????????'
+    '??????????????????'
+)
+
+RAG_ENABLED = False
+RAG_STORE_DIR = ''
+RAG_EMBEDDING_MODEL = 'gemini-embedding-001'
+RAG_QUERY_TASK_TYPE = 'RETRIEVAL_QUERY'
+RAG_DOCUMENT_TASK_TYPE = 'RETRIEVAL_DOCUMENT'
+RAG_OUTPUT_DIMENSIONALITY = 768
+RAG_TOP_K_HISTORY = 4
+RAG_TOP_K_TERMS = 8
+RAG_MIN_SIMILARITY = 0.72
+RAG_SEGMENT_LINES = 4
+RAG_BOOTSTRAP_ON_BUILD = True
+RAG_HISTORY_CHAR_LIMIT = 220
+_RAG_STORE = None
+_RAG_PRESERVED_TERMS_CACHE = None
+_RAG_PRESERVED_TERMS_CACHE_KEY = None
+
+
+def load_json_file(path):
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, 'r', encoding='utf-8-sig') as handle:
+            return json.load(handle) or {}
+    except Exception as exc:
+        print(f'Warning: Failed to load JSON {path}: {exc}')
+        return {}
+
+
+def coerce_positive_int(value, default):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
+
+
+def coerce_float(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def coerce_bool(value, default):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {'1', 'true', 'yes', 'on'}:
+            return True
+        if lowered in {'0', 'false', 'no', 'off'}:
+            return False
+    return default
+
+
+def coerce_non_empty_string(value, default):
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    return default
+
+
+def read_text_file(path):
+    if not path or not os.path.isfile(path):
+        return ''
+    with open(path, 'r', encoding='utf-8-sig') as handle:
+        return handle.read().strip()
+
+
+def normalize_task_type(value, default):
+    if isinstance(value, str):
+        cleaned = value.strip().upper()
+        if cleaned:
+            return cleaned
+    return default
+
+
+def load_batch_settings():
+    global BATCH_MODEL, BATCH_TARGET_SIZE, BATCH_CONTEXT_BEFORE, BATCH_CONTEXT_AFTER
+    global BATCH_MAX_OUTPUT_TOKENS, BATCH_TEMPERATURE, BATCH_THINKING_LEVEL
+    global BATCH_DISPLAY_NAME_PREFIX, BATCH_MACRO_SETTING
+    global RAG_ENABLED, RAG_STORE_DIR, RAG_EMBEDDING_MODEL, RAG_QUERY_TASK_TYPE
+    global RAG_DOCUMENT_TASK_TYPE, RAG_OUTPUT_DIMENSIONALITY, RAG_TOP_K_HISTORY
+    global RAG_TOP_K_TERMS, RAG_MIN_SIMILARITY, RAG_SEGMENT_LINES
+    global RAG_BOOTSTRAP_ON_BUILD, RAG_HISTORY_CHAR_LIMIT, _RAG_STORE
+
+    config = load_json_file(legacy.CONFIG_FILE)
+    translator_config = load_json_file(legacy.TRANSLATOR_CONFIG)
+
+    batch_model = config.get('batch_model')
+    if isinstance(batch_model, str) and batch_model.strip():
+        BATCH_MODEL = batch_model.strip()
+
+    BATCH_TARGET_SIZE = coerce_positive_int(
+        config.get('batch_target_size', config.get('batch_size')),
+        BATCH_TARGET_SIZE,
+    )
+    BATCH_CONTEXT_BEFORE = coerce_positive_int(config.get('batch_context_before'), BATCH_CONTEXT_BEFORE)
+    BATCH_CONTEXT_AFTER = coerce_positive_int(config.get('batch_context_after'), BATCH_CONTEXT_AFTER)
+    BATCH_MAX_OUTPUT_TOKENS = coerce_positive_int(
+        config.get('batch_max_output_tokens'),
+        BATCH_MAX_OUTPUT_TOKENS,
+    )
+    BATCH_THINKING_LEVEL = coerce_non_empty_string(
+        config.get('batch_thinking_level'),
+        BATCH_THINKING_LEVEL,
+    )
+
+    display_name_prefix = config.get('batch_display_name_prefix')
+    if isinstance(display_name_prefix, str) and display_name_prefix.strip():
+        BATCH_DISPLAY_NAME_PREFIX = display_name_prefix.strip()
+
+    macro_setting = config.get('batch_macro_setting')
+    if isinstance(macro_setting, str) and macro_setting.strip():
+        BATCH_MACRO_SETTING = macro_setting.strip()
+
+    batch = translator_config.get('batch')
+    if not isinstance(batch, dict):
+        batch = {}
+
+    model_name = batch.get('model')
+    if isinstance(model_name, str) and model_name.strip():
+        BATCH_MODEL = model_name.strip()
+
+    display_name_prefix = batch.get('display_name_prefix')
+    if isinstance(display_name_prefix, str) and display_name_prefix.strip():
+        BATCH_DISPLAY_NAME_PREFIX = display_name_prefix.strip()
+
+    BATCH_TARGET_SIZE = coerce_positive_int(batch.get('chunk_size'), BATCH_TARGET_SIZE)
+    BATCH_CONTEXT_BEFORE = coerce_positive_int(batch.get('context_before'), BATCH_CONTEXT_BEFORE)
+    BATCH_CONTEXT_AFTER = coerce_positive_int(batch.get('context_after'), BATCH_CONTEXT_AFTER)
+    BATCH_MAX_OUTPUT_TOKENS = coerce_positive_int(
+        batch.get('max_output_tokens'),
+        BATCH_MAX_OUTPUT_TOKENS,
+    )
+    BATCH_TEMPERATURE = coerce_float(batch.get('temperature'), BATCH_TEMPERATURE)
+    BATCH_THINKING_LEVEL = coerce_non_empty_string(
+        batch.get('thinking_level'),
+        BATCH_THINKING_LEVEL,
+    )
+
+    macro_setting_file = batch.get('macro_setting_file')
+    if macro_setting_file:
+        resolved_path = legacy._resolve_path(legacy.BASE_DIR, macro_setting_file)
+        macro_text = read_text_file(resolved_path)
+        if macro_text:
+            BATCH_MACRO_SETTING = macro_text
+
+    macro_setting = batch.get('macro_setting')
+    if isinstance(macro_setting, str) and macro_setting.strip():
+        BATCH_MACRO_SETTING = macro_setting.strip()
+
+    rag = batch.get('rag')
+    if not isinstance(rag, dict):
+        rag = {}
+
+    RAG_ENABLED = coerce_bool(rag.get('enabled'), RAG_ENABLED)
+    RAG_EMBEDDING_MODEL = coerce_non_empty_string(rag.get('embedding_model'), RAG_EMBEDDING_MODEL)
+    RAG_QUERY_TASK_TYPE = normalize_task_type(rag.get('query_task_type'), RAG_QUERY_TASK_TYPE)
+    RAG_DOCUMENT_TASK_TYPE = normalize_task_type(rag.get('document_task_type'), RAG_DOCUMENT_TASK_TYPE)
+    RAG_OUTPUT_DIMENSIONALITY = coerce_positive_int(
+        rag.get('output_dimensionality'),
+        RAG_OUTPUT_DIMENSIONALITY,
+    )
+    RAG_TOP_K_HISTORY = coerce_positive_int(rag.get('top_k_history'), RAG_TOP_K_HISTORY)
+    RAG_TOP_K_TERMS = coerce_positive_int(rag.get('top_k_terms'), RAG_TOP_K_TERMS)
+    RAG_MIN_SIMILARITY = coerce_float(rag.get('min_similarity'), RAG_MIN_SIMILARITY)
+    RAG_SEGMENT_LINES = coerce_positive_int(rag.get('segment_lines'), RAG_SEGMENT_LINES)
+    RAG_BOOTSTRAP_ON_BUILD = coerce_bool(rag.get('bootstrap_on_build'), RAG_BOOTSTRAP_ON_BUILD)
+    RAG_HISTORY_CHAR_LIMIT = coerce_positive_int(rag.get('history_char_limit'), RAG_HISTORY_CHAR_LIMIT)
+
+    store_dir = rag.get('store_dir')
+    if store_dir:
+        RAG_STORE_DIR = legacy._resolve_path(legacy.BASE_DIR, store_dir)
+    else:
+        RAG_STORE_DIR = ''
+
+    _RAG_STORE = None
+
+
+load_batch_settings()
+
+
+def load_progress():
+    if not os.path.exists(PROGRESS_LOG):
+        return {}
+    try:
+        with open(PROGRESS_LOG, 'r', encoding='utf-8') as handle:
+            return json.load(handle)
+    except Exception:
+        return {}
+
+
+def save_progress(progress):
+    with open(PROGRESS_LOG, 'w', encoding='utf-8') as handle:
+        json.dump(progress, handle, ensure_ascii=False, indent=2)
+
+
+def update_progress(file_key, translated_lines):
+    progress = load_progress()
+    progress.setdefault(file_key, [])
+    progress[file_key].extend(translated_lines)
+    progress[file_key] = sorted(set(progress[file_key]))
+    save_progress(progress)
+
+
+def ensure_batch_sdk():
+    if genai is None or genai_types is None:
+        raise SystemExit('google-genai is not installed. Run: pip install google-genai')
+
+
+def normalize_api_key_index(value):
+    try:
+        index = int(value)
+    except (TypeError, ValueError):
+        return None
+    api_keys = getattr(legacy, 'API_KEYS', []) or []
+    if 0 <= index < len(api_keys):
+        return index
+    return None
+
+
+def create_batch_client(api_key_index=None):
+    ensure_batch_sdk()
+    if api_key_index is None:
+        api_key = legacy.get_current_api_key()
+    else:
+        index = normalize_api_key_index(api_key_index)
+        if index is None:
+            raise SystemExit(f'Invalid API key index: {api_key_index}')
+        api_key = legacy.API_KEYS[index]
+    return genai.Client(api_key=api_key)
+
+
+def is_quota_error(exc):
+    status_code = getattr(exc, 'status_code', None)
+    if status_code == 429:
+        return True
+    text = str(exc)
+    return '429' in text or 'RESOURCE_EXHAUSTED' in text
+
+
+def is_not_found_error(exc):
+    status_code = getattr(exc, 'status_code', None)
+    if status_code == 404:
+        return True
+    text = str(exc)
+    return '404' in text or 'NOT_FOUND' in text
+
+
+def is_unavailable_error(exc):
+    status_code = getattr(exc, 'status_code', None)
+    if status_code == 503:
+        return True
+    text = str(exc)
+    return '503' in text or 'UNAVAILABLE' in text
+
+
+def allow_non_chinese_repair_translation(original, translated):
+    if legacy.allow_non_chinese_term_translation(
+        original,
+        translated,
+        known_terms=collect_shared_rag_preserved_terms(),
+    ):
+        return True
+    if not original or not translated or original == translated:
+        return False
+    if legacy.contains_chinese(translated):
+        return False
+    stripped = original.strip()
+    if stripped.startswith('{#') or '%' in stripped:
+        return True
+    return False
+
+
+def iter_manifest_api_key_indices(manifest):
+    api_keys = getattr(legacy, 'API_KEYS', []) or []
+    preferred = []
+    for key in ('submitted_api_key_index', 'last_status_api_key_index'):
+        index = normalize_api_key_index(manifest.get(key))
+        if index is not None and index not in preferred:
+            preferred.append(index)
+    for index in range(len(api_keys)):
+        if index not in preferred:
+            preferred.append(index)
+    return preferred
+
+
+def fetch_batch_job_for_manifest(manifest):
+    if not manifest.get('job_name'):
+        raise SystemExit('Manifest does not have a job_name yet.')
+
+    last_error = None
+    for api_key_index in iter_manifest_api_key_indices(manifest):
+        client = create_batch_client(api_key_index=api_key_index)
+        try:
+            batch_job = client.batches.get(name=manifest['job_name'])
+            manifest['submitted_api_key_index'] = api_key_index
+            manifest['submitted_api_key_number'] = api_key_index + 1
+            manifest['last_status_api_key_index'] = api_key_index
+            return client, batch_job
+        except Exception as exc:
+            last_error = exc
+            if is_not_found_error(exc):
+                continue
+            raise
+
+    if last_error is not None and is_not_found_error(last_error):
+        raise SystemExit(
+            'Batch job not found under any configured API key/project. '
+            'It may belong to a different project, or the job may no longer exist.'
+        )
+    if last_error is not None:
+        raise last_error
+    raise SystemExit('No API keys available to query batch job.')
+
+
+def slugify(text):
+    text = re.sub(r'[^A-Za-z0-9._-]+', '-', text or '').strip('-._')
+    return text or 'batch'
+
+
+def guess_project_slug():
+    base_name = os.path.basename(os.path.abspath(legacy.BASE_DIR))
+    if base_name.lower() == 'work':
+        parent = os.path.basename(os.path.dirname(os.path.abspath(legacy.BASE_DIR)))
+        return slugify(parent or base_name)
+    return slugify(base_name)
+
+
+def hash_key(text):
+    return hashlib.sha1(text.encode('utf-8')).hexdigest()[:10]
+
+
+def get_default_rag_store_dir():
+    return os.path.join(LOG_DIR, 'rag_store', guess_project_slug())
+
+
+def get_rag_store():
+    global _RAG_STORE, RAG_STORE_DIR
+    if not RAG_ENABLED:
+        return None
+    if not RAG_STORE_DIR:
+        RAG_STORE_DIR = get_default_rag_store_dir()
+    if _RAG_STORE is None or os.path.abspath(_RAG_STORE.store_dir) != os.path.abspath(RAG_STORE_DIR):
+        _RAG_STORE = JsonRagStore(RAG_STORE_DIR)
+        _RAG_STORE.set_metadata(
+            project_slug=guess_project_slug(),
+            embedding_model=RAG_EMBEDDING_MODEL,
+            query_task_type=RAG_QUERY_TASK_TYPE,
+            document_task_type=RAG_DOCUMENT_TASK_TYPE,
+            output_dimensionality=RAG_OUTPUT_DIMENSIONALITY,
+        )
+    return _RAG_STORE
+
+
+def extract_word_tokens(text):
+    return legacy._extract_word_tokens(text)
+
+
+def collect_shared_rag_preserved_terms():
+    global _RAG_PRESERVED_TERMS_CACHE, _RAG_PRESERVED_TERMS_CACHE_KEY
+
+    store = get_rag_store()
+    cache_key = os.path.abspath(store.store_dir) if store is not None else ''
+    if _RAG_PRESERVED_TERMS_CACHE is not None and _RAG_PRESERVED_TERMS_CACHE_KEY == cache_key:
+        return set(_RAG_PRESERVED_TERMS_CACHE)
+
+    terms = set(getattr(legacy, 'PRESERVE_TERMS_LOWER', set()) or [])
+    if store is not None:
+        store.load()
+        for record in store.history.values():
+            source_tokens = set(extract_word_tokens(record.get('source_text', '')))
+            translated_tokens = set(extract_word_tokens(record.get('translated_text', '')))
+            terms.update(source_tokens & translated_tokens)
+
+    _RAG_PRESERVED_TERMS_CACHE = tuple(sorted(terms))
+    _RAG_PRESERVED_TERMS_CACHE_KEY = cache_key
+    return set(terms)
+
+
+def collect_chunk_known_terms(chunk):
+    terms = collect_shared_rag_preserved_terms()
+    for hit in chunk.get('glossary_hits') or []:
+        terms.update(extract_word_tokens(hit.get('source', '')))
+        terms.update(extract_word_tokens(hit.get('target', '')))
+    for hit in chunk.get('history_hits') or []:
+        source_tokens = set(extract_word_tokens(hit.get('source_text', '')))
+        translated_tokens = set(extract_word_tokens(hit.get('translated_text', '')))
+        terms.update(source_tokens & translated_tokens)
+    return terms
+
+
+def allow_non_chinese_batch_translation(manifest, chunk, original, translated):
+    if not manifest.get('rag_enabled'):
+        return False
+    return legacy.allow_non_chinese_term_translation(
+        original,
+        translated,
+        known_terms=collect_chunk_known_terms(chunk),
+    )
+
+
+def compact_text(text):
+    return re.sub(r'\s+', ' ', text or '').strip()
+
+
+def build_rag_query_text(target_items, context_past):
+    parts = []
+    local_past = [compact_text(text) for text in context_past[-2:] if compact_text(text)]
+    target_lines = [compact_text(item.get('text', '')) for item in target_items if compact_text(item.get('text', ''))]
+    if local_past:
+        parts.append('Context before:\n' + '\n'.join(f'- {text}' for text in local_past))
+    if target_lines:
+        parts.append('Target:\n' + '\n'.join(f'- {text}' for text in target_lines))
+    return '\n\n'.join(parts)
+
+
+def embed_texts(contents, task_type):
+    if not contents:
+        return []
+    client = create_batch_client()
+    response = client.models.embed_content(
+        model=RAG_EMBEDDING_MODEL,
+        contents=contents,
+        config=genai_types.EmbedContentConfig(
+            task_type=task_type,
+            output_dimensionality=RAG_OUTPUT_DIMENSIONALITY,
+        ),
+    )
+    embeddings = getattr(response, 'embeddings', None) or []
+    values = [list(getattr(item, 'values', None) or []) for item in embeddings]
+    if len(values) != len(contents):
+        raise RuntimeError(f'Embedding count mismatch: expected {len(contents)}, got {len(values)}')
+    return values
+
+
+def embed_query_text(query_text):
+    query_text = compact_text(query_text)
+    if not query_text:
+        return []
+    vectors = embed_texts([query_text], RAG_QUERY_TASK_TYPE)
+    return vectors[0] if vectors else []
+
+
+def retrieve_glossary_hits(target_items):
+    if not RAG_ENABLED:
+        return []
+    combined_text = '\n'.join(item.get('text', '') for item in target_items if item.get('text'))
+    if not combined_text:
+        return []
+    hits = []
+    seen = set()
+    for source, target in (legacy.NORMALIZE_TRANSLATION_MAP or {}).items():
+        if source and source in combined_text and source not in seen:
+            hits.append({'source': source, 'target': target, 'kind': 'normalize'})
+            seen.add(source)
+    for term in legacy.PRESERVE_TERMS:
+        if not isinstance(term, str) or not term.strip():
+            continue
+        if term in combined_text and term not in seen:
+            hits.append({'source': term, 'target': term, 'kind': 'preserve'})
+            seen.add(term)
+    return hits[:RAG_TOP_K_TERMS]
+
+
+def format_glossary_hits_block(hits, empty_label='(none)'):
+    if not hits:
+        return empty_label
+    lines = []
+    for hit in hits:
+        source = hit.get('source', '')
+        target = hit.get('target', '')
+        if not source:
+            continue
+        if source == target:
+            lines.append(f'- Keep unchanged: {source}')
+        else:
+            lines.append(f'- {source} -> {target}')
+    return '\n'.join(lines) if lines else empty_label
+
+
+def format_history_hits_block(hits, empty_label='(none)'):
+    if not hits:
+        return empty_label
+    lines = []
+    for hit in hits:
+        file_rel_path = hit.get('file_rel_path', '')
+        line_start = hit.get('line_start', '')
+        line_end = hit.get('line_end', '')
+        score = hit.get('score', 0.0)
+        quality = hit.get('quality_state', '')
+        translated_text = hit.get('translated_text', '') or hit.get('source_text', '')
+        translated_text = truncate_text(translated_text, RAG_HISTORY_CHAR_LIMIT)
+        lines.append(
+            f'- [{file_rel_path}:{line_start}-{line_end} score={score:.3f} quality={quality}] {translated_text}'
+        )
+    return '\n'.join(lines) if lines else empty_label
+
+
+def retrieve_history_hits(target_items, context_past):
+    if not RAG_ENABLED:
+        return [], {'enabled': False}
+    store = get_rag_store()
+    if store is None or store.count_history() <= 0:
+        return [], {'enabled': True, 'reason': 'empty_history_store'}
+
+    query_text = build_rag_query_text(target_items, context_past)
+    if not query_text:
+        return [], {'enabled': True, 'reason': 'empty_query'}
+
+    try:
+        query_vector = embed_query_text(query_text)
+        matches = store.search_history(
+            query_vector,
+            top_k=RAG_TOP_K_HISTORY,
+            min_similarity=RAG_MIN_SIMILARITY,
+        )
+    except Exception as exc:
+        print(f'Warning: RAG history retrieval failed: {exc}')
+        return [], {'enabled': True, 'error': str(exc)}
+
+    hits = []
+    for match in matches:
+        hits.append(
+            {
+                'memory_id': match.get('memory_id', ''),
+                'file_rel_path': match.get('file_rel_path', ''),
+                'line_start': match.get('line_start', 0),
+                'line_end': match.get('line_end', 0),
+                'source_text': truncate_text(match.get('source_text', ''), RAG_HISTORY_CHAR_LIMIT),
+                'translated_text': truncate_text(match.get('translated_text', ''), RAG_HISTORY_CHAR_LIMIT),
+                'quality_state': match.get('quality_state', ''),
+                'score': float(match.get('score', 0.0)),
+            }
+        )
+
+    return hits, {
+        'enabled': True,
+        'query_text': truncate_text(query_text, 400),
+        'hit_count': len(hits),
+    }
+
+
+
+def manifest_path_for_target(target):
+    if target:
+        candidate = os.path.abspath(target)
+        if os.path.isdir(candidate):
+            candidate = os.path.join(candidate, 'manifest.json')
+        if os.path.isfile(candidate):
+            return candidate
+        raise SystemExit(f'Manifest not found: {target}')
+
+    if os.path.isfile(LATEST_MANIFEST_FILE):
+        with open(LATEST_MANIFEST_FILE, 'r', encoding='utf-8') as handle:
+            candidate = handle.read().strip()
+        if candidate and os.path.isfile(candidate):
+            return candidate
+
+    manifests = []
+    for root, _, files in os.walk(BATCH_JOBS_DIR):
+        if 'manifest.json' in files:
+            manifests.append(os.path.join(root, 'manifest.json'))
+    if not manifests:
+        raise SystemExit('No batch manifest found.')
+    manifests.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+    return manifests[0]
+
+
+def remember_latest_manifest(manifest_path):
+    with open(LATEST_MANIFEST_FILE, 'w', encoding='utf-8') as handle:
+        handle.write(manifest_path)
+
+
+def load_manifest(target=None):
+    manifest_path = manifest_path_for_target(target)
+    with open(manifest_path, 'r', encoding='utf-8') as handle:
+        manifest = json.load(handle)
+    manifest['_manifest_path'] = manifest_path
+    manifest['_package_dir'] = os.path.dirname(manifest_path)
+    return manifest
+
+
+def save_manifest(manifest):
+    manifest_path = manifest['_manifest_path']
+    data = dict(manifest)
+    data.pop('_manifest_path', None)
+    data.pop('_package_dir', None)
+    with open(manifest_path, 'w', encoding='utf-8') as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+    remember_latest_manifest(manifest_path)
+
+
+
+
+def load_request_rows(manifest):
+    input_jsonl_path = manifest.get('input_jsonl_path')
+    if not input_jsonl_path or not os.path.isfile(input_jsonl_path):
+        raise SystemExit(f"Input JSONL not found: {input_jsonl_path}")
+    rows = []
+    with open(input_jsonl_path, 'r', encoding='utf-8') as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    return rows
+
+
+def summarize_files_for_chunks(chunks):
+    files = {}
+    for chunk in chunks:
+        rel_path = chunk['file_rel_path']
+        if rel_path not in files:
+            files[rel_path] = {
+                'path': chunk['file_path'],
+                'task_count': 0,
+            }
+        files[rel_path]['task_count'] += len(chunk.get('items', []))
+    return files
+
+
+def split_chunks_and_lines(chunks, request_lines, max_chunks=0, max_items=0):
+    groups = []
+    current_chunks = []
+    current_lines = []
+    current_item_count = 0
+
+    for chunk, line in zip(chunks, request_lines):
+        chunk_item_count = len(chunk.get('items', []))
+        should_flush = False
+
+        if current_chunks:
+            if max_chunks and len(current_chunks) >= max_chunks:
+                should_flush = True
+            elif max_items and current_item_count + chunk_item_count > max_items:
+                should_flush = True
+
+        if should_flush:
+            groups.append((current_chunks, current_lines))
+            current_chunks = []
+            current_lines = []
+            current_item_count = 0
+
+        current_chunks.append(chunk)
+        current_lines.append(line)
+        current_item_count += chunk_item_count
+
+    if current_chunks:
+        groups.append((current_chunks, current_lines))
+
+    return groups
+
+def get_state_name(state):
+    if state is None:
+        return ''
+    name = getattr(state, 'name', None)
+    return name or str(state)
+
+
+def get_nested(source, *candidates):
+    for candidate in candidates:
+        if source is None:
+            continue
+        if isinstance(source, dict) and candidate in source:
+            return source.get(candidate)
+        if hasattr(source, candidate):
+            return getattr(source, candidate)
+    return None
+
+
+def serialize_unknown(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): serialize_unknown(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [serialize_unknown(item) for item in value]
+    for method_name in ('model_dump', 'dict'):
+        method = getattr(value, method_name, None)
+        if callable(method):
+            try:
+                return serialize_unknown(method())
+            except Exception:
+                pass
+    if hasattr(value, '__dict__'):
+        return serialize_unknown(vars(value))
+    return str(value)
+
+
+def extract_batch_stats(batch_job):
+    stats = get_nested(batch_job, 'batch_stats', 'batchStats')
+    if not stats:
+        return {}
+    result = {}
+    for key in ('request_count', 'successful_request_count', 'failed_request_count', 'pending_request_count'):
+        camel = ''.join(part.capitalize() if idx else part for idx, part in enumerate(key.split('_')))
+        value = get_nested(stats, key, camel)
+        if value is not None:
+            result[key] = value
+    return result
+
+
+def write_status_snapshot(manifest, batch_job):
+    snapshot_path = os.path.join(manifest['_package_dir'], 'last_status_snapshot.json')
+    payload = {
+        'checked_at': datetime.now().isoformat(timespec='seconds'),
+        'job_state': get_state_name(getattr(batch_job, 'state', None)),
+        'job_error': serialize_unknown(get_nested(batch_job, 'error')),
+        'batch_stats': extract_batch_stats(batch_job),
+        'job': serialize_unknown(batch_job),
+    }
+    with open(snapshot_path, 'w', encoding='utf-8') as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    manifest['last_status_snapshot_path'] = snapshot_path
+
+def collect_files_to_process():
+    files_to_process = []
+    for root, _, files in os.walk(legacy.TL_DIR):
+        for file_name in files:
+            if not file_name.endswith('.rpy'):
+                continue
+            file_path = os.path.join(root, file_name)
+            rel_path = legacy._normalize_rel_path(os.path.relpath(file_path, legacy.TL_DIR))
+            if legacy.INCLUDE_FILES or legacy.INCLUDE_PREFIXES:
+                allowed = False
+                if legacy.INCLUDE_FILES and rel_path in legacy.INCLUDE_FILES:
+                    allowed = True
+                if not allowed and legacy.INCLUDE_PREFIXES:
+                    for prefix in legacy.INCLUDE_PREFIXES:
+                        if rel_path.startswith(prefix):
+                            allowed = True
+                            break
+                if not allowed:
+                    continue
+            files_to_process.append((rel_path, file_path))
+    files_to_process.sort(key=lambda item: item[0])
+    return files_to_process
+
+
+def collect_pending_file_jobs():
+    jobs = []
+
+    for rel_path, file_path in collect_files_to_process():
+        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+            lines = handle.readlines()
+
+        raw_tasks = legacy.collect_tasks(lines)
+        pending = []
+
+        for task in raw_tasks:
+            if legacy.is_non_translatable(task['text']):
+                continue
+            current = dict(task)
+            current['file_rel_path'] = rel_path
+            current['file_path'] = file_path
+            current['id'] = f"{rel_path}:{current['line']}:{current['start']}"
+            pending.append(current)
+
+        if pending:
+            jobs.append(
+                {
+                    'file_rel_path': rel_path,
+                    'file_path': file_path,
+                    'task_count': len(pending),
+                    'tasks': pending,
+                }
+            )
+
+    return jobs
+
+
+def format_context_block(lines, empty_label):
+    if not lines:
+        return empty_label
+    return '\n'.join(f'- {line}' for line in lines)
+
+
+def build_system_instruction():
+    glossary = ', '.join(legacy.PRESERVE_TERMS)
+    return (
+        'Setting:\n'
+        f'{BATCH_MACRO_SETTING}\n\n'
+        'Task:\n'
+        'Translate only TARGET lines into Simplified Chinese. CONTEXT lines are reference only.\n'
+        f'Keep these terms unchanged: {glossary}\n'
+        "Keep names, Ren'Py tags, placeholders, variables, and format strings unchanged.\n"
+        'Return JSON only. Preserve every id exactly. Item count must match. '
+        'translation must contain only the translated Chinese text.'
+    )
+
+
+def build_user_prompt(context_past, target_items, context_future, glossary_hits=None, history_hits=None):
+    target_payload = json.dumps(
+        [{'id': item['id'], 'text': item['text']} for item in target_items],
+        ensure_ascii=False,
+        separators=(',', ':'),
+    )
+    glossary_hits = glossary_hits or []
+    history_hits = history_hits or []
+    return (
+        f'LOCKED TERMS:\n{format_glossary_hits_block(glossary_hits, "(none)")}\n\n'
+        f'RETRIEVED MEMORY:\n{format_history_hits_block(history_hits, "(none)")}\n\n'
+        f'CONTEXT BEFORE:\n{format_context_block(context_past, "(none)")}\n\n'
+        f'TARGET:\n{target_payload}\n\n'
+        f'CONTEXT AFTER:\n{format_context_block(context_future, "(none)")}\n\n'
+        'Return the result now.'
+    )
+
+
+
+def build_response_json_schema(target_items):
+    target_ids = [item['id'] for item in target_items]
+    return {
+        'type': 'array',
+        'minItems': len(target_items),
+        'maxItems': len(target_items),
+        'items': {
+            'type': 'object',
+            'required': ['id', 'translation'],
+            'additionalProperties': False,
+            'properties': {
+                'id': {'type': 'string', 'enum': target_ids},
+                'translation': {'type': 'string'},
+            },
+        },
+    }
+
+
+def build_generation_config(target_items):
+    config = {
+        'temperature': BATCH_TEMPERATURE,
+        'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
+        'response_mime_type': 'application/json',
+        'response_json_schema': build_response_json_schema(target_items),
+    }
+    if BATCH_THINKING_LEVEL and BATCH_MODEL.startswith('gemini-3'):
+        config['thinking_config'] = {
+            'thinking_level': BATCH_THINKING_LEVEL.upper(),
+        }
+    return config
+
+
+def build_batch_request(chunk):
+    return {
+        'key': chunk['key'],
+        'request': {
+            'system_instruction': {'parts': [{'text': build_system_instruction()}]},
+            'contents': [
+                {
+                    'role': 'user',
+                    'parts': [
+                        {
+                            'text': build_user_prompt(
+                                chunk['context_past'],
+                                chunk['items'],
+                                chunk['context_future'],
+                                glossary_hits=chunk.get('glossary_hits') or [],
+                                history_hits=chunk.get('history_hits') or [],
+                            )
+                        }
+                    ],
+                }
+            ],
+            'generation_config': build_generation_config(chunk['items']),
+        },
+    }
+
+
+
+def build_chunks(file_jobs):
+    chunks = []
+    for job in file_jobs:
+        tasks = job['tasks']
+        total = len(tasks)
+        for start in range(0, total, BATCH_TARGET_SIZE):
+            end = min(start + BATCH_TARGET_SIZE, total)
+            target_items = tasks[start:end]
+            context_past = [item['text'] for item in tasks[max(0, start - BATCH_CONTEXT_BEFORE):start]]
+            context_future = [item['text'] for item in tasks[end:min(total, end + BATCH_CONTEXT_AFTER)]]
+            glossary_hits = retrieve_glossary_hits(target_items) if RAG_ENABLED else []
+            history_hits, rag_stats = retrieve_history_hits(target_items, context_past) if RAG_ENABLED else ([], {})
+            chunk_number = start // BATCH_TARGET_SIZE + 1
+            chunk_key = f"{hash_key(job['file_rel_path'])}-{chunk_number:05d}"
+            chunks.append(
+                {
+                    'key': chunk_key,
+                    'file_rel_path': job['file_rel_path'],
+                    'file_path': job['file_path'],
+                    'chunk_index': chunk_number,
+                    'line_numbers': [item['line'] for item in target_items],
+                    'context_past': context_past,
+                    'context_future': context_future,
+                    'glossary_hits': glossary_hits,
+                    'history_hits': history_hits,
+                    'rag_stats': rag_stats,
+                    'items': [
+                        {
+                            'id': item['id'],
+                            'text': item['text'],
+                            'line': item['line'],
+                            'start': item['start'],
+                            'end': item['end'],
+                            'quote': item['quote'],
+                        }
+                        for item in target_items
+                    ],
+                }
+            )
+    return chunks
+
+
+
+def get_batch_risk_warnings():
+    warnings_list = []
+    if BATCH_TARGET_SIZE > 4:
+        warnings_list.append(f'chunk_size={BATCH_TARGET_SIZE} is aggressive for Gemini 3 Flash structured output.')
+    if BATCH_CONTEXT_BEFORE > 12 or BATCH_CONTEXT_AFTER > 6:
+        warnings_list.append(
+            f'context_before/context_after ({BATCH_CONTEXT_BEFORE}/{BATCH_CONTEXT_AFTER}) may inflate prompt tokens.'
+        )
+    if BATCH_MAX_OUTPUT_TOKENS < 2048:
+        warnings_list.append(f'max_output_tokens={BATCH_MAX_OUTPUT_TOKENS} is likely too low for JSON batch output.')
+    if BATCH_MODEL.startswith('gemini-3') and (BATCH_THINKING_LEVEL or '').lower() != 'minimal':
+        warnings_list.append(
+            f'thinking_level={BATCH_THINKING_LEVEL or "(default)"} may waste output budget on reasoning tokens.'
+        )
+    return warnings_list
+
+
+def create_batch_package(display_name_override='', skip_prepare=False):
+    if not skip_prepare:
+        legacy.run_prepare_steps()
+    if not os.path.isdir(legacy.TL_DIR):
+        raise SystemExit(f'TL dir does not exist: {legacy.TL_DIR}')
+
+    file_jobs = collect_pending_file_jobs()
+    if not file_jobs:
+        print('No pending lines to translate.')
+        return None
+
+    rag_prepare_summary = prepare_rag_store(file_jobs)
+
+    chunks = build_chunks(file_jobs)
+    if not chunks:
+        print('No chunks built.')
+        return None
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    package_name = f'{timestamp}_{guess_project_slug()}'
+    package_dir = os.path.join(BATCH_JOBS_DIR, package_name)
+    os.makedirs(package_dir, exist_ok=True)
+
+    display_name = display_name_override.strip() if display_name_override else ''
+    if not display_name:
+        display_name = f'{BATCH_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
+
+    input_jsonl_path = os.path.join(package_dir, 'requests.jsonl')
+    with open(input_jsonl_path, 'w', encoding='utf-8') as handle:
+        for chunk in chunks:
+            handle.write(json.dumps(build_batch_request(chunk), ensure_ascii=False) + '\n')
+
+    build_warnings = get_batch_risk_warnings()
+
+    manifest = {
+        'version': 1,
+        'created_at': datetime.now().isoformat(timespec='seconds'),
+        'display_name': display_name,
+        'batch_model': BATCH_MODEL,
+        'base_dir': legacy.BASE_DIR,
+        'tl_dir': legacy.TL_DIR,
+        'input_jsonl_path': input_jsonl_path,
+        'result_jsonl_path': '',
+        'job_name': '',
+        'job_state': 'LOCAL_ONLY',
+        'uploaded_file_name': '',
+        'result_file_name': '',
+        'settings': {
+            'target_size': BATCH_TARGET_SIZE,
+            'context_before': BATCH_CONTEXT_BEFORE,
+            'context_after': BATCH_CONTEXT_AFTER,
+            'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
+            'temperature': BATCH_TEMPERATURE,
+            'thinking_level': BATCH_THINKING_LEVEL,
+        },
+        'build_warnings': build_warnings,
+        'rag_enabled': RAG_ENABLED,
+        'rag_store_path': RAG_STORE_DIR if RAG_ENABLED else '',
+        'rag_settings': {
+            'embedding_model': RAG_EMBEDDING_MODEL,
+            'query_task_type': RAG_QUERY_TASK_TYPE,
+            'document_task_type': RAG_DOCUMENT_TASK_TYPE,
+            'output_dimensionality': RAG_OUTPUT_DIMENSIONALITY,
+            'top_k_history': RAG_TOP_K_HISTORY,
+            'top_k_terms': RAG_TOP_K_TERMS,
+            'min_similarity': RAG_MIN_SIMILARITY,
+            'segment_lines': RAG_SEGMENT_LINES,
+            'bootstrap_on_build': RAG_BOOTSTRAP_ON_BUILD,
+        } if RAG_ENABLED else {},
+        'rag_summary': {
+            'prepare': rag_prepare_summary,
+            'chunks_with_glossary_hits': sum(1 for chunk in chunks if chunk.get('glossary_hits')),
+            'chunks_with_history_hits': sum(1 for chunk in chunks if chunk.get('history_hits')),
+        } if RAG_ENABLED else {},
+        'summary': {
+            'file_count': len(file_jobs),
+            'chunk_count': len(chunks),
+            'item_count': sum(len(chunk['items']) for chunk in chunks),
+        },
+        'files': {
+            job['file_rel_path']: {
+                'path': job['file_path'],
+                'task_count': job['task_count'],
+            }
+            for job in file_jobs
+        },
+        'chunks': chunks,
+    }
+
+    manifest_path = os.path.join(package_dir, 'manifest.json')
+    with open(manifest_path, 'w', encoding='utf-8') as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
+    remember_latest_manifest(manifest_path)
+
+    print(f'Created batch package: {package_dir}')
+    print(f"Pending files: {manifest['summary']['file_count']}")
+    print(f"Chunks: {manifest['summary']['chunk_count']}")
+    print(f"Items: {manifest['summary']['item_count']}")
+    if build_warnings:
+        print('Warnings:')
+        for warning_text in build_warnings:
+            print(f'- {warning_text}')
+    return manifest_path
+
+
+
+
+def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix=''):
+    manifest = load_manifest(target)
+    chunks = manifest.get('chunks') or []
+    if not chunks:
+        raise SystemExit('Manifest does not contain any chunks to split.')
+
+    input_jsonl_path = manifest.get('input_jsonl_path')
+    if not input_jsonl_path or not os.path.isfile(input_jsonl_path):
+        raise SystemExit(f'Input JSONL not found: {input_jsonl_path}')
+
+    if max_chunks <= 0 and max_items <= 0:
+        raise SystemExit('At least one of --max-chunks or --max-items must be greater than 0.')
+
+    with open(input_jsonl_path, 'r', encoding='utf-8') as handle:
+        request_lines = handle.readlines()
+
+    if len(request_lines) != len(chunks):
+        raise SystemExit(
+            f'Chunk count mismatch between manifest ({len(chunks)}) and requests.jsonl ({len(request_lines)}).'
+        )
+
+    for index, (chunk, raw_line) in enumerate(zip(chunks, request_lines), start=1):
+        try:
+            row = json.loads(raw_line)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f'Invalid JSONL row #{index}: {exc}') from exc
+        if row.get('key') != chunk.get('key'):
+            raise SystemExit(
+                f"Chunk key mismatch at row #{index}: manifest={chunk.get('key')} jsonl={row.get('key')}"
+            )
+
+    grouped = split_chunks_and_lines(
+        chunks,
+        request_lines,
+        max_chunks=max_chunks,
+        max_items=max_items,
+    )
+    if len(grouped) <= 1:
+        print('Split not needed; current package already fits the requested limits.')
+        return [manifest['_manifest_path']]
+
+    source_package_dir = manifest['_package_dir']
+    split_root = os.path.join(source_package_dir, 'split_parts')
+    os.makedirs(split_root, exist_ok=True)
+
+    total_parts = len(grouped)
+    now = datetime.now().isoformat(timespec='seconds')
+    created_manifests = []
+    source_display_name = manifest.get('display_name') or os.path.basename(source_package_dir)
+    part_name_prefix = display_name_prefix.strip() if display_name_prefix else source_display_name
+
+    for index, (part_chunks, part_lines) in enumerate(grouped, start=1):
+        part_dir = os.path.join(split_root, f'part{index:02d}_of_{total_parts:02d}')
+        os.makedirs(part_dir, exist_ok=True)
+
+        part_input_jsonl_path = os.path.join(part_dir, 'requests.jsonl')
+        with open(part_input_jsonl_path, 'w', encoding='utf-8') as handle:
+            handle.writelines(part_lines)
+
+        part_files = summarize_files_for_chunks(part_chunks)
+        part_manifest = {
+            'version': manifest.get('version', 1),
+            'created_at': now,
+            'display_name': f'{part_name_prefix}-part{index:02d}',
+            'batch_model': manifest.get('batch_model', BATCH_MODEL),
+            'base_dir': manifest.get('base_dir', legacy.BASE_DIR),
+            'tl_dir': manifest.get('tl_dir', legacy.TL_DIR),
+            'input_jsonl_path': part_input_jsonl_path,
+            'result_jsonl_path': '',
+            'job_name': '',
+            'job_state': 'LOCAL_ONLY',
+            'uploaded_file_name': '',
+            'result_file_name': '',
+            'settings': dict(manifest.get('settings') or {}),
+            'summary': {
+                'file_count': len(part_files),
+                'chunk_count': len(part_chunks),
+                'item_count': sum(len(chunk.get('items', [])) for chunk in part_chunks),
+            },
+            'files': part_files,
+            'chunks': part_chunks,
+            'split_from_manifest': manifest['_manifest_path'],
+            'split_from_package': source_package_dir,
+            'split_index': index,
+            'split_total': total_parts,
+            'split_limits': {
+                'max_chunks': max_chunks,
+                'max_items': max_items,
+            },
+        }
+
+        part_manifest_path = os.path.join(part_dir, 'manifest.json')
+        with open(part_manifest_path, 'w', encoding='utf-8') as handle:
+            json.dump(part_manifest, handle, ensure_ascii=False, indent=2)
+
+        created_manifests.append(part_manifest_path)
+        remember_latest_manifest(part_manifest_path)
+
+        print(f'Created split package: {part_dir}')
+        print(f"Chunks: {part_manifest['summary']['chunk_count']}")
+        print(f"Items: {part_manifest['summary']['item_count']}")
+
+    manifest['split_children'] = created_manifests
+    manifest['split_generated_at'] = now
+    manifest['job_state'] = 'LOCAL_SPLIT_SOURCE'
+    save_manifest(manifest)
+
+    print(f'Source manifest updated: {manifest["_manifest_path"]}')
+    return created_manifests
+
+def submit_manifest(target=None, display_name_override='', model_override=''):
+    manifest = load_manifest(target) if target else None
+    if manifest is None:
+        manifest_path = create_batch_package(display_name_override=display_name_override)
+        if not manifest_path:
+            return None
+        manifest = load_manifest(manifest_path)
+
+    if manifest.get('job_name'):
+        raise SystemExit(f"Manifest already submitted: {manifest['job_name']}")
+
+    if display_name_override:
+        manifest['display_name'] = display_name_override.strip()
+    if model_override:
+        manifest['batch_model'] = model_override.strip()
+
+    attempts = max(1, len(getattr(legacy, 'API_KEYS', [])))
+    last_error = None
+
+    for attempt in range(1, attempts + 1):
+        client = create_batch_client()
+        uploaded_file = None
+        try:
+            print(f"Uploading JSONL: {manifest['input_jsonl_path']}")
+            uploaded_file = client.files.upload(
+                file=manifest['input_jsonl_path'],
+                config=genai_types.UploadFileConfig(
+                    display_name=manifest['display_name'],
+                    mime_type='jsonl',
+                ),
+            )
+            manifest['uploaded_file_name'] = getattr(uploaded_file, 'name', '')
+            manifest.setdefault('uploaded_file_names', [])
+            if manifest['uploaded_file_name'] and manifest['uploaded_file_name'] not in manifest['uploaded_file_names']:
+                manifest['uploaded_file_names'].append(manifest['uploaded_file_name'])
+            manifest['last_submit_error'] = ''
+            save_manifest(manifest)
+            print(f'Uploaded file: {uploaded_file.name}')
+
+            print(f"Creating batch job with model: {manifest['batch_model']}")
+            batch_job = client.batches.create(
+                model=manifest['batch_model'],
+                src=uploaded_file.name,
+                config={'display_name': manifest['display_name']},
+            )
+
+            manifest['job_name'] = getattr(batch_job, 'name', '')
+            manifest['job_state'] = get_state_name(getattr(batch_job, 'state', None))
+            manifest['submitted_at'] = datetime.now().isoformat(timespec='seconds')
+            manifest['last_status_checked_at'] = manifest['submitted_at']
+            manifest['submitted_api_key_index'] = getattr(legacy, 'CURRENT_KEY_INDEX', 0)
+            manifest['submitted_api_key_number'] = manifest['submitted_api_key_index'] + 1
+            manifest['last_status_api_key_index'] = manifest['submitted_api_key_index']
+            manifest['last_submit_error'] = ''
+            save_manifest(manifest)
+
+            print(f"Batch job created: {manifest['job_name']}")
+            print(f"Manifest: {manifest['_manifest_path']}")
+            return manifest['_manifest_path']
+        except Exception as exc:
+            last_error = exc
+            manifest['last_submit_error'] = str(exc)
+            manifest['job_state'] = 'SUBMIT_FAILED'
+            if uploaded_file is not None:
+                manifest['uploaded_file_name'] = getattr(uploaded_file, 'name', '')
+                manifest.setdefault('uploaded_file_names', [])
+                if manifest['uploaded_file_name'] and manifest['uploaded_file_name'] not in manifest['uploaded_file_names']:
+                    manifest['uploaded_file_names'].append(manifest['uploaded_file_name'])
+            save_manifest(manifest)
+
+            if is_quota_error(exc) and attempt < attempts and legacy.rotate_api_key():
+                print(f'Quota hit during batch submit. Retrying with next API key ({attempt}/{attempts})...')
+                continue
+            raise
+
+    if last_error is not None:
+        raise last_error
+    return None
+
+
+def refresh_manifest_status(manifest):
+    client, batch_job = fetch_batch_job_for_manifest(manifest)
+
+    manifest['job_state'] = get_state_name(getattr(batch_job, 'state', None))
+    manifest['last_status_checked_at'] = datetime.now().isoformat(timespec='seconds')
+    manifest['batch_stats'] = extract_batch_stats(batch_job)
+    manifest['job_error'] = serialize_unknown(get_nested(batch_job, 'error'))
+    write_status_snapshot(manifest, batch_job)
+
+    dest = get_nested(batch_job, 'dest')
+    if dest:
+        result_file_name = get_nested(dest, 'file_name', 'fileName')
+        if result_file_name:
+            manifest['result_file_name'] = result_file_name
+
+    save_manifest(manifest)
+    return manifest
+
+
+def show_status(target=None):
+    manifest = load_manifest(target)
+    manifest = refresh_manifest_status(manifest)
+    print(f"Manifest: {manifest['_manifest_path']}")
+    print(f"Job: {manifest.get('job_name')}")
+    print(f"State: {manifest.get('job_state')}")
+    stats = manifest.get('batch_stats') or {}
+    if stats:
+        print(
+            'Stats: '
+            f"total={stats.get('request_count', '?')} "
+            f"ok={stats.get('successful_request_count', '?')} "
+            f"failed={stats.get('failed_request_count', '?')} "
+            f"pending={stats.get('pending_request_count', '?')}"
+        )
+    if manifest.get('result_file_name'):
+        print(f"Result file: {manifest['result_file_name']}")
+    if manifest.get('job_error'):
+        print(f"Error: {manifest['job_error']}")
+    elif manifest.get('job_state') == 'JOB_STATE_FAILED':
+        snapshot_path = manifest.get('last_status_snapshot_path')
+        if snapshot_path:
+            print('Error: API returned JOB_STATE_FAILED but no explicit job_error field.')
+            print(f'Status snapshot: {snapshot_path}')
+    return manifest
+
+
+def decode_downloaded_content(downloaded):
+    if isinstance(downloaded, bytes):
+        return downloaded.decode('utf-8')
+    if hasattr(downloaded, 'decode'):
+        return downloaded.decode('utf-8')
+    if hasattr(downloaded, 'text'):
+        return downloaded.text
+    return str(downloaded)
+
+
+def download_results(target=None, force=False):
+    manifest = load_manifest(target)
+    manifest = refresh_manifest_status(manifest)
+    state = manifest.get('job_state')
+    if state != 'JOB_STATE_SUCCEEDED':
+        raise SystemExit(f'Batch job is not succeeded yet: {state}')
+
+    result_path = manifest.get('result_jsonl_path') or os.path.join(manifest['_package_dir'], 'results.jsonl')
+    if os.path.isfile(result_path) and not force:
+        print(f'Result file already exists: {result_path}')
+        return result_path
+
+    result_file_name = manifest.get('result_file_name')
+    if not result_file_name:
+        raise SystemExit('Result file name is missing from manifest/job metadata.')
+
+    client = create_batch_client(api_key_index=manifest.get('submitted_api_key_index'))
+    print(f'Downloading result file: {result_file_name}')
+    downloaded = client.files.download(file=result_file_name)
+    text = decode_downloaded_content(downloaded)
+
+    with open(result_path, 'w', encoding='utf-8') as handle:
+        handle.write(text)
+
+    manifest['result_jsonl_path'] = result_path
+    manifest['downloaded_at'] = datetime.now().isoformat(timespec='seconds')
+    save_manifest(manifest)
+
+    print(f'Saved results to: {result_path}')
+    return result_path
+
+def extract_text_from_response_payload(response_payload):
+    payload = response_payload
+    if not isinstance(payload, dict):
+        return ''
+
+    nested_response = payload.get('response')
+    if isinstance(nested_response, dict):
+        payload = nested_response
+
+    candidates = payload.get('candidates')
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            content = candidate.get('content') if isinstance(candidate, dict) else None
+            parts = content.get('parts') if isinstance(content, dict) else None
+            if not isinstance(parts, list):
+                continue
+            texts = []
+            for part in parts:
+                if isinstance(part, dict) and part.get('text'):
+                    texts.append(part['text'])
+            if texts:
+                return ''.join(texts)
+
+    text = payload.get('text')
+    return text if isinstance(text, str) else ''
+
+
+def extract_finish_reason(response_payload):
+    payload = response_payload if isinstance(response_payload, dict) else {}
+    nested_response = payload.get('response')
+    if isinstance(nested_response, dict):
+        payload = nested_response
+
+    candidates = payload.get('candidates')
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if isinstance(candidate, dict) and candidate.get('finishReason'):
+                return str(candidate['finishReason'])
+    return ''
+
+
+def extract_usage_metadata(response_payload):
+    payload = response_payload if isinstance(response_payload, dict) else {}
+    nested_response = payload.get('response')
+    if isinstance(nested_response, dict):
+        payload = nested_response
+    usage = payload.get('usageMetadata')
+    return usage if isinstance(usage, dict) else {}
+
+
+def summarize_usage_metadata(usage_metadata):
+    if not isinstance(usage_metadata, dict):
+        return {}
+    summary = {}
+    for key in ('promptTokenCount', 'thoughtsTokenCount', 'candidatesTokenCount', 'totalTokenCount'):
+        value = usage_metadata.get(key)
+        if value is not None:
+            summary[key] = value
+    return summary
+
+
+def bump_counter(bucket, name, amount=1):
+    bucket[name] = bucket.get(name, 0) + amount
+
+
+def salvage_partial_json_array(text):
+    start = text.find('[')
+    if start < 0:
+        return []
+
+    decoder = json.JSONDecoder()
+    index = start + 1
+    items = []
+    while index < len(text):
+        while index < len(text) and text[index] in ' \r\n\t,':
+            index += 1
+        if index >= len(text):
+            break
+        if text[index] == ']':
+            return items
+        try:
+            item, index = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            break
+        items.append(item)
+    return items
+
+
+def parse_json_payload(text):
+    if not text:
+        raise ValueError('Empty response text')
+
+    cleaned = text.strip()
+    if cleaned.startswith('```'):
+        cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
+        cleaned = re.sub(r'\s*```$', '', cleaned)
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find('[')
+        end = cleaned.rfind(']')
+        if start >= 0 and end > start:
+            try:
+                return json.loads(cleaned[start:end + 1])
+            except json.JSONDecodeError:
+                pass
+        salvaged = salvage_partial_json_array(cleaned)
+        if salvaged:
+            return salvaged
+        raise
+
+
+def normalize_result_items(payload):
+    data = payload
+    if isinstance(data, dict):
+        if isinstance(data.get('items'), list):
+            data = data['items']
+        elif isinstance(data.get('translations'), list):
+            data = data['translations']
+
+    if not isinstance(data, list):
+        raise ValueError(f'Response JSON is not a list: {type(data)}')
+
+    normalized = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        item_id = item.get('id')
+        translation = item.get('translation')
+        if item_id is None or translation is None:
+            continue
+        normalized.append({'id': str(item_id), 'translation': str(translation)})
+    return normalized
+
+
+def append_failure_entries(entries, package_dir=''):
+    if not entries:
+        return
+
+    paths = [FAILED_LOG]
+    if package_dir:
+        paths.append(os.path.join(package_dir, 'failures.jsonl'))
+
+    for path in paths:
+        try:
+            with open(path, 'a', encoding='utf-8') as handle:
+                for entry in entries:
+                    handle.write(json.dumps(entry, ensure_ascii=False) + '\n')
+        except Exception as exc:
+            print(f'Warning: Could not write failure log {path}: {exc}')
+
+
+def collect_result_actions(manifest):
+    result_path = manifest.get('result_jsonl_path')
+    if not result_path or not os.path.isfile(result_path):
+        raise SystemExit('Result JSONL not found. Run download first.')
+
+    chunk_map = {chunk['key']: chunk for chunk in manifest.get('chunks', [])}
+    replacements_by_file = {}
+    translated_lines_by_file = {}
+    processed_keys = set()
+    failure_entries = []
+    summary = {
+        'expected_chunks': len(chunk_map),
+        'result_rows': 0,
+        'expected_items': sum(len(chunk['items']) for chunk in chunk_map.values()),
+        'valid_items': 0,
+        'chunk_row_errors': 0,
+        'missing_response_chunks': 0,
+        'partial_chunks': 0,
+        'max_tokens_chunks': 0,
+        'reason_counts': {},
+    }
+
+    with open(result_path, 'r', encoding='utf-8') as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            summary['result_rows'] += 1
+
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                summary['chunk_row_errors'] += 1
+                bump_counter(summary['reason_counts'], 'invalid_result_jsonl_row')
+                failure_entries.append(
+                    {
+                        'timestamp': datetime.now().isoformat(timespec='seconds'),
+                        'package': manifest['_package_dir'],
+                        'error': f'Invalid result JSONL row: {exc}',
+                        'raw': line[:500],
+                    }
+                )
+                continue
+
+            key = row.get('key')
+            if not key or key not in chunk_map:
+                bump_counter(summary['reason_counts'], 'unknown_chunk_key')
+                failure_entries.append(
+                    {
+                        'timestamp': datetime.now().isoformat(timespec='seconds'),
+                        'package': manifest['_package_dir'],
+                        'error': 'Unknown chunk key in result file',
+                        'key': key,
+                    }
+                )
+                continue
+
+            processed_keys.add(key)
+            chunk = chunk_map[key]
+            chunk_items = chunk['items']
+            item_map = {item['id']: item for item in chunk_items}
+            response_payload = row.get('response', {})
+            finish_reason = extract_finish_reason(response_payload)
+            usage_metadata = summarize_usage_metadata(extract_usage_metadata(response_payload))
+            if finish_reason == 'MAX_TOKENS':
+                summary['max_tokens_chunks'] += 1
+
+            if row.get('error'):
+                summary['chunk_row_errors'] += 1
+                bump_counter(summary['reason_counts'], 'row_error')
+                for item in chunk_items:
+                    failure_entries.append(
+                        {
+                            'timestamp': datetime.now().isoformat(timespec='seconds'),
+                            'package': manifest['_package_dir'],
+                            'key': key,
+                            'file_rel_path': chunk['file_rel_path'],
+                            'id': item['id'],
+                            'line': item['line'],
+                            'text': item['text'],
+                            'error': serialize_unknown(row.get('error')),
+                            'finish_reason': finish_reason,
+                            'usage_metadata': usage_metadata,
+                        }
+                    )
+                continue
+
+            response_text = extract_text_from_response_payload(response_payload)
+            if not response_text:
+                summary['missing_response_chunks'] += 1
+                bump_counter(summary['reason_counts'], 'missing_response_text')
+                for item in chunk_items:
+                    failure_entries.append(
+                        {
+                            'timestamp': datetime.now().isoformat(timespec='seconds'),
+                            'package': manifest['_package_dir'],
+                            'key': key,
+                            'file_rel_path': chunk['file_rel_path'],
+                            'id': item['id'],
+                            'line': item['line'],
+                            'text': item['text'],
+                            'error': 'Missing text in response payload',
+                            'finish_reason': finish_reason,
+                            'usage_metadata': usage_metadata,
+                        }
+                    )
+                continue
+
+            try:
+                payload = parse_json_payload(response_text)
+                result_items = normalize_result_items(payload)
+            except Exception as exc:
+                summary['partial_chunks'] += 1
+                reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'failed_to_parse_model_json'
+                bump_counter(summary['reason_counts'], reason_name)
+                for item in chunk_items:
+                    failure_entries.append(
+                        {
+                            'timestamp': datetime.now().isoformat(timespec='seconds'),
+                            'package': manifest['_package_dir'],
+                            'key': key,
+                            'file_rel_path': chunk['file_rel_path'],
+                            'id': item['id'],
+                            'line': item['line'],
+                            'text': item['text'],
+                            'error': f'Failed to parse model JSON: {exc}',
+                            'response_preview': response_text[:500],
+                            'finish_reason': finish_reason,
+                            'usage_metadata': usage_metadata,
+                        }
+                    )
+                continue
+
+            if len(result_items) < len(chunk_items):
+                summary['partial_chunks'] += 1
+                reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_result_items'
+                bump_counter(summary['reason_counts'], reason_name)
+
+            seen_ids = set()
+            for result_item in result_items:
+                target_item = item_map.get(result_item['id'])
+                if not target_item:
+                    bump_counter(summary['reason_counts'], 'schema_or_item_mismatch')
+                    continue
+                seen_ids.add(result_item['id'])
+
+                valid, reason = legacy.validate_translation(target_item['text'], result_item['translation'])
+                if not valid and reason == 'No Chinese characters' and allow_non_chinese_batch_translation(
+                    manifest,
+                    chunk,
+                    target_item['text'],
+                    result_item['translation'],
+                ):
+                    valid = True
+                    reason = 'OK'
+                if not valid:
+                    bump_counter(summary['reason_counts'], 'validation_failed')
+                    failure_entries.append(
+                        {
+                            'timestamp': datetime.now().isoformat(timespec='seconds'),
+                            'package': manifest['_package_dir'],
+                            'key': key,
+                            'file_rel_path': chunk['file_rel_path'],
+                            'id': target_item['id'],
+                            'line': target_item['line'],
+                            'text': target_item['text'],
+                            'error': f'Validation failed: {reason}',
+                            'translation': result_item['translation'],
+                            'finish_reason': finish_reason,
+                            'usage_metadata': usage_metadata,
+                        }
+                    )
+                    continue
+
+                summary['valid_items'] += 1
+                file_key = chunk['file_rel_path']
+                replacements_by_file.setdefault(file_key, {}).setdefault(target_item['line'], []).append(
+                    (
+                        target_item['start'],
+                        target_item['end'],
+                        result_item['translation'],
+                        target_item['quote'],
+                    )
+                )
+                translated_lines_by_file.setdefault(file_key, set()).add(target_item['line'])
+
+            missing_ids = set(item_map.keys()) - seen_ids
+            if missing_ids:
+                bump_counter(summary['reason_counts'], 'response_missing_item_id', len(missing_ids))
+            for missing_id in sorted(missing_ids):
+                item = item_map[missing_id]
+                failure_entries.append(
+                    {
+                        'timestamp': datetime.now().isoformat(timespec='seconds'),
+                        'package': manifest['_package_dir'],
+                        'key': key,
+                        'file_rel_path': chunk['file_rel_path'],
+                        'id': item['id'],
+                        'line': item['line'],
+                        'text': item['text'],
+                        'error': 'Response missing item id',
+                        'finish_reason': finish_reason,
+                        'usage_metadata': usage_metadata,
+                    }
+                )
+
+    missing_keys = set(chunk_map.keys()) - processed_keys
+    if missing_keys:
+        bump_counter(summary['reason_counts'], 'missing_chunk_rows', len(missing_keys))
+    for key in sorted(missing_keys):
+        chunk = chunk_map[key]
+        for item in chunk['items']:
+            failure_entries.append(
+                {
+                    'timestamp': datetime.now().isoformat(timespec='seconds'),
+                    'package': manifest['_package_dir'],
+                    'key': key,
+                    'file_rel_path': chunk['file_rel_path'],
+                    'id': item['id'],
+                    'line': item['line'],
+                    'text': item['text'],
+                    'error': 'No result row found for chunk',
+                }
+            )
+
+    summary['failure_items'] = len(failure_entries)
+    summary['processed_chunks'] = len(processed_keys)
+    return replacements_by_file, translated_lines_by_file, failure_entries, summary
+
+
+def print_check_summary(summary):
+    print(f"Expected chunks: {summary['expected_chunks']}")
+    print(f"Result rows: {summary['result_rows']}")
+    print(f"Processed chunks: {summary['processed_chunks']}")
+    print(f"Expected items: {summary['expected_items']}")
+    print(f"Recoverable valid items: {summary['valid_items']}")
+    print(f"Failure items: {summary['failure_items']}")
+    print(f"Chunk row errors: {summary['chunk_row_errors']}")
+    print(f"Missing-response chunks: {summary['missing_response_chunks']}")
+    print(f"Partial/truncated chunks: {summary['partial_chunks']}")
+    print(f"MAX_TOKENS chunks: {summary['max_tokens_chunks']}")
+    if summary.get('reason_counts'):
+        print('Failure categories:')
+        for name in sorted(summary['reason_counts']):
+            print(f"- {name}: {summary['reason_counts'][name]}")
+
+
+def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
+    manifest = load_manifest(target)
+    rows = load_request_rows(manifest)
+    if offset < 0:
+        offset = 0
+    if limit <= 0:
+        raise SystemExit('--limit must be greater than 0.')
+    sample = rows[offset:offset + limit]
+    if not sample:
+        raise SystemExit('No request rows available for the requested probe range.')
+
+    client = create_batch_client(api_key_index=api_key_index)
+    summary = {
+        'sample_count': len(sample),
+        'parse_ok': 0,
+        'full_item_match': 0,
+        'max_tokens': 0,
+        'missing_text': 0,
+        'request_errors': 0,
+    }
+    probe_results = []
+
+    for index, row in enumerate(sample, start=1):
+        key = row.get('key', f'probe-{index}')
+        request_payload = row.get('request') or {}
+        config = dict(request_payload.get('generation_config') or {})
+        system_instruction = request_payload.get('system_instruction')
+        if system_instruction:
+            config['system_instruction'] = system_instruction
+
+        expected_items = len(((manifest.get('chunks') or []) and next((chunk['items'] for chunk in manifest['chunks'] if chunk['key'] == key), [])) or [])
+        parse_ok = False
+        parsed_items = 0
+        parse_error = ''
+        finish_reason = ''
+        usage_metadata = {}
+        response_text = ''
+        try:
+            response = client.models.generate_content(
+                model=manifest.get('batch_model') or BATCH_MODEL,
+                contents=request_payload.get('contents') or [],
+                config=config,
+            )
+            response_payload = serialize_unknown(response)
+            finish_reason = extract_finish_reason(response_payload)
+            usage_metadata = summarize_usage_metadata(extract_usage_metadata(response_payload))
+            response_text = extract_text_from_response_payload(response_payload)
+        except Exception as exc:
+            summary['request_errors'] += 1
+            parse_error = str(exc)
+        if response_text:
+            try:
+                payload = parse_json_payload(response_text)
+                result_items = normalize_result_items(payload)
+                parsed_items = len(result_items)
+                parse_ok = True
+            except Exception as exc:
+                parse_error = str(exc)
+        else:
+            summary['missing_text'] += 1
+            if not parse_error:
+                parse_error = 'Missing text in response payload'
+
+        if finish_reason == 'MAX_TOKENS':
+            summary['max_tokens'] += 1
+        if parse_ok:
+            summary['parse_ok'] += 1
+        if parse_ok and parsed_items == expected_items:
+            summary['full_item_match'] += 1
+
+        probe_row = {
+            'index': index,
+            'key': key,
+            'finish_reason': finish_reason,
+            'usage_metadata': usage_metadata,
+            'expected_items': expected_items,
+            'parsed_items': parsed_items,
+            'parse_ok': parse_ok,
+            'parse_error': parse_error,
+            'response_preview': response_text[:500] if response_text else '',
+        }
+        probe_results.append(probe_row)
+        print(f"[{index}/{len(sample)}] {key}")
+        print(f"  finish_reason: {finish_reason or '(none)'}")
+        print(f"  usage: {usage_metadata or {}}")
+        print(f"  parsed_items: {parsed_items}/{expected_items}")
+        print(f"  parse_ok: {parse_ok}")
+        if parse_error:
+            print(f"  parse_error: {parse_error}")
+
+    summary_path = os.path.join(manifest['_package_dir'], 'probe_summary.json')
+    results_path = os.path.join(manifest['_package_dir'], 'probe_results.jsonl')
+    with open(summary_path, 'w', encoding='utf-8') as handle:
+        json.dump(summary, handle, ensure_ascii=False, indent=2)
+    with open(results_path, 'w', encoding='utf-8') as handle:
+        for row in probe_results:
+            handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+
+    print('Probe summary:')
+    print(f"- sample_count: {summary['sample_count']}")
+    print(f"- parse_ok: {summary['parse_ok']}")
+    print(f"- full_item_match: {summary['full_item_match']}")
+    print(f"- max_tokens: {summary['max_tokens']}")
+    print(f"- missing_text: {summary['missing_text']}")
+    print(f"- request_errors: {summary['request_errors']}")
+    print(f"- summary_file: {summary_path}")
+    print(f"- results_file: {results_path}")
+    return summary
+
+
+def check_results(target=None):
+    manifest = load_manifest(target)
+    _replacements, _translated, _failures, summary = collect_result_actions(manifest)
+    manifest['last_check_at'] = datetime.now().isoformat(timespec='seconds')
+    manifest['last_check_summary'] = summary
+    save_manifest(manifest)
+    print(f"Manifest: {manifest['_manifest_path']}")
+    print_check_summary(summary)
+    return manifest
+
+
+def apply_results(target=None):
+    manifest = load_manifest(target)
+    replacements_by_file, translated_lines_by_file, failure_entries, summary = collect_result_actions(manifest)
+
+    applied_files = 0
+    applied_lines = 0
+    rag_jobs = []
+    for file_key, replacements in replacements_by_file.items():
+        file_info = manifest['files'].get(file_key)
+        if not file_info:
+            continue
+        file_path = file_info['path']
+        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+            lines = handle.readlines()
+        legacy.commit_replacements(file_path, lines, replacements)
+        line_numbers = sorted(translated_lines_by_file.get(file_key, set()))
+        update_progress(file_key, line_numbers)
+        applied_files += 1
+        applied_lines += len(line_numbers)
+        if line_numbers:
+            rag_jobs.append({'file_rel_path': file_key, 'file_path': file_path})
+
+    append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
+
+    rag_apply_summary = {}
+    if RAG_ENABLED and rag_jobs:
+        rag_apply_summary = sync_rag_store_for_jobs(rag_jobs, quality_state='batch_applied')
+
+    manifest['applied_at'] = datetime.now().isoformat(timespec='seconds')
+    manifest['apply_summary'] = {
+        'applied_files': applied_files,
+        'applied_lines': applied_lines,
+        'recoverable_items': summary['valid_items'],
+        'failure_count': len(failure_entries),
+        'rag': rag_apply_summary,
+    }
+    save_manifest(manifest)
+
+    print_check_summary(summary)
+    print(f'Applied files: {applied_files}')
+    print(f'Applied lines: {applied_lines}')
+    print(f'Failures logged: {len(failure_entries)}')
+    if rag_apply_summary:
+        print(f"RAG store updated: {rag_apply_summary.get('upserted', 0)} entries")
+    if failure_entries:
+        print(f"Failure log: {os.path.join(manifest['_package_dir'], 'failures.jsonl')}")
+    return manifest
+
+
+REPAIR_LINE_COMMENT_RE = re.compile(r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"\s*$')
+REPAIR_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
+REPAIR_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
+
+
+def write_jsonl_file(path, entries):
+    with open(path, 'w', encoding='utf-8') as handle:
+        for entry in entries:
+            handle.write(json.dumps(entry, ensure_ascii=False) + '\n')
+
+
+def extract_string_token_from_line(line):
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
+    except Exception:
+        return None
+
+    for token in tokens:
+        if token.type != tokenize.STRING:
+            continue
+        try:
+            text_value = ast.literal_eval(token.string)
+        except Exception:
+            continue
+        return {
+            'text': text_value,
+            'start': token.start[1],
+            'end': token.end[1],
+            'quote': token.string[0],
+        }
+    return None
+
+
+def collect_translation_entries_from_lines(lines):
+    entries = []
+    index = 0
+    while index < len(lines):
+        raw_line = lines[index].rstrip('\n')
+        comment_match = REPAIR_LINE_COMMENT_RE.match(raw_line)
+        if comment_match:
+            next_index = index + 1
+            while next_index < len(lines) and not lines[next_index].strip():
+                next_index += 1
+            if next_index < len(lines):
+                token = extract_string_token_from_line(lines[next_index])
+                if token:
+                    entries.append(
+                        {
+                            'line_number': next_index + 1,
+                            'source': comment_match.group('text'),
+                            'translation': token['text'],
+                            'start': token['start'],
+                            'end': token['end'],
+                            'quote': token['quote'],
+                        }
+                    )
+            index = next_index
+        else:
+            old_match = REPAIR_OLD_LINE_RE.match(raw_line)
+            if old_match:
+                next_index = index + 1
+                while next_index < len(lines) and not lines[next_index].strip():
+                    next_index += 1
+                if next_index < len(lines) and REPAIR_NEW_LINE_RE.match(lines[next_index].rstrip('\n')):
+                    token = extract_string_token_from_line(lines[next_index])
+                    if token:
+                        entries.append(
+                            {
+                                'line_number': next_index + 1,
+                                'source': old_match.group('text'),
+                                'translation': token['text'],
+                                'start': token['start'],
+                                'end': token['end'],
+                                'quote': token['quote'],
+                            }
+                        )
+                index = next_index
+        index += 1
+
+    for entry_index, entry in enumerate(entries):
+        entry['entry_index'] = entry_index
+    return entries
+
+
+def should_index_rag_entry(entry):
+    source = compact_text(entry.get('source', ''))
+    translation = compact_text(entry.get('translation', ''))
+    if not source or not translation:
+        return False
+    if source == translation:
+        return False
+    return True
+
+
+def build_rag_record(file_rel_path, group, quality_state):
+    source_text = '\n'.join(entry.get('source', '') for entry in group).strip()
+    translated_text = '\n'.join(entry.get('translation', '') for entry in group).strip()
+    line_start = group[0]['line_number']
+    line_end = group[-1]['line_number']
+    combined_text = f"Source:\n{source_text}\n\nTranslation:\n{translated_text}"
+    memory_id = hash_key(f"{file_rel_path}:{line_start}:{line_end}:{source_text}")
+    return {
+        'memory_id': memory_id,
+        'file_rel_path': file_rel_path,
+        'line_start': line_start,
+        'line_end': line_end,
+        'source_text': source_text,
+        'translated_text': translated_text,
+        'combined_text': combined_text,
+        'quality_state': quality_state,
+        'created_at': datetime.now().isoformat(timespec='seconds'),
+        'source_checksum': hash_text(source_text),
+        'translation_checksum': hash_text(translated_text),
+    }
+
+
+def collect_rag_seed_records_for_jobs(file_jobs, quality_state='seed'):
+    records = []
+    segment_size = max(1, RAG_SEGMENT_LINES)
+    for job in file_jobs:
+        file_rel_path = job.get('file_rel_path')
+        file_path = job.get('file_path')
+        if not file_rel_path or not file_path or not os.path.isfile(file_path):
+            continue
+        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+            entries = collect_translation_entries_from_lines(handle.readlines())
+        usable_entries = [entry for entry in entries if should_index_rag_entry(entry)]
+        for start in range(0, len(usable_entries), segment_size):
+            group = usable_entries[start:start + segment_size]
+            if group:
+                records.append(build_rag_record(file_rel_path, group, quality_state))
+    return records
+
+
+def embed_history_records(records):
+    embedded_records = []
+    batch_size = 16
+    for start in range(0, len(records), batch_size):
+        batch = records[start:start + batch_size]
+        vectors = embed_texts([record['combined_text'] for record in batch], RAG_DOCUMENT_TASK_TYPE)
+        for record, vector in zip(batch, vectors):
+            enriched = dict(record)
+            enriched['embedding'] = vector
+            enriched['embedding_model'] = RAG_EMBEDDING_MODEL
+            enriched['embedding_task_type'] = RAG_DOCUMENT_TASK_TYPE
+            enriched['embedding_dim'] = len(vector)
+            embedded_records.append(enriched)
+    return embedded_records
+
+
+def sync_rag_store_for_jobs(file_jobs, quality_state='seed'):
+    if not RAG_ENABLED:
+        return {'enabled': False}
+    store = get_rag_store()
+    if store is None:
+        return {'enabled': True, 'error': 'RAG store unavailable'}
+
+    base_records = collect_rag_seed_records_for_jobs(file_jobs, quality_state=quality_state)
+    pending_records = []
+    for record in base_records:
+        existing = store.get_history_record(record['memory_id'])
+        if (
+            existing
+            and existing.get('source_checksum') == record['source_checksum']
+            and existing.get('translation_checksum') == record['translation_checksum']
+            and existing.get('embedding_model') == RAG_EMBEDDING_MODEL
+            and existing.get('embedding_task_type') == RAG_DOCUMENT_TASK_TYPE
+            and existing.get('embedding_dim') == RAG_OUTPUT_DIMENSIONALITY
+        ):
+            continue
+        pending_records.append(record)
+
+    stats = {
+        'enabled': True,
+        'store_dir': store.store_dir,
+        'scanned': len(base_records),
+        'pending': len(pending_records),
+        'upserted': 0,
+        'history_records_before': store.count_history(),
+    }
+    if not pending_records:
+        stats['history_records_after'] = store.count_history()
+        return stats
+
+    try:
+        embedded_records = embed_history_records(pending_records)
+        stats['upserted'] = store.upsert_history(embedded_records)
+        stats['history_records_after'] = store.count_history()
+    except Exception as exc:
+        print(f'Warning: Failed to update RAG store: {exc}')
+        stats['error'] = str(exc)
+        stats['history_records_after'] = store.count_history()
+    return stats
+
+
+def prepare_rag_store(file_jobs):
+    if not RAG_ENABLED:
+        return {'enabled': False}
+    store = get_rag_store()
+    summary = {
+        'enabled': True,
+        'store_dir': store.store_dir if store else '',
+        'history_records_before': store.count_history() if store else 0,
+        'bootstrap_on_build': RAG_BOOTSTRAP_ON_BUILD,
+    }
+    if RAG_BOOTSTRAP_ON_BUILD:
+        summary.update(sync_rag_store_for_jobs(file_jobs, quality_state='seed'))
+    return summary
+
+
+
+def entry_context_text(entry):
+    translated = entry.get('translation', '')
+    if legacy.contains_chinese(translated):
+        return translated
+    return entry.get('source', '')
+
+
+def load_repair_report_items(report_path):
+    if not report_path or not os.path.isfile(report_path):
+        raise SystemExit(f'Repair report not found: {report_path}')
+
+    items = []
+    seen = set()
+    with open(report_path, 'r', encoding='utf-8-sig') as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f'Invalid repair report JSONL row: {exc}') from exc
+            file_path = row.get('file')
+            line_number = row.get('line')
+            source_text = row.get('source')
+            if not file_path or not isinstance(line_number, int) or source_text is None:
+                continue
+            dedupe_key = (file_path, line_number)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            items.append(row)
+
+    items.sort(key=lambda item: (item.get('game', ''), item['file'], item['line']))
+    return items
+
+
+def build_repair_jobs(report_items, batch_size=2, context_before=2, context_after=2):
+    jobs = []
+    unresolved = []
+    items_by_file = {}
+    for item in report_items:
+        items_by_file.setdefault(item['file'], []).append(item)
+
+    for file_path in sorted(items_by_file):
+        file_items = sorted(items_by_file[file_path], key=lambda item: item['line'])
+        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+            lines = handle.readlines()
+        entries = collect_translation_entries_from_lines(lines)
+        line_map = {entry['line_number']: entry for entry in entries}
+
+        targets = []
+        for item in file_items:
+            entry = line_map.get(item['line'])
+            if not entry:
+                unresolved.append(
+                    {
+                        'file': file_path,
+                        'line': item.get('line'),
+                        'source': item.get('source', ''),
+                        'error': 'Could not locate target line in current tl file',
+                    }
+                )
+                continue
+            target = dict(item)
+            target['id'] = f"{file_path}:{entry['line_number']}"
+            target['text'] = item['source']
+            target['start'] = entry['start']
+            target['end'] = entry['end']
+            target['quote'] = entry['quote']
+            target['entry_index'] = entry['entry_index']
+            targets.append(target)
+
+        if not targets:
+            continue
+
+        current_group = []
+        previous_index = None
+        for target in targets:
+            current_index = target['entry_index']
+            if (
+                current_group
+                and (
+                    len(current_group) >= batch_size
+                    or previous_index is None
+                    or current_index != previous_index + 1
+                )
+            ):
+                jobs.append(_build_repair_job(file_path, entries, current_group, context_before, context_after))
+                current_group = []
+            current_group.append(target)
+            previous_index = current_index
+        if current_group:
+            jobs.append(_build_repair_job(file_path, entries, current_group, context_before, context_after))
+
+    return jobs, unresolved
+
+
+def _build_repair_job(file_path, entries, target_group, context_before, context_after):
+    first_index = target_group[0]['entry_index']
+    last_index = target_group[-1]['entry_index']
+    context_past = [
+        entry_context_text(entry)
+        for entry in entries[max(0, first_index - context_before):first_index]
+    ]
+    context_future = [
+        entry_context_text(entry)
+        for entry in entries[last_index + 1:last_index + 1 + context_after]
+    ]
+    return {
+        'key': hashlib.sha1(f"repair:{file_path}:{target_group[0]['line']}:{target_group[-1]['line']}".encode('utf-8')).hexdigest()[:12],
+        'file_path': file_path,
+        'context_past': context_past,
+        'context_future': context_future,
+        'items': [
+            {
+                'id': target['id'],
+                'text': target['text'],
+                'line': target['line'],
+                'start': target['start'],
+                'end': target['end'],
+                'quote': target['quote'],
+            }
+            for target in target_group
+        ],
+    }
+
+
+def build_repair_request(job):
+    instruction = (
+        build_system_instruction()
+        + '\nSome targets may be short interjections, short UI text, or short reactions. Translate them naturally in context.'
+    )
+    return {
+        'key': job['key'],
+        'request': {
+            'system_instruction': {'parts': [{'text': instruction}]},
+            'contents': [
+                {
+                    'role': 'user',
+                    'parts': [
+                        {
+                            'text': build_user_prompt(
+                                job['context_past'],
+                                job['items'],
+                                job['context_future'],
+                            )
+                        }
+                    ],
+                }
+            ],
+            'generation_config': build_generation_config(job['items']),
+        },
+    }
+
+
+def run_sync_request(request_payload, model_name, api_key_index=None):
+    attempts = 1 if api_key_index is not None else max(1, len(getattr(legacy, 'API_KEYS', [])))
+    last_error = None
+
+    for attempt in range(1, attempts + 1):
+        client = create_batch_client(api_key_index=api_key_index)
+        try:
+            config = dict(request_payload.get('generation_config') or {})
+            system_instruction = request_payload.get('system_instruction')
+            if system_instruction:
+                config['system_instruction'] = system_instruction
+            response = client.models.generate_content(
+                model=model_name,
+                contents=request_payload.get('contents') or [],
+                config=config,
+            )
+            response_payload = serialize_unknown(response)
+            return {
+                'response_payload': response_payload,
+                'response_text': extract_text_from_response_payload(response_payload),
+                'finish_reason': extract_finish_reason(response_payload),
+                'usage_metadata': summarize_usage_metadata(extract_usage_metadata(response_payload)),
+            }
+        except Exception as exc:
+            last_error = exc
+            retryable = is_quota_error(exc) or is_unavailable_error(exc)
+            if api_key_index is None and retryable and attempt < attempts and legacy.rotate_api_key():
+                label = 'quota' if is_quota_error(exc) else 'service unavailable'
+                print(f'Repair hit {label}. Retrying with next API key ({attempt}/{attempts})...')
+                time.sleep(min(attempt, 2))
+                continue
+            raise
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError('Repair request failed without a captured exception.')
+
+
+def print_repair_summary(summary):
+    print(f"Requested items: {summary['requested_items']}")
+    print(f"Repair jobs: {summary['job_count']}")
+    print(f"Applied items: {summary['applied_items']}")
+    print(f"Applied files: {summary['applied_files']}")
+    print(f"Failure items: {summary['failure_items']}")
+    print(f"Request errors: {summary['request_errors']}")
+    print(f"Parse errors: {summary['parse_errors']}")
+    print(f"Validation failures: {summary['validation_failures']}")
+    print(f"Missing item ids: {summary['missing_item_ids']}")
+    print(f"Unresolved items: {summary['unresolved_items']}")
+    if summary.get('reason_counts'):
+        print('Failure categories:')
+        for name in sorted(summary['reason_counts']):
+            print(f"- {name}: {summary['reason_counts'][name]}")
+
+
+def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context_before=2, context_after=2, api_key_index=None):
+    report_items = load_repair_report_items(report_path)
+    if offset < 0:
+        offset = 0
+    if limit and limit > 0:
+        report_items = report_items[offset:offset + limit]
+    else:
+        report_items = report_items[offset:]
+    if not report_items:
+        raise SystemExit('No repair items available for the requested range.')
+
+    jobs, unresolved = build_repair_jobs(
+        report_items,
+        batch_size=batch_size,
+        context_before=context_before,
+        context_after=context_after,
+    )
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    report_stem = os.path.splitext(os.path.basename(report_path))[0]
+    run_dir = os.path.join(REPAIR_RUNS_DIR, f'{timestamp}_{report_stem}')
+    os.makedirs(run_dir, exist_ok=True)
+
+    request_log_path = os.path.join(run_dir, 'repair_requests.jsonl')
+    result_log_path = os.path.join(run_dir, 'repair_results.jsonl')
+    failure_log_path = os.path.join(run_dir, 'repair_failures.jsonl')
+    summary_path = os.path.join(run_dir, 'repair_summary.json')
+
+    replacements_by_file = {}
+    result_entries = []
+    failure_entries = []
+    reason_counts = {}
+    summary = {
+        'report_path': report_path,
+        'run_dir': run_dir,
+        'requested_items': len(report_items),
+        'job_count': len(jobs),
+        'applied_items': 0,
+        'applied_files': 0,
+        'failure_items': 0,
+        'request_errors': 0,
+        'parse_errors': 0,
+        'validation_failures': 0,
+        'missing_item_ids': 0,
+        'unresolved_items': len(unresolved),
+        'reason_counts': reason_counts,
+    }
+
+    for row in unresolved:
+        bump_counter(reason_counts, 'unresolved_line')
+        failure_entries.append(
+            {
+                'timestamp': datetime.now().isoformat(timespec='seconds'),
+                'error': row['error'],
+                'file': row['file'],
+                'line': row.get('line'),
+                'source': row.get('source', ''),
+            }
+        )
+
+    request_rows = [build_repair_request(job) for job in jobs]
+    write_jsonl_file(request_log_path, request_rows)
+
+    for index, (job, request_row) in enumerate(zip(jobs, request_rows), start=1):
+        finish_reason = ''
+        usage_metadata = {}
+        response_text = ''
+        parse_error = ''
+        result_items = []
+        parse_ok = False
+        try:
+            response_data = run_sync_request(
+                request_row['request'],
+                model_name=BATCH_MODEL,
+                api_key_index=api_key_index,
+            )
+            finish_reason = response_data['finish_reason']
+            usage_metadata = response_data['usage_metadata']
+            response_text = response_data['response_text']
+        except Exception as exc:
+            summary['request_errors'] += 1
+            bump_counter(reason_counts, 'request_error')
+            parse_error = str(exc)
+            for item in job['items']:
+                failure_entries.append(
+                    {
+                        'timestamp': datetime.now().isoformat(timespec='seconds'),
+                        'file': job['file_path'],
+                        'line': item['line'],
+                        'source': item['text'],
+                        'id': item['id'],
+                        'error': parse_error,
+                    }
+                )
+            result_entries.append(
+                {
+                    'index': index,
+                    'key': job['key'],
+                    'file': job['file_path'],
+                    'expected_items': len(job['items']),
+                    'parsed_items': 0,
+                    'parse_ok': False,
+                    'parse_error': parse_error,
+                    'finish_reason': finish_reason,
+                    'usage_metadata': usage_metadata,
+                    'response_preview': '',
+                }
+            )
+            continue
+
+        if response_text:
+            try:
+                payload = parse_json_payload(response_text)
+                result_items = normalize_result_items(payload)
+                parse_ok = True
+            except Exception as exc:
+                parse_error = str(exc)
+                summary['parse_errors'] += 1
+                bump_counter(reason_counts, 'parse_error')
+        else:
+            parse_error = 'Missing text in response payload'
+            summary['parse_errors'] += 1
+            bump_counter(reason_counts, 'missing_response_text')
+
+        if not parse_ok:
+            for item in job['items']:
+                failure_entries.append(
+                    {
+                        'timestamp': datetime.now().isoformat(timespec='seconds'),
+                        'file': job['file_path'],
+                        'line': item['line'],
+                        'source': item['text'],
+                        'id': item['id'],
+                        'error': parse_error,
+                        'finish_reason': finish_reason,
+                        'usage_metadata': usage_metadata,
+                        'response_preview': response_text[:500],
+                    }
+                )
+            result_entries.append(
+                {
+                    'index': index,
+                    'key': job['key'],
+                    'file': job['file_path'],
+                    'expected_items': len(job['items']),
+                    'parsed_items': 0,
+                    'parse_ok': False,
+                    'parse_error': parse_error,
+                    'finish_reason': finish_reason,
+                    'usage_metadata': usage_metadata,
+                    'response_preview': response_text[:500],
+                }
+            )
+            continue
+
+        item_map = {item['id']: item for item in job['items']}
+        seen_ids = set()
+        for result_item in result_items:
+            target_item = item_map.get(result_item['id'])
+            if not target_item:
+                bump_counter(reason_counts, 'schema_or_item_mismatch')
+                continue
+            seen_ids.add(result_item['id'])
+            valid, reason = legacy.validate_translation(target_item['text'], result_item['translation'])
+            if not valid and reason == 'No Chinese characters' and allow_non_chinese_repair_translation(
+                target_item['text'], result_item['translation']
+            ):
+                valid = True
+            if not valid:
+                summary['validation_failures'] += 1
+                bump_counter(reason_counts, 'validation_failed')
+                failure_entries.append(
+                    {
+                        'timestamp': datetime.now().isoformat(timespec='seconds'),
+                        'file': job['file_path'],
+                        'line': target_item['line'],
+                        'source': target_item['text'],
+                        'translation': result_item['translation'],
+                        'id': target_item['id'],
+                        'error': f'Validation failed: {reason}',
+                        'finish_reason': finish_reason,
+                        'usage_metadata': usage_metadata,
+                    }
+                )
+                continue
+
+            replacements_by_file.setdefault(job['file_path'], {}).setdefault(target_item['line'] - 1, []).append(
+                (
+                    target_item['start'],
+                    target_item['end'],
+                    result_item['translation'],
+                    target_item['quote'],
+                )
+            )
+            summary['applied_items'] += 1
+
+        missing_ids = set(item_map.keys()) - seen_ids
+        if missing_ids:
+            summary['missing_item_ids'] += len(missing_ids)
+            bump_counter(reason_counts, 'response_missing_item_id', len(missing_ids))
+        for missing_id in sorted(missing_ids):
+            item = item_map[missing_id]
+            failure_entries.append(
+                {
+                    'timestamp': datetime.now().isoformat(timespec='seconds'),
+                    'file': job['file_path'],
+                    'line': item['line'],
+                    'source': item['text'],
+                    'id': item['id'],
+                    'error': 'Response missing item id',
+                    'finish_reason': finish_reason,
+                    'usage_metadata': usage_metadata,
+                }
+            )
+
+        result_entries.append(
+            {
+                'index': index,
+                'key': job['key'],
+                'file': job['file_path'],
+                'expected_items': len(job['items']),
+                'parsed_items': len(result_items),
+                'parse_ok': True,
+                'parse_error': '',
+                'finish_reason': finish_reason,
+                'usage_metadata': usage_metadata,
+                'response_preview': response_text[:500],
+            }
+        )
+
+    for file_path, replacements in replacements_by_file.items():
+        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+            lines = handle.readlines()
+        legacy.commit_replacements(file_path, lines, replacements)
+        summary['applied_files'] += 1
+
+    summary['failure_items'] = len(failure_entries)
+    write_jsonl_file(result_log_path, result_entries)
+    write_jsonl_file(failure_log_path, failure_entries)
+    with open(summary_path, 'w', encoding='utf-8') as handle:
+        json.dump(summary, handle, ensure_ascii=False, indent=2)
+
+    print(f'Repair report: {report_path}')
+    print(f'Repair run dir: {run_dir}')
+    print_repair_summary(summary)
+    print(f'Repair results: {result_log_path}')
+    print(f'Repair failures: {failure_log_path}')
+    return summary
+
+
+def print_banner():
+    print('=' * 60)
+    print('Gemini Batch Translator (Ren\'Py)')
+    print(f'Base dir: {legacy.BASE_DIR}')
+    print(f'TL dir: {legacy.TL_DIR} (exists: {os.path.isdir(legacy.TL_DIR)})')
+    print(f'Batch jobs dir: {BATCH_JOBS_DIR}')
+    print(f'Translator config: {legacy.TRANSLATOR_CONFIG} (exists: {os.path.isfile(legacy.TRANSLATOR_CONFIG)})')
+    print(f'Glossary: {legacy.GLOSSARY_FILE} (exists: {os.path.isfile(legacy.GLOSSARY_FILE)})')
+    print(f'Batch model: {BATCH_MODEL}')
+    print(
+        f'Chunk settings: target={BATCH_TARGET_SIZE}, '
+        f'context_before={BATCH_CONTEXT_BEFORE}, context_after={BATCH_CONTEXT_AFTER}'
+    )
+    print(f'Max output tokens: {BATCH_MAX_OUTPUT_TOKENS}')
+    print(f'Thinking level: {BATCH_THINKING_LEVEL or "(default)"}')
+    print(f'Prepare enabled: {legacy.PREP_ENABLED}')
+    print('=' * 60)
+
+
+def build_arg_parser():
+    parser = argparse.ArgumentParser(
+        description='Batch translator for Ren\'Py tl files using Gemini Batch API.'
+    )
+    subparsers = parser.add_subparsers(dest='command')
+
+    build_parser = subparsers.add_parser('build', help='Build local batch package and JSONL only.')
+    build_parser.add_argument('--display-name', default='', help='Override Batch display name.')
+    build_parser.add_argument(
+        '--skip-prepare',
+        action='store_true',
+        help='Skip auto prepare steps before collecting tasks.',
+    )
+
+    submit_parser = subparsers.add_parser('submit', help='Create and submit a batch job.')
+    submit_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Existing manifest path or package dir. If omitted, build a new package first.',
+    )
+    submit_parser.add_argument('--display-name', default='', help='Override Batch display name.')
+    submit_parser.add_argument('--model', default='', help='Override batch model.')
+
+    status_parser = subparsers.add_parser('status', help='Refresh and show batch job status.')
+    status_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Manifest path or package dir. Defaults to latest package.',
+    )
+
+    check_parser = subparsers.add_parser('check', help='Dry-run parse downloaded results and summarize recoverable items.')
+    check_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Manifest path or package dir. Defaults to latest package.',
+    )
+
+    probe_parser = subparsers.add_parser('probe', help='Run a small synchronous smoke test with normal generate_content calls.')
+    probe_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Manifest path or package dir. Defaults to latest package.',
+    )
+    probe_parser.add_argument('--limit', type=int, default=3, help='How many request rows to probe.')
+    probe_parser.add_argument('--offset', type=int, default=0, help='Start offset within requests.jsonl.')
+    probe_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
+
+    download_parser = subparsers.add_parser('download', help='Download batch results for a succeeded job.')
+    download_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Manifest path or package dir. Defaults to latest package.',
+    )
+    download_parser.add_argument('--force', action='store_true', help='Overwrite local results.jsonl.')
+
+    apply_parser = subparsers.add_parser('apply', help='Apply downloaded results back into tl files.')
+    apply_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Manifest path or package dir. Defaults to latest package.',
+    )
+
+    split_parser = subparsers.add_parser('split', help='Split an existing batch package into smaller local packages.')
+    split_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Manifest path or package dir. Defaults to latest package.',
+    )
+    split_parser.add_argument(
+        '--max-chunks',
+        type=int,
+        default=600,
+        help='Maximum chunk count per split package. Set 0 to disable this limit.',
+    )
+    split_parser.add_argument(
+        '--max-items',
+        type=int,
+        default=0,
+        help='Maximum item count per split package. Set 0 to disable this limit.',
+    )
+    split_parser.add_argument(
+        '--display-name-prefix',
+        default='',
+        help='Override display-name prefix for generated child packages.',
+    )
+
+    repair_parser = subparsers.add_parser('repair', help='Synchronously repair specific remaining untranslated items from a JSONL report.')
+    repair_parser.add_argument('report', help='JSONL report path, typically remaining_need_translate_*.jsonl')
+    repair_parser.add_argument('--limit', type=int, default=0, help='Optional maximum number of report items to process.')
+    repair_parser.add_argument('--offset', type=int, default=0, help='Optional starting offset within the report.')
+    repair_parser.add_argument('--batch-size', type=int, default=2, help='How many adjacent items to repair per synchronous request.')
+    repair_parser.add_argument('--context-before', type=int, default=2, help='How many prior nearby entries to include as context.')
+    repair_parser.add_argument('--context-after', type=int, default=2, help='How many following nearby entries to include as context.')
+    repair_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
+
+    return parser
+
+
+def main():
+    legacy.load_config()
+    legacy.load_translator_settings()
+    legacy.load_glossary()
+    load_batch_settings()
+    print_banner()
+
+    parser = build_arg_parser()
+    args = parser.parse_args()
+    command = args.command or 'submit'
+
+    if command == 'build':
+        create_batch_package(
+            display_name_override=args.display_name,
+            skip_prepare=args.skip_prepare,
+        )
+        return
+
+    if command == 'submit':
+        submit_manifest(
+            target=args.target or None,
+            display_name_override=args.display_name,
+            model_override=args.model,
+        )
+        return
+
+    if command == 'status':
+        show_status(args.target or None)
+        return
+
+    if command == 'check':
+        check_results(args.target or None)
+        return
+
+    if command == 'probe':
+        probe_requests(
+            target=args.target or None,
+            limit=args.limit,
+            offset=args.offset,
+            api_key_index=args.api_key_index,
+        )
+        return
+
+    if command == 'download':
+        download_results(args.target or None, force=args.force)
+        return
+
+    if command == 'apply':
+        apply_results(args.target or None)
+        return
+
+    if command == 'split':
+        split_manifest(
+            target=args.target or None,
+            max_chunks=args.max_chunks,
+            max_items=args.max_items,
+            display_name_prefix=args.display_name_prefix,
+        )
+        return
+
+    if command == 'repair':
+        repair_remaining_items(
+            report_path=args.report,
+            limit=args.limit,
+            offset=args.offset,
+            batch_size=args.batch_size,
+            context_before=args.context_before,
+            context_after=args.context_after,
+            api_key_index=args.api_key_index,
+        )
+        return
+
+    parser.print_help()
+
+
+if __name__ == '__main__':
+    main()
+
