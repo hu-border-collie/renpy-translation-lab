@@ -91,7 +91,7 @@ Game_Example/
 
 ### 4. 运行
 
-当前更推荐优先使用 Batch 模式；同步模式仍可用，但依赖的是已弃用的 `google-generativeai` SDK。
+当前更推荐优先使用 Batch 模式；同步模式仍可用，并且现在与 Batch 一样统一基于 `google-genai` SDK。
 
 当前模型建议：
 
@@ -131,8 +131,7 @@ python gemini_translate_batch.py apply
 ## 环境要求
 
 - Python 3.11+
-- `google-generativeai`，供同步脚本使用；该 SDK 已被官方弃用，但当前同步脚本在已安装依赖的环境里仍可运行
-- `google-genai`，供 Batch 脚本使用
+- `google-genai`，供同步脚本和 Batch 脚本使用
 - 有效的 Gemini API Key
 - Ren'Py 项目中的 `game/tl/schinese` 翻译目录
 
@@ -156,7 +155,7 @@ python gemini_translate_batch.py apply
 - 更适合作为思路实现、代码快照和进一步改造的基础
 - 项目开发过程中使用了 AI 辅助生成代码，整体方向、功能取舍、测试验证与集成决策由作者负责
 - 目前不承诺及时处理 issue、兼容性问题或长期更新
-- 当前更推荐使用 Batch 脚本；同步脚本保留用于直接运行和实验，但其底层 SDK 迁移尚未完成
+- 当前更推荐使用 Batch 脚本；同步脚本保留用于直接运行、补译、局部修复和 smoke test
 - Batch / RAG 是当前主要验证方向；同步脚本更适合补译、局部修复和 smoke test
 - 当前的 RAG 能力更适合“小包验证 + 逐步扩展”，还不应被表述为已经完成的大项目生产级方案
 
