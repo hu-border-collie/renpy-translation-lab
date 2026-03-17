@@ -2,7 +2,6 @@
 import argparse
 import ast
 import hashlib
-import importlib.util
 import io
 import json
 import os
@@ -10,7 +9,6 @@ import re
 import sys
 import time
 import tokenize
-import warnings
 from datetime import datetime
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +16,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from rag_memory import JsonRagStore, hash_text, truncate_text
+import translator_runtime as runtime
 
 try:
     from google import genai
@@ -26,22 +25,7 @@ except ImportError:
     genai = None
     genai_types = None
 
-
-def load_legacy_module():
-    original_stdout = sys.stdout
-    script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gemini_translate.py')
-    spec = importlib.util.spec_from_file_location('legacy_gemini_translate', script_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f'Unable to load legacy translator: {script_path}')
-    module = importlib.util.module_from_spec(spec)
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', FutureWarning)
-        spec.loader.exec_module(module)
-    sys.stdout = original_stdout
-    return module
-
-
-legacy = load_legacy_module()
+legacy = runtime
 
 LOG_DIR = legacy.LOG_DIR
 FAILED_LOG = os.path.join(LOG_DIR, 'translation_failures_batch.jsonl')
