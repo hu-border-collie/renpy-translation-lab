@@ -4,7 +4,7 @@
 
 ## 这是什么
 
-这个仓库有三个核心脚本：
+这个仓库有三个主要入口/支持脚本，以及一个内部共享 runtime：
 
 - `gemini_translate.py`
   - Ren'Py 主翻译脚本
@@ -16,6 +16,9 @@
 - `rag_memory.py`
   - 轻量 RAG / history store 模块
   - 提供本地 JSON 历史库存储、文本哈希和相似度检索
+- `translator_runtime.py`
+  - 内部共享 runtime
+  - 为同步脚本和 Batch 脚本提供共用的配置、SDK、校验、响应解析和文件处理逻辑
 
 如果你想找的是 GUI、一键打包、面向普通用户的整套发行流程，这个仓库不是那个方向。
 
