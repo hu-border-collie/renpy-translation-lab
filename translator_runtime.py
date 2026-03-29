@@ -1187,6 +1187,50 @@ def update_progress(filename, translated_lines):
     progress[filename] = list(set(progress[filename]))
     save_progress(progress)
 
+
+def _progress_key_for_path(file_path):
+    try:
+        rel_path = os.path.relpath(file_path, TL_DIR)
+    except ValueError:
+        rel_path = file_path
+    normalized = _normalize_rel_path(rel_path)
+    return normalized or os.path.basename(file_path)
+
+
+def _upgrade_legacy_progress_keys(progress, file_paths):
+    if not isinstance(progress, dict):
+        return {}
+
+    basename_map = {}
+    for file_path in file_paths:
+        basename = os.path.basename(file_path)
+        basename_map.setdefault(basename, []).append(_progress_key_for_path(file_path))
+
+    migrated = False
+    for basename, rel_paths in basename_map.items():
+        legacy_lines = progress.get(basename)
+        if legacy_lines is None:
+            continue
+
+        unique_rel_paths = _dedupe_keep_order(rel_paths)
+        if len(unique_rel_paths) != 1:
+            print(
+                f"Warning: Ignoring ambiguous legacy progress key '{basename}' "
+                f"({len(unique_rel_paths)} matching files)."
+            )
+            continue
+
+        progress_key = unique_rel_paths[0]
+        merged_lines = set(progress.get(progress_key, []))
+        merged_lines.update(legacy_lines if isinstance(legacy_lines, list) else [])
+        progress[progress_key] = sorted(merged_lines)
+        progress.pop(basename, None)
+        migrated = True
+
+    if migrated:
+        save_progress(progress)
+    return progress
+
 def commit_replacements(path, lines, replacements):
     """Writes the replacements to the file."""
     if not replacements:
@@ -1640,10 +1684,11 @@ def run_translation():
     print(f"Found {len(files_to_process)} files.")
     
     # Load global progress
-    global_progress = load_progress()
+    global_progress = _upgrade_legacy_progress_keys(load_progress(), files_to_process)
 
     for file_path in files_to_process:
         filename = os.path.basename(file_path)
+        progress_key = _progress_key_for_path(file_path)
         print(f"\nProcessing: {filename}")
         
         # Check if fully done (optional optimization, skip for now to be safe)
@@ -1652,9 +1697,9 @@ def run_translation():
             lines = f.readlines()
             
         # Collect tasks
-        # We need to filter tasks that are already in global_progress[filename]
+        # We need to filter tasks that are already in global_progress[progress_key]
         raw_tasks = collect_tasks(lines)
-        completed_lines = set(global_progress.get(filename, []))
+        completed_lines = set(global_progress.get(progress_key, []))
         
         tasks = []
         for task in raw_tasks:
@@ -1694,7 +1739,9 @@ def run_translation():
                     translated_line_indices.extend(batch_indices)
                     # Commit to file every batch to be safe
                     commit_replacements(file_path, lines, replacements)
-                    update_progress(filename, batch_indices)
+                    update_progress(progress_key, batch_indices)
+                    completed_lines.update(batch_indices)
+                    global_progress[progress_key] = sorted(completed_lines)
                     replacements = {} # Clear after commit
                 
                 batch = []
@@ -1709,6 +1756,9 @@ def run_translation():
                 batch_indices = [t["line"] for t in batch]
                 translated_line_indices.extend(batch_indices)
                 commit_replacements(file_path, lines, replacements)
-                update_progress(filename, batch_indices)
+                update_progress(progress_key, batch_indices)
+                completed_lines.update(batch_indices)
+                global_progress[progress_key] = sorted(completed_lines)
 
         print(f"  Done with {filename}.")
+
