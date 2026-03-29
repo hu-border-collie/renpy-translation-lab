@@ -975,6 +975,7 @@ def build_chunks(file_jobs):
                             'line': item['line'],
                             'start': item['start'],
                             'end': item['end'],
+                            'prefix': item.get('prefix', ''),
                             'quote': item['quote'],
                         }
                         for item in target_items
@@ -1720,6 +1721,7 @@ def collect_result_actions(manifest):
                         target_item['start'],
                         target_item['end'],
                         result_item['translation'],
+                        target_item.get('prefix', ''),
                         target_item['quote'],
                     )
                 )
@@ -1980,14 +1982,17 @@ def extract_string_token_from_line(line):
             text_value = ast.literal_eval(token.string)
         except Exception:
             continue
+        if not isinstance(text_value, str):
+            continue
+        prefix, quote = legacy.parse_string_literal_format(token.string)
         return {
             'text': text_value,
             'start': token.start[1],
             'end': token.end[1],
-            'quote': token.string[0],
+            'prefix': prefix,
+            'quote': quote,
         }
     return None
-
 
 def collect_translation_entries_from_lines(lines):
     entries = []
@@ -2009,6 +2014,7 @@ def collect_translation_entries_from_lines(lines):
                             'translation': token['text'],
                             'start': token['start'],
                             'end': token['end'],
+                            'prefix': token.get('prefix', ''),
                             'quote': token['quote'],
                         }
                     )
@@ -2189,20 +2195,60 @@ def load_repair_report_items(report_path):
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise SystemExit(f'Invalid repair report JSONL row: {exc}') from exc
+
+            batch_style = False
             file_path = row.get('file')
+            if isinstance(file_path, str) and file_path.strip():
+                file_path = file_path.strip()
+                if not os.path.isabs(file_path):
+                    normalized_rel = legacy._normalize_rel_path(file_path)
+                    candidate = os.path.abspath(os.path.join(legacy.TL_DIR, normalized_rel))
+                    file_path = candidate if os.path.isfile(candidate) else os.path.abspath(file_path)
+            else:
+                file_rel_path = row.get('file_rel_path')
+                if isinstance(file_rel_path, str) and file_rel_path.strip():
+                    normalized_rel = legacy._normalize_rel_path(file_rel_path)
+                    if normalized_rel:
+                        file_path = os.path.abspath(os.path.join(legacy.TL_DIR, normalized_rel))
+                        batch_style = True
+                    else:
+                        file_path = ''
+                else:
+                    file_path = ''
+
             line_number = row.get('line')
-            source_text = row.get('source')
-            if not file_path or not isinstance(line_number, int) or source_text is None:
+            try:
+                line_number = int(line_number)
+            except (TypeError, ValueError):
                 continue
+
+            source_text = row.get('source')
+            if source_text is None:
+                source_text = row.get('text')
+                if source_text is not None:
+                    batch_style = True
+            if source_text is None:
+                continue
+
+            if batch_style:
+                line_number += 1
+
+            if not file_path:
+                continue
+
+            normalized_row = dict(row)
+            normalized_row['file'] = file_path
+            normalized_row['line'] = line_number
+            normalized_row['source'] = source_text
+
             dedupe_key = (file_path, line_number)
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
-            items.append(row)
+            items.append(normalized_row)
 
     items.sort(key=lambda item: (item.get('game', ''), item['file'], item['line']))
     return items
-
 
 def build_repair_jobs(report_items, batch_size=2, context_before=2, context_after=2):
     jobs = []
@@ -2236,6 +2282,7 @@ def build_repair_jobs(report_items, batch_size=2, context_before=2, context_afte
             target['text'] = item['source']
             target['start'] = entry['start']
             target['end'] = entry['end']
+            target['prefix'] = entry.get('prefix', '')
             target['quote'] = entry['quote']
             target['entry_index'] = entry['entry_index']
             targets.append(target)
@@ -2288,6 +2335,7 @@ def _build_repair_job(file_path, entries, target_group, context_before, context_
                 'line': target['line'],
                 'start': target['start'],
                 'end': target['end'],
+                'prefix': target.get('prefix', ''),
                 'quote': target['quote'],
             }
             for target in target_group
@@ -2569,6 +2617,7 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                     target_item['start'],
                     target_item['end'],
                     result_item['translation'],
+                    target_item.get('prefix', ''),
                     target_item['quote'],
                 )
             )
