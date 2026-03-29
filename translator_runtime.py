@@ -144,6 +144,7 @@ MULTI_DOT_PATTERN = re.compile(r"(\.{2,}|…{2,})")
 # Matches sequences like "A B C" or "A. B. C." (single-letter tokens only)
 LETTER_SEQUENCE_RE = re.compile(r"^(?:[A-Za-z]\.?)(?:\s+[A-Za-z]\.?)+$")
 FILE_NAME_SIMPLE_RE = re.compile(r"^[\w.-]+\.\w+$", re.IGNORECASE)
+STRING_LITERAL_PREFIX_RE = re.compile(r"(?is)^(?P<prefix>[rubf]*)(?P<quote>'''|\"\"\"|'|\")")
 PRESERVE_TERMS_LOWER = {term.lower() for term in PRESERVE_TERMS}
 FILE_EXTENSIONS = (
     "png", "jpg", "jpeg", "bmp", "gif", "webp", "txt", "pdf", "mp3", "wav", "ogg", "zip"
@@ -928,12 +929,32 @@ def create_genai_client(api_key=None):
 def get_random_delay():
     return random.uniform(MIN_DELAY, MAX_DELAY)
 
-def quote_with(text, quote):
+
+def _normalize_string_prefix(prefix):
+    if not prefix:
+        return ""
+    if any(ch.lower() in {"b", "f"} for ch in prefix):
+        return prefix
+    return "".join(ch for ch in prefix if ch.lower() != "r")
+
+
+def parse_string_literal_format(token_string):
+    match = STRING_LITERAL_PREFIX_RE.match(token_string or "")
+    if not match:
+        return "", '"'
+    prefix = _normalize_string_prefix(match.group("prefix") or "")
+    quote = match.group("quote") or '"'
+    return prefix, quote
+
+
+def quote_with(text, quote, prefix=""):
     escaped = text
     for old, new in SPECIAL_ESCAPES:
         escaped = escaped.replace(old, new)
-    escaped = escaped.replace(quote, "\\\\" + quote)
-    return f"{quote}{escaped}{quote}"
+    quote_char = (quote or '"')[0]
+    escaped = escaped.replace(quote_char, "\\" + quote_char)
+    return f"{prefix}{quote}{escaped}{quote}"
+
 
 def contains_chinese(text):
     if not text:
@@ -1168,9 +1189,16 @@ def load_progress():
         return {}
     try:
         with open(PROGRESS_LOG, "r", encoding="utf-8-sig") as handle:
-            return json.load(handle)
+            raw_progress = json.load(handle)
     except Exception:
         return {}
+    if not isinstance(raw_progress, dict):
+        return {}
+    normalized = {}
+    for filename, entries in raw_progress.items():
+        normalized[str(filename)] = _normalize_progress_entries(entries)
+    return normalized
+
 
 def save_progress(progress):
     try:
@@ -1179,12 +1207,49 @@ def save_progress(progress):
     except Exception as e:
         print(f"Warning: Could not save progress: {e}")
 
+
+def _normalize_progress_entry(value):
+    if isinstance(value, int):
+        return f"line:{value}"
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        if text.isdigit():
+            return f"line:{int(text)}"
+        return text
+    return ""
+
+
+def _normalize_progress_entries(values):
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        values = [values]
+    result = []
+    seen = set()
+    for value in values:
+        normalized = _normalize_progress_entry(value)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+def _progress_line_entry(line_idx):
+    return f"line:{int(line_idx)}"
+
+
+def _progress_entry_for_task(task):
+    return f"task:{int(task['line'])}:{int(task['start'])}"
+
+
 def update_progress(filename, translated_lines):
     progress = load_progress()
-    if filename not in progress:
-        progress[filename] = []
-    progress[filename].extend(translated_lines)
-    progress[filename] = list(set(progress[filename]))
+    existing_entries = _normalize_progress_entries(progress.get(filename, []))
+    new_entries = _normalize_progress_entries(translated_lines)
+    progress[filename] = sorted(set(existing_entries + new_entries))
     save_progress(progress)
 
 
@@ -1221,9 +1286,9 @@ def _upgrade_legacy_progress_keys(progress, file_paths):
             continue
 
         progress_key = unique_rel_paths[0]
-        merged_lines = set(progress.get(progress_key, []))
-        merged_lines.update(legacy_lines if isinstance(legacy_lines, list) else [])
-        progress[progress_key] = sorted(merged_lines)
+        merged_entries = set(_normalize_progress_entries(progress.get(progress_key, [])))
+        merged_entries.update(_normalize_progress_entries(legacy_lines))
+        progress[progress_key] = sorted(merged_entries)
         progress.pop(basename, None)
         migrated = True
 
@@ -1231,24 +1296,30 @@ def _upgrade_legacy_progress_keys(progress, file_paths):
         save_progress(progress)
     return progress
 
+
 def commit_replacements(path, lines, replacements):
     """Writes the replacements to the file."""
     if not replacements:
         return
-    
+
     for line_idx, repls in replacements.items():
         if line_idx >= len(lines):
             continue
         line = lines[line_idx]
         # Sort replacements by start position descending to avoid index shifting
-        for start, end, translated, quote in sorted(repls, key=lambda x: x[0], reverse=True):
+        for repl in sorted(repls, key=lambda x: x[0], reverse=True):
+            if len(repl) == 4:
+                start, end, translated, quote = repl
+                prefix = ""
+            else:
+                start, end, translated, prefix, quote = repl
             # Safety check indices
             if start < 0 or end > len(line):
                 continue
             normalized = apply_normalization(translated) if USE_TRANSLATION_MEMORY else translated
-            line = line[:start] + quote_with(normalized, quote) + line[end:]
+            line = line[:start] + quote_with(normalized, quote, prefix=prefix) + line[end:]
         lines[line_idx] = line
-        
+
     with open(path, "w", encoding="utf-8") as handle:
         handle.writelines(lines)
 
@@ -1471,117 +1542,121 @@ def call_gemini_sdk(prompt, items):
 
 def process_batch(batch, replacements):
     prompt = build_prompt(batch)
-    
+
     # Call API (SDK handles connection details)
     results = call_gemini_sdk(prompt, batch)
-    
+
     if not isinstance(results, list):
         raise RuntimeError(f"API returned {type(results)} instead of list")
-    
+
     id_map = {item["id"]: item for item in batch}
-    valid_count = 0
-    
+    valid_progress_entries = []
+    seen_result_ids = set()
+
     for item in results:
         entry = id_map.get(item.get("id"))
         if not entry:
             continue
-            
+        if entry["id"] in seen_result_ids:
+            print(f"  Warning: Duplicate result id ignored: {entry['id']}")
+            continue
+        seen_result_ids.add(entry["id"])
+
         translated = item.get("translation", "")
         valid, msg = validate_translation(entry["text"], translated)
-        
+
         if not valid:
             print(f"  Warning: Validation failed for {entry['id']}: {msg}")
             continue
-            
-        valid_count += 1
+
+        valid_progress_entries.append(entry["progress_entry"])
         line_idx = entry["line"]
         replacements.setdefault(line_idx, []).append(
-            (entry["start"], entry["end"], translated, entry["quote"])
+            (entry["start"], entry["end"], translated, entry.get("prefix", ""), entry["quote"])
         )
-        
-    if valid_count == 0:
+
+    if not valid_progress_entries:
         raise RuntimeError("No valid translations in batch (all items rejected; consider expanding non-translatable rules or switching model)")
-        
+
     # Calculate total chars to show valid data receipt without spoilers
     total_chars = sum(len(item.get("translation", "")) for item in results)
-    print(f"  Translated {valid_count}/{len(batch)} items. (Received {total_chars} chars of translation)", flush=True)
-    return True
+    print(f"  Translated {len(valid_progress_entries)}/{len(batch)} items. (Received {total_chars} chars of translation)", flush=True)
+    return valid_progress_entries
+
 
 def process_batch_with_retry(batch, replacements, retry_depth=0):
     if retry_depth >= 5:
         log_failure(batch, "Max retry depth reached")
-        return False
+        return []
 
     error_str = "" # Initialize variable to be safe
-    
+
     for attempt in range(1, BATCH_RETRIES + 1):
         try:
             # Respect rate limits
             time.sleep(get_random_delay())
-            
-            process_batch(batch, replacements)
-            return True
-            
+
+            return process_batch(batch, replacements)
+
         except Exception as e:
             error_str = str(e)
             print(f"  [Attempt {attempt}] Error: {error_str[:100]}...", flush=True)
-            
+
             # Handle Specific Errors
-            
+
             # 1. 429 Resource Exhausted -> Rotate Key AND Model if needed
             if "429" in error_str or "ResourceExhausted" in error_str:
                 print("  ! Rate limit hit.")
-                
+
                 # First try rotating key
                 key_rotated = rotate_api_key()
-                
+
                 # If we have retried multiple times (meaning keys are likely all exhausted for this model)
                 # OR we only have 1 key, switch the model.
                 if attempt > 1 or not key_rotated:
                     print("  ! Persistent rate limit. Switching model...")
                     if rotate_model():
                         continue
-                
+
                 if key_rotated:
                     continue
                 else:
                     # No more keys, wait longer
                     time.sleep(10)
-            
+
             # 2. 404 Not Found -> Rotate Model (Invalid model name)
             elif "404" in error_str or "NotFound" in error_str:
                 print("  ! Model not found.")
                 if rotate_model():
                     continue
-            
+
             # 3. 500/503 Server Errors -> Just wait
             elif "500" in error_str or "503" in error_str:
                 time.sleep(5)
-            
+
             # 4. Truncated/Finish Reason 2 -> Break loop to split batch immediately
             elif "Finish reason: 2" in error_str:
                 print("  ! Output truncated. Splitting batch...")
                 break # Break retry loop to trigger batch splitting
-                
+
             # Generic retry backoff
             time.sleep(2 ** attempt)
-    
+
     # If batch failed after retries, try splitting
     if len(batch) > 1:
         print("  > Splitting batch...", flush=True)
         mid = len(batch) // 2
         r1 = process_batch_with_retry(batch[:mid], replacements, retry_depth + 1)
         r2 = process_batch_with_retry(batch[mid:], replacements, retry_depth + 1)
-        return r1 and r2
-        
+        return r1 + r2
+
     log_failure(batch, f"Failed after retries: {error_str}")
-    return False
+    return []
 
 def collect_tasks(lines, skip_translated=True):
     # Logic to parse Ren'Py files
-    progress = load_progress()
     # Note: caller handles filename lookup, this function just parses
-    
+
     tasks = []
     # Detect Ren'Py translation files so we can protect `old` entries.
     is_translation_file = any(
@@ -1600,43 +1675,48 @@ def collect_tasks(lines, skip_translated=True):
             or (is_translation_file and sline.startswith("old "))
         ):
             continue
-            
+
         # Very basic string extraction (robust enough for this task)
         # Look for dialogue lines: Character "Text" or "Text"
         # And strings: old "Text"
-        
-        # Check for dialogue
+
         try:
             tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
-            for i, token in enumerate(tokens):
-                if token.type == tokenize.STRING:
-                    try:
-                        text_val = ast.literal_eval(token.string)
-                    except:
-                        continue
-                        
-                    # Simple heuristic: if it contains Chinese, it's already translated or source is CN
-                    # If it's pure ASCII/English, we want to translate it.
-                    if text_val and not contains_chinese(text_val) and len(text_val) > 1:
-                        if is_non_translatable(text_val):
-                            continue
-                        # Skip if it's likely a bare file path (no spaces)
-                        if (" " not in text_val) and ("/" in text_val or "\\" in text_val):
-                            continue
+            for token in tokens:
+                if token.type != tokenize.STRING:
+                    continue
+                try:
+                    text_val = ast.literal_eval(token.string)
+                except Exception:
+                    continue
+                if not isinstance(text_val, str):
+                    continue
+                prefix, quote = parse_string_literal_format(token.string)
 
-                        if (" " in text_val or len(text_val) > 15 or (text_val and text_val[0].isupper())
-                                or (ALLOW_SINGLE_WORD_TRANSLATION and is_english_like(text_val))):
-                            tasks.append({
-                                "id": f"line_{idx}", # Temp ID, updated later
-                                "text": text_val,
-                                "line": idx,
-                                "start": token.start[1],
-                                "end": token.end[1],
-                                "quote": token.string[0]
-                            })
-        except:
+                # Simple heuristic: if it contains Chinese, it's already translated or source is CN
+                # If it's pure ASCII/English, we want to translate it.
+                if text_val and not contains_chinese(text_val) and len(text_val) > 1:
+                    if is_non_translatable(text_val):
+                        continue
+                    # Skip if it's likely a bare file path (no spaces)
+                    if (" " not in text_val) and ("/" in text_val or "\\" in text_val):
+                        continue
+
+                    if (" " in text_val or len(text_val) > 15 or (text_val and text_val[0].isupper())
+                            or (ALLOW_SINGLE_WORD_TRANSLATION and is_english_like(text_val))):
+                        tasks.append({
+                            "id": f"line_{idx}_{token.start[1]}", # Temp ID, updated later
+                            "text": text_val,
+                            "line": idx,
+                            "start": token.start[1],
+                            "end": token.end[1],
+                            "quote": quote,
+                            "prefix": prefix,
+                            "progress_entry": f"task:{idx}:{token.start[1]}",
+                        })
+        except Exception:
             continue
-            
+
     return tasks
 
 def run_translation():
@@ -1680,9 +1760,9 @@ def run_translation():
                     if not allowed:
                         continue
                 files_to_process.append(file_path)
-    
+
     print(f"Found {len(files_to_process)} files.")
-    
+
     # Load global progress
     global_progress = _upgrade_legacy_progress_keys(load_progress(), files_to_process)
 
@@ -1690,75 +1770,66 @@ def run_translation():
         filename = os.path.basename(file_path)
         progress_key = _progress_key_for_path(file_path)
         print(f"\nProcessing: {filename}")
-        
-        # Check if fully done (optional optimization, skip for now to be safe)
-        
+
         with open(file_path, "r", encoding="utf-8-sig") as f:
             lines = f.readlines()
-            
+
         # Collect tasks
-        # We need to filter tasks that are already in global_progress[progress_key]
         raw_tasks = collect_tasks(lines)
-        completed_lines = set(global_progress.get(progress_key, []))
-        
+        completed_entries = set(_normalize_progress_entries(global_progress.get(progress_key, [])))
+
         tasks = []
         for task in raw_tasks:
             if is_non_translatable(task["text"]):
                 continue
-            if task["line"] in completed_lines:
+            progress_entry = task.get("progress_entry") or _progress_entry_for_task(task)
+            if progress_entry in completed_entries or _progress_line_entry(task["line"]) in completed_entries:
                 if not FORCE_RETRANSLATE_ENGLISH:
                     continue
                 if not is_english_like(task["text"]):
                     continue
             tasks.append(task)
-        
+
         if not tasks:
             print("  No new lines to translate.")
             continue
-            
+
         print(f"  Found {len(tasks)} lines to translate.")
-        
+
         # Process in batches
         replacements = {}
-        translated_line_indices = []
-        
         batch = []
         current_batch_chars = 0
-        
+
         for task in tasks:
-            # Update ID to be unique per file
-            task["id"] = f"{filename}:{task['line']}"
-            
+            # Update ID to be unique per file and string literal
+            task["id"] = f"{progress_key}:{task['line']}:{task['start']}"
+            task["progress_entry"] = _progress_entry_for_task(task)
+
             task_len = len(task["text"])
-            
+
             if len(batch) >= MAX_ITEMS or (current_batch_chars + task_len > MAX_CHARS):
-                # Process
-                if process_batch_with_retry(batch, replacements):
-                    # Success
-                    batch_indices = [t["line"] for t in batch]
-                    translated_line_indices.extend(batch_indices)
-                    # Commit to file every batch to be safe
+                successful_entries = process_batch_with_retry(batch, replacements)
+                if successful_entries:
                     commit_replacements(file_path, lines, replacements)
-                    update_progress(progress_key, batch_indices)
-                    completed_lines.update(batch_indices)
-                    global_progress[progress_key] = sorted(completed_lines)
-                    replacements = {} # Clear after commit
-                
+                    update_progress(progress_key, successful_entries)
+                    completed_entries.update(_normalize_progress_entries(successful_entries))
+                    global_progress[progress_key] = sorted(completed_entries)
+                    replacements = {}
+
                 batch = []
                 current_batch_chars = 0
-            
+
             batch.append(task)
             current_batch_chars += task_len
-            
+
         # Final batch
         if batch:
-            if process_batch_with_retry(batch, replacements):
-                batch_indices = [t["line"] for t in batch]
-                translated_line_indices.extend(batch_indices)
+            successful_entries = process_batch_with_retry(batch, replacements)
+            if successful_entries:
                 commit_replacements(file_path, lines, replacements)
-                update_progress(progress_key, batch_indices)
-                completed_lines.update(batch_indices)
-                global_progress[progress_key] = sorted(completed_lines)
+                update_progress(progress_key, successful_entries)
+                completed_entries.update(_normalize_progress_entries(successful_entries))
+                global_progress[progress_key] = sorted(completed_entries)
 
         print(f"  Done with {filename}.")
-
