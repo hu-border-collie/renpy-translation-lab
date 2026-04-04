@@ -57,8 +57,6 @@ def parse_dialogue_line(line):
         first = parts[0]
         if first in TEXT_COMMANDS:
             speaker = None
-        elif len(parts) > 1:
-            return None
         elif first in CONTROL_KEYWORDS:
             return None
         elif IDENTIFIER_RE.match(first):
@@ -125,7 +123,7 @@ def extract_units_from_raw_rpy(lines, file_path):
     return units
 
 def extract_units_from_rpy(file_path):
-    lines = file_path.read_text(encoding="utf-8").splitlines()
+    lines = file_path.read_text(encoding="utf-8-sig").splitlines()
     if any(TRANSLATE_BLOCK_RE.match(line) for line in lines):
         units = extract_units_from_translation_file(lines, file_path)
         if units:
@@ -139,7 +137,7 @@ def load_text_units(input_path, context_window):
     for file_path in files:
         suffix = file_path.suffix.lower()
         if suffix == ".txt":
-            content = file_path.read_text(encoding="utf-8")
+            content = file_path.read_text(encoding="utf-8-sig")
             paragraphs = split_text_paragraphs(content)
             for index, paragraph in enumerate(paragraphs, start=1):
                 units.append(
