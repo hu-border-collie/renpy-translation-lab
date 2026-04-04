@@ -43,3 +43,5 @@ history_store/
 Thumbs.db
 .vscode/
 .idea/
+/character_matrix*.png
+*_relations.csv

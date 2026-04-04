@@ -131,6 +131,35 @@ python gemini_translate_batch.py apply
 - 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包
 - 当前不建议并行 `apply` 到同一个本地 RAG store；共享 `history.jsonl` 的写入保护还不算完整产品化
 
+## 角色关系 / 语义分析
+
+仓库同时提供一个独立的剧本分析入口：
+
+- `extract_relations.py`
+  - 用于分析 `game/tl/schinese` 下的角色关系或语义接近度
+  - 内部实现位于 `relation_analyzer/`
+
+常见命令：
+
+```bash
+python extract_relations.py /path/to/game/tl/schinese
+python extract_relations.py /path/to/game/tl/schinese --mode semantic
+```
+
+说明：
+
+- 默认 `--mode relation`
+  - 输出人物关系热力图、关系网络图和 `*_relations.csv`
+- `--mode semantic`
+  - 输出角色语义相似度热力图和网络图
+- 不传 `--characters` 时，会自动选择主要说话人
+- 可以用 `--auto-characters` 控制自动推断数量
+- 可以用 `--portraits off` 禁用从 `archive.rpa` 自动读取头像
+- `relation` 模式不需要 Gemini API
+- `semantic` 模式需要有效的 Gemini API key
+
+更具体的模块说明见 [relation_analyzer/README.md](relation_analyzer/README.md)。
+
 ## 环境要求
 
 - Python 3.11+
