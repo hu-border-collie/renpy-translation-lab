@@ -58,7 +58,8 @@ def embed_texts(texts, batch_size, model_name, output_dimensionality, cache_dir)
                     raise SystemExit(
                         "\u274c \u6240\u6709\u53ef\u7528\u7684 Gemini API key \u90fd\u65e0\u6548\u6216\u5df2\u8fc7\u671f\u3002"
                         f"\u6700\u540e\u4e00\u6b21\u5931\u8d25\u6765\u6e90: {expired_source}\u3002"
-                        "\u8bf7\u66f4\u65b0 00_tools/api_keys.json\uff0c\u6216\u4fee\u6b63\u73af\u5883\u53d8\u91cf GEMINI_API_KEY\u3002"
+                        "\u8bf7\u66f4\u65b0\u4ed3\u5e93\u6839\u76ee\u5f55\u4e0b\u7684 api_keys.json\uff08\u53ef\u53c2\u8003 api_keys.example.json\uff09\uff0c"
+                        "\u6216\u4fee\u6b63\u73af\u5883\u53d8\u91cf GEMINI_API_KEY\u3002"
                     ) from exc
                 wait_seconds = get_retry_delay_seconds(exc) if is_rate_limit_error(exc) else None
                 if attempt >= API_RETRIES:

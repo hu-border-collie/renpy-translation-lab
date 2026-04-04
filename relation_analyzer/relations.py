@@ -1,3 +1,5 @@
+import csv
+
 from .common import *
 from .parsing import normalize_character_aliases, build_character_matchers, speaker_matches_character, text_mentions_character
 
@@ -343,12 +345,22 @@ def compute_force_layout(sim_matrix, iterations=280, seed=42):
 def write_relation_csv(csv_output, relation_data):
     pair_rows = relation_data['pair_rows']
     csv_output.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        'left,right,total_score,co_scene_score,dialogue_score,mention_score,co_scene_raw,dialogue_raw,mention_raw,dominant_component'
-    ]
-    for row in pair_rows:
-        lines.append(
-            ','.join([
+    with open(csv_output, 'w', encoding='utf-8-sig', newline='') as handle:
+        writer = csv.writer(handle)
+        writer.writerow([
+            'left',
+            'right',
+            'total_score',
+            'co_scene_score',
+            'dialogue_score',
+            'mention_score',
+            'co_scene_raw',
+            'dialogue_raw',
+            'mention_raw',
+            'dominant_component',
+        ])
+        for row in pair_rows:
+            writer.writerow([
                 row['left'],
                 row['right'],
                 f"{row['score']:.6f}",
@@ -360,7 +372,5 @@ def write_relation_csv(csv_output, relation_data):
                 f"{row['mention_raw']:.3f}",
                 row['dominant_component'],
             ])
-        )
-    csv_output.write_text('\n'.join(lines) + '\n', encoding='utf-8-sig')
     print(f"📝 已导出关系明细: {csv_output}")
 

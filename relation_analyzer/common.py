@@ -262,8 +262,14 @@ def load_image_libs():
         _IMAGE_LIBS = imported_image
     return _IMAGE_LIBS
 
+class _RestrictedUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        raise pickle.UnpicklingError(
+            f"Disallowed pickle global during RPA index load: {module}.{name}"
+        )
+
 def load_pickle_blob(blob):
-    return pickle.loads(blob)
+    return _RestrictedUnpickler(io.BytesIO(blob)).load()
 
 def read_rpa_index(archive_path):
     archive_path = str(archive_path)
