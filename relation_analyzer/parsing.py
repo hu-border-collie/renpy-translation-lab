@@ -39,6 +39,13 @@ def normalize_text(text):
         return ""
     return text
 
+def is_valid_say_attribute_token(token):
+    return (
+        bool(IDENTIFIER_RE.match(token))
+        and token not in CONTROL_KEYWORDS
+        and token not in TEXT_COMMANDS
+    )
+
 def parse_dialogue_line(line):
     stripped = line.strip()
     if not stripped or stripped.startswith("#"):
@@ -52,14 +59,17 @@ def parse_dialogue_line(line):
 
     leading = stripped[:start_col].strip()
     speaker = None
+    command = None
     if leading:
         parts = leading.split()
         first = parts[0]
         if first in TEXT_COMMANDS:
-            speaker = None
+            command = first
         elif first in CONTROL_KEYWORDS:
             return None
         elif IDENTIFIER_RE.match(first):
+            if any(not is_valid_say_attribute_token(token) for token in parts[1:]):
+                return None
             speaker = first
         else:
             return None
@@ -72,18 +82,30 @@ def parse_dialogue_line(line):
     if not text:
         return None
 
-    return {"speaker": speaker, "text": text}
+    return {"speaker": speaker, "text": text, "command": command}
+
+def apply_extend_speaker(parsed, last_speaker):
+    speaker = parsed["speaker"]
+    if speaker is None and parsed.get("command") == "extend" and last_speaker:
+        speaker = last_speaker
+    return {
+        "speaker": speaker,
+        "speaker_name": resolve_speaker_name(speaker),
+        "text": parsed["text"],
+    }
 
 def extract_units_from_translation_file(lines, file_path):
     units = []
     in_block = False
     in_strings_block = False
+    last_speaker = None
 
     for line_no, line in enumerate(lines, start=1):
         match = TRANSLATE_BLOCK_RE.match(line)
         if match:
             in_block = True
             in_strings_block = match.group("label").strip() == "strings"
+            last_speaker = None
             continue
 
         if not in_block or in_strings_block:
@@ -92,14 +114,17 @@ def extract_units_from_translation_file(lines, file_path):
         parsed = parse_dialogue_line(line)
         if not parsed:
             continue
+        normalized = apply_extend_speaker(parsed, last_speaker)
+        if normalized["speaker"]:
+            last_speaker = normalized["speaker"]
 
         units.append(
             {
                 "source": str(file_path),
                 "line_no": line_no,
-                "speaker": parsed["speaker"],
-                "speaker_name": resolve_speaker_name(parsed["speaker"]),
-                "text": parsed["text"],
+                "speaker": normalized["speaker"],
+                "speaker_name": normalized["speaker_name"],
+                "text": normalized["text"],
             }
         )
 
@@ -107,17 +132,21 @@ def extract_units_from_translation_file(lines, file_path):
 
 def extract_units_from_raw_rpy(lines, file_path):
     units = []
+    last_speaker = None
     for line_no, line in enumerate(lines, start=1):
         parsed = parse_dialogue_line(line)
         if not parsed:
             continue
+        normalized = apply_extend_speaker(parsed, last_speaker)
+        if normalized["speaker"]:
+            last_speaker = normalized["speaker"]
         units.append(
             {
                 "source": str(file_path),
                 "line_no": line_no,
-                "speaker": parsed["speaker"],
-                "speaker_name": resolve_speaker_name(parsed["speaker"]),
-                "text": parsed["text"],
+                "speaker": normalized["speaker"],
+                "speaker_name": normalized["speaker_name"],
+                "text": normalized["text"],
             }
         )
     return units

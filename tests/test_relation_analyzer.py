@@ -18,6 +18,9 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertEqual(parsed['speaker'], 'e')
         self.assertEqual(parsed['text'], 'Hello there.')
 
+    def test_parse_dialogue_line_rejects_assignment_like_statement(self):
+        self.assertIsNone(parse_dialogue_line('title = "Hello there."'))
+
     def test_resolve_speaker_name_uses_generic_suffix_heuristic(self):
         self.assertEqual(resolve_speaker_name('spencer_no_side'), 'Spencer')
         self.assertEqual(resolve_speaker_name('mr_smith'), 'Mr Smith')
@@ -68,6 +71,25 @@ class RelationAnalyzerTests(unittest.TestCase):
             self.assertEqual(rpy_units[0]['text'], 'Hello there.')
             self.assertEqual(len(txt_units), 2)
             self.assertEqual(txt_units[0]['text'], 'First paragraph line.')
+
+    def test_load_text_units_preserves_previous_speaker_for_extend(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            rpy_path = root / 'scene.rpy'
+            rpy_path.write_text(
+                'translate schinese start:\n'
+                '    e happy "Hello there."\n'
+                '    extend "And another line."\n',
+                encoding='utf-8-sig',
+            )
+
+            rpy_units = load_text_units(rpy_path, context_window=0)
+
+            self.assertEqual(len(rpy_units), 2)
+            self.assertEqual(rpy_units[0]['speaker'], 'e')
+            self.assertEqual(rpy_units[1]['speaker'], 'e')
+            self.assertEqual(rpy_units[1]['speaker_name'], 'E')
+            self.assertEqual(rpy_units[1]['text'], 'And another line.')
 
     def test_write_relation_csv_uses_proper_csv_escaping(self):
         relation_data = {
