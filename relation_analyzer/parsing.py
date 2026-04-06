@@ -46,6 +46,21 @@ def is_valid_say_attribute_token(token):
         and token not in TEXT_COMMANDS
     )
 
+def is_allowed_bare_string_trailing(trailing):
+    if not trailing:
+        return True
+    if trailing.startswith("#"):
+        return True
+
+    clause = trailing.split("#", 1)[0].strip()
+    if not clause:
+        return True
+    if clause == "nointeract":
+        return True
+    if clause.startswith("with "):
+        return True
+    return False
+
 def parse_dialogue_line(line):
     stripped = line.strip()
     if not stripped or stripped.startswith("#"):
@@ -57,7 +72,7 @@ def parse_dialogue_line(line):
 
     leading = stripped[:start_col].strip()
     trailing = stripped[end_col:].strip()
-    if trailing and not trailing.startswith("#") and not leading:
+    if not leading and not is_allowed_bare_string_trailing(trailing):
         return None
     speaker = None
     command = None
@@ -95,6 +110,24 @@ def apply_extend_speaker(parsed, last_speaker):
         "text": parsed["text"],
     }
 
+def append_unit(units, parsed, file_path, line_no, last_speaker):
+    normalized = apply_extend_speaker(parsed, last_speaker)
+    units.append(
+        {
+            "source": str(file_path),
+            "line_no": line_no,
+            "speaker": normalized["speaker"],
+            "speaker_name": normalized["speaker_name"],
+            "text": normalized["text"],
+        }
+    )
+    if normalized["speaker"]:
+        return normalized["speaker"]
+    return last_speaker
+
+def get_line_indent(line):
+    return len(line) - len(line.lstrip())
+
 def extract_units_from_translation_file(lines, file_path):
     units = []
     in_block = False
@@ -115,19 +148,7 @@ def extract_units_from_translation_file(lines, file_path):
         parsed = parse_dialogue_line(line)
         if not parsed:
             continue
-        normalized = apply_extend_speaker(parsed, last_speaker)
-        if normalized["speaker"]:
-            last_speaker = normalized["speaker"]
-
-        units.append(
-            {
-                "source": str(file_path),
-                "line_no": line_no,
-                "speaker": normalized["speaker"],
-                "speaker_name": normalized["speaker_name"],
-                "text": normalized["text"],
-            }
-        )
+        last_speaker = append_unit(units, parsed, file_path, line_no, last_speaker)
 
     return units
 
@@ -138,25 +159,49 @@ def extract_units_from_raw_rpy(lines, file_path):
         parsed = parse_dialogue_line(line)
         if not parsed:
             continue
-        normalized = apply_extend_speaker(parsed, last_speaker)
-        if normalized["speaker"]:
-            last_speaker = normalized["speaker"]
-        units.append(
-            {
-                "source": str(file_path),
-                "line_no": line_no,
-                "speaker": normalized["speaker"],
-                "speaker_name": normalized["speaker_name"],
-                "text": normalized["text"],
-            }
-        )
+        last_speaker = append_unit(units, parsed, file_path, line_no, last_speaker)
     return units
 
 def extract_units_from_rpy(file_path):
     lines = file_path.read_text(encoding="utf-8-sig").splitlines()
-    if any(TRANSLATE_BLOCK_RE.match(line) for line in lines):
-        return extract_units_from_translation_file(lines, file_path)
-    return extract_units_from_raw_rpy(lines, file_path)
+    units = []
+    in_translate_block = False
+    in_strings_block = False
+    translate_indent = 0
+    last_speaker = None
+
+    for line_no, line in enumerate(lines, start=1):
+        match = TRANSLATE_BLOCK_RE.match(line)
+        if match:
+            in_translate_block = True
+            in_strings_block = match.group("label").strip() == "strings"
+            translate_indent = get_line_indent(line)
+            last_speaker = None
+            continue
+
+        stripped = line.strip()
+        if in_translate_block and stripped and not stripped.startswith("#"):
+            current_indent = get_line_indent(line)
+            if current_indent <= translate_indent:
+                in_translate_block = False
+                in_strings_block = False
+                last_speaker = None
+
+        if in_translate_block:
+            if in_strings_block:
+                continue
+            parsed = parse_dialogue_line(line)
+            if not parsed:
+                continue
+            last_speaker = append_unit(units, parsed, file_path, line_no, last_speaker)
+            continue
+
+        parsed = parse_dialogue_line(line)
+        if not parsed:
+            continue
+        last_speaker = append_unit(units, parsed, file_path, line_no, last_speaker)
+
+    return units
 
 def load_text_units(input_path, context_window):
     units = []
