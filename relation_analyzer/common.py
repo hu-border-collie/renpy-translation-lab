@@ -3,6 +3,7 @@ import ast
 import hashlib
 import io
 import json
+import keyword
 import os
 import pickle
 import re
@@ -56,7 +57,7 @@ CONTROL_KEYWORDS = {
     "label", "menu", "pass", "pause", "play", "python", "queue", "return",
     "scene", "screen", "show", "stop", "style", "transform", "voice", "window",
     "while", "for", "with", "default", "define", "layeredimage",
-}
+} | set(keyword.kwlist)
 TEXT_COMMANDS = {"centered", "extend", "narrator"}
 SINGLE_CHAR_PRECEDERS = "和与跟对向给找叫帮替把被让朝等爱恨像为比同陪靠从离到往"
 SINGLE_CHAR_FOLLOWERS = "说问道想看听笑哭叫答喊写拿抱推拉打找跟在向给被让来去走跑站坐等爱恨帮指摸望瞪"
