@@ -2,8 +2,12 @@ import csv
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from relation_analyzer import cli
 from relation_analyzer.parsing import extract_units_from_rpy, infer_characters_from_units, load_text_units, parse_dialogue_line, resolve_speaker_name
+from relation_analyzer.plotting import project_vectors_2d
 from relation_analyzer.relations import compute_relation_data, write_relation_csv
 
 
@@ -56,6 +60,18 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertGreater(pair_rows[frozenset(('Ian', 'Spencer'))]['score'], 0.0)
         self.assertGreater(pair_rows[frozenset(('Andrew', 'Spencer'))]['mention'], 0.0)
         self.assertEqual(data['characters'], ['Spencer', 'Ian', 'Andrew'])
+
+    def test_compute_relation_data_deduplicates_character_list(self):
+        units = [
+            {'source': 'scene_1.rpy', 'line_no': 1, 'speaker': 'ian', 'speaker_name': 'Ian', 'text': 'Hello Spencer.', 'context': 'Ian: Hello Spencer.'},
+            {'source': 'scene_1.rpy', 'line_no': 2, 'speaker': 'spencer_no_side', 'speaker_name': 'Spencer', 'text': 'Hi Ian.', 'context': 'Spencer: Hi Ian.'},
+        ]
+        data = compute_relation_data(units, ['Ian', 'Spencer', 'Ian'], segment_size=2)
+
+        self.assertEqual(data['characters'], ['Ian', 'Spencer'])
+        self.assertEqual(len(data['pair_rows']), 1)
+        self.assertEqual(data['pair_rows'][0]['left'], 'Ian')
+        self.assertEqual(data['pair_rows'][0]['right'], 'Spencer')
 
     def test_load_text_units_reads_utf8_sig_for_rpy_and_txt(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -113,6 +129,75 @@ class RelationAnalyzerTests(unittest.TestCase):
             units = extract_units_from_rpy(rpy_path)
 
             self.assertEqual(units, [])
+
+    def test_project_vectors_2d_handles_one_dimensional_embeddings(self):
+        class FakePCA:
+            def __init__(self, n_components):
+                self.n_components = n_components
+
+            def fit_transform(self, matrix):
+                rows = []
+                for row in matrix:
+                    rows.append([float(row[0])][:self.n_components])
+                return __import__('numpy').array(rows, dtype=float)
+
+        vectors_2d = project_vectors_2d([[1.0], [2.0], [3.0]], FakePCA)
+
+        self.assertEqual(vectors_2d.shape, (3, 2))
+        self.assertTrue((vectors_2d[:, 1] == 0).all())
+
+    def test_cli_relation_mode_exits_nonzero_when_active_characters_drop_below_two(self):
+        args = SimpleNamespace(
+            input='input.rpy',
+            output='output.png',
+            cache_dir='cache',
+            characters='Solo,Missing',
+            auto_characters=0,
+            portraits='off',
+            mode='relation',
+            batch_size=1,
+            context_window=0,
+            model='gemini-embedding-001',
+            output_dimensionality=768,
+            max_texts_per_character=0,
+            relation_window_size=12,
+            csv_output=None,
+        )
+        with patch.object(cli, 'parse_args', return_value=args), \
+             patch.object(cli, 'resolve_path', side_effect=lambda value: Path(value)), \
+             patch.object(cli, 'load_text_units', return_value=[{'text': 'x'}]), \
+             patch.object(cli, 'compute_relation_data', return_value={'characters': ['Solo']}):
+            with self.assertRaises(SystemExit) as exc:
+                cli.main()
+
+        self.assertEqual(str(exc.exception), '❌ 提取到的有效角色少于 2 个，无法计算关系。')
+
+    def test_cli_semantic_mode_exits_nonzero_when_active_characters_drop_below_two(self):
+        args = SimpleNamespace(
+            input='input.rpy',
+            output='output.png',
+            cache_dir='cache',
+            characters='Solo,Missing',
+            auto_characters=0,
+            portraits='off',
+            mode='semantic',
+            batch_size=1,
+            context_window=0,
+            model='gemini-embedding-001',
+            output_dimensionality=1,
+            max_texts_per_character=0,
+            relation_window_size=12,
+            csv_output=None,
+        )
+        with patch.object(cli, 'parse_args', return_value=args), \
+             patch.object(cli, 'resolve_path', side_effect=lambda value: Path(value)), \
+             patch.object(cli, 'load_text_units', return_value=[{'text': 'x'}]), \
+             patch.object(cli, 'collect_character_texts', return_value={'Solo': ['x'], 'Missing': []}), \
+             patch.object(cli, 'extract_character_vectors', return_value={'Solo': [1.0]}):
+            with self.assertRaises(SystemExit) as exc:
+                cli.main()
+
+        self.assertEqual(str(exc.exception), '❌ 提取到的有效角色少于 2 个，无法计算关系。')
 
     def test_write_relation_csv_uses_proper_csv_escaping(self):
         relation_data = {
