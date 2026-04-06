@@ -32,7 +32,8 @@ def embed_texts(texts, batch_size, model_name, output_dimensionality, cache_dir)
             all_embeddings.extend(batch_embeddings)
             continue
 
-        for attempt in range(1, API_RETRIES + 1):
+        attempt = 0
+        while True:
             try:
                 response = client.models.embed_content(
                     model=model_name,
@@ -61,6 +62,7 @@ def embed_texts(texts, batch_size, model_name, output_dimensionality, cache_dir)
                         "\u8bf7\u66f4\u65b0\u4ed3\u5e93\u6839\u76ee\u5f55\u4e0b\u7684 api_keys.json\uff08\u53ef\u53c2\u8003 api_keys.example.json\uff09\uff0c"
                         "\u6216\u4fee\u6b63\u73af\u5883\u53d8\u91cf GEMINI_API_KEY\u3002"
                     ) from exc
+                attempt += 1
                 wait_seconds = get_retry_delay_seconds(exc) if is_rate_limit_error(exc) else None
                 if attempt >= API_RETRIES:
                     raise RuntimeError(f"Embedding \u8bf7\u6c42\u8fde\u7eed\u5931\u8d25\uff0c\u6700\u540e\u4e00\u6b21\u9519\u8bef: {exc}") from exc

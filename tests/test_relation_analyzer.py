@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from relation_analyzer import cli
+from relation_analyzer import semantic
 from relation_analyzer.parsing import extract_units_from_rpy, infer_characters_from_units, load_text_units, parse_dialogue_line, resolve_speaker_name
 from relation_analyzer.plotting import project_vectors_2d
 from relation_analyzer.relations import compute_relation_data, write_relation_csv
@@ -37,6 +38,10 @@ class RelationAnalyzerTests(unittest.TestCase):
         parsed = parse_dialogue_line('"Hello there." nointeract')
         self.assertIsNone(parsed['speaker'])
         self.assertEqual(parsed['text'], 'Hello there.')
+
+    def test_parse_dialogue_line_rejects_python_keyword_speaker(self):
+        self.assertIsNone(parse_dialogue_line('assert "Hello there."'))
+        self.assertIsNone(parse_dialogue_line('yield "Hello there."'))
 
     def test_resolve_speaker_name_uses_generic_suffix_heuristic(self):
         self.assertEqual(resolve_speaker_name('spencer_no_side'), 'Spencer')
@@ -255,6 +260,57 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertEqual(rows[0]['left'], 'A,One')
         self.assertEqual(rows[0]['right'], 'B"Two')
         self.assertEqual(rows[0]['dominant_component'], '提及,对话')
+
+    def test_embed_texts_rotates_past_retry_count_until_valid_key(self):
+        class FakeModels:
+            def __init__(self, behavior):
+                self.behavior = behavior
+
+            def embed_content(self, **kwargs):
+                return self.behavior()
+
+        class FakeClient:
+            def __init__(self, behavior):
+                self.models = FakeModels(behavior)
+
+        def auth_error():
+            raise RuntimeError('API key expired. Please renew the API key.')
+
+        def success():
+            return SimpleNamespace(
+                embeddings=[SimpleNamespace(values=[1.0, 2.0])]
+            )
+
+        behaviors = [auth_error, auth_error, auth_error, success]
+        clients = [FakeClient(behavior) for behavior in behaviors]
+        client_iter = iter(clients)
+        state = {'index': 0}
+
+        def fake_rotate():
+            if state['index'] >= len(clients) - 1:
+                return False
+            state['index'] += 1
+            return True
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(semantic, 'API_RETRIES', 3), \
+             patch.object(semantic, 'load_numpy', return_value=__import__('numpy')), \
+             patch.object(semantic, 'load_embedding_libs', return_value=(None, SimpleNamespace(EmbedContentConfig=lambda **kwargs: kwargs))), \
+             patch.object(semantic, 'get_client', side_effect=lambda: next(client_iter)), \
+             patch.object(semantic, 'rotate_api_key', side_effect=fake_rotate), \
+             patch.object(semantic, 'get_api_key_source', side_effect=lambda: f'key{state["index"] + 1}'), \
+             patch.object(semantic, 'load_cached_embedding', return_value=None), \
+             patch.object(semantic, 'save_cached_embedding', return_value=None):
+            embeddings = semantic.embed_texts(
+                ['hello'],
+                batch_size=1,
+                model_name='gemini-embedding-001',
+                output_dimensionality=2,
+                cache_dir=Path(tmpdir),
+            )
+
+        self.assertEqual(embeddings.shape, (1, 2))
+        self.assertEqual(embeddings.tolist(), [[1.0, 2.0]])
 
 
 if __name__ == '__main__':
