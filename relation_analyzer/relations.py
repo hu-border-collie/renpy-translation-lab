@@ -144,10 +144,11 @@ def build_relation_pair_rows(total_matrix, chars, component_matrices, component_
 
 def compute_relation_data(units, characters, segment_size):
     np = load_numpy()
-    relation_units, participation_counts, speaker_counts, mention_presence_counts = collect_relation_units(units, characters)
-    active_characters = [char for char in characters if participation_counts.get(char, 0) > 0]
+    deduped_characters = list(dict.fromkeys(characters))
+    relation_units, participation_counts, speaker_counts, mention_presence_counts = collect_relation_units(units, deduped_characters)
+    active_characters = [char for char in deduped_characters if participation_counts.get(char, 0) > 0]
 
-    for char in characters:
+    for char in deduped_characters:
         if char not in active_characters:
             print(f"⚠️ 未发现 [{char}] 的有效出场或提及，已从关系图中跳过。")
 

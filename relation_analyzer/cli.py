@@ -65,7 +65,7 @@ def main():
             csv_output = resolve_path(args.csv_output) if args.csv_output else output_path.with_name(f"{output_path.stem}_relations.csv")
             analyze_and_plot_relation(relation_data, output_path, csv_output, active_portraits)
         else:
-            print('❌ 提取到的有效角色少于 2 个，无法计算关系。')
+            raise SystemExit('❌ 提取到的有效角色少于 2 个，无法计算关系。')
         return
 
     char_texts = collect_character_texts(units, characters)
@@ -82,4 +82,4 @@ def main():
         active_portraits = {char: portraits.get(char) for char in vectors.keys()} if portraits else {}
         analyze_and_plot(vectors, char_texts, output_path, active_portraits)
     else:
-        print('❌ 提取到的有效角色少于 2 个，无法计算关系。')
+        raise SystemExit('❌ 提取到的有效角色少于 2 个，无法计算关系。')

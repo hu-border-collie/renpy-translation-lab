@@ -142,6 +142,26 @@ def build_pair_rows(sim_matrix, chars):
     rows.sort(key=lambda item: item['score'], reverse=True)
     return rows
 
+def project_vectors_2d(matrix, PCA):
+    np = load_numpy()
+    matrix = np.asarray(matrix, dtype=float)
+    if matrix.ndim != 2:
+        raise ValueError('project_vectors_2d 需要二维矩阵输入。')
+
+    sample_count, feature_count = matrix.shape
+    if sample_count == 0:
+        return np.zeros((0, 2), dtype=float)
+
+    n_components = min(2, sample_count, feature_count)
+    if n_components <= 0:
+        return np.zeros((sample_count, 2), dtype=float)
+
+    vectors_2d = PCA(n_components=n_components).fit_transform(matrix)
+    if vectors_2d.shape[1] < 2:
+        padding = np.zeros((sample_count, 2 - vectors_2d.shape[1]), dtype=float)
+        vectors_2d = np.hstack([vectors_2d, padding])
+    return vectors_2d
+
 def analyze_and_plot(char_vectors, char_texts, output_path, portraits=None):
     np = load_numpy()
     plt, PCA, cosine_similarity, OffsetImage, AnnotationBbox = load_plot_libs()
@@ -191,8 +211,8 @@ def analyze_and_plot(char_vectors, char_texts, output_path, portraits=None):
     for index, row in enumerate(relative_pair_rows[:min(8, len(relative_pair_rows))], start=1):
         print(f"{index}. {row['left']} <-> {row['right']}: {row['score']:.3f}")
 
-    raw_vectors_2d = PCA(n_components=2).fit_transform(matrix)
-    relative_vectors_2d = PCA(n_components=2).fit_transform(centered_matrix)
+    raw_vectors_2d = project_vectors_2d(matrix, PCA)
+    relative_vectors_2d = project_vectors_2d(centered_matrix, PCA)
     raw_edges = select_similarity_edges(raw_sim_matrix, chars)
     relative_edges = select_similarity_edges(relative_sim_matrix, chars)
     map_labels = [f"{char}\n{counts[char]}" for char in chars]
