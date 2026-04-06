@@ -33,6 +33,11 @@ class RelationAnalyzerTests(unittest.TestCase):
     def test_parse_dialogue_line_rejects_bare_string_python_literal(self):
         self.assertIsNone(parse_dialogue_line('"dismiss": ["mouseup_1"],'))
 
+    def test_parse_dialogue_line_accepts_bare_string_with_narrator_clause(self):
+        parsed = parse_dialogue_line('"Hello there." nointeract')
+        self.assertIsNone(parsed['speaker'])
+        self.assertEqual(parsed['text'], 'Hello there.')
+
     def test_resolve_speaker_name_uses_generic_suffix_heuristic(self):
         self.assertEqual(resolve_speaker_name('spencer_no_side'), 'Spencer')
         self.assertEqual(resolve_speaker_name('mr_smith'), 'Mr Smith')
@@ -129,6 +134,31 @@ class RelationAnalyzerTests(unittest.TestCase):
             units = extract_units_from_rpy(rpy_path)
 
             self.assertEqual(units, [])
+
+    def test_extract_units_from_rpy_preserves_raw_dialogue_around_strings_block(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            rpy_path = root / 'mixed.rpy'
+            rpy_path.write_text(
+                'label start:\n'
+                '    e "Before."\n'
+                '\n'
+                'translate schinese strings:\n'
+                '    old "Default"\n'
+                '    new "Default"\n'
+                '\n'
+                'label later:\n'
+                '    "After." nointeract\n',
+                encoding='utf-8-sig',
+            )
+
+            units = extract_units_from_rpy(rpy_path)
+
+            self.assertEqual(len(units), 2)
+            self.assertEqual(units[0]['speaker'], 'e')
+            self.assertEqual(units[0]['text'], 'Before.')
+            self.assertIsNone(units[1]['speaker'])
+            self.assertEqual(units[1]['text'], 'After.')
 
     def test_project_vectors_2d_handles_one_dimensional_embeddings(self):
         class FakePCA:
