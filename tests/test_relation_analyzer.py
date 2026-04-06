@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from relation_analyzer.parsing import infer_characters_from_units, load_text_units, parse_dialogue_line, resolve_speaker_name
+from relation_analyzer.parsing import extract_units_from_rpy, infer_characters_from_units, load_text_units, parse_dialogue_line, resolve_speaker_name
 from relation_analyzer.relations import compute_relation_data, write_relation_csv
 
 
@@ -20,6 +20,14 @@ class RelationAnalyzerTests(unittest.TestCase):
 
     def test_parse_dialogue_line_rejects_assignment_like_statement(self):
         self.assertIsNone(parse_dialogue_line('title = "Hello there."'))
+
+    def test_parse_dialogue_line_allows_new_as_regular_speaker_name(self):
+        parsed = parse_dialogue_line('new "Hello there."')
+        self.assertEqual(parsed['speaker'], 'new')
+        self.assertEqual(parsed['text'], 'Hello there.')
+
+    def test_parse_dialogue_line_rejects_bare_string_python_literal(self):
+        self.assertIsNone(parse_dialogue_line('"dismiss": ["mouseup_1"],'))
 
     def test_resolve_speaker_name_uses_generic_suffix_heuristic(self):
         self.assertEqual(resolve_speaker_name('spencer_no_side'), 'Spencer')
@@ -90,6 +98,21 @@ class RelationAnalyzerTests(unittest.TestCase):
             self.assertEqual(rpy_units[1]['speaker'], 'e')
             self.assertEqual(rpy_units[1]['speaker_name'], 'E')
             self.assertEqual(rpy_units[1]['text'], 'And another line.')
+
+    def test_extract_units_from_rpy_skips_strings_only_translation_blocks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            rpy_path = root / 'common.rpy'
+            rpy_path.write_text(
+                'translate schinese strings:\n'
+                '    old "Default"\n'
+                '    new "Default"\n',
+                encoding='utf-8-sig',
+            )
+
+            units = extract_units_from_rpy(rpy_path)
+
+            self.assertEqual(units, [])
 
     def test_write_relation_csv_uses_proper_csv_escaping(self):
         relation_data = {

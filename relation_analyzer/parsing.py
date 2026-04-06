@@ -24,10 +24,10 @@ def extract_first_string_token(source_line):
     try:
         for token in tokenize.generate_tokens(io.StringIO(source_line).readline):
             if token.type == tokenize.STRING:
-                return token.string, token.start[1]
+                return token.string, token.start[1], token.end[1]
     except tokenize.TokenError:
-        return None, None
-    return None, None
+        return None, None, None
+    return None, None, None
 
 def normalize_text(text):
     text = " ".join(str(text).split()).strip()
@@ -50,14 +50,15 @@ def parse_dialogue_line(line):
     stripped = line.strip()
     if not stripped or stripped.startswith("#"):
         return None
-    if stripped.startswith("old ") or stripped.startswith("new "):
-        return None
 
-    literal, start_col = extract_first_string_token(stripped)
+    literal, start_col, end_col = extract_first_string_token(stripped)
     if not literal:
         return None
 
     leading = stripped[:start_col].strip()
+    trailing = stripped[end_col:].strip()
+    if trailing and not trailing.startswith("#") and not leading:
+        return None
     speaker = None
     command = None
     if leading:
@@ -154,9 +155,7 @@ def extract_units_from_raw_rpy(lines, file_path):
 def extract_units_from_rpy(file_path):
     lines = file_path.read_text(encoding="utf-8-sig").splitlines()
     if any(TRANSLATE_BLOCK_RE.match(line) for line in lines):
-        units = extract_units_from_translation_file(lines, file_path)
-        if units:
-            return units
+        return extract_units_from_translation_file(lines, file_path)
     return extract_units_from_raw_rpy(lines, file_path)
 
 def load_text_units(input_path, context_window):
