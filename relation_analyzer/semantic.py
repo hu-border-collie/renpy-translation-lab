@@ -2,8 +2,8 @@ from .common import *
 
 def embed_texts(texts, batch_size, model_name, output_dimensionality, cache_dir):
     np = load_numpy()
-    _, types = load_embedding_libs()
-    client = get_client()
+    types = None
+    client = None
     all_embeddings = []
     config_kwargs = {"output_dimensionality": output_dimensionality}
     task_type = get_task_type_for_model(model_name)
@@ -31,6 +31,11 @@ def embed_texts(texts, batch_size, model_name, output_dimensionality, cache_dir)
         if not missing_texts:
             all_embeddings.extend(batch_embeddings)
             continue
+
+        if types is None:
+            _, types = load_embedding_libs()
+        if client is None:
+            client = get_client()
 
         attempt = 0
         while True:

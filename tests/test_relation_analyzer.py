@@ -43,6 +43,9 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertIsNone(parse_dialogue_line('assert "Hello there."'))
         self.assertIsNone(parse_dialogue_line('yield "Hello there."'))
 
+    def test_parse_dialogue_line_rejects_style_property_line(self):
+        self.assertIsNone(parse_dialogue_line('font "DejaVuSans.ttf"'))
+
     def test_resolve_speaker_name_uses_generic_suffix_heuristic(self):
         self.assertEqual(resolve_speaker_name('spencer_no_side'), 'Spencer')
         self.assertEqual(resolve_speaker_name('mr_smith'), 'Mr Smith')
@@ -311,6 +314,25 @@ class RelationAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(embeddings.shape, (1, 2))
         self.assertEqual(embeddings.tolist(), [[1.0, 2.0]])
+
+    def test_embed_texts_uses_cache_without_loading_gemini_client(self):
+        cached_vector = __import__('numpy').array([3.0, 4.0], dtype=float)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch.object(semantic, 'load_numpy', return_value=__import__('numpy')), \
+             patch.object(semantic, 'load_cached_embedding', return_value=cached_vector), \
+             patch.object(semantic, 'load_embedding_libs', side_effect=AssertionError('should not load embedding libs')), \
+             patch.object(semantic, 'get_client', side_effect=AssertionError('should not create client')):
+            embeddings = semantic.embed_texts(
+                ['hello'],
+                batch_size=1,
+                model_name='gemini-embedding-001',
+                output_dimensionality=2,
+                cache_dir=Path(tmpdir),
+            )
+
+        self.assertEqual(embeddings.shape, (1, 2))
+        self.assertEqual(embeddings.tolist(), [[3.0, 4.0]])
 
 
 if __name__ == '__main__':

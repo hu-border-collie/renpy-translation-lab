@@ -83,6 +83,8 @@ def parse_dialogue_line(line):
             command = first
         elif first in CONTROL_KEYWORDS:
             return None
+        elif first in NON_DIALOGUE_PROPERTY_KEYWORDS:
+            return None
         elif IDENTIFIER_RE.match(first):
             if any(not is_valid_say_attribute_token(token) for token in parts[1:]):
                 return None

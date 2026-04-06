@@ -59,6 +59,19 @@ CONTROL_KEYWORDS = {
     "while", "for", "with", "default", "define", "layeredimage",
 } | set(keyword.kwlist)
 TEXT_COMMANDS = {"centered", "extend", "narrator"}
+NON_DIALOGUE_PROPERTY_KEYWORDS = {
+    "action", "activate_sound", "alt", "anchor", "antialias", "background", "bar", "bold",
+    "bottom_margin", "box_layout", "caret", "child", "child_size", "clipping", "color",
+    "first_indent", "font", "foreground", "hinting", "hover_background", "hover_color",
+    "hover_foreground", "hover_sound", "idle_background", "idle_color", "idle_foreground",
+    "insensitive_background", "insensitive_color", "italic", "justify", "kerning",
+    "language", "last_spacing", "layout", "line_leading", "line_spacing", "minimum",
+    "mouse", "offset", "outlines", "prefix", "rest_indent", "selected_background",
+    "selected_color", "selected_foreground", "size", "sound", "spacing", "strikethrough",
+    "subtitle_width", "text_align", "thumb", "thumb_shadow", "top_margin", "underline",
+    "xalign", "xanchor", "xfill", "xmaximum", "xminimum", "xoffset", "xpos", "xsize",
+    "yalign", "yanchor", "yfill", "ymaximum", "yminimum", "yoffset", "ypos", "ysize",
+}
 SINGLE_CHAR_PRECEDERS = "和与跟对向给找叫帮替把被让朝等爱恨像为比同陪靠从离到往"
 SINGLE_CHAR_FOLLOWERS = "说问道想看听笑哭叫答喊写拿抱推拉打找跟在向给被让来去走跑站坐等爱恨帮指摸望瞪"
 
