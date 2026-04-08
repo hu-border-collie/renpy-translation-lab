@@ -50,6 +50,10 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertIsNone(parse_dialogue_line('text "Overlay"'))
         self.assertIsNone(parse_dialogue_line('id "window"'))
 
+    def test_parse_dialogue_line_rejects_assignment_like_text_commands(self):
+        self.assertIsNone(parse_dialogue_line('narrator = Character("Narrator")'))
+        self.assertIsNone(parse_dialogue_line('extend = "Hello there."'))
+
     def test_resolve_speaker_name_uses_generic_suffix_heuristic(self):
         self.assertEqual(resolve_speaker_name('spencer_no_side'), 'Spencer')
         self.assertEqual(resolve_speaker_name('mr_smith'), 'Mr Smith')

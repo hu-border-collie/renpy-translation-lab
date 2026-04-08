@@ -80,6 +80,8 @@ def parse_dialogue_line(line):
         parts = leading.split()
         first = parts[0]
         if first in TEXT_COMMANDS:
+            if len(parts) != 1:
+                return None
             command = first
         elif first in CONTROL_KEYWORDS:
             return None
