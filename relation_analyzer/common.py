@@ -61,14 +61,17 @@ CONTROL_KEYWORDS = {
 TEXT_COMMANDS = {"centered", "extend", "narrator"}
 NON_DIALOGUE_PROPERTY_KEYWORDS = {
     "action", "activate_sound", "alt", "anchor", "antialias", "background", "bar", "bold",
-    "bottom_margin", "box_layout", "caret", "child", "child_size", "clipping", "color",
+    "bottom_margin", "box_layout", "button", "caret", "child", "child_size", "clipping", "color",
+    "drag", "draggroup", "fixed", "frame", "grid", "hbox", "hotbar", "hotspot",
+    "id", "imagebutton", "imagemap", "input",
     "first_indent", "font", "foreground", "hinting", "hover_background", "hover_color",
     "hover_foreground", "hover_sound", "idle_background", "idle_color", "idle_foreground",
     "insensitive_background", "insensitive_color", "italic", "justify", "kerning",
     "language", "last_spacing", "layout", "line_leading", "line_spacing", "minimum",
-    "mouse", "offset", "outlines", "prefix", "rest_indent", "selected_background",
+    "mouse", "mousearea", "offset", "on", "outlines", "prefix", "rest_indent", "selected_background",
     "selected_color", "selected_foreground", "size", "sound", "spacing", "strikethrough",
     "subtitle_width", "text_align", "thumb", "thumb_shadow", "top_margin", "underline",
+    "text", "textbutton", "timer", "transclude", "use", "vbox", "viewport",
     "xalign", "xanchor", "xfill", "xmaximum", "xminimum", "xoffset", "xpos", "xsize",
     "yalign", "yanchor", "yfill", "ymaximum", "yminimum", "yoffset", "ypos", "ysize",
 }

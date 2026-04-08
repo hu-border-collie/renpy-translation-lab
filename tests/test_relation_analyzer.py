@@ -46,6 +46,10 @@ class RelationAnalyzerTests(unittest.TestCase):
     def test_parse_dialogue_line_rejects_style_property_line(self):
         self.assertIsNone(parse_dialogue_line('font "DejaVuSans.ttf"'))
 
+    def test_parse_dialogue_line_rejects_screen_property_line(self):
+        self.assertIsNone(parse_dialogue_line('text "Overlay"'))
+        self.assertIsNone(parse_dialogue_line('id "window"'))
+
     def test_resolve_speaker_name_uses_generic_suffix_heuristic(self):
         self.assertEqual(resolve_speaker_name('spencer_no_side'), 'Spencer')
         self.assertEqual(resolve_speaker_name('mr_smith'), 'Mr Smith')
@@ -127,6 +131,26 @@ class RelationAnalyzerTests(unittest.TestCase):
             self.assertEqual(rpy_units[1]['speaker'], 'e')
             self.assertEqual(rpy_units[1]['speaker_name'], 'E')
             self.assertEqual(rpy_units[1]['text'], 'And another line.')
+
+    def test_load_text_units_resets_speaker_context_after_narrator_line(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            rpy_path = root / 'scene.rpy'
+            rpy_path.write_text(
+                'translate schinese start:\n'
+                '    e happy "Hello there."\n'
+                '    "A narrator line."\n'
+                '    extend "Still narrator."\n',
+                encoding='utf-8-sig',
+            )
+
+            rpy_units = load_text_units(rpy_path, context_window=0)
+
+            self.assertEqual(len(rpy_units), 3)
+            self.assertEqual(rpy_units[0]['speaker'], 'e')
+            self.assertIsNone(rpy_units[1]['speaker'])
+            self.assertIsNone(rpy_units[2]['speaker'])
+            self.assertEqual(rpy_units[2]['text'], 'Still narrator.')
 
     def test_extract_units_from_rpy_skips_strings_only_translation_blocks(self):
         with tempfile.TemporaryDirectory() as tmpdir:
