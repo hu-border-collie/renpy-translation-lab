@@ -1,2 +1,6 @@
 # Sync + Batch translator
 google-genai
+numpy
+matplotlib
+scikit-learn
+pillow
