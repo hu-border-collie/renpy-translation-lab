@@ -125,7 +125,7 @@ def append_unit(units, parsed, file_path, line_no, last_speaker):
     )
     if normalized["speaker"]:
         return normalized["speaker"]
-    return last_speaker
+    return None
 
 def get_line_indent(line):
     return len(line) - len(line.lstrip())
