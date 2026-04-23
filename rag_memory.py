@@ -49,6 +49,7 @@ class JsonRagStore(object):
         self._loaded = False
         self.metadata = {}
         self.history = {}
+        self.file_index = {}
 
     def load(self):
         if self._loaded:
@@ -56,6 +57,7 @@ class JsonRagStore(object):
         os.makedirs(self.store_dir, exist_ok=True)
         self.metadata = self._load_json_file(self.metadata_path)
         self.history = {}
+        self.file_index = {}
         if os.path.isfile(self.history_path):
             with open(self.history_path, 'r', encoding='utf-8-sig') as handle:
                 for raw_line in handle:
@@ -69,6 +71,7 @@ class JsonRagStore(object):
                     memory_id = record.get('memory_id')
                     if memory_id:
                         self.history[memory_id] = record
+                        self._index_record(memory_id, record)
         self._loaded = True
 
     def _load_json_file(self, path):
@@ -111,6 +114,23 @@ class JsonRagStore(object):
             for memory_id in sorted(self.history):
                 handle.write(json.dumps(self.history[memory_id], ensure_ascii=False) + '\n')
 
+    def _index_record(self, memory_id, record):
+        file_rel_path = record.get('file_rel_path')
+        if not file_rel_path:
+            return
+        self.file_index.setdefault(file_rel_path, set()).add(memory_id)
+
+    def _unindex_record(self, memory_id, record):
+        file_rel_path = record.get('file_rel_path')
+        if not file_rel_path:
+            return
+        bucket = self.file_index.get(file_rel_path)
+        if not bucket:
+            return
+        bucket.discard(memory_id)
+        if not bucket:
+            self.file_index.pop(file_rel_path, None)
+
     def upsert_history(self, records):
         self.load()
         changed = 0
@@ -124,7 +144,10 @@ class JsonRagStore(object):
             existing = self.history.get(memory_id)
             if existing == record:
                 continue
+            if existing:
+                self._unindex_record(memory_id, existing)
             self.history[memory_id] = record
+            self._index_record(memory_id, record)
             changed += 1
         if changed:
             self._write_history()
@@ -135,13 +158,25 @@ class JsonRagStore(object):
         self.load()
         changed = 0
         for memory_id in memory_ids:
-            if memory_id in self.history:
-                del self.history[memory_id]
-                changed += 1
+            existing = self.history.pop(memory_id, None)
+            if not existing:
+                continue
+            self._unindex_record(memory_id, existing)
+            changed += 1
         if changed:
             self._write_history()
             self.set_metadata(history_count=len(self.history))
         return changed
+
+    def history_ids_for_file(self, file_rel_path, quality_state=None):
+        self.load()
+        memory_ids = list(self.file_index.get(file_rel_path, set()))
+        if quality_state is None:
+            return memory_ids
+        return [
+            memory_id for memory_id in memory_ids
+            if self.history.get(memory_id, {}).get('quality_state') == quality_state
+        ]
 
     def search_history(self, query_vector, top_k=4, min_similarity=0.72):
         self.load()

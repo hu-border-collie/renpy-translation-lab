@@ -1649,6 +1649,16 @@ def extract_string_token_from_line(line):
     return None
 
 
+def decode_string_literal_text(raw_text):
+    if not isinstance(raw_text, str):
+        return ""
+    try:
+        value = ast.literal_eval('"' + raw_text + '"')
+    except Exception:
+        return raw_text
+    return value if isinstance(value, str) else raw_text
+
+
 def collect_translation_entries_from_lines(lines):
     entries = []
     index = 0
@@ -1669,7 +1679,7 @@ def collect_translation_entries_from_lines(lines):
                     entries.append(
                         {
                             "line_number": next_index + 1,
-                            "source": comment_match.group("text"),
+                            "source": decode_string_literal_text(comment_match.group("text")),
                             "translation": token["text"],
                             "start": token["start"],
                             "end": token["end"],
@@ -1690,7 +1700,7 @@ def collect_translation_entries_from_lines(lines):
                         entries.append(
                             {
                                 "line_number": next_index + 1,
-                                "source": old_match.group("text"),
+                                "source": decode_string_literal_text(old_match.group("text")),
                                 "translation": token["text"],
                                 "start": token["start"],
                                 "end": token["end"],
@@ -1737,6 +1747,17 @@ def build_sync_rag_record(file_rel_path, group, quality_state):
     }
 
 
+def collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state):
+    records = []
+    segment_size = max(1, SYNC_RAG_SEGMENT_LINES)
+    usable_entries = [entry for entry in entries if should_index_sync_rag_entry(entry)]
+    for start in range(0, len(usable_entries), segment_size):
+        group = usable_entries[start:start + segment_size]
+        if group:
+            records.append(build_sync_rag_record(file_rel_path, group, quality_state))
+    return records
+
+
 def collect_sync_rag_records_for_file(file_path, quality_state=None):
     if quality_state is None:
         quality_state = SYNC_RAG_QUALITY_STATE
@@ -1749,14 +1770,35 @@ def collect_sync_rag_records_for_file(file_path, quality_state=None):
     with open(file_path, "r", encoding="utf-8-sig") as handle:
         entries = collect_translation_entries_from_lines(handle.readlines())
 
-    records = []
-    segment_size = max(1, SYNC_RAG_SEGMENT_LINES)
-    usable_entries = [entry for entry in entries if should_index_sync_rag_entry(entry)]
-    for start in range(0, len(usable_entries), segment_size):
-        group = usable_entries[start:start + segment_size]
-        if group:
-            records.append(build_sync_rag_record(file_rel_path, group, quality_state))
-    return records
+    return collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state)
+
+
+def collect_sync_rag_records_for_tasks(file_path, tasks, quality_state=None):
+    if quality_state is None:
+        quality_state = SYNC_RAG_QUALITY_STATE
+    if not file_path or not tasks:
+        return []
+    try:
+        file_rel_path = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
+    except ValueError:
+        file_rel_path = os.path.basename(file_path)
+
+    entries = []
+    for task in tasks:
+        translated_text = task.get("translated_text")
+        if not translated_text:
+            continue
+        entries.append(
+            {
+                "line_number": int(task["line"]) + 1,
+                "source": task.get("text", ""),
+                "translation": translated_text,
+                "start": task.get("start", 0),
+                "end": task.get("end", 0),
+                "quote": task.get("quote", '"'),
+            }
+        )
+    return collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state)
 
 
 def embed_sync_history_records(records):
@@ -1773,6 +1815,62 @@ def embed_sync_history_records(records):
             enriched["embedding_dim"] = len(vector)
             embedded_records.append(enriched)
     return embedded_records
+
+
+def upsert_sync_rag_records(store, records):
+    pending_records = []
+    for record in records:
+        existing = store.get_history_record(record["memory_id"])
+        if (
+            existing
+            and existing.get("source_checksum") == record["source_checksum"]
+            and existing.get("translation_checksum") == record["translation_checksum"]
+            and existing.get("embedding_model") == SYNC_RAG_EMBEDDING_MODEL
+            and existing.get("embedding_task_type") == SYNC_RAG_DOCUMENT_TASK_TYPE
+            and existing.get("embedding_dim") == SYNC_RAG_OUTPUT_DIMENSIONALITY
+        ):
+            continue
+        pending_records.append(record)
+
+    stats = {
+        "pending": len(pending_records),
+        "upserted": 0,
+    }
+    if not pending_records:
+        return stats
+
+    embedded_records = embed_sync_history_records(pending_records)
+    stats["upserted"] = store.upsert_history(embedded_records)
+    return stats
+
+
+def sync_rag_store_for_tasks(file_path, tasks, quality_state=None):
+    if quality_state is None:
+        quality_state = SYNC_RAG_QUALITY_STATE
+    if not SYNC_RAG_ENABLED or not SYNC_RAG_UPDATE_ON_SUCCESS:
+        return {"enabled": False}
+    store = get_sync_rag_store()
+    if store is None:
+        return {"enabled": True, "error": "RAG store unavailable"}
+
+    base_records = collect_sync_rag_records_for_tasks(file_path, tasks, quality_state=quality_state)
+    stats = {
+        "enabled": True,
+        "store_dir": store.store_dir,
+        "scanned": len(base_records),
+        "pending": 0,
+        "pruned": 0,
+        "upserted": 0,
+        "history_records_before": store.count_history(),
+    }
+    try:
+        stats.update(upsert_sync_rag_records(store, base_records))
+        stats["history_records_after"] = store.count_history()
+    except Exception as exc:
+        print(f"Warning: Failed to update sync RAG store: {exc}")
+        stats["error"] = str(exc)
+        stats["history_records_after"] = store.count_history()
+    return stats
 
 
 def sync_rag_store_for_file(file_path, quality_state=None):
@@ -1792,45 +1890,25 @@ def sync_rag_store_for_file(file_path, quality_state=None):
         file_rel_path = os.path.basename(file_path)
     obsolete_record_ids = [
         memory_id
-        for memory_id, record in store.history.items()
-        if record.get("file_rel_path") == file_rel_path
-        and record.get("quality_state") == quality_state
-        and memory_id not in current_record_ids
+        for memory_id in store.history_ids_for_file(file_rel_path, quality_state=quality_state)
+        if memory_id not in current_record_ids
     ]
-    pending_records = []
-    for record in base_records:
-        existing = store.get_history_record(record["memory_id"])
-        if (
-            existing
-            and existing.get("source_checksum") == record["source_checksum"]
-            and existing.get("translation_checksum") == record["translation_checksum"]
-            and existing.get("embedding_model") == SYNC_RAG_EMBEDDING_MODEL
-            and existing.get("embedding_task_type") == SYNC_RAG_DOCUMENT_TASK_TYPE
-            and existing.get("embedding_dim") == SYNC_RAG_OUTPUT_DIMENSIONALITY
-        ):
-            continue
-        pending_records.append(record)
 
     stats = {
         "enabled": True,
         "store_dir": store.store_dir,
         "scanned": len(base_records),
-        "pending": len(pending_records),
+        "pending": 0,
         "pruned": 0,
         "upserted": 0,
         "history_records_before": store.count_history(),
     }
-    if not pending_records:
-        if obsolete_record_ids:
-            stats["pruned"] = store.delete_history(obsolete_record_ids)
-        stats["history_records_after"] = store.count_history()
-        return stats
 
     try:
-        embedded_records = embed_sync_history_records(pending_records)
+        upsert_stats = upsert_sync_rag_records(store, base_records)
+        stats.update(upsert_stats)
         if obsolete_record_ids:
             stats["pruned"] = store.delete_history(obsolete_record_ids)
-        stats["upserted"] = store.upsert_history(embedded_records)
         stats["history_records_after"] = store.count_history()
     except Exception as exc:
         print(f"Warning: Failed to update sync RAG store: {exc}")
@@ -1839,12 +1917,17 @@ def sync_rag_store_for_file(file_path, quality_state=None):
     return stats
 
 
-def maybe_update_sync_rag_store(file_path):
+def maybe_update_sync_rag_store(file_path, tasks=None, full_file=False):
     if not SYNC_RAG_ENABLED or not SYNC_RAG_UPDATE_ON_SUCCESS:
         return
-    summary = sync_rag_store_for_file(file_path, quality_state=SYNC_RAG_QUALITY_STATE)
+    if full_file:
+        summary = sync_rag_store_for_file(file_path, quality_state=SYNC_RAG_QUALITY_STATE)
+    else:
+        summary = sync_rag_store_for_tasks(file_path, tasks or [], quality_state=SYNC_RAG_QUALITY_STATE)
     if summary.get("upserted"):
         print(f"  Sync RAG store updated: {summary.get('upserted', 0)} entries", flush=True)
+    if summary.get("pruned"):
+        print(f"  Sync RAG store pruned: {summary.get('pruned', 0)} obsolete entries", flush=True)
     elif summary.get("error"):
         print(f"  Warning: Sync RAG store update skipped: {summary['error']}", flush=True)
 
@@ -2112,6 +2195,7 @@ def process_batch(batch, replacements):
             continue
 
         valid_progress_entries.append(entry["progress_entry"])
+        entry["translated_text"] = translated
         line_idx = entry["line"]
         replacements.setdefault(line_idx, []).append(
             (entry["start"], entry["end"], translated, entry.get("prefix", ""), entry["quote"])
@@ -2342,6 +2426,7 @@ def run_translation():
         replacements = {}
         batch = []
         current_batch_chars = 0
+        sync_rag_needs_file_refresh = False
 
         for task in tasks:
             # Update ID to be unique per file and string literal
@@ -2355,7 +2440,8 @@ def run_translation():
                 if successful_entries:
                     commit_replacements(file_path, lines, replacements)
                     update_progress(progress_key, successful_entries)
-                    maybe_update_sync_rag_store(file_path)
+                    maybe_update_sync_rag_store(file_path, tasks=batch)
+                    sync_rag_needs_file_refresh = True
                     completed_entries.update(_normalize_progress_entries(successful_entries))
                     global_progress[progress_key] = sorted(completed_entries)
                     replacements = {}
@@ -2372,8 +2458,12 @@ def run_translation():
             if successful_entries:
                 commit_replacements(file_path, lines, replacements)
                 update_progress(progress_key, successful_entries)
-                maybe_update_sync_rag_store(file_path)
+                maybe_update_sync_rag_store(file_path, tasks=batch)
+                sync_rag_needs_file_refresh = True
                 completed_entries.update(_normalize_progress_entries(successful_entries))
                 global_progress[progress_key] = sorted(completed_entries)
+
+        if sync_rag_needs_file_refresh:
+            maybe_update_sync_rag_store(file_path, full_file=True)
 
         print(f"  Done with {filename}.")
