@@ -1620,7 +1620,7 @@ def commit_replacements(path, lines, replacements):
 
 
 def sync_rag_hash_key(text):
-    return hash_text(text)[:10]
+    return hash_text(text)
 
 
 def extract_string_token_from_line(line):
