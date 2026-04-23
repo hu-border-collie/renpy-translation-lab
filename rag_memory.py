@@ -131,6 +131,18 @@ class JsonRagStore(object):
             self.set_metadata(history_count=len(self.history))
         return changed
 
+    def delete_history(self, memory_ids):
+        self.load()
+        changed = 0
+        for memory_id in memory_ids:
+            if memory_id in self.history:
+                del self.history[memory_id]
+                changed += 1
+        if changed:
+            self._write_history()
+            self.set_metadata(history_count=len(self.history))
+        return changed
+
     def search_history(self, query_vector, top_k=4, min_similarity=0.72):
         self.load()
         results = []

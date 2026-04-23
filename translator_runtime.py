@@ -1660,7 +1660,11 @@ def collect_translation_entries_from_lines(lines):
             while next_index < len(lines) and not lines[next_index].strip():
                 next_index += 1
             if next_index < len(lines):
-                token = extract_string_token_from_line(lines[next_index])
+                candidate_line = lines[next_index].rstrip("\n")
+                if not TL_OLD_LINE_RE.match(candidate_line):
+                    token = extract_string_token_from_line(lines[next_index])
+                else:
+                    token = None
                 if token:
                     entries.append(
                         {
@@ -1673,7 +1677,7 @@ def collect_translation_entries_from_lines(lines):
                             "quote": token["quote"],
                         }
                     )
-            index = next_index
+                    index = next_index
         else:
             old_match = TL_OLD_LINE_RE.match(raw_line)
             if old_match:
@@ -1693,7 +1697,7 @@ def collect_translation_entries_from_lines(lines):
                                 "quote": token["quote"],
                             }
                         )
-                index = next_index
+                        index = next_index
         index += 1
 
     for entry_index, entry in enumerate(entries):
@@ -1733,7 +1737,9 @@ def build_sync_rag_record(file_rel_path, group, quality_state):
     }
 
 
-def collect_sync_rag_records_for_file(file_path, quality_state=SYNC_RAG_QUALITY_STATE):
+def collect_sync_rag_records_for_file(file_path, quality_state=None):
+    if quality_state is None:
+        quality_state = SYNC_RAG_QUALITY_STATE
     if not file_path or not os.path.isfile(file_path):
         return []
     try:
@@ -1769,7 +1775,9 @@ def embed_sync_history_records(records):
     return embedded_records
 
 
-def sync_rag_store_for_file(file_path, quality_state=SYNC_RAG_QUALITY_STATE):
+def sync_rag_store_for_file(file_path, quality_state=None):
+    if quality_state is None:
+        quality_state = SYNC_RAG_QUALITY_STATE
     if not SYNC_RAG_ENABLED or not SYNC_RAG_UPDATE_ON_SUCCESS:
         return {"enabled": False}
     store = get_sync_rag_store()
@@ -1777,6 +1785,18 @@ def sync_rag_store_for_file(file_path, quality_state=SYNC_RAG_QUALITY_STATE):
         return {"enabled": True, "error": "RAG store unavailable"}
 
     base_records = collect_sync_rag_records_for_file(file_path, quality_state=quality_state)
+    current_record_ids = {record["memory_id"] for record in base_records}
+    try:
+        file_rel_path = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
+    except ValueError:
+        file_rel_path = os.path.basename(file_path)
+    obsolete_record_ids = [
+        memory_id
+        for memory_id, record in store.history.items()
+        if record.get("file_rel_path") == file_rel_path
+        and record.get("quality_state") == quality_state
+        and memory_id not in current_record_ids
+    ]
     pending_records = []
     for record in base_records:
         existing = store.get_history_record(record["memory_id"])
@@ -1796,15 +1816,20 @@ def sync_rag_store_for_file(file_path, quality_state=SYNC_RAG_QUALITY_STATE):
         "store_dir": store.store_dir,
         "scanned": len(base_records),
         "pending": len(pending_records),
+        "pruned": 0,
         "upserted": 0,
         "history_records_before": store.count_history(),
     }
     if not pending_records:
+        if obsolete_record_ids:
+            stats["pruned"] = store.delete_history(obsolete_record_ids)
         stats["history_records_after"] = store.count_history()
         return stats
 
     try:
         embedded_records = embed_sync_history_records(pending_records)
+        if obsolete_record_ids:
+            stats["pruned"] = store.delete_history(obsolete_record_ids)
         stats["upserted"] = store.upsert_history(embedded_records)
         stats["history_records_after"] = store.count_history()
     except Exception as exc:
@@ -1837,6 +1862,7 @@ def log_failure(batch, error):
                 }, ensure_ascii=False) + "\n")
     except Exception as e:
         print(f"  Warning: Could not log failure: {e}")
+
 
 def build_prompt(items, glossary_hits=None, history_hits=None):
     glossary = ", ".join(PRESERVE_TERMS)
