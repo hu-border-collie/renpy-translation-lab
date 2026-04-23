@@ -64,6 +64,34 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(successful, ['task:0:1'])
         self.assertEqual(replacements, {0: [(1, 8, '\u4f60\u597d', '', '"')]})
 
+    def test_process_batch_stores_normalized_text_for_sync_rag(self):
+        old_normalize_map = runtime.NORMALIZE_TRANSLATION_MAP
+        old_use_memory = runtime.USE_TRANSLATION_MEMORY
+        batch = [
+            {
+                'id': 'file:0:1',
+                'text': 'Hello',
+                'line': 0,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:0:1',
+            },
+        ]
+        try:
+            runtime.NORMALIZE_TRANSLATION_MAP = {'\u65e7\u79f0': '\u65b0\u79f0'}
+            runtime.USE_TRANSLATION_MEMORY = True
+            with mock.patch.object(runtime, 'call_gemini_sdk', return_value=[
+                {'id': 'file:0:1', 'translation': '\u65e7\u79f0\u4f60\u597d'},
+            ]):
+                runtime.process_batch(batch, {})
+        finally:
+            runtime.NORMALIZE_TRANSLATION_MAP = old_normalize_map
+            runtime.USE_TRANSLATION_MEMORY = old_use_memory
+
+        self.assertEqual(batch[0]['translated_text'], '\u65b0\u79f0\u4f60\u597d')
+
     def test_sync_rag_prompt_includes_retrieved_memory_when_enabled(self):
         old_enabled = runtime.SYNC_RAG_ENABLED
         try:
@@ -213,6 +241,60 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 records = list(runtime._SYNC_RAG_STORE.history.values())
                 self.assertEqual(records[0]['source_text'], 'Hello there')
                 self.assertEqual(records[0]['translated_text'], '\u4f60\u597d')
+                self.assertEqual(records[0]['record_scope'], 'task')
+            finally:
+                runtime.SYNC_RAG_ENABLED = old_values['enabled']
+                runtime.SYNC_RAG_UPDATE_ON_SUCCESS = old_values['update_on_success']
+                runtime.SYNC_RAG_STORE_DIR = old_values['store_dir']
+                runtime.SYNC_RAG_OUTPUT_DIMENSIONALITY = old_values['output_dimensionality']
+                runtime.SYNC_RAG_SEGMENT_LINES = old_values['segment_lines']
+                runtime.TL_DIR = old_values['tl_dir']
+                runtime._SYNC_RAG_STORE = old_values['store']
+
+    def test_sync_rag_file_refresh_keeps_task_scoped_records(self):
+        old_values = {
+            'enabled': runtime.SYNC_RAG_ENABLED,
+            'update_on_success': runtime.SYNC_RAG_UPDATE_ON_SUCCESS,
+            'store_dir': runtime.SYNC_RAG_STORE_DIR,
+            'output_dimensionality': runtime.SYNC_RAG_OUTPUT_DIMENSIONALITY,
+            'segment_lines': runtime.SYNC_RAG_SEGMENT_LINES,
+            'tl_dir': runtime.TL_DIR,
+            'store': runtime._SYNC_RAG_STORE,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            tl_dir = Path(tmp) / 'tl'
+            tl_dir.mkdir()
+            target_file = tl_dir / 'script.rpy'
+            target_file.write_text('label test:\n    e "\u4f60\u597d"\n', encoding='utf-8')
+            tasks = [
+                {
+                    'line': 1,
+                    'start': 6,
+                    'end': 13,
+                    'text': 'Hello there',
+                    'translated_text': '\u4f60\u597d',
+                    'quote': '"',
+                }
+            ]
+            try:
+                runtime.SYNC_RAG_ENABLED = True
+                runtime.SYNC_RAG_UPDATE_ON_SUCCESS = True
+                runtime.SYNC_RAG_STORE_DIR = str(Path(tmp) / 'store')
+                runtime.SYNC_RAG_OUTPUT_DIMENSIONALITY = 3
+                runtime.SYNC_RAG_SEGMENT_LINES = 4
+                runtime.TL_DIR = str(tl_dir)
+                runtime._SYNC_RAG_STORE = None
+
+                with mock.patch.object(runtime, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]):
+                    task_summary = runtime.sync_rag_store_for_tasks(str(target_file), tasks)
+                    refresh_summary = runtime.sync_rag_store_for_file(str(target_file))
+
+                self.assertEqual(task_summary['upserted'], 1)
+                self.assertEqual(refresh_summary['pruned'], 0)
+                records = list(runtime._SYNC_RAG_STORE.history.values())
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]['record_scope'], 'task')
+                self.assertEqual(records[0]['source_text'], 'Hello there')
             finally:
                 runtime.SYNC_RAG_ENABLED = old_values['enabled']
                 runtime.SYNC_RAG_UPDATE_ON_SUCCESS = old_values['update_on_success']

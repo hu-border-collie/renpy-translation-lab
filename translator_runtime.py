@@ -1725,7 +1725,7 @@ def should_index_sync_rag_entry(entry):
     return True
 
 
-def build_sync_rag_record(file_rel_path, group, quality_state):
+def build_sync_rag_record(file_rel_path, group, quality_state, record_scope="file_scan"):
     source_text = "\n".join(entry.get("source", "") for entry in group).strip()
     translated_text = "\n".join(entry.get("translation", "") for entry in group).strip()
     line_start = group[0]["line_number"]
@@ -1741,20 +1741,21 @@ def build_sync_rag_record(file_rel_path, group, quality_state):
         "translated_text": translated_text,
         "combined_text": combined_text,
         "quality_state": quality_state,
+        "record_scope": record_scope,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "source_checksum": hash_text(source_text),
         "translation_checksum": hash_text(translated_text),
     }
 
 
-def collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state):
+def collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state, record_scope="file_scan"):
     records = []
     segment_size = max(1, SYNC_RAG_SEGMENT_LINES)
     usable_entries = [entry for entry in entries if should_index_sync_rag_entry(entry)]
     for start in range(0, len(usable_entries), segment_size):
         group = usable_entries[start:start + segment_size]
         if group:
-            records.append(build_sync_rag_record(file_rel_path, group, quality_state))
+            records.append(build_sync_rag_record(file_rel_path, group, quality_state, record_scope=record_scope))
     return records
 
 
@@ -1770,7 +1771,7 @@ def collect_sync_rag_records_for_file(file_path, quality_state=None):
     with open(file_path, "r", encoding="utf-8-sig") as handle:
         entries = collect_translation_entries_from_lines(handle.readlines())
 
-    return collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state)
+    return collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state, record_scope="file_scan")
 
 
 def collect_sync_rag_records_for_tasks(file_path, tasks, quality_state=None):
@@ -1798,7 +1799,7 @@ def collect_sync_rag_records_for_tasks(file_path, tasks, quality_state=None):
                 "quote": task.get("quote", '"'),
             }
         )
-    return collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state)
+    return collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state, record_scope="task")
 
 
 def embed_sync_history_records(records):
@@ -1892,6 +1893,7 @@ def sync_rag_store_for_file(file_path, quality_state=None):
         memory_id
         for memory_id in store.history_ids_for_file(file_rel_path, quality_state=quality_state)
         if memory_id not in current_record_ids
+        and (store.get_history_record(memory_id) or {}).get("record_scope") == "file_scan"
     ]
 
     stats = {
@@ -2188,6 +2190,7 @@ def process_batch(batch, replacements):
         seen_result_ids.add(entry["id"])
 
         translated = item.get("translation", "")
+        memory_translation = apply_normalization(translated) if USE_TRANSLATION_MEMORY else translated
         valid, msg = validate_translation(entry["text"], translated)
 
         if not valid:
@@ -2195,7 +2198,7 @@ def process_batch(batch, replacements):
             continue
 
         valid_progress_entries.append(entry["progress_entry"])
-        entry["translated_text"] = translated
+        entry["translated_text"] = memory_translation
         line_idx = entry["line"]
         replacements.setdefault(line_idx, []).append(
             (entry["start"], entry["end"], translated, entry.get("prefix", ""), entry["quote"])
