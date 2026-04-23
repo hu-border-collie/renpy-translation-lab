@@ -94,7 +94,7 @@ Game_Example/
 
 ### 4. 运行
 
-当前更推荐优先使用 Batch 模式；同步模式仍可用，并且现在与 Batch 一样统一基于 `google-genai` SDK。
+当前更推荐优先使用 Batch 模式；同步模式仍可用，并且现在与 Batch 一样统一基于 `google-genai` SDK。同步模式可以通过 `translator_config.json` 里的 `sync.rag.enabled=true` 启用可选 RAG 滚动记忆。
 
 当前模型建议：
 
@@ -123,6 +123,7 @@ python gemini_translate_batch.py apply
 说明：
 
 - `python gemini_translate.py --help` 会显示同步脚本的最小 CLI 帮助
+- 同步 RAG 启用后，每个成功写回的小批次会更新本地 history store，后续同步批次会在请求前重新检索并注入相关历史
 - 不带子命令直接运行 `gemini_translate_batch.py` 时，默认等价于 `submit`
 - Batch 产物默认会写到本地 `logs/` 目录
 - `probe` 会用同步请求做最小 smoke test
@@ -187,8 +188,8 @@ python extract_relations.py /path/to/game/tl/schinese --mode semantic
 - 更适合作为思路实现、代码快照和进一步改造的基础
 - 项目开发过程中使用了 AI 辅助生成代码，整体方向、功能取舍、测试验证与集成决策由作者负责
 - 目前不承诺及时处理 issue、兼容性问题或长期更新
-- 当前更推荐使用 Batch 脚本；同步脚本保留用于直接运行、补译、局部修复和 smoke test
-- Batch / RAG 是当前主要验证方向；同步脚本更适合补译、局部修复和 smoke test
+- 当前更推荐使用 Batch 脚本；同步脚本保留用于直接运行、补译、局部修复、smoke test，以及可选的 RAG 滚动记忆验证
+- Batch / RAG 仍是主要验证方向；同步 RAG 更适合小批量即时反馈和局部精修，不是 Batch 吞吐流程的替代品
 - 当前的 RAG 能力更适合“小包验证 + 逐步扩展”，还不应被表述为已经完成的大项目生产级方案
 
 执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。

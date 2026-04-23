@@ -15,6 +15,8 @@ import subprocess
 import zlib
 from datetime import datetime
 
+from rag_memory import JsonRagStore, hash_text, truncate_text
+
 # Configuration
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 FLAT_CONFIG = os.path.join(TOOL_DIR, "api_keys.json")
@@ -93,6 +95,23 @@ FORCE_RETRANSLATE_ENGLISH = True
 ALLOW_SINGLE_WORD_TRANSLATION = True
 USE_TRANSLATION_MEMORY = True
 
+# Optional RAG support for synchronous translation. Disabled by default so the
+# sync script remains a lightweight repair/smoke-test path unless configured.
+SYNC_RAG_ENABLED = False
+SYNC_RAG_STORE_DIR = ""
+SYNC_RAG_EMBEDDING_MODEL = "gemini-embedding-001"
+SYNC_RAG_QUERY_TASK_TYPE = "RETRIEVAL_QUERY"
+SYNC_RAG_DOCUMENT_TASK_TYPE = "RETRIEVAL_DOCUMENT"
+SYNC_RAG_OUTPUT_DIMENSIONALITY = 768
+SYNC_RAG_TOP_K_HISTORY = 4
+SYNC_RAG_TOP_K_TERMS = 8
+SYNC_RAG_MIN_SIMILARITY = 0.72
+SYNC_RAG_SEGMENT_LINES = 4
+SYNC_RAG_HISTORY_CHAR_LIMIT = 220
+SYNC_RAG_UPDATE_ON_SUCCESS = True
+SYNC_RAG_QUALITY_STATE = "sync_applied"
+_SYNC_RAG_STORE = None
+
 # Optional allowlist to limit which files are processed (relative to TL_DIR).
 INCLUDE_FILES = set()
 INCLUDE_PREFIXES = set()
@@ -145,6 +164,9 @@ MULTI_DOT_PATTERN = re.compile(r"(\.{2,}|…{2,})")
 LETTER_SEQUENCE_RE = re.compile(r"^(?:[A-Za-z]\.?)(?:\s+[A-Za-z]\.?)+$")
 FILE_NAME_SIMPLE_RE = re.compile(r"^[\w.-]+\.\w+$", re.IGNORECASE)
 STRING_LITERAL_PREFIX_RE = re.compile(r"(?is)^(?P<prefix>[rubf]*)(?P<quote>'''|\"\"\"|'|\")")
+TL_COMMENT_SOURCE_RE = re.compile(r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"\s*$')
+TL_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
+TL_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
 PRESERVE_TERMS_LOWER = {term.lower() for term in PRESERVE_TERMS}
 FILE_EXTENSIONS = (
     "png", "jpg", "jpeg", "bmp", "gif", "webp", "txt", "pdf", "mp3", "wav", "ogg", "zip"
@@ -239,6 +261,45 @@ def _coerce_bool(value, default):
             return True
         if lowered in {"0", "false", "no", "off"}:
             return False
+    return default
+
+
+def _coerce_positive_int(value, default):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
+
+
+def _coerce_float(value, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_non_empty_string(value, default):
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return default
+
+
+def _normalize_task_type(value, default):
+    allowed = {
+        "SEMANTIC_SIMILARITY",
+        "CLASSIFICATION",
+        "CLUSTERING",
+        "RETRIEVAL_DOCUMENT",
+        "RETRIEVAL_QUERY",
+        "QUESTION_ANSWERING",
+        "FACT_VERIFICATION",
+        "CODE_RETRIEVAL_QUERY",
+    }
+    if isinstance(value, str):
+        normalized = value.strip().upper()
+        if normalized in allowed:
+            return normalized
     return default
 
 
@@ -340,6 +401,55 @@ def load_glossary():
     refresh_derived_terms()
 
 
+def load_sync_rag_settings(config):
+    global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
+    global SYNC_RAG_QUERY_TASK_TYPE, SYNC_RAG_DOCUMENT_TASK_TYPE
+    global SYNC_RAG_OUTPUT_DIMENSIONALITY, SYNC_RAG_TOP_K_HISTORY
+    global SYNC_RAG_TOP_K_TERMS, SYNC_RAG_MIN_SIMILARITY, SYNC_RAG_SEGMENT_LINES
+    global SYNC_RAG_HISTORY_CHAR_LIMIT, SYNC_RAG_UPDATE_ON_SUCCESS, _SYNC_RAG_STORE
+
+    sync = config.get("sync")
+    if not isinstance(sync, dict):
+        sync = {}
+    rag = sync.get("rag")
+    if not isinstance(rag, dict):
+        rag = {}
+
+    SYNC_RAG_ENABLED = _coerce_bool(rag.get("enabled"), False)
+    SYNC_RAG_EMBEDDING_MODEL = _coerce_non_empty_string(
+        rag.get("embedding_model"),
+        "gemini-embedding-001",
+    )
+    SYNC_RAG_QUERY_TASK_TYPE = _normalize_task_type(
+        rag.get("query_task_type"),
+        "RETRIEVAL_QUERY",
+    )
+    SYNC_RAG_DOCUMENT_TASK_TYPE = _normalize_task_type(
+        rag.get("document_task_type"),
+        "RETRIEVAL_DOCUMENT",
+    )
+    SYNC_RAG_OUTPUT_DIMENSIONALITY = _coerce_positive_int(
+        rag.get("output_dimensionality"),
+        768,
+    )
+    SYNC_RAG_TOP_K_HISTORY = _coerce_positive_int(rag.get("top_k_history"), 4)
+    SYNC_RAG_TOP_K_TERMS = _coerce_positive_int(rag.get("top_k_terms"), 8)
+    SYNC_RAG_MIN_SIMILARITY = _coerce_float(rag.get("min_similarity"), 0.72)
+    SYNC_RAG_SEGMENT_LINES = _coerce_positive_int(rag.get("segment_lines"), 4)
+    SYNC_RAG_HISTORY_CHAR_LIMIT = _coerce_positive_int(
+        rag.get("history_char_limit"),
+        220,
+    )
+    SYNC_RAG_UPDATE_ON_SUCCESS = _coerce_bool(rag.get("update_on_success"), True)
+
+    store_dir = rag.get("store_dir")
+    if store_dir:
+        SYNC_RAG_STORE_DIR = _resolve_path(BASE_DIR, store_dir)
+    else:
+        SYNC_RAG_STORE_DIR = ""
+    _SYNC_RAG_STORE = None
+
+
 def load_translator_settings():
     """Loads per-game settings (game root, tl subdir) from translator_config.json or env."""
     global BASE_DIR, TL_DIR, TL_SUBDIR, ENV_GAME_ROOT, WORK_GAME_DIR, SOURCE_GAME_DIR, GLOSSARY_FILE
@@ -413,6 +523,7 @@ def load_translator_settings():
 
     PREP_UNPACK_COMMAND = _coerce_command(prepare.get("unpack_command"))
     PREP_TEMPLATE_COMMAND = _coerce_command(prepare.get("template_command"))
+    load_sync_rag_settings(config)
 
 
 def load_config():
@@ -926,6 +1037,190 @@ def create_genai_client(api_key=None):
     genai = get_genai_module()
     return genai.Client(api_key=api_key or get_current_api_key())
 
+
+def _slugify(text):
+    text = re.sub(r"[^A-Za-z0-9._-]+", "-", text or "").strip("-._")
+    return text or "sync"
+
+
+def guess_project_slug():
+    base_name = os.path.basename(os.path.abspath(BASE_DIR))
+    if base_name.lower() == "work":
+        parent = os.path.basename(os.path.dirname(os.path.abspath(BASE_DIR)))
+        return _slugify(parent or base_name)
+    return _slugify(base_name)
+
+
+def get_default_sync_rag_store_dir():
+    return os.path.join(LOG_DIR, "rag_store", guess_project_slug())
+
+
+def get_sync_rag_store():
+    global _SYNC_RAG_STORE, SYNC_RAG_STORE_DIR
+    if not SYNC_RAG_ENABLED:
+        return None
+    if not SYNC_RAG_STORE_DIR:
+        SYNC_RAG_STORE_DIR = get_default_sync_rag_store_dir()
+    if (
+        _SYNC_RAG_STORE is None
+        or os.path.abspath(_SYNC_RAG_STORE.store_dir) != os.path.abspath(SYNC_RAG_STORE_DIR)
+    ):
+        _SYNC_RAG_STORE = JsonRagStore(SYNC_RAG_STORE_DIR)
+        _SYNC_RAG_STORE.set_metadata(
+            owner="gemini_translate.py",
+            mode="sync",
+            embedding_model=SYNC_RAG_EMBEDDING_MODEL,
+            query_task_type=SYNC_RAG_QUERY_TASK_TYPE,
+            document_task_type=SYNC_RAG_DOCUMENT_TASK_TYPE,
+            output_dimensionality=SYNC_RAG_OUTPUT_DIMENSIONALITY,
+        )
+    return _SYNC_RAG_STORE
+
+
+def compact_text(text):
+    if not isinstance(text, str):
+        return ""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def build_sync_rag_query_text(target_items):
+    target_lines = [
+        compact_text(item.get("text", ""))
+        for item in target_items
+        if compact_text(item.get("text", ""))
+    ]
+    if not target_lines:
+        return ""
+    return "Target:\n" + "\n".join(f"- {text}" for text in target_lines)
+
+
+def embed_texts(contents, task_type):
+    if not contents:
+        return []
+    genai = get_genai_module()
+    client = create_genai_client()
+    response = client.models.embed_content(
+        model=SYNC_RAG_EMBEDDING_MODEL,
+        contents=contents,
+        config=genai.types.EmbedContentConfig(
+            task_type=task_type,
+            output_dimensionality=SYNC_RAG_OUTPUT_DIMENSIONALITY,
+        ),
+    )
+    embeddings = getattr(response, "embeddings", None) or []
+    values = [list(getattr(item, "values", None) or []) for item in embeddings]
+    if len(values) != len(contents):
+        raise RuntimeError(f"Embedding count mismatch: expected {len(contents)}, got {len(values)}")
+    return values
+
+
+def embed_sync_query_text(query_text):
+    query_text = compact_text(query_text)
+    if not query_text:
+        return []
+    vectors = embed_texts([query_text], SYNC_RAG_QUERY_TASK_TYPE)
+    return vectors[0] if vectors else []
+
+
+def retrieve_sync_glossary_hits(target_items):
+    if not SYNC_RAG_ENABLED:
+        return []
+    combined_text = "\n".join(item.get("text", "") for item in target_items if item.get("text"))
+    if not combined_text:
+        return []
+    hits = []
+    seen = set()
+    for source, target in (NORMALIZE_TRANSLATION_MAP or {}).items():
+        if source and source in combined_text and source not in seen:
+            hits.append({"source": source, "target": target, "kind": "normalize"})
+            seen.add(source)
+    for term in PRESERVE_TERMS:
+        if not isinstance(term, str) or not term.strip():
+            continue
+        if term in combined_text and term not in seen:
+            hits.append({"source": term, "target": term, "kind": "preserve"})
+            seen.add(term)
+    return hits[:SYNC_RAG_TOP_K_TERMS]
+
+
+def format_sync_glossary_hits_block(hits, empty_label="(none)"):
+    if not hits:
+        return empty_label
+    lines = []
+    for hit in hits:
+        source = hit.get("source", "")
+        target = hit.get("target", "")
+        if not source:
+            continue
+        if source == target:
+            lines.append(f"- Keep unchanged: {source}")
+        else:
+            lines.append(f"- {source} -> {target}")
+    return "\n".join(lines) if lines else empty_label
+
+
+def format_sync_history_hits_block(hits, empty_label="(none)"):
+    if not hits:
+        return empty_label
+    lines = []
+    for hit in hits:
+        file_rel_path = hit.get("file_rel_path", "")
+        line_start = hit.get("line_start", "")
+        line_end = hit.get("line_end", "")
+        score = hit.get("score", 0.0)
+        quality = hit.get("quality_state", "")
+        translated_text = hit.get("translated_text", "") or hit.get("source_text", "")
+        translated_text = truncate_text(translated_text, SYNC_RAG_HISTORY_CHAR_LIMIT)
+        lines.append(
+            f"- [{file_rel_path}:{line_start}-{line_end} score={score:.3f} quality={quality}] {translated_text}"
+        )
+    return "\n".join(lines) if lines else empty_label
+
+
+def retrieve_sync_history_hits(target_items):
+    if not SYNC_RAG_ENABLED:
+        return [], {"enabled": False}
+    store = get_sync_rag_store()
+    if store is None or store.count_history() <= 0:
+        return [], {"enabled": True, "reason": "empty_history_store"}
+
+    query_text = build_sync_rag_query_text(target_items)
+    if not query_text:
+        return [], {"enabled": True, "reason": "empty_query"}
+
+    try:
+        query_vector = embed_sync_query_text(query_text)
+        matches = store.search_history(
+            query_vector,
+            top_k=SYNC_RAG_TOP_K_HISTORY,
+            min_similarity=SYNC_RAG_MIN_SIMILARITY,
+        )
+    except Exception as exc:
+        print(f"Warning: Sync RAG history retrieval failed: {exc}")
+        return [], {"enabled": True, "error": str(exc)}
+
+    hits = []
+    for match in matches:
+        hits.append(
+            {
+                "memory_id": match.get("memory_id", ""),
+                "file_rel_path": match.get("file_rel_path", ""),
+                "line_start": match.get("line_start", 0),
+                "line_end": match.get("line_end", 0),
+                "source_text": truncate_text(match.get("source_text", ""), SYNC_RAG_HISTORY_CHAR_LIMIT),
+                "translated_text": truncate_text(match.get("translated_text", ""), SYNC_RAG_HISTORY_CHAR_LIMIT),
+                "quality_state": match.get("quality_state", ""),
+                "score": float(match.get("score", 0.0)),
+            }
+        )
+
+    return hits, {
+        "enabled": True,
+        "query_text": truncate_text(query_text, 400),
+        "hit_count": len(hits),
+    }
+
+
 def get_random_delay():
     return random.uniform(MIN_DELAY, MAX_DELAY)
 
@@ -1323,6 +1618,322 @@ def commit_replacements(path, lines, replacements):
     with open(path, "w", encoding="utf-8") as handle:
         handle.writelines(lines)
 
+
+def sync_rag_hash_key(text):
+    return hash_text(text)
+
+
+def extract_string_token_from_line(line):
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
+    except Exception:
+        return None
+
+    for token in tokens:
+        if token.type != tokenize.STRING:
+            continue
+        try:
+            text_value = ast.literal_eval(token.string)
+        except Exception:
+            continue
+        if not isinstance(text_value, str):
+            continue
+        prefix, quote = parse_string_literal_format(token.string)
+        return {
+            "text": text_value,
+            "start": token.start[1],
+            "end": token.end[1],
+            "prefix": prefix,
+            "quote": quote,
+        }
+    return None
+
+
+def decode_string_literal_text(raw_text):
+    if not isinstance(raw_text, str):
+        return ""
+    try:
+        value = ast.literal_eval('"' + raw_text + '"')
+    except Exception:
+        return raw_text
+    return value if isinstance(value, str) else raw_text
+
+
+def collect_translation_entries_from_lines(lines):
+    entries = []
+    index = 0
+    while index < len(lines):
+        raw_line = lines[index].rstrip("\n")
+        comment_match = TL_COMMENT_SOURCE_RE.match(raw_line)
+        if comment_match:
+            next_index = index + 1
+            while next_index < len(lines) and not lines[next_index].strip():
+                next_index += 1
+            if next_index < len(lines):
+                candidate_line = lines[next_index].rstrip("\n")
+                if not TL_OLD_LINE_RE.match(candidate_line):
+                    token = extract_string_token_from_line(lines[next_index])
+                else:
+                    token = None
+                if token:
+                    entries.append(
+                        {
+                            "line_number": next_index + 1,
+                            "source": decode_string_literal_text(comment_match.group("text")),
+                            "translation": token["text"],
+                            "start": token["start"],
+                            "end": token["end"],
+                            "prefix": token.get("prefix", ""),
+                            "quote": token["quote"],
+                        }
+                    )
+                    index = next_index
+        else:
+            old_match = TL_OLD_LINE_RE.match(raw_line)
+            if old_match:
+                next_index = index + 1
+                while next_index < len(lines) and not lines[next_index].strip():
+                    next_index += 1
+                if next_index < len(lines) and TL_NEW_LINE_RE.match(lines[next_index].rstrip("\n")):
+                    token = extract_string_token_from_line(lines[next_index])
+                    if token:
+                        entries.append(
+                            {
+                                "line_number": next_index + 1,
+                                "source": decode_string_literal_text(old_match.group("text")),
+                                "translation": token["text"],
+                                "start": token["start"],
+                                "end": token["end"],
+                                "quote": token["quote"],
+                            }
+                        )
+                        index = next_index
+        index += 1
+
+    for entry_index, entry in enumerate(entries):
+        entry["entry_index"] = entry_index
+    return entries
+
+
+def should_index_sync_rag_entry(entry):
+    source = compact_text(entry.get("source", ""))
+    translation = compact_text(entry.get("translation", ""))
+    if not source or not translation:
+        return False
+    if source == translation:
+        return False
+    return True
+
+
+def build_sync_rag_record(file_rel_path, group, quality_state, record_scope="file_scan"):
+    source_text = "\n".join(entry.get("source", "") for entry in group).strip()
+    translated_text = "\n".join(entry.get("translation", "") for entry in group).strip()
+    line_start = group[0]["line_number"]
+    line_end = group[-1]["line_number"]
+    combined_text = f"Source:\n{source_text}\n\nTranslation:\n{translated_text}"
+    memory_id = sync_rag_hash_key(f"{file_rel_path}:{line_start}:{line_end}:{source_text}")
+    return {
+        "memory_id": memory_id,
+        "file_rel_path": file_rel_path,
+        "line_start": line_start,
+        "line_end": line_end,
+        "source_text": source_text,
+        "translated_text": translated_text,
+        "combined_text": combined_text,
+        "quality_state": quality_state,
+        "record_scope": record_scope,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "source_checksum": hash_text(source_text),
+        "translation_checksum": hash_text(translated_text),
+    }
+
+
+def collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state, record_scope="file_scan"):
+    records = []
+    segment_size = max(1, SYNC_RAG_SEGMENT_LINES)
+    usable_entries = [entry for entry in entries if should_index_sync_rag_entry(entry)]
+    for start in range(0, len(usable_entries), segment_size):
+        group = usable_entries[start:start + segment_size]
+        if group:
+            records.append(build_sync_rag_record(file_rel_path, group, quality_state, record_scope=record_scope))
+    return records
+
+
+def collect_sync_rag_records_for_file(file_path, quality_state=None):
+    if quality_state is None:
+        quality_state = SYNC_RAG_QUALITY_STATE
+    if not file_path or not os.path.isfile(file_path):
+        return []
+    try:
+        file_rel_path = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
+    except ValueError:
+        file_rel_path = os.path.basename(file_path)
+    with open(file_path, "r", encoding="utf-8-sig") as handle:
+        entries = collect_translation_entries_from_lines(handle.readlines())
+
+    return collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state, record_scope="file_scan")
+
+
+def collect_sync_rag_records_for_tasks(file_path, tasks, quality_state=None):
+    if quality_state is None:
+        quality_state = SYNC_RAG_QUALITY_STATE
+    if not file_path or not tasks:
+        return []
+    try:
+        file_rel_path = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
+    except ValueError:
+        file_rel_path = os.path.basename(file_path)
+
+    entries = []
+    for task in tasks:
+        translated_text = task.get("translated_text")
+        if not translated_text:
+            continue
+        entries.append(
+            {
+                "line_number": int(task["line"]) + 1,
+                "source": task.get("text", ""),
+                "translation": translated_text,
+                "start": task.get("start", 0),
+                "end": task.get("end", 0),
+                "quote": task.get("quote", '"'),
+            }
+        )
+    return collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state, record_scope="task")
+
+
+def embed_sync_history_records(records):
+    embedded_records = []
+    batch_size = 16
+    for start in range(0, len(records), batch_size):
+        batch = records[start:start + batch_size]
+        vectors = embed_texts([record["combined_text"] for record in batch], SYNC_RAG_DOCUMENT_TASK_TYPE)
+        for record, vector in zip(batch, vectors):
+            enriched = dict(record)
+            enriched["embedding"] = vector
+            enriched["embedding_model"] = SYNC_RAG_EMBEDDING_MODEL
+            enriched["embedding_task_type"] = SYNC_RAG_DOCUMENT_TASK_TYPE
+            enriched["embedding_dim"] = len(vector)
+            embedded_records.append(enriched)
+    return embedded_records
+
+
+def upsert_sync_rag_records(store, records):
+    pending_records = []
+    for record in records:
+        existing = store.get_history_record(record["memory_id"])
+        if (
+            existing
+            and existing.get("source_checksum") == record["source_checksum"]
+            and existing.get("translation_checksum") == record["translation_checksum"]
+            and existing.get("embedding_model") == SYNC_RAG_EMBEDDING_MODEL
+            and existing.get("embedding_task_type") == SYNC_RAG_DOCUMENT_TASK_TYPE
+            and existing.get("embedding_dim") == SYNC_RAG_OUTPUT_DIMENSIONALITY
+        ):
+            continue
+        pending_records.append(record)
+
+    stats = {
+        "pending": len(pending_records),
+        "upserted": 0,
+    }
+    if not pending_records:
+        return stats
+
+    embedded_records = embed_sync_history_records(pending_records)
+    stats["upserted"] = store.upsert_history(embedded_records)
+    return stats
+
+
+def sync_rag_store_for_tasks(file_path, tasks, quality_state=None):
+    if quality_state is None:
+        quality_state = SYNC_RAG_QUALITY_STATE
+    if not SYNC_RAG_ENABLED or not SYNC_RAG_UPDATE_ON_SUCCESS:
+        return {"enabled": False}
+    store = get_sync_rag_store()
+    if store is None:
+        return {"enabled": True, "error": "RAG store unavailable"}
+
+    base_records = collect_sync_rag_records_for_tasks(file_path, tasks, quality_state=quality_state)
+    stats = {
+        "enabled": True,
+        "store_dir": store.store_dir,
+        "scanned": len(base_records),
+        "pending": 0,
+        "pruned": 0,
+        "upserted": 0,
+        "history_records_before": store.count_history(),
+    }
+    try:
+        stats.update(upsert_sync_rag_records(store, base_records))
+        stats["history_records_after"] = store.count_history()
+    except Exception as exc:
+        print(f"Warning: Failed to update sync RAG store: {exc}")
+        stats["error"] = str(exc)
+        stats["history_records_after"] = store.count_history()
+    return stats
+
+
+def sync_rag_store_for_file(file_path, quality_state=None):
+    if quality_state is None:
+        quality_state = SYNC_RAG_QUALITY_STATE
+    if not SYNC_RAG_ENABLED or not SYNC_RAG_UPDATE_ON_SUCCESS:
+        return {"enabled": False}
+    store = get_sync_rag_store()
+    if store is None:
+        return {"enabled": True, "error": "RAG store unavailable"}
+
+    base_records = collect_sync_rag_records_for_file(file_path, quality_state=quality_state)
+    current_record_ids = {record["memory_id"] for record in base_records}
+    try:
+        file_rel_path = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
+    except ValueError:
+        file_rel_path = os.path.basename(file_path)
+    obsolete_record_ids = [
+        memory_id
+        for memory_id in store.history_ids_for_file(file_rel_path, quality_state=quality_state)
+        if memory_id not in current_record_ids
+        and (store.get_history_record(memory_id) or {}).get("record_scope") == "file_scan"
+    ]
+
+    stats = {
+        "enabled": True,
+        "store_dir": store.store_dir,
+        "scanned": len(base_records),
+        "pending": 0,
+        "pruned": 0,
+        "upserted": 0,
+        "history_records_before": store.count_history(),
+    }
+
+    try:
+        upsert_stats = upsert_sync_rag_records(store, base_records)
+        stats.update(upsert_stats)
+        if obsolete_record_ids:
+            stats["pruned"] = store.delete_history(obsolete_record_ids)
+        stats["history_records_after"] = store.count_history()
+    except Exception as exc:
+        print(f"Warning: Failed to update sync RAG store: {exc}")
+        stats["error"] = str(exc)
+        stats["history_records_after"] = store.count_history()
+    return stats
+
+
+def maybe_update_sync_rag_store(file_path, tasks=None, full_file=False):
+    if not SYNC_RAG_ENABLED or not SYNC_RAG_UPDATE_ON_SUCCESS:
+        return
+    if full_file:
+        summary = sync_rag_store_for_file(file_path, quality_state=SYNC_RAG_QUALITY_STATE)
+    else:
+        summary = sync_rag_store_for_tasks(file_path, tasks or [], quality_state=SYNC_RAG_QUALITY_STATE)
+    if summary.get("upserted"):
+        print(f"  Sync RAG store updated: {summary.get('upserted', 0)} entries", flush=True)
+    if summary.get("pruned"):
+        print(f"  Sync RAG store pruned: {summary.get('pruned', 0)} obsolete entries", flush=True)
+    elif summary.get("error"):
+        print(f"  Warning: Sync RAG store update skipped: {summary['error']}", flush=True)
+
+
 def log_failure(batch, error):
     try:
         with open(FAILED_LOG, "a", encoding="utf-8-sig") as handle:
@@ -1337,12 +1948,23 @@ def log_failure(batch, error):
     except Exception as e:
         print(f"  Warning: Could not log failure: {e}")
 
-def build_prompt(items):
+
+def build_prompt(items, glossary_hits=None, history_hits=None):
     glossary = ", ".join(PRESERVE_TERMS)
     payload = json.dumps(
         [{"id": item["id"], "text": item["text"]} for item in items],
         ensure_ascii=False,
     )
+    reference_blocks = ""
+    if SYNC_RAG_ENABLED:
+        glossary_hits = glossary_hits or []
+        history_hits = history_hits or []
+        reference_blocks = (
+            "\nReference blocks:\n"
+            f"LOCKED TERMS:\n{format_sync_glossary_hits_block(glossary_hits, '(none)')}\n\n"
+            f"RETRIEVED MEMORY:\n{format_sync_history_hits_block(history_hits, '(none)')}\n"
+            "Use retrieved memory only as style and terminology reference; ignore it when unrelated.\n"
+        )
     return (
         "You are translating a Ren'Py visual novel into Simplified Chinese (zh-CN).\n"
         "Rules:\n"
@@ -1351,6 +1973,7 @@ def build_prompt(items):
         "2. Preserve Ren'Py tags like {i}, {/i}, {color=...}, [name], %s.\n"
         "3. Output plain Chinese text. No markdown, no Pinyin, no explanations.\n"
         "4. Return ONLY a JSON array matching the requested id/translation structure.\n"
+        f"{reference_blocks}"
         f"Input JSON:\n{payload}"
     )
 
@@ -1541,7 +2164,11 @@ def call_gemini_sdk(prompt, items):
         raise e
 
 def process_batch(batch, replacements):
-    prompt = build_prompt(batch)
+    glossary_hits = retrieve_sync_glossary_hits(batch) if SYNC_RAG_ENABLED else []
+    history_hits, rag_stats = retrieve_sync_history_hits(batch) if SYNC_RAG_ENABLED else ([], {})
+    if rag_stats.get("hit_count"):
+        print(f"  Sync RAG memory hits: {rag_stats['hit_count']}", flush=True)
+    prompt = build_prompt(batch, glossary_hits=glossary_hits, history_hits=history_hits)
 
     # Call API (SDK handles connection details)
     results = call_gemini_sdk(prompt, batch)
@@ -1563,6 +2190,7 @@ def process_batch(batch, replacements):
         seen_result_ids.add(entry["id"])
 
         translated = item.get("translation", "")
+        memory_translation = apply_normalization(translated) if USE_TRANSLATION_MEMORY else translated
         valid, msg = validate_translation(entry["text"], translated)
 
         if not valid:
@@ -1570,6 +2198,7 @@ def process_batch(batch, replacements):
             continue
 
         valid_progress_entries.append(entry["progress_entry"])
+        entry["translated_text"] = memory_translation
         line_idx = entry["line"]
         replacements.setdefault(line_idx, []).append(
             (entry["start"], entry["end"], translated, entry.get("prefix", ""), entry["quote"])
@@ -1800,6 +2429,7 @@ def run_translation():
         replacements = {}
         batch = []
         current_batch_chars = 0
+        sync_rag_needs_file_refresh = False
 
         for task in tasks:
             # Update ID to be unique per file and string literal
@@ -1813,6 +2443,8 @@ def run_translation():
                 if successful_entries:
                     commit_replacements(file_path, lines, replacements)
                     update_progress(progress_key, successful_entries)
+                    maybe_update_sync_rag_store(file_path, tasks=batch)
+                    sync_rag_needs_file_refresh = True
                     completed_entries.update(_normalize_progress_entries(successful_entries))
                     global_progress[progress_key] = sorted(completed_entries)
                     replacements = {}
@@ -1829,7 +2461,12 @@ def run_translation():
             if successful_entries:
                 commit_replacements(file_path, lines, replacements)
                 update_progress(progress_key, successful_entries)
+                maybe_update_sync_rag_store(file_path, tasks=batch)
+                sync_rag_needs_file_refresh = True
                 completed_entries.update(_normalize_progress_entries(successful_entries))
                 global_progress[progress_key] = sorted(completed_entries)
+
+        if sync_rag_needs_file_refresh:
+            maybe_update_sync_rag_store(file_path, full_file=True)
 
         print(f"  Done with {filename}.")

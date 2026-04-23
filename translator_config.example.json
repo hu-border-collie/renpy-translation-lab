@@ -10,6 +10,22 @@
     "language": "schinese",
     "python_exe": ""
   },
+  "sync": {
+    "rag": {
+      "enabled": false,
+      "embedding_model": "gemini-embedding-001",
+      "query_task_type": "RETRIEVAL_QUERY",
+      "document_task_type": "RETRIEVAL_DOCUMENT",
+      "output_dimensionality": 768,
+      "top_k_history": 4,
+      "top_k_terms": 8,
+      "min_similarity": 0.72,
+      "segment_lines": 4,
+      "history_char_limit": 220,
+      "update_on_success": true,
+      "store_dir": ""
+    }
+  },
   "batch": {
     "model": "gemini-2.5-flash",
     "chunk_size": 10,
