@@ -155,5 +155,6 @@ class JsonRagStore(object):
             'manual_polished': 3,
             'seed': 2,
             'batch_applied': 1,
+            'sync_applied': 1,
         }.get(quality_state, 0)
         return (float(record.get('score') or 0.0), quality_rank, record.get('created_at') or '')
