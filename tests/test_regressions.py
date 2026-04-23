@@ -149,6 +149,10 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         )
         self.assertFalse(any(runtime.should_index_sync_rag_entry(entry) for entry in entries))
 
+    def test_sync_rag_hash_key_uses_full_digest(self):
+        self.assertEqual(runtime.sync_rag_hash_key('memory'), runtime.hash_text('memory'))
+        self.assertEqual(len(runtime.sync_rag_hash_key('memory')), 40)
+
     def test_sync_rag_store_for_file_upserts_translation_entries(self):
         old_values = {
             'enabled': runtime.SYNC_RAG_ENABLED,
