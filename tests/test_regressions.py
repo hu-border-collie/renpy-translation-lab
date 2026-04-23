@@ -107,6 +107,20 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             ],
         )
 
+    def test_collect_translation_entries_decodes_source_literals(self):
+        entries = runtime.collect_translation_entries_from_lines([
+            'old "\\n"\n',
+            'new "\\n"\n',
+            '    # e "Say \\"hi\\""\n',
+            '    e "Say \\"hi\\""\n',
+        ])
+
+        self.assertEqual(
+            [(entry['source'], entry['translation']) for entry in entries],
+            [('\n', '\n'), ('Say "hi"', 'Say "hi"')],
+        )
+        self.assertFalse(any(runtime.should_index_sync_rag_entry(entry) for entry in entries))
+
     def test_sync_rag_store_for_file_upserts_translation_entries(self):
         old_values = {
             'enabled': runtime.SYNC_RAG_ENABLED,
@@ -145,6 +159,60 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 self.assertEqual(records[0]['source_text'], 'Hello there')
                 self.assertEqual(records[0]['translated_text'], '\u4f60\u597d')
                 self.assertEqual(records[0]['quality_state'], 'sync_applied')
+            finally:
+                runtime.SYNC_RAG_ENABLED = old_values['enabled']
+                runtime.SYNC_RAG_UPDATE_ON_SUCCESS = old_values['update_on_success']
+                runtime.SYNC_RAG_STORE_DIR = old_values['store_dir']
+                runtime.SYNC_RAG_OUTPUT_DIMENSIONALITY = old_values['output_dimensionality']
+                runtime.SYNC_RAG_SEGMENT_LINES = old_values['segment_lines']
+                runtime.TL_DIR = old_values['tl_dir']
+                runtime._SYNC_RAG_STORE = old_values['store']
+
+    def test_sync_rag_store_for_tasks_updates_incrementally(self):
+        old_values = {
+            'enabled': runtime.SYNC_RAG_ENABLED,
+            'update_on_success': runtime.SYNC_RAG_UPDATE_ON_SUCCESS,
+            'store_dir': runtime.SYNC_RAG_STORE_DIR,
+            'output_dimensionality': runtime.SYNC_RAG_OUTPUT_DIMENSIONALITY,
+            'segment_lines': runtime.SYNC_RAG_SEGMENT_LINES,
+            'tl_dir': runtime.TL_DIR,
+            'store': runtime._SYNC_RAG_STORE,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            tl_dir = Path(tmp) / 'tl'
+            tl_dir.mkdir()
+            target_file = tl_dir / 'script.rpy'
+            target_file.write_text('label test:\n    pass\n', encoding='utf-8')
+            tasks = [
+                {
+                    'line': 1,
+                    'start': 4,
+                    'end': 11,
+                    'text': 'Hello there',
+                    'translated_text': '\u4f60\u597d',
+                    'quote': '"',
+                }
+            ]
+            try:
+                runtime.SYNC_RAG_ENABLED = True
+                runtime.SYNC_RAG_UPDATE_ON_SUCCESS = True
+                runtime.SYNC_RAG_STORE_DIR = str(Path(tmp) / 'store')
+                runtime.SYNC_RAG_OUTPUT_DIMENSIONALITY = 3
+                runtime.SYNC_RAG_SEGMENT_LINES = 4
+                runtime.TL_DIR = str(tl_dir)
+                runtime._SYNC_RAG_STORE = None
+
+                with (
+                    mock.patch.object(runtime, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]),
+                    mock.patch.object(runtime, 'collect_sync_rag_records_for_file') as full_scan,
+                ):
+                    summary = runtime.sync_rag_store_for_tasks(str(target_file), tasks)
+
+                full_scan.assert_not_called()
+                self.assertEqual(summary['upserted'], 1)
+                records = list(runtime._SYNC_RAG_STORE.history.values())
+                self.assertEqual(records[0]['source_text'], 'Hello there')
+                self.assertEqual(records[0]['translated_text'], '\u4f60\u597d')
             finally:
                 runtime.SYNC_RAG_ENABLED = old_values['enabled']
                 runtime.SYNC_RAG_UPDATE_ON_SUCCESS = old_values['update_on_success']
