@@ -64,6 +64,78 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(successful, ['task:0:1'])
         self.assertEqual(replacements, {0: [(1, 8, '\u4f60\u597d', '', '"')]})
 
+    def test_sync_rag_prompt_includes_retrieved_memory_when_enabled(self):
+        old_enabled = runtime.SYNC_RAG_ENABLED
+        try:
+            runtime.SYNC_RAG_ENABLED = True
+            prompt = runtime.build_prompt(
+                [{'id': 'file:0:1', 'text': 'Hello Alice'}],
+                glossary_hits=[{'source': 'Alice', 'target': 'Alice'}],
+                history_hits=[
+                    {
+                        'file_rel_path': 'script.rpy',
+                        'line_start': 2,
+                        'line_end': 2,
+                        'translated_text': '\u4f60\u597d\uff0cAlice',
+                        'quality_state': 'sync_applied',
+                        'score': 0.91,
+                    }
+                ],
+            )
+        finally:
+            runtime.SYNC_RAG_ENABLED = old_enabled
+
+        self.assertIn('LOCKED TERMS', prompt)
+        self.assertIn('RETRIEVED MEMORY', prompt)
+        self.assertIn('\u4f60\u597d\uff0cAlice', prompt)
+
+    def test_sync_rag_store_for_file_upserts_translation_entries(self):
+        old_values = {
+            'enabled': runtime.SYNC_RAG_ENABLED,
+            'update_on_success': runtime.SYNC_RAG_UPDATE_ON_SUCCESS,
+            'store_dir': runtime.SYNC_RAG_STORE_DIR,
+            'output_dimensionality': runtime.SYNC_RAG_OUTPUT_DIMENSIONALITY,
+            'segment_lines': runtime.SYNC_RAG_SEGMENT_LINES,
+            'tl_dir': runtime.TL_DIR,
+            'store': runtime._SYNC_RAG_STORE,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            tl_dir = Path(tmp) / 'tl'
+            tl_dir.mkdir()
+            target_file = tl_dir / 'script.rpy'
+            target_file.write_text(
+                'translate schinese start:\n'
+                '    # e "Hello there"\n'
+                '    e "\u4f60\u597d"\n',
+                encoding='utf-8',
+            )
+            try:
+                runtime.SYNC_RAG_ENABLED = True
+                runtime.SYNC_RAG_UPDATE_ON_SUCCESS = True
+                runtime.SYNC_RAG_STORE_DIR = str(Path(tmp) / 'store')
+                runtime.SYNC_RAG_OUTPUT_DIMENSIONALITY = 3
+                runtime.SYNC_RAG_SEGMENT_LINES = 4
+                runtime.TL_DIR = str(tl_dir)
+                runtime._SYNC_RAG_STORE = None
+
+                with mock.patch.object(runtime, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]):
+                    summary = runtime.sync_rag_store_for_file(str(target_file))
+
+                self.assertEqual(summary['upserted'], 1)
+                records = list(runtime._SYNC_RAG_STORE.history.values())
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]['source_text'], 'Hello there')
+                self.assertEqual(records[0]['translated_text'], '\u4f60\u597d')
+                self.assertEqual(records[0]['quality_state'], 'sync_applied')
+            finally:
+                runtime.SYNC_RAG_ENABLED = old_values['enabled']
+                runtime.SYNC_RAG_UPDATE_ON_SUCCESS = old_values['update_on_success']
+                runtime.SYNC_RAG_STORE_DIR = old_values['store_dir']
+                runtime.SYNC_RAG_OUTPUT_DIMENSIONALITY = old_values['output_dimensionality']
+                runtime.SYNC_RAG_SEGMENT_LINES = old_values['segment_lines']
+                runtime.TL_DIR = old_values['tl_dir']
+                runtime._SYNC_RAG_STORE = old_values['store']
+
 
 class BatchRepairRegressionTests(unittest.TestCase):
     def test_load_repair_report_items_accepts_batch_failure_log_shape(self):
