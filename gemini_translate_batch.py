@@ -1184,7 +1184,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
         } if STORY_MEMORY_ENABLED else {},
         'story_memory_summary': {
             'chunks_with_story_hits': sum(
-                1 for chunk in chunks if chunk.get('story_hits')
+                1 for chunk in chunks if story_memory.has_story_hits(chunk.get('story_hits'))
             ),
         } if STORY_MEMORY_ENABLED else {},
         'summary': {

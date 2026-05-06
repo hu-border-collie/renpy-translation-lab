@@ -160,6 +160,33 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertIn('STORY MEMORY', prompt_with_story)
         self.assertIn('Void Gate -> \u865a\u7a7a\u95e8', prompt_with_story)
 
+        term_only_block = story_memory.format_story_hits_block(
+            {'terms': [{'source': 'Aether', 'target': '', 'note': 'Proper noun'}]},
+            200,
+        )
+        self.assertIn('Term: Aether', term_only_block)
+        self.assertNotIn('Keep unchanged', term_only_block)
+
+    def test_story_memory_hit_count_ignores_empty_categories(self):
+        self.assertFalse(story_memory.has_story_hits({}))
+        self.assertFalse(
+            story_memory.has_story_hits(
+                {'characters': [], 'relations': [], 'terms': [], 'scenes': []}
+            )
+        )
+        self.assertTrue(story_memory.has_story_hits({'terms': [{'source': 'Void Gate'}]}))
+
+    def test_load_story_graph_warns_on_invalid_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            graph_file = Path(tmp) / 'story_graph.json'
+            graph_file.write_text('{bad json', encoding='utf-8')
+            with mock.patch('builtins.print') as print_mock:
+                graph = story_memory.load_story_graph(str(graph_file))
+
+        self.assertEqual(graph, {'characters': {}, 'relations': [], 'terms': [], 'scenes': []})
+        self.assertTrue(print_mock.called)
+        self.assertIn('Failed to load story graph', print_mock.call_args[0][0])
+
     def test_sync_story_memory_uses_local_graph_when_enabled(self):
         old_values = {
             'enabled': runtime.SYNC_STORY_MEMORY_ENABLED,
