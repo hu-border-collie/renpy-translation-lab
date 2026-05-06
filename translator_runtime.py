@@ -2431,7 +2431,6 @@ def infer_dialogue_speaker_id(line, string_start_col):
         candidate = token.string.strip()
         if candidate and candidate not in RENPLY_NON_SPEAKER_NAMES:
             return candidate
-        return ""
     return ""
 
 

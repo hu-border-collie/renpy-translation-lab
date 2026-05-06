@@ -28,6 +28,13 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(by_text['Hello Noah'].get('speaker'), 'e')
         self.assertNotIn('speaker_id', by_text['Start Game'])
 
+    def test_infer_dialogue_speaker_skips_non_speaker_names(self):
+        line = 'call e happy "Hello Noah"\n'
+        self.assertEqual(
+            runtime.infer_dialogue_speaker_id(line, line.index('"')),
+            'e',
+        )
+
     def test_quote_with_round_trips_prefixed_literals(self):
         prefix, quote = runtime.parse_string_literal_format('u"Hello"')
         literal = runtime.quote_with('\u4f60\u597d', quote, prefix=prefix)
