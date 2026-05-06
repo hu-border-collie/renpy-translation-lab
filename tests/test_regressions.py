@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
+import story_memory
 import translator_runtime as runtime
 
 
@@ -116,6 +117,135 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertIn('LOCKED TERMS', prompt)
         self.assertIn('RETRIEVED MEMORY', prompt)
         self.assertIn('\u4f60\u597d\uff0cAlice', prompt)
+
+    def test_story_memory_prompt_blocks_are_optional(self):
+        old_sync_rag_enabled = runtime.SYNC_RAG_ENABLED
+        old_sync_story_enabled = runtime.SYNC_STORY_MEMORY_ENABLED
+        old_batch_limit = batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS
+        try:
+            runtime.SYNC_RAG_ENABLED = False
+            runtime.SYNC_STORY_MEMORY_ENABLED = False
+            batch_prompt = batch_mod.build_user_prompt(
+                [],
+                [{'id': 'chapter1.rpy:0:1', 'text': 'Open the Void Gate'}],
+                [],
+            )
+            sync_prompt = runtime.build_prompt(
+                [{'id': 'chapter1.rpy:0:1', 'text': 'Open the Void Gate'}],
+            )
+
+            self.assertNotIn('STORY MEMORY', batch_prompt)
+            self.assertNotIn('STORY MEMORY', sync_prompt)
+
+            batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS = 120
+            prompt_with_story = batch_mod.build_user_prompt(
+                [],
+                [{'id': 'chapter1.rpy:0:1', 'text': 'Open the Void Gate'}],
+                [],
+                story_hits={
+                    'terms': [
+                        {
+                            'source': 'Void Gate',
+                            'target': '\u865a\u7a7a\u95e8',
+                            'note': '\u4e16\u754c\u89c2\u6838\u5fc3\u672f\u8bed',
+                        },
+                    ],
+                },
+            )
+        finally:
+            runtime.SYNC_RAG_ENABLED = old_sync_rag_enabled
+            runtime.SYNC_STORY_MEMORY_ENABLED = old_sync_story_enabled
+            batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS = old_batch_limit
+
+        self.assertIn('STORY MEMORY', prompt_with_story)
+        self.assertIn('Void Gate -> \u865a\u7a7a\u95e8', prompt_with_story)
+
+    def test_sync_story_memory_uses_local_graph_when_enabled(self):
+        old_values = {
+            'enabled': runtime.SYNC_STORY_MEMORY_ENABLED,
+            'graph_file': runtime.SYNC_STORY_MEMORY_GRAPH_FILE,
+            'max_context_chars': runtime.SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
+            'top_k_relations': runtime.SYNC_STORY_MEMORY_TOP_K_RELATIONS,
+            'top_k_terms': runtime.SYNC_STORY_MEMORY_TOP_K_TERMS,
+            'include_scene_summary': runtime.SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY,
+            'graph': runtime._SYNC_STORY_GRAPH,
+            'graph_path': runtime._SYNC_STORY_GRAPH_PATH,
+        }
+        graph = {
+            'characters': {
+                'eileen': {
+                    'zh_name': '\u827e\u7433',
+                    'speaker_ids': ['eileen', 'eileen_side'],
+                    'style': '\u8bed\u6c14\u8f7b\u5feb',
+                },
+                'noah': {
+                    'zh_name': '\u8bfa\u4e9a',
+                    'speaker_ids': ['noah'],
+                },
+            },
+            'relations': [
+                {
+                    'left': 'eileen',
+                    'right': 'noah',
+                    'type': 'close_friend',
+                    'note': '\u4e24\u4eba\u5173\u7cfb\u4eb2\u8fd1',
+                    'confidence': 0.85,
+                },
+            ],
+            'terms': [
+                {
+                    'source': 'Void Gate',
+                    'target': '\u865a\u7a7a\u95e8',
+                    'note': '\u5fc5\u987b\u7edf\u4e00',
+                },
+            ],
+            'scenes': [
+                {
+                    'file_rel_path': 'chapter1.rpy',
+                    'line_start': 120,
+                    'line_end': 220,
+                    'summary': '\u827e\u7433\u548c\u8bfa\u4e9a\u5728\u5929\u53f0\u8c08\u8bdd',
+                    'characters': ['eileen', 'noah'],
+                },
+            ],
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                graph_file = Path(tmp) / 'story_graph.json'
+                graph_file.write_text(json.dumps(graph), encoding='utf-8')
+                runtime.SYNC_STORY_MEMORY_ENABLED = True
+                runtime.SYNC_STORY_MEMORY_GRAPH_FILE = str(graph_file)
+                runtime.SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = 500
+                runtime.SYNC_STORY_MEMORY_TOP_K_RELATIONS = 4
+                runtime.SYNC_STORY_MEMORY_TOP_K_TERMS = 8
+                runtime.SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY = True
+                runtime._SYNC_STORY_GRAPH = None
+                runtime._SYNC_STORY_GRAPH_PATH = ''
+
+                items = [
+                    {
+                        'id': 'chapter1.rpy:129:0',
+                        'text': 'Noah opens the Void Gate.',
+                        'line': 129,
+                        'file_rel_path': 'chapter1.rpy',
+                    },
+                ]
+                hits = runtime.retrieve_sync_story_hits(items)
+                prompt = runtime.build_prompt(items, story_hits=hits)
+        finally:
+            runtime.SYNC_STORY_MEMORY_ENABLED = old_values['enabled']
+            runtime.SYNC_STORY_MEMORY_GRAPH_FILE = old_values['graph_file']
+            runtime.SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = old_values['max_context_chars']
+            runtime.SYNC_STORY_MEMORY_TOP_K_RELATIONS = old_values['top_k_relations']
+            runtime.SYNC_STORY_MEMORY_TOP_K_TERMS = old_values['top_k_terms']
+            runtime.SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY = old_values['include_scene_summary']
+            runtime._SYNC_STORY_GRAPH = old_values['graph']
+            runtime._SYNC_STORY_GRAPH_PATH = old_values['graph_path']
+
+        self.assertIn('STORY MEMORY', prompt)
+        self.assertIn('Void Gate -> \u865a\u7a7a\u95e8', prompt)
+        self.assertIn('eileen -> noah', prompt)
+        self.assertLessEqual(len(story_memory.format_story_hits_block(hits, 80)), 80)
 
     def test_collect_translation_entries_does_not_skip_after_unmatched_source_markers(self):
         entries = runtime.collect_translation_entries_from_lines([

@@ -16,6 +16,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from rag_memory import JsonRagStore, hash_text, truncate_text
+import story_memory
 import translator_runtime as runtime
 
 try:
@@ -85,6 +86,15 @@ RAG_HISTORY_CHAR_LIMIT = 220
 _RAG_STORE = None
 _RAG_PRESERVED_TERMS_CACHE = None
 _RAG_PRESERVED_TERMS_CACHE_KEY = None
+
+STORY_MEMORY_ENABLED = False
+STORY_MEMORY_GRAPH_FILE = ''
+STORY_MEMORY_MAX_CONTEXT_CHARS = 1200
+STORY_MEMORY_TOP_K_RELATIONS = 6
+STORY_MEMORY_TOP_K_TERMS = 12
+STORY_MEMORY_INCLUDE_SCENE_SUMMARY = True
+_STORY_GRAPH = None
+_STORY_GRAPH_PATH = ''
 
 
 def load_json_file(path):
@@ -156,6 +166,9 @@ def load_batch_settings():
     global RAG_DOCUMENT_TASK_TYPE, RAG_OUTPUT_DIMENSIONALITY, RAG_TOP_K_HISTORY
     global RAG_TOP_K_TERMS, RAG_MIN_SIMILARITY, RAG_SEGMENT_LINES
     global RAG_BOOTSTRAP_ON_BUILD, RAG_HISTORY_CHAR_LIMIT, _RAG_STORE
+    global STORY_MEMORY_ENABLED, STORY_MEMORY_GRAPH_FILE, STORY_MEMORY_MAX_CONTEXT_CHARS
+    global STORY_MEMORY_TOP_K_RELATIONS, STORY_MEMORY_TOP_K_TERMS
+    global STORY_MEMORY_INCLUDE_SCENE_SUMMARY, _STORY_GRAPH, _STORY_GRAPH_PATH
 
     config = load_json_file(legacy.CONFIG_FILE)
     translator_config = load_json_file(legacy.TRANSLATOR_CONFIG)
@@ -249,6 +262,39 @@ def load_batch_settings():
         RAG_STORE_DIR = ''
 
     _RAG_STORE = None
+
+    story_config = batch.get('story_memory')
+    if not isinstance(story_config, dict):
+        story_config = {}
+
+    STORY_MEMORY_ENABLED = coerce_bool(story_config.get('enabled'), False)
+    STORY_MEMORY_MAX_CONTEXT_CHARS = coerce_positive_int(
+        story_config.get('max_context_chars'),
+        1200,
+    )
+    STORY_MEMORY_TOP_K_RELATIONS = coerce_positive_int(
+        story_config.get('top_k_relations'),
+        6,
+    )
+    STORY_MEMORY_TOP_K_TERMS = coerce_positive_int(
+        story_config.get('top_k_terms'),
+        12,
+    )
+    STORY_MEMORY_INCLUDE_SCENE_SUMMARY = coerce_bool(
+        story_config.get('include_scene_summary'),
+        True,
+    )
+    graph_file = story_config.get('graph_file')
+    if graph_file:
+        STORY_MEMORY_GRAPH_FILE = legacy._resolve_preferred_path(
+            legacy.BASE_DIR,
+            SCRIPT_DIR,
+            graph_file,
+        )
+    else:
+        STORY_MEMORY_GRAPH_FILE = ''
+    _STORY_GRAPH = None
+    _STORY_GRAPH_PATH = ''
 
 
 load_batch_settings()
@@ -615,6 +661,32 @@ def retrieve_history_hits(target_items, context_past):
     }
 
 
+def get_story_graph():
+    global _STORY_GRAPH, _STORY_GRAPH_PATH
+    if not STORY_MEMORY_ENABLED:
+        return None
+    graph_path = os.path.abspath(STORY_MEMORY_GRAPH_FILE) if STORY_MEMORY_GRAPH_FILE else ''
+    if _STORY_GRAPH is None or _STORY_GRAPH_PATH != graph_path:
+        _STORY_GRAPH = story_memory.load_story_graph(graph_path)
+        _STORY_GRAPH_PATH = graph_path
+    return _STORY_GRAPH
+
+
+def retrieve_batch_story_hits(file_rel_path, target_items, context_past, context_future):
+    if not STORY_MEMORY_ENABLED:
+        return None
+    return story_memory.retrieve_story_hits(
+        get_story_graph(),
+        file_rel_path,
+        target_items,
+        context_past=context_past,
+        context_future=context_future,
+        top_k_relations=STORY_MEMORY_TOP_K_RELATIONS,
+        top_k_terms=STORY_MEMORY_TOP_K_TERMS,
+        include_scene_summary=STORY_MEMORY_INCLUDE_SCENE_SUMMARY,
+    )
+
+
 
 def manifest_path_for_target(target):
     if target:
@@ -864,7 +936,14 @@ def build_system_instruction():
     )
 
 
-def build_user_prompt(context_past, target_items, context_future, glossary_hits=None, history_hits=None):
+def build_user_prompt(
+    context_past,
+    target_items,
+    context_future,
+    glossary_hits=None,
+    history_hits=None,
+    story_hits=None,
+):
     target_payload = json.dumps(
         [{'id': item['id'], 'text': item['text']} for item in target_items],
         ensure_ascii=False,
@@ -872,14 +951,24 @@ def build_user_prompt(context_past, target_items, context_future, glossary_hits=
     )
     glossary_hits = glossary_hits or []
     history_hits = history_hits or []
-    return (
+    blocks = [
         f'LOCKED TERMS:\n{format_glossary_hits_block(glossary_hits, "(none)")}\n\n'
-        f'RETRIEVED MEMORY:\n{format_history_hits_block(history_hits, "(none)")}\n\n'
-        f'CONTEXT BEFORE:\n{format_context_block(context_past, "(none)")}\n\n'
-        f'TARGET:\n{target_payload}\n\n'
-        f'CONTEXT AFTER:\n{format_context_block(context_future, "(none)")}\n\n'
-        'Return the result now.'
+        f'RETRIEVED MEMORY:\n{format_history_hits_block(history_hits, "(none)")}\n\n',
+    ]
+    if story_hits is not None:
+        blocks.append(
+            'STORY MEMORY:\n'
+            f'{story_memory.format_story_hits_block(story_hits, STORY_MEMORY_MAX_CONTEXT_CHARS)}\n\n'
+        )
+    blocks.extend(
+        [
+            f'CONTEXT BEFORE:\n{format_context_block(context_past, "(none)")}\n\n',
+            f'TARGET:\n{target_payload}\n\n',
+            f'CONTEXT AFTER:\n{format_context_block(context_future, "(none)")}\n\n',
+            'Return the result now.',
+        ]
     )
+    return ''.join(blocks)
 
 
 
@@ -931,6 +1020,7 @@ def build_batch_request(chunk):
                                 chunk['context_future'],
                                 glossary_hits=chunk.get('glossary_hits') or [],
                                 history_hits=chunk.get('history_hits') or [],
+                                story_hits=chunk.get('story_hits') if 'story_hits' in chunk else None,
                             )
                         }
                     ],
@@ -954,34 +1044,41 @@ def build_chunks(file_jobs):
             context_future = [item['text'] for item in tasks[end:min(total, end + BATCH_CONTEXT_AFTER)]]
             glossary_hits = retrieve_glossary_hits(target_items) if RAG_ENABLED else []
             history_hits, rag_stats = retrieve_history_hits(target_items, context_past) if RAG_ENABLED else ([], {})
+            story_hits = retrieve_batch_story_hits(
+                job['file_rel_path'],
+                target_items,
+                context_past,
+                context_future,
+            ) if STORY_MEMORY_ENABLED else None
             chunk_number = start // BATCH_TARGET_SIZE + 1
             chunk_key = f"{hash_key(job['file_rel_path'])}-{chunk_number:05d}"
-            chunks.append(
-                {
-                    'key': chunk_key,
-                    'file_rel_path': job['file_rel_path'],
-                    'file_path': job['file_path'],
-                    'chunk_index': chunk_number,
-                    'line_numbers': [item['line'] for item in target_items],
-                    'context_past': context_past,
-                    'context_future': context_future,
-                    'glossary_hits': glossary_hits,
-                    'history_hits': history_hits,
-                    'rag_stats': rag_stats,
-                    'items': [
-                        {
-                            'id': item['id'],
-                            'text': item['text'],
-                            'line': item['line'],
-                            'start': item['start'],
-                            'end': item['end'],
-                            'prefix': item.get('prefix', ''),
-                            'quote': item['quote'],
-                        }
-                        for item in target_items
-                    ],
-                }
-            )
+            chunk = {
+                'key': chunk_key,
+                'file_rel_path': job['file_rel_path'],
+                'file_path': job['file_path'],
+                'chunk_index': chunk_number,
+                'line_numbers': [item['line'] for item in target_items],
+                'context_past': context_past,
+                'context_future': context_future,
+                'glossary_hits': glossary_hits,
+                'history_hits': history_hits,
+                'rag_stats': rag_stats,
+                'items': [
+                    {
+                        'id': item['id'],
+                        'text': item['text'],
+                        'line': item['line'],
+                        'start': item['start'],
+                        'end': item['end'],
+                        'prefix': item.get('prefix', ''),
+                        'quote': item['quote'],
+                    }
+                    for item in target_items
+                ],
+            }
+            if STORY_MEMORY_ENABLED:
+                chunk['story_hits'] = story_hits or {}
+            chunks.append(chunk)
     return chunks
 
 
@@ -1077,6 +1174,19 @@ def create_batch_package(display_name_override='', skip_prepare=False):
             'chunks_with_glossary_hits': sum(1 for chunk in chunks if chunk.get('glossary_hits')),
             'chunks_with_history_hits': sum(1 for chunk in chunks if chunk.get('history_hits')),
         } if RAG_ENABLED else {},
+        'story_memory_enabled': STORY_MEMORY_ENABLED,
+        'story_memory_graph_file': STORY_MEMORY_GRAPH_FILE if STORY_MEMORY_ENABLED else '',
+        'story_memory_settings': {
+            'max_context_chars': STORY_MEMORY_MAX_CONTEXT_CHARS,
+            'top_k_relations': STORY_MEMORY_TOP_K_RELATIONS,
+            'top_k_terms': STORY_MEMORY_TOP_K_TERMS,
+            'include_scene_summary': STORY_MEMORY_INCLUDE_SCENE_SUMMARY,
+        } if STORY_MEMORY_ENABLED else {},
+        'story_memory_summary': {
+            'chunks_with_story_hits': sum(
+                1 for chunk in chunks if chunk.get('story_hits')
+            ),
+        } if STORY_MEMORY_ENABLED else {},
         'summary': {
             'file_count': len(file_jobs),
             'chunk_count': len(chunks),
@@ -2878,4 +2988,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
