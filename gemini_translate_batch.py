@@ -286,11 +286,7 @@ def load_batch_settings():
     )
     graph_file = story_config.get('graph_file')
     if graph_file:
-        STORY_MEMORY_GRAPH_FILE = legacy._resolve_preferred_path(
-            legacy.BASE_DIR,
-            SCRIPT_DIR,
-            graph_file,
-        )
+        STORY_MEMORY_GRAPH_FILE = legacy.resolve_story_memory_graph_path(graph_file)
     else:
         STORY_MEMORY_GRAPH_FILE = ''
     _STORY_GRAPH = None
@@ -1072,6 +1068,8 @@ def build_chunks(file_jobs):
                         'end': item['end'],
                         'prefix': item.get('prefix', ''),
                         'quote': item['quote'],
+                        'speaker_id': item.get('speaker_id', ''),
+                        'speaker': item.get('speaker', ''),
                     }
                     for item in target_items
                 ],

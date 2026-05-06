@@ -211,14 +211,15 @@ def _looks_word_like(text):
     return bool(re.fullmatch(r"[A-Za-z0-9_ -]+", text or ""))
 
 
-def _text_contains_alias(search_text, alias):
+def _text_contains_alias(search_text_lower, alias):
     alias = _clean_text(alias)
     if len(alias) <= 1:
         return False
+    alias_lower = alias.lower()
     if _looks_word_like(alias):
-        pattern = r"(?<![A-Za-z0-9_])" + re.escape(alias.lower()) + r"(?![A-Za-z0-9_])"
-        return re.search(pattern, search_text.lower()) is not None
-    return alias.lower() in search_text.lower()
+        pattern = r"(?<![A-Za-z0-9_])" + re.escape(alias_lower) + r"(?![A-Za-z0-9_])"
+        return re.search(pattern, search_text_lower) is not None
+    return alias_lower in search_text_lower
 
 
 def _character_aliases(char_id, data):
@@ -305,7 +306,7 @@ def _rank_matching_scenes(story_graph, file_rel_path, target_start, target_end, 
     return [scene for _, scene in ranked]
 
 
-def _collect_active_characters(story_graph, search_text, speaker_ids):
+def _collect_active_characters(story_graph, search_text_lower, speaker_ids):
     active = set()
     characters = story_graph.get("characters", {})
     for char_id, data in characters.items():
@@ -313,7 +314,7 @@ def _collect_active_characters(story_graph, search_text, speaker_ids):
         if any(alias in speaker_ids for alias in aliases):
             active.add(char_id)
             continue
-        if any(_text_contains_alias(search_text, alias) for alias in aliases):
+        if any(_text_contains_alias(search_text_lower, alias) for alias in aliases):
             active.add(char_id)
     return active
 
@@ -330,9 +331,10 @@ def retrieve_story_hits(
 ):
     story_graph = normalize_story_graph(story_graph)
     search_text = _combined_search_text(target_items, context_past, context_future)
+    search_text_lower = search_text.lower()
     speaker_ids = _speaker_ids_from_items(target_items)
     target_start, target_end = _target_line_span(target_items)
-    active_char_ids = _collect_active_characters(story_graph, search_text, speaker_ids)
+    active_char_ids = _collect_active_characters(story_graph, search_text_lower, speaker_ids)
 
     matching_scenes = _rank_matching_scenes(
         story_graph,
@@ -364,7 +366,7 @@ def retrieve_story_hits(
         if len(term_hits) >= max_terms:
             break
         aliases = _term_aliases(term)
-        if any(_text_contains_alias(search_text, alias) for alias in aliases):
+        if any(_text_contains_alias(search_text_lower, alias) for alias in aliases):
             term_hits.append(term)
 
     relation_hits = []
