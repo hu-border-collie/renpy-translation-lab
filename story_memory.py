@@ -136,7 +136,8 @@ def load_story_graph(path):
     try:
         with open(path, "r", encoding="utf-8-sig") as handle:
             return normalize_story_graph(json.load(handle) or {})
-    except Exception:
+    except Exception as exc:
+        print(f"Warning: Failed to load story graph {path}: {exc}")
         return _empty_graph()
 
 
@@ -415,6 +416,16 @@ def _append_limited(lines, line, max_chars):
     return False
 
 
+def has_story_hits(story_hits):
+    if not isinstance(story_hits, dict):
+        return False
+    for key in ("characters", "relations", "terms", "scenes"):
+        hits = story_hits.get(key)
+        if isinstance(hits, list) and hits:
+            return True
+    return False
+
+
 def format_story_hits_block(story_hits, max_chars, empty_label="(none)"):
     if not isinstance(story_hits, dict):
         return empty_label
@@ -462,8 +473,12 @@ def format_story_hits_block(story_hits, max_chars, empty_label="(none)"):
             note = _clean_text(item.get("note"))
             if source and target and source != target:
                 line = f"- {source} -> {target}"
+            elif source:
+                line = f"- Term: {source}"
+            elif target:
+                line = f"- Term target: {target}"
             else:
-                line = f"- Keep unchanged: {source or target}"
+                continue
             if note:
                 line += f": {note}"
             if not _append_limited(lines, line, max_chars):
