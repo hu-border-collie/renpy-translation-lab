@@ -4,7 +4,7 @@
 
 ## 这是什么
 
-这个仓库有三个主要入口/支持脚本，以及一个内部共享 runtime：
+这个仓库有几个主要入口/支持脚本，以及一个内部共享 runtime：
 
 - `gemini_translate.py`
   - Ren'Py 主翻译脚本
@@ -16,6 +16,9 @@
 - `rag_memory.py`
   - 轻量 RAG / history store 模块
   - 提供本地 JSON 历史库存储、文本哈希和相似度检索
+- `story_memory.py`
+  - 可选的结构化剧情记忆模块
+  - 从本地 `story_graph.json` 读取角色、关系、术语和场景摘要，并在启用后注入 `STORY MEMORY` prompt 块
 - `translator_runtime.py`
   - 内部共享 runtime
   - 为同步脚本和 Batch 脚本提供共用的配置、SDK、校验、响应解析和文件处理逻辑
@@ -31,6 +34,7 @@
 - 生成 Batch 请求包并执行完整的 `build / submit / status / probe / download / check / apply / split / repair` 流程
 - 使用本地 history store 做轻量 RAG 检索
 - 将历史译文注入后续请求，提升术语和语气一致性
+- 可选注入结构化剧情记忆，补充角色、关系、场景和术语上下文
 - 允许已知术语按规则保留英文，不再把这类结果一律判成失败
 
 ## 快速开始
@@ -124,6 +128,7 @@ python gemini_translate_batch.py apply
 
 - `python gemini_translate.py --help` 会显示同步脚本的最小 CLI 帮助
 - 同步 RAG 启用后，每个成功写回的小批次会更新本地 history store，后续同步批次会在请求前重新检索并注入相关历史
+- Structured Story Memory 默认关闭；需要分别通过 `batch.story_memory.enabled=true` 或 `sync.story_memory.enabled=true` 启用
 - 不带子命令直接运行 `gemini_translate_batch.py` 时，默认等价于 `submit`
 - Batch 产物默认会写到本地 `logs/` 目录
 - `probe` 会用同步请求做最小 smoke test
@@ -131,6 +136,78 @@ python gemini_translate_batch.py apply
 - `apply` 只会写回通过校验的结果
 - 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包
 - 当前不建议并行 `apply` 到同一个本地 RAG store；共享 `history.jsonl` 的写入保护还不算完整产品化
+
+### 可选：Structured Story Memory
+
+Structured Story Memory 是现有 glossary / translation-memory RAG 之外的可选上下文层。它不会调用额外 LLM 自动抽取图谱，也不依赖 Neo4j；启用后只读取本地 JSON，并把命中的结构化信息插入到 prompt 的 `STORY MEMORY` 分区。
+
+配置示例见 `translator_config.example.json`：
+
+```json
+{
+  "batch": {
+    "story_memory": {
+      "enabled": false,
+      "graph_file": "logs/story_memory/story_graph.json",
+      "max_context_chars": 1200,
+      "top_k_relations": 6,
+      "top_k_terms": 12,
+      "include_scene_summary": true
+    }
+  },
+  "sync": {
+    "story_memory": {
+      "enabled": false,
+      "graph_file": "logs/story_memory/story_graph.json",
+      "max_context_chars": 800,
+      "top_k_relations": 4,
+      "top_k_terms": 8,
+      "include_scene_summary": true
+    }
+  }
+}
+```
+
+`story_graph.json` 可以先手写或半自动维护，初版结构类似：
+
+```json
+{
+  "characters": {
+    "eileen": {
+      "zh_name": "艾琳",
+      "speaker_ids": ["eileen", "eileen_side"],
+      "style": "语气轻快，常吐槽，但关键时刻认真。"
+    }
+  },
+  "relations": [
+    {
+      "left": "eileen",
+      "right": "noah",
+      "type": "close_friend",
+      "note": "两人关系亲近，可以使用自然熟悉的中文语气。",
+      "confidence": 0.85
+    }
+  ],
+  "terms": [
+    {
+      "source": "Void Gate",
+      "target": "虚空门",
+      "note": "世界观核心术语，必须统一。"
+    }
+  ],
+  "scenes": [
+    {
+      "file_rel_path": "chapter1.rpy",
+      "line_start": 120,
+      "line_end": 220,
+      "summary": "艾琳和诺亚在天台讨论是否进入危险区域。",
+      "characters": ["eileen", "noah"]
+    }
+  ]
+}
+```
+
+当前实现仍是 MVP：检索逻辑是轻量启发式，正式 schema 校验、`relation_analyzer` seed 导出、Neo4j 可视化导出和更完整 diagnostics 还属于后续工作。
 
 ## 角色关系 / 语义分析
 
@@ -177,6 +254,7 @@ python extract_relations.py /path/to/game/tl/schinese --mode semantic
 - 面向普通用户的零配置体验
 - 完整的游戏解包 / 打包一体化发布流程
 - 面向超大项目的完整 RAG 生产工作流（例如全项目 bootstrap 建库、严格的波次式回灌编排、并发写保护）
+- 完整的结构化剧情图谱生产工作流（例如 schema 校验、自动 seed 生成、Neo4j 可视化导出）
 
 ## 项目状态
 
@@ -191,6 +269,7 @@ python extract_relations.py /path/to/game/tl/schinese --mode semantic
 - 当前更推荐使用 Batch 脚本；同步脚本保留用于直接运行、补译、局部修复、smoke test，以及可选的 RAG 滚动记忆验证
 - Batch / RAG 仍是主要验证方向；同步 RAG 更适合小批量即时反馈和局部精修，不是 Batch 吞吐流程的替代品
 - 当前的 RAG 能力更适合“小包验证 + 逐步扩展”，还不应被表述为已经完成的大项目生产级方案
+- Structured Story Memory 目前是可选 MVP，适合作为人工维护剧情上下文的 prompt 增强，不是完整自动图谱系统
 
 执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。
 
@@ -202,6 +281,7 @@ python extract_relations.py /path/to/game/tl/schinese --mode semantic
 - 你本地的 `api_keys.json`
 - 你本地的 `translator_config.json`
 - 你本地的 `glossary.json` / `glossary_*.json`
+- 你本地的 `story_graph.json` / `story_graph.seed.json`
 - 你本地的 `macro_setting.md`
 - 私有游戏脚本
 - 本地 batch 结果
