@@ -181,7 +181,7 @@ def _speaker_ids_from_items(target_items):
         for key in ("speaker", "speaker_id", "speaker_name", "character", "who"):
             value = _clean_text(item.get(key))
             if value:
-                speaker_ids.add(value)
+                speaker_ids.add(value.lower())
     return speaker_ids
 
 
@@ -311,7 +311,7 @@ def _collect_active_characters(story_graph, search_text_lower, speaker_ids):
     characters = story_graph.get("characters", {})
     for char_id, data in characters.items():
         aliases = _character_aliases(char_id, data)
-        if any(alias in speaker_ids for alias in aliases):
+        if any(alias.lower() in speaker_ids for alias in aliases):
             active.add(char_id)
             continue
         if any(_text_contains_alias(search_text_lower, alias) for alias in aliases):
