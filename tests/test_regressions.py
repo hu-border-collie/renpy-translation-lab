@@ -194,7 +194,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         )
         self.assertTrue(story_memory.has_story_hits({'terms': [{'source': 'Void Gate'}]}))
 
-    def test_story_memory_uses_speaker_id_to_activate_character(self):
+    def test_story_memory_uses_speaker_id_case_insensitively(self):
         graph = {
             'characters': {
                 'eileen': {
@@ -219,7 +219,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         hits = story_memory.retrieve_story_hits(
             graph,
             'chapter1.rpy',
-            [{'id': 'chapter1.rpy:10:4', 'text': 'We should go.', 'speaker_id': 'e'}],
+            [{'id': 'chapter1.rpy:10:4', 'text': 'We should go.', 'speaker_id': 'E'}],
         )
 
         self.assertEqual([item['id'] for item in hits['characters']], ['eileen'])
