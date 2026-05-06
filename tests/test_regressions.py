@@ -17,6 +17,17 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertNotEqual(tasks[0]['start'], tasks[1]['start'])
         self.assertNotEqual(tasks[0]['progress_entry'], tasks[1]['progress_entry'])
 
+    def test_collect_tasks_records_dialogue_speaker_id(self):
+        tasks = runtime.collect_tasks([
+            'e happy "Hello Noah"\n',
+            'text "Start Game"\n',
+        ])
+        by_text = {task['text']: task for task in tasks}
+
+        self.assertEqual(by_text['Hello Noah'].get('speaker_id'), 'e')
+        self.assertEqual(by_text['Hello Noah'].get('speaker'), 'e')
+        self.assertNotIn('speaker_id', by_text['Start Game'])
+
     def test_quote_with_round_trips_prefixed_literals(self):
         prefix, quote = runtime.parse_string_literal_format('u"Hello"')
         literal = runtime.quote_with('\u4f60\u597d', quote, prefix=prefix)
@@ -176,6 +187,37 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         )
         self.assertTrue(story_memory.has_story_hits({'terms': [{'source': 'Void Gate'}]}))
 
+    def test_story_memory_uses_speaker_id_to_activate_character(self):
+        graph = {
+            'characters': {
+                'eileen': {
+                    'speaker_ids': ['e'],
+                    'zh_name': '\u827e\u7433',
+                    'style': '\u8bed\u6c14\u8f7b\u5feb',
+                },
+                'noah': {
+                    'speaker_ids': ['n'],
+                    'zh_name': '\u8bfa\u4e9a',
+                },
+            },
+            'relations': [
+                {
+                    'left': 'eileen',
+                    'right': 'noah',
+                    'type': 'close_friend',
+                    'confidence': 0.85,
+                },
+            ],
+        }
+        hits = story_memory.retrieve_story_hits(
+            graph,
+            'chapter1.rpy',
+            [{'id': 'chapter1.rpy:10:4', 'text': 'We should go.', 'speaker_id': 'e'}],
+        )
+
+        self.assertEqual([item['id'] for item in hits['characters']], ['eileen'])
+        self.assertEqual(hits['relations'], [])
+
     def test_load_story_graph_warns_on_invalid_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             graph_file = Path(tmp) / 'story_graph.json'
@@ -186,6 +228,39 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(graph, {'characters': {}, 'relations': [], 'terms': [], 'scenes': []})
         self.assertTrue(print_mock.called)
         self.assertIn('Failed to load story graph', print_mock.call_args[0][0])
+
+    def test_story_memory_graph_path_prefers_root_logs(self):
+        old_values = {
+            'root': runtime.ROOT_DIR,
+            'base': runtime.BASE_DIR,
+            'tool': runtime.TOOL_DIR,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                root_dir = tmp_path / 'repo'
+                base_dir = tmp_path / 'game'
+                tool_dir = tmp_path / 'tool'
+                root_graph = root_dir / 'logs' / 'story_memory' / 'story_graph.json'
+                base_graph = base_dir / 'logs' / 'story_memory' / 'story_graph.json'
+                root_graph.parent.mkdir(parents=True)
+                base_graph.parent.mkdir(parents=True)
+                tool_dir.mkdir()
+                root_graph.write_text('{}', encoding='utf-8')
+                base_graph.write_text('{}', encoding='utf-8')
+                runtime.ROOT_DIR = str(root_dir)
+                runtime.BASE_DIR = str(base_dir)
+                runtime.TOOL_DIR = str(tool_dir)
+
+                resolved = runtime.resolve_story_memory_graph_path(
+                    'logs/story_memory/story_graph.json'
+                )
+        finally:
+            runtime.ROOT_DIR = old_values['root']
+            runtime.BASE_DIR = old_values['base']
+            runtime.TOOL_DIR = old_values['tool']
+
+        self.assertEqual(Path(resolved), root_graph)
 
     def test_sync_story_memory_uses_local_graph_when_enabled(self):
         old_values = {

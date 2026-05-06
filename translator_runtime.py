@@ -179,6 +179,34 @@ STRING_LITERAL_PREFIX_RE = re.compile(r"(?is)^(?P<prefix>[rubf]*)(?P<quote>'''|\
 TL_COMMENT_SOURCE_RE = re.compile(r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"\s*$')
 TL_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 TL_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
+RENPLY_NON_SPEAKER_NAMES = {
+    "_",
+    "call",
+    "elif",
+    "else",
+    "extend",
+    "hide",
+    "if",
+    "image",
+    "init",
+    "jump",
+    "label",
+    "menu",
+    "new",
+    "old",
+    "python",
+    "renpy",
+    "return",
+    "scene",
+    "screen",
+    "set",
+    "show",
+    "text",
+    "translate",
+    "voice",
+    "window",
+    "with",
+}
 PRESERVE_TERMS_LOWER = {term.lower() for term in PRESERVE_TERMS}
 FILE_EXTENSIONS = (
     "png", "jpg", "jpeg", "bmp", "gif", "webp", "txt", "pdf", "mp3", "wav", "ogg", "zip"
@@ -326,7 +354,7 @@ def _resolve_path(base_dir, value):
     return os.path.abspath(os.path.join(base_dir, text))
 
 
-def _resolve_preferred_path(primary_base_dir, secondary_base_dir, value):
+def _resolve_preferred_path_from_bases(value, base_dirs):
     if value is None:
         return ""
     text = str(value).strip()
@@ -336,7 +364,7 @@ def _resolve_preferred_path(primary_base_dir, secondary_base_dir, value):
         return os.path.abspath(text)
 
     candidates = []
-    for base_dir in (primary_base_dir, secondary_base_dir):
+    for base_dir in base_dirs:
         if not base_dir:
             continue
         candidate = os.path.abspath(os.path.join(base_dir, text))
@@ -347,6 +375,14 @@ def _resolve_preferred_path(primary_base_dir, secondary_base_dir, value):
         if os.path.exists(candidate):
             return candidate
     return candidates[0] if candidates else ""
+
+
+def _resolve_preferred_path(primary_base_dir, secondary_base_dir, value):
+    return _resolve_preferred_path_from_bases(value, (primary_base_dir, secondary_base_dir))
+
+
+def resolve_story_memory_graph_path(value):
+    return _resolve_preferred_path_from_bases(value, (ROOT_DIR, BASE_DIR, TOOL_DIR))
 
 
 def _coerce_command(value):
@@ -495,11 +531,7 @@ def load_sync_story_memory_settings(config):
 
     graph_file = story_config.get("graph_file")
     if graph_file:
-        SYNC_STORY_MEMORY_GRAPH_FILE = _resolve_preferred_path(
-            BASE_DIR,
-            TOOL_DIR,
-            graph_file,
-        )
+        SYNC_STORY_MEMORY_GRAPH_FILE = resolve_story_memory_graph_path(graph_file)
     else:
         SYNC_STORY_MEMORY_GRAPH_FILE = ""
     _SYNC_STORY_GRAPH = None
@@ -2384,6 +2416,25 @@ def process_batch_with_retry(batch, replacements, retry_depth=0):
     log_failure(batch, f"Failed after retries: {error_str}")
     return []
 
+
+def infer_dialogue_speaker_id(line, string_start_col):
+    prefix = (line[:string_start_col] or "").strip()
+    if not prefix:
+        return ""
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(prefix).readline))
+    except Exception:
+        return ""
+    for token in tokens:
+        if token.type != tokenize.NAME:
+            continue
+        candidate = token.string.strip()
+        if candidate and candidate not in RENPLY_NON_SPEAKER_NAMES:
+            return candidate
+        return ""
+    return ""
+
+
 def collect_tasks(lines, skip_translated=True):
     # Logic to parse Ren'Py files
     # Note: caller handles filename lookup, this function just parses
@@ -2435,7 +2486,7 @@ def collect_tasks(lines, skip_translated=True):
 
                     if (" " in text_val or len(text_val) > 15 or (text_val and text_val[0].isupper())
                             or (ALLOW_SINGLE_WORD_TRANSLATION and is_english_like(text_val))):
-                        tasks.append({
+                        task = {
                             "id": f"line_{idx}_{token.start[1]}", # Temp ID, updated later
                             "text": text_val,
                             "line": idx,
@@ -2444,7 +2495,12 @@ def collect_tasks(lines, skip_translated=True):
                             "quote": quote,
                             "prefix": prefix,
                             "progress_entry": f"task:{idx}:{token.start[1]}",
-                        })
+                        }
+                        speaker_id = infer_dialogue_speaker_id(line, token.start[1])
+                        if speaker_id:
+                            task["speaker_id"] = speaker_id
+                            task["speaker"] = speaker_id
+                        tasks.append(task)
         except Exception:
             continue
 
