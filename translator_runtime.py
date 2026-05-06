@@ -16,6 +16,7 @@ import zlib
 from datetime import datetime
 
 from rag_memory import JsonRagStore, hash_text, truncate_text
+import story_memory
 
 # Configuration
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -111,6 +112,17 @@ SYNC_RAG_HISTORY_CHAR_LIMIT = 220
 SYNC_RAG_UPDATE_ON_SUCCESS = True
 SYNC_RAG_QUALITY_STATE = "sync_applied"
 _SYNC_RAG_STORE = None
+
+# Optional structured story memory for synchronous translation. Disabled by
+# default to keep sync repair and smoke-test runs lightweight unless configured.
+SYNC_STORY_MEMORY_ENABLED = False
+SYNC_STORY_MEMORY_GRAPH_FILE = ""
+SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = 800
+SYNC_STORY_MEMORY_TOP_K_RELATIONS = 4
+SYNC_STORY_MEMORY_TOP_K_TERMS = 8
+SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY = True
+_SYNC_STORY_GRAPH = None
+_SYNC_STORY_GRAPH_PATH = ""
 
 # Optional allowlist to limit which files are processed (relative to TL_DIR).
 INCLUDE_FILES = set()
@@ -450,6 +462,50 @@ def load_sync_rag_settings(config):
     _SYNC_RAG_STORE = None
 
 
+def load_sync_story_memory_settings(config):
+    global SYNC_STORY_MEMORY_ENABLED, SYNC_STORY_MEMORY_GRAPH_FILE
+    global SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS, SYNC_STORY_MEMORY_TOP_K_RELATIONS
+    global SYNC_STORY_MEMORY_TOP_K_TERMS, SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY
+    global _SYNC_STORY_GRAPH, _SYNC_STORY_GRAPH_PATH
+
+    sync = config.get("sync")
+    if not isinstance(sync, dict):
+        sync = {}
+    story_config = sync.get("story_memory")
+    if not isinstance(story_config, dict):
+        story_config = {}
+
+    SYNC_STORY_MEMORY_ENABLED = _coerce_bool(story_config.get("enabled"), False)
+    SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = _coerce_positive_int(
+        story_config.get("max_context_chars"),
+        800,
+    )
+    SYNC_STORY_MEMORY_TOP_K_RELATIONS = _coerce_positive_int(
+        story_config.get("top_k_relations"),
+        4,
+    )
+    SYNC_STORY_MEMORY_TOP_K_TERMS = _coerce_positive_int(
+        story_config.get("top_k_terms"),
+        8,
+    )
+    SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY = _coerce_bool(
+        story_config.get("include_scene_summary"),
+        True,
+    )
+
+    graph_file = story_config.get("graph_file")
+    if graph_file:
+        SYNC_STORY_MEMORY_GRAPH_FILE = _resolve_preferred_path(
+            BASE_DIR,
+            TOOL_DIR,
+            graph_file,
+        )
+    else:
+        SYNC_STORY_MEMORY_GRAPH_FILE = ""
+    _SYNC_STORY_GRAPH = None
+    _SYNC_STORY_GRAPH_PATH = ""
+
+
 def load_translator_settings():
     """Loads per-game settings (game root, tl subdir) from translator_config.json or env."""
     global BASE_DIR, TL_DIR, TL_SUBDIR, ENV_GAME_ROOT, WORK_GAME_DIR, SOURCE_GAME_DIR, GLOSSARY_FILE
@@ -524,6 +580,7 @@ def load_translator_settings():
     PREP_UNPACK_COMMAND = _coerce_command(prepare.get("unpack_command"))
     PREP_TEMPLATE_COMMAND = _coerce_command(prepare.get("template_command"))
     load_sync_rag_settings(config)
+    load_sync_story_memory_settings(config)
 
 
 def load_config():
@@ -1175,6 +1232,35 @@ def format_sync_history_hits_block(hits, empty_label="(none)"):
             f"- [{file_rel_path}:{line_start}-{line_end} score={score:.3f} quality={quality}] {translated_text}"
         )
     return "\n".join(lines) if lines else empty_label
+
+
+def get_sync_story_graph():
+    global _SYNC_STORY_GRAPH, _SYNC_STORY_GRAPH_PATH
+    if not SYNC_STORY_MEMORY_ENABLED:
+        return None
+    graph_path = os.path.abspath(SYNC_STORY_MEMORY_GRAPH_FILE) if SYNC_STORY_MEMORY_GRAPH_FILE else ""
+    if _SYNC_STORY_GRAPH is None or _SYNC_STORY_GRAPH_PATH != graph_path:
+        _SYNC_STORY_GRAPH = story_memory.load_story_graph(graph_path)
+        _SYNC_STORY_GRAPH_PATH = graph_path
+    return _SYNC_STORY_GRAPH
+
+
+def retrieve_sync_story_hits(target_items):
+    if not SYNC_STORY_MEMORY_ENABLED:
+        return None
+    file_rel_path = ""
+    for item in target_items or []:
+        if isinstance(item, dict) and item.get("file_rel_path"):
+            file_rel_path = item.get("file_rel_path")
+            break
+    return story_memory.retrieve_story_hits(
+        get_sync_story_graph(),
+        file_rel_path,
+        target_items,
+        top_k_relations=SYNC_STORY_MEMORY_TOP_K_RELATIONS,
+        top_k_terms=SYNC_STORY_MEMORY_TOP_K_TERMS,
+        include_scene_summary=SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY,
+    )
 
 
 def retrieve_sync_history_hits(target_items):
@@ -1949,22 +2035,32 @@ def log_failure(batch, error):
         print(f"  Warning: Could not log failure: {e}")
 
 
-def build_prompt(items, glossary_hits=None, history_hits=None):
+def build_prompt(items, glossary_hits=None, history_hits=None, story_hits=None):
     glossary = ", ".join(PRESERVE_TERMS)
     payload = json.dumps(
         [{"id": item["id"], "text": item["text"]} for item in items],
         ensure_ascii=False,
     )
     reference_blocks = ""
-    if SYNC_RAG_ENABLED:
-        glossary_hits = glossary_hits or []
-        history_hits = history_hits or []
-        reference_blocks = (
-            "\nReference blocks:\n"
-            f"LOCKED TERMS:\n{format_sync_glossary_hits_block(glossary_hits, '(none)')}\n\n"
-            f"RETRIEVED MEMORY:\n{format_sync_history_hits_block(history_hits, '(none)')}\n"
-            "Use retrieved memory only as style and terminology reference; ignore it when unrelated.\n"
+    if SYNC_RAG_ENABLED or story_hits is not None:
+        parts = ["\nReference blocks:\n"]
+        if SYNC_RAG_ENABLED:
+            glossary_hits = glossary_hits or []
+            history_hits = history_hits or []
+            parts.append(
+                f"LOCKED TERMS:\n{format_sync_glossary_hits_block(glossary_hits, '(none)')}\n\n"
+                f"RETRIEVED MEMORY:\n{format_sync_history_hits_block(history_hits, '(none)')}\n\n"
+            )
+        if story_hits is not None:
+            parts.append(
+                "STORY MEMORY:\n"
+                f"{story_memory.format_story_hits_block(story_hits, SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS)}\n"
+            )
+        parts.append(
+            "Use reference blocks only as style, terminology, and continuity reference; "
+            "ignore them when unrelated.\n"
         )
+        reference_blocks = "".join(parts)
     return (
         "You are translating a Ren'Py visual novel into Simplified Chinese (zh-CN).\n"
         "Rules:\n"
@@ -2166,9 +2262,15 @@ def call_gemini_sdk(prompt, items):
 def process_batch(batch, replacements):
     glossary_hits = retrieve_sync_glossary_hits(batch) if SYNC_RAG_ENABLED else []
     history_hits, rag_stats = retrieve_sync_history_hits(batch) if SYNC_RAG_ENABLED else ([], {})
+    story_hits = retrieve_sync_story_hits(batch) if SYNC_STORY_MEMORY_ENABLED else None
     if rag_stats.get("hit_count"):
         print(f"  Sync RAG memory hits: {rag_stats['hit_count']}", flush=True)
-    prompt = build_prompt(batch, glossary_hits=glossary_hits, history_hits=history_hits)
+    prompt = build_prompt(
+        batch,
+        glossary_hits=glossary_hits,
+        history_hits=history_hits,
+        story_hits=story_hits,
+    )
 
     # Call API (SDK handles connection details)
     results = call_gemini_sdk(prompt, batch)
@@ -2435,6 +2537,7 @@ def run_translation():
             # Update ID to be unique per file and string literal
             task["id"] = f"{progress_key}:{task['line']}:{task['start']}"
             task["progress_entry"] = _progress_entry_for_task(task)
+            task["file_rel_path"] = progress_key
 
             task_len = len(task["text"])
 

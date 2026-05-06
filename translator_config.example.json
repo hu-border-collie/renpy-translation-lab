@@ -24,6 +24,14 @@
       "history_char_limit": 220,
       "update_on_success": true,
       "store_dir": ""
+    },
+    "story_memory": {
+      "enabled": false,
+      "graph_file": "logs/story_memory/story_graph.json",
+      "max_context_chars": 800,
+      "top_k_relations": 4,
+      "top_k_terms": 8,
+      "include_scene_summary": true
     }
   },
   "batch": {
@@ -49,6 +57,14 @@
       "bootstrap_on_build": true,
       "history_char_limit": 220,
       "store_dir": ""
+    },
+    "story_memory": {
+      "enabled": false,
+      "graph_file": "logs/story_memory/story_graph.json",
+      "max_context_chars": 1200,
+      "top_k_relations": 6,
+      "top_k_terms": 12,
+      "include_scene_summary": true
     }
   }
 }
