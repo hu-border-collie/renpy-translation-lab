@@ -2234,17 +2234,30 @@ def parse_repair_start_hint(item):
     raw_id = item.get('id')
     if not raw_id:
         return None
-    parts = str(raw_id).rsplit(':', 2)
-    if len(parts) != 3:
+    numeric_suffix = []
+    for part in reversed(str(raw_id).split(':')):
+        try:
+            numeric_suffix.append(int(part))
+        except (TypeError, ValueError):
+            break
+    numeric_suffix.reverse()
+    if len(numeric_suffix) < 2:
         return None
+
     try:
-        zero_based_line = int(parts[1])
-        start = int(parts[2])
+        item_line = int(item.get('line'))
     except (TypeError, ValueError):
         return None
-    if zero_based_line + 1 != item.get('line'):
-        return None
-    return start
+
+    candidates = []
+    if len(numeric_suffix) >= 3:
+        candidates.append((numeric_suffix[-3], numeric_suffix[-2]))
+    candidates.append((numeric_suffix[-2], numeric_suffix[-1]))
+
+    for line_hint, start in candidates:
+        if line_hint == item_line or line_hint + 1 == item_line:
+            return start
+    return None
 
 
 def find_repair_entry_for_item(item, candidates):

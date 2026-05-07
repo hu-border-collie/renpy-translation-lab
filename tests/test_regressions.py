@@ -863,6 +863,35 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual([item['text'] for item in jobs[0]['items']], ['Hello', 'World'])
         self.assertEqual(len({item['id'] for item in jobs[0]['items']}), 2)
 
+    def test_repair_jobs_parse_line_start_end_repair_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tl_dir = Path(tmp)
+            target_file = tl_dir / 'script.rpy'
+            duplicate_line = '    call screen test("Menu", "Menu")\n'
+            second_start = duplicate_line.rindex('"Menu"')
+            second_end = second_start + len('"Menu"')
+            target_file.write_text(
+                'label test:\n' + duplicate_line,
+                encoding='utf-8',
+            )
+            report_path = tl_dir / 'repair_failures.jsonl'
+            report_path.write_text(
+                json.dumps({
+                    'file': str(target_file.resolve()),
+                    'line': 2,
+                    'source': 'Menu',
+                    'id': f'{target_file.resolve()}:2:{second_start}:{second_end}',
+                }, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+
+            items = batch_mod.load_repair_report_items(str(report_path))
+            jobs, unresolved = batch_mod.build_repair_jobs(items, batch_size=2)
+
+        self.assertEqual(unresolved, [])
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]['items'][0]['start'], second_start)
+
 
 if __name__ == '__main__':
     unittest.main()
