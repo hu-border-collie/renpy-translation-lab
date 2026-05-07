@@ -16,15 +16,23 @@ import translator_runtime as runtime
 class TranslatorRuntimeRegressionTests(unittest.TestCase):
     def test_batch_module_import_has_no_stdout_or_directory_side_effects(self):
         sentinel_stdout = io.StringIO()
+        module_name = 'gemini_translate_batch'
+        original_module = sys.modules.pop(module_name, None)
+        try:
+            with (
+                mock.patch('sys.stdout', sentinel_stdout),
+                mock.patch('os.makedirs') as makedirs_mock,
+            ):
+                imported = importlib.import_module(module_name)
+                self.assertIs(sys.stdout, sentinel_stdout)
+                self.assertEqual(imported.BATCH_MACRO_SETTING, '')
 
-        with (
-            mock.patch('sys.stdout', sentinel_stdout),
-            mock.patch('os.makedirs') as makedirs_mock,
-        ):
-            importlib.reload(batch_mod)
-            self.assertIs(sys.stdout, sentinel_stdout)
-
-        makedirs_mock.assert_not_called()
+            makedirs_mock.assert_not_called()
+        finally:
+            if original_module is not None:
+                sys.modules[module_name] = original_module
+            else:
+                sys.modules.pop(module_name, None)
 
     def test_batch_cli_without_command_prints_help_without_submit(self):
         output = io.StringIO()
