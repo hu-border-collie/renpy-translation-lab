@@ -194,7 +194,6 @@ RENPY_NON_SPEAKER_NAMES = {
     "jump",
     "label",
     "menu",
-    "new",
     "old",
     "python",
     "renpy",
@@ -2076,7 +2075,8 @@ def build_prompt(items, glossary_hits=None, history_hits=None, story_hits=None):
         ensure_ascii=False,
     )
     reference_blocks = ""
-    if SYNC_RAG_ENABLED or story_hits is not None:
+    has_story_hits = story_memory.has_story_hits(story_hits)
+    if SYNC_RAG_ENABLED or has_story_hits:
         parts = ["\nReference blocks:\n"]
         if SYNC_RAG_ENABLED:
             glossary_hits = glossary_hits or []
@@ -2085,7 +2085,7 @@ def build_prompt(items, glossary_hits=None, history_hits=None, story_hits=None):
                 f"LOCKED TERMS:\n{format_sync_glossary_hits_block(glossary_hits, '(none)')}\n\n"
                 f"RETRIEVED MEMORY:\n{format_sync_history_hits_block(history_hits, '(none)')}\n\n"
             )
-        if story_hits is not None:
+        if has_story_hits:
             parts.append(
                 "STORY MEMORY:\n"
                 f"{story_memory.format_story_hits_block(story_hits, SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS)}\n"
@@ -2500,7 +2500,9 @@ def collect_tasks(lines, skip_translated=True):
                             "prefix": prefix,
                             "progress_entry": f"task:{idx}:{token.start[1]}",
                         }
-                        speaker_id = infer_dialogue_speaker_id(line, token.start[1])
+                        speaker_id = ""
+                        if not (is_translation_file and sline.startswith("new ")):
+                            speaker_id = infer_dialogue_speaker_id(line, token.start[1])
                         if speaker_id:
                             task["speaker_id"] = speaker_id
                             task["speaker"] = speaker_id

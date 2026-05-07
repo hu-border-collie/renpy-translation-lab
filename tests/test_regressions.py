@@ -28,6 +28,21 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(by_text['Hello Noah'].get('speaker'), 'e')
         self.assertNotIn('speaker_id', by_text['Start Game'])
 
+    def test_collect_tasks_allows_new_as_dialogue_speaker_id(self):
+        tasks = runtime.collect_tasks(['new "Hello Noah"\n'])
+
+        self.assertEqual(tasks[0].get('speaker_id'), 'new')
+
+    def test_collect_tasks_skips_new_speaker_id_in_translation_templates(self):
+        tasks = runtime.collect_tasks([
+            'translate schinese start_123:\n',
+            '    old "Hello Noah"\n',
+            '    new "Hello Noah"\n',
+        ])
+
+        self.assertEqual(len(tasks), 1)
+        self.assertNotIn('speaker_id', tasks[0])
+
     def test_infer_dialogue_speaker_skips_non_speaker_names(self):
         line = 'call e happy "Hello Noah"\n'
         self.assertEqual(
@@ -162,9 +177,21 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             sync_prompt = runtime.build_prompt(
                 [{'id': 'chapter1.rpy:0:1', 'text': 'Open the Void Gate'}],
             )
+            batch_empty_story_prompt = batch_mod.build_user_prompt(
+                [],
+                [{'id': 'chapter1.rpy:0:1', 'text': 'Open the Void Gate'}],
+                [],
+                story_hits={'characters': [], 'relations': [], 'terms': [], 'scenes': []},
+            )
+            sync_empty_story_prompt = runtime.build_prompt(
+                [{'id': 'chapter1.rpy:0:1', 'text': 'Open the Void Gate'}],
+                story_hits={'characters': [], 'relations': [], 'terms': [], 'scenes': []},
+            )
 
             self.assertNotIn('STORY MEMORY', batch_prompt)
             self.assertNotIn('STORY MEMORY', sync_prompt)
+            self.assertNotIn('STORY MEMORY', batch_empty_story_prompt)
+            self.assertNotIn('STORY MEMORY', sync_empty_story_prompt)
 
             batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS = 120
             prompt_with_story = batch_mod.build_user_prompt(

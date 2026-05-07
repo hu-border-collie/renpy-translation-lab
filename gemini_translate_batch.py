@@ -951,7 +951,7 @@ def build_user_prompt(
         f'LOCKED TERMS:\n{format_glossary_hits_block(glossary_hits, "(none)")}\n\n'
         f'RETRIEVED MEMORY:\n{format_history_hits_block(history_hits, "(none)")}\n\n',
     ]
-    if story_hits is not None:
+    if story_memory.has_story_hits(story_hits):
         blocks.append(
             'STORY MEMORY:\n'
             f'{story_memory.format_story_hits_block(story_hits, STORY_MEMORY_MAX_CONTEXT_CHARS)}\n\n'
@@ -1074,8 +1074,8 @@ def build_chunks(file_jobs):
                     for item in target_items
                 ],
             }
-            if STORY_MEMORY_ENABLED:
-                chunk['story_hits'] = story_hits or {}
+            if STORY_MEMORY_ENABLED and story_memory.has_story_hits(story_hits):
+                chunk['story_hits'] = story_hits
             chunks.append(chunk)
     return chunks
 
