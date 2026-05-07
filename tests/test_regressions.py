@@ -1,5 +1,8 @@
 import ast
+import importlib
+import io
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +14,76 @@ import translator_runtime as runtime
 
 
 class TranslatorRuntimeRegressionTests(unittest.TestCase):
+    def test_batch_module_import_has_no_stdout_or_directory_side_effects(self):
+        sentinel_stdout = io.StringIO()
+        module_name = 'gemini_translate_batch'
+        original_module = sys.modules.pop(module_name, None)
+        try:
+            with (
+                mock.patch('sys.stdout', sentinel_stdout),
+                mock.patch('os.makedirs') as makedirs_mock,
+            ):
+                imported = importlib.import_module(module_name)
+                self.assertIs(sys.stdout, sentinel_stdout)
+                self.assertEqual(imported.BATCH_MACRO_SETTING, '')
+
+            makedirs_mock.assert_not_called()
+        finally:
+            if original_module is not None:
+                sys.modules[module_name] = original_module
+            else:
+                sys.modules.pop(module_name, None)
+
+    def test_batch_cli_without_command_prints_help_without_submit(self):
+        output = io.StringIO()
+
+        with (
+            mock.patch('sys.stdout', output),
+            mock.patch.object(batch_mod, 'initialize_batch_logging') as logging_mock,
+            mock.patch.object(batch_mod.legacy, 'load_config') as load_config_mock,
+            mock.patch.object(batch_mod, 'submit_manifest') as submit_mock,
+        ):
+            batch_mod.main([])
+
+        self.assertIn('usage:', output.getvalue())
+        logging_mock.assert_not_called()
+        load_config_mock.assert_not_called()
+        submit_mock.assert_not_called()
+
+    def test_batch_cli_help_does_not_load_runtime_settings(self):
+        output = io.StringIO()
+
+        with (
+            mock.patch('sys.stdout', output),
+            mock.patch.object(batch_mod, 'initialize_batch_logging') as logging_mock,
+            mock.patch.object(batch_mod.legacy, 'load_config') as load_config_mock,
+            mock.patch.object(batch_mod.legacy, 'load_translator_settings') as settings_mock,
+            mock.patch.object(batch_mod.legacy, 'load_glossary') as glossary_mock,
+            mock.patch.object(batch_mod, 'load_batch_settings') as batch_settings_mock,
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                batch_mod.main(['--help'])
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn('usage:', output.getvalue())
+        logging_mock.assert_not_called()
+        load_config_mock.assert_not_called()
+        settings_mock.assert_not_called()
+        glossary_mock.assert_not_called()
+        batch_settings_mock.assert_not_called()
+
+    def test_batch_system_instruction_has_readable_empty_macro_default(self):
+        old_macro_setting = batch_mod.BATCH_MACRO_SETTING
+        try:
+            batch_mod.BATCH_MACRO_SETTING = ''
+            instruction = batch_mod.build_system_instruction()
+        finally:
+            batch_mod.BATCH_MACRO_SETTING = old_macro_setting
+
+        self.assertIn('Setting:', instruction)
+        setting_block = instruction.split('Task:', 1)[0]
+        self.assertNotIn('????', setting_block)
+
     def test_collect_tasks_keeps_distinct_entries_on_same_line(self):
         tasks = runtime.collect_tasks(['call screen test("Hello", "World")\n'])
         self.assertEqual(len(tasks), 2)
