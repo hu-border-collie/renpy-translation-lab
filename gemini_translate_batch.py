@@ -2468,7 +2468,7 @@ def load_repair_report_items(report_path):
                 line_number,
                 str(source_text),
                 str(row.get('id') or ''),
-                str(row.get('start') or ''),
+                str(row.get('start')),
             )
             if dedupe_key in seen:
                 continue
@@ -2508,7 +2508,7 @@ def build_repair_jobs(report_items, batch_size=2, context_before=2, context_afte
                 )
                 continue
             target = dict(item)
-            target['id'] = f"{file_path}:{entry['line_number']}"
+            target['id'] = f"{file_path}:{entry['line_number']}:{entry['start']}:{entry['end']}"
             target['text'] = item['source']
             target['start'] = entry['start']
             target['end'] = entry['end']
