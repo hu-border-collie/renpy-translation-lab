@@ -4,12 +4,7 @@ import os
 import re
 
 
-_EMPTY_GRAPH = {
-    "characters": {},
-    "relations": [],
-    "terms": [],
-    "scenes": [],
-}
+_NORMALIZED_GRAPH_MARKER = "_story_memory_normalized"
 
 
 def _empty_graph():
@@ -119,14 +114,21 @@ def _normalize_dict_list(value):
     return [dict(item) for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
+def _is_normalized_story_graph(value):
+    return isinstance(value, dict) and value.get(_NORMALIZED_GRAPH_MARKER) is True
+
+
 def normalize_story_graph(raw_graph):
     if not isinstance(raw_graph, dict):
         return _empty_graph()
+    if _is_normalized_story_graph(raw_graph):
+        return raw_graph
     return {
         "characters": _normalize_character_map(raw_graph.get("characters")),
         "relations": _normalize_dict_list(raw_graph.get("relations")),
         "terms": _normalize_terms(raw_graph.get("terms")),
         "scenes": _normalize_dict_list(raw_graph.get("scenes")),
+        _NORMALIZED_GRAPH_MARKER: True,
     }
 
 

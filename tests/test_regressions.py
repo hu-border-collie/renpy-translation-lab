@@ -35,6 +35,17 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             'e',
         )
 
+    def test_infer_dialogue_speaker_uses_inline_dialogue_segment(self):
+        line = 'if unlocked: e "Hello Noah"\n'
+        self.assertEqual(
+            runtime.infer_dialogue_speaker_id(line, line.index('"')),
+            'e',
+        )
+
+    def test_infer_dialogue_speaker_skips_define_expressions(self):
+        line = 'define e = Character("Eileen")\n'
+        self.assertEqual(runtime.infer_dialogue_speaker_id(line, line.index('"')), '')
+
     def test_quote_with_round_trips_prefixed_literals(self):
         prefix, quote = runtime.parse_string_literal_format('u"Hello"')
         literal = runtime.quote_with('\u4f60\u597d', quote, prefix=prefix)
@@ -193,6 +204,12 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             )
         )
         self.assertTrue(story_memory.has_story_hits({'terms': [{'source': 'Void Gate'}]}))
+
+    def test_story_memory_normalize_has_fast_path_for_normalized_graphs(self):
+        normalized = story_memory.normalize_story_graph({'terms': {'Void Gate': '\u865a\u7a7a\u95e8'}})
+
+        self.assertIs(story_memory.normalize_story_graph(normalized), normalized)
+        self.assertIn('Void Gate', normalized['terms'][0]['source'])
 
     def test_story_memory_uses_speaker_id_case_insensitively(self):
         graph = {

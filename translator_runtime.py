@@ -182,6 +182,8 @@ TL_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
 RENPLY_NON_SPEAKER_NAMES = {
     "_",
     "call",
+    "default",
+    "define",
     "elif",
     "else",
     "extend",
@@ -2421,6 +2423,9 @@ def infer_dialogue_speaker_id(line, string_start_col):
     prefix = (line[:string_start_col] or "").strip()
     if not prefix:
         return ""
+    prefix = prefix.rsplit(":", 1)[-1].strip()
+    if not prefix or any(marker in prefix for marker in ("=", "(", ")", "[", "]", "{", "}")):
+        return ""
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(prefix).readline))
     except Exception:
@@ -2429,7 +2434,7 @@ def infer_dialogue_speaker_id(line, string_start_col):
         if token.type != tokenize.NAME:
             continue
         candidate = token.string.strip()
-        if candidate and candidate not in RENPLY_NON_SPEAKER_NAMES:
+        if candidate and candidate.lower() not in RENPLY_NON_SPEAKER_NAMES:
             return candidate
     return ""
 
