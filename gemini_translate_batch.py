@@ -723,14 +723,15 @@ def load_manifest(target=None):
     return manifest
 
 
-def save_manifest(manifest):
+def save_manifest(manifest, update_latest=True):
     manifest_path = manifest['_manifest_path']
     data = dict(manifest)
     data.pop('_manifest_path', None)
     data.pop('_package_dir', None)
     with open(manifest_path, 'w', encoding='utf-8') as handle:
         json.dump(data, handle, ensure_ascii=False, indent=2)
-    remember_latest_manifest(manifest_path)
+    if update_latest:
+        remember_latest_manifest(manifest_path)
 
 
 
@@ -760,6 +761,37 @@ def summarize_files_for_chunks(chunks):
             }
         files[rel_path]['task_count'] += len(chunk.get('items', []))
     return files
+
+
+def copy_split_context_metadata(source_manifest, part_manifest, part_chunks):
+    for key in ('rag_enabled', 'rag_store_path', 'rag_settings'):
+        if key in source_manifest:
+            part_manifest[key] = source_manifest[key]
+
+    if source_manifest.get('rag_enabled'):
+        rag_summary = dict(source_manifest.get('rag_summary') or {})
+        rag_summary['chunks_with_glossary_hits'] = sum(
+            1 for chunk in part_chunks if chunk.get('glossary_hits')
+        )
+        rag_summary['chunks_with_history_hits'] = sum(
+            1 for chunk in part_chunks if chunk.get('history_hits')
+        )
+        part_manifest['rag_summary'] = rag_summary
+
+    for key in (
+        'story_memory_enabled',
+        'story_memory_graph_file',
+        'story_memory_settings',
+    ):
+        if key in source_manifest:
+            part_manifest[key] = source_manifest[key]
+
+    if source_manifest.get('story_memory_enabled'):
+        story_summary = dict(source_manifest.get('story_memory_summary') or {})
+        story_summary['chunks_with_story_hits'] = sum(
+            1 for chunk in part_chunks if story_memory.has_story_hits(chunk.get('story_hits'))
+        )
+        part_manifest['story_memory_summary'] = story_summary
 
 
 def split_chunks_and_lines(chunks, request_lines, max_chunks=0, max_items=0):
@@ -1308,6 +1340,7 @@ def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix
                 'max_items': max_items,
             },
         }
+        copy_split_context_metadata(manifest, part_manifest, part_chunks)
 
         part_manifest_path = os.path.join(part_dir, 'manifest.json')
         with open(part_manifest_path, 'w', encoding='utf-8') as handle:
@@ -1323,9 +1356,11 @@ def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix
     manifest['split_children'] = created_manifests
     manifest['split_generated_at'] = now
     manifest['job_state'] = 'LOCAL_SPLIT_SOURCE'
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=False)
+    remember_latest_manifest(created_manifests[0])
 
     print(f'Source manifest updated: {manifest["_manifest_path"]}')
+    print(f'Latest manifest set to first split package: {created_manifests[0]}')
     return created_manifests
 
 def submit_manifest(target=None, display_name_override='', model_override=''):
@@ -1788,11 +1823,15 @@ def collect_result_actions(manifest):
 
             seen_ids = set()
             for result_item in result_items:
-                target_item = item_map.get(result_item['id'])
+                result_id = result_item['id']
+                target_item = item_map.get(result_id)
                 if not target_item:
                     bump_counter(summary['reason_counts'], 'schema_or_item_mismatch')
                     continue
-                seen_ids.add(result_item['id'])
+                if result_id in seen_ids:
+                    bump_counter(summary['reason_counts'], 'duplicate_result_id')
+                    continue
+                seen_ids.add(result_id)
 
                 valid, reason = legacy.validate_translation(target_item['text'], result_item['translation'])
                 if not valid and reason == 'No Chinese characters' and allow_non_chinese_batch_translation(
@@ -2154,6 +2193,94 @@ def collect_translation_entries_from_lines(lines):
     return entries
 
 
+def collect_repair_entries_from_lines(lines):
+    entries = collect_translation_entries_from_lines(lines)
+    seen_spans = {
+        (entry.get('line_number'), entry.get('start'), entry.get('end'))
+        for entry in entries
+    }
+
+    for task in legacy.collect_tasks(lines):
+        span = (int(task['line']) + 1, task.get('start'), task.get('end'))
+        if span in seen_spans:
+            continue
+        seen_spans.add(span)
+        entries.append(
+            {
+                'line_number': span[0],
+                'source': task.get('text', ''),
+                'translation': task.get('text', ''),
+                'start': task.get('start', 0),
+                'end': task.get('end', 0),
+                'prefix': task.get('prefix', ''),
+                'quote': task.get('quote', '"'),
+            }
+        )
+
+    entries.sort(key=lambda entry: (entry.get('line_number', 0), entry.get('start', 0), entry.get('end', 0)))
+    for entry_index, entry in enumerate(entries):
+        entry['entry_index'] = entry_index
+    return entries
+
+
+def parse_repair_start_hint(item):
+    for key in ('start', 'column', 'col'):
+        try:
+            if item.get(key) is not None:
+                return int(item.get(key))
+        except (TypeError, ValueError):
+            pass
+
+    raw_id = item.get('id')
+    if not raw_id:
+        return None
+    numeric_suffix = []
+    for part in reversed(str(raw_id).split(':')):
+        try:
+            numeric_suffix.append(int(part))
+        except (TypeError, ValueError):
+            break
+    numeric_suffix.reverse()
+    if len(numeric_suffix) < 2:
+        return None
+
+    try:
+        item_line = int(item.get('line'))
+    except (TypeError, ValueError):
+        return None
+
+    candidates = []
+    if len(numeric_suffix) >= 3:
+        candidates.append((numeric_suffix[-3], numeric_suffix[-2]))
+    candidates.append((numeric_suffix[-2], numeric_suffix[-1]))
+
+    for line_hint, start in candidates:
+        if line_hint == item_line or line_hint + 1 == item_line:
+            return start
+    return None
+
+
+def find_repair_entry_for_item(item, candidates):
+    if not candidates:
+        return None
+    source = item.get('source', '')
+    start_hint = parse_repair_start_hint(item)
+
+    if start_hint is not None:
+        for candidate in candidates:
+            if candidate.get('start') == start_hint and candidate.get('source') == source:
+                return candidate
+        for candidate in candidates:
+            if candidate.get('start') == start_hint:
+                return candidate
+
+    for candidate in candidates:
+        if candidate.get('source') == source or candidate.get('translation') == source:
+            return candidate
+
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def should_index_rag_entry(entry):
     source = compact_text(entry.get('source', ''))
     translation = compact_text(entry.get('translation', ''))
@@ -2349,7 +2476,13 @@ def load_repair_report_items(report_path):
             normalized_row['line'] = line_number
             normalized_row['source'] = source_text
 
-            dedupe_key = (file_path, line_number)
+            dedupe_key = (
+                file_path,
+                line_number,
+                str(source_text),
+                str(row.get('id') or ''),
+                str(row.get('start')),
+            )
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
@@ -2369,12 +2502,14 @@ def build_repair_jobs(report_items, batch_size=2, context_before=2, context_afte
         file_items = sorted(items_by_file[file_path], key=lambda item: item['line'])
         with open(file_path, 'r', encoding='utf-8-sig') as handle:
             lines = handle.readlines()
-        entries = collect_translation_entries_from_lines(lines)
-        line_map = {entry['line_number']: entry for entry in entries}
+        entries = collect_repair_entries_from_lines(lines)
+        line_map = {}
+        for entry in entries:
+            line_map.setdefault(entry['line_number'], []).append(entry)
 
         targets = []
         for item in file_items:
-            entry = line_map.get(item['line'])
+            entry = find_repair_entry_for_item(item, line_map.get(item['line'], []))
             if not entry:
                 unresolved.append(
                     {
@@ -2386,7 +2521,7 @@ def build_repair_jobs(report_items, batch_size=2, context_before=2, context_afte
                 )
                 continue
             target = dict(item)
-            target['id'] = f"{file_path}:{entry['line_number']}"
+            target['id'] = f"{file_path}:{entry['line_number']}:{entry['start']}:{entry['end']}"
             target['text'] = item['source']
             target['start'] = entry['start']
             target['end'] = entry['end']
