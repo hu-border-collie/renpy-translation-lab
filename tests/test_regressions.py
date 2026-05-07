@@ -655,6 +655,126 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
 
 
 class BatchRepairRegressionTests(unittest.TestCase):
+    def test_split_manifest_keeps_first_child_latest_and_context_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_dir = root / 'package'
+            package_dir.mkdir()
+            input_path = package_dir / 'requests.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            latest_path = root / 'latest_manifest.txt'
+            chunks = [
+                {
+                    'key': 'chunk-1',
+                    'file_rel_path': 'script.rpy',
+                    'file_path': str(root / 'script.rpy'),
+                    'items': [{'id': 'script.rpy:0:4', 'text': 'Hello'}],
+                    'history_hits': [{'source_text': 'Hello', 'translated_text': '\u4f60\u597d'}],
+                    'story_hits': {'terms': [{'source': 'Void Gate', 'target': '\u865a\u7a7a\u95e8'}]},
+                },
+                {
+                    'key': 'chunk-2',
+                    'file_rel_path': 'script.rpy',
+                    'file_path': str(root / 'script.rpy'),
+                    'items': [{'id': 'script.rpy:1:4', 'text': 'World'}],
+                },
+            ]
+            input_path.write_text(
+                json.dumps({'key': 'chunk-1', 'request': {}}, ensure_ascii=False) + '\n' +
+                json.dumps({'key': 'chunk-2', 'request': {}}, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'version': 1,
+                        'display_name': 'demo',
+                        'batch_model': 'gemini-test',
+                        'input_jsonl_path': str(input_path),
+                        'settings': {'target_size': 1},
+                        'rag_enabled': True,
+                        'rag_store_path': str(root / 'rag_store'),
+                        'rag_settings': {'top_k_history': 4},
+                        'rag_summary': {'chunks_with_history_hits': 1},
+                        'story_memory_enabled': True,
+                        'story_memory_graph_file': str(root / 'story_graph.json'),
+                        'story_memory_settings': {'top_k_terms': 8},
+                        'story_memory_summary': {'chunks_with_story_hits': 1},
+                        'chunks': chunks,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            with mock.patch.object(batch_mod, 'LATEST_MANIFEST_FILE', str(latest_path)):
+                created = batch_mod.split_manifest(str(manifest_path), max_chunks=1)
+
+            self.assertEqual(latest_path.read_text(encoding='utf-8'), created[0])
+            source_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            self.assertEqual(source_manifest['job_state'], 'LOCAL_SPLIT_SOURCE')
+            first_child = json.loads(Path(created[0]).read_text(encoding='utf-8'))
+            self.assertTrue(first_child['rag_enabled'])
+            self.assertEqual(first_child['rag_settings'], {'top_k_history': 4})
+            self.assertTrue(first_child['story_memory_enabled'])
+            self.assertEqual(first_child['story_memory_settings'], {'top_k_terms': 8})
+            self.assertEqual(first_child['rag_summary']['chunks_with_history_hits'], 1)
+            self.assertEqual(first_child['story_memory_summary']['chunks_with_story_hits'], 1)
+
+    def test_collect_result_actions_ignores_duplicate_result_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            result_path = package_dir / 'results.jsonl'
+            response_text = json.dumps(
+                [
+                    {'id': 'script.rpy:0:4', 'translation': '\u4f60\u597d'},
+                    {'id': 'script.rpy:0:4', 'translation': '\u518d\u89c1'},
+                ],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'chunk-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest = {
+                '_package_dir': str(package_dir),
+                'result_jsonl_path': str(result_path),
+                'chunks': [
+                    {
+                        'key': 'chunk-1',
+                        'file_rel_path': 'script.rpy',
+                        'items': [
+                            {
+                                'id': 'script.rpy:0:4',
+                                'line': 0,
+                                'start': 4,
+                                'end': 11,
+                                'text': 'Hello',
+                                'prefix': '',
+                                'quote': '"',
+                            }
+                        ],
+                    }
+                ],
+            }
+
+            replacements, _translated, failures, summary = batch_mod.collect_result_actions(manifest)
+
+        self.assertEqual(summary['valid_items'], 1)
+        self.assertEqual(summary['reason_counts']['duplicate_result_id'], 1)
+        self.assertEqual(len(replacements['script.rpy'][0]), 1)
+        self.assertEqual(failures, [])
+
     def test_load_repair_report_items_accepts_batch_failure_log_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
             tl_dir = Path(tmp)
@@ -678,6 +798,99 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(items[0]['file'], str(target_file.resolve()))
         self.assertEqual(items[0]['source'], 'Hello')
         self.assertEqual(items[0]['line'], 1)
+
+    def test_load_repair_report_items_distinguishes_start_zero_from_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tl_dir = Path(tmp)
+            target_file = tl_dir / 'script.rpy'
+            target_file.write_text('label test:\n    "Menu"\n', encoding='utf-8')
+            report_path = tl_dir / 'failures.jsonl'
+            report_path.write_text(
+                json.dumps({
+                    'file_rel_path': 'script.rpy',
+                    'line': 1,
+                    'text': 'Menu',
+                }, ensure_ascii=False) + '\n' +
+                json.dumps({
+                    'file_rel_path': 'script.rpy',
+                    'line': 1,
+                    'text': 'Menu',
+                    'start': 0,
+                }, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                items = batch_mod.load_repair_report_items(str(report_path))
+
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0].get('start'), None)
+        self.assertEqual(items[1]['start'], 0)
+
+    def test_repair_jobs_keep_multiple_items_on_same_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tl_dir = Path(tmp)
+            target_file = tl_dir / 'script.rpy'
+            target_file.write_text(
+                'label test:\n'
+                '    call screen test("Hello", "World")\n',
+                encoding='utf-8',
+            )
+            report_path = tl_dir / 'failures.jsonl'
+            report_path.write_text(
+                json.dumps({
+                    'file_rel_path': 'script.rpy',
+                    'line': 1,
+                    'text': 'Hello',
+                    'id': 'script.rpy:1:21',
+                }, ensure_ascii=False) + '\n' +
+                json.dumps({
+                    'file_rel_path': 'script.rpy',
+                    'line': 1,
+                    'text': 'World',
+                    'id': 'script.rpy:1:30',
+                }, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                items = batch_mod.load_repair_report_items(str(report_path))
+                jobs, unresolved = batch_mod.build_repair_jobs(items, batch_size=2)
+
+        self.assertEqual([item['source'] for item in items], ['Hello', 'World'])
+        self.assertEqual(unresolved, [])
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual([item['text'] for item in jobs[0]['items']], ['Hello', 'World'])
+        self.assertEqual(len({item['id'] for item in jobs[0]['items']}), 2)
+
+    def test_repair_jobs_parse_line_start_end_repair_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tl_dir = Path(tmp)
+            target_file = tl_dir / 'script.rpy'
+            duplicate_line = '    call screen test("Menu", "Menu")\n'
+            second_start = duplicate_line.rindex('"Menu"')
+            second_end = second_start + len('"Menu"')
+            target_file.write_text(
+                'label test:\n' + duplicate_line,
+                encoding='utf-8',
+            )
+            report_path = tl_dir / 'repair_failures.jsonl'
+            report_path.write_text(
+                json.dumps({
+                    'file': str(target_file.resolve()),
+                    'line': 2,
+                    'source': 'Menu',
+                    'id': f'{target_file.resolve()}:2:{second_start}:{second_end}',
+                }, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+
+            items = batch_mod.load_repair_report_items(str(report_path))
+            jobs, unresolved = batch_mod.build_repair_jobs(items, batch_size=2)
+
+        self.assertEqual(unresolved, [])
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]['items'][0]['start'], second_start)
 
 
 if __name__ == '__main__':
