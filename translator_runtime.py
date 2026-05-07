@@ -165,8 +165,8 @@ NON_TRANSLATABLE_EXACT = {
 
 NON_TRANSLATABLE_TAG_ONLY = re.compile(r"^\{[^}]+\}$")
 NON_TRANSLATABLE_SYMBOLS = re.compile(r"^[^A-Za-z0-9\u4e00-\u9fff]+$")
-RENPLY_TAG_RE = re.compile(r"\{[^}]*\}")
-RENPLY_FIELD_RE = re.compile(r"\[[^\]]+\]")
+RENPY_TAG_RE = re.compile(r"\{[^}]*\}")
+RENPY_FIELD_RE = re.compile(r"\[[^\]]+\]")
 WORD_TOKEN_RE = re.compile(r"[A-Za-z]+")
 VOWEL_RE = re.compile(r"[aeiou]", re.IGNORECASE)
 REPEATED_CHAR_RE = re.compile(r"(.)\\1{2,}")
@@ -1441,8 +1441,8 @@ def is_english_like(text):
 
 
 def is_name_hint(text):
-    cleaned = RENPLY_TAG_RE.sub("", text or "")
-    cleaned = RENPLY_FIELD_RE.sub("", cleaned)
+    cleaned = RENPY_TAG_RE.sub("", text or "")
+    cleaned = RENPY_FIELD_RE.sub("", cleaned)
     cleaned = cleaned.strip()
     if not cleaned:
         return False
@@ -1460,8 +1460,8 @@ def is_name_hint(text):
 
 
 def is_sound_name_hint(text):
-    cleaned = RENPLY_TAG_RE.sub("", text or "")
-    cleaned = RENPLY_FIELD_RE.sub("", cleaned)
+    cleaned = RENPY_TAG_RE.sub("", text or "")
+    cleaned = RENPY_FIELD_RE.sub("", cleaned)
     cleaned = cleaned.strip()
     if not cleaned:
         return False
@@ -1489,8 +1489,8 @@ def is_sound_name_hint(text):
 
 
 def is_name_like(text):
-    cleaned = RENPLY_TAG_RE.sub("", text or "")
-    cleaned = RENPLY_FIELD_RE.sub("", cleaned)
+    cleaned = RENPY_TAG_RE.sub("", text or "")
+    cleaned = RENPY_FIELD_RE.sub("", cleaned)
     cleaned = cleaned.strip()
     if not cleaned:
         return False
@@ -1506,8 +1506,8 @@ def is_name_like(text):
 def is_short_effect(text):
     if not text:
         return False
-    cleaned = RENPLY_TAG_RE.sub("", text)
-    cleaned = RENPLY_FIELD_RE.sub("", cleaned)
+    cleaned = RENPY_TAG_RE.sub("", text)
+    cleaned = RENPY_FIELD_RE.sub("", cleaned)
     cleaned = cleaned.strip()
     if not cleaned:
         return True
@@ -1546,8 +1546,8 @@ def apply_normalization(text):
 
 
 def _extract_word_tokens(text):
-    cleaned = RENPLY_TAG_RE.sub("", text or "")
-    cleaned = RENPLY_FIELD_RE.sub("", cleaned)
+    cleaned = RENPY_TAG_RE.sub("", text or "")
+    cleaned = RENPY_FIELD_RE.sub("", cleaned)
     return [token.lower() for token in WORD_TOKEN_RE.findall(cleaned)]
 
 
