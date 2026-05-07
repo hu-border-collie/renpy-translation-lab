@@ -799,6 +799,34 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(items[0]['source'], 'Hello')
         self.assertEqual(items[0]['line'], 1)
 
+    def test_load_repair_report_items_distinguishes_start_zero_from_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tl_dir = Path(tmp)
+            target_file = tl_dir / 'script.rpy'
+            target_file.write_text('label test:\n    "Menu"\n', encoding='utf-8')
+            report_path = tl_dir / 'failures.jsonl'
+            report_path.write_text(
+                json.dumps({
+                    'file_rel_path': 'script.rpy',
+                    'line': 1,
+                    'text': 'Menu',
+                }, ensure_ascii=False) + '\n' +
+                json.dumps({
+                    'file_rel_path': 'script.rpy',
+                    'line': 1,
+                    'text': 'Menu',
+                    'start': 0,
+                }, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                items = batch_mod.load_repair_report_items(str(report_path))
+
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0].get('start'), None)
+        self.assertEqual(items[1]['start'], 0)
+
     def test_repair_jobs_keep_multiple_items_on_same_line(self):
         with tempfile.TemporaryDirectory() as tmp:
             tl_dir = Path(tmp)
@@ -833,6 +861,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(unresolved, [])
         self.assertEqual(len(jobs), 1)
         self.assertEqual([item['text'] for item in jobs[0]['items']], ['Hello', 'World'])
+        self.assertEqual(len({item['id'] for item in jobs[0]['items']}), 2)
 
 
 if __name__ == '__main__':
