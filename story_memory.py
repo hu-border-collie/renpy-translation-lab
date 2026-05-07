@@ -4,23 +4,25 @@ import os
 import re
 
 
-_NORMALIZED_GRAPH_MARKER = "_story_memory_normalized"
+class _NormalizedStoryGraph(dict):
+    pass
 
 
 def _empty_graph():
-    return {
+    return _NormalizedStoryGraph({
         "characters": {},
         "relations": [],
         "terms": [],
         "scenes": [],
-    }
+    })
 
 
 def _normalize_rel_path(value):
     if not value:
         return ""
     text = str(value).replace("\\", "/").strip()
-    text = text.lstrip("./")
+    while text.startswith("./"):
+        text = text[2:]
     text = text.lstrip("/")
     return text
 
@@ -115,7 +117,7 @@ def _normalize_dict_list(value):
 
 
 def _is_normalized_story_graph(value):
-    return isinstance(value, dict) and value.get(_NORMALIZED_GRAPH_MARKER) is True
+    return isinstance(value, _NormalizedStoryGraph)
 
 
 def normalize_story_graph(raw_graph):
@@ -123,13 +125,12 @@ def normalize_story_graph(raw_graph):
         return _empty_graph()
     if _is_normalized_story_graph(raw_graph):
         return raw_graph
-    return {
+    return _NormalizedStoryGraph({
         "characters": _normalize_character_map(raw_graph.get("characters")),
         "relations": _normalize_dict_list(raw_graph.get("relations")),
         "terms": _normalize_terms(raw_graph.get("terms")),
         "scenes": _normalize_dict_list(raw_graph.get("scenes")),
-        _NORMALIZED_GRAPH_MARKER: True,
-    }
+    })
 
 
 def load_story_graph(path):
@@ -143,7 +144,7 @@ def load_story_graph(path):
         return _empty_graph()
 
 
-def _item_texts(items):
+def _texts_from_items(items):
     texts = []
     for item in items or []:
         if isinstance(item, dict):
@@ -155,23 +156,11 @@ def _item_texts(items):
     return texts
 
 
-def _context_texts(context):
-    texts = []
-    for item in context or []:
-        if isinstance(item, dict):
-            text = _clean_text(item.get("text"))
-        else:
-            text = _clean_text(item)
-        if text:
-            texts.append(text)
-    return texts
-
-
 def _combined_search_text(target_items, context_past, context_future):
     parts = []
-    parts.extend(_context_texts(context_past))
-    parts.extend(_item_texts(target_items))
-    parts.extend(_context_texts(context_future))
+    parts.extend(_texts_from_items(context_past))
+    parts.extend(_texts_from_items(target_items))
+    parts.extend(_texts_from_items(context_future))
     return "\n".join(parts)
 
 

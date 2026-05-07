@@ -210,6 +210,11 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
 
         self.assertIs(story_memory.normalize_story_graph(normalized), normalized)
         self.assertIn('Void Gate', normalized['terms'][0]['source'])
+        self.assertNotIn('_story_memory_normalized', json.dumps(normalized))
+
+    def test_story_memory_rel_path_preserves_parent_segments(self):
+        self.assertEqual(story_memory._normalize_rel_path('./chapter1.rpy'), 'chapter1.rpy')
+        self.assertEqual(story_memory._normalize_rel_path('../chapter1.rpy'), '../chapter1.rpy')
 
     def test_story_memory_uses_speaker_id_case_insensitively(self):
         graph = {
