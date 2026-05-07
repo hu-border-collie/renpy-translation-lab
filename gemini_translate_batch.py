@@ -34,11 +34,7 @@ PROGRESS_LOG = os.path.join(LOG_DIR, 'translation_progress_batch.json')
 CONSOLE_LOG = os.path.join(LOG_DIR, 'translation_batch_console_output.log')
 BATCH_JOBS_DIR = os.path.join(LOG_DIR, 'batch_jobs')
 LATEST_MANIFEST_FILE = os.path.join(BATCH_JOBS_DIR, 'latest_manifest.txt')
-
-os.makedirs(LOG_DIR, exist_ok=True)
-os.makedirs(BATCH_JOBS_DIR, exist_ok=True)
 REPAIR_RUNS_DIR = os.path.join(LOG_DIR, 'repair_runs')
-os.makedirs(REPAIR_RUNS_DIR, exist_ok=True)
 
 
 class DualLogger(object):
@@ -56,7 +52,17 @@ class DualLogger(object):
         self.log.flush()
 
 
-sys.stdout = DualLogger(CONSOLE_LOG)
+def ensure_batch_dirs():
+    os.makedirs(LOG_DIR, exist_ok=True)
+    os.makedirs(BATCH_JOBS_DIR, exist_ok=True)
+    os.makedirs(REPAIR_RUNS_DIR, exist_ok=True)
+
+
+def initialize_batch_logging():
+    if isinstance(sys.stdout, DualLogger):
+        return
+    ensure_batch_dirs()
+    sys.stdout = DualLogger(CONSOLE_LOG)
 
 BATCH_MODEL = 'gemini-3-flash-preview'
 BATCH_TARGET_SIZE = 4
@@ -66,10 +72,7 @@ BATCH_MAX_OUTPUT_TOKENS = 4096
 BATCH_TEMPERATURE = 0.2
 BATCH_THINKING_LEVEL = 'minimal'
 BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
-BATCH_MACRO_SETTING = (
-    '???? Ren\'Py ???????????????????????????'
-    '??????????????????'
-)
+BATCH_MACRO_SETTING = ''
 
 RAG_ENABLED = False
 RAG_STORE_DIR = ''
@@ -292,10 +295,6 @@ def load_batch_settings():
     _STORY_GRAPH = None
     _STORY_GRAPH_PATH = ''
 
-
-load_batch_settings()
-
-
 def load_progress():
     if not os.path.exists(PROGRESS_LOG):
         return {}
@@ -307,6 +306,7 @@ def load_progress():
 
 
 def save_progress(progress):
+    ensure_batch_dirs()
     with open(PROGRESS_LOG, 'w', encoding='utf-8') as handle:
         json.dump(progress, handle, ensure_ascii=False, indent=2)
 
@@ -710,6 +710,7 @@ def manifest_path_for_target(target):
 
 
 def remember_latest_manifest(manifest_path):
+    ensure_batch_dirs()
     with open(LATEST_MANIFEST_FILE, 'w', encoding='utf-8') as handle:
         handle.write(manifest_path)
 
@@ -1670,6 +1671,7 @@ def append_failure_entries(entries, package_dir=''):
     if not entries:
         return
 
+    ensure_batch_dirs()
     paths = [FAILED_LOG]
     if package_dir:
         paths.append(os.path.join(package_dir, 'failures.jsonl'))
@@ -3044,16 +3046,20 @@ def build_arg_parser():
     return parser
 
 
-def main():
+def main(argv=None):
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    command = args.command
+    if command is None:
+        parser.print_help()
+        return
+
+    initialize_batch_logging()
     legacy.load_config()
     legacy.load_translator_settings()
     legacy.load_glossary()
     load_batch_settings()
     print_banner()
-
-    parser = build_arg_parser()
-    args = parser.parse_args()
-    command = args.command or 'submit'
 
     if command == 'build':
         create_batch_package(
