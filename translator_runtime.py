@@ -179,7 +179,7 @@ STRING_LITERAL_PREFIX_RE = re.compile(r"(?is)^(?P<prefix>[rubf]*)(?P<quote>'''|\
 TL_COMMENT_SOURCE_RE = re.compile(r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"\s*$')
 TL_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 TL_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
-RENPLY_NON_SPEAKER_NAMES = {
+RENPY_NON_SPEAKER_NAMES = {
     "_",
     "call",
     "default",
@@ -2434,7 +2434,7 @@ def infer_dialogue_speaker_id(line, string_start_col):
         if token.type != tokenize.NAME:
             continue
         candidate = token.string.strip()
-        if candidate and candidate.lower() not in RENPLY_NON_SPEAKER_NAMES:
+        if candidate and candidate.lower() not in RENPY_NON_SPEAKER_NAMES:
             return candidate
     return ""
 
