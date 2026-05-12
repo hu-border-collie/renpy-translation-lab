@@ -1746,7 +1746,7 @@ def append_failure_entries(entries, package_dir=''):
             print(f'Warning: Could not write failure log {path}: {exc}')
 
 
-def extract_string_token_at(line, start, end):
+def extract_string_token_text_at(line, start, end):
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
     except Exception:
@@ -1762,14 +1762,7 @@ def extract_string_token_at(line, start, end):
             return None
         if not isinstance(text_value, str):
             return None
-        prefix, quote = legacy.parse_string_literal_format(token.string)
-        return {
-            'text': text_value,
-            'start': token.start[1],
-            'end': token.end[1],
-            'prefix': prefix,
-            'quote': quote,
-        }
+        return text_value
     return None
 
 
@@ -1799,7 +1792,7 @@ def make_failure_entry(manifest, error, file_rel_path='', item_id='', line=None,
     return entry
 
 
-def validate_result_replacements(manifest, replacements_by_file, translated_lines_by_file, summary):
+def validate_result_replacements(manifest, replacements_by_file, summary):
     validated_replacements = {}
     validated_lines_by_file = {}
     failure_entries = []
@@ -1872,8 +1865,8 @@ def validate_result_replacements(manifest, replacements_by_file, translated_line
                     ))
                     continue
 
-                token = extract_string_token_at(lines[line_idx], start, end)
-                if not token or token.get('text') != source_text:
+                current_text = extract_string_token_text_at(lines[line_idx], start, end)
+                if current_text != source_text:
                     skipped_items += 1
                     source_mismatch_items += 1
                     bump_counter(summary['reason_counts'], 'source_text_mismatch')
@@ -1887,7 +1880,7 @@ def validate_result_replacements(manifest, replacements_by_file, translated_line
                         key=chunk_key,
                         start=start,
                         end=end,
-                        current_text=token.get('text') if token else '',
+                        current_text=current_text if current_text is not None else '',
                     ))
                     continue
 
@@ -2152,7 +2145,6 @@ def collect_result_actions(manifest, validate_sources=False):
         replacements_by_file, translated_lines_by_file, validation_failures = validate_result_replacements(
             manifest,
             replacements_by_file,
-            translated_lines_by_file,
             summary,
         )
         failure_entries.extend(validation_failures)
