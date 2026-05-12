@@ -1746,7 +1746,191 @@ def append_failure_entries(entries, package_dir=''):
             print(f'Warning: Could not write failure log {path}: {exc}')
 
 
-def collect_result_actions(manifest):
+def extract_string_token_text_at(line, start, end):
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
+    except Exception:
+        return None
+    for token in tokens:
+        if token.type != tokenize.STRING:
+            continue
+        if token.start[1] != start or token.end[1] != end:
+            continue
+        try:
+            text_value = ast.literal_eval(token.string)
+        except Exception:
+            return None
+        if not isinstance(text_value, str):
+            return None
+        return text_value
+    return None
+
+
+def unpack_replacement_for_validation(replacement):
+    start, end, translated, prefix, quote = replacement[:5]
+    source_text = replacement[5] if len(replacement) > 5 else ''
+    item_id = replacement[6] if len(replacement) > 6 else ''
+    chunk_key = replacement[7] if len(replacement) > 7 else ''
+    return start, end, translated, prefix, quote, source_text, item_id, chunk_key
+
+
+def make_failure_entry(manifest, error, file_rel_path='', item_id='', line=None, text='', **extra):
+    entry = {
+        'timestamp': datetime.now().isoformat(timespec='seconds'),
+        'package': manifest.get('_package_dir', ''),
+        'error': error,
+    }
+    if file_rel_path:
+        entry['file_rel_path'] = file_rel_path
+    if item_id:
+        entry['id'] = item_id
+    if line is not None:
+        entry['line'] = line
+    if text:
+        entry['text'] = text
+    entry.update(extra)
+    return entry
+
+
+def validate_replacements_for_lines(manifest, file_key, replacements_by_line, lines, summary):
+    validated_replacements = {}
+    validated_lines = set()
+    failure_entries = []
+    skipped_items = 0
+    source_mismatch_items = 0
+
+    for line_idx, repls in replacements_by_line.items():
+        for repl in repls:
+            start, end, _translated, _prefix, _quote, source_text, item_id, chunk_key = unpack_replacement_for_validation(repl)
+            if line_idx < 0 or line_idx >= len(lines):
+                skipped_items += 1
+                bump_counter(summary['reason_counts'], 'source_line_missing')
+                failure_entries.append(make_failure_entry(
+                    manifest,
+                    'Source line missing during source validation',
+                    file_rel_path=file_key,
+                    item_id=item_id,
+                    line=line_idx,
+                    text=source_text,
+                    key=chunk_key,
+                    start=start,
+                    end=end,
+                ))
+                continue
+
+            current_text = extract_string_token_text_at(lines[line_idx], start, end)
+            if current_text != source_text:
+                skipped_items += 1
+                source_mismatch_items += 1
+                bump_counter(summary['reason_counts'], 'source_text_mismatch')
+                failure_entries.append(make_failure_entry(
+                    manifest,
+                    'Source text mismatch during source validation',
+                    file_rel_path=file_key,
+                    item_id=item_id,
+                    line=line_idx,
+                    text=source_text,
+                    key=chunk_key,
+                    start=start,
+                    end=end,
+                    current_text=current_text if current_text is not None else '',
+                ))
+                continue
+
+            validated_replacements.setdefault(line_idx, []).append(repl)
+            validated_lines.add(line_idx)
+
+    return validated_replacements, validated_lines, failure_entries, skipped_items, source_mismatch_items
+
+
+def validate_result_replacements(manifest, replacements_by_file, summary):
+    validated_replacements = {}
+    validated_lines_by_file = {}
+    failure_entries = []
+    skipped_items = 0
+    source_mismatch_items = 0
+    candidate_items = summary.get('valid_items', 0)
+    files_info = manifest.get('files') or {}
+
+    for file_key, replacements_by_line in replacements_by_file.items():
+        file_info = files_info.get(file_key)
+        if not file_info:
+            for line_idx, repls in replacements_by_line.items():
+                for repl in repls:
+                    start, end, _translated, _prefix, _quote, source_text, item_id, chunk_key = unpack_replacement_for_validation(repl)
+                    skipped_items += 1
+                    bump_counter(summary['reason_counts'], 'missing_manifest_file')
+                    failure_entries.append(make_failure_entry(
+                        manifest,
+                        'Manifest file entry missing for result item',
+                        file_rel_path=file_key,
+                        item_id=item_id,
+                        line=line_idx,
+                        text=source_text,
+                        key=chunk_key,
+                        start=start,
+                        end=end,
+                    ))
+            continue
+
+        file_path = resolve_manifest_file_path(manifest, file_key, file_info)
+        if not os.path.isfile(file_path):
+            for line_idx, repls in replacements_by_line.items():
+                for repl in repls:
+                    start, end, _translated, _prefix, _quote, source_text, item_id, chunk_key = unpack_replacement_for_validation(repl)
+                    skipped_items += 1
+                    bump_counter(summary['reason_counts'], 'target_file_missing')
+                    failure_entries.append(make_failure_entry(
+                        manifest,
+                        'Target file missing during source validation',
+                        file_rel_path=file_key,
+                        item_id=item_id,
+                        line=line_idx,
+                        text=source_text,
+                        key=chunk_key,
+                        start=start,
+                        end=end,
+                        file=file_path,
+                    ))
+            continue
+
+        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+            lines = handle.readlines()
+
+        file_replacements, file_lines, file_failures, file_skipped, file_mismatches = validate_replacements_for_lines(
+            manifest,
+            file_key,
+            replacements_by_line,
+            lines,
+            summary,
+        )
+        if file_replacements:
+            validated_replacements[file_key] = file_replacements
+            validated_lines_by_file[file_key] = file_lines
+        failure_entries.extend(file_failures)
+        skipped_items += file_skipped
+        source_mismatch_items += file_mismatches
+
+    pending_files = len(validated_replacements)
+    pending_lines = sum(len(lines) for lines in validated_lines_by_file.values())
+    summary['candidate_valid_items'] = candidate_items
+    summary['valid_items'] = candidate_items - skipped_items
+    summary['source_mismatch_items'] = source_mismatch_items
+    summary['skipped_items'] = skipped_items
+    summary['pending_files'] = pending_files
+    summary['pending_lines'] = pending_lines
+    return validated_replacements, validated_lines_by_file, failure_entries
+
+
+def summarize_pending_replacements(replacements_by_file, translated_lines_by_file, summary):
+    summary.setdefault('candidate_valid_items', summary.get('valid_items', 0))
+    summary.setdefault('source_mismatch_items', 0)
+    summary.setdefault('skipped_items', 0)
+    summary['pending_files'] = len(replacements_by_file)
+    summary['pending_lines'] = sum(len(lines) for lines in translated_lines_by_file.values())
+
+
+def collect_result_actions(manifest, validate_sources=False):
     result_path = resolve_manifest_result_path(manifest)
     if not os.path.isfile(result_path):
         raise SystemExit('Result JSONL not found. Run download first.')
@@ -1933,6 +2117,9 @@ def collect_result_actions(manifest):
                         result_item['translation'],
                         target_item.get('prefix', ''),
                         target_item['quote'],
+                        target_item['text'],
+                        target_item['id'],
+                        key,
                     )
                 )
                 translated_lines_by_file.setdefault(file_key, set()).add(target_item['line'])
@@ -1978,6 +2165,16 @@ def collect_result_actions(manifest):
 
     summary['failure_items'] = len(failure_entries)
     summary['processed_chunks'] = len(processed_keys)
+    if validate_sources:
+        replacements_by_file, translated_lines_by_file, validation_failures = validate_result_replacements(
+            manifest,
+            replacements_by_file,
+            summary,
+        )
+        failure_entries.extend(validation_failures)
+        summary['failure_items'] = len(failure_entries)
+    else:
+        summarize_pending_replacements(replacements_by_file, translated_lines_by_file, summary)
     return replacements_by_file, translated_lines_by_file, failure_entries, summary
 
 
@@ -1986,7 +2183,13 @@ def print_check_summary(summary):
     print(f"Result rows: {summary['result_rows']}")
     print(f"Processed chunks: {summary['processed_chunks']}")
     print(f"Expected items: {summary['expected_items']}")
+    if 'candidate_valid_items' in summary:
+        print(f"Candidate valid items: {summary['candidate_valid_items']}")
     print(f"Recoverable valid items: {summary['valid_items']}")
+    print(f"Pending files: {summary.get('pending_files', 0)}")
+    print(f"Pending lines: {summary.get('pending_lines', 0)}")
+    print(f"Skipped items: {summary.get('skipped_items', 0)}")
+    print(f"Source mismatches: {summary.get('source_mismatch_items', 0)}")
     print(f"Failure items: {summary['failure_items']}")
     print(f"Chunk row errors: {summary['chunk_row_errors']}")
     print(f"Missing-response chunks: {summary['missing_response_chunks']}")
@@ -2110,7 +2313,7 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
 
 def check_results(target=None):
     manifest = load_manifest(target)
-    _replacements, _translated, _failures, summary = collect_result_actions(manifest)
+    _replacements, _translated, _failures, summary = collect_result_actions(manifest, validate_sources=True)
     manifest['last_check_at'] = datetime.now().isoformat(timespec='seconds')
     manifest['last_check_summary'] = summary
     save_manifest(manifest)
@@ -2119,12 +2322,20 @@ def check_results(target=None):
     return manifest
 
 
-def apply_results(target=None):
+def apply_results(target=None, force=False):
     manifest = load_manifest(target)
-    replacements_by_file, translated_lines_by_file, failure_entries, summary = collect_result_actions(manifest)
+    if manifest.get('applied_at') and not force:
+        raise SystemExit('Manifest was already applied. Re-run apply with --force to bypass this guard; source validation still applies.')
+
+    replacements_by_file, _translated_lines_by_file, failure_entries, summary = collect_result_actions(
+        manifest,
+        validate_sources=True,
+    )
 
     applied_files = 0
     applied_lines = 0
+    final_pending_files = 0
+    final_pending_lines = 0
     rag_jobs = []
     for file_key, replacements in replacements_by_file.items():
         file_info = manifest['files'].get(file_key)
@@ -2133,14 +2344,33 @@ def apply_results(target=None):
         file_path = resolve_manifest_file_path(manifest, file_key, file_info)
         with open(file_path, 'r', encoding='utf-8-sig') as handle:
             lines = handle.readlines()
+        replacements, line_numbers_set, revalidation_failures, revalidated_skipped, revalidated_mismatches = validate_replacements_for_lines(
+            manifest,
+            file_key,
+            replacements,
+            lines,
+            summary,
+        )
+        if revalidated_skipped:
+            summary['valid_items'] = max(0, summary['valid_items'] - revalidated_skipped)
+            summary['skipped_items'] = summary.get('skipped_items', 0) + revalidated_skipped
+            summary['source_mismatch_items'] = summary.get('source_mismatch_items', 0) + revalidated_mismatches
+            failure_entries.extend(revalidation_failures)
+            summary['failure_items'] = len(failure_entries)
+        if not replacements:
+            continue
         legacy.commit_replacements(file_path, lines, replacements)
-        line_numbers = sorted(translated_lines_by_file.get(file_key, set()))
+        line_numbers = sorted(line_numbers_set)
         update_progress(file_key, line_numbers)
         applied_files += 1
         applied_lines += len(line_numbers)
+        final_pending_files += 1
+        final_pending_lines += len(line_numbers)
         if line_numbers:
             rag_jobs.append({'file_rel_path': file_key, 'file_path': file_path})
 
+    summary['pending_files'] = final_pending_files
+    summary['pending_lines'] = final_pending_lines
     append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
 
     rag_apply_summary = {}
@@ -2151,7 +2381,10 @@ def apply_results(target=None):
     manifest['apply_summary'] = {
         'applied_files': applied_files,
         'applied_lines': applied_lines,
+        'candidate_items': summary.get('candidate_valid_items', summary['valid_items']),
         'recoverable_items': summary['valid_items'],
+        'skipped_items': summary.get('skipped_items', 0),
+        'source_mismatch_items': summary.get('source_mismatch_items', 0),
         'failure_count': len(failure_entries),
         'rag': rag_apply_summary,
     }
@@ -3062,6 +3295,11 @@ def build_arg_parser():
         default='',
         help='Manifest path or package dir. Defaults to latest package.',
     )
+    apply_parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Bypass the applied_at guard; source validation still applies.',
+    )
 
     split_parser = subparsers.add_parser('split', help='Split an existing batch package into smaller local packages.')
     split_parser.add_argument(
@@ -3152,7 +3390,7 @@ def main(argv=None):
         return
 
     if command == 'apply':
-        apply_results(args.target or None)
+        apply_results(args.target or None, force=args.force)
         return
 
     if command == 'split':
