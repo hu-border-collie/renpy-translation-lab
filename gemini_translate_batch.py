@@ -1854,7 +1854,7 @@ def validate_result_replacements(manifest, replacements_by_file, summary):
                     bump_counter(summary['reason_counts'], 'source_line_missing')
                     failure_entries.append(make_failure_entry(
                         manifest,
-                        'Source line missing during apply validation',
+                        'Source line missing during source validation',
                         file_rel_path=file_key,
                         item_id=item_id,
                         line=line_idx,
@@ -1872,7 +1872,7 @@ def validate_result_replacements(manifest, replacements_by_file, summary):
                     bump_counter(summary['reason_counts'], 'source_text_mismatch')
                     failure_entries.append(make_failure_entry(
                         manifest,
-                        'Source text mismatch during apply validation',
+                        'Source text mismatch during source validation',
                         file_rel_path=file_key,
                         item_id=item_id,
                         line=line_idx,
@@ -2301,7 +2301,7 @@ def check_results(target=None):
 def apply_results(target=None, force=False):
     manifest = load_manifest(target)
     if manifest.get('applied_at') and not force:
-        raise SystemExit('Manifest was already applied. Re-run apply with --force to apply it again.')
+        raise SystemExit('Manifest was already applied. Re-run apply with --force to bypass this guard; source validation still applies.')
 
     replacements_by_file, translated_lines_by_file, failure_entries, summary = collect_result_actions(
         manifest,
@@ -3250,7 +3250,11 @@ def build_arg_parser():
         default='',
         help='Manifest path or package dir. Defaults to latest package.',
     )
-    apply_parser.add_argument('--force', action='store_true', help='Apply a manifest even if it already has applied_at.')
+    apply_parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Bypass the applied_at guard; source validation still applies.',
+    )
 
     split_parser = subparsers.add_parser('split', help='Split an existing batch package into smaller local packages.')
     split_parser.add_argument(
