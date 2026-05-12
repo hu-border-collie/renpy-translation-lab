@@ -974,6 +974,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(summary['pending_lines'], 0)
         self.assertEqual(summary['reason_counts']['source_text_mismatch'], 1)
         self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]['error'], 'Source text mismatch during source validation')
         self.assertEqual(failures[0]['current_text'], 'Hallo')
 
     def test_apply_results_handles_multiple_replacements_on_same_line(self):
@@ -1078,6 +1079,82 @@ class BatchRepairRegressionTests(unittest.TestCase):
 
             with self.assertRaisesRegex(SystemExit, 'already applied'):
                 batch_mod.apply_results(str(manifest_path))
+
+    def test_apply_results_force_keeps_source_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'tl'
+            package_dir = root / 'package'
+            tl_dir.mkdir()
+            package_dir.mkdir()
+            target_file = tl_dir / 'script.rpy'
+            line = '    e "Hallo"\n'
+            start = line.index('"Hallo"')
+            end = start + len('"Hallo"')
+            target_file.write_text(line, encoding='utf-8')
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            response_text = json.dumps(
+                [{'id': f'script.rpy:0:{start}', 'translation': '\u4f60\u597d'}],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'chunk-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'applied_at': '2026-05-12T12:00:00',
+                        'files': {'script.rpy': {'path': str(target_file)}},
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'chunk-1',
+                                'file_rel_path': 'script.rpy',
+                                'items': [
+                                    {
+                                        'id': f'script.rpy:0:{start}',
+                                        'line': 0,
+                                        'start': start,
+                                        'end': end,
+                                        'text': 'Hello',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod, 'append_failure_entries') as append_failures,
+            ):
+                manifest = batch_mod.apply_results(str(manifest_path), force=True)
+
+            unchanged_script = target_file.read_text(encoding='utf-8')
+
+        self.assertEqual(unchanged_script, line)
+        self.assertEqual(manifest['apply_summary']['applied_files'], 0)
+        self.assertEqual(manifest['apply_summary']['recoverable_items'], 0)
+        self.assertEqual(manifest['apply_summary']['skipped_items'], 1)
+        self.assertEqual(manifest['apply_summary']['source_mismatch_items'], 1)
+        append_failures.assert_called_once()
 
     def test_manifest_result_path_must_stay_in_package_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
