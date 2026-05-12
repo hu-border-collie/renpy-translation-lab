@@ -812,8 +812,21 @@ def _safe_archive_relpath(raw_name):
     return os.path.join(*parts)
 
 
+class _RestrictedRpaUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        raise pickle.UnpicklingError(
+            f"Disallowed pickle global during RPA index load: {module}.{name}"
+        )
+
+
 def _load_pickle_blob(blob):
-    return pickle.loads(blob, encoding="bytes")
+    return _RestrictedRpaUnpickler(io.BytesIO(blob), encoding="bytes").load()
+
+
+def _validate_rpa_index(raw_index):
+    if not isinstance(raw_index, dict):
+        raise RuntimeError("Invalid RPA index: expected a dictionary.")
+    return raw_index
 
 
 def _read_rpa_index(archive_path):
@@ -824,7 +837,7 @@ def _read_rpa_index(archive_path):
             offset = int(header[8:24], 16)
             key = int(header[25:33], 16)
             infile.seek(offset)
-            raw_index = _load_pickle_blob(zlib.decompress(infile.read()))
+            raw_index = _validate_rpa_index(_load_pickle_blob(zlib.decompress(infile.read())))
 
             index = {}
             for name, chunks in raw_index.items():
@@ -850,7 +863,7 @@ def _read_rpa_index(archive_path):
             line = infile.read(24)
             offset = int(line[8:], 16)
             infile.seek(offset)
-            raw_index = _load_pickle_blob(zlib.decompress(infile.read()))
+            raw_index = _validate_rpa_index(_load_pickle_blob(zlib.decompress(infile.read())))
 
             index = {}
             for name, chunks in raw_index.items():
@@ -946,7 +959,7 @@ def _resolve_prepare_launcher():
         if stem in exe_stems:
             return path
 
-    return py_files[0]
+    return ""
 
 
 def _render_prepare_command(command, variables):
