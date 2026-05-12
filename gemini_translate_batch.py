@@ -724,6 +724,67 @@ def load_manifest(target=None):
     return manifest
 
 
+def _normalized_abs_path(path):
+    return os.path.normcase(os.path.abspath(path))
+
+
+def path_is_within_dir(base_dir, candidate):
+    base = _normalized_abs_path(base_dir)
+    target = _normalized_abs_path(candidate)
+    try:
+        return os.path.commonpath([base, target]) == base
+    except ValueError:
+        return False
+
+
+def normalize_safe_rel_path(value, field_name):
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f'Unsafe {field_name}: empty path.')
+    text = value.strip().replace('\\', '/')
+    if os.path.isabs(text) or re.match(r'^[A-Za-z]:', text):
+        raise SystemExit(f'Unsafe {field_name}: absolute paths are not allowed here.')
+    parts = []
+    for part in text.split('/'):
+        if not part or part == '.':
+            continue
+        if part == '..':
+            raise SystemExit(f'Unsafe {field_name}: parent directory segments are not allowed.')
+        parts.append(part)
+    if not parts:
+        raise SystemExit(f'Unsafe {field_name}: empty path.')
+    return os.path.join(*parts)
+
+
+def resolve_path_under_dir(base_dir, value, field_name):
+    if not base_dir:
+        raise SystemExit(f'Unsafe {field_name}: base directory is missing.')
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f'Unsafe {field_name}: empty path.')
+    raw = value.strip()
+    if os.path.isabs(raw):
+        candidate = os.path.abspath(raw)
+    else:
+        candidate = os.path.abspath(os.path.join(base_dir, normalize_safe_rel_path(raw, field_name)))
+    if not path_is_within_dir(base_dir, candidate):
+        raise SystemExit(f'Unsafe {field_name}: {value} escapes {base_dir}.')
+    return candidate
+
+
+def resolve_manifest_result_path(manifest):
+    package_dir = manifest.get('_package_dir')
+    result_path = manifest.get('result_jsonl_path')
+    if result_path:
+        return resolve_path_under_dir(package_dir, result_path, 'result_jsonl_path')
+    return os.path.join(package_dir, 'results.jsonl')
+
+
+def resolve_manifest_file_path(manifest, file_key, file_info):
+    path_value = file_info.get('path') if isinstance(file_info, dict) else ''
+    if path_value:
+        return resolve_path_under_dir(legacy.TL_DIR, path_value, f'manifest file path for {file_key}')
+    return resolve_path_under_dir(legacy.TL_DIR, file_key, f'manifest file key {file_key}')
+
+
 def save_manifest(manifest, update_latest=True):
     manifest_path = manifest['_manifest_path']
     data = dict(manifest)
@@ -1507,7 +1568,7 @@ def download_results(target=None, force=False):
     if state != 'JOB_STATE_SUCCEEDED':
         raise SystemExit(f'Batch job is not succeeded yet: {state}')
 
-    result_path = manifest.get('result_jsonl_path') or os.path.join(manifest['_package_dir'], 'results.jsonl')
+    result_path = resolve_manifest_result_path(manifest)
     if os.path.isfile(result_path) and not force:
         print(f'Result file already exists: {result_path}')
         return result_path
@@ -1686,8 +1747,8 @@ def append_failure_entries(entries, package_dir=''):
 
 
 def collect_result_actions(manifest):
-    result_path = manifest.get('result_jsonl_path')
-    if not result_path or not os.path.isfile(result_path):
+    result_path = resolve_manifest_result_path(manifest)
+    if not os.path.isfile(result_path):
         raise SystemExit('Result JSONL not found. Run download first.')
 
     chunk_map = {chunk['key']: chunk for chunk in manifest.get('chunks', [])}
@@ -2069,7 +2130,7 @@ def apply_results(target=None):
         file_info = manifest['files'].get(file_key)
         if not file_info:
             continue
-        file_path = file_info['path']
+        file_path = resolve_manifest_file_path(manifest, file_key, file_info)
         with open(file_path, 'r', encoding='utf-8-sig') as handle:
             lines = handle.readlines()
         legacy.commit_replacements(file_path, lines, replacements)
@@ -2436,20 +2497,12 @@ def load_repair_report_items(report_path):
             batch_style = False
             file_path = row.get('file')
             if isinstance(file_path, str) and file_path.strip():
-                file_path = file_path.strip()
-                if not os.path.isabs(file_path):
-                    normalized_rel = legacy._normalize_rel_path(file_path)
-                    candidate = os.path.abspath(os.path.join(legacy.TL_DIR, normalized_rel))
-                    file_path = candidate if os.path.isfile(candidate) else os.path.abspath(file_path)
+                file_path = resolve_path_under_dir(legacy.TL_DIR, file_path, 'repair file')
             else:
                 file_rel_path = row.get('file_rel_path')
                 if isinstance(file_rel_path, str) and file_rel_path.strip():
-                    normalized_rel = legacy._normalize_rel_path(file_rel_path)
-                    if normalized_rel:
-                        file_path = os.path.abspath(os.path.join(legacy.TL_DIR, normalized_rel))
-                        batch_style = True
-                    else:
-                        file_path = ''
+                    file_path = resolve_path_under_dir(legacy.TL_DIR, file_rel_path, 'repair file_rel_path')
+                    batch_style = True
                 else:
                     file_path = ''
 
@@ -2903,9 +2956,10 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
         )
 
     for file_path, replacements in replacements_by_file.items():
-        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+        safe_file_path = resolve_path_under_dir(legacy.TL_DIR, file_path, 'repair writeback file')
+        with open(safe_file_path, 'r', encoding='utf-8-sig') as handle:
             lines = handle.readlines()
-        legacy.commit_replacements(file_path, lines, replacements)
+        legacy.commit_replacements(safe_file_path, lines, replacements)
         summary['applied_files'] += 1
 
     summary['failure_items'] = len(failure_entries)
