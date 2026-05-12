@@ -1739,7 +1739,7 @@ def commit_replacements(path, lines, replacements):
                 start, end, translated, quote = repl
                 prefix = ""
             else:
-                start, end, translated, prefix, quote = repl
+                start, end, translated, prefix, quote = repl[:5]
             # Safety check indices
             if start < 0 or end > len(line):
                 continue
