@@ -2,9 +2,12 @@ import ast
 import importlib
 import io
 import json
+import os
+import pickle
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 from unittest import mock
 
@@ -148,6 +151,59 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         prefix, quote = runtime.parse_string_literal_format('"""Hello"""')
         literal = runtime.quote_with('\u4f60\u597d', quote, prefix=prefix)
         self.assertEqual(ast.literal_eval(literal), '\u4f60\u597d')
+
+    def test_rpa_index_loads_primitive_pickle_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = Path(tmp) / 'archive.rpa'
+            raw_index = {'game/script.rpy': [(123, 4, b'')]}
+            payload = zlib.compress(pickle.dumps(raw_index, protocol=4))
+            header = b'RPA-3.0 %016x %08x\n' % (34, 0)
+            archive_path.write_bytes(header + payload)
+
+            index = runtime._read_rpa_index(str(archive_path))
+
+        self.assertEqual(index, raw_index)
+
+    def test_rpa_index_rejects_pickle_globals_without_executing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = Path(tmp) / 'archive.rpa'
+            marker_path = Path(tmp) / 'pickle-executed.txt'
+
+            class Payload:
+                def __reduce__(self):
+                    return (os.system, (f'echo unsafe > "{marker_path}"',))
+
+            payload = zlib.compress(pickle.dumps(Payload(), protocol=4))
+            header = b'RPA-3.0 %016x %08x\n' % (34, 0)
+            archive_path.write_bytes(header + payload)
+
+            with self.assertRaises(pickle.UnpicklingError):
+                runtime._read_rpa_index(str(archive_path))
+            self.assertFalse(marker_path.exists())
+
+    def test_prepare_launcher_does_not_guess_unrelated_python_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'tools.py').write_text('print("maintenance helper")\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(root)),
+                mock.patch.object(runtime, 'PREP_LAUNCHER_PY', ''),
+            ):
+                self.assertEqual(runtime._resolve_prepare_launcher(), '')
+
+    def test_prepare_launcher_still_detects_renpy_bootstrap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            launcher = root / 'Game.py'
+            launcher.write_text('import renpy.bootstrap\n', encoding='utf-8')
+            (root / 'tools.py').write_text('print("maintenance helper")\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(root)),
+                mock.patch.object(runtime, 'PREP_LAUNCHER_PY', ''),
+            ):
+                self.assertEqual(runtime._resolve_prepare_launcher(), str(launcher))
 
     def test_process_batch_returns_only_successful_progress_entries(self):
         batch = [
@@ -848,6 +904,90 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(len(replacements['script.rpy'][0]), 1)
         self.assertEqual(failures, [])
 
+    def test_manifest_result_path_must_stay_in_package_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_dir = root / 'package'
+            package_dir.mkdir()
+            manifest = {
+                '_package_dir': str(package_dir),
+                'result_jsonl_path': str(root / 'outside-results.jsonl'),
+            }
+
+            with self.assertRaisesRegex(SystemExit, 'escapes'):
+                batch_mod.resolve_manifest_result_path(manifest)
+
+    def test_manifest_result_path_rejects_parent_segments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp) / 'package'
+            package_dir.mkdir()
+            manifest = {
+                '_package_dir': str(package_dir),
+                'result_jsonl_path': '../outside-results.jsonl',
+            }
+
+            with self.assertRaisesRegex(SystemExit, 'parent directory'):
+                batch_mod.resolve_manifest_result_path(manifest)
+
+    def test_apply_results_rejects_manifest_file_path_outside_tl_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'tl'
+            package_dir = root / 'package'
+            tl_dir.mkdir()
+            package_dir.mkdir()
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            response_text = json.dumps(
+                [{'id': 'script.rpy:0:4', 'translation': '\u4f60\u597d'}],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'chunk-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'files': {'script.rpy': {'path': str(root / 'outside.rpy')}},
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'chunk-1',
+                                'file_rel_path': 'script.rpy',
+                                'items': [
+                                    {
+                                        'id': 'script.rpy:0:4',
+                                        'line': 0,
+                                        'start': 4,
+                                        'end': 11,
+                                        'text': 'Hello',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                with self.assertRaisesRegex(SystemExit, 'escapes'):
+                    batch_mod.apply_results(str(manifest_path))
+
     def test_load_repair_report_items_accepts_batch_failure_log_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
             tl_dir = Path(tmp)
@@ -871,6 +1011,44 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(items[0]['file'], str(target_file.resolve()))
         self.assertEqual(items[0]['source'], 'Hello')
         self.assertEqual(items[0]['line'], 1)
+
+    def test_load_repair_report_items_rejects_file_outside_tl_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'tl'
+            tl_dir.mkdir()
+            outside_file = root / 'outside.rpy'
+            outside_file.write_text('label outside:\n    pass\n', encoding='utf-8')
+            report_path = tl_dir / 'failures.jsonl'
+            report_path.write_text(
+                json.dumps({
+                    'file': str(outside_file),
+                    'line': 1,
+                    'source': 'Hello',
+                }, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                with self.assertRaisesRegex(SystemExit, 'escapes'):
+                    batch_mod.load_repair_report_items(str(report_path))
+
+    def test_load_repair_report_items_rejects_parent_segments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tl_dir = Path(tmp)
+            report_path = tl_dir / 'failures.jsonl'
+            report_path.write_text(
+                json.dumps({
+                    'file_rel_path': '../outside.rpy',
+                    'line': 0,
+                    'text': 'Hello',
+                }, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                with self.assertRaisesRegex(SystemExit, 'parent directory'):
+                    batch_mod.load_repair_report_items(str(report_path))
 
     def test_load_repair_report_items_distinguishes_start_zero_from_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -958,8 +1136,9 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 encoding='utf-8',
             )
 
-            items = batch_mod.load_repair_report_items(str(report_path))
-            jobs, unresolved = batch_mod.build_repair_jobs(items, batch_size=2)
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                items = batch_mod.load_repair_report_items(str(report_path))
+                jobs, unresolved = batch_mod.build_repair_jobs(items, batch_size=2)
 
         self.assertEqual(unresolved, [])
         self.assertEqual(len(jobs), 1)
