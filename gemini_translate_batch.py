@@ -1792,6 +1792,57 @@ def make_failure_entry(manifest, error, file_rel_path='', item_id='', line=None,
     return entry
 
 
+def validate_replacements_for_lines(manifest, file_key, replacements_by_line, lines, summary):
+    validated_replacements = {}
+    validated_lines = set()
+    failure_entries = []
+    skipped_items = 0
+    source_mismatch_items = 0
+
+    for line_idx, repls in replacements_by_line.items():
+        for repl in repls:
+            start, end, _translated, _prefix, _quote, source_text, item_id, chunk_key = unpack_replacement_for_validation(repl)
+            if line_idx < 0 or line_idx >= len(lines):
+                skipped_items += 1
+                bump_counter(summary['reason_counts'], 'source_line_missing')
+                failure_entries.append(make_failure_entry(
+                    manifest,
+                    'Source line missing during source validation',
+                    file_rel_path=file_key,
+                    item_id=item_id,
+                    line=line_idx,
+                    text=source_text,
+                    key=chunk_key,
+                    start=start,
+                    end=end,
+                ))
+                continue
+
+            current_text = extract_string_token_text_at(lines[line_idx], start, end)
+            if current_text != source_text:
+                skipped_items += 1
+                source_mismatch_items += 1
+                bump_counter(summary['reason_counts'], 'source_text_mismatch')
+                failure_entries.append(make_failure_entry(
+                    manifest,
+                    'Source text mismatch during source validation',
+                    file_rel_path=file_key,
+                    item_id=item_id,
+                    line=line_idx,
+                    text=source_text,
+                    key=chunk_key,
+                    start=start,
+                    end=end,
+                    current_text=current_text if current_text is not None else '',
+                ))
+                continue
+
+            validated_replacements.setdefault(line_idx, []).append(repl)
+            validated_lines.add(line_idx)
+
+    return validated_replacements, validated_lines, failure_entries, skipped_items, source_mismatch_items
+
+
 def validate_result_replacements(manifest, replacements_by_file, summary):
     validated_replacements = {}
     validated_lines_by_file = {}
@@ -1846,46 +1897,19 @@ def validate_result_replacements(manifest, replacements_by_file, summary):
         with open(file_path, 'r', encoding='utf-8-sig') as handle:
             lines = handle.readlines()
 
-        for line_idx, repls in replacements_by_line.items():
-            for repl in repls:
-                start, end, _translated, _prefix, _quote, source_text, item_id, chunk_key = unpack_replacement_for_validation(repl)
-                if line_idx < 0 or line_idx >= len(lines):
-                    skipped_items += 1
-                    bump_counter(summary['reason_counts'], 'source_line_missing')
-                    failure_entries.append(make_failure_entry(
-                        manifest,
-                        'Source line missing during source validation',
-                        file_rel_path=file_key,
-                        item_id=item_id,
-                        line=line_idx,
-                        text=source_text,
-                        key=chunk_key,
-                        start=start,
-                        end=end,
-                    ))
-                    continue
-
-                current_text = extract_string_token_text_at(lines[line_idx], start, end)
-                if current_text != source_text:
-                    skipped_items += 1
-                    source_mismatch_items += 1
-                    bump_counter(summary['reason_counts'], 'source_text_mismatch')
-                    failure_entries.append(make_failure_entry(
-                        manifest,
-                        'Source text mismatch during source validation',
-                        file_rel_path=file_key,
-                        item_id=item_id,
-                        line=line_idx,
-                        text=source_text,
-                        key=chunk_key,
-                        start=start,
-                        end=end,
-                        current_text=current_text if current_text is not None else '',
-                    ))
-                    continue
-
-                validated_replacements.setdefault(file_key, {}).setdefault(line_idx, []).append(repl)
-                validated_lines_by_file.setdefault(file_key, set()).add(line_idx)
+        file_replacements, file_lines, file_failures, file_skipped, file_mismatches = validate_replacements_for_lines(
+            manifest,
+            file_key,
+            replacements_by_line,
+            lines,
+            summary,
+        )
+        if file_replacements:
+            validated_replacements[file_key] = file_replacements
+            validated_lines_by_file[file_key] = file_lines
+        failure_entries.extend(file_failures)
+        skipped_items += file_skipped
+        source_mismatch_items += file_mismatches
 
     pending_files = len(validated_replacements)
     pending_lines = sum(len(lines) for lines in validated_lines_by_file.values())
@@ -2303,13 +2327,15 @@ def apply_results(target=None, force=False):
     if manifest.get('applied_at') and not force:
         raise SystemExit('Manifest was already applied. Re-run apply with --force to bypass this guard; source validation still applies.')
 
-    replacements_by_file, translated_lines_by_file, failure_entries, summary = collect_result_actions(
+    replacements_by_file, _translated_lines_by_file, failure_entries, summary = collect_result_actions(
         manifest,
         validate_sources=True,
     )
 
     applied_files = 0
     applied_lines = 0
+    final_pending_files = 0
+    final_pending_lines = 0
     rag_jobs = []
     for file_key, replacements in replacements_by_file.items():
         file_info = manifest['files'].get(file_key)
@@ -2318,14 +2344,33 @@ def apply_results(target=None, force=False):
         file_path = resolve_manifest_file_path(manifest, file_key, file_info)
         with open(file_path, 'r', encoding='utf-8-sig') as handle:
             lines = handle.readlines()
+        replacements, line_numbers_set, revalidation_failures, revalidated_skipped, revalidated_mismatches = validate_replacements_for_lines(
+            manifest,
+            file_key,
+            replacements,
+            lines,
+            summary,
+        )
+        if revalidated_skipped:
+            summary['valid_items'] = max(0, summary['valid_items'] - revalidated_skipped)
+            summary['skipped_items'] = summary.get('skipped_items', 0) + revalidated_skipped
+            summary['source_mismatch_items'] = summary.get('source_mismatch_items', 0) + revalidated_mismatches
+            failure_entries.extend(revalidation_failures)
+            summary['failure_items'] = len(failure_entries)
+        if not replacements:
+            continue
         legacy.commit_replacements(file_path, lines, replacements)
-        line_numbers = sorted(translated_lines_by_file.get(file_key, set()))
+        line_numbers = sorted(line_numbers_set)
         update_progress(file_key, line_numbers)
         applied_files += 1
         applied_lines += len(line_numbers)
+        final_pending_files += 1
+        final_pending_lines += len(line_numbers)
         if line_numbers:
             rag_jobs.append({'file_rel_path': file_key, 'file_path': file_path})
 
+    summary['pending_files'] = final_pending_files
+    summary['pending_lines'] = final_pending_lines
     append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
 
     rag_apply_summary = {}

@@ -1068,6 +1068,91 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(manifest['apply_summary']['skipped_items'], 0)
         self.assertIn('applied_at', saved_manifest)
 
+    def test_apply_results_revalidates_snapshot_before_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'tl'
+            package_dir = root / 'package'
+            tl_dir.mkdir()
+            package_dir.mkdir()
+            target_file = tl_dir / 'script.rpy'
+            original_line = '    e "Hello"\n'
+            changed_line = '    e "Hallo"\n'
+            start = original_line.index('"Hello"')
+            end = start + len('"Hello"')
+            target_file.write_text(original_line, encoding='utf-8')
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            response_text = json.dumps(
+                [{'id': f'script.rpy:0:{start}', 'translation': '\u4f60\u597d'}],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'chunk-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'files': {'script.rpy': {'path': str(target_file)}},
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'chunk-1',
+                                'file_rel_path': 'script.rpy',
+                                'items': [
+                                    {
+                                        'id': f'script.rpy:0:{start}',
+                                        'line': 0,
+                                        'start': start,
+                                        'end': end,
+                                        'text': 'Hello',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+            collect_result_actions = batch_mod.collect_result_actions
+
+            def mutate_after_initial_validation(*args, **kwargs):
+                result = collect_result_actions(*args, **kwargs)
+                target_file.write_text(changed_line, encoding='utf-8')
+                return result
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod, 'collect_result_actions', side_effect=mutate_after_initial_validation),
+                mock.patch.object(batch_mod, 'update_progress') as update_progress,
+                mock.patch.object(batch_mod, 'append_failure_entries') as append_failures,
+            ):
+                manifest = batch_mod.apply_results(str(manifest_path))
+
+            final_script = target_file.read_text(encoding='utf-8')
+
+        self.assertEqual(final_script, changed_line)
+        update_progress.assert_not_called()
+        append_failures.assert_called_once()
+        self.assertEqual(manifest['apply_summary']['applied_files'], 0)
+        self.assertEqual(manifest['apply_summary']['recoverable_items'], 0)
+        self.assertEqual(manifest['apply_summary']['skipped_items'], 1)
+        self.assertEqual(manifest['apply_summary']['source_mismatch_items'], 1)
+
     def test_apply_results_rejects_already_applied_manifest_without_force(self):
         with tempfile.TemporaryDirectory() as tmp:
             package_dir = Path(tmp)
