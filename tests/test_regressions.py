@@ -904,6 +904,181 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(len(replacements['script.rpy'][0]), 1)
         self.assertEqual(failures, [])
 
+    def test_collect_result_actions_skips_source_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'tl'
+            package_dir = root / 'package'
+            tl_dir.mkdir()
+            package_dir.mkdir()
+            target_file = tl_dir / 'script.rpy'
+            line = '    e "Hallo"\n'
+            start = line.index('"Hallo"')
+            end = start + len('"Hallo"')
+            target_file.write_text(line, encoding='utf-8')
+            result_path = package_dir / 'results.jsonl'
+            response_text = json.dumps(
+                [{'id': f'script.rpy:0:{start}', 'translation': '\u4f60\u597d'}],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'chunk-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest = {
+                '_package_dir': str(package_dir),
+                'result_jsonl_path': str(result_path),
+                'files': {'script.rpy': {'path': str(target_file)}},
+                'chunks': [
+                    {
+                        'key': 'chunk-1',
+                        'file_rel_path': 'script.rpy',
+                        'items': [
+                            {
+                                'id': f'script.rpy:0:{start}',
+                                'line': 0,
+                                'start': start,
+                                'end': end,
+                                'text': 'Hello',
+                                'prefix': '',
+                                'quote': '"',
+                            }
+                        ],
+                    }
+                ],
+            }
+
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                replacements, translated, failures, summary = batch_mod.collect_result_actions(
+                    manifest,
+                    validate_sources=True,
+                )
+
+        self.assertEqual(replacements, {})
+        self.assertEqual(translated, {})
+        self.assertEqual(summary['candidate_valid_items'], 1)
+        self.assertEqual(summary['valid_items'], 0)
+        self.assertEqual(summary['skipped_items'], 1)
+        self.assertEqual(summary['source_mismatch_items'], 1)
+        self.assertEqual(summary['pending_files'], 0)
+        self.assertEqual(summary['pending_lines'], 0)
+        self.assertEqual(summary['reason_counts']['source_text_mismatch'], 1)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]['current_text'], 'Hallo')
+
+    def test_apply_results_handles_multiple_replacements_on_same_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'tl'
+            package_dir = root / 'package'
+            tl_dir.mkdir()
+            package_dir.mkdir()
+            target_file = tl_dir / 'script.rpy'
+            dialogue_line = '    call screen test("Hello", "World")\n'
+            hello_start = dialogue_line.index('"Hello"')
+            hello_end = hello_start + len('"Hello"')
+            world_start = dialogue_line.index('"World"')
+            world_end = world_start + len('"World"')
+            target_file.write_text('label test:\n' + dialogue_line, encoding='utf-8')
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            response_text = json.dumps(
+                [
+                    {'id': f'script.rpy:1:{hello_start}', 'translation': '\u4f60\u597d'},
+                    {'id': f'script.rpy:1:{world_start}', 'translation': '\u4e16\u754c'},
+                ],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'chunk-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'files': {'script.rpy': {'path': str(target_file)}},
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'chunk-1',
+                                'file_rel_path': 'script.rpy',
+                                'items': [
+                                    {
+                                        'id': f'script.rpy:1:{hello_start}',
+                                        'line': 1,
+                                        'start': hello_start,
+                                        'end': hello_end,
+                                        'text': 'Hello',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    },
+                                    {
+                                        'id': f'script.rpy:1:{world_start}',
+                                        'line': 1,
+                                        'start': world_start,
+                                        'end': world_end,
+                                        'text': 'World',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod, 'update_progress') as update_progress,
+            ):
+                manifest = batch_mod.apply_results(str(manifest_path))
+
+            updated_script = target_file.read_text(encoding='utf-8')
+            saved_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+
+        self.assertIn('call screen test("\u4f60\u597d", "\u4e16\u754c")', updated_script)
+        update_progress.assert_called_once_with('script.rpy', [1])
+        self.assertEqual(manifest['apply_summary']['applied_files'], 1)
+        self.assertEqual(manifest['apply_summary']['applied_lines'], 1)
+        self.assertEqual(manifest['apply_summary']['recoverable_items'], 2)
+        self.assertEqual(manifest['apply_summary']['skipped_items'], 0)
+        self.assertIn('applied_at', saved_manifest)
+
+    def test_apply_results_rejects_already_applied_manifest_without_force(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            manifest_path = package_dir / 'manifest.json'
+            manifest_path.write_text(
+                json.dumps({'applied_at': '2026-05-12T12:00:00'}, ensure_ascii=False),
+                encoding='utf-8',
+            )
+
+            with self.assertRaisesRegex(SystemExit, 'already applied'):
+                batch_mod.apply_results(str(manifest_path))
+
     def test_manifest_result_path_must_stay_in_package_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
