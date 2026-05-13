@@ -8,6 +8,9 @@ import socket
 from datetime import datetime
 
 
+LOCK_STALE_AFTER_SECONDS = 60 * 60
+
+
 def now_iso():
     return datetime.now().isoformat(timespec='seconds')
 
@@ -54,6 +57,7 @@ class JsonRagStore(object):
         self.history_path = os.path.join(self.store_dir, 'history.jsonl')
         self.lock_path = os.path.join(self.store_dir, '.rag_store.lock')
         self._loaded = False
+        self._disk_snapshot = None
         self.metadata = {}
         self.history = {}
         self.file_index = {}
@@ -90,6 +94,24 @@ class JsonRagStore(object):
                         self.history[memory_id] = record
                         self._index_record(memory_id, record)
         self._loaded = True
+        self._disk_snapshot = self._disk_version()
+
+    def _file_version(self, path):
+        try:
+            stat = os.stat(path)
+        except FileNotFoundError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _disk_version(self):
+        return (
+            self._file_version(self.metadata_path),
+            self._file_version(self.history_path),
+        )
+
+    def _refresh_from_disk_if_changed(self):
+        if not self._loaded or self._disk_snapshot != self._disk_version():
+            self._load_from_disk()
 
     def _load_json_file(self, path):
         if not os.path.isfile(path):
@@ -115,7 +137,7 @@ class JsonRagStore(object):
 
     def set_metadata(self, **updates):
         with self._locked('set_metadata') as lock_info:
-            self._load_from_disk()
+            self._refresh_from_disk_if_changed()
             self._update_metadata_unlocked('set_metadata', updates, lock_info)
 
     def _write_metadata(self):
@@ -140,12 +162,13 @@ class JsonRagStore(object):
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp_path, path)
+            self._disk_snapshot = self._disk_version()
         finally:
             if os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    self._warn(f'Failed to remove temporary RAG store file {tmp_path}: {exc}')
 
     def _lock_owner(self, operation):
         return {
@@ -180,17 +203,111 @@ class JsonRagStore(object):
         except Exception:
             return {}
 
+    def _lock_age_seconds(self, data):
+        if not isinstance(data, dict):
+            return None
+        created_at = data.get('created_at')
+        if not created_at:
+            return None
+        try:
+            created_at = datetime.fromisoformat(str(created_at))
+        except (TypeError, ValueError):
+            return None
+        return (datetime.now() - created_at).total_seconds()
+
+    def _is_lock_owner_alive(self, pid):
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return None
+        if pid <= 0:
+            return None
+        if os.name == 'nt':
+            return self._is_windows_process_alive(pid)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return None
+        return True
+
+    def _is_windows_process_alive(self, pid):
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        error_invalid_parameter = 87
+        still_active = 259
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        kernel32.CloseHandle.restype = ctypes.c_int
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            if ctypes.get_last_error() == error_invalid_parameter:
+                return False
+            return True
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def _is_stale_lock(self, data):
+        if not isinstance(data, dict):
+            return False
+        local_owner = data.get('owner') == socket.gethostname()
+        if local_owner and data.get('pid') is not None:
+            is_alive = self._is_lock_owner_alive(data.get('pid'))
+            if is_alive is False:
+                return True
+            if is_alive is True:
+                return False
+        age_seconds = self._lock_age_seconds(data)
+        return age_seconds is not None and age_seconds >= LOCK_STALE_AFTER_SECONDS
+
+    def _recover_stale_lock(self, existing):
+        if not self._is_stale_lock(existing):
+            return False
+        try:
+            os.remove(self.lock_path)
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            self._warn(f'Failed to remove stale RAG store lock {self.lock_path}: {exc}')
+            return False
+        self._warn(f'Recovered stale RAG store lock {self.lock_path} ({self._format_lock_owner(existing)})')
+        return True
+
+    def _open_lock_file(self):
+        return os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+
     @contextmanager
     def _locked(self, operation):
         os.makedirs(self.store_dir, exist_ok=True)
         lock_info = self._lock_owner(operation)
         try:
-            fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            fd = self._open_lock_file()
         except FileExistsError:
             existing = self._read_lock_owner()
-            raise JsonRagStoreLockError(
-                f'RAG store is locked at {self.lock_path} ({self._format_lock_owner(existing)}).'
-            )
+            if not self._recover_stale_lock(existing):
+                raise JsonRagStoreLockError(
+                    f'RAG store is locked at {self.lock_path} ({self._format_lock_owner(existing)}).'
+                )
+            try:
+                fd = self._open_lock_file()
+            except FileExistsError:
+                existing = self._read_lock_owner()
+                raise JsonRagStoreLockError(
+                    f'RAG store is locked at {self.lock_path} ({self._format_lock_owner(existing)}).'
+                )
 
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as handle:
@@ -202,7 +319,7 @@ class JsonRagStore(object):
             except FileNotFoundError:
                 pass
             except OSError as exc:
-                print(f'Warning: Failed to remove RAG store lock {self.lock_path}: {exc}')
+                self._warn(f'Failed to remove RAG store lock {self.lock_path}: {exc}')
 
     def _update_metadata_unlocked(self, operation, updates, lock_info):
         if not isinstance(self.metadata, dict):
@@ -241,7 +358,7 @@ class JsonRagStore(object):
 
     def upsert_history(self, records):
         with self._locked('upsert_history') as lock_info:
-            self._load_from_disk()
+            self._refresh_from_disk_if_changed()
             changed = 0
             for record in records:
                 if not isinstance(record, dict):
@@ -269,7 +386,7 @@ class JsonRagStore(object):
 
     def delete_history(self, memory_ids):
         with self._locked('delete_history') as lock_info:
-            self._load_from_disk()
+            self._refresh_from_disk_if_changed()
             changed = 0
             for memory_id in memory_ids:
                 existing = self.history.pop(memory_id, None)

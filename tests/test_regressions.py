@@ -840,6 +840,30 @@ class RagMemoryStoreTests(unittest.TestCase):
         self.assertEqual(persisted, json.dumps(original_record, ensure_ascii=False) + '\n')
         self.assertEqual(temp_files, [])
 
+    def test_json_rag_store_warns_when_temp_cleanup_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = Path(tmp)
+            store = rag_memory.JsonRagStore(str(store_dir))
+            original_remove = rag_memory.os.remove
+
+            def remove_tmp(path):
+                if '.tmp.' in str(path):
+                    raise OSError('tmp remove denied')
+                return original_remove(path)
+
+            with (
+                mock.patch.object(rag_memory.os, 'replace', side_effect=OSError('replace failed')),
+                mock.patch.object(rag_memory.os, 'remove', side_effect=remove_tmp),
+                mock.patch('builtins.print') as print_mock,
+            ):
+                with self.assertRaisesRegex(OSError, 'replace failed'):
+                    store.upsert_history([self.make_record('m1')])
+
+            warnings = '\n'.join(str(call.args[0]) for call in print_mock.call_args_list)
+
+        self.assertIn('Failed to remove temporary RAG store file', warnings)
+        self.assertIn('tmp remove denied', warnings)
+
     def test_json_rag_store_lock_conflict_fails_explicitly(self):
         with tempfile.TemporaryDirectory() as tmp:
             store_dir = Path(tmp)
@@ -870,6 +894,34 @@ class RagMemoryStoreTests(unittest.TestCase):
                 store.upsert_history([self.make_record('m1')])
 
         self.assertEqual(open_modes[0], 0o600)
+
+    def test_json_rag_store_recovers_stale_lock_from_dead_local_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = Path(tmp)
+            lock_path = store_dir / '.rag_store.lock'
+            lock_path.write_text(
+                json.dumps({
+                    'operation': 'upsert_history',
+                    'owner': rag_memory.socket.gethostname(),
+                    'pid': 987654,
+                    'created_at': rag_memory.now_iso(),
+                }),
+                encoding='utf-8',
+            )
+            store = rag_memory.JsonRagStore(str(store_dir))
+
+            with (
+                mock.patch.object(rag_memory.JsonRagStore, '_is_lock_owner_alive', return_value=False),
+                mock.patch('builtins.print') as print_mock,
+            ):
+                store.upsert_history([self.make_record('m1')])
+
+            reloaded = rag_memory.JsonRagStore(str(store_dir))
+            history_ids = reloaded.history_ids_for_file('script.rpy')
+            warnings = '\n'.join(str(call.args[0]) for call in print_mock.call_args_list)
+
+        self.assertEqual(history_ids, ['m1'])
+        self.assertIn('Recovered stale RAG store lock', warnings)
 
     def test_json_rag_store_lock_cleanup_warns_without_failing_write(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -903,6 +955,21 @@ class RagMemoryStoreTests(unittest.TestCase):
             history_ids = set(reloaded.history_ids_for_file('script.rpy'))
 
         self.assertEqual(history_ids, {'fresh', 'stale'})
+
+    def test_json_rag_store_skips_reload_when_disk_snapshot_is_current(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = Path(tmp)
+            store = rag_memory.JsonRagStore(str(store_dir))
+
+            store.upsert_history([self.make_record('m1')])
+            with mock.patch.object(store, '_load_from_disk', wraps=store._load_from_disk) as load_mock:
+                store.upsert_history([self.make_record('m2')])
+
+            reloaded = rag_memory.JsonRagStore(str(store_dir))
+            history_ids = set(reloaded.history_ids_for_file('script.rpy'))
+
+        load_mock.assert_not_called()
+        self.assertEqual(history_ids, {'m1', 'm2'})
 
     def test_json_rag_store_metadata_records_write_owner(self):
         with tempfile.TemporaryDirectory() as tmp:
