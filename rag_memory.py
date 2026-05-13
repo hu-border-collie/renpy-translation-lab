@@ -215,6 +215,12 @@ class JsonRagStore(object):
             return None
         return (datetime.now() - created_at).total_seconds()
 
+    def _lock_file_age_seconds(self):
+        try:
+            return datetime.now().timestamp() - os.path.getmtime(self.lock_path)
+        except OSError:
+            return None
+
     def _is_lock_owner_alive(self, pid):
         try:
             pid = int(pid)
@@ -262,7 +268,8 @@ class JsonRagStore(object):
 
     def _is_stale_lock(self, data):
         if not isinstance(data, dict):
-            return False
+            age_seconds = self._lock_file_age_seconds()
+            return age_seconds is not None and age_seconds >= LOCK_STALE_AFTER_SECONDS
         local_owner = data.get('owner') == socket.gethostname()
         if local_owner and data.get('pid') is not None:
             is_alive = self._is_lock_owner_alive(data.get('pid'))
@@ -271,6 +278,8 @@ class JsonRagStore(object):
             if is_alive is True:
                 return False
         age_seconds = self._lock_age_seconds(data)
+        if age_seconds is None and not data:
+            age_seconds = self._lock_file_age_seconds()
         return age_seconds is not None and age_seconds >= LOCK_STALE_AFTER_SECONDS
 
     def _recover_stale_lock(self, existing):
