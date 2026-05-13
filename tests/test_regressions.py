@@ -1147,7 +1147,7 @@ class BatchRagRegressionTests(unittest.TestCase):
             'base_dir': batch_mod.legacy.BASE_DIR,
             'tl_dir': batch_mod.legacy.TL_DIR,
             'include_files': set(batch_mod.legacy.INCLUDE_FILES),
-            'include_prefixes': tuple(batch_mod.legacy.INCLUDE_PREFIXES),
+            'include_prefixes': set(batch_mod.legacy.INCLUDE_PREFIXES),
         }
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -1168,7 +1168,7 @@ class BatchRagRegressionTests(unittest.TestCase):
                 batch_mod.legacy.BASE_DIR = str(root)
                 batch_mod.legacy.TL_DIR = str(tl_dir)
                 batch_mod.legacy.INCLUDE_FILES = set()
-                batch_mod.legacy.INCLUDE_PREFIXES = ()
+                batch_mod.legacy.INCLUDE_PREFIXES = set()
 
                 embedded_inputs = []
 
