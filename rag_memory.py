@@ -5,6 +5,7 @@ import json
 import math
 import os
 import socket
+import stat
 from datetime import datetime
 
 
@@ -303,31 +304,46 @@ class JsonRagStore(object):
     def _open_lock_file(self):
         return os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
 
-    def _mark_lock_released(self, lock_info):
-        released_info = dict(lock_info)
-        released_info['released_at'] = now_iso()
+    def _lock_path_is_regular_file(self):
         try:
-            fd = os.open(self.lock_path, os.O_WRONLY | os.O_TRUNC)
+            lock_stat = os.lstat(self.lock_path)
         except FileNotFoundError:
             return True
-        except OSError as exc:
-            self._warn(f'Failed to mark RAG store lock released {self.lock_path}: {exc}')
+        return stat.S_ISREG(lock_stat.st_mode)
+
+    def _mark_lock_released(self, lock_info):
+        if not os.path.exists(self.lock_path):
+            return True
+        if not self._lock_path_is_regular_file():
+            self._warn(f'Failed to mark RAG store lock released {self.lock_path}: not a regular file')
             return False
+        released_info = dict(lock_info)
+        released_info['released_at'] = now_iso()
+        tmp_path = f'{self.lock_path}.released.tmp.{os.getpid()}.{id(self)}'
         try:
-            handle = os.fdopen(fd, 'w', encoding='utf-8')
-        except OSError as exc:
+            fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             try:
-                os.close(fd)
+                handle = os.fdopen(fd, 'w', encoding='utf-8')
             except OSError:
-                pass
-            self._warn(f'Failed to mark RAG store lock released {self.lock_path}: {exc}')
-            return False
-        try:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
             with handle:
                 json.dump(released_info, handle, ensure_ascii=False)
-        except OSError as exc:
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, self.lock_path)
+        except Exception as exc:
             self._warn(f'Failed to mark RAG store lock released {self.lock_path}: {exc}')
             return False
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError as exc:
+                    self._warn(f'Failed to remove temporary RAG store lock marker {tmp_path}: {exc}')
         return True
 
     @contextmanager
@@ -367,7 +383,7 @@ class JsonRagStore(object):
                 if operation_succeeded:
                     raise JsonRagStoreLockError(
                         f'Failed to remove RAG store lock {self.lock_path}: {exc}'
-                    )
+                    ) from exc
 
     def _update_metadata_unlocked(self, operation, updates, lock_info):
         if not isinstance(self.metadata, dict):
