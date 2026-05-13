@@ -6,6 +6,7 @@ import os
 import pickle
 import sys
 import tempfile
+import time
 import unittest
 import zlib
 from pathlib import Path
@@ -922,6 +923,38 @@ class RagMemoryStoreTests(unittest.TestCase):
 
         self.assertEqual(history_ids, ['m1'])
         self.assertIn('Recovered stale RAG store lock', warnings)
+
+    def test_json_rag_store_recovers_stale_unreadable_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = Path(tmp)
+            lock_path = store_dir / '.rag_store.lock'
+            lock_path.write_text('{bad json', encoding='utf-8')
+            stale_time = time.time() - rag_memory.LOCK_STALE_AFTER_SECONDS - 5
+            os.utime(lock_path, (stale_time, stale_time))
+            store = rag_memory.JsonRagStore(str(store_dir))
+
+            with mock.patch('builtins.print') as print_mock:
+                store.upsert_history([self.make_record('m1')])
+
+            reloaded = rag_memory.JsonRagStore(str(store_dir))
+            history_ids = reloaded.history_ids_for_file('script.rpy')
+            warnings = '\n'.join(str(call.args[0]) for call in print_mock.call_args_list)
+
+        self.assertEqual(history_ids, ['m1'])
+        self.assertIn('Recovered stale RAG store lock', warnings)
+        self.assertIn('unknown owner', warnings)
+
+    def test_json_rag_store_keeps_fresh_unreadable_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = Path(tmp)
+            lock_path = store_dir / '.rag_store.lock'
+            lock_path.write_text('{bad json', encoding='utf-8')
+            store = rag_memory.JsonRagStore(str(store_dir))
+
+            with self.assertRaisesRegex(rag_memory.JsonRagStoreLockError, 'unknown owner'):
+                store.upsert_history([self.make_record('m1')])
+
+            self.assertFalse((store_dir / 'history.jsonl').exists())
 
     def test_json_rag_store_lock_cleanup_warns_without_failing_write(self):
         with tempfile.TemporaryDirectory() as tmp:
