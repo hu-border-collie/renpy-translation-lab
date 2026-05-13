@@ -981,6 +981,44 @@ class RagMemoryStoreTests(unittest.TestCase):
         self.assertIn('Failed to remove RAG store lock', warnings)
         self.assertIn('remove denied', warnings)
 
+    def test_json_rag_store_lock_cleanup_failure_fails_inside_outer_except(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = Path(tmp)
+            store = rag_memory.JsonRagStore(str(store_dir))
+
+            with (
+                mock.patch.object(rag_memory.os, 'remove', side_effect=OSError('remove denied')),
+                mock.patch('builtins.print'),
+            ):
+                try:
+                    raise RuntimeError('outer error')
+                except RuntimeError:
+                    with self.assertRaisesRegex(rag_memory.JsonRagStoreLockError, 'remove denied'):
+                        store.upsert_history([self.make_record('m1')])
+
+    def test_json_rag_store_mark_released_closes_fdopen_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = Path(tmp)
+            lock_path = store_dir / '.rag_store.lock'
+            lock_path.write_text('{}', encoding='utf-8')
+            store = rag_memory.JsonRagStore(str(store_dir))
+            fake_fd = 777
+
+            with (
+                mock.patch.object(rag_memory.os, 'open', return_value=fake_fd),
+                mock.patch.object(rag_memory.os, 'fdopen', side_effect=OSError('fdopen denied')),
+                mock.patch.object(rag_memory.os, 'close') as close_mock,
+                mock.patch('builtins.print') as print_mock,
+            ):
+                marked = store._mark_lock_released({'operation': 'upsert_history'})
+
+            warnings = '\n'.join(str(call.args[0]) for call in print_mock.call_args_list)
+
+        self.assertFalse(marked)
+        close_mock.assert_called_once_with(fake_fd)
+        self.assertIn('Failed to mark RAG store lock released', warnings)
+        self.assertIn('fdopen denied', warnings)
+
     def test_json_rag_store_reload_under_lock_prevents_stale_overwrite(self):
         with tempfile.TemporaryDirectory() as tmp:
             store_dir = Path(tmp)

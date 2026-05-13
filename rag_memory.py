@@ -5,7 +5,6 @@ import json
 import math
 import os
 import socket
-import sys
 from datetime import datetime
 
 
@@ -315,7 +314,16 @@ class JsonRagStore(object):
             self._warn(f'Failed to mark RAG store lock released {self.lock_path}: {exc}')
             return False
         try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            handle = os.fdopen(fd, 'w', encoding='utf-8')
+        except OSError as exc:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            self._warn(f'Failed to mark RAG store lock released {self.lock_path}: {exc}')
+            return False
+        try:
+            with handle:
                 json.dump(released_info, handle, ensure_ascii=False)
         except OSError as exc:
             self._warn(f'Failed to mark RAG store lock released {self.lock_path}: {exc}')
@@ -343,11 +351,12 @@ class JsonRagStore(object):
                 )
 
         try:
+            operation_succeeded = False
             with os.fdopen(fd, 'w', encoding='utf-8') as handle:
                 json.dump(lock_info, handle, ensure_ascii=False)
             yield lock_info
+            operation_succeeded = True
         finally:
-            operation_failed = sys.exc_info()[0] is not None
             try:
                 os.remove(self.lock_path)
             except FileNotFoundError:
@@ -355,7 +364,7 @@ class JsonRagStore(object):
             except OSError as exc:
                 self._mark_lock_released(lock_info)
                 self._warn(f'Failed to remove RAG store lock {self.lock_path}: {exc}')
-                if not operation_failed:
+                if operation_succeeded:
                     raise JsonRagStoreLockError(
                         f'Failed to remove RAG store lock {self.lock_path}: {exc}'
                     )
