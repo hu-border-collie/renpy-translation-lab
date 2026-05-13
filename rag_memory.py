@@ -185,7 +185,7 @@ class JsonRagStore(object):
         os.makedirs(self.store_dir, exist_ok=True)
         lock_info = self._lock_owner(operation)
         try:
-            fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
             existing = self._read_lock_owner()
             raise JsonRagStoreLockError(
@@ -201,6 +201,8 @@ class JsonRagStore(object):
                 os.remove(self.lock_path)
             except FileNotFoundError:
                 pass
+            except OSError as exc:
+                print(f'Warning: Failed to remove RAG store lock {self.lock_path}: {exc}')
 
     def _update_metadata_unlocked(self, operation, updates, lock_info):
         if not isinstance(self.metadata, dict):
