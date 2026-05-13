@@ -135,7 +135,8 @@ python gemini_translate_batch.py apply
 - `check` 是干跑校验，不会修改 `.rpy`
 - `apply` 只会写回通过校验的结果
 - 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包
-- 当前不建议并行 `apply` 到同一个本地 RAG store；共享 `history.jsonl` 的写入保护还不算完整产品化
+- 本地 RAG store 写入会使用 `.rag_store.lock` 和临时文件 + 原子替换保护 `history.jsonl` / `metadata.json`；如果另一个进程正在写同一个 store，后启动的进程会明确失败并显示锁持有者信息
+- 加载 RAG store 时，损坏的 metadata 或坏 JSONL 行会输出 warning；可恢复的 history 记录会继续保留
 
 ### 可选：Structured Story Memory
 
