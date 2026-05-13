@@ -956,21 +956,28 @@ class RagMemoryStoreTests(unittest.TestCase):
 
             self.assertFalse((store_dir / 'history.jsonl').exists())
 
-    def test_json_rag_store_lock_cleanup_warns_without_failing_write(self):
+    def test_json_rag_store_lock_cleanup_failure_fails_and_releases_lock(self):
         with tempfile.TemporaryDirectory() as tmp:
             store_dir = Path(tmp)
+            lock_path = store_dir / '.rag_store.lock'
             store = rag_memory.JsonRagStore(str(store_dir))
             with (
                 mock.patch.object(rag_memory.os, 'remove', side_effect=OSError('remove denied')),
                 mock.patch('builtins.print') as print_mock,
             ):
-                store.upsert_history([self.make_record('m1')])
+                with self.assertRaisesRegex(rag_memory.JsonRagStoreLockError, 'remove denied'):
+                    store.upsert_history([self.make_record('m1')])
 
+                released_lock = json.loads(lock_path.read_text(encoding='utf-8'))
+                warnings = '\n'.join(str(call.args[0]) for call in print_mock.call_args_list)
+
+            with mock.patch('builtins.print'):
+                store.upsert_history([self.make_record('m2')])
             reloaded = rag_memory.JsonRagStore(str(store_dir))
-            history_ids = reloaded.history_ids_for_file('script.rpy')
-            warnings = '\n'.join(str(call.args[0]) for call in print_mock.call_args_list)
+            history_ids = set(reloaded.history_ids_for_file('script.rpy'))
 
-        self.assertEqual(history_ids, ['m1'])
+        self.assertIn('released_at', released_lock)
+        self.assertEqual(history_ids, {'m1', 'm2'})
         self.assertIn('Failed to remove RAG store lock', warnings)
         self.assertIn('remove denied', warnings)
 

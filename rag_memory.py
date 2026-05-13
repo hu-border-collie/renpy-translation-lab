@@ -5,6 +5,7 @@ import json
 import math
 import os
 import socket
+import sys
 from datetime import datetime
 
 
@@ -186,6 +187,7 @@ class JsonRagStore(object):
         owner = data.get('owner')
         pid = data.get('pid')
         created_at = data.get('created_at')
+        released_at = data.get('released_at')
         if operation:
             parts.append(f'operation={operation}')
         if owner:
@@ -194,6 +196,8 @@ class JsonRagStore(object):
             parts.append(f'pid={pid}')
         if created_at:
             parts.append(f'created_at={created_at}')
+        if released_at:
+            parts.append(f'released_at={released_at}')
         return ', '.join(parts) if parts else 'unknown owner'
 
     def _read_lock_owner(self):
@@ -270,6 +274,8 @@ class JsonRagStore(object):
         if not isinstance(data, dict):
             age_seconds = self._lock_file_age_seconds()
             return age_seconds is not None and age_seconds >= LOCK_STALE_AFTER_SECONDS
+        if data.get('released_at'):
+            return True
         local_owner = data.get('owner') == socket.gethostname()
         if local_owner and data.get('pid') is not None:
             is_alive = self._is_lock_owner_alive(data.get('pid'))
@@ -298,6 +304,24 @@ class JsonRagStore(object):
     def _open_lock_file(self):
         return os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
 
+    def _mark_lock_released(self, lock_info):
+        released_info = dict(lock_info)
+        released_info['released_at'] = now_iso()
+        try:
+            fd = os.open(self.lock_path, os.O_WRONLY | os.O_TRUNC)
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            self._warn(f'Failed to mark RAG store lock released {self.lock_path}: {exc}')
+            return False
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                json.dump(released_info, handle, ensure_ascii=False)
+        except OSError as exc:
+            self._warn(f'Failed to mark RAG store lock released {self.lock_path}: {exc}')
+            return False
+        return True
+
     @contextmanager
     def _locked(self, operation):
         os.makedirs(self.store_dir, exist_ok=True)
@@ -323,12 +347,18 @@ class JsonRagStore(object):
                 json.dump(lock_info, handle, ensure_ascii=False)
             yield lock_info
         finally:
+            operation_failed = sys.exc_info()[0] is not None
             try:
                 os.remove(self.lock_path)
             except FileNotFoundError:
                 pass
             except OSError as exc:
+                self._mark_lock_released(lock_info)
                 self._warn(f'Failed to remove RAG store lock {self.lock_path}: {exc}')
+                if not operation_failed:
+                    raise JsonRagStoreLockError(
+                        f'Failed to remove RAG store lock {self.lock_path}: {exc}'
+                    )
 
     def _update_metadata_unlocked(self, operation, updates, lock_info):
         if not isinstance(self.metadata, dict):
