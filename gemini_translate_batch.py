@@ -2657,10 +2657,16 @@ def coerce_external_seed_line(value, default=None):
     return line_number if line_number > 0 else default
 
 
+def hash_file_contents(path):
+    digest = hashlib.sha1()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()[:10]
+
+
 def external_seed_source_name(seed_path):
-    basename = os.path.basename(seed_path) or 'seed.jsonl'
-    seed_fingerprint = hash_key(os.path.normcase(os.path.abspath(seed_path)))
-    return f'external/{seed_fingerprint}-{basename}'
+    return f'external/{hash_file_contents(seed_path)}'
 
 
 def build_external_rag_seed_record(row, source_name, row_number, quality_state='external_seed'):
@@ -2901,9 +2907,10 @@ def bootstrap_rag_store(skip_prepare=False, seed_jsonl_paths=None):
         print_rag_bootstrap_summary(summary)
         return summary
 
+    seed_jsonl_paths = [path for path in (seed_jsonl_paths or []) if path]
     if not skip_prepare:
         legacy.run_prepare_steps()
-    if not os.path.isdir(legacy.TL_DIR):
+    if not os.path.isdir(legacy.TL_DIR) and not seed_jsonl_paths:
         raise SystemExit(f'TL dir does not exist: {legacy.TL_DIR}')
 
     external_records, external_summary = load_external_rag_seed_records(seed_jsonl_paths)
@@ -3469,7 +3476,7 @@ def build_arg_parser():
     bootstrap_rag_parser.add_argument(
         '--seed-jsonl',
         action='append',
-        default=[],
+        default=None,
         help='Import external parallel corpus JSONL rows as additional RAG seed records. Can be repeated.',
     )
 
