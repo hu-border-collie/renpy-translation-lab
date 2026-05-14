@@ -1333,6 +1333,7 @@ class BatchRagRegressionTests(unittest.TestCase):
                     '\n'.join([
                         json.dumps({
                             'file_rel_path': 'external/memory.txt',
+                            'line_start': None,
                             'line': 7,
                             'source': 'Aether Gate',
                             'translation': '\u4ee5\u592a\u95e8',
@@ -1369,9 +1370,13 @@ class BatchRagRegressionTests(unittest.TestCase):
             embed_mock.assert_called_once_with(['Aether Gate'], batch_mod.RAG_DOCUMENT_TASK_TYPE)
             self.assertIn('- external_seed_files: 1', output)
             self.assertIn('- external_seed_records: 1', output)
+            self.assertIn('- external_seed_invalid_json: 1', output)
+            self.assertIn('- external_seed_filtered: 1', output)
             self.assertIn('- external_seed_skipped: 2', output)
             self.assertEqual(summary['external_seed_files'], 1)
             self.assertEqual(summary['external_seed_records'], 1)
+            self.assertEqual(summary['external_seed_invalid_json'], 1)
+            self.assertEqual(summary['external_seed_filtered'], 1)
             self.assertEqual(summary['external_seed_skipped'], 2)
             self.assertEqual(summary['files_scanned'], 0)
             self.assertEqual(summary['scanned'], 1)
@@ -1381,6 +1386,75 @@ class BatchRagRegressionTests(unittest.TestCase):
             self.assertEqual(records[0]['quality_state'], 'external_seed')
             self.assertEqual(records[0]['source_text'], 'Aether Gate')
             self.assertEqual(records[0]['translated_text'], '\u4ee5\u592a\u95e8')
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
+            batch_mod._RAG_STORE = old_values['rag_store']
+            batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
+            batch_mod.legacy.BASE_DIR = old_values['base_dir']
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
+            batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
+
+    def test_external_jsonl_seed_default_source_name_preserves_path_uniqueness(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_store_dir': batch_mod.RAG_STORE_DIR,
+            'rag_store': batch_mod._RAG_STORE,
+            'rag_dim': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'base_dir': batch_mod.legacy.BASE_DIR,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'include_files': set(batch_mod.legacy.INCLUDE_FILES),
+            'include_prefixes': set(batch_mod.legacy.INCLUDE_PREFIXES),
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'game' / 'tl' / 'schinese'
+                tl_dir.mkdir(parents=True)
+                left_seed = root / 'left' / 'parallel.jsonl'
+                right_seed = root / 'right' / 'parallel.jsonl'
+                left_seed.parent.mkdir()
+                right_seed.parent.mkdir()
+                seed_row = json.dumps({
+                    'line': 1,
+                    'source': 'Aether Gate',
+                    'translation': '\u4ee5\u592a\u95e8',
+                }, ensure_ascii=False)
+                left_seed.write_text(seed_row, encoding='utf-8')
+                right_seed.write_text(seed_row, encoding='utf-8')
+
+                batch_mod.RAG_ENABLED = True
+                batch_mod.RAG_STORE_DIR = str(root / 'rag_store')
+                batch_mod.RAG_OUTPUT_DIMENSIONALITY = 3
+                batch_mod._RAG_STORE = None
+                batch_mod.legacy.BASE_DIR = str(root)
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.legacy.INCLUDE_FILES = set()
+                batch_mod.legacy.INCLUDE_PREFIXES = set()
+
+                with (
+                    mock.patch.object(batch_mod, 'embed_texts', return_value=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    summary = batch_mod.bootstrap_rag_store(
+                        skip_prepare=True,
+                        seed_jsonl_paths=[str(left_seed), str(right_seed)],
+                    )
+
+                store = batch_mod.get_rag_store()
+                records = list(store.history.values())
+                file_rel_paths = {record['file_rel_path'] for record in records}
+                memory_ids = {record['memory_id'] for record in records}
+
+            self.assertEqual(summary['external_seed_files'], 2)
+            self.assertEqual(summary['external_seed_records'], 2)
+            self.assertEqual(summary['upserted'], 2)
+            self.assertEqual(store.count_history(), 2)
+            self.assertEqual(len(file_rel_paths), 2)
+            self.assertEqual(len(memory_ids), 2)
+            self.assertTrue(all(path.startswith('external/') for path in file_rel_paths))
+            self.assertTrue(all(path.endswith('-parallel.jsonl') for path in file_rel_paths))
         finally:
             batch_mod.RAG_ENABLED = old_values['rag_enabled']
             batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
