@@ -605,11 +605,15 @@ def format_history_hits_block(hits, empty_label='(none)'):
         line_end = hit.get('line_end', '')
         score = hit.get('score', 0.0)
         quality = hit.get('quality_state', '')
-        translated_text = hit.get('translated_text', '') or hit.get('source_text', '')
-        translated_text = truncate_text(translated_text, RAG_HISTORY_CHAR_LIMIT)
-        lines.append(
-            f'- [{file_rel_path}:{line_start}-{line_end} score={score:.3f} quality={quality}] {translated_text}'
-        )
+        raw_source_text = hit.get('source_text', '')
+        raw_translated_text = hit.get('translated_text', '') or raw_source_text
+        source_text = truncate_text(raw_source_text, RAG_HISTORY_CHAR_LIMIT)
+        translated_text = truncate_text(raw_translated_text, RAG_HISTORY_CHAR_LIMIT)
+        prefix = f'- [{file_rel_path}:{line_start}-{line_end} score={score:.3f} quality={quality}]'
+        if source_text and translated_text and raw_source_text != raw_translated_text:
+            lines.append(f'{prefix} Source: {source_text} -> Translation: {translated_text}')
+        else:
+            lines.append(f'{prefix} Translation: {translated_text}')
     return '\n'.join(lines) if lines else empty_label
 
 
@@ -831,14 +835,11 @@ def copy_split_context_metadata(source_manifest, part_manifest, part_chunks):
             part_manifest[key] = source_manifest[key]
 
     if source_manifest.get('rag_enabled'):
-        rag_summary = dict(source_manifest.get('rag_summary') or {})
-        rag_summary['chunks_with_glossary_hits'] = sum(
-            1 for chunk in part_chunks if chunk.get('glossary_hits')
+        source_rag_summary = source_manifest.get('rag_summary') or {}
+        part_manifest['rag_summary'] = summarize_batch_rag(
+            part_chunks,
+            dict(source_rag_summary.get('prepare') or {}),
         )
-        rag_summary['chunks_with_history_hits'] = sum(
-            1 for chunk in part_chunks if chunk.get('history_hits')
-        )
-        part_manifest['rag_summary'] = rag_summary
 
     for key in (
         'story_memory_enabled',
@@ -1174,6 +1175,23 @@ def build_chunks(file_jobs):
     return chunks
 
 
+def summarize_batch_rag(chunks, prepare_summary):
+    chunk_count = len(chunks)
+    chunks_with_history_hits = sum(1 for chunk in chunks if chunk.get('history_hits'))
+    history_hit_count = sum(len(chunk.get('history_hits') or []) for chunk in chunks)
+    return {
+        'prepare': prepare_summary,
+        'chunks_with_glossary_hits': sum(1 for chunk in chunks if chunk.get('glossary_hits')),
+        'chunks_with_history_hits': chunks_with_history_hits,
+        'history_hit_count': history_hit_count,
+        'history_hit_rate': (chunks_with_history_hits / chunk_count) if chunk_count else 0.0,
+        'history_retrieval_errors': sum(
+            1 for chunk in chunks
+            if (chunk.get('rag_stats') or {}).get('error')
+        ),
+    }
+
+
 
 def get_batch_risk_warnings():
     warnings_list = []
@@ -1261,11 +1279,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
             'segment_lines': RAG_SEGMENT_LINES,
             'bootstrap_on_build': RAG_BOOTSTRAP_ON_BUILD,
         } if RAG_ENABLED else {},
-        'rag_summary': {
-            'prepare': rag_prepare_summary,
-            'chunks_with_glossary_hits': sum(1 for chunk in chunks if chunk.get('glossary_hits')),
-            'chunks_with_history_hits': sum(1 for chunk in chunks if chunk.get('history_hits')),
-        } if RAG_ENABLED else {},
+        'rag_summary': summarize_batch_rag(chunks, rag_prepare_summary) if RAG_ENABLED else {},
         'story_memory_enabled': STORY_MEMORY_ENABLED,
         'story_memory_graph_file': STORY_MEMORY_GRAPH_FILE if STORY_MEMORY_ENABLED else '',
         'story_memory_settings': {
@@ -2632,44 +2646,85 @@ def embed_history_records(records):
     batch_size = 16
     for start in range(0, len(records), batch_size):
         batch = records[start:start + batch_size]
-        vectors = embed_texts([record['combined_text'] for record in batch], RAG_DOCUMENT_TASK_TYPE)
+        vectors = embed_texts([record['source_text'] for record in batch], RAG_DOCUMENT_TASK_TYPE)
         for record, vector in zip(batch, vectors):
             enriched = dict(record)
             enriched['embedding'] = vector
             enriched['embedding_model'] = RAG_EMBEDDING_MODEL
             enriched['embedding_task_type'] = RAG_DOCUMENT_TASK_TYPE
             enriched['embedding_dim'] = len(vector)
+            enriched['embedding_text_kind'] = 'source_text'
+            enriched['embedding_text_checksum'] = hash_text(record.get('source_text', ''))
             embedded_records.append(enriched)
     return embedded_records
 
 
-def sync_rag_store_for_jobs(file_jobs, quality_state='seed'):
+def has_current_source_embedding(existing, record):
+    return (
+        existing
+        and existing.get('source_checksum') == record['source_checksum']
+        and existing.get('embedding_model') == RAG_EMBEDDING_MODEL
+        and existing.get('embedding_task_type') == RAG_DOCUMENT_TASK_TYPE
+        and existing.get('embedding_dim') == RAG_OUTPUT_DIMENSIONALITY
+        and existing.get('embedding_text_kind') == 'source_text'
+        and existing.get('embedding_text_checksum') == hash_text(record.get('source_text', ''))
+        and isinstance(existing.get('embedding'), list)
+        and bool(existing.get('embedding'))
+    )
+
+
+def reuse_existing_source_embedding(record, existing):
+    enriched = dict(record)
+    for key in (
+        'embedding',
+        'embedding_model',
+        'embedding_task_type',
+        'embedding_dim',
+        'embedding_text_kind',
+        'embedding_text_checksum',
+    ):
+        enriched[key] = existing.get(key)
+    return enriched
+
+
+def all_rag_file_jobs():
+    return [
+        {'file_rel_path': rel_path, 'file_path': file_path}
+        for rel_path, file_path in collect_files_to_process()
+    ]
+
+
+def sync_rag_store_for_jobs(file_jobs, quality_state='seed', scan_all_files=False):
     if not RAG_ENABLED:
         return {'enabled': False}
     store = get_rag_store()
     if store is None:
         return {'enabled': True, 'error': 'RAG store unavailable'}
 
-    base_records = collect_rag_seed_records_for_jobs(file_jobs, quality_state=quality_state)
-    pending_records = []
+    scan_jobs = all_rag_file_jobs() if scan_all_files else file_jobs
+    base_records = collect_rag_seed_records_for_jobs(scan_jobs, quality_state=quality_state)
+    records_to_embed = []
+    records_with_reused_embedding = []
     for record in base_records:
         existing = store.get_history_record(record['memory_id'])
-        if (
-            existing
-            and existing.get('source_checksum') == record['source_checksum']
-            and existing.get('translation_checksum') == record['translation_checksum']
-            and existing.get('embedding_model') == RAG_EMBEDDING_MODEL
-            and existing.get('embedding_task_type') == RAG_DOCUMENT_TASK_TYPE
-            and existing.get('embedding_dim') == RAG_OUTPUT_DIMENSIONALITY
-        ):
-            continue
-        pending_records.append(record)
+        if has_current_source_embedding(existing, record):
+            if existing.get('translation_checksum') == record['translation_checksum']:
+                continue
+            records_with_reused_embedding.append(reuse_existing_source_embedding(record, existing))
+        else:
+            records_to_embed.append(record)
+    pending_records = records_with_reused_embedding + records_to_embed
 
     stats = {
         'enabled': True,
         'store_dir': store.store_dir,
+        'scan_scope': 'all_files' if scan_all_files else 'pending_files',
+        'files_scanned': len(scan_jobs),
         'scanned': len(base_records),
         'pending': len(pending_records),
+        'embedding_pending': len(records_to_embed),
+        'reused_embeddings': len(records_with_reused_embedding),
+        'embedded': 0,
         'upserted': 0,
         'history_records_before': store.count_history(),
     }
@@ -2678,8 +2733,9 @@ def sync_rag_store_for_jobs(file_jobs, quality_state='seed'):
         return stats
 
     try:
-        embedded_records = embed_history_records(pending_records)
-        stats['upserted'] = store.upsert_history(embedded_records)
+        embedded_records = embed_history_records(records_to_embed)
+        stats['embedded'] = len(embedded_records)
+        stats['upserted'] = store.upsert_history(records_with_reused_embedding + embedded_records)
         stats['history_records_after'] = store.count_history()
     except Exception as exc:
         print(f'Warning: Failed to update RAG store: {exc}')
@@ -2699,7 +2755,7 @@ def prepare_rag_store(file_jobs):
         'bootstrap_on_build': RAG_BOOTSTRAP_ON_BUILD,
     }
     if RAG_BOOTSTRAP_ON_BUILD:
-        summary.update(sync_rag_store_for_jobs(file_jobs, quality_state='seed'))
+        summary.update(sync_rag_store_for_jobs(file_jobs, quality_state='seed', scan_all_files=True))
     return summary
 
 
