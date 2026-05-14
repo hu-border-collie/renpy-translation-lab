@@ -1122,6 +1122,24 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertIn('Source: Aether Gate -> Translation: \u4ee5\u592a\u95e8', block)
         self.assertIn('score=0.812', block)
 
+    def test_format_history_hits_block_compares_untruncated_text(self):
+        shared_prefix = 'A' * batch_mod.RAG_HISTORY_CHAR_LIMIT
+        block = batch_mod.format_history_hits_block([
+            {
+                'file_rel_path': 'script.rpy',
+                'line_start': 10,
+                'line_end': 12,
+                'score': 0.8123,
+                'quality_state': 'seed',
+                'source_text': shared_prefix + 'S',
+                'translated_text': shared_prefix + 'T',
+            }
+        ])
+
+        self.assertIn(' Source: ', block)
+        self.assertIn(' -> Translation: ', block)
+        self.assertNotIn('] Translation: ', block)
+
     def test_embed_history_records_uses_source_text_only(self):
         record = batch_mod.build_rag_record(
             'script.rpy',
@@ -1258,15 +1276,21 @@ class BatchRagRegressionTests(unittest.TestCase):
                 with mock.patch.object(batch_mod, 'embed_texts') as embed_mock_second:
                     second_summary = batch_mod.sync_rag_store_for_jobs(file_jobs)
 
+                with mock.patch.object(batch_mod, 'embed_texts') as embed_mock_third:
+                    third_summary = batch_mod.sync_rag_store_for_jobs(file_jobs)
+
                 store = batch_mod.get_rag_store()
                 records = list(store.history.values())
 
             embed_mock.assert_called_once()
             embed_mock_second.assert_not_called()
+            embed_mock_third.assert_not_called()
             self.assertEqual(first_summary['embedded'], 1)
             self.assertEqual(second_summary['embedding_pending'], 0)
             self.assertEqual(second_summary['reused_embeddings'], 1)
             self.assertEqual(second_summary['upserted'], 1)
+            self.assertEqual(third_summary['pending'], 0)
+            self.assertEqual(third_summary['embedded'], 0)
             self.assertEqual(records[0]['translated_text'], '\u65b0\u8bd1')
             self.assertEqual(records[0]['embedding'], [1.0, 0.0, 0.0])
         finally:
