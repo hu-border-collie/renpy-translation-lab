@@ -1230,6 +1230,52 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertEqual(summary['history_hit_rate'], 0.5)
         self.assertEqual(summary['history_retrieval_errors'], 1)
 
+    def test_sync_rag_store_reuses_embedding_when_only_translation_changes(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_store_dir': batch_mod.RAG_STORE_DIR,
+            'rag_store': batch_mod._RAG_STORE,
+            'rag_dim': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'rag_segment_lines': batch_mod.RAG_SEGMENT_LINES,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                store_dir = root / 'rag_store'
+                target_file = root / 'script.rpy'
+                target_file.write_text('old "Aether Gate"\nnew "\u65e7\u8bd1"\n', encoding='utf-8')
+                batch_mod.RAG_ENABLED = True
+                batch_mod.RAG_STORE_DIR = str(store_dir)
+                batch_mod.RAG_OUTPUT_DIMENSIONALITY = 3
+                batch_mod.RAG_SEGMENT_LINES = 4
+                batch_mod._RAG_STORE = None
+                file_jobs = [{'file_rel_path': 'script.rpy', 'file_path': str(target_file)}]
+
+                with mock.patch.object(batch_mod, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]) as embed_mock:
+                    first_summary = batch_mod.sync_rag_store_for_jobs(file_jobs)
+
+                target_file.write_text('old "Aether Gate"\nnew "\u65b0\u8bd1"\n', encoding='utf-8')
+                with mock.patch.object(batch_mod, 'embed_texts') as embed_mock_second:
+                    second_summary = batch_mod.sync_rag_store_for_jobs(file_jobs)
+
+                store = batch_mod.get_rag_store()
+                records = list(store.history.values())
+
+            embed_mock.assert_called_once()
+            embed_mock_second.assert_not_called()
+            self.assertEqual(first_summary['embedded'], 1)
+            self.assertEqual(second_summary['embedding_pending'], 0)
+            self.assertEqual(second_summary['reused_embeddings'], 1)
+            self.assertEqual(second_summary['upserted'], 1)
+            self.assertEqual(records[0]['translated_text'], '\u65b0\u8bd1')
+            self.assertEqual(records[0]['embedding'], [1.0, 0.0, 0.0])
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
+            batch_mod._RAG_STORE = old_values['rag_store']
+            batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
+            batch_mod.RAG_SEGMENT_LINES = old_values['rag_segment_lines']
+
 
 class BatchRepairRegressionTests(unittest.TestCase):
     def test_split_manifest_keeps_first_child_latest_and_context_metadata(self):
@@ -1246,7 +1292,11 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     'file_rel_path': 'script.rpy',
                     'file_path': str(root / 'script.rpy'),
                     'items': [{'id': 'script.rpy:0:4', 'text': 'Hello'}],
-                    'history_hits': [{'source_text': 'Hello', 'translated_text': '\u4f60\u597d'}],
+                    'glossary_hits': [{'source': 'Hello', 'target': '\u4f60\u597d'}],
+                    'history_hits': [
+                        {'source_text': 'Hello', 'translated_text': '\u4f60\u597d'},
+                        {'source_text': 'Hi', 'translated_text': '\u55e8'},
+                    ],
                     'story_hits': {'terms': [{'source': 'Void Gate', 'target': '\u865a\u7a7a\u95e8'}]},
                 },
                 {
@@ -1254,6 +1304,8 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     'file_rel_path': 'script.rpy',
                     'file_path': str(root / 'script.rpy'),
                     'items': [{'id': 'script.rpy:1:4', 'text': 'World'}],
+                    'history_hits': [{'source_text': 'World', 'translated_text': '\u4e16\u754c'}],
+                    'rag_stats': {'error': 'embedding failed'},
                 },
             ]
             input_path.write_text(
@@ -1272,7 +1324,13 @@ class BatchRepairRegressionTests(unittest.TestCase):
                         'rag_enabled': True,
                         'rag_store_path': str(root / 'rag_store'),
                         'rag_settings': {'top_k_history': 4},
-                        'rag_summary': {'chunks_with_history_hits': 1},
+                        'rag_summary': {
+                            'prepare': {'upserted': 3},
+                            'chunks_with_history_hits': 2,
+                            'history_hit_count': 3,
+                            'history_hit_rate': 1.0,
+                            'history_retrieval_errors': 1,
+                        },
                         'story_memory_enabled': True,
                         'story_memory_graph_file': str(root / 'story_graph.json'),
                         'story_memory_settings': {'top_k_terms': 8},
@@ -1296,6 +1354,11 @@ class BatchRepairRegressionTests(unittest.TestCase):
             self.assertTrue(first_child['story_memory_enabled'])
             self.assertEqual(first_child['story_memory_settings'], {'top_k_terms': 8})
             self.assertEqual(first_child['rag_summary']['chunks_with_history_hits'], 1)
+            self.assertEqual(first_child['rag_summary']['chunks_with_glossary_hits'], 1)
+            self.assertEqual(first_child['rag_summary']['history_hit_count'], 2)
+            self.assertEqual(first_child['rag_summary']['history_hit_rate'], 1.0)
+            self.assertEqual(first_child['rag_summary']['history_retrieval_errors'], 0)
+            self.assertEqual(first_child['rag_summary']['prepare'], {'upserted': 3})
             self.assertEqual(first_child['story_memory_summary']['chunks_with_story_hits'], 1)
 
     def test_collect_result_actions_ignores_duplicate_result_ids(self):
