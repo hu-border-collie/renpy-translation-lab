@@ -2785,6 +2785,11 @@ def print_rag_bootstrap_summary(summary):
 
 
 def bootstrap_rag_store(skip_prepare=False):
+    if not RAG_ENABLED:
+        summary = {'enabled': False}
+        print_rag_bootstrap_summary(summary)
+        return summary
+
     if not skip_prepare:
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):

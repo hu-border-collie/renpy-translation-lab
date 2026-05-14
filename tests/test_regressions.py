@@ -1289,6 +1289,29 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
             batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
 
+    def test_bootstrap_rag_store_disabled_does_not_require_tl_dir(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+        }
+        try:
+            batch_mod.RAG_ENABLED = False
+            batch_mod.legacy.TL_DIR = str(Path('missing') / 'tl')
+
+            stdout = io.StringIO()
+            with (
+                mock.patch.object(batch_mod.legacy, 'run_prepare_steps') as prepare_mock,
+                mock.patch('sys.stdout', stdout),
+            ):
+                summary = batch_mod.bootstrap_rag_store(skip_prepare=False)
+
+            prepare_mock.assert_not_called()
+            self.assertEqual(summary, {'enabled': False})
+            self.assertIn('RAG is disabled', stdout.getvalue())
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+
     def test_build_arg_parser_accepts_bootstrap_rag_command(self):
         args = batch_mod.build_arg_parser().parse_args(['bootstrap-rag', '--skip-prepare'])
 
