@@ -1421,8 +1421,20 @@ class BatchRagRegressionTests(unittest.TestCase):
                     'source': 'Aether Gate',
                     'translation': '\u4ee5\u592a\u95e8',
                 }, ensure_ascii=False)
-                left_seed.write_text(seed_row, encoding='utf-8')
-                right_seed.write_text(seed_row, encoding='utf-8')
+                left_seed.write_text(
+                    '\n'.join([
+                        seed_row,
+                        json.dumps({'source': 'left noop', 'translation': 'left noop'}, ensure_ascii=False),
+                    ]),
+                    encoding='utf-8',
+                )
+                right_seed.write_text(
+                    '\n'.join([
+                        seed_row,
+                        json.dumps({'source': 'right noop', 'translation': 'right noop'}, ensure_ascii=False),
+                    ]),
+                    encoding='utf-8',
+                )
 
                 batch_mod.RAG_ENABLED = True
                 batch_mod.RAG_STORE_DIR = str(root / 'rag_store')
@@ -1454,7 +1466,82 @@ class BatchRagRegressionTests(unittest.TestCase):
             self.assertEqual(len(file_rel_paths), 2)
             self.assertEqual(len(memory_ids), 2)
             self.assertTrue(all(path.startswith('external/') for path in file_rel_paths))
-            self.assertTrue(all(path.endswith('-parallel.jsonl') for path in file_rel_paths))
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
+            batch_mod._RAG_STORE = old_values['rag_store']
+            batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
+            batch_mod.legacy.BASE_DIR = old_values['base_dir']
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
+            batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
+
+    def test_external_jsonl_seed_default_source_name_is_content_stable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            left_seed = root / 'left' / 'parallel.jsonl'
+            right_seed = root / 'right' / 'renamed.jsonl'
+            left_seed.parent.mkdir()
+            right_seed.parent.mkdir()
+            seed_content = json.dumps({
+                'line': 1,
+                'source': 'Aether Gate',
+                'translation': '\u4ee5\u592a\u95e8',
+            }, ensure_ascii=False)
+            left_seed.write_text(seed_content, encoding='utf-8')
+            right_seed.write_text(seed_content, encoding='utf-8')
+
+            self.assertEqual(
+                batch_mod.external_seed_source_name(str(left_seed)),
+                batch_mod.external_seed_source_name(str(right_seed)),
+            )
+
+    def test_bootstrap_rag_store_imports_seed_when_tl_dir_is_missing(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_store_dir': batch_mod.RAG_STORE_DIR,
+            'rag_store': batch_mod._RAG_STORE,
+            'rag_dim': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'base_dir': batch_mod.legacy.BASE_DIR,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'include_files': set(batch_mod.legacy.INCLUDE_FILES),
+            'include_prefixes': set(batch_mod.legacy.INCLUDE_PREFIXES),
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                seed_path = root / 'parallel.jsonl'
+                seed_path.write_text(
+                    json.dumps({
+                        'source': 'Aether Gate',
+                        'translation': '\u4ee5\u592a\u95e8',
+                    }, ensure_ascii=False),
+                    encoding='utf-8',
+                )
+
+                batch_mod.RAG_ENABLED = True
+                batch_mod.RAG_STORE_DIR = str(root / 'rag_store')
+                batch_mod.RAG_OUTPUT_DIMENSIONALITY = 3
+                batch_mod._RAG_STORE = None
+                batch_mod.legacy.BASE_DIR = str(root)
+                batch_mod.legacy.TL_DIR = str(root / 'missing_tl')
+
+                with (
+                    mock.patch.object(batch_mod, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]) as embed_mock,
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    summary = batch_mod.bootstrap_rag_store(
+                        skip_prepare=True,
+                        seed_jsonl_paths=[str(seed_path)],
+                    )
+
+                store = batch_mod.get_rag_store()
+
+            embed_mock.assert_called_once_with(['Aether Gate'], batch_mod.RAG_DOCUMENT_TASK_TYPE)
+            self.assertEqual(summary['files_scanned'], 0)
+            self.assertEqual(summary['external_seed_records'], 1)
+            self.assertEqual(summary['upserted'], 1)
+            self.assertEqual(store.count_history(), 1)
         finally:
             batch_mod.RAG_ENABLED = old_values['rag_enabled']
             batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
@@ -1476,6 +1563,11 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertEqual(args.command, 'bootstrap-rag')
         self.assertTrue(args.skip_prepare)
         self.assertEqual(args.seed_jsonl, ['parallel.jsonl'])
+
+        parser = batch_mod.build_arg_parser()
+        parser.parse_args(['bootstrap-rag', '--seed-jsonl', 'first.jsonl'])
+        parsed_without_seed = parser.parse_args(['bootstrap-rag'])
+        self.assertIsNone(parsed_without_seed.seed_jsonl)
 
     def test_summarize_batch_rag_reports_hit_count_rate_and_errors(self):
         summary = batch_mod.summarize_batch_rag(

@@ -165,6 +165,8 @@ python gemini_translate_batch.py submit
 python gemini_translate_batch.py bootstrap-rag --seed-jsonl parallel_corpus.jsonl
 ```
 
+如果只想导入外部 seed，`game/tl/schinese` 目录可以暂时不存在；此时 TL 扫描数量会是 0，只导入 JSONL 中的有效记录。
+
 JSONL 每行是一个对象，支持以下字段：
 
 ```json
@@ -175,7 +177,7 @@ JSONL 每行是一个对象，支持以下字段：
 
 - `source` 或 `source_text`：原文
 - `translation`、`translated_text` 或 `target`：译文
-- `file_rel_path` / `file`、`line` / `line_start` / `line_end`：可选定位信息，用于生成稳定 memory id 和 diagnostics；如果未提供文件路径，会使用带 seed 文件路径指纹的默认来源名，避免多个同名 JSONL 相互覆盖
+- `file_rel_path` / `file`、`line` / `line_start` / `line_end`：可选定位信息，用于生成稳定 memory id 和 diagnostics；如果未提供文件路径，会使用带 seed 文件内容指纹的默认来源名，避免多个同名 JSONL 相互覆盖，同时保持移动文件后的重复导入可去重
 - `memory_id`：可选；不提供时会根据来源、行号和原文生成
 
 空行会被忽略；坏 JSON 会计入 `external_seed_invalid_json`，缺少原文/译文、或原文和译文完全相同的有效行会计入 `external_seed_filtered`，两者合计为 `external_seed_skipped`。
