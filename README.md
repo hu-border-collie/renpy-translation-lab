@@ -115,6 +115,7 @@ python gemini_translate.py
 Batch 模式：
 
 ```bash
+python gemini_translate_batch.py bootstrap-rag
 python gemini_translate_batch.py build
 python gemini_translate_batch.py submit
 python gemini_translate_batch.py status
@@ -131,6 +132,7 @@ python gemini_translate_batch.py apply
 - Structured Story Memory 默认关闭；需要分别通过 `batch.story_memory.enabled=true` 或 `sync.story_memory.enabled=true` 启用
 - 不带子命令直接运行 `gemini_translate_batch.py` 时，默认等价于 `submit`
 - Batch 产物默认会写到本地 `logs/` 目录
+- `bootstrap-rag` 会扫描当前允许处理的全部 TL `.rpy` 文件，把已有译文预先写入本地 history store；适合在正式 `build / submit` 前先暖库
 - `probe` 会用同步请求做最小 smoke test
 - `check` 是干跑校验，不会修改 `.rpy`
 - `apply` 只会写回通过校验的结果
@@ -138,6 +140,28 @@ python gemini_translate_batch.py apply
 - 本地 RAG store 写入会使用 `.rag_store.lock` 和临时文件 + 原子替换保护 `history.jsonl` / `metadata.json`；如果另一个进程正在写同一个 store，后启动的进程会明确失败并显示锁持有者信息；同机写入进程崩溃后留下的 stale lock 会在确认 PID 已退出时自动回收
 - 如果确认没有进程正在写入同一个 RAG store，可手动删除残留的 `.rag_store.lock` 或 `*.tmp.*` 文件来恢复写入；自动清理失败时会输出包含文件路径的 warning
 - 加载 RAG store 时，损坏的 metadata 或坏 JSONL 行会输出 warning；可恢复的 history 记录会继续保留
+
+### 可选：Batch RAG 预建库
+
+如果项目里已经有一部分人工译文或旧译文，可以先运行：
+
+```bash
+python gemini_translate_batch.py bootstrap-rag
+```
+
+这个命令只刷新本地 RAG history store，不会创建 Batch package，也不会修改 `.rpy`。它会复用 `batch.rag` 配置，扫描 `game/tl/schinese` 下当前允许处理的 `.rpy` 文件，提取已有 `old/new` 译文记录并生成 source-only embedding。
+
+典型流程：
+
+```bash
+python gemini_translate_batch.py bootstrap-rag
+python gemini_translate_batch.py build
+python gemini_translate_batch.py submit
+```
+
+命令输出会包含 `scan_scope`、`files_scanned`、`scanned`、`embedded`、`reused_embeddings`、`upserted` 和 history record 数量，方便确认预建库是否真的扫描并写入了内容。
+
+注意：`bootstrap-rag` 解决的是“build 前先用已有译文暖库”的问题；它不会让已经 build / split 完的旧请求动态吃到后续 apply 的新结果。需要滚动回灌时，仍要按波次重新 build，或等待后续动态波次编排能力。
 
 ### 可选：Structured Story Memory
 
@@ -255,7 +279,7 @@ python extract_relations.py /path/to/game/tl/schinese --mode semantic
 - Excel / HTML 协作流
 - 面向普通用户的零配置体验
 - 完整的游戏解包 / 打包一体化发布流程
-- 面向超大项目的完整 RAG 生产工作流（例如全项目 bootstrap 建库、严格的波次式回灌编排、并发写保护）
+- 面向超大项目的完整 RAG 生产工作流（例如严格的波次式回灌编排、多阶段调度策略）
 - 完整的结构化剧情图谱生产工作流（例如 schema 校验、自动 seed 生成、Neo4j 可视化导出）
 
 ## 项目状态

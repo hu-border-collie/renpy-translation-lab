@@ -2759,6 +2759,47 @@ def prepare_rag_store(file_jobs):
     return summary
 
 
+def print_rag_bootstrap_summary(summary):
+    if not summary.get('enabled'):
+        print('RAG is disabled. Enable batch.rag.enabled=true before bootstrapping.')
+        return
+
+    print('RAG bootstrap summary:')
+    for key in (
+        'store_dir',
+        'scan_scope',
+        'files_scanned',
+        'scanned',
+        'pending',
+        'embedding_pending',
+        'reused_embeddings',
+        'embedded',
+        'upserted',
+        'history_records_before',
+        'history_records_after',
+    ):
+        if key in summary:
+            print(f'- {key}: {summary[key]}')
+    if summary.get('error'):
+        print(f"- error: {summary['error']}")
+
+
+def bootstrap_rag_store(skip_prepare=False):
+    if not RAG_ENABLED:
+        summary = {'enabled': False}
+        print_rag_bootstrap_summary(summary)
+        return summary
+
+    if not skip_prepare:
+        legacy.run_prepare_steps()
+    if not os.path.isdir(legacy.TL_DIR):
+        raise SystemExit(f'TL dir does not exist: {legacy.TL_DIR}')
+
+    summary = sync_rag_store_for_jobs([], quality_state='seed', scan_all_files=True)
+    print_rag_bootstrap_summary(summary)
+    return summary
+
+
 
 def entry_context_text(entry):
     translated = entry.get('translation', '')
@@ -3298,6 +3339,16 @@ def build_arg_parser():
         help='Skip auto prepare steps before collecting tasks.',
     )
 
+    bootstrap_rag_parser = subparsers.add_parser(
+        'bootstrap-rag',
+        help='Prebuild or refresh the Batch RAG history store from all allowed TL files.',
+    )
+    bootstrap_rag_parser.add_argument(
+        '--skip-prepare',
+        action='store_true',
+        help='Skip auto prepare steps before scanning TL files.',
+    )
+
     submit_parser = subparsers.add_parser('submit', help='Create and submit a batch job.')
     submit_parser.add_argument(
         'target',
@@ -3414,6 +3465,10 @@ def main(argv=None):
             display_name_override=args.display_name,
             skip_prepare=args.skip_prepare,
         )
+        return
+
+    if command == 'bootstrap-rag':
+        bootstrap_rag_store(skip_prepare=args.skip_prepare)
         return
 
     if command == 'submit':
