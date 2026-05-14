@@ -2649,12 +2649,18 @@ def coerce_external_seed_text(row, keys):
     return ''
 
 
-def coerce_external_seed_line(value, default):
+def coerce_external_seed_line(value, default=None):
     try:
         line_number = int(value)
     except (TypeError, ValueError):
         return default
     return line_number if line_number > 0 else default
+
+
+def external_seed_source_name(seed_path):
+    basename = os.path.basename(seed_path) or 'seed.jsonl'
+    seed_fingerprint = hash_key(os.path.normcase(os.path.abspath(seed_path)))
+    return f'external/{seed_fingerprint}-{basename}'
 
 
 def build_external_rag_seed_record(row, source_name, row_number, quality_state='external_seed'):
@@ -2671,7 +2677,9 @@ def build_external_rag_seed_record(row, source_name, row_number, quality_state='
         file_rel_path = source_name
     file_rel_path = legacy._normalize_rel_path(file_rel_path.strip())
 
-    line_start = coerce_external_seed_line(row.get('line_start', row.get('line')), row_number)
+    line_start = coerce_external_seed_line(row.get('line_start'))
+    if line_start is None:
+        line_start = coerce_external_seed_line(row.get('line'), row_number)
     line_end = coerce_external_seed_line(row.get('line_end'), line_start)
     if line_end < line_start:
         line_end = line_start
@@ -2700,12 +2708,13 @@ def build_external_rag_seed_record(row, source_name, row_number, quality_state='
 
 def load_external_rag_seed_records(seed_jsonl_paths, quality_state='external_seed'):
     records = []
-    skipped = 0
+    invalid_json = 0
+    filtered = 0
     paths = [path for path in (seed_jsonl_paths or []) if path]
     for seed_path in paths:
         if not os.path.isfile(seed_path):
             raise SystemExit(f'External RAG seed JSONL not found: {seed_path}')
-        source_name = f'external/{os.path.basename(seed_path)}'
+        source_name = external_seed_source_name(seed_path)
         with open(seed_path, 'r', encoding='utf-8-sig') as handle:
             for row_number, raw_line in enumerate(handle, start=1):
                 line = raw_line.strip()
@@ -2714,17 +2723,19 @@ def load_external_rag_seed_records(seed_jsonl_paths, quality_state='external_see
                 try:
                     row = json.loads(line)
                 except json.JSONDecodeError:
-                    skipped += 1
+                    invalid_json += 1
                     continue
                 record = build_external_rag_seed_record(row, source_name, row_number, quality_state=quality_state)
                 if record is None:
-                    skipped += 1
+                    filtered += 1
                     continue
                 records.append(record)
     return records, {
         'external_seed_files': len(paths),
         'external_seed_records': len(records),
-        'external_seed_skipped': skipped,
+        'external_seed_invalid_json': invalid_json,
+        'external_seed_filtered': filtered,
+        'external_seed_skipped': invalid_json + filtered,
     }
 
 
@@ -2867,6 +2878,8 @@ def print_rag_bootstrap_summary(summary):
         'scanned',
         'external_seed_files',
         'external_seed_records',
+        'external_seed_invalid_json',
+        'external_seed_filtered',
         'external_seed_skipped',
         'pending',
         'embedding_pending',
