@@ -605,11 +605,12 @@ def format_history_hits_block(hits, empty_label='(none)'):
         line_end = hit.get('line_end', '')
         score = hit.get('score', 0.0)
         quality = hit.get('quality_state', '')
-        source_text = truncate_text(hit.get('source_text', ''), RAG_HISTORY_CHAR_LIMIT)
-        translated_text = hit.get('translated_text', '') or hit.get('source_text', '')
-        translated_text = truncate_text(translated_text, RAG_HISTORY_CHAR_LIMIT)
+        raw_source_text = hit.get('source_text', '')
+        raw_translated_text = hit.get('translated_text', '') or raw_source_text
+        source_text = truncate_text(raw_source_text, RAG_HISTORY_CHAR_LIMIT)
+        translated_text = truncate_text(raw_translated_text, RAG_HISTORY_CHAR_LIMIT)
         prefix = f'- [{file_rel_path}:{line_start}-{line_end} score={score:.3f} quality={quality}]'
-        if source_text and translated_text and source_text != translated_text:
+        if source_text and translated_text and raw_source_text != raw_translated_text:
             lines.append(f'{prefix} Source: {source_text} -> Translation: {translated_text}')
         else:
             lines.append(f'{prefix} Translation: {translated_text}')
@@ -2723,6 +2724,7 @@ def sync_rag_store_for_jobs(file_jobs, quality_state='seed', scan_all_files=Fals
         'pending': len(pending_records),
         'embedding_pending': len(records_to_embed),
         'reused_embeddings': len(records_with_reused_embedding),
+        'embedded': 0,
         'upserted': 0,
         'history_records_before': store.count_history(),
     }
