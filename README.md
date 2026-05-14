@@ -159,7 +159,28 @@ python gemini_translate_batch.py build
 python gemini_translate_batch.py submit
 ```
 
-命令输出会包含 `scan_scope`、`files_scanned`、`scanned`、`embedded`、`reused_embeddings`、`upserted` 和 history record 数量，方便确认预建库是否真的扫描并写入了内容。
+也可以导入外部平行语料 JSONL 作为额外 seed：
+
+```bash
+python gemini_translate_batch.py bootstrap-rag --seed-jsonl parallel_corpus.jsonl
+```
+
+JSONL 每行是一个对象，支持以下字段：
+
+```json
+{"source": "Aether Gate", "translation": "以太门", "file_rel_path": "external/memory.txt", "line": 1}
+```
+
+字段说明：
+
+- `source` 或 `source_text`：原文
+- `translation`、`translated_text` 或 `target`：译文
+- `file_rel_path` / `file`、`line` / `line_start` / `line_end`：可选定位信息，用于生成稳定 memory id 和 diagnostics
+- `memory_id`：可选；不提供时会根据来源、行号和原文生成
+
+空行、坏 JSON、缺少原文/译文、或原文和译文完全相同的行会被跳过，并计入 `external_seed_skipped`。
+
+命令输出会包含 `scan_scope`、`files_scanned`、`scanned`、`external_seed_records`、`external_seed_skipped`、`embedded`、`reused_embeddings`、`upserted` 和 history record 数量，方便确认预建库是否真的扫描并写入了内容。
 
 注意：`bootstrap-rag` 解决的是“build 前先用已有译文暖库”的问题；它不会让已经 build / split 完的旧请求动态吃到后续 apply 的新结果。需要滚动回灌时，仍要按波次重新 build，或等待后续动态波次编排能力。
 
