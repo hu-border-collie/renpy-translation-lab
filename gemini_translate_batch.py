@@ -834,14 +834,11 @@ def copy_split_context_metadata(source_manifest, part_manifest, part_chunks):
             part_manifest[key] = source_manifest[key]
 
     if source_manifest.get('rag_enabled'):
-        rag_summary = dict(source_manifest.get('rag_summary') or {})
-        rag_summary['chunks_with_glossary_hits'] = sum(
-            1 for chunk in part_chunks if chunk.get('glossary_hits')
+        source_rag_summary = source_manifest.get('rag_summary') or {}
+        part_manifest['rag_summary'] = summarize_batch_rag(
+            part_chunks,
+            dict(source_rag_summary.get('prepare') or {}),
         )
-        rag_summary['chunks_with_history_hits'] = sum(
-            1 for chunk in part_chunks if chunk.get('history_hits')
-        )
-        part_manifest['rag_summary'] = rag_summary
 
     for key in (
         'story_memory_enabled',
@@ -2661,6 +2658,34 @@ def embed_history_records(records):
     return embedded_records
 
 
+def has_current_source_embedding(existing, record):
+    return (
+        existing
+        and existing.get('source_checksum') == record['source_checksum']
+        and existing.get('embedding_model') == RAG_EMBEDDING_MODEL
+        and existing.get('embedding_task_type') == RAG_DOCUMENT_TASK_TYPE
+        and existing.get('embedding_dim') == RAG_OUTPUT_DIMENSIONALITY
+        and existing.get('embedding_text_kind') == 'source_text'
+        and existing.get('embedding_text_checksum') == hash_text(record.get('source_text', ''))
+        and isinstance(existing.get('embedding'), list)
+        and bool(existing.get('embedding'))
+    )
+
+
+def reuse_existing_source_embedding(record, existing):
+    enriched = dict(record)
+    for key in (
+        'embedding',
+        'embedding_model',
+        'embedding_task_type',
+        'embedding_dim',
+        'embedding_text_kind',
+        'embedding_text_checksum',
+    ):
+        enriched[key] = existing.get(key)
+    return enriched
+
+
 def all_rag_file_jobs():
     return [
         {'file_rel_path': rel_path, 'file_path': file_path}
@@ -2677,21 +2702,17 @@ def sync_rag_store_for_jobs(file_jobs, quality_state='seed', scan_all_files=Fals
 
     scan_jobs = all_rag_file_jobs() if scan_all_files else file_jobs
     base_records = collect_rag_seed_records_for_jobs(scan_jobs, quality_state=quality_state)
-    pending_records = []
+    records_to_embed = []
+    records_with_reused_embedding = []
     for record in base_records:
         existing = store.get_history_record(record['memory_id'])
-        if (
-            existing
-            and existing.get('source_checksum') == record['source_checksum']
-            and existing.get('translation_checksum') == record['translation_checksum']
-            and existing.get('embedding_model') == RAG_EMBEDDING_MODEL
-            and existing.get('embedding_task_type') == RAG_DOCUMENT_TASK_TYPE
-            and existing.get('embedding_dim') == RAG_OUTPUT_DIMENSIONALITY
-            and existing.get('embedding_text_kind') == 'source_text'
-            and existing.get('embedding_text_checksum') == hash_text(record.get('source_text', ''))
-        ):
-            continue
-        pending_records.append(record)
+        if has_current_source_embedding(existing, record):
+            if existing.get('translation_checksum') == record['translation_checksum']:
+                continue
+            records_with_reused_embedding.append(reuse_existing_source_embedding(record, existing))
+        else:
+            records_to_embed.append(record)
+    pending_records = records_with_reused_embedding + records_to_embed
 
     stats = {
         'enabled': True,
@@ -2700,6 +2721,8 @@ def sync_rag_store_for_jobs(file_jobs, quality_state='seed', scan_all_files=Fals
         'files_scanned': len(scan_jobs),
         'scanned': len(base_records),
         'pending': len(pending_records),
+        'embedding_pending': len(records_to_embed),
+        'reused_embeddings': len(records_with_reused_embedding),
         'upserted': 0,
         'history_records_before': store.count_history(),
     }
@@ -2708,8 +2731,9 @@ def sync_rag_store_for_jobs(file_jobs, quality_state='seed', scan_all_files=Fals
         return stats
 
     try:
-        embedded_records = embed_history_records(pending_records)
-        stats['upserted'] = store.upsert_history(embedded_records)
+        embedded_records = embed_history_records(records_to_embed)
+        stats['embedded'] = len(embedded_records)
+        stats['upserted'] = store.upsert_history(records_with_reused_embedding + embedded_records)
         stats['history_records_after'] = store.count_history()
     except Exception as exc:
         print(f'Warning: Failed to update RAG store: {exc}')
