@@ -2641,6 +2641,110 @@ def collect_rag_seed_records_for_jobs(file_jobs, quality_state='seed'):
     return records
 
 
+def coerce_external_seed_text(row, keys):
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ''
+
+
+def coerce_external_seed_line(value, default=None):
+    try:
+        line_number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return line_number if line_number > 0 else default
+
+
+def hash_file_contents(path):
+    digest = hashlib.sha1()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()[:10]
+
+
+def external_seed_source_name(seed_path):
+    return f'external/{hash_file_contents(seed_path)}'
+
+
+def build_external_rag_seed_record(row, source_name, row_number, quality_state='external_seed'):
+    if not isinstance(row, dict):
+        return None
+
+    source_text = coerce_external_seed_text(row, ('source_text', 'source'))
+    translated_text = coerce_external_seed_text(row, ('translated_text', 'translation', 'target'))
+    if not should_index_rag_entry({'source': source_text, 'translation': translated_text}):
+        return None
+
+    file_rel_path = row.get('file_rel_path') or row.get('file') or source_name
+    if not isinstance(file_rel_path, str) or not file_rel_path.strip():
+        file_rel_path = source_name
+    file_rel_path = legacy._normalize_rel_path(file_rel_path.strip())
+
+    line_start = coerce_external_seed_line(row.get('line_start'))
+    if line_start is None:
+        line_start = coerce_external_seed_line(row.get('line'), row_number)
+    line_end = coerce_external_seed_line(row.get('line_end'), line_start)
+    if line_end < line_start:
+        line_end = line_start
+
+    memory_id = row.get('memory_id')
+    if not isinstance(memory_id, str) or not memory_id.strip():
+        memory_id = hash_key(f'external:{file_rel_path}:{line_start}:{line_end}:{source_text}')
+    else:
+        memory_id = memory_id.strip()
+
+    combined_text = f"Source:\n{source_text}\n\nTranslation:\n{translated_text}"
+    return {
+        'memory_id': memory_id,
+        'file_rel_path': file_rel_path,
+        'line_start': line_start,
+        'line_end': line_end,
+        'source_text': source_text,
+        'translated_text': translated_text,
+        'combined_text': combined_text,
+        'quality_state': quality_state,
+        'created_at': datetime.now().isoformat(timespec='seconds'),
+        'source_checksum': hash_text(source_text),
+        'translation_checksum': hash_text(translated_text),
+    }
+
+
+def load_external_rag_seed_records(seed_jsonl_paths, quality_state='external_seed'):
+    records = []
+    invalid_json = 0
+    filtered = 0
+    paths = [path for path in (seed_jsonl_paths or []) if path]
+    for seed_path in paths:
+        if not os.path.isfile(seed_path):
+            raise SystemExit(f'External RAG seed JSONL not found: {seed_path}')
+        source_name = external_seed_source_name(seed_path)
+        with open(seed_path, 'r', encoding='utf-8-sig') as handle:
+            for row_number, raw_line in enumerate(handle, start=1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    invalid_json += 1
+                    continue
+                record = build_external_rag_seed_record(row, source_name, row_number, quality_state=quality_state)
+                if record is None:
+                    filtered += 1
+                    continue
+                records.append(record)
+    return records, {
+        'external_seed_files': len(paths),
+        'external_seed_records': len(records),
+        'external_seed_invalid_json': invalid_json,
+        'external_seed_filtered': filtered,
+        'external_seed_skipped': invalid_json + filtered,
+    }
+
+
 def embed_history_records(records):
     embedded_records = []
     batch_size = 16
@@ -2694,7 +2798,13 @@ def all_rag_file_jobs():
     ]
 
 
-def sync_rag_store_for_jobs(file_jobs, quality_state='seed', scan_all_files=False):
+def sync_rag_store_for_jobs(
+    file_jobs,
+    quality_state='seed',
+    scan_all_files=False,
+    extra_records=None,
+    extra_summary=None,
+):
     if not RAG_ENABLED:
         return {'enabled': False}
     store = get_rag_store()
@@ -2703,6 +2813,7 @@ def sync_rag_store_for_jobs(file_jobs, quality_state='seed', scan_all_files=Fals
 
     scan_jobs = all_rag_file_jobs() if scan_all_files else file_jobs
     base_records = collect_rag_seed_records_for_jobs(scan_jobs, quality_state=quality_state)
+    base_records.extend(extra_records or [])
     records_to_embed = []
     records_with_reused_embedding = []
     for record in base_records:
@@ -2728,6 +2839,7 @@ def sync_rag_store_for_jobs(file_jobs, quality_state='seed', scan_all_files=Fals
         'upserted': 0,
         'history_records_before': store.count_history(),
     }
+    stats.update(extra_summary or {})
     if not pending_records:
         stats['history_records_after'] = store.count_history()
         return stats
@@ -2770,6 +2882,11 @@ def print_rag_bootstrap_summary(summary):
         'scan_scope',
         'files_scanned',
         'scanned',
+        'external_seed_files',
+        'external_seed_records',
+        'external_seed_invalid_json',
+        'external_seed_filtered',
+        'external_seed_skipped',
         'pending',
         'embedding_pending',
         'reused_embeddings',
@@ -2784,18 +2901,26 @@ def print_rag_bootstrap_summary(summary):
         print(f"- error: {summary['error']}")
 
 
-def bootstrap_rag_store(skip_prepare=False):
+def bootstrap_rag_store(skip_prepare=False, seed_jsonl_paths=None):
     if not RAG_ENABLED:
         summary = {'enabled': False}
         print_rag_bootstrap_summary(summary)
         return summary
 
+    seed_jsonl_paths = [path for path in (seed_jsonl_paths or []) if path]
     if not skip_prepare:
         legacy.run_prepare_steps()
-    if not os.path.isdir(legacy.TL_DIR):
+    if not os.path.isdir(legacy.TL_DIR) and not seed_jsonl_paths:
         raise SystemExit(f'TL dir does not exist: {legacy.TL_DIR}')
 
-    summary = sync_rag_store_for_jobs([], quality_state='seed', scan_all_files=True)
+    external_records, external_summary = load_external_rag_seed_records(seed_jsonl_paths)
+    summary = sync_rag_store_for_jobs(
+        [],
+        quality_state='seed',
+        scan_all_files=True,
+        extra_records=external_records,
+        extra_summary=external_summary,
+    )
     print_rag_bootstrap_summary(summary)
     return summary
 
@@ -3348,6 +3473,12 @@ def build_arg_parser():
         action='store_true',
         help='Skip auto prepare steps before scanning TL files.',
     )
+    bootstrap_rag_parser.add_argument(
+        '--seed-jsonl',
+        action='append',
+        default=None,
+        help='Import external parallel corpus JSONL rows as additional RAG seed records. Can be repeated.',
+    )
 
     submit_parser = subparsers.add_parser('submit', help='Create and submit a batch job.')
     submit_parser.add_argument(
@@ -3468,7 +3599,7 @@ def main(argv=None):
         return
 
     if command == 'bootstrap-rag':
-        bootstrap_rag_store(skip_prepare=args.skip_prepare)
+        bootstrap_rag_store(skip_prepare=args.skip_prepare, seed_jsonl_paths=args.seed_jsonl)
         return
 
     if command == 'submit':
