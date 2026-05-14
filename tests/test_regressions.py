@@ -1225,6 +1225,76 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
             batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
 
+    def test_bootstrap_rag_store_scans_all_allowed_tl_files_explicitly(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_bootstrap': batch_mod.RAG_BOOTSTRAP_ON_BUILD,
+            'rag_store_dir': batch_mod.RAG_STORE_DIR,
+            'rag_store': batch_mod._RAG_STORE,
+            'rag_dim': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'rag_segment_lines': batch_mod.RAG_SEGMENT_LINES,
+            'base_dir': batch_mod.legacy.BASE_DIR,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'include_files': set(batch_mod.legacy.INCLUDE_FILES),
+            'include_prefixes': set(batch_mod.legacy.INCLUDE_PREFIXES),
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'game' / 'tl' / 'schinese'
+                tl_dir.mkdir(parents=True)
+                memory_file = tl_dir / 'memory.rpy'
+                memory_file.write_text('old "Aether Gate"\nnew "\u4ee5\u592a\u95e8"\n', encoding='utf-8')
+
+                batch_mod.RAG_ENABLED = True
+                batch_mod.RAG_BOOTSTRAP_ON_BUILD = False
+                batch_mod.RAG_STORE_DIR = str(root / 'rag_store')
+                batch_mod.RAG_OUTPUT_DIMENSIONALITY = 3
+                batch_mod.RAG_SEGMENT_LINES = 4
+                batch_mod._RAG_STORE = None
+                batch_mod.legacy.BASE_DIR = str(root)
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.legacy.INCLUDE_FILES = set()
+                batch_mod.legacy.INCLUDE_PREFIXES = set()
+
+                stdout = io.StringIO()
+                with (
+                    mock.patch.object(batch_mod, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]) as embed_mock,
+                    mock.patch('sys.stdout', stdout),
+                ):
+                    summary = batch_mod.bootstrap_rag_store(skip_prepare=True)
+
+                store = batch_mod.get_rag_store()
+                output = stdout.getvalue()
+
+            embed_mock.assert_called_once_with(['Aether Gate'], batch_mod.RAG_DOCUMENT_TASK_TYPE)
+            self.assertIn('RAG bootstrap summary:', output)
+            self.assertIn('- scan_scope: all_files', output)
+            self.assertIn('- embedded: 1', output)
+            self.assertEqual(summary['scan_scope'], 'all_files')
+            self.assertEqual(summary['files_scanned'], 1)
+            self.assertEqual(summary['scanned'], 1)
+            self.assertEqual(summary['embedded'], 1)
+            self.assertEqual(summary['upserted'], 1)
+            self.assertEqual(store.count_history(), 1)
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.RAG_BOOTSTRAP_ON_BUILD = old_values['rag_bootstrap']
+            batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
+            batch_mod._RAG_STORE = old_values['rag_store']
+            batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
+            batch_mod.RAG_SEGMENT_LINES = old_values['rag_segment_lines']
+            batch_mod.legacy.BASE_DIR = old_values['base_dir']
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
+            batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
+
+    def test_build_arg_parser_accepts_bootstrap_rag_command(self):
+        args = batch_mod.build_arg_parser().parse_args(['bootstrap-rag', '--skip-prepare'])
+
+        self.assertEqual(args.command, 'bootstrap-rag')
+        self.assertTrue(args.skip_prepare)
+
     def test_summarize_batch_rag_reports_hit_count_rate_and_errors(self):
         summary = batch_mod.summarize_batch_rag(
             [
