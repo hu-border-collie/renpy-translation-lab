@@ -370,6 +370,117 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertIn('Void Gate', normalized['terms'][0]['source'])
         self.assertNotIn('_story_memory_normalized', json.dumps(normalized))
 
+    def test_story_graph_example_passes_lightweight_validation(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        schema_path = repo_root / 'docs' / 'story_graph.schema.json'
+        example_path = repo_root / 'docs' / 'story_graph.example.json'
+
+        schema = json.loads(schema_path.read_text(encoding='utf-8'))
+        raw_graph = json.loads(example_path.read_text(encoding='utf-8'))
+
+        self.assertEqual(
+            schema['properties']['schema_version']['const'],
+            story_memory.STORY_GRAPH_SCHEMA_VERSION,
+        )
+        self.assertEqual(story_memory.validate_story_graph(raw_graph), [])
+
+        hits = story_memory.retrieve_story_hits(
+            raw_graph,
+            'chapter1.rpy',
+            [
+                {
+                    'id': 'chapter1.rpy:129:0',
+                    'text': 'Noah opens the Void Gate.',
+                    'line': 129,
+                    'speaker_id': 'e',
+                },
+            ],
+        )
+
+        self.assertTrue(story_memory.has_story_hits(hits))
+        self.assertEqual({item['id'] for item in hits['characters']}, {'eileen', 'noah'})
+        self.assertEqual(hits['relations'][0]['type'], 'close_friend')
+        self.assertEqual(hits['terms'][0]['source'], 'Void Gate')
+        self.assertEqual(hits['scenes'][0]['file_rel_path'], 'chapter1.rpy')
+
+    def test_validate_story_graph_reports_non_fatal_schema_warnings(self):
+        warnings = story_memory.validate_story_graph(
+            {
+                'schema_version': 2,
+                'characters': [
+                    'bad-character',
+                    {'id': '', 'speaker_ids': {'bad': 'shape'}},
+                    {'id': 'eileen', 'aliases': [{}]},
+                    {'id': 'numeric-alias', 'speaker_ids': 1, 'aliases': ['ok', 2]},
+                ],
+                'relations': [
+                    {'left': 'eileen', 'confidence': 'very'},
+                    {'left': 'eileen', 'right': 'noah', 'confidence': 'nan'},
+                    {'left': {'bad': 'shape'}, 'right': ['bad']},
+                    'bad-relation',
+                ],
+                'terms': [
+                    {'note': 'missing source'},
+                    {'source': {'bad': 'shape'}},
+                    {'target': {'bad': 'shape'}},
+                    42,
+                ],
+                'scenes': [
+                    {'line_start': 'ten', 'characters': {'bad': 'shape'}},
+                    {'file_rel_path': {'bad': 'shape'}, 'summary': 'invalid path'},
+                    {'file_rel_path': 'chapter1.rpy', 'line_start': 0, 'line_end': -1},
+                ],
+            }
+        )
+
+        self.assertTrue(any('schema_version' in warning for warning in warnings))
+        self.assertTrue(any('characters[0]' in warning for warning in warnings))
+        self.assertTrue(any('characters[1] is missing a usable id' in warning for warning in warnings))
+        self.assertTrue(any('characters[3].speaker_ids' in warning for warning in warnings))
+        self.assertTrue(any('characters[3].aliases[1]' in warning for warning in warnings))
+        self.assertTrue(any('relations[0].right' in warning for warning in warnings))
+        self.assertTrue(any('relations[1].confidence' in warning for warning in warnings))
+        self.assertTrue(any('relations[2].left' in warning for warning in warnings))
+        self.assertTrue(any('relations[2].right' in warning for warning in warnings))
+        self.assertTrue(any('terms[0]' in warning for warning in warnings))
+        self.assertTrue(any('terms[1].source' in warning for warning in warnings))
+        self.assertTrue(any('terms[2].target' in warning for warning in warnings))
+        self.assertTrue(any('scenes[0].line_start' in warning for warning in warnings))
+        self.assertTrue(any('scenes[0].file_rel_path' in warning for warning in warnings))
+        self.assertTrue(any('scenes[1].file_rel_path' in warning for warning in warnings))
+        self.assertTrue(any('scenes[2].line_start should be >= 1' in warning for warning in warnings))
+        self.assertTrue(any('scenes[2].line_end should be >= 1' in warning for warning in warnings))
+
+    def test_validate_story_graph_accepts_legacy_term_shapes(self):
+        self.assertEqual(
+            story_memory.validate_story_graph(
+                {
+                    'schema_version': story_memory.STORY_GRAPH_SCHEMA_VERSION,
+                    'terms': {
+                        'Void Gate': '\u865a\u7a7a\u95e8',
+                    },
+                }
+            ),
+            [],
+        )
+        self.assertEqual(
+            story_memory.validate_story_graph(
+                {
+                    'schema_version': story_memory.STORY_GRAPH_SCHEMA_VERSION,
+                    'terms': [
+                        {'term': 'Aether'},
+                        {'translation': '\u4ee5\u592a\u95e8'},
+                    ],
+                }
+            ),
+            [],
+        )
+
+    def test_validate_story_graph_warns_when_schema_version_missing(self):
+        warnings = story_memory.validate_story_graph({'terms': {'Void Gate': '\u865a\u7a7a\u95e8'}})
+
+        self.assertTrue(any('schema_version is required' in warning for warning in warnings))
+
     def test_story_memory_rel_path_preserves_parent_segments(self):
         self.assertEqual(story_memory._normalize_rel_path('./chapter1.rpy'), 'chapter1.rpy')
         self.assertEqual(story_memory._normalize_rel_path('../chapter1.rpy'), '../chapter1.rpy')
@@ -415,6 +526,40 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(graph, {'characters': {}, 'relations': [], 'terms': [], 'scenes': []})
         self.assertTrue(print_mock.called)
         self.assertIn('Failed to load story graph', print_mock.call_args[0][0])
+
+    def test_load_story_graph_warns_on_schema_issues_but_keeps_valid_entries(self):
+        graph = {
+            'characters': {
+                'eileen': {
+                    'speaker_ids': 'e',
+                    'zh_name': '\u827e\u7433',
+                },
+            },
+            'relations': [
+                {'left': 'eileen'},
+            ],
+            'terms': [
+                {'source': 'Void Gate', 'target': '\u865a\u7a7a\u95e8'},
+            ],
+            'scenes': [
+                {'file_rel_path': 'chapter1.rpy', 'line_start': 'bad'},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            graph_file = Path(tmp) / 'story_graph.json'
+            graph_file.write_text(json.dumps(graph), encoding='utf-8')
+            with mock.patch('builtins.print') as print_mock:
+                loaded = story_memory.load_story_graph(str(graph_file))
+
+        self.assertIn('eileen', loaded['characters'])
+        self.assertEqual(loaded['characters']['eileen']['speaker_ids'], ['e'])
+        self.assertEqual(loaded['terms'][0]['source'], 'Void Gate')
+        self.assertTrue(print_mock.called)
+        printed = '\n'.join(call.args[0] for call in print_mock.call_args_list)
+        self.assertIn('Story graph', printed)
+        self.assertIn('schema_version is required', printed)
+        self.assertIn('relations[0].right', printed)
+        self.assertIn('scenes[0].line_start', printed)
 
     def test_story_memory_graph_path_prefers_root_logs(self):
         old_values = {

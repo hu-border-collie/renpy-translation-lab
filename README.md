@@ -217,14 +217,22 @@ Structured Story Memory 是现有 glossary / translation-memory RAG 之外的可
 }
 ```
 
-`story_graph.json` 可以先手写或半自动维护，初版结构类似：
+仓库提供了两个公开参考文件：
+
+- `docs/story_graph.schema.json`：正式的 JSON Schema，描述推荐的 `schema_version=1` 结构
+- `docs/story_graph.example.json`：可复制后按项目修改的示例图谱
+
+`story_graph.json` 可以先手写或半自动维护，推荐结构类似：
 
 ```json
 {
+  "schema_version": 1,
   "characters": {
     "eileen": {
+      "name": "Eileen",
       "zh_name": "艾琳",
       "speaker_ids": ["eileen", "eileen_side"],
+      "aliases": ["Miss Eileen"],
       "style": "语气轻快，常吐槽，但关键时刻认真。"
     }
   },
@@ -256,7 +264,11 @@ Structured Story Memory 是现有 glossary / translation-memory RAG 之外的可
 }
 ```
 
-当前实现仍是 MVP：检索逻辑是轻量启发式，正式 schema 校验、`relation_analyzer` seed 导出、Neo4j 可视化导出和更完整 diagnostics 还属于后续工作。
+为了兼容早期手写图谱，加载器仍接受 `terms` 对象映射、术语字符串条目，以及 `term` / `translation` 这类旧字段名；新图谱建议优先使用示例里的 `source` / `target` 写法。
+
+加载 `story_graph.json` 时会做轻量基础校验：顶层集合类型、角色别名字段、关系 `left/right/confidence`、术语有效内容、场景行号与角色列表等明显问题会输出 warning。校验是非阻塞的；有效部分仍会被规范化后继续用于检索，避免一个局部坏条目导致整个图谱不可用。
+
+当前实现仍是 MVP：检索逻辑是轻量启发式，`relation_analyzer` seed 导出、Neo4j 可视化导出和更完整 diagnostics 还属于后续工作。
 
 ## 角色关系 / 语义分析
 
@@ -303,7 +315,7 @@ python extract_relations.py /path/to/game/tl/schinese --mode semantic
 - 面向普通用户的零配置体验
 - 完整的游戏解包 / 打包一体化发布流程
 - 面向超大项目的完整 RAG 生产工作流（例如严格的波次式回灌编排、多阶段调度策略）
-- 完整的结构化剧情图谱生产工作流（例如 schema 校验、自动 seed 生成、Neo4j 可视化导出）
+- 完整的结构化剧情图谱生产工作流（例如自动 seed 生成、Neo4j 可视化导出）
 
 ## 项目状态
 
