@@ -414,6 +414,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 ],
                 'relations': [
                     {'left': 'eileen', 'confidence': 'very'},
+                    {'left': 'eileen', 'right': 'noah', 'confidence': 'nan'},
                     'bad-relation',
                 ],
                 'terms': [
@@ -429,8 +430,40 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertTrue(any('schema_version' in warning for warning in warnings))
         self.assertTrue(any('characters[0]' in warning for warning in warnings))
         self.assertTrue(any('relations[0].right' in warning for warning in warnings))
+        self.assertTrue(any('relations[1].confidence' in warning for warning in warnings))
         self.assertTrue(any('terms[0]' in warning for warning in warnings))
         self.assertTrue(any('scenes[0].line_start' in warning for warning in warnings))
+        self.assertTrue(any('scenes[0].file_rel_path' in warning for warning in warnings))
+
+    def test_validate_story_graph_accepts_legacy_term_shapes(self):
+        self.assertEqual(
+            story_memory.validate_story_graph(
+                {
+                    'schema_version': story_memory.STORY_GRAPH_SCHEMA_VERSION,
+                    'terms': {
+                        'Void Gate': '\u865a\u7a7a\u95e8',
+                    },
+                }
+            ),
+            [],
+        )
+        self.assertEqual(
+            story_memory.validate_story_graph(
+                {
+                    'schema_version': story_memory.STORY_GRAPH_SCHEMA_VERSION,
+                    'terms': [
+                        {'term': 'Aether'},
+                        {'translation': '\u4ee5\u592a\u95e8'},
+                    ],
+                }
+            ),
+            [],
+        )
+
+    def test_validate_story_graph_warns_when_schema_version_missing(self):
+        warnings = story_memory.validate_story_graph({'terms': {'Void Gate': '\u865a\u7a7a\u95e8'}})
+
+        self.assertTrue(any('schema_version is required' in warning for warning in warnings))
 
     def test_story_memory_rel_path_preserves_parent_segments(self):
         self.assertEqual(story_memory._normalize_rel_path('./chapter1.rpy'), 'chapter1.rpy')
@@ -508,6 +541,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertTrue(print_mock.called)
         printed = '\n'.join(call.args[0] for call in print_mock.call_args_list)
         self.assertIn('Story graph', printed)
+        self.assertIn('schema_version is required', printed)
         self.assertIn('relations[0].right', printed)
         self.assertIn('scenes[0].line_start', printed)
 

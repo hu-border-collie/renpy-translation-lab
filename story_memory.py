@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+import math
 import os
 import re
 
@@ -133,10 +134,10 @@ def _is_numeric_like(value):
     if isinstance(value, bool):
         return False
     try:
-        float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return False
-    return True
+    return math.isfinite(number)
 
 
 def _field_label(*parts):
@@ -202,7 +203,7 @@ def _validate_relations(value, warnings):
             warnings.append(f"{label}.right is required")
         if item.get("confidence") is not None:
             if not _is_numeric_like(item.get("confidence")):
-                warnings.append(f"{label}.confidence should be a number from 0 to 1")
+                warnings.append(f"{label}.confidence should be a finite number from 0 to 1")
             else:
                 confidence = float(item.get("confidence"))
                 if confidence < 0 or confidence > 1:
@@ -213,6 +214,11 @@ def _validate_terms(value, warnings):
     if value is None:
         return
     if isinstance(value, dict):
+        for source, target in value.items():
+            if not _clean_text(source):
+                warnings.append("terms object contains an entry without a usable source")
+            if target is not None and not isinstance(target, (str, int, float)):
+                warnings.append(f"terms.{source} should be a string")
         return
     if not isinstance(value, list):
         warnings.append("terms should be a list or object")
@@ -230,10 +236,13 @@ def _validate_terms(value, warnings):
             _clean_text(item.get("source"))
             or _clean_text(item.get("term"))
             or _clean_text(item.get("target"))
+            or _clean_text(item.get("translation"))
             or any(_clean_text(alias) for alias in _as_list(aliases))
         )
         if not has_term_content:
-            warnings.append(f"{label} should define source, term, target, or aliases")
+            warnings.append(
+                f"{label} should define source, term, target, translation, or aliases"
+            )
 
 
 def _validate_scenes(value, warnings):
@@ -254,6 +263,8 @@ def _validate_scenes(value, warnings):
         line_end = _safe_int(item.get("line_end"))
         if line_start is not None and line_end is not None and line_start > line_end:
             warnings.append(f"{label}.line_start should be <= line_end")
+        if not _normalize_rel_path(item.get("file_rel_path")):
+            warnings.append(f"{label}.file_rel_path is required")
         _validate_alias_field(item.get("characters"), f"{label}.characters", warnings)
         if not (
             _normalize_rel_path(item.get("file_rel_path"))
@@ -272,7 +283,11 @@ def validate_story_graph(raw_graph):
 
     warnings = []
     version = raw_graph.get("schema_version")
-    if version is not None and version != STORY_GRAPH_SCHEMA_VERSION:
+    if version is None:
+        warnings.append(
+            f"schema_version is required and should be {STORY_GRAPH_SCHEMA_VERSION}"
+        )
+    elif version != STORY_GRAPH_SCHEMA_VERSION:
         warnings.append(
             f"schema_version should be {STORY_GRAPH_SCHEMA_VERSION}"
         )
@@ -545,9 +560,10 @@ def retrieve_story_hits(
 
     def relation_confidence(item):
         try:
-            return float(item.get("confidence", 0.0) or 0.0)
+            value = float(item.get("confidence", 0.0) or 0.0)
         except (TypeError, ValueError):
             return 0.0
+        return value if math.isfinite(value) else 0.0
 
     relation_hits.sort(key=relation_confidence, reverse=True)
 
