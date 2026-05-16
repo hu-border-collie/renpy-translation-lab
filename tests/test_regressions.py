@@ -411,29 +411,41 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                     'bad-character',
                     {'id': '', 'speaker_ids': {'bad': 'shape'}},
                     {'id': 'eileen', 'aliases': [{}]},
+                    {'id': 'numeric-alias', 'speaker_ids': 1, 'aliases': ['ok', 2]},
                 ],
                 'relations': [
                     {'left': 'eileen', 'confidence': 'very'},
                     {'left': 'eileen', 'right': 'noah', 'confidence': 'nan'},
+                    {'left': {'bad': 'shape'}, 'right': ['bad']},
                     'bad-relation',
                 ],
                 'terms': [
                     {'note': 'missing source'},
+                    {'source': {'bad': 'shape'}},
+                    {'target': {'bad': 'shape'}},
                     42,
                 ],
                 'scenes': [
                     {'line_start': 'ten', 'characters': {'bad': 'shape'}},
+                    {'file_rel_path': {'bad': 'shape'}, 'summary': 'invalid path'},
                 ],
             }
         )
 
         self.assertTrue(any('schema_version' in warning for warning in warnings))
         self.assertTrue(any('characters[0]' in warning for warning in warnings))
+        self.assertTrue(any('characters.numeric-alias.speaker_ids' in warning for warning in warnings))
+        self.assertTrue(any('characters.numeric-alias.aliases[1]' in warning for warning in warnings))
         self.assertTrue(any('relations[0].right' in warning for warning in warnings))
         self.assertTrue(any('relations[1].confidence' in warning for warning in warnings))
+        self.assertTrue(any('relations[2].left' in warning for warning in warnings))
+        self.assertTrue(any('relations[2].right' in warning for warning in warnings))
         self.assertTrue(any('terms[0]' in warning for warning in warnings))
+        self.assertTrue(any('terms[1].source' in warning for warning in warnings))
+        self.assertTrue(any('terms[2].target' in warning for warning in warnings))
         self.assertTrue(any('scenes[0].line_start' in warning for warning in warnings))
         self.assertTrue(any('scenes[0].file_rel_path' in warning for warning in warnings))
+        self.assertTrue(any('scenes[1].file_rel_path' in warning for warning in warnings))
 
     def test_validate_story_graph_accepts_legacy_term_shapes(self):
         self.assertEqual(

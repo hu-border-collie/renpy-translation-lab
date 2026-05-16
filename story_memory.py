@@ -45,6 +45,10 @@ def _clean_text(value):
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
+def _has_string_content(value):
+    return isinstance(value, str) and bool(_clean_text(value))
+
+
 def _safe_int(value):
     try:
         return int(value)
@@ -147,11 +151,11 @@ def _field_label(*parts):
 def _validate_alias_field(value, label, warnings):
     if value is None:
         return
-    if isinstance(value, (str, int, float)):
+    if isinstance(value, str):
         return
     if isinstance(value, list):
         for index, item in enumerate(value):
-            if not isinstance(item, (str, int, float)):
+            if not isinstance(item, str):
                 warnings.append(f"{label}[{index}] should be a string")
         return
     warnings.append(f"{label} should be a string or list of strings")
@@ -197,10 +201,10 @@ def _validate_relations(value, warnings):
         if not isinstance(item, dict):
             warnings.append(f"{label} should be an object")
             continue
-        if not _clean_text(item.get("left")):
-            warnings.append(f"{label}.left is required")
-        if not _clean_text(item.get("right")):
-            warnings.append(f"{label}.right is required")
+        if not _has_string_content(item.get("left")):
+            warnings.append(f"{label}.left should be a non-empty string")
+        if not _has_string_content(item.get("right")):
+            warnings.append(f"{label}.right should be a non-empty string")
         if item.get("confidence") is not None:
             if not _is_numeric_like(item.get("confidence")):
                 warnings.append(f"{label}.confidence should be a finite number from 0 to 1")
@@ -215,9 +219,9 @@ def _validate_terms(value, warnings):
         return
     if isinstance(value, dict):
         for source, target in value.items():
-            if not _clean_text(source):
-                warnings.append("terms object contains an entry without a usable source")
-            if target is not None and not isinstance(target, (str, int, float)):
+            if not _has_string_content(source):
+                warnings.append("terms object keys should be non-empty strings")
+            if target is not None and not isinstance(target, str):
                 warnings.append(f"terms.{source} should be a string")
         return
     if not isinstance(value, list):
@@ -232,12 +236,16 @@ def _validate_terms(value, warnings):
             continue
         aliases = item.get("aliases")
         _validate_alias_field(aliases, f"{label}.aliases", warnings)
-        has_term_content = (
-            _clean_text(item.get("source"))
-            or _clean_text(item.get("term"))
-            or _clean_text(item.get("target"))
-            or _clean_text(item.get("translation"))
-            or any(_clean_text(alias) for alias in _as_list(aliases))
+        has_term_content = False
+        for key in ("source", "term", "target", "translation"):
+            if key not in item or item.get(key) is None:
+                continue
+            if isinstance(item.get(key), str):
+                has_term_content = has_term_content or bool(_clean_text(item.get(key)))
+            else:
+                warnings.append(f"{label}.{key} should be a string")
+        has_term_content = has_term_content or any(
+            _has_string_content(alias) for alias in _as_list(aliases)
         )
         if not has_term_content:
             warnings.append(
@@ -263,8 +271,8 @@ def _validate_scenes(value, warnings):
         line_end = _safe_int(item.get("line_end"))
         if line_start is not None and line_end is not None and line_start > line_end:
             warnings.append(f"{label}.line_start should be <= line_end")
-        if not _normalize_rel_path(item.get("file_rel_path")):
-            warnings.append(f"{label}.file_rel_path is required")
+        if not _has_string_content(item.get("file_rel_path")):
+            warnings.append(f"{label}.file_rel_path should be a non-empty string")
         _validate_alias_field(item.get("characters"), f"{label}.characters", warnings)
         if not (
             _normalize_rel_path(item.get("file_rel_path"))
