@@ -64,7 +64,7 @@ def main():
         relation_data = compute_relation_data(units, characters, args.relation_window_size)
         if len(relation_data['characters']) > 1:
             if args.story_seed_output:
-                write_story_graph_seed(resolve_path(args.story_seed_output), units, characters, relation_data)
+                write_story_graph_seed(resolve_path(args.story_seed_output), units, characters, relation_data, source_root=input_path)
             active_portraits = {char: portraits.get(char) for char in relation_data['characters']} if portraits else {}
             csv_output = resolve_path(args.csv_output) if args.csv_output else output_path.with_name(f"{output_path.stem}_relations.csv")
             analyze_and_plot_relation(relation_data, output_path, csv_output, active_portraits)

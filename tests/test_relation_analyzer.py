@@ -64,10 +64,12 @@ class RelationAnalyzerTests(unittest.TestCase):
         definitions = extract_character_definitions([
             'define e = Character("Eileen")\n',
             'define n = Character(_("Noah"), color="#fff")\n',
+            'define c = Character(name="Cora", image="cora")\n',
+            'define img = Character(None, image="not_a_name")\n',
             'default title = "Not a character"\n',
         ])
 
-        self.assertEqual(definitions, {'e': 'Eileen', 'n': 'Noah'})
+        self.assertEqual(definitions, {'e': 'Eileen', 'n': 'Noah', 'c': 'Cora'})
 
     def test_infer_characters_from_units_prefers_most_frequent_speakers(self):
         units = [
@@ -129,6 +131,36 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertGreater(relation['seed_stats']['dialogue_raw'], 0.0)
         self.assertIn('scene_1.rpy', relation['seed_stats']['source_files'])
         self.assertTrue(relation['seed_stats']['needs_human_review'])
+
+    def test_build_story_graph_seed_uses_relative_source_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            scene_path = root / 'scene_1.rpy'
+            units = [
+                {'source': str(scene_path), 'line_no': 1, 'speaker': 'e', 'speaker_name': 'E', 'text': 'Hello Noah.', 'context': 'E: Hello Noah.'},
+                {'source': str(scene_path), 'line_no': 2, 'speaker': 'noah', 'speaker_name': 'Noah', 'text': 'Hello.', 'context': 'Noah: Hello.'},
+            ]
+            relation_data = compute_relation_data(units, ['E', 'Noah'], segment_size=2)
+
+            seed = build_story_graph_seed(units, ['E', 'Noah'], relation_data, source_root=root)
+
+        self.assertEqual(seed['characters']['e']['seed_stats']['source_files'], ['scene_1.rpy'])
+        self.assertEqual(seed['relations'][0]['seed_stats']['source_files'], ['scene_1.rpy'])
+
+    def test_build_story_graph_seed_filters_zero_evidence_pairs(self):
+        units = [
+            {'source': 'scene_1.rpy', 'line_no': 1, 'speaker': 'a', 'speaker_name': 'A', 'text': 'Solo.', 'context': 'A: Solo.'},
+            {'source': 'scene_1.rpy', 'line_no': 2, 'speaker': 'c', 'speaker_name': 'C', 'text': 'Solo.', 'context': 'C: Solo.'},
+            {'source': 'scene_1.rpy', 'line_no': 3, 'speaker': 'b', 'speaker_name': 'B', 'text': 'Solo.', 'context': 'B: Solo.'},
+        ]
+        relation_data = compute_relation_data(units, ['A', 'B', 'C'], segment_size=1)
+
+        seed = build_story_graph_seed(units, ['A', 'B', 'C'], relation_data)
+        relation_pairs = {(item['left'], item['right']) for item in seed['relations']}
+
+        self.assertNotIn(('a', 'b'), relation_pairs)
+        self.assertIn(('a', 'c'), relation_pairs)
+        self.assertIn(('b', 'c'), relation_pairs)
 
     def test_write_story_graph_seed_creates_parent_directory(self):
         units = [
@@ -297,6 +329,7 @@ class RelationAnalyzerTests(unittest.TestCase):
             max_texts_per_character=0,
             relation_window_size=12,
             csv_output=None,
+            story_seed_output=None,
         )
         with patch.object(cli, 'parse_args', return_value=args), \
              patch.object(cli, 'resolve_path', side_effect=lambda value: Path(value)), \
@@ -323,6 +356,7 @@ class RelationAnalyzerTests(unittest.TestCase):
             max_texts_per_character=0,
             relation_window_size=12,
             csv_output=None,
+            story_seed_output=None,
         )
         with patch.object(cli, 'parse_args', return_value=args), \
              patch.object(cli, 'resolve_path', side_effect=lambda value: Path(value)), \

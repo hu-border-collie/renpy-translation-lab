@@ -147,6 +147,7 @@ def compute_relation_data(units, characters, segment_size):
     deduped_characters = list(dict.fromkeys(characters))
     relation_units, participation_counts, speaker_counts, mention_presence_counts = collect_relation_units(units, deduped_characters)
     active_characters = [char for char in deduped_characters if participation_counts.get(char, 0) > 0]
+    segment_size = max(1, int(segment_size))
 
     for char in deduped_characters:
         if char not in active_characters:
@@ -155,6 +156,7 @@ def compute_relation_data(units, characters, segment_size):
     if len(active_characters) < 2:
         return {
             'characters': active_characters,
+            'segment_size': segment_size,
             'presence_counts': {char: participation_counts.get(char, 0) for char in active_characters},
             'pair_rows': [],
             'total_matrix': np.zeros((len(active_characters), len(active_characters)), dtype=float),
@@ -165,8 +167,6 @@ def compute_relation_data(units, characters, segment_size):
     co_scene_raw = {}
     dialogue_raw = {}
     mention_raw = {}
-    segment_size = max(1, int(segment_size))
-
     for group in iter_source_groups(relation_units):
         for start in range(0, len(group), segment_size):
             segment = group[start:start + segment_size]
@@ -257,6 +257,7 @@ def compute_relation_data(units, characters, segment_size):
 
     return {
         'characters': active_characters,
+        'segment_size': segment_size,
         'presence_counts': {char: participation_counts.get(char, 0) for char in active_characters},
         'speaker_counts': {char: speaker_counts.get(char, 0) for char in active_characters},
         'scene_presence_counts': {char: scene_presence_counts.get(char, 0) for char in active_characters},
