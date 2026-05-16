@@ -1,7 +1,7 @@
 from .common import *
 
 CHARACTER_DEFINE_RE = re.compile(
-    r"^\s*define\s+(?P<speaker>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*Character\s*\("
+    r"^\s*define\s+(?P<speaker>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<call>Character\s*\(.*)"
 )
 
 
@@ -44,19 +44,51 @@ def normalize_text(text):
         return ""
     return text
 
+def _literal_display_name(expr):
+    if isinstance(expr, ast.Constant):
+        if expr.value is None:
+            return None
+        if isinstance(expr.value, str):
+            return normalize_text(expr.value)
+        return None
+    if (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Name)
+        and expr.func.id == "_"
+        and len(expr.args) == 1
+        and not expr.keywords
+    ):
+        return _literal_display_name(expr.args[0])
+    return None
+
+def extract_character_display_name(call_source):
+    try:
+        parsed = ast.parse(call_source.strip(), mode="eval")
+    except SyntaxError:
+        return None
+    call = parsed.body
+    if not isinstance(call, ast.Call):
+        return None
+    if not isinstance(call.func, ast.Name) or call.func.id != "Character":
+        return None
+
+    if call.args:
+        name = _literal_display_name(call.args[0])
+        return name or None
+
+    for keyword_arg in call.keywords:
+        if keyword_arg.arg == "name":
+            name = _literal_display_name(keyword_arg.value)
+            return name or None
+    return None
+
 def extract_character_definitions(lines):
     definitions = {}
     for line in lines:
         match = CHARACTER_DEFINE_RE.match(line)
         if not match:
             continue
-        literal, _, _ = extract_first_string_token(line)
-        if not literal:
-            continue
-        try:
-            name = normalize_text(ast.literal_eval(literal))
-        except (SyntaxError, ValueError):
-            continue
+        name = extract_character_display_name(match.group("call"))
         if name:
             definitions[match.group("speaker")] = name
     return definitions
