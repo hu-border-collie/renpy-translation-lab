@@ -1803,6 +1803,28 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertEqual(summary['total_hit_count'], 5)
         self.assertGreaterEqual(summary['truncated_story_blocks'], 1)
         self.assertGreater(summary['formatted_char_count'], 0)
+        self.assertLessEqual(summary['formatted_char_count'], 60)
+
+    def test_summarize_batch_story_memory_uses_default_limit_for_bad_context_chars(self):
+        old_limit = batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS
+        try:
+            batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS = 200
+            summary = batch_mod.summarize_batch_story_memory(
+                [
+                    {
+                        'story_hits': {
+                            'terms': [{'source': 'Aether', 'target': '\u4ee5\u592a'}],
+                        },
+                    },
+                ],
+                max_context_chars={'bad': 'shape'},
+            )
+        finally:
+            batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS = old_limit
+
+        self.assertEqual(summary['chunks_with_story_hits'], 1)
+        self.assertEqual(summary['truncated_story_blocks'], 0)
+        self.assertGreater(summary['formatted_char_count'], 1)
 
     def test_sync_rag_store_reuses_embedding_when_only_translation_changes(self):
         old_values = {

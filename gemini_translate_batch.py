@@ -1199,11 +1199,14 @@ def summarize_batch_story_memory(chunks, graph_file=None, max_context_chars=None
     chunks_with_story_hits = 0
     truncated_story_blocks = 0
     formatted_char_count = 0
-    max_context_chars = max_context_chars if max_context_chars is not None else STORY_MEMORY_MAX_CONTEXT_CHARS
+    requested_limit = max_context_chars if max_context_chars is not None else STORY_MEMORY_MAX_CONTEXT_CHARS
     try:
-        context_limit = max(1, int(max_context_chars or 1))
+        context_limit = max(1, int(requested_limit or 1))
     except (TypeError, ValueError):
-        context_limit = 1
+        try:
+            context_limit = max(1, int(STORY_MEMORY_MAX_CONTEXT_CHARS or 1))
+        except (TypeError, ValueError):
+            context_limit = 1
 
     for chunk in chunks:
         story_hits = chunk.get('story_hits')
@@ -1213,9 +1216,10 @@ def summarize_batch_story_memory(chunks, graph_file=None, max_context_chars=None
         chunk_counts = story_memory.story_hit_counts(story_hits)
         for key in hit_counts:
             hit_counts[key] += chunk_counts.get(key, 0)
-        full_block = story_memory.format_story_hits_block(story_hits, 1_000_000)
-        formatted_char_count += len(full_block)
-        if len(full_block) > context_limit:
+        formatted_block = story_memory.format_story_hits_block(story_hits, context_limit)
+        over_limit_probe = story_memory.format_story_hits_block(story_hits, context_limit + 1)
+        formatted_char_count += len(formatted_block)
+        if len(over_limit_probe) > context_limit:
             truncated_story_blocks += 1
 
     return {
