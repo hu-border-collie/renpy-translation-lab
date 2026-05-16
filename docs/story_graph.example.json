@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "characters": {
+    "eileen": {
+      "name": "Eileen",
+      "zh_name": "艾琳",
+      "speaker_ids": ["e", "eileen", "eileen_side"],
+      "aliases": ["Miss Eileen"],
+      "style": "语气轻快，常吐槽，但关键时刻认真。",
+      "note": "主角之一，熟悉遗迹机关。"
+    },
+    "noah": {
+      "name": "Noah",
+      "zh_name": "诺亚",
+      "speaker_ids": ["n", "noah"],
+      "aliases": ["Noa"],
+      "style": "说话谨慎，遇到危险时会压低语气。",
+      "note": "艾琳的同行者，负责记录路线。"
+    }
+  },
+  "relations": [
+    {
+      "left": "eileen",
+      "right": "noah",
+      "type": "close_friend",
+      "note": "两人关系亲近，可以使用自然熟悉的中文语气。",
+      "confidence": 0.85
+    }
+  ],
+  "terms": [
+    {
+      "source": "Void Gate",
+      "target": "虚空门",
+      "aliases": ["Gate of Void"],
+      "note": "世界观核心术语，必须统一。"
+    }
+  ],
+  "scenes": [
+    {
+      "file_rel_path": "chapter1.rpy",
+      "line_start": 120,
+      "line_end": 220,
+      "summary": "艾琳和诺亚在天台讨论是否进入危险区域。",
+      "characters": ["eileen", "noah"]
+    }
+  ]
+}
