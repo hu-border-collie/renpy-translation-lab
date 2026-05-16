@@ -270,7 +270,15 @@ Structured Story Memory 是现有 glossary / translation-memory RAG 之外的可
 
 Batch `build` 生成的 `manifest.json` 会在 `story_memory_summary` 中记录 diagnostics，包括 `graph_file`、命中 chunk 数、命中率、characters / relations / terms / scenes 各类命中数量、总命中数、预算内格式化字符数，以及有多少个 `STORY MEMORY` 块会被 `max_context_chars` 截断。
 
-当前实现仍是 MVP：检索逻辑是轻量启发式，`relation_analyzer` seed 导出、Neo4j 可视化导出，以及 sync / probe 等辅助路径的更完整 diagnostics 还属于后续工作。
+`relation_analyzer` 可以额外导出 `story_graph.seed.json` 候选数据，帮助从 Ren'Py 剧本里半自动整理 `speaker_ids`、候选角色和候选关系：
+
+```bash
+python extract_relations.py /path/to/game/tl/schinese --mode relation --story-seed-output logs/story_memory/story_graph.seed.json
+```
+
+seed 中的关系统一标记为 `candidate`，只包含共场景、对话往来、相互提及、来源文件和 speaker 统计等可审查信息；如果同一输入目录里存在 `define e = Character("Eileen")` 这类 Ren'Py 角色定义，seed 会优先用定义名作为 speaker 名称候选。它不会自动断言恋人、敌人、上下级等强语义关系。建议人工确认并编辑后，再作为正式 `story_graph.json` 使用。
+
+当前实现仍是 MVP：检索逻辑是轻量启发式，Neo4j 可视化导出，以及 sync / probe 等辅助路径的更完整 diagnostics 还属于后续工作。
 
 ## 角色关系 / 语义分析
 
@@ -296,6 +304,7 @@ python extract_relations.py /path/to/game/tl/schinese --mode semantic
 - 不传 `--characters` 时，会自动选择主要说话人
 - 可以用 `--auto-characters` 控制自动推断数量
 - 可以用 `--portraits off` 禁用从 `archive.rpa` 自动读取头像
+- 可以用 `--story-seed-output logs/story_memory/story_graph.seed.json` 在 relation 模式额外导出 Story Memory 候选 seed
 - `relation` 模式不需要 Gemini API
 - `semantic` 模式需要有效的 Gemini API key
 

@@ -1,4 +1,5 @@
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,9 +8,10 @@ from unittest.mock import patch
 
 from relation_analyzer import cli
 from relation_analyzer import semantic
-from relation_analyzer.parsing import extract_units_from_rpy, infer_characters_from_units, load_text_units, parse_dialogue_line, resolve_speaker_name
+from relation_analyzer.parsing import extract_character_definitions, extract_units_from_rpy, infer_characters_from_units, load_text_units, parse_dialogue_line, resolve_speaker_name
 from relation_analyzer.plotting import project_vectors_2d
 from relation_analyzer.relations import compute_relation_data, write_relation_csv
+from relation_analyzer.story_seed import build_story_graph_seed, write_story_graph_seed
 
 
 class RelationAnalyzerTests(unittest.TestCase):
@@ -58,6 +60,15 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertEqual(resolve_speaker_name('spencer_no_side'), 'Spencer')
         self.assertEqual(resolve_speaker_name('mr_smith'), 'Mr Smith')
 
+    def test_extract_character_definitions_reads_renpy_character_names(self):
+        definitions = extract_character_definitions([
+            'define e = Character("Eileen")\n',
+            'define n = Character(_("Noah"), color="#fff")\n',
+            'default title = "Not a character"\n',
+        ])
+
+        self.assertEqual(definitions, {'e': 'Eileen', 'n': 'Noah'})
+
     def test_infer_characters_from_units_prefers_most_frequent_speakers(self):
         units = [
             {'speaker_name': 'Spencer'},
@@ -93,6 +104,45 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertEqual(len(data['pair_rows']), 1)
         self.assertEqual(data['pair_rows'][0]['left'], 'Ian')
         self.assertEqual(data['pair_rows'][0]['right'], 'Spencer')
+
+    def test_build_story_graph_seed_exports_reviewable_candidates(self):
+        units = [
+            {'source': 'scene_1.rpy', 'line_no': 1, 'speaker': 'eileen_side', 'speaker_name': 'Eileen', 'text': 'Noah, open the gate.', 'context': 'Eileen: Noah, open the gate.'},
+            {'source': 'scene_1.rpy', 'line_no': 2, 'speaker': 'noah', 'speaker_name': 'Noah', 'text': 'I am opening it.', 'context': 'Noah: I am opening it.'},
+            {'source': 'scene_2.rpy', 'line_no': 1, 'speaker': 'eileen_happy', 'speaker_name': 'Eileen', 'text': 'Good work, Noah.', 'context': 'Eileen: Good work, Noah.'},
+        ]
+        relation_data = compute_relation_data(units, ['Eileen', 'Noah'], segment_size=2)
+
+        seed = build_story_graph_seed(units, ['Eileen', 'Noah'], relation_data)
+
+        self.assertEqual(seed['schema_version'], 1)
+        self.assertEqual(seed['characters']['eileen']['name'], 'Eileen')
+        self.assertEqual(seed['characters']['eileen']['speaker_ids'], ['eileen_side', 'eileen_happy'])
+        self.assertEqual(seed['characters']['eileen']['seed_stats']['speaker_count'], 2)
+        self.assertEqual(seed['characters']['noah']['speaker_ids'], ['noah'])
+        self.assertEqual(len(seed['relations']), 1)
+        relation = seed['relations'][0]
+        self.assertEqual(relation['left'], 'eileen')
+        self.assertEqual(relation['right'], 'noah')
+        self.assertEqual(relation['type'], 'candidate')
+        self.assertIn('人工确认', relation['note'])
+        self.assertGreater(relation['seed_stats']['dialogue_raw'], 0.0)
+        self.assertIn('scene_1.rpy', relation['seed_stats']['source_files'])
+        self.assertTrue(relation['seed_stats']['needs_human_review'])
+
+    def test_write_story_graph_seed_creates_parent_directory(self):
+        units = [
+            {'source': 'scene_1.rpy', 'line_no': 1, 'speaker': 'e', 'speaker_name': 'E', 'text': 'Hello Noah.', 'context': 'E: Hello Noah.'},
+            {'source': 'scene_1.rpy', 'line_no': 2, 'speaker': 'noah', 'speaker_name': 'Noah', 'text': 'Hello.', 'context': 'Noah: Hello.'},
+        ]
+        relation_data = compute_relation_data(units, ['E', 'Noah'], segment_size=2)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / 'logs' / 'story_memory' / 'story_graph.seed.json'
+            write_story_graph_seed(output_path, units, ['E', 'Noah'], relation_data)
+            loaded = json.loads(output_path.read_text(encoding='utf-8'))
+
+        self.assertEqual(loaded['characters']['e']['speaker_ids'], ['e'])
+        self.assertEqual(loaded['relations'][0]['type'], 'candidate')
 
     def test_load_text_units_reads_utf8_sig_for_rpy_and_txt(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -135,6 +185,25 @@ class RelationAnalyzerTests(unittest.TestCase):
             self.assertEqual(rpy_units[1]['speaker'], 'e')
             self.assertEqual(rpy_units[1]['speaker_name'], 'E')
             self.assertEqual(rpy_units[1]['text'], 'And another line.')
+
+    def test_load_text_units_uses_character_defines_across_directory(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / 'characters.rpy').write_text(
+                'define e = Character("Eileen")\n',
+                encoding='utf-8-sig',
+            )
+            (root / 'scene.rpy').write_text(
+                'label start:\n'
+                '    e happy "Hello there."\n',
+                encoding='utf-8-sig',
+            )
+
+            rpy_units = load_text_units(root, context_window=0)
+
+            self.assertEqual(len(rpy_units), 1)
+            self.assertEqual(rpy_units[0]['speaker'], 'e')
+            self.assertEqual(rpy_units[0]['speaker_name'], 'Eileen')
 
     def test_load_text_units_resets_speaker_context_after_narrator_line(self):
         with tempfile.TemporaryDirectory() as tmpdir:

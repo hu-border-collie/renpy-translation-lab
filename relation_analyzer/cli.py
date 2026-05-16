@@ -3,6 +3,7 @@ from .parsing import load_text_units, collect_character_texts, infer_characters_
 from .semantic import extract_character_vectors
 from .relations import compute_relation_data
 from .plotting import analyze_and_plot, analyze_and_plot_relation
+from .story_seed import write_story_graph_seed
 
 
 def parse_args():
@@ -21,6 +22,7 @@ def parse_args():
     parser.add_argument('--cache-dir', default=str(EMBEDDING_CACHE_DIR), help='embedding 缓存目录（semantic 模式使用）')
     parser.add_argument('--relation-window-size', type=int, default=12, help='relation 模式下划分局部剧情段的窗口大小')
     parser.add_argument('--csv-output', help='relation 模式导出 CSV 路径，默认与图片同目录同名后缀 _relations.csv')
+    parser.add_argument('--story-seed-output', help='relation 模式额外导出 story_graph.seed.json 候选数据，供人工确认后维护 story_graph.json')
     return parser.parse_args()
 
 
@@ -61,6 +63,8 @@ def main():
     if args.mode == 'relation':
         relation_data = compute_relation_data(units, characters, args.relation_window_size)
         if len(relation_data['characters']) > 1:
+            if args.story_seed_output:
+                write_story_graph_seed(resolve_path(args.story_seed_output), units, characters, relation_data)
             active_portraits = {char: portraits.get(char) for char in relation_data['characters']} if portraits else {}
             csv_output = resolve_path(args.csv_output) if args.csv_output else output_path.with_name(f"{output_path.stem}_relations.csv")
             analyze_and_plot_relation(relation_data, output_path, csv_output, active_portraits)
