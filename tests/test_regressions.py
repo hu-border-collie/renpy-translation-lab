@@ -428,14 +428,16 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 'scenes': [
                     {'line_start': 'ten', 'characters': {'bad': 'shape'}},
                     {'file_rel_path': {'bad': 'shape'}, 'summary': 'invalid path'},
+                    {'file_rel_path': 'chapter1.rpy', 'line_start': 0, 'line_end': -1},
                 ],
             }
         )
 
         self.assertTrue(any('schema_version' in warning for warning in warnings))
         self.assertTrue(any('characters[0]' in warning for warning in warnings))
-        self.assertTrue(any('characters.numeric-alias.speaker_ids' in warning for warning in warnings))
-        self.assertTrue(any('characters.numeric-alias.aliases[1]' in warning for warning in warnings))
+        self.assertTrue(any('characters[1] is missing a usable id' in warning for warning in warnings))
+        self.assertTrue(any('characters[3].speaker_ids' in warning for warning in warnings))
+        self.assertTrue(any('characters[3].aliases[1]' in warning for warning in warnings))
         self.assertTrue(any('relations[0].right' in warning for warning in warnings))
         self.assertTrue(any('relations[1].confidence' in warning for warning in warnings))
         self.assertTrue(any('relations[2].left' in warning for warning in warnings))
@@ -446,6 +448,8 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertTrue(any('scenes[0].line_start' in warning for warning in warnings))
         self.assertTrue(any('scenes[0].file_rel_path' in warning for warning in warnings))
         self.assertTrue(any('scenes[1].file_rel_path' in warning for warning in warnings))
+        self.assertTrue(any('scenes[2].line_start should be >= 1' in warning for warning in warnings))
+        self.assertTrue(any('scenes[2].line_end should be >= 1' in warning for warning in warnings))
 
     def test_validate_story_graph_accepts_legacy_term_shapes(self):
         self.assertEqual(

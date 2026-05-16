@@ -165,7 +165,7 @@ def _validate_characters(value, warnings):
     if value is None:
         return
     if isinstance(value, dict):
-        iterable = value.items()
+        iterable = [(char_id, data, None) for char_id, data in value.items()]
     elif isinstance(value, list):
         iterable = []
         for index, item in enumerate(value):
@@ -173,16 +173,16 @@ def _validate_characters(value, warnings):
                 warnings.append(f"characters[{index}] should be an object")
                 continue
             char_id = item.get("id") or item.get("key") or item.get("name")
-            iterable.append((char_id, item))
+            iterable.append((char_id, item, f"characters[{index}]"))
     else:
         warnings.append("characters should be an object keyed by character id")
         return
 
-    for char_id, data in iterable:
+    for char_id, data, source_label in iterable:
         clean_id = _clean_text(char_id)
-        label = _field_label("characters", clean_id or "<empty>")
+        label = source_label or _field_label("characters", clean_id or "<empty>")
         if not clean_id:
-            warnings.append("characters contains an entry without a usable id")
+            warnings.append(f"{label} is missing a usable id")
         if not isinstance(data, dict):
             warnings.append(f"{label} should be an object")
             continue
@@ -269,6 +269,10 @@ def _validate_scenes(value, warnings):
                 warnings.append(f"{label}.{key} should be an integer")
         line_start = _safe_int(item.get("line_start"))
         line_end = _safe_int(item.get("line_end"))
+        if line_start is not None and line_start < 1:
+            warnings.append(f"{label}.line_start should be >= 1")
+        if line_end is not None and line_end < 1:
+            warnings.append(f"{label}.line_end should be >= 1")
         if line_start is not None and line_end is not None and line_start > line_end:
             warnings.append(f"{label}.line_start should be <= line_end")
         if not _has_string_content(item.get("file_rel_path")):
