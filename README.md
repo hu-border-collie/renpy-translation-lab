@@ -268,7 +268,9 @@ Structured Story Memory 是现有 glossary / translation-memory RAG 之外的可
 
 加载 `story_graph.json` 时会做轻量基础校验：顶层集合类型、角色别名字段、关系 `left/right/confidence`、术语有效内容、场景行号与角色列表等明显问题会输出 warning。校验是非阻塞的；有效部分仍会被规范化后继续用于检索，避免一个局部坏条目导致整个图谱不可用。
 
-当前实现仍是 MVP：检索逻辑是轻量启发式，`relation_analyzer` seed 导出、Neo4j 可视化导出和更完整 diagnostics 还属于后续工作。
+Batch `build` 生成的 `manifest.json` 会在 `story_memory_summary` 中记录 diagnostics，包括 `graph_file`、命中 chunk 数、命中率、characters / relations / terms / scenes 各类命中数量、总命中数、格式化字符数，以及有多少个 `STORY MEMORY` 块会被 `max_context_chars` 截断。
+
+当前实现仍是 MVP：检索逻辑是轻量启发式，`relation_analyzer` seed 导出、Neo4j 可视化导出，以及 sync / probe 等辅助路径的更完整 diagnostics 还属于后续工作。
 
 ## 角色关系 / 语义分析
 

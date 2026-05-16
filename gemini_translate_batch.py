@@ -850,11 +850,12 @@ def copy_split_context_metadata(source_manifest, part_manifest, part_chunks):
             part_manifest[key] = source_manifest[key]
 
     if source_manifest.get('story_memory_enabled'):
-        story_summary = dict(source_manifest.get('story_memory_summary') or {})
-        story_summary['chunks_with_story_hits'] = sum(
-            1 for chunk in part_chunks if story_memory.has_story_hits(chunk.get('story_hits'))
+        story_settings = source_manifest.get('story_memory_settings') or {}
+        part_manifest['story_memory_summary'] = summarize_batch_story_memory(
+            part_chunks,
+            graph_file=source_manifest.get('story_memory_graph_file', ''),
+            max_context_chars=story_settings.get('max_context_chars'),
         )
-        part_manifest['story_memory_summary'] = story_summary
 
 
 def split_chunks_and_lines(chunks, request_lines, max_chunks=0, max_items=0):
@@ -1192,6 +1193,42 @@ def summarize_batch_rag(chunks, prepare_summary):
     }
 
 
+def summarize_batch_story_memory(chunks, graph_file=None, max_context_chars=None):
+    chunk_count = len(chunks)
+    hit_counts = {key: 0 for key in story_memory.STORY_HIT_CATEGORIES}
+    chunks_with_story_hits = 0
+    truncated_story_blocks = 0
+    formatted_char_count = 0
+    max_context_chars = max_context_chars if max_context_chars is not None else STORY_MEMORY_MAX_CONTEXT_CHARS
+    try:
+        context_limit = max(1, int(max_context_chars or 1))
+    except (TypeError, ValueError):
+        context_limit = 1
+
+    for chunk in chunks:
+        story_hits = chunk.get('story_hits')
+        if not story_memory.has_story_hits(story_hits):
+            continue
+        chunks_with_story_hits += 1
+        chunk_counts = story_memory.story_hit_counts(story_hits)
+        for key in hit_counts:
+            hit_counts[key] += chunk_counts.get(key, 0)
+        full_block = story_memory.format_story_hits_block(story_hits, 1_000_000)
+        formatted_char_count += len(full_block)
+        if len(full_block) > context_limit:
+            truncated_story_blocks += 1
+
+    return {
+        'graph_file': STORY_MEMORY_GRAPH_FILE if graph_file is None else graph_file,
+        'chunks_with_story_hits': chunks_with_story_hits,
+        'story_hit_rate': (chunks_with_story_hits / chunk_count) if chunk_count else 0.0,
+        'hit_counts': hit_counts,
+        'total_hit_count': sum(hit_counts.values()),
+        'truncated_story_blocks': truncated_story_blocks,
+        'formatted_char_count': formatted_char_count,
+    }
+
+
 
 def get_batch_risk_warnings():
     warnings_list = []
@@ -1288,11 +1325,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
             'top_k_terms': STORY_MEMORY_TOP_K_TERMS,
             'include_scene_summary': STORY_MEMORY_INCLUDE_SCENE_SUMMARY,
         } if STORY_MEMORY_ENABLED else {},
-        'story_memory_summary': {
-            'chunks_with_story_hits': sum(
-                1 for chunk in chunks if story_memory.has_story_hits(chunk.get('story_hits'))
-            ),
-        } if STORY_MEMORY_ENABLED else {},
+        'story_memory_summary': summarize_batch_story_memory(chunks) if STORY_MEMORY_ENABLED else {},
         'summary': {
             'file_count': len(file_jobs),
             'chunk_count': len(chunks),
