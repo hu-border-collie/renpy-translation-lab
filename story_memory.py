@@ -6,6 +6,7 @@ import re
 
 
 STORY_GRAPH_SCHEMA_VERSION = 1
+STORY_HIT_CATEGORIES = ("characters", "relations", "terms", "scenes")
 
 
 class _NormalizedStoryGraph(dict):
@@ -611,11 +612,21 @@ def _append_limited(lines, line, max_chars):
 def has_story_hits(story_hits):
     if not isinstance(story_hits, dict):
         return False
-    for key in ("characters", "relations", "terms", "scenes"):
+    for key in STORY_HIT_CATEGORIES:
         hits = story_hits.get(key)
         if isinstance(hits, list) and hits:
             return True
     return False
+
+
+def story_hit_counts(story_hits):
+    counts = {}
+    if not isinstance(story_hits, dict):
+        return {key: 0 for key in STORY_HIT_CATEGORIES}
+    for key in STORY_HIT_CATEGORIES:
+        hits = story_hits.get(key)
+        counts[key] = len(hits) if isinstance(hits, list) else 0
+    return counts
 
 
 def format_story_hits_block(story_hits, max_chars, empty_label="(none)"):
