@@ -363,6 +363,35 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         )
         self.assertTrue(story_memory.has_story_hits({'terms': [{'source': 'Void Gate'}]}))
 
+    def test_story_memory_hit_counts_reports_categories(self):
+        counts = story_memory.story_hit_counts(
+            {
+                'characters': [{'id': 'eileen'}],
+                'relations': [{'left': 'eileen', 'right': 'noah'}],
+                'terms': [{'source': 'Void Gate'}, {'source': 'Aether'}],
+                'scenes': [{'file_rel_path': 'chapter1.rpy'}],
+            }
+        )
+
+        self.assertEqual(
+            counts,
+            {
+                'characters': 1,
+                'relations': 1,
+                'terms': 2,
+                'scenes': 1,
+            },
+        )
+        self.assertEqual(
+            story_memory.story_hit_counts(None),
+            {
+                'characters': 0,
+                'relations': 0,
+                'terms': 0,
+                'scenes': 0,
+            },
+        )
+
     def test_story_memory_normalize_has_fast_path_for_normalized_graphs(self):
         normalized = story_memory.normalize_story_graph({'terms': {'Void Gate': '\u865a\u7a7a\u95e8'}})
 
@@ -1737,6 +1766,66 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertEqual(summary['history_hit_rate'], 0.5)
         self.assertEqual(summary['history_retrieval_errors'], 1)
 
+    def test_summarize_batch_story_memory_reports_diagnostics(self):
+        summary = batch_mod.summarize_batch_story_memory(
+            [
+                {
+                    'story_hits': {
+                        'characters': [{'id': 'eileen'}],
+                        'relations': [{'left': 'eileen', 'right': 'noah'}],
+                        'terms': [{'source': 'Void Gate', 'target': '\u865a\u7a7a\u95e8'}],
+                        'scenes': [{'file_rel_path': 'chapter1.rpy'}],
+                    },
+                },
+                {
+                    'story_hits': {
+                        'terms': [{'source': 'Aether', 'note': 'x' * 80}],
+                    },
+                },
+                {},
+            ],
+            graph_file='logs/story_memory/story_graph.json',
+            max_context_chars=30,
+        )
+
+        self.assertEqual(summary['graph_file'], 'logs/story_memory/story_graph.json')
+        self.assertEqual(summary['chunks_with_story_hits'], 2)
+        self.assertEqual(summary['story_hit_rate'], 2 / 3)
+        self.assertEqual(
+            summary['hit_counts'],
+            {
+                'characters': 1,
+                'relations': 1,
+                'terms': 2,
+                'scenes': 1,
+            },
+        )
+        self.assertEqual(summary['total_hit_count'], 5)
+        self.assertGreaterEqual(summary['truncated_story_blocks'], 1)
+        self.assertGreater(summary['formatted_char_count'], 0)
+        self.assertLessEqual(summary['formatted_char_count'], 60)
+
+    def test_summarize_batch_story_memory_uses_default_limit_for_bad_context_chars(self):
+        old_limit = batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS
+        try:
+            batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS = 200
+            summary = batch_mod.summarize_batch_story_memory(
+                [
+                    {
+                        'story_hits': {
+                            'terms': [{'source': 'Aether', 'target': '\u4ee5\u592a'}],
+                        },
+                    },
+                ],
+                max_context_chars={'bad': 'shape'},
+            )
+        finally:
+            batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS = old_limit
+
+        self.assertEqual(summary['chunks_with_story_hits'], 1)
+        self.assertEqual(summary['truncated_story_blocks'], 0)
+        self.assertGreater(summary['formatted_char_count'], 1)
+
     def test_sync_rag_store_reuses_embedding_when_only_translation_changes(self):
         old_values = {
             'rag_enabled': batch_mod.RAG_ENABLED,
@@ -1873,6 +1962,12 @@ class BatchRepairRegressionTests(unittest.TestCase):
             self.assertEqual(first_child['rag_summary']['history_retrieval_errors'], 0)
             self.assertEqual(first_child['rag_summary']['prepare'], {'upserted': 3})
             self.assertEqual(first_child['story_memory_summary']['chunks_with_story_hits'], 1)
+            self.assertEqual(first_child['story_memory_summary']['graph_file'], str(root / 'story_graph.json'))
+            self.assertEqual(first_child['story_memory_summary']['hit_counts']['terms'], 1)
+            self.assertEqual(first_child['story_memory_summary']['total_hit_count'], 1)
+            self.assertEqual(first_child['story_memory_summary']['story_hit_rate'], 1.0)
+            self.assertEqual(first_child['story_memory_summary']['truncated_story_blocks'], 0)
+            self.assertGreater(first_child['story_memory_summary']['formatted_char_count'], 0)
 
     def test_collect_result_actions_ignores_duplicate_result_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
