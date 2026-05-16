@@ -4,6 +4,9 @@ import os
 import re
 
 
+STORY_GRAPH_SCHEMA_VERSION = 1
+
+
 class _NormalizedStoryGraph(dict):
     pass
 
@@ -116,6 +119,171 @@ def _normalize_dict_list(value):
     return [dict(item) for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
+def _is_int_like(value):
+    if isinstance(value, bool):
+        return False
+    try:
+        int(value)
+    except (TypeError, ValueError):
+        return False
+    return str(value).strip() == str(int(value))
+
+
+def _is_numeric_like(value):
+    if isinstance(value, bool):
+        return False
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _field_label(*parts):
+    return ".".join(str(part) for part in parts if part != "")
+
+
+def _validate_alias_field(value, label, warnings):
+    if value is None:
+        return
+    if isinstance(value, (str, int, float)):
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            if not isinstance(item, (str, int, float)):
+                warnings.append(f"{label}[{index}] should be a string")
+        return
+    warnings.append(f"{label} should be a string or list of strings")
+
+
+def _validate_characters(value, warnings):
+    if value is None:
+        return
+    if isinstance(value, dict):
+        iterable = value.items()
+    elif isinstance(value, list):
+        iterable = []
+        for index, item in enumerate(value):
+            if not isinstance(item, dict):
+                warnings.append(f"characters[{index}] should be an object")
+                continue
+            char_id = item.get("id") or item.get("key") or item.get("name")
+            iterable.append((char_id, item))
+    else:
+        warnings.append("characters should be an object keyed by character id")
+        return
+
+    for char_id, data in iterable:
+        clean_id = _clean_text(char_id)
+        label = _field_label("characters", clean_id or "<empty>")
+        if not clean_id:
+            warnings.append("characters contains an entry without a usable id")
+        if not isinstance(data, dict):
+            warnings.append(f"{label} should be an object")
+            continue
+        _validate_alias_field(data.get("speaker_ids"), f"{label}.speaker_ids", warnings)
+        _validate_alias_field(data.get("aliases"), f"{label}.aliases", warnings)
+
+
+def _validate_relations(value, warnings):
+    if value is None:
+        return
+    if not isinstance(value, list):
+        warnings.append("relations should be a list")
+        return
+    for index, item in enumerate(value):
+        label = f"relations[{index}]"
+        if not isinstance(item, dict):
+            warnings.append(f"{label} should be an object")
+            continue
+        if not _clean_text(item.get("left")):
+            warnings.append(f"{label}.left is required")
+        if not _clean_text(item.get("right")):
+            warnings.append(f"{label}.right is required")
+        if item.get("confidence") is not None:
+            if not _is_numeric_like(item.get("confidence")):
+                warnings.append(f"{label}.confidence should be a number from 0 to 1")
+            else:
+                confidence = float(item.get("confidence"))
+                if confidence < 0 or confidence > 1:
+                    warnings.append(f"{label}.confidence should be between 0 and 1")
+
+
+def _validate_terms(value, warnings):
+    if value is None:
+        return
+    if isinstance(value, dict):
+        return
+    if not isinstance(value, list):
+        warnings.append("terms should be a list or object")
+        return
+    for index, item in enumerate(value):
+        label = f"terms[{index}]"
+        if isinstance(item, str):
+            continue
+        if not isinstance(item, dict):
+            warnings.append(f"{label} should be an object or string")
+            continue
+        aliases = item.get("aliases")
+        _validate_alias_field(aliases, f"{label}.aliases", warnings)
+        has_term_content = (
+            _clean_text(item.get("source"))
+            or _clean_text(item.get("term"))
+            or _clean_text(item.get("target"))
+            or any(_clean_text(alias) for alias in _as_list(aliases))
+        )
+        if not has_term_content:
+            warnings.append(f"{label} should define source, term, target, or aliases")
+
+
+def _validate_scenes(value, warnings):
+    if value is None:
+        return
+    if not isinstance(value, list):
+        warnings.append("scenes should be a list")
+        return
+    for index, item in enumerate(value):
+        label = f"scenes[{index}]"
+        if not isinstance(item, dict):
+            warnings.append(f"{label} should be an object")
+            continue
+        for key in ("line_start", "line_end"):
+            if item.get(key) is not None and not _is_int_like(item.get(key)):
+                warnings.append(f"{label}.{key} should be an integer")
+        line_start = _safe_int(item.get("line_start"))
+        line_end = _safe_int(item.get("line_end"))
+        if line_start is not None and line_end is not None and line_start > line_end:
+            warnings.append(f"{label}.line_start should be <= line_end")
+        _validate_alias_field(item.get("characters"), f"{label}.characters", warnings)
+        if not (
+            _normalize_rel_path(item.get("file_rel_path"))
+            or _clean_text(item.get("summary"))
+            or any(_clean_text(char) for char in _as_list(item.get("characters")))
+        ):
+            warnings.append(f"{label} should include file_rel_path, summary, or characters")
+
+
+def validate_story_graph(raw_graph):
+    """Return non-fatal schema warnings for a story graph JSON object."""
+    if _is_normalized_story_graph(raw_graph):
+        return []
+    if not isinstance(raw_graph, dict):
+        return ["root should be a JSON object"]
+
+    warnings = []
+    version = raw_graph.get("schema_version")
+    if version is not None and version != STORY_GRAPH_SCHEMA_VERSION:
+        warnings.append(
+            f"schema_version should be {STORY_GRAPH_SCHEMA_VERSION}"
+        )
+
+    _validate_characters(raw_graph.get("characters"), warnings)
+    _validate_relations(raw_graph.get("relations"), warnings)
+    _validate_terms(raw_graph.get("terms"), warnings)
+    _validate_scenes(raw_graph.get("scenes"), warnings)
+    return warnings
+
+
 def _is_normalized_story_graph(value):
     return isinstance(value, _NormalizedStoryGraph)
 
@@ -138,7 +306,10 @@ def load_story_graph(path):
         return _empty_graph()
     try:
         with open(path, "r", encoding="utf-8-sig") as handle:
-            return normalize_story_graph(json.load(handle) or {})
+            raw_graph = json.load(handle) or {}
+        for warning in validate_story_graph(raw_graph):
+            print(f"Warning: Story graph {path}: {warning}")
+        return normalize_story_graph(raw_graph)
     except Exception as exc:
         print(f"Warning: Failed to load story graph {path}: {exc}")
         return _empty_graph()

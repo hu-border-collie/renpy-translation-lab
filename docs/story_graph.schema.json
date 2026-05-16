@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hu-border-collie/renpy-translation-lab/blob/main/docs/story_graph.schema.json",
+  "title": "Ren'Py Translation Lab Story Graph",
+  "description": "Canonical schema for the optional Structured Story Memory graph.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "characters", "relations", "terms", "scenes"],
+  "properties": {
+    "schema_version": {
+      "description": "Schema version for this public JSON format.",
+      "const": 1
+    },
+    "characters": {
+      "description": "Character records keyed by stable character id.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/character"
+      }
+    },
+    "relations": {
+      "description": "Human-reviewed relation hints between known characters.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relation"
+      }
+    },
+    "terms": {
+      "description": "Story-specific terms that may be retrieved into prompts.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/term"
+      }
+    },
+    "scenes": {
+      "description": "Scene summaries and line ranges keyed to Ren'Py script files.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/scene"
+      }
+    }
+  },
+  "$defs": {
+    "stringList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "character": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "zh_name": {
+          "type": "string"
+        },
+        "speaker_ids": {
+          "$ref": "#/$defs/stringList"
+        },
+        "aliases": {
+          "$ref": "#/$defs/stringList"
+        },
+        "style": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["left", "right"],
+      "properties": {
+        "left": {
+          "type": "string",
+          "minLength": 1
+        },
+        "right": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "term": {
+      "type": "object",
+      "additionalProperties": true,
+      "anyOf": [
+        {
+          "required": ["source"]
+        },
+        {
+          "required": ["target"]
+        },
+        {
+          "required": ["aliases"]
+        }
+      ],
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "aliases": {
+          "$ref": "#/$defs/stringList"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "scene": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["file_rel_path"],
+      "properties": {
+        "file_rel_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line_start": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "line_end": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "summary": {
+          "type": "string"
+        },
+        "characters": {
+          "$ref": "#/$defs/stringList"
+        }
+      }
+    }
+  }
+}
