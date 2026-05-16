@@ -264,6 +264,8 @@ Structured Story Memory 是现有 glossary / translation-memory RAG 之外的可
 }
 ```
 
+为了兼容早期手写图谱，加载器仍接受 `terms` 对象映射、术语字符串条目，以及 `term` / `translation` 这类旧字段名；新图谱建议优先使用示例里的 `source` / `target` 写法。
+
 加载 `story_graph.json` 时会做轻量基础校验：顶层集合类型、角色别名字段、关系 `left/right/confidence`、术语有效内容、场景行号与角色列表等明显问题会输出 warning。校验是非阻塞的；有效部分仍会被规范化后继续用于检索，避免一个局部坏条目导致整个图谱不可用。
 
 当前实现仍是 MVP：检索逻辑是轻量启发式，`relation_analyzer` seed 导出、Neo4j 可视化导出和更完整 diagnostics 还属于后续工作。

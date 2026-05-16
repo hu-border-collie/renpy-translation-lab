@@ -5,7 +5,7 @@
   "description": "Canonical schema for the optional Structured Story Memory graph.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "characters", "relations", "terms", "scenes"],
+  "required": ["schema_version"],
   "properties": {
     "schema_version": {
       "description": "Schema version for this public JSON format.",
@@ -26,11 +26,29 @@
       }
     },
     "terms": {
-      "description": "Story-specific terms that may be retrieved into prompts.",
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/term"
-      }
+      "description": "Story-specific terms that may be retrieved into prompts. Prefer an array of term objects; object maps and string items are accepted for compatibility with the loader.",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/term"
+              },
+              {
+                "type": "string",
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      ]
     },
     "scenes": {
       "description": "Scene summaries and line ranges keyed to Ren'Py script files.",
@@ -106,7 +124,13 @@
           "required": ["source"]
         },
         {
+          "required": ["term"]
+        },
+        {
           "required": ["target"]
+        },
+        {
+          "required": ["translation"]
         },
         {
           "required": ["aliases"]
@@ -116,7 +140,13 @@
         "source": {
           "type": "string"
         },
+        "term": {
+          "type": "string"
+        },
         "target": {
+          "type": "string"
+        },
+        "translation": {
           "type": "string"
         },
         "aliases": {
