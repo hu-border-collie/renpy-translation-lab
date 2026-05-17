@@ -268,7 +268,9 @@ Structured Story Memory 是现有 glossary / translation-memory RAG 之外的可
 
 加载 `story_graph.json` 时会做轻量基础校验：顶层集合类型、角色别名字段、关系 `left/right/confidence`、术语有效内容、场景行号与角色列表等明显问题会输出 warning。校验是非阻塞的；有效部分仍会被规范化后继续用于检索，避免一个局部坏条目导致整个图谱不可用。
 
-Batch `build` 生成的 `manifest.json` 会在 `story_memory_summary` 中记录 diagnostics，包括 `graph_file`、命中 chunk 数、命中率、characters / relations / terms / scenes 各类命中数量、总命中数、预算内格式化字符数，以及有多少个 `STORY MEMORY` 块会被 `max_context_chars` 截断。
+Batch `build` 生成的 `manifest.json` 会在 `story_memory_summary` 中记录 diagnostics，包括 `graph_file`、命中 chunk 数、命中率、characters / relations / terms / scenes 各类命中数量、总命中数、预算内格式化字符数，以及有多少个 `STORY MEMORY` 块会被 `max_context_chars` 截断。`split` 会按子包重新计算这些统计。
+
+`repair` 在 `batch.story_memory.enabled=true` 时也会复用同一个 `story_memory.py` 读取和格式化路径，为 repair request 注入受 `max_context_chars` 限制的 `STORY MEMORY` 块，并在 `repair_summary.json` 记录 repair job 的 Story Memory 命中统计。`probe` 只探测当前 package 里的既有 `requests.jsonl`，不会重新读取或刷新 `story_graph.json`；如果这些请求是在 Story Memory 启用时 build 出来的，probe 会自然测试已经写入请求的 prompt。
 
 `relation_analyzer` 可以额外导出 `story_graph.seed.json` 候选数据，帮助从 Ren'Py 剧本里半自动整理 `speaker_ids`、候选角色和候选关系：
 
@@ -278,7 +280,7 @@ python extract_relations.py /path/to/game/tl/schinese --mode relation --story-se
 
 seed 中的关系统一标记为 `candidate`，只包含共场景、对话往来、相互提及、来源文件和 speaker 统计等可审查信息；如果同一输入目录里存在 `define e = Character("Eileen")` 这类 Ren'Py 角色定义，seed 会优先用定义名作为 speaker 名称候选。它不会自动断言恋人、敌人、上下级等强语义关系。建议人工确认并编辑后，再作为正式 `story_graph.json` 使用。
 
-当前实现仍是 MVP：检索逻辑是轻量启发式，Neo4j 可视化导出，以及 sync / probe 等辅助路径的更完整 diagnostics 还属于后续工作。
+当前实现仍是 MVP：检索逻辑是轻量启发式，Neo4j 可视化导出，以及 sync 运行日志里的更完整 Story Memory diagnostics 还属于后续工作。
 
 ## 角色关系 / 语义分析
 
