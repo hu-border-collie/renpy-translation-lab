@@ -44,12 +44,22 @@ def normalize_text(text):
         return ""
     return text
 
+def normalize_character_display_name(text):
+    text = " ".join(str(text).split()).strip()
+    if not text:
+        return ""
+    if ONLY_SYMBOLS_RE.match(text):
+        return ""
+    if ASSET_FILE_RE.match(text):
+        return ""
+    return text
+
 def _literal_display_name(expr):
     if isinstance(expr, ast.Constant):
         if expr.value is None:
             return None
         if isinstance(expr.value, str):
-            return normalize_text(expr.value)
+            return normalize_character_display_name(expr.value)
         return None
     if (
         isinstance(expr, ast.Call)
@@ -220,8 +230,9 @@ def extract_units_from_raw_rpy(lines, file_path, speaker_map=None):
         last_speaker = append_unit(units, parsed, file_path, line_no, last_speaker, speaker_map)
     return units
 
-def extract_units_from_rpy(file_path, speaker_map=None):
-    lines = file_path.read_text(encoding="utf-8-sig").splitlines()
+def extract_units_from_rpy(file_path, speaker_map=None, lines=None):
+    if lines is None:
+        lines = file_path.read_text(encoding="utf-8-sig").splitlines()
     active_speaker_map = dict(speaker_map or {})
     active_speaker_map.update(extract_character_definitions(lines))
     units = []
@@ -263,7 +274,7 @@ def extract_units_from_rpy(file_path, speaker_map=None):
 
     return units
 
-def collect_speaker_definitions(files):
+def collect_speaker_definitions(files, line_cache=None):
     definitions = {}
     for file_path in files:
         if file_path.suffix.lower() != ".rpy":
@@ -272,13 +283,16 @@ def collect_speaker_definitions(files):
             lines = file_path.read_text(encoding="utf-8-sig").splitlines()
         except OSError:
             continue
+        if line_cache is not None:
+            line_cache[file_path] = lines
         definitions.update(extract_character_definitions(lines))
     return definitions
 
 def load_text_units(input_path, context_window):
     units = []
     files = iter_input_files(input_path)
-    speaker_map = collect_speaker_definitions(files)
+    rpy_line_cache = {}
+    speaker_map = collect_speaker_definitions(files, rpy_line_cache)
 
     for file_path in files:
         suffix = file_path.suffix.lower()
@@ -298,7 +312,7 @@ def load_text_units(input_path, context_window):
             continue
 
         if suffix == ".rpy":
-            units.extend(extract_units_from_rpy(file_path, speaker_map))
+            units.extend(extract_units_from_rpy(file_path, speaker_map, rpy_line_cache.get(file_path)))
 
     if not units:
         raise SystemExit("❌ 没有抽取到可分析的剧情文本。")
@@ -389,13 +403,13 @@ def guess_character_name_from_speaker(speaker):
 def resolve_speaker_name(speaker, speaker_map=None):
     if not speaker:
         return None
+    mapped = SPEAKER_TO_CHARACTER.get(speaker)
+    if mapped:
+        return mapped
     if speaker_map:
         mapped = speaker_map.get(speaker)
         if mapped:
             return mapped
-    mapped = SPEAKER_TO_CHARACTER.get(speaker)
-    if mapped:
-        return mapped
     return guess_character_name_from_speaker(speaker)
 
 

@@ -159,6 +159,7 @@ def compute_relation_data(units, characters, segment_size):
             'segment_size': segment_size,
             'presence_counts': {char: participation_counts.get(char, 0) for char in active_characters},
             'pair_rows': [],
+            'pair_source_files': {},
             'total_matrix': np.zeros((len(active_characters), len(active_characters)), dtype=float),
         }
 
@@ -167,7 +168,14 @@ def compute_relation_data(units, characters, segment_size):
     co_scene_raw = {}
     dialogue_raw = {}
     mention_raw = {}
+    pair_source_files = {}
+
+    def add_pair_source(key, source):
+        if source:
+            pair_source_files.setdefault(key, set()).add(str(source))
+
     for group in iter_source_groups(relation_units):
+        source = group[0].get('source') if group else ''
         for start in range(0, len(group), segment_size):
             segment = group[start:start + segment_size]
             present = []
@@ -185,6 +193,7 @@ def compute_relation_data(units, characters, segment_size):
                 for right in range(left + 1, len(present)):
                     key = pair_key(present[left], present[right])
                     co_scene_raw[key] = co_scene_raw.get(key, 0.0) + 1.0
+                    add_pair_source(key, source)
 
         spoken = [unit for unit in group if unit['speaker_character'] in active_set]
         for previous, current in zip(spoken, spoken[1:]):
@@ -194,6 +203,7 @@ def compute_relation_data(units, characters, segment_size):
                 continue
             key = pair_key(left, right)
             dialogue_raw[key] = dialogue_raw.get(key, 0.0) + 1.0
+            add_pair_source(key, source)
 
         for unit in group:
             speaker_character = unit['speaker_character'] if unit['speaker_character'] in active_set else None
@@ -204,12 +214,14 @@ def compute_relation_data(units, characters, segment_size):
                         continue
                     key = pair_key(speaker_character, char)
                     mention_raw[key] = mention_raw.get(key, 0.0) + 1.0
+                    add_pair_source(key, source)
             if len(mentioned) >= 2:
                 bonus = 0.35 if speaker_character else 0.55
                 for left in range(len(mentioned)):
                     for right in range(left + 1, len(mentioned)):
                         key = pair_key(mentioned[left], mentioned[right])
                         mention_raw[key] = mention_raw.get(key, 0.0) + bonus
+                        add_pair_source(key, source)
 
     component_labels = {
         'co_scene': '共场景',
@@ -265,6 +277,10 @@ def compute_relation_data(units, characters, segment_size):
         'component_colors': component_colors,
         'component_weights': component_weights,
         'component_raw_counts': component_raw_counts,
+        'pair_source_files': {
+            key: sorted(sources)
+            for key, sources in pair_source_files.items()
+        },
         'component_density_matrices': component_density_matrices,
         'component_matrices': component_scaled_matrices,
         'total_matrix': total_matrix,
