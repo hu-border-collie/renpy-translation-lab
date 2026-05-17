@@ -2488,6 +2488,21 @@ def extract_string_token_from_line(line):
         }
     return None
 
+
+def infer_repair_speaker_id(prefix='', line='', string_start_col=None):
+    if line and string_start_col is not None:
+        stripped = line.lstrip()
+        if not stripped.startswith(('old ', 'new ')):
+            speaker_id = legacy.infer_dialogue_speaker_id(line, string_start_col)
+            if speaker_id:
+                return speaker_id
+
+    prefix = str(prefix or '')
+    if not prefix.strip():
+        return ''
+    return legacy.infer_dialogue_speaker_id(f'{prefix}"x"', len(prefix))
+
+
 def collect_translation_entries_from_lines(lines):
     entries = []
     index = 0
@@ -2501,16 +2516,25 @@ def collect_translation_entries_from_lines(lines):
             if next_index < len(lines):
                 token = extract_string_token_from_line(lines[next_index])
                 if token:
+                    speaker_id = infer_repair_speaker_id(
+                        comment_match.group('prefix'),
+                        lines[next_index],
+                        token['start'],
+                    )
+                    entry = {
+                        'line_number': next_index + 1,
+                        'source': comment_match.group('text'),
+                        'translation': token['text'],
+                        'start': token['start'],
+                        'end': token['end'],
+                        'prefix': token.get('prefix', ''),
+                        'quote': token['quote'],
+                    }
+                    if speaker_id:
+                        entry['speaker_id'] = speaker_id
+                        entry['speaker'] = speaker_id
                     entries.append(
-                        {
-                            'line_number': next_index + 1,
-                            'source': comment_match.group('text'),
-                            'translation': token['text'],
-                            'start': token['start'],
-                            'end': token['end'],
-                            'prefix': token.get('prefix', ''),
-                            'quote': token['quote'],
-                        }
+                        entry
                     )
             index = next_index
         else:
@@ -2561,6 +2585,8 @@ def collect_repair_entries_from_lines(lines):
                 'end': task.get('end', 0),
                 'prefix': task.get('prefix', ''),
                 'quote': task.get('quote', '"'),
+                'speaker_id': task.get('speaker_id', ''),
+                'speaker': task.get('speaker', ''),
             }
         )
 
@@ -2987,6 +3013,7 @@ def load_repair_report_items(report_path):
                 raise SystemExit(f'Invalid repair report JSONL row: {exc}') from exc
 
             batch_style = False
+            file_rel_path = ''
             file_path = row.get('file')
             if isinstance(file_path, str) and file_path.strip():
                 file_path = resolve_path_under_dir(legacy.TL_DIR, file_path, 'repair file')
@@ -3020,6 +3047,7 @@ def load_repair_report_items(report_path):
 
             normalized_row = dict(row)
             normalized_row['file'] = file_path
+            normalized_row['file_rel_path'] = file_rel_path_for_repair(file_path, file_rel_path)
             normalized_row['line'] = line_number
             normalized_row['source'] = source_text
 
@@ -3038,6 +3066,17 @@ def load_repair_report_items(report_path):
     items.sort(key=lambda item: (item.get('game', ''), item['file'], item['line']))
     return items
 
+
+def file_rel_path_for_repair(file_path, preferred=''):
+    preferred = str(preferred or '').strip()
+    if preferred:
+        return legacy._normalize_rel_path(preferred)
+    try:
+        return legacy._normalize_rel_path(os.path.relpath(file_path, legacy.TL_DIR))
+    except Exception:
+        return legacy._normalize_rel_path(os.path.basename(file_path))
+
+
 def build_repair_jobs(report_items, batch_size=2, context_before=2, context_after=2):
     jobs = []
     unresolved = []
@@ -3047,6 +3086,10 @@ def build_repair_jobs(report_items, batch_size=2, context_before=2, context_afte
 
     for file_path in sorted(items_by_file):
         file_items = sorted(items_by_file[file_path], key=lambda item: item['line'])
+        file_rel_path = file_rel_path_for_repair(
+            file_path,
+            file_items[0].get('file_rel_path') if file_items else '',
+        )
         with open(file_path, 'r', encoding='utf-8-sig') as handle:
             lines = handle.readlines()
         entries = collect_repair_entries_from_lines(lines)
@@ -3075,6 +3118,9 @@ def build_repair_jobs(report_items, batch_size=2, context_before=2, context_afte
             target['prefix'] = entry.get('prefix', '')
             target['quote'] = entry['quote']
             target['entry_index'] = entry['entry_index']
+            target['file_rel_path'] = file_rel_path
+            target['speaker_id'] = target.get('speaker_id') or entry.get('speaker_id', '')
+            target['speaker'] = target.get('speaker') or entry.get('speaker', '')
             targets.append(target)
 
         if not targets:
@@ -3092,17 +3138,17 @@ def build_repair_jobs(report_items, batch_size=2, context_before=2, context_afte
                     or current_index != previous_index + 1
                 )
             ):
-                jobs.append(_build_repair_job(file_path, entries, current_group, context_before, context_after))
+                jobs.append(_build_repair_job(file_rel_path, file_path, entries, current_group, context_before, context_after))
                 current_group = []
             current_group.append(target)
             previous_index = current_index
         if current_group:
-            jobs.append(_build_repair_job(file_path, entries, current_group, context_before, context_after))
+            jobs.append(_build_repair_job(file_rel_path, file_path, entries, current_group, context_before, context_after))
 
     return jobs, unresolved
 
 
-def _build_repair_job(file_path, entries, target_group, context_before, context_after):
+def _build_repair_job(file_rel_path, file_path, entries, target_group, context_before, context_after):
     first_index = target_group[0]['entry_index']
     last_index = target_group[-1]['entry_index']
     context_past = [
@@ -3113,8 +3159,9 @@ def _build_repair_job(file_path, entries, target_group, context_before, context_
         entry_context_text(entry)
         for entry in entries[last_index + 1:last_index + 1 + context_after]
     ]
-    return {
+    job = {
         'key': hashlib.sha1(f"repair:{file_path}:{target_group[0]['line']}:{target_group[-1]['line']}".encode('utf-8')).hexdigest()[:12],
+        'file_rel_path': file_rel_path,
         'file_path': file_path,
         'context_past': context_past,
         'context_future': context_future,
@@ -3123,14 +3170,27 @@ def _build_repair_job(file_path, entries, target_group, context_before, context_
                 'id': target['id'],
                 'text': target['text'],
                 'line': target['line'],
+                'line_number': target['line'],
                 'start': target['start'],
                 'end': target['end'],
                 'prefix': target.get('prefix', ''),
                 'quote': target['quote'],
+                'file_rel_path': target.get('file_rel_path', file_rel_path),
+                'speaker_id': target.get('speaker_id', ''),
+                'speaker': target.get('speaker', ''),
             }
             for target in target_group
         ],
     }
+    story_hits = retrieve_batch_story_hits(
+        file_rel_path,
+        job['items'],
+        context_past,
+        context_future,
+    ) if STORY_MEMORY_ENABLED else None
+    if STORY_MEMORY_ENABLED and story_memory.has_story_hits(story_hits):
+        job['story_hits'] = story_hits
+    return job
 
 
 def build_repair_request(job):
@@ -3151,6 +3211,7 @@ def build_repair_request(job):
                                 job['context_past'],
                                 job['items'],
                                 job['context_future'],
+                                story_hits=job.get('story_hits') if 'story_hits' in job else None,
                             )
                         }
                     ],
@@ -3210,6 +3271,12 @@ def print_repair_summary(summary):
     print(f"Validation failures: {summary['validation_failures']}")
     print(f"Missing item ids: {summary['missing_item_ids']}")
     print(f"Unresolved items: {summary['unresolved_items']}")
+    if summary.get('story_memory_enabled'):
+        story_summary = summary.get('story_memory_summary') or {}
+        print(
+            'Story Memory repair hits: '
+            f"{story_summary.get('chunks_with_story_hits', 0)}/{summary['job_count']} jobs"
+        )
     if summary.get('reason_counts'):
         print('Failure categories:')
         for name in sorted(summary['reason_counts']):
@@ -3261,6 +3328,9 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
         'validation_failures': 0,
         'missing_item_ids': 0,
         'unresolved_items': len(unresolved),
+        'story_memory_enabled': STORY_MEMORY_ENABLED,
+        'story_memory_graph_file': STORY_MEMORY_GRAPH_FILE if STORY_MEMORY_ENABLED else '',
+        'story_memory_summary': summarize_batch_story_memory(jobs) if STORY_MEMORY_ENABLED else {},
         'reason_counts': reason_counts,
     }
 
