@@ -2600,6 +2600,105 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0]['items'][0]['start'], second_start)
 
+    def test_repair_jobs_include_story_memory_when_enabled(self):
+        old_values = {
+            'enabled': batch_mod.STORY_MEMORY_ENABLED,
+            'graph_file': batch_mod.STORY_MEMORY_GRAPH_FILE,
+            'max_context_chars': batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS,
+            'graph': batch_mod._STORY_GRAPH,
+            'graph_path': batch_mod._STORY_GRAPH_PATH,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                tl_dir = Path(tmp)
+                target_file = tl_dir / 'script.rpy'
+                graph_file = tl_dir / 'story_graph.json'
+                target_file.write_text(
+                    'label test:\n'
+                    '    e "Open the Void Gate"\n',
+                    encoding='utf-8',
+                )
+                graph_file.write_text(
+                    json.dumps(
+                        {
+                            'schema_version': 1,
+                            'characters': {
+                                'eileen': {
+                                    'zh_name': '艾琳',
+                                    'speaker_ids': ['e'],
+                                    'style': '语气轻快',
+                                },
+                            },
+                            'relations': [],
+                            'terms': [
+                                {
+                                    'source': 'Void Gate',
+                                    'target': '虚空门',
+                                    'note': '世界观核心术语',
+                                },
+                            ],
+                            'scenes': [
+                                {
+                                    'file_rel_path': 'script.rpy',
+                                    'line_start': 3,
+                                    'line_end': 3,
+                                    'summary': '偏后一行的场景。',
+                                    'characters': ['eileen'],
+                                },
+                                {
+                                    'file_rel_path': 'script.rpy',
+                                    'line_start': 2,
+                                    'line_end': 2,
+                                    'summary': '正确边界场景。',
+                                    'characters': ['eileen'],
+                                },
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding='utf-8',
+                )
+
+                batch_mod.STORY_MEMORY_ENABLED = True
+                batch_mod.STORY_MEMORY_GRAPH_FILE = str(graph_file)
+                batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS = 500
+                batch_mod._STORY_GRAPH = None
+                batch_mod._STORY_GRAPH_PATH = ''
+                with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                    jobs, unresolved = batch_mod.build_repair_jobs(
+                        [
+                            {
+                                'file': str(target_file),
+                                'line': 2,
+                                'source': 'Open the Void Gate',
+                            },
+                        ],
+                        batch_size=1,
+                    )
+                request = batch_mod.build_repair_request(jobs[0])
+                prompt = request['request']['contents'][0]['parts'][0]['text']
+                summary = batch_mod.summarize_batch_story_memory(
+                    jobs,
+                    graph_file=str(graph_file),
+                    max_context_chars=500,
+                )
+        finally:
+            batch_mod.STORY_MEMORY_ENABLED = old_values['enabled']
+            batch_mod.STORY_MEMORY_GRAPH_FILE = old_values['graph_file']
+            batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS = old_values['max_context_chars']
+            batch_mod._STORY_GRAPH = old_values['graph']
+            batch_mod._STORY_GRAPH_PATH = old_values['graph_path']
+
+        self.assertEqual(unresolved, [])
+        self.assertEqual(jobs[0]['file_rel_path'], 'script.rpy')
+        self.assertEqual(jobs[0]['items'][0]['speaker_id'], 'e')
+        self.assertEqual(jobs[0]['items'][0]['line_number'], 2)
+        self.assertIn('story_hits', jobs[0])
+        self.assertEqual(jobs[0]['story_hits']['scenes'][0]['summary'], '正确边界场景。')
+        self.assertIn('STORY MEMORY', prompt)
+        self.assertIn('Void Gate -> 虚空门', prompt)
+        self.assertEqual(summary['chunks_with_story_hits'], 1)
+
 
 if __name__ == '__main__':
     unittest.main()
