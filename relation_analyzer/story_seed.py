@@ -1,5 +1,6 @@
 from .common import Path, json, re
-from .relations import collect_relation_units, iter_source_groups, pair_key
+from .parsing import normalize_character_aliases, speaker_matches_character
+from .relations import pair_key
 
 
 def character_id_from_name(name):
@@ -44,6 +45,18 @@ def _source_file(value, source_root=None):
         except (OSError, ValueError):
             pass
     return text.replace('\\', '/')
+
+
+def _source_files(values, source_root=None):
+    normalized = []
+    seen = set()
+    for value in values or []:
+        source = _source_file(value, source_root)
+        if not source or source in seen:
+            continue
+        normalized.append(source)
+        seen.add(source)
+    return sorted(normalized)
 
 
 def collect_speaker_seed_stats(units, source_root=None):
@@ -97,12 +110,21 @@ def collect_speaker_seed_stats(units, source_root=None):
 
 def build_character_seed(units, characters, source_root=None):
     speaker_stats = collect_speaker_seed_stats(units, source_root)
-    by_name = {}
-    for speaker, stats in speaker_stats.items():
-        for candidate in stats['speaker_name_candidates']:
-            key = candidate['name'].strip().lower()
-            if key:
-                by_name.setdefault(key, []).append(speaker)
+    alias_map = normalize_character_aliases(characters)
+    speakers_by_character = {character: [] for character in characters}
+    seen_by_character = {character: set() for character in characters}
+
+    for unit in units:
+        speaker = str(unit.get('speaker') or '').strip()
+        if not speaker or speaker not in speaker_stats:
+            continue
+        for character in characters:
+            if not speaker_matches_character(unit, alias_map[character]):
+                continue
+            if speaker not in seen_by_character[character]:
+                speakers_by_character[character].append(speaker)
+                seen_by_character[character].add(speaker)
+            break
 
     character_entries = {}
     used_ids = set()
@@ -118,7 +140,7 @@ def build_character_seed(units, characters, source_root=None):
             suffix += 1
         used_ids.add(char_id)
 
-        speaker_ids = _dedupe_preserve_order(by_name.get(name.lower(), []))
+        speaker_ids = _dedupe_preserve_order(speakers_by_character.get(character, []))
         candidate_details = []
         source_files = set()
         speaker_count = 0
@@ -170,53 +192,6 @@ def _character_id_map(characters):
     return mapping
 
 
-def collect_pair_source_files(units, characters, segment_size=1, source_root=None):
-    relation_units, _, _, _ = collect_relation_units(units, characters)
-    pair_sources = {}
-    active = set(characters)
-    segment_size = max(1, int(segment_size or 1))
-
-    for group in iter_source_groups(relation_units):
-        source = _source_file(group[0].get('source'), source_root) if group else ''
-
-        for start in range(0, len(group), segment_size):
-            segment = group[start:start + segment_size]
-            present = []
-            seen = set()
-            for unit in segment:
-                for char in unit.get('participants', []):
-                    if char in active and char not in seen:
-                        present.append(char)
-                        seen.add(char)
-            for left_index in range(len(present)):
-                for right_index in range(left_index + 1, len(present)):
-                    pair_sources.setdefault(pair_key(present[left_index], present[right_index]), set()).add(source)
-
-        spoken = [unit for unit in group if unit.get('speaker_character') in active]
-        for previous, current in zip(spoken, spoken[1:]):
-            left = previous.get('speaker_character')
-            right = current.get('speaker_character')
-            if left and right and left != right:
-                pair_sources.setdefault(pair_key(left, right), set()).add(source)
-
-        for unit in group:
-            speaker_character = unit.get('speaker_character') if unit.get('speaker_character') in active else None
-            mentioned = [char for char in unit.get('mentioned_characters', []) if char in active]
-            if speaker_character:
-                for char in mentioned:
-                    if char != speaker_character:
-                        pair_sources.setdefault(pair_key(speaker_character, char), set()).add(source)
-            if len(mentioned) >= 2:
-                for left_index in range(len(mentioned)):
-                    for right_index in range(left_index + 1, len(mentioned)):
-                        pair_sources.setdefault(pair_key(mentioned[left_index], mentioned[right_index]), set()).add(source)
-
-    return {
-        key: sorted(value for value in sources if value)
-        for key, sources in pair_sources.items()
-    }
-
-
 def _has_relation_evidence(row):
     raw_total = (
         float(row.get('co_scene_raw', 0.0))
@@ -228,12 +203,7 @@ def _has_relation_evidence(row):
 
 def build_relation_seed(units, characters, relation_data, source_root=None):
     id_map = _character_id_map(characters)
-    source_files = collect_pair_source_files(
-        units,
-        characters,
-        relation_data.get('segment_size', 1),
-        source_root,
-    )
+    pair_source_files = relation_data.get('pair_source_files', {})
     relation_entries = []
     for row in relation_data.get('pair_rows', []):
         if not _has_relation_evidence(row):
@@ -258,7 +228,7 @@ def build_relation_seed(units, characters, relation_data, source_root=None):
                     'dialogue_raw': float(row.get('dialogue_raw', 0.0)),
                     'mention_raw': float(row.get('mention_raw', 0.0)),
                     'dominant_component': row.get('dominant_component', ''),
-                    'source_files': source_files.get(key, []),
+                    'source_files': _source_files(pair_source_files.get(key, []), source_root),
                     'needs_human_review': True,
                 },
             }
