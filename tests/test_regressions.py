@@ -1969,6 +1969,148 @@ class BatchRepairRegressionTests(unittest.TestCase):
             self.assertEqual(first_child['story_memory_summary']['truncated_story_blocks'], 0)
             self.assertGreater(first_child['story_memory_summary']['formatted_char_count'], 0)
 
+    def test_create_keyword_package_uses_keyword_mode_manifest(self):
+        old_values = {
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'log_dir': batch_mod.LOG_DIR,
+            'jobs_dir': batch_mod.BATCH_JOBS_DIR,
+            'repair_dir': batch_mod.REPAIR_RUNS_DIR,
+            'latest': batch_mod.LATEST_MANIFEST_FILE,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'tl'
+                jobs_dir = root / 'batch_jobs'
+                tl_dir.mkdir()
+                target_file = tl_dir / 'script.rpy'
+                target_file.write_text(
+                    'translate schinese start:\n'
+                    '    old "Void Gate"\n'
+                    '    new "虚空门"\n'
+                    'label demo:\n'
+                    '    e "Aether Compass"\n',
+                    encoding='utf-8',
+                )
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.LOG_DIR = str(root / 'logs')
+                batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+                batch_mod.REPAIR_RUNS_DIR = str(root / 'repair_runs')
+                batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
+
+                manifest_path = batch_mod.create_keyword_package(
+                    skip_prepare=True,
+                    chunk_size=1,
+                    max_candidates_per_chunk=3,
+                )
+                manifest = json.loads(Path(manifest_path).read_text(encoding='utf-8'))
+                request_rows = [
+                    json.loads(line)
+                    for line in Path(manifest['input_jsonl_path']).read_text(encoding='utf-8').splitlines()
+                ]
+        finally:
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.LOG_DIR = old_values['log_dir']
+            batch_mod.BATCH_JOBS_DIR = old_values['jobs_dir']
+            batch_mod.REPAIR_RUNS_DIR = old_values['repair_dir']
+            batch_mod.LATEST_MANIFEST_FILE = old_values['latest']
+
+        self.assertEqual(manifest['mode'], batch_mod.MANIFEST_MODE_KEYWORD_EXTRACTION)
+        self.assertEqual(manifest['summary']['item_count'], 2)
+        self.assertEqual(manifest['summary']['chunk_count'], 2)
+        self.assertEqual(request_rows[0]['request']['generation_config']['response_json_schema']['maxItems'], 3)
+        self.assertIn('source', request_rows[0]['request']['generation_config']['response_json_schema']['items']['required'])
+
+    def test_export_keyword_candidates_dedupes_jsonl_and_markdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            response_text = json.dumps(
+                [
+                    {
+                        'source': 'Void Gate',
+                        'suggested_target': '虚空门',
+                        'category': 'term',
+                        'confidence': 0.7,
+                        'evidence': 'script.rpy:2',
+                    },
+                    {
+                        'source': 'Void Gate',
+                        'suggested_target': '虚空门',
+                        'category': 'term',
+                        'confidence': 0.9,
+                        'evidence': 'script.rpy:3',
+                    },
+                ],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'kw-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'version': 1,
+                        'mode': batch_mod.MANIFEST_MODE_KEYWORD_EXTRACTION,
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'kw-1',
+                                'file_rel_path': 'script.rpy',
+                                'line_numbers': [2, 3],
+                                'items': [
+                                    {'id': 'script.rpy:2:keyword:0'},
+                                    {'id': 'script.rpy:3:keyword:1'},
+                                ],
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            export = batch_mod.export_keyword_candidates(str(manifest_path))
+            jsonl_path = Path(export['jsonl_path'])
+            markdown_path = Path(export['markdown_path'])
+            rows = [
+                json.loads(line)
+                for line in jsonl_path.read_text(encoding='utf-8').splitlines()
+            ]
+            markdown_text = markdown_path.read_text(encoding='utf-8')
+
+        self.assertEqual(export['summary']['candidate_count_raw'], 2)
+        self.assertEqual(export['summary']['candidate_count_deduped'], 1)
+        self.assertEqual(rows[0]['source'], 'Void Gate')
+        self.assertEqual(rows[0]['confidence'], 0.9)
+        self.assertEqual(rows[0]['occurrences'], 2)
+        self.assertIn('Void Gate', markdown_text)
+
+    def test_check_and_apply_reject_keyword_manifests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / 'manifest.json'
+            manifest_path.write_text(
+                json.dumps({'mode': batch_mod.MANIFEST_MODE_KEYWORD_EXTRACTION}),
+                encoding='utf-8',
+            )
+
+            with self.assertRaisesRegex(SystemExit, 'check only supports translation manifests'):
+                batch_mod.check_results(str(manifest_path))
+            with self.assertRaisesRegex(SystemExit, 'apply only supports translation manifests'):
+                batch_mod.apply_results(str(manifest_path))
+
     def test_collect_result_actions_ignores_duplicate_result_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
             package_dir = Path(tmp)
