@@ -75,9 +75,12 @@ BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
 BATCH_MACRO_SETTING = ''
 MANIFEST_MODE_TRANSLATION = 'translation'
 MANIFEST_MODE_KEYWORD_EXTRACTION = 'keyword_extraction'
+MANIFEST_MODE_REVISION = 'revision'
 KEYWORD_DISPLAY_NAME_PREFIX = 'renpy-keywords'
 KEYWORD_CHUNK_SIZE = 40
 KEYWORD_MAX_CANDIDATES_PER_CHUNK = 12
+REVISION_DISPLAY_NAME_PREFIX = 'renpy-revise'
+REVISION_CHUNK_SIZE = 6
 
 RAG_ENABLED = False
 RAG_STORE_DIR = ''
@@ -171,6 +174,7 @@ def load_batch_settings():
     global BATCH_MAX_OUTPUT_TOKENS, BATCH_TEMPERATURE, BATCH_THINKING_LEVEL
     global BATCH_DISPLAY_NAME_PREFIX, BATCH_MACRO_SETTING
     global KEYWORD_DISPLAY_NAME_PREFIX, KEYWORD_CHUNK_SIZE, KEYWORD_MAX_CANDIDATES_PER_CHUNK
+    global REVISION_DISPLAY_NAME_PREFIX, REVISION_CHUNK_SIZE
     global RAG_ENABLED, RAG_STORE_DIR, RAG_EMBEDDING_MODEL, RAG_QUERY_TASK_TYPE
     global RAG_DOCUMENT_TASK_TYPE, RAG_OUTPUT_DIMENSIONALITY, RAG_TOP_K_HISTORY
     global RAG_TOP_K_TERMS, RAG_MIN_SIMILARITY, RAG_SEGMENT_LINES
@@ -248,6 +252,17 @@ def load_batch_settings():
     display_name_prefix = keyword_config.get('display_name_prefix')
     if isinstance(display_name_prefix, str) and display_name_prefix.strip():
         KEYWORD_DISPLAY_NAME_PREFIX = display_name_prefix.strip()
+
+    revision_config = batch.get('revision')
+    if not isinstance(revision_config, dict):
+        revision_config = {}
+    REVISION_CHUNK_SIZE = coerce_positive_int(
+        revision_config.get('chunk_size'),
+        REVISION_CHUNK_SIZE,
+    )
+    revision_display_name_prefix = revision_config.get('display_name_prefix')
+    if isinstance(revision_display_name_prefix, str) and revision_display_name_prefix.strip():
+        REVISION_DISPLAY_NAME_PREFIX = revision_display_name_prefix.strip()
 
     macro_setting_file = batch.get('macro_setting_file')
     if macro_setting_file:
@@ -880,6 +895,8 @@ def create_batch_package_dir(package_name):
 def copy_split_context_metadata(source_manifest, part_manifest, part_chunks):
     if source_manifest.get('keyword_settings'):
         part_manifest['keyword_settings'] = dict(source_manifest.get('keyword_settings') or {})
+    if source_manifest.get('revision_settings'):
+        part_manifest['revision_settings'] = dict(source_manifest.get('revision_settings') or {})
 
     for key in ('rag_enabled', 'rag_store_path', 'rag_settings'):
         if key in source_manifest:
@@ -1413,6 +1430,337 @@ def create_batch_package(display_name_override='', skip_prepare=False):
     return manifest_path
 
 
+
+
+def should_include_revision_entry(entry):
+    source = compact_text(entry.get('source', ''))
+    current_translation = compact_text(entry.get('translation', ''))
+    return bool(source and current_translation)
+
+
+def collect_revision_file_jobs():
+    jobs = []
+    for rel_path, file_path in collect_files_to_process():
+        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+            entries = collect_translation_entries_from_lines(handle.readlines())
+
+        items = []
+        for entry in entries:
+            if not should_include_revision_entry(entry):
+                continue
+            try:
+                line_number = int(entry.get('line_number'))
+            except (TypeError, ValueError):
+                line_number = 0
+            line_index = max(0, line_number - 1)
+            start = int(entry.get('start', 0) or 0)
+            item = {
+                'id': f"{rel_path}:{line_index}:{start}:revision:{entry.get('entry_index', len(items))}",
+                'text': entry.get('source', ''),
+                'source': entry.get('source', ''),
+                'current_translation': entry.get('translation', ''),
+                'file_rel_path': rel_path,
+                'line': line_index,
+                'line_number': line_number,
+                'start': start,
+                'end': int(entry.get('end', 0) or 0),
+                'prefix': entry.get('prefix', ''),
+                'quote': entry.get('quote', '"'),
+            }
+            speaker_id = entry.get('speaker_id') or entry.get('speaker')
+            if speaker_id:
+                item['speaker_id'] = speaker_id
+            items.append(item)
+
+        if items:
+            jobs.append(
+                {
+                    'file_rel_path': rel_path,
+                    'file_path': file_path,
+                    'task_count': len(items),
+                    'items': items,
+                }
+            )
+    return jobs
+
+
+def format_revision_context_block(items, empty_label):
+    if not items:
+        return empty_label
+    lines = []
+    for item in items:
+        source = compact_text(item.get('source', ''))
+        current = compact_text(item.get('current_translation', ''))
+        if source or current:
+            lines.append(f'- {source} => {current}')
+    return '\n'.join(lines) if lines else empty_label
+
+
+def build_revision_chunks(file_jobs, chunk_size=None):
+    chunk_size = max(1, int(chunk_size or REVISION_CHUNK_SIZE))
+    chunks = []
+    for job in file_jobs:
+        items = job['items']
+        total = len(items)
+        for start in range(0, total, chunk_size):
+            end = min(start + chunk_size, total)
+            target_items = items[start:end]
+            context_past_items = items[max(0, start - BATCH_CONTEXT_BEFORE):start]
+            context_future_items = items[end:min(total, end + BATCH_CONTEXT_AFTER)]
+            glossary_hits = retrieve_glossary_hits(target_items) if RAG_ENABLED else []
+            history_hits, rag_stats = retrieve_history_hits(
+                target_items,
+                [item.get('source', '') for item in context_past_items],
+            ) if RAG_ENABLED else ([], {})
+            story_hits = retrieve_batch_story_hits(
+                job['file_rel_path'],
+                target_items,
+                [item.get('source', '') for item in context_past_items],
+                [item.get('source', '') for item in context_future_items],
+            ) if STORY_MEMORY_ENABLED else None
+            chunk_number = start // chunk_size + 1
+            chunk = {
+                'key': f"rv-{hash_key(job['file_rel_path'])}-{chunk_number:05d}",
+                'mode': MANIFEST_MODE_REVISION,
+                'file_rel_path': job['file_rel_path'],
+                'file_path': job['file_path'],
+                'chunk_index': chunk_number,
+                'line_numbers': [item.get('line_number', 0) for item in target_items],
+                'context_past': [
+                    {
+                        'source': item.get('source', ''),
+                        'current_translation': item.get('current_translation', ''),
+                    }
+                    for item in context_past_items
+                ],
+                'context_future': [
+                    {
+                        'source': item.get('source', ''),
+                        'current_translation': item.get('current_translation', ''),
+                    }
+                    for item in context_future_items
+                ],
+                'glossary_hits': glossary_hits,
+                'history_hits': history_hits,
+                'rag_stats': rag_stats,
+                'items': target_items,
+            }
+            if STORY_MEMORY_ENABLED and story_memory.has_story_hits(story_hits):
+                chunk['story_hits'] = story_hits
+            chunks.append(chunk)
+    return chunks
+
+
+def build_revision_system_instruction():
+    glossary = ', '.join(legacy.PRESERVE_TERMS)
+    return (
+        'Setting:\n'
+        f'{BATCH_MACRO_SETTING}\n\n'
+        'Task:\n'
+        'Review existing Simplified Chinese Ren\'Py TL translations. '
+        'For each TARGET item, decide whether the current translation should be revised. '
+        'Preserve meaning, tone, Ren\'Py tags, placeholders, variables, format strings, and locked terms. '
+        f'Keep these terms unchanged: {glossary}\n'
+        'If the current translation is already acceptable, set should_update=false and repeat it as revised_translation. '
+        'If it needs a change, set should_update=true and provide only the revised Chinese translation. '
+        'Return JSON only. Preserve every id exactly. Item count must match.'
+    )
+
+
+def build_revision_user_prompt(chunk):
+    target_payload = json.dumps(
+        [
+            {
+                'id': item['id'],
+                'file': item.get('file_rel_path', ''),
+                'line': item.get('line_number', 0),
+                'speaker_id': item.get('speaker_id', ''),
+                'source': item.get('source', ''),
+                'current_translation': item.get('current_translation', ''),
+            }
+            for item in chunk['items']
+        ],
+        ensure_ascii=False,
+        separators=(',', ':'),
+    )
+    blocks = [
+        f'LOCKED TERMS:\n{format_glossary_hits_block(chunk.get("glossary_hits") or [], "(none)")}\n\n',
+        f'RETRIEVED MEMORY:\n{format_history_hits_block(chunk.get("history_hits") or [], "(none)")}\n\n',
+    ]
+    if story_memory.has_story_hits(chunk.get('story_hits')):
+        blocks.append(
+            'STORY MEMORY:\n'
+            f'{story_memory.format_story_hits_block(chunk.get("story_hits"), STORY_MEMORY_MAX_CONTEXT_CHARS)}\n\n'
+        )
+    blocks.extend(
+        [
+            f'CONTEXT BEFORE:\n{format_revision_context_block(chunk.get("context_past") or [], "(none)")}\n\n',
+            f'TARGET:\n{target_payload}\n\n',
+            f'CONTEXT AFTER:\n{format_revision_context_block(chunk.get("context_future") or [], "(none)")}\n\n',
+            'Return objects with id, should_update, revised_translation, and reason.',
+        ]
+    )
+    return ''.join(blocks)
+
+
+def build_revision_response_json_schema(target_items):
+    target_ids = [item['id'] for item in target_items]
+    return {
+        'type': 'array',
+        'minItems': len(target_items),
+        'maxItems': len(target_items),
+        'items': {
+            'type': 'object',
+            'required': ['id', 'should_update', 'revised_translation', 'reason'],
+            'additionalProperties': False,
+            'properties': {
+                'id': {'type': 'string', 'enum': target_ids},
+                'should_update': {'type': 'boolean'},
+                'revised_translation': {'type': 'string'},
+                'reason': {'type': 'string'},
+            },
+        },
+    }
+
+
+def build_revision_generation_config(target_items):
+    config = {
+        'temperature': BATCH_TEMPERATURE,
+        'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
+        'response_mime_type': 'application/json',
+        'response_json_schema': build_revision_response_json_schema(target_items),
+    }
+    if BATCH_THINKING_LEVEL and BATCH_MODEL.startswith('gemini-3'):
+        config['thinking_config'] = {
+            'thinking_level': BATCH_THINKING_LEVEL.upper(),
+        }
+    return config
+
+
+def build_revision_request(chunk):
+    return {
+        'key': chunk['key'],
+        'request': {
+            'system_instruction': {'parts': [{'text': build_revision_system_instruction()}]},
+            'contents': [
+                {
+                    'role': 'user',
+                    'parts': [{'text': build_revision_user_prompt(chunk)}],
+                }
+            ],
+            'generation_config': build_revision_generation_config(chunk['items']),
+        },
+    }
+
+
+def create_revision_package(display_name_override='', skip_prepare=False, chunk_size=None):
+    if not skip_prepare:
+        legacy.run_prepare_steps()
+    if not os.path.isdir(legacy.TL_DIR):
+        raise SystemExit(f'TL dir does not exist: {legacy.TL_DIR}')
+
+    file_jobs = collect_revision_file_jobs()
+    if not file_jobs:
+        print('No revision source lines found.')
+        return None
+
+    chunk_size = max(1, int(chunk_size or REVISION_CHUNK_SIZE))
+    rag_prepare_summary = prepare_rag_store(file_jobs)
+    chunks = build_revision_chunks(file_jobs, chunk_size=chunk_size)
+    if not chunks:
+        print('No revision chunks built.')
+        return None
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    package_name = f'{timestamp}_{guess_project_slug()}_revisions'
+    package_dir = create_batch_package_dir(package_name)
+
+    display_name = display_name_override.strip() if display_name_override else ''
+    if not display_name:
+        display_name = f'{REVISION_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
+
+    input_jsonl_path = os.path.join(package_dir, 'requests.jsonl')
+    with open(input_jsonl_path, 'w', encoding='utf-8') as handle:
+        for chunk in chunks:
+            handle.write(json.dumps(build_revision_request(chunk), ensure_ascii=False) + '\n')
+
+    build_warnings = get_batch_risk_warnings()
+    manifest = {
+        'version': 1,
+        'mode': MANIFEST_MODE_REVISION,
+        'created_at': datetime.now().isoformat(timespec='seconds'),
+        'display_name': display_name,
+        'batch_model': BATCH_MODEL,
+        'base_dir': legacy.BASE_DIR,
+        'tl_dir': legacy.TL_DIR,
+        'input_jsonl_path': input_jsonl_path,
+        'result_jsonl_path': '',
+        'job_name': '',
+        'job_state': 'LOCAL_ONLY',
+        'uploaded_file_name': '',
+        'result_file_name': '',
+        'settings': {
+            'revision_chunk_size': chunk_size,
+            'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
+            'temperature': BATCH_TEMPERATURE,
+            'thinking_level': BATCH_THINKING_LEVEL,
+        },
+        'revision_settings': {
+            'chunk_size': chunk_size,
+        },
+        'summary': {
+            'file_count': len(file_jobs),
+            'chunk_count': len(chunks),
+            'item_count': sum(len(chunk['items']) for chunk in chunks),
+        },
+        'files': {
+            job['file_rel_path']: {
+                'path': job['file_path'],
+                'task_count': job['task_count'],
+            }
+            for job in file_jobs
+        },
+        'chunks': chunks,
+        'build_warnings': build_warnings,
+    }
+
+    if RAG_ENABLED:
+        manifest['rag_enabled'] = True
+        manifest['rag_store_path'] = RAG_STORE_DIR or get_default_rag_store_dir()
+        manifest['rag_settings'] = {
+            'top_k_history': RAG_TOP_K_HISTORY,
+            'top_k_terms': RAG_TOP_K_TERMS,
+            'min_similarity': RAG_MIN_SIMILARITY,
+            'segment_lines': RAG_SEGMENT_LINES,
+        }
+        manifest['rag_summary'] = summarize_batch_rag(chunks, rag_prepare_summary)
+    if STORY_MEMORY_ENABLED:
+        manifest['story_memory_enabled'] = True
+        manifest['story_memory_graph_file'] = STORY_MEMORY_GRAPH_FILE
+        manifest['story_memory_settings'] = {
+            'top_k_terms': STORY_MEMORY_TOP_K_TERMS,
+            'top_k_characters': STORY_MEMORY_TOP_K_CHARACTERS,
+            'top_k_relations': STORY_MEMORY_TOP_K_RELATIONS,
+            'top_k_scenes': STORY_MEMORY_TOP_K_SCENES,
+            'max_context_chars': STORY_MEMORY_MAX_CONTEXT_CHARS,
+        }
+        manifest['story_memory_summary'] = summarize_batch_story_memory(chunks)
+
+    manifest_path = os.path.join(package_dir, 'manifest.json')
+    with open(manifest_path, 'w', encoding='utf-8') as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
+    remember_latest_manifest(manifest_path)
+
+    print(f'Created revision package: {package_dir}')
+    print(f"Source files: {manifest['summary']['file_count']}")
+    print(f"Chunks: {manifest['summary']['chunk_count']}")
+    print(f"Revision items: {manifest['summary']['item_count']}")
+    print('Mode: revision')
+    if build_warnings:
+        print('Warnings:')
+        for warning_text in build_warnings:
+            print(f'- {warning_text}')
+    return manifest_path
 
 
 def should_include_keyword_source(text):
@@ -2610,6 +2958,445 @@ def summarize_pending_replacements(replacements_by_file, translated_lines_by_fil
     summary['pending_lines'] = sum(len(lines) for lines in translated_lines_by_file.values())
 
 
+def coerce_revision_should_update(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {'1', 'true', 'yes', 'y', 'update', 'revise', 'change', 'changed'}
+    return False
+
+
+def normalize_revision_items(payload):
+    data = payload
+    if isinstance(data, dict):
+        for key in ('revisions', 'items', 'results'):
+            if isinstance(data.get(key), list):
+                data = data[key]
+                break
+    if not isinstance(data, list):
+        raise ValueError(f'Response JSON is not a revision list: {type(data)}')
+
+    normalized = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        item_id = item.get('id')
+        if item_id is None:
+            continue
+        revised = item.get('revised_translation')
+        if revised is None:
+            revised = item.get('translation')
+        if revised is None:
+            revised = item.get('revised')
+        normalized.append(
+            {
+                'id': str(item_id),
+                'should_update': coerce_revision_should_update(item.get('should_update')),
+                'revised_translation': str(revised or ''),
+                'reason': compact_text(str(item.get('reason') or '')),
+            }
+        )
+    return normalized
+
+
+def make_revision_preview_entry(target_item, result_item, status, error=''):
+    return {
+        'id': target_item.get('id', ''),
+        'file_rel_path': target_item.get('file_rel_path', ''),
+        'line': target_item.get('line_number', target_item.get('line', 0)),
+        'source': target_item.get('source', target_item.get('text', '')),
+        'current_translation': target_item.get('current_translation', ''),
+        'revised_translation': result_item.get('revised_translation', ''),
+        'should_update': result_item.get('should_update', False),
+        'reason': result_item.get('reason', ''),
+        'status': status,
+        'error': error,
+    }
+
+
+def reconcile_revision_preview_entries(preview_entries, validation_failures):
+    failures_by_item = {}
+    for failure in validation_failures:
+        item_id = failure.get('item_id') or failure.get('id')
+        if item_id:
+            failures_by_item[str(item_id)] = failure
+    if not failures_by_item:
+        return preview_entries
+
+    reconciled = []
+    for entry in preview_entries:
+        failure = failures_by_item.get(str(entry.get('id') or ''))
+        if entry.get('status') != 'pending' or not failure:
+            reconciled.append(entry)
+            continue
+        error = str(failure.get('error') or 'Source validation skipped this revision.')
+        status = 'source_mismatch' if 'Source text mismatch' in error else 'skipped'
+        updated = dict(entry)
+        updated['status'] = status
+        updated['error'] = error
+        if failure.get('current_text') is not None:
+            updated['current_text'] = failure.get('current_text')
+        reconciled.append(updated)
+    return reconciled
+
+
+def collect_revision_actions(manifest, validate_sources=False):
+    result_path = resolve_manifest_result_path(manifest)
+    if not os.path.isfile(result_path):
+        raise SystemExit('Result JSONL not found. Run download first.')
+
+    chunk_map = {chunk['key']: chunk for chunk in manifest.get('chunks', [])}
+    replacements_by_file = {}
+    revised_lines_by_file = {}
+    processed_keys = set()
+    failure_entries = []
+    preview_entries = []
+    summary = {
+        'expected_chunks': len(chunk_map),
+        'result_rows': 0,
+        'expected_items': sum(len(chunk['items']) for chunk in chunk_map.values()),
+        'parsed_items': 0,
+        'valid_items': 0,
+        'revision_candidate_items': 0,
+        'unchanged_items': 0,
+        'chunk_row_errors': 0,
+        'missing_response_chunks': 0,
+        'partial_chunks': 0,
+        'max_tokens_chunks': 0,
+        'reason_counts': {},
+    }
+
+    with open(result_path, 'r', encoding='utf-8') as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            summary['result_rows'] += 1
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                summary['chunk_row_errors'] += 1
+                bump_counter(summary['reason_counts'], 'invalid_result_jsonl_row')
+                failure_entries.append(make_failure_entry(manifest, f'Invalid result JSONL row: {exc}', text=line[:500]))
+                continue
+
+            key = row.get('key')
+            if not key or key not in chunk_map:
+                bump_counter(summary['reason_counts'], 'unknown_chunk_key')
+                failure_entries.append(make_failure_entry(manifest, 'Unknown chunk key in result file', key=key))
+                continue
+
+            processed_keys.add(key)
+            chunk = chunk_map[key]
+            chunk_items = chunk['items']
+            item_map = {item['id']: item for item in chunk_items}
+            response_payload = row.get('response', {})
+            finish_reason = extract_finish_reason(response_payload)
+            usage_metadata = summarize_usage_metadata(extract_usage_metadata(response_payload))
+            if finish_reason == 'MAX_TOKENS':
+                summary['max_tokens_chunks'] += 1
+
+            if row.get('error'):
+                summary['chunk_row_errors'] += 1
+                bump_counter(summary['reason_counts'], 'row_error')
+                for item in chunk_items:
+                    failure_entries.append(make_failure_entry(
+                        manifest,
+                        serialize_unknown(row.get('error')),
+                        file_rel_path=chunk['file_rel_path'],
+                        item_id=item['id'],
+                        line=item['line'],
+                        text=item.get('source', item.get('text', '')),
+                        key=key,
+                        finish_reason=finish_reason,
+                        usage_metadata=usage_metadata,
+                    ))
+                continue
+
+            response_text = extract_text_from_response_payload(response_payload)
+            if not response_text:
+                summary['missing_response_chunks'] += 1
+                bump_counter(summary['reason_counts'], 'missing_response_text')
+                for item in chunk_items:
+                    failure_entries.append(make_failure_entry(
+                        manifest,
+                        'Missing text in response payload',
+                        file_rel_path=chunk['file_rel_path'],
+                        item_id=item['id'],
+                        line=item['line'],
+                        text=item.get('source', item.get('text', '')),
+                        key=key,
+                        finish_reason=finish_reason,
+                        usage_metadata=usage_metadata,
+                    ))
+                continue
+
+            try:
+                payload = parse_json_payload(response_text)
+                result_items = normalize_revision_items(payload)
+            except Exception as exc:
+                summary['partial_chunks'] += 1
+                reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'failed_to_parse_revision_json'
+                bump_counter(summary['reason_counts'], reason_name)
+                for item in chunk_items:
+                    failure_entries.append(make_failure_entry(
+                        manifest,
+                        f'Failed to parse revision JSON: {exc}',
+                        file_rel_path=chunk['file_rel_path'],
+                        item_id=item['id'],
+                        line=item['line'],
+                        text=item.get('source', item.get('text', '')),
+                        key=key,
+                        response_preview=response_text[:500],
+                        finish_reason=finish_reason,
+                        usage_metadata=usage_metadata,
+                    ))
+                continue
+
+            if len(result_items) < len(chunk_items):
+                summary['partial_chunks'] += 1
+                reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_revision_items'
+                bump_counter(summary['reason_counts'], reason_name)
+
+            seen_ids = set()
+            for result_item in result_items:
+                result_id = result_item['id']
+                target_item = item_map.get(result_id)
+                if not target_item:
+                    bump_counter(summary['reason_counts'], 'schema_or_item_mismatch')
+                    continue
+                if result_id in seen_ids:
+                    bump_counter(summary['reason_counts'], 'duplicate_result_id')
+                    continue
+                seen_ids.add(result_id)
+                summary['parsed_items'] += 1
+
+                current_translation = target_item.get('current_translation', '')
+                revised_translation = result_item.get('revised_translation', '')
+                if not revised_translation and not result_item.get('should_update'):
+                    revised_translation = current_translation
+                    result_item['revised_translation'] = revised_translation
+                should_update = result_item.get('should_update') and compact_text(revised_translation) != compact_text(current_translation)
+                if not should_update:
+                    summary['unchanged_items'] += 1
+                    preview_entries.append(make_revision_preview_entry(target_item, result_item, 'unchanged'))
+                    continue
+
+                valid, reason = legacy.validate_translation(
+                    target_item.get('source', target_item.get('text', '')),
+                    revised_translation,
+                )
+                if not valid and reason == 'No Chinese characters' and allow_non_chinese_batch_translation(
+                    manifest,
+                    chunk,
+                    target_item.get('source', target_item.get('text', '')),
+                    revised_translation,
+                ):
+                    valid = True
+                    reason = 'OK'
+                if not valid:
+                    bump_counter(summary['reason_counts'], 'validation_failed')
+                    failure_entries.append(make_failure_entry(
+                        manifest,
+                        f'Validation failed: {reason}',
+                        file_rel_path=chunk['file_rel_path'],
+                        item_id=target_item['id'],
+                        line=target_item['line'],
+                        text=target_item.get('source', target_item.get('text', '')),
+                        key=key,
+                        translation=revised_translation,
+                        finish_reason=finish_reason,
+                        usage_metadata=usage_metadata,
+                    ))
+                    preview_entries.append(make_revision_preview_entry(target_item, result_item, 'invalid', reason))
+                    continue
+
+                summary['valid_items'] += 1
+                summary['revision_candidate_items'] += 1
+                preview_entries.append(make_revision_preview_entry(target_item, result_item, 'pending'))
+                file_key = chunk['file_rel_path']
+                replacements_by_file.setdefault(file_key, {}).setdefault(target_item['line'], []).append(
+                    (
+                        target_item['start'],
+                        target_item['end'],
+                        revised_translation,
+                        target_item.get('prefix', ''),
+                        target_item['quote'],
+                        current_translation,
+                        target_item['id'],
+                        key,
+                    )
+                )
+                revised_lines_by_file.setdefault(file_key, set()).add(target_item['line'])
+
+            missing_ids = set(item_map.keys()) - seen_ids
+            if missing_ids:
+                bump_counter(summary['reason_counts'], 'response_missing_item_id', len(missing_ids))
+            for missing_id in sorted(missing_ids):
+                item = item_map[missing_id]
+                failure_entries.append(make_failure_entry(
+                    manifest,
+                    'Response missing item id',
+                    file_rel_path=chunk['file_rel_path'],
+                    item_id=item['id'],
+                    line=item['line'],
+                    text=item.get('source', item.get('text', '')),
+                    key=key,
+                    finish_reason=finish_reason,
+                    usage_metadata=usage_metadata,
+                ))
+
+    missing_keys = set(chunk_map.keys()) - processed_keys
+    if missing_keys:
+        bump_counter(summary['reason_counts'], 'missing_chunk_rows', len(missing_keys))
+    for key in sorted(missing_keys):
+        chunk = chunk_map[key]
+        for item in chunk['items']:
+            failure_entries.append(make_failure_entry(
+                manifest,
+                'No result row found for chunk',
+                file_rel_path=chunk['file_rel_path'],
+                item_id=item['id'],
+                line=item['line'],
+                text=item.get('source', item.get('text', '')),
+                key=key,
+            ))
+
+    summary['failure_items'] = len(failure_entries)
+    summary['processed_chunks'] = len(processed_keys)
+    if validate_sources:
+        replacements_by_file, revised_lines_by_file, validation_failures = validate_result_replacements(
+            manifest,
+            replacements_by_file,
+            summary,
+        )
+        failure_entries.extend(validation_failures)
+        preview_entries = reconcile_revision_preview_entries(preview_entries, validation_failures)
+        summary['failure_items'] = len(failure_entries)
+    else:
+        summarize_pending_replacements(replacements_by_file, revised_lines_by_file, summary)
+    return replacements_by_file, revised_lines_by_file, failure_entries, summary, preview_entries
+
+
+def print_revision_summary(summary):
+    print(f"Expected chunks: {summary['expected_chunks']}")
+    print(f"Result rows: {summary['result_rows']}")
+    print(f"Processed chunks: {summary['processed_chunks']}")
+    print(f"Expected items: {summary['expected_items']}")
+    print(f"Parsed items: {summary.get('parsed_items', 0)}")
+    if 'candidate_valid_items' in summary:
+        print(f"Candidate revision items: {summary['candidate_valid_items']}")
+    else:
+        print(f"Candidate revision items: {summary.get('revision_candidate_items', 0)}")
+    print(f"Recoverable revision items: {summary['valid_items']}")
+    print(f"Unchanged items: {summary.get('unchanged_items', 0)}")
+    print(f"Pending files: {summary.get('pending_files', 0)}")
+    print(f"Pending lines: {summary.get('pending_lines', 0)}")
+    print(f"Skipped items: {summary.get('skipped_items', 0)}")
+    print(f"Source mismatches: {summary.get('source_mismatch_items', 0)}")
+    print(f"Failure items: {summary['failure_items']}")
+    print(f"Chunk row errors: {summary['chunk_row_errors']}")
+    print(f"Missing-response chunks: {summary['missing_response_chunks']}")
+    print(f"Partial/truncated chunks: {summary['partial_chunks']}")
+    print(f"MAX_TOKENS chunks: {summary['max_tokens_chunks']}")
+    if summary.get('reason_counts'):
+        print('Failure categories:')
+        for name in sorted(summary['reason_counts']):
+            print(f"- {name}: {summary['reason_counts'][name]}")
+
+
+def resolve_revision_output_path(manifest, value, default_name, field_name):
+    package_dir = manifest.get('_package_dir')
+    if value:
+        return resolve_path_under_dir(package_dir, value, field_name)
+    return os.path.join(package_dir, default_name)
+
+
+def validate_revision_output_paths(manifest, jsonl_path, markdown_path):
+    normalized_jsonl = _normalized_abs_path(jsonl_path)
+    normalized_markdown = _normalized_abs_path(markdown_path)
+    if normalized_jsonl == normalized_markdown:
+        raise SystemExit('Revision preview JSONL and Markdown outputs must be different files.')
+
+    reserved_paths = {
+        os.path.join(manifest.get('_package_dir', ''), 'manifest.json'),
+        os.path.join(manifest.get('_package_dir', ''), 'requests.jsonl'),
+        os.path.join(manifest.get('_package_dir', ''), 'results.jsonl'),
+        os.path.join(manifest.get('_package_dir', ''), 'failures.jsonl'),
+    }
+    for manifest_key in ('_manifest_path', 'input_jsonl_path', 'result_jsonl_path'):
+        value = manifest.get(manifest_key)
+        if value:
+            reserved_paths.add(value)
+    normalized_reserved = {_normalized_abs_path(path) for path in reserved_paths if path}
+    for output_path in (jsonl_path, markdown_path):
+        if _normalized_abs_path(output_path) in normalized_reserved:
+            raise SystemExit(f'Revision preview output would overwrite reserved package file: {output_path}')
+
+
+def write_revision_markdown(path, entries, summary):
+    lines = [
+        '# Revision Preview',
+        '',
+        f"- Pending revisions: {summary.get('valid_items', 0)}",
+        f"- Unchanged items: {summary.get('unchanged_items', 0)}",
+        f"- Failure items: {summary.get('failure_items', 0)}",
+        '',
+        '| Status | Source | Current | Revised | Reason | File | Line |',
+        '| --- | --- | --- | --- | --- | --- | ---: |',
+    ]
+    for entry in entries:
+        lines.append(
+            '| '
+            + ' | '.join(
+                [
+                    markdown_escape_cell(entry.get('status')),
+                    markdown_escape_cell(entry.get('source')),
+                    markdown_escape_cell(entry.get('current_translation')),
+                    markdown_escape_cell(entry.get('revised_translation')),
+                    markdown_escape_cell(entry.get('reason') or entry.get('error')),
+                    markdown_escape_cell(entry.get('file_rel_path')),
+                    markdown_escape_cell(entry.get('line')),
+                ]
+            )
+            + ' |'
+        )
+    with open(path, 'w', encoding='utf-8') as handle:
+        handle.write('\n'.join(lines) + '\n')
+
+
+def preview_revisions(target=None, output_jsonl='', output_markdown=''):
+    manifest = load_manifest(target)
+    require_manifest_mode(manifest, MANIFEST_MODE_REVISION, 'preview-revisions')
+    _replacements, _lines, _failure_entries, summary, preview_entries = collect_revision_actions(
+        manifest,
+        validate_sources=True,
+    )
+    jsonl_path = resolve_revision_output_path(manifest, output_jsonl, 'revision_preview.jsonl', 'revision JSONL output')
+    markdown_path = resolve_revision_output_path(manifest, output_markdown, 'revision_preview.md', 'revision Markdown output')
+    validate_revision_output_paths(manifest, jsonl_path, markdown_path)
+    os.makedirs(os.path.dirname(jsonl_path), exist_ok=True)
+    os.makedirs(os.path.dirname(markdown_path), exist_ok=True)
+    with open(jsonl_path, 'w', encoding='utf-8') as handle:
+        for entry in preview_entries:
+            handle.write(json.dumps(entry, ensure_ascii=False) + '\n')
+    write_revision_markdown(markdown_path, preview_entries, summary)
+
+    manifest['last_revision_preview_at'] = datetime.now().isoformat(timespec='seconds')
+    manifest['last_revision_preview'] = {
+        'jsonl_path': jsonl_path,
+        'markdown_path': markdown_path,
+        'summary': summary,
+    }
+    save_manifest(manifest)
+    print_revision_summary(summary)
+    print(f'Preview JSONL: {jsonl_path}')
+    print(f'Preview Markdown: {markdown_path}')
+    return manifest
+
+
 def collect_result_actions(manifest, validate_sources=False):
     result_path = resolve_manifest_result_path(manifest)
     if not os.path.isfile(result_path):
@@ -3073,6 +3860,88 @@ def apply_results(target=None, force=False):
     save_manifest(manifest)
 
     print_check_summary(summary)
+    print(f'Applied files: {applied_files}')
+    print(f'Applied lines: {applied_lines}')
+    print(f'Failures logged: {len(failure_entries)}')
+    if rag_apply_summary:
+        print(f"RAG store updated: {rag_apply_summary.get('upserted', 0)} entries")
+    if failure_entries:
+        print(f"Failure log: {os.path.join(manifest['_package_dir'], 'failures.jsonl')}")
+    return manifest
+
+
+def apply_revisions(target=None, force=False):
+    manifest = load_manifest(target)
+    require_manifest_mode(manifest, MANIFEST_MODE_REVISION, 'apply-revisions')
+    if manifest.get('revision_applied_at') and not force:
+        raise SystemExit('Revision manifest was already applied. Re-run apply-revisions with --force to bypass this guard; source validation still applies.')
+
+    replacements_by_file, _revised_lines_by_file, failure_entries, summary, preview_entries = collect_revision_actions(
+        manifest,
+        validate_sources=True,
+    )
+
+    applied_files = 0
+    applied_lines = 0
+    final_pending_files = 0
+    final_pending_lines = 0
+    rag_jobs = []
+    for file_key, replacements in replacements_by_file.items():
+        file_info = manifest['files'].get(file_key)
+        if not file_info:
+            continue
+        file_path = resolve_manifest_file_path(manifest, file_key, file_info)
+        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+            lines = handle.readlines()
+        replacements, line_numbers_set, revalidation_failures, revalidated_skipped, revalidated_mismatches = validate_replacements_for_lines(
+            manifest,
+            file_key,
+            replacements,
+            lines,
+            summary,
+        )
+        if revalidated_skipped:
+            summary['valid_items'] = max(0, summary['valid_items'] - revalidated_skipped)
+            summary['skipped_items'] = summary.get('skipped_items', 0) + revalidated_skipped
+            summary['source_mismatch_items'] = summary.get('source_mismatch_items', 0) + revalidated_mismatches
+            failure_entries.extend(revalidation_failures)
+            summary['failure_items'] = len(failure_entries)
+        if not replacements:
+            continue
+        legacy.commit_replacements(file_path, lines, replacements)
+        line_numbers = sorted(line_numbers_set)
+        update_progress(file_key, line_numbers)
+        applied_files += 1
+        applied_lines += len(line_numbers)
+        final_pending_files += 1
+        final_pending_lines += len(line_numbers)
+        if line_numbers:
+            rag_jobs.append({'file_rel_path': file_key, 'file_path': file_path})
+
+    summary['pending_files'] = final_pending_files
+    summary['pending_lines'] = final_pending_lines
+    append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
+
+    rag_apply_summary = {}
+    if RAG_ENABLED and rag_jobs:
+        rag_apply_summary = sync_rag_store_for_jobs(rag_jobs, quality_state='revision_applied')
+
+    manifest['revision_applied_at'] = datetime.now().isoformat(timespec='seconds')
+    manifest['revision_apply_summary'] = {
+        'applied_files': applied_files,
+        'applied_lines': applied_lines,
+        'candidate_items': summary.get('candidate_valid_items', summary['valid_items']),
+        'recoverable_items': summary['valid_items'],
+        'unchanged_items': summary.get('unchanged_items', 0),
+        'skipped_items': summary.get('skipped_items', 0),
+        'source_mismatch_items': summary.get('source_mismatch_items', 0),
+        'failure_count': len(failure_entries),
+        'rag': rag_apply_summary,
+    }
+    manifest['last_revision_apply_summary'] = summary
+    save_manifest(manifest)
+
+    print_revision_summary(summary)
     print(f'Applied files: {applied_files}')
     print(f'Applied lines: {applied_lines}')
     print(f'Failures logged: {len(failure_entries)}')
@@ -4233,6 +5102,23 @@ def build_arg_parser():
         help='Maximum keyword candidates requested from each chunk.',
     )
 
+    revision_build_parser = subparsers.add_parser(
+        'build-revisions',
+        help='Build a revision batch package for existing old/new TL translations.',
+    )
+    revision_build_parser.add_argument('--display-name', default='', help='Override Batch display name.')
+    revision_build_parser.add_argument(
+        '--skip-prepare',
+        action='store_true',
+        help='Skip auto prepare steps before collecting revision sources.',
+    )
+    revision_build_parser.add_argument(
+        '--chunk-size',
+        type=int,
+        default=0,
+        help='Old/new pair count per revision chunk. Defaults to batch.revision.chunk_size.',
+    )
+
     bootstrap_rag_parser = subparsers.add_parser(
         'bootstrap-rag',
         help='Prebuild or refresh the Batch RAG history store from all allowed TL files.',
@@ -4321,6 +5207,35 @@ def build_arg_parser():
     keyword_export_parser.add_argument('--jsonl', default='', help='Relative output JSONL path inside the package.')
     keyword_export_parser.add_argument('--markdown', default='', help='Relative output Markdown path inside the package.')
 
+    revision_preview_parser = subparsers.add_parser(
+        'preview-revisions',
+        help='Dry-run downloaded revision results and export JSONL/Markdown preview reports.',
+    )
+    revision_preview_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Revision manifest path or package dir. Defaults to latest package.',
+    )
+    revision_preview_parser.add_argument('--jsonl', default='', help='Relative output JSONL path inside the package.')
+    revision_preview_parser.add_argument('--markdown', default='', help='Relative output Markdown path inside the package.')
+
+    revision_apply_parser = subparsers.add_parser(
+        'apply-revisions',
+        help='Apply validated revision results back into existing TL new lines.',
+    )
+    revision_apply_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Revision manifest path or package dir. Defaults to latest package.',
+    )
+    revision_apply_parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Bypass the revision_applied_at guard; source validation still applies.',
+    )
+
     split_parser = subparsers.add_parser('split', help='Split an existing batch package into smaller local packages.')
     split_parser.add_argument(
         'target',
@@ -4389,6 +5304,14 @@ def main(argv=None):
         )
         return
 
+    if command == 'build-revisions':
+        create_revision_package(
+            display_name_override=args.display_name,
+            skip_prepare=args.skip_prepare,
+            chunk_size=args.chunk_size,
+        )
+        return
+
     if command == 'bootstrap-rag':
         bootstrap_rag_store(skip_prepare=args.skip_prepare, seed_jsonl_paths=args.seed_jsonl)
         return
@@ -4432,6 +5355,18 @@ def main(argv=None):
             output_jsonl=args.jsonl,
             output_markdown=args.markdown,
         )
+        return
+
+    if command == 'preview-revisions':
+        preview_revisions(
+            target=args.target or None,
+            output_jsonl=args.jsonl,
+            output_markdown=args.markdown,
+        )
+        return
+
+    if command == 'apply-revisions':
+        apply_revisions(args.target or None, force=args.force)
         return
 
     if command == 'split':
