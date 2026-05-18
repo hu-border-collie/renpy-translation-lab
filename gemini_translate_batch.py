@@ -73,6 +73,11 @@ BATCH_TEMPERATURE = 0.2
 BATCH_THINKING_LEVEL = 'minimal'
 BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
 BATCH_MACRO_SETTING = ''
+MANIFEST_MODE_TRANSLATION = 'translation'
+MANIFEST_MODE_KEYWORD_EXTRACTION = 'keyword_extraction'
+KEYWORD_DISPLAY_NAME_PREFIX = 'renpy-keywords'
+KEYWORD_CHUNK_SIZE = 40
+KEYWORD_MAX_CANDIDATES_PER_CHUNK = 12
 
 RAG_ENABLED = False
 RAG_STORE_DIR = ''
@@ -165,6 +170,7 @@ def load_batch_settings():
     global BATCH_MODEL, BATCH_TARGET_SIZE, BATCH_CONTEXT_BEFORE, BATCH_CONTEXT_AFTER
     global BATCH_MAX_OUTPUT_TOKENS, BATCH_TEMPERATURE, BATCH_THINKING_LEVEL
     global BATCH_DISPLAY_NAME_PREFIX, BATCH_MACRO_SETTING
+    global KEYWORD_DISPLAY_NAME_PREFIX, KEYWORD_CHUNK_SIZE, KEYWORD_MAX_CANDIDATES_PER_CHUNK
     global RAG_ENABLED, RAG_STORE_DIR, RAG_EMBEDDING_MODEL, RAG_QUERY_TASK_TYPE
     global RAG_DOCUMENT_TASK_TYPE, RAG_OUTPUT_DIMENSIONALITY, RAG_TOP_K_HISTORY
     global RAG_TOP_K_TERMS, RAG_MIN_SIMILARITY, RAG_SEGMENT_LINES
@@ -227,6 +233,21 @@ def load_batch_settings():
         batch.get('thinking_level'),
         BATCH_THINKING_LEVEL,
     )
+
+    keyword_config = batch.get('keyword_extraction')
+    if not isinstance(keyword_config, dict):
+        keyword_config = {}
+    KEYWORD_CHUNK_SIZE = coerce_positive_int(
+        keyword_config.get('chunk_size'),
+        KEYWORD_CHUNK_SIZE,
+    )
+    KEYWORD_MAX_CANDIDATES_PER_CHUNK = coerce_positive_int(
+        keyword_config.get('max_candidates_per_chunk'),
+        KEYWORD_MAX_CANDIDATES_PER_CHUNK,
+    )
+    display_name_prefix = keyword_config.get('display_name_prefix')
+    if isinstance(display_name_prefix, str) and display_name_prefix.strip():
+        KEYWORD_DISPLAY_NAME_PREFIX = display_name_prefix.strip()
 
     macro_setting_file = batch.get('macro_setting_file')
     if macro_setting_file:
@@ -728,6 +749,20 @@ def load_manifest(target=None):
     return manifest
 
 
+def manifest_mode(manifest):
+    mode = manifest.get('mode', MANIFEST_MODE_TRANSLATION)
+    return mode if isinstance(mode, str) and mode.strip() else MANIFEST_MODE_TRANSLATION
+
+
+def require_manifest_mode(manifest, expected_mode, command_name):
+    current_mode = manifest_mode(manifest)
+    if current_mode != expected_mode:
+        raise SystemExit(
+            f'{command_name} only supports {expected_mode} manifests; '
+            f'this manifest is {current_mode}.'
+        )
+
+
 def _normalized_abs_path(path):
     return os.path.normcase(os.path.abspath(path))
 
@@ -829,7 +864,23 @@ def summarize_files_for_chunks(chunks):
     return files
 
 
+def create_batch_package_dir(package_name):
+    base_dir = os.path.join(BATCH_JOBS_DIR, package_name)
+    candidates = [base_dir]
+    candidates.extend(f'{base_dir}_{index:02d}' for index in range(1, 1000))
+    for candidate in candidates:
+        try:
+            os.makedirs(candidate, exist_ok=False)
+            return candidate
+        except FileExistsError:
+            continue
+    raise SystemExit(f'Could not create unique batch package directory for {package_name}.')
+
+
 def copy_split_context_metadata(source_manifest, part_manifest, part_chunks):
+    if source_manifest.get('keyword_settings'):
+        part_manifest['keyword_settings'] = dict(source_manifest.get('keyword_settings') or {})
+
     for key in ('rag_enabled', 'rag_store_path', 'rag_settings'):
         if key in source_manifest:
             part_manifest[key] = source_manifest[key]
@@ -1287,6 +1338,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
 
     manifest = {
         'version': 1,
+        'mode': MANIFEST_MODE_TRANSLATION,
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
         'batch_model': BATCH_MODEL,
@@ -1363,6 +1415,281 @@ def create_batch_package(display_name_override='', skip_prepare=False):
 
 
 
+def should_include_keyword_source(text):
+    if not isinstance(text, str):
+        return False
+    stripped = text.strip()
+    if not stripped:
+        return False
+    return any(ch.isalnum() or '\u4e00' <= ch <= '\u9fff' for ch in stripped)
+
+
+def keyword_source_line_number(entry):
+    for key in ('source_line_number', 'line_number'):
+        try:
+            value = int(entry.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return 0
+
+
+def collect_keyword_file_jobs():
+    jobs = []
+    for rel_path, file_path in collect_files_to_process():
+        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+            entries = collect_repair_entries_from_lines(handle.readlines())
+
+        items = []
+        for entry in entries:
+            source_text = str(entry.get('source') or '').strip()
+            if not should_include_keyword_source(source_text):
+                continue
+            line_number = keyword_source_line_number(entry)
+            item = {
+                'id': f"{rel_path}:{line_number}:keyword:{entry.get('entry_index', len(items))}",
+                'text': source_text,
+                'file_rel_path': rel_path,
+                'line_number': line_number,
+                'translation_line_number': entry.get('line_number', 0),
+            }
+            speaker_id = entry.get('speaker_id') or entry.get('speaker')
+            if speaker_id:
+                item['speaker_id'] = speaker_id
+            items.append(item)
+
+        if items:
+            jobs.append(
+                {
+                    'file_rel_path': rel_path,
+                    'file_path': file_path,
+                    'task_count': len(items),
+                    'items': items,
+                }
+            )
+    return jobs
+
+
+def build_keyword_chunks(file_jobs, chunk_size=None):
+    chunk_size = max(1, int(chunk_size or KEYWORD_CHUNK_SIZE))
+    chunks = []
+    for job in file_jobs:
+        items = job['items']
+        for start in range(0, len(items), chunk_size):
+            target_items = items[start:start + chunk_size]
+            chunk_number = start // chunk_size + 1
+            chunks.append(
+                {
+                    'key': f"kw-{hash_key(job['file_rel_path'])}-{chunk_number:05d}",
+                    'mode': MANIFEST_MODE_KEYWORD_EXTRACTION,
+                    'file_rel_path': job['file_rel_path'],
+                    'file_path': job['file_path'],
+                    'chunk_index': chunk_number,
+                    'line_numbers': [item.get('line_number', 0) for item in target_items],
+                    'items': target_items,
+                }
+            )
+    return chunks
+
+
+def format_keyword_glossary_block():
+    lines = []
+    for term in legacy.PRESERVE_TERMS:
+        if isinstance(term, str) and term.strip():
+            lines.append(f'- Preserve: {term.strip()}')
+    for source, target in (legacy.NORMALIZE_TRANSLATION_MAP or {}).items():
+        if source:
+            lines.append(f'- Existing mapping: {source} -> {target}')
+    for term in sorted(getattr(legacy, 'NON_TRANSLATABLE_EXACT', set()) or []):
+        if isinstance(term, str) and term.strip():
+            lines.append(f'- Non-translatable: {term.strip()}')
+    return '\n'.join(lines) if lines else '(none)'
+
+
+def build_keyword_system_instruction(max_candidates_per_chunk=None):
+    max_candidates = max(1, int(max_candidates_per_chunk or KEYWORD_MAX_CANDIDATES_PER_CHUNK))
+    return (
+        'Setting:\n'
+        f'{BATCH_MACRO_SETTING}\n\n'
+        'Existing glossary entries:\n'
+        f'{format_keyword_glossary_block()}\n\n'
+        'Task:\n'
+        'Extract glossary or story-memory keyword candidates from Ren\'Py TL source text. '
+        'Do not translate full lines. Return only high-value terms, names, places, items, concepts, abilities, '
+        'relationship labels, or recurring phrasing that a human may want to add to glossary.json or story_graph.json.\n'
+        f'Return at most {max_candidates} candidates for this chunk. '
+        'Avoid generic words, common function words, UI filler, and candidates already covered by existing glossary entries. '
+        'Set source_item_ids to the input id values that support the candidate. '
+        'Use concise evidence that cites the relevant input id or phrase. Return JSON only.'
+    )
+
+
+def build_keyword_user_prompt(target_items):
+    target_payload = json.dumps(
+        [
+            {
+                'id': item['id'],
+                'file': item.get('file_rel_path', ''),
+                'line': item.get('line_number', 0),
+                'speaker_id': item.get('speaker_id', ''),
+                'text': item['text'],
+            }
+            for item in target_items
+        ],
+        ensure_ascii=False,
+        separators=(',', ':'),
+    )
+    return (
+        'TARGET LINES:\n'
+        f'{target_payload}\n\n'
+        'Return candidate objects with source, suggested_target, category, confidence, evidence, and source_item_ids.'
+    )
+
+
+def build_keyword_response_json_schema(max_candidates_per_chunk=None):
+    max_candidates = max(1, int(max_candidates_per_chunk or KEYWORD_MAX_CANDIDATES_PER_CHUNK))
+    return {
+        'type': 'array',
+        'maxItems': max_candidates,
+        'items': {
+            'type': 'object',
+            'required': ['source', 'suggested_target', 'category', 'confidence', 'evidence'],
+            'additionalProperties': False,
+            'properties': {
+                'source': {'type': 'string'},
+                'suggested_target': {'type': 'string'},
+                'category': {
+                    'type': 'string',
+                    'enum': ['term', 'character', 'place', 'item', 'ability', 'concept', 'relationship', 'style', 'other'],
+                },
+                'confidence': {'type': 'number'},
+                'evidence': {'type': 'string'},
+                'source_item_ids': {
+                    'type': 'array',
+                    'items': {'type': 'string'},
+                },
+            },
+        },
+    }
+
+
+def build_keyword_generation_config(max_candidates_per_chunk=None):
+    config = {
+        'temperature': BATCH_TEMPERATURE,
+        'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
+        'response_mime_type': 'application/json',
+        'response_json_schema': build_keyword_response_json_schema(max_candidates_per_chunk),
+    }
+    if BATCH_THINKING_LEVEL and BATCH_MODEL.startswith('gemini-3'):
+        config['thinking_config'] = {
+            'thinking_level': BATCH_THINKING_LEVEL.upper(),
+        }
+    return config
+
+
+def build_keyword_request(chunk, max_candidates_per_chunk=None):
+    return {
+        'key': chunk['key'],
+        'request': {
+            'system_instruction': {
+                'parts': [{'text': build_keyword_system_instruction(max_candidates_per_chunk)}],
+            },
+            'contents': [
+                {
+                    'role': 'user',
+                    'parts': [{'text': build_keyword_user_prompt(chunk['items'])}],
+                }
+            ],
+            'generation_config': build_keyword_generation_config(max_candidates_per_chunk),
+        },
+    }
+
+
+def create_keyword_package(display_name_override='', skip_prepare=True, chunk_size=None, max_candidates_per_chunk=None):
+    if not skip_prepare:
+        legacy.run_prepare_steps()
+    if not os.path.isdir(legacy.TL_DIR):
+        raise SystemExit(f'TL dir does not exist: {legacy.TL_DIR}')
+
+    file_jobs = collect_keyword_file_jobs()
+    if not file_jobs:
+        print('No keyword source lines found.')
+        return None
+
+    chunk_size = max(1, int(chunk_size or KEYWORD_CHUNK_SIZE))
+    max_candidates = max(1, int(max_candidates_per_chunk or KEYWORD_MAX_CANDIDATES_PER_CHUNK))
+    chunks = build_keyword_chunks(file_jobs, chunk_size=chunk_size)
+    if not chunks:
+        print('No keyword chunks built.')
+        return None
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    package_name = f'{timestamp}_{guess_project_slug()}_keywords'
+    package_dir = create_batch_package_dir(package_name)
+
+    display_name = display_name_override.strip() if display_name_override else ''
+    if not display_name:
+        display_name = f'{KEYWORD_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
+
+    input_jsonl_path = os.path.join(package_dir, 'requests.jsonl')
+    with open(input_jsonl_path, 'w', encoding='utf-8') as handle:
+        for chunk in chunks:
+            handle.write(json.dumps(build_keyword_request(chunk, max_candidates), ensure_ascii=False) + '\n')
+
+    manifest = {
+        'version': 1,
+        'mode': MANIFEST_MODE_KEYWORD_EXTRACTION,
+        'created_at': datetime.now().isoformat(timespec='seconds'),
+        'display_name': display_name,
+        'batch_model': BATCH_MODEL,
+        'base_dir': legacy.BASE_DIR,
+        'tl_dir': legacy.TL_DIR,
+        'input_jsonl_path': input_jsonl_path,
+        'result_jsonl_path': '',
+        'job_name': '',
+        'job_state': 'LOCAL_ONLY',
+        'uploaded_file_name': '',
+        'result_file_name': '',
+        'settings': {
+            'keyword_chunk_size': chunk_size,
+            'keyword_max_candidates_per_chunk': max_candidates,
+            'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
+            'temperature': BATCH_TEMPERATURE,
+            'thinking_level': BATCH_THINKING_LEVEL,
+        },
+        'keyword_settings': {
+            'chunk_size': chunk_size,
+            'max_candidates_per_chunk': max_candidates,
+        },
+        'summary': {
+            'file_count': len(file_jobs),
+            'chunk_count': len(chunks),
+            'item_count': sum(len(chunk['items']) for chunk in chunks),
+        },
+        'files': {
+            job['file_rel_path']: {
+                'path': job['file_path'],
+                'task_count': job['task_count'],
+            }
+            for job in file_jobs
+        },
+        'chunks': chunks,
+    }
+
+    manifest_path = os.path.join(package_dir, 'manifest.json')
+    with open(manifest_path, 'w', encoding='utf-8') as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
+    remember_latest_manifest(manifest_path)
+
+    print(f'Created keyword package: {package_dir}')
+    print(f"Source files: {manifest['summary']['file_count']}")
+    print(f"Chunks: {manifest['summary']['chunk_count']}")
+    print(f"Source lines: {manifest['summary']['item_count']}")
+    print('Mode: keyword_extraction')
+    return manifest_path
+
+
 def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix=''):
     manifest = load_manifest(target)
     chunks = manifest.get('chunks') or []
@@ -1425,6 +1752,7 @@ def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix
         part_files = summarize_files_for_chunks(part_chunks)
         part_manifest = {
             'version': manifest.get('version', 1),
+            'mode': manifest_mode(manifest),
             'created_at': now,
             'display_name': f'{part_name_prefix}-part{index:02d}',
             'batch_model': manifest.get('batch_model', BATCH_MODEL),
@@ -1777,6 +2105,307 @@ def normalize_result_items(payload):
             continue
         normalized.append({'id': str(item_id), 'translation': str(translation)})
     return normalized
+
+
+KEYWORD_CATEGORIES = {'term', 'character', 'place', 'item', 'ability', 'concept', 'relationship', 'style', 'other'}
+
+
+def coerce_keyword_confidence(value):
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not confidence == confidence:
+        return 0.0
+    return max(0.0, min(confidence, 1.0))
+
+
+def normalize_keyword_candidates(payload):
+    data = payload
+    if isinstance(data, dict):
+        if isinstance(data.get('candidates'), list):
+            data = data['candidates']
+        elif isinstance(data.get('items'), list):
+            data = data['items']
+        elif isinstance(data.get('keywords'), list):
+            data = data['keywords']
+    if not isinstance(data, list):
+        raise ValueError(f'Response JSON is not a candidate list: {type(data)}')
+
+    normalized = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        source = compact_text(str(item.get('source') or ''))
+        if not source:
+            continue
+        category = compact_text(str(item.get('category') or 'other')).lower()
+        if category not in KEYWORD_CATEGORIES:
+            category = 'other'
+        raw_source_item_ids = item.get('source_item_ids')
+        if not isinstance(raw_source_item_ids, list):
+            raw_source_item_ids = []
+        normalized.append(
+            {
+                'source': source,
+                'suggested_target': compact_text(str(item.get('suggested_target') or '')),
+                'category': category,
+                'confidence': coerce_keyword_confidence(item.get('confidence')),
+                'evidence': compact_text(str(item.get('evidence') or '')),
+                'source_item_ids': [str(value) for value in raw_source_item_ids if str(value).strip()],
+            }
+        )
+    return normalized
+
+
+def keyword_candidate_key(candidate):
+    return (
+        compact_text(candidate.get('source', '')).lower(),
+        compact_text(candidate.get('suggested_target', '')).lower(),
+        compact_text(candidate.get('category', '')).lower(),
+    )
+
+
+def merge_keyword_candidate(existing, incoming):
+    existing['confidence'] = max(existing.get('confidence', 0.0), incoming.get('confidence', 0.0))
+    for field in ('source_files', 'source_item_ids', 'source_lines'):
+        values = list(existing.get(field) or [])
+        for value in incoming.get(field) or []:
+            if value not in values:
+                values.append(value)
+        existing[field] = values
+    evidence_values = list(existing.get('evidence_items') or [])
+    evidence = incoming.get('evidence')
+    if evidence and evidence not in evidence_values:
+        evidence_values.append(evidence)
+    existing['evidence_items'] = evidence_values
+    if evidence_values:
+        existing['evidence'] = ' / '.join(evidence_values[:3])
+    existing['occurrences'] = int(existing.get('occurrences', 1)) + int(incoming.get('occurrences', 1))
+    return existing
+
+
+def resolve_keyword_export_path(manifest, value, default_name, field_name):
+    package_dir = manifest.get('_package_dir')
+    if value:
+        return resolve_path_under_dir(package_dir, value, field_name)
+    return os.path.join(package_dir, default_name)
+
+
+def validate_keyword_export_paths(manifest, jsonl_path, markdown_path):
+    normalized_jsonl = _normalized_abs_path(jsonl_path)
+    normalized_markdown = _normalized_abs_path(markdown_path)
+    if normalized_jsonl == normalized_markdown:
+        raise SystemExit('Keyword export JSONL and Markdown outputs must be different files.')
+
+    reserved_paths = {
+        os.path.join(manifest.get('_package_dir', ''), 'manifest.json'),
+        os.path.join(manifest.get('_package_dir', ''), 'requests.jsonl'),
+        os.path.join(manifest.get('_package_dir', ''), 'results.jsonl'),
+        os.path.join(manifest.get('_package_dir', ''), 'failures.jsonl'),
+    }
+    for manifest_key in ('_manifest_path', 'input_jsonl_path', 'result_jsonl_path'):
+        value = manifest.get(manifest_key)
+        if value:
+            reserved_paths.add(value)
+    normalized_reserved = {_normalized_abs_path(path) for path in reserved_paths if path}
+    for output_path in (jsonl_path, markdown_path):
+        if _normalized_abs_path(output_path) in normalized_reserved:
+            raise SystemExit(f'Keyword export output would overwrite reserved package file: {output_path}')
+
+
+def match_keyword_candidate_items(candidate, chunk):
+    items = chunk.get('items') or []
+    requested_ids = {str(value) for value in candidate.get('source_item_ids') or [] if str(value).strip()}
+    evidence = compact_text(candidate.get('evidence', '')).lower()
+    source = compact_text(candidate.get('source', '')).lower()
+    matched = []
+
+    for item in items:
+        item_id = str(item.get('id') or '')
+        item_text = compact_text(item.get('text', '')).lower()
+        if item_id and item_id in requested_ids:
+            matched.append(item)
+            continue
+        if item_id and evidence and item_id.lower() in evidence:
+            matched.append(item)
+            continue
+        if source and item_text and source in item_text:
+            matched.append(item)
+
+    deduped = []
+    seen = set()
+    for item in matched:
+        item_id = item.get('id')
+        key = item_id or (item.get('line_number'), item.get('text'))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def markdown_escape_cell(value):
+    return compact_text(str(value or '')).replace('|', '\\|').replace('\n', ' ')
+
+
+def write_keyword_markdown(path, candidates, summary):
+    lines = [
+        '# Keyword Candidates',
+        '',
+        f"- Candidate count: {len(candidates)}",
+        f"- Parsed chunks: {summary.get('parsed_chunks', 0)}/{summary.get('expected_chunks', summary.get('result_rows', 0))}",
+        f"- Missing chunk rows: {summary.get('missing_chunk_rows', 0)}",
+        f"- Ambiguous provenance candidates: {summary.get('ambiguous_provenance_candidates', 0)}",
+        '',
+        '| Source | Suggested target | Category | Confidence | Evidence | Files |',
+        '| --- | --- | --- | ---: | --- | --- |',
+    ]
+    for candidate in candidates:
+        files = ', '.join(candidate.get('source_files') or [])
+        lines.append(
+            '| '
+            + ' | '.join(
+                [
+                    markdown_escape_cell(candidate.get('source')),
+                    markdown_escape_cell(candidate.get('suggested_target')),
+                    markdown_escape_cell(candidate.get('category')),
+                    f"{candidate.get('confidence', 0.0):.2f}",
+                    markdown_escape_cell(candidate.get('evidence')),
+                    markdown_escape_cell(files),
+                ]
+            )
+            + ' |'
+        )
+    with open(path, 'w', encoding='utf-8') as handle:
+        handle.write('\n'.join(lines) + '\n')
+
+
+def export_keyword_candidates(target=None, output_jsonl='', output_markdown=''):
+    manifest = load_manifest(target)
+    require_manifest_mode(manifest, MANIFEST_MODE_KEYWORD_EXTRACTION, 'export-keywords')
+    result_path = resolve_manifest_result_path(manifest)
+    if not os.path.isfile(result_path):
+        raise SystemExit('Result JSONL not found. Run download first.')
+
+    chunk_map = {chunk['key']: chunk for chunk in manifest.get('chunks', [])}
+    processed_keys = set()
+    merged_candidates = {}
+    summary = {
+        'expected_chunks': len(chunk_map),
+        'result_rows': 0,
+        'processed_chunks': 0,
+        'parsed_chunks': 0,
+        'candidate_count_raw': 0,
+        'candidate_count_deduped': 0,
+        'chunk_row_errors': 0,
+        'unknown_chunk_keys': 0,
+        'missing_response_chunks': 0,
+        'missing_chunk_rows': 0,
+        'ambiguous_provenance_candidates': 0,
+        'parse_errors': 0,
+        'reason_counts': {},
+    }
+
+    with open(result_path, 'r', encoding='utf-8') as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            summary['result_rows'] += 1
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                summary['chunk_row_errors'] += 1
+                bump_counter(summary['reason_counts'], 'invalid_result_jsonl_row')
+                continue
+            key = row.get('key')
+            chunk = chunk_map.get(key)
+            if not chunk:
+                summary['unknown_chunk_keys'] += 1
+                bump_counter(summary['reason_counts'], 'unknown_chunk_key')
+                continue
+            processed_keys.add(key)
+            if row.get('error'):
+                summary['chunk_row_errors'] += 1
+                bump_counter(summary['reason_counts'], 'row_error')
+                continue
+            response_text = extract_text_from_response_payload(row.get('response', {}))
+            if not response_text:
+                summary['parse_errors'] += 1
+                summary['missing_response_chunks'] += 1
+                bump_counter(summary['reason_counts'], 'missing_response_text')
+                continue
+            try:
+                candidates = normalize_keyword_candidates(parse_json_payload(response_text))
+            except Exception:
+                summary['parse_errors'] += 1
+                bump_counter(summary['reason_counts'], 'failed_to_parse_keyword_json')
+                continue
+
+            summary['parsed_chunks'] += 1
+            summary['candidate_count_raw'] += len(candidates)
+            for candidate in candidates:
+                matched_items = match_keyword_candidate_items(candidate, chunk)
+                if not matched_items:
+                    summary['ambiguous_provenance_candidates'] += 1
+                    bump_counter(summary['reason_counts'], 'ambiguous_candidate_provenance')
+                enriched = dict(candidate)
+                enriched['source_files'] = [chunk.get('file_rel_path', '')] if chunk.get('file_rel_path') else []
+                enriched['source_lines'] = sorted(
+                    {item.get('line_number', 0) for item in matched_items if item.get('line_number')}
+                )
+                enriched['source_item_ids'] = [
+                    item.get('id') for item in matched_items if item.get('id')
+                ]
+                enriched['evidence_items'] = [candidate['evidence']] if candidate.get('evidence') else []
+                enriched['occurrences'] = 1
+                key_tuple = keyword_candidate_key(enriched)
+                if key_tuple in merged_candidates:
+                    merge_keyword_candidate(merged_candidates[key_tuple], enriched)
+                else:
+                    merged_candidates[key_tuple] = enriched
+
+    missing_keys = set(chunk_map.keys()) - processed_keys
+    if missing_keys:
+        summary['missing_chunk_rows'] = len(missing_keys)
+        bump_counter(summary['reason_counts'], 'missing_chunk_rows', len(missing_keys))
+    summary['processed_chunks'] = len(processed_keys)
+
+    candidates = sorted(
+        merged_candidates.values(),
+        key=lambda item: (-item.get('confidence', 0.0), item.get('category', ''), item.get('source', '').lower()),
+    )
+    summary['candidate_count_deduped'] = len(candidates)
+
+    jsonl_path = resolve_keyword_export_path(manifest, output_jsonl, 'keyword_candidates.jsonl', 'keyword JSONL output')
+    markdown_path = resolve_keyword_export_path(manifest, output_markdown, 'keyword_candidates.md', 'keyword Markdown output')
+    validate_keyword_export_paths(manifest, jsonl_path, markdown_path)
+    os.makedirs(os.path.dirname(jsonl_path), exist_ok=True)
+    os.makedirs(os.path.dirname(markdown_path), exist_ok=True)
+    with open(jsonl_path, 'w', encoding='utf-8') as handle:
+        for candidate in candidates:
+            serializable = dict(candidate)
+            serializable.pop('evidence_items', None)
+            handle.write(json.dumps(serializable, ensure_ascii=False) + '\n')
+    write_keyword_markdown(markdown_path, candidates, summary)
+
+    manifest['keyword_exported_at'] = datetime.now().isoformat(timespec='seconds')
+    manifest['keyword_export'] = {
+        'jsonl_path': jsonl_path,
+        'markdown_path': markdown_path,
+        'summary': summary,
+    }
+    save_manifest(manifest)
+
+    print(f'Keyword candidates: {summary["candidate_count_deduped"]} deduped from {summary["candidate_count_raw"]} raw')
+    print(f'JSONL: {jsonl_path}')
+    print(f'Markdown: {markdown_path}')
+    if summary.get('reason_counts'):
+        print('Warnings:')
+        for name in sorted(summary['reason_counts']):
+            print(f"- {name}: {summary['reason_counts'][name]}")
+    return manifest['keyword_export']
 
 
 def append_failure_entries(entries, package_dir=''):
@@ -2364,6 +2993,7 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
 
 def check_results(target=None):
     manifest = load_manifest(target)
+    require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'check')
     _replacements, _translated, _failures, summary = collect_result_actions(manifest, validate_sources=True)
     manifest['last_check_at'] = datetime.now().isoformat(timespec='seconds')
     manifest['last_check_summary'] = summary
@@ -2375,6 +3005,7 @@ def check_results(target=None):
 
 def apply_results(target=None, force=False):
     manifest = load_manifest(target)
+    require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'apply')
     if manifest.get('applied_at') and not force:
         raise SystemExit('Manifest was already applied. Re-run apply with --force to bypass this guard; source validation still applies.')
 
@@ -2523,6 +3154,7 @@ def collect_translation_entries_from_lines(lines):
                     )
                     entry = {
                         'line_number': next_index + 1,
+                        'source_line_number': index + 1,
                         'source': comment_match.group('text'),
                         'translation': token['text'],
                         'start': token['start'],
@@ -2549,6 +3181,7 @@ def collect_translation_entries_from_lines(lines):
                         entries.append(
                             {
                                 'line_number': next_index + 1,
+                                'source_line_number': index + 1,
                                 'source': old_match.group('text'),
                                 'translation': token['text'],
                                 'start': token['start'],
@@ -2579,6 +3212,7 @@ def collect_repair_entries_from_lines(lines):
         entries.append(
             {
                 'line_number': span[0],
+                'source_line_number': span[0],
                 'source': task.get('text', ''),
                 'translation': task.get('text', ''),
                 'start': task.get('start', 0),
@@ -3571,6 +4205,34 @@ def build_arg_parser():
         help='Skip auto prepare steps before collecting tasks.',
     )
 
+    keyword_build_parser = subparsers.add_parser(
+        'build-keywords',
+        help='Build a keyword extraction batch package without changing translation files.',
+    )
+    keyword_build_parser.add_argument('--display-name', default='', help='Override Batch display name.')
+    keyword_build_parser.add_argument(
+        '--skip-prepare',
+        action='store_true',
+        help='Compatibility no-op; keyword builds skip prepare by default.',
+    )
+    keyword_build_parser.add_argument(
+        '--prepare',
+        action='store_true',
+        help='Run auto prepare steps before collecting keyword sources.',
+    )
+    keyword_build_parser.add_argument(
+        '--chunk-size',
+        type=int,
+        default=0,
+        help='Source line count per keyword extraction chunk. Defaults to batch.keyword_extraction.chunk_size.',
+    )
+    keyword_build_parser.add_argument(
+        '--max-candidates-per-chunk',
+        type=int,
+        default=0,
+        help='Maximum keyword candidates requested from each chunk.',
+    )
+
     bootstrap_rag_parser = subparsers.add_parser(
         'bootstrap-rag',
         help='Prebuild or refresh the Batch RAG history store from all allowed TL files.',
@@ -3646,6 +4308,19 @@ def build_arg_parser():
         help='Bypass the applied_at guard; source validation still applies.',
     )
 
+    keyword_export_parser = subparsers.add_parser(
+        'export-keywords',
+        help='Export keyword extraction batch results to JSONL and Markdown review files.',
+    )
+    keyword_export_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Keyword manifest path or package dir. Defaults to latest package.',
+    )
+    keyword_export_parser.add_argument('--jsonl', default='', help='Relative output JSONL path inside the package.')
+    keyword_export_parser.add_argument('--markdown', default='', help='Relative output Markdown path inside the package.')
+
     split_parser = subparsers.add_parser('split', help='Split an existing batch package into smaller local packages.')
     split_parser.add_argument(
         'target',
@@ -3705,6 +4380,15 @@ def main(argv=None):
         )
         return
 
+    if command == 'build-keywords':
+        create_keyword_package(
+            display_name_override=args.display_name,
+            skip_prepare=(not args.prepare) or args.skip_prepare,
+            chunk_size=args.chunk_size,
+            max_candidates_per_chunk=args.max_candidates_per_chunk,
+        )
+        return
+
     if command == 'bootstrap-rag':
         bootstrap_rag_store(skip_prepare=args.skip_prepare, seed_jsonl_paths=args.seed_jsonl)
         return
@@ -3740,6 +4424,14 @@ def main(argv=None):
 
     if command == 'apply':
         apply_results(args.target or None, force=args.force)
+        return
+
+    if command == 'export-keywords':
+        export_keyword_candidates(
+            target=args.target or None,
+            output_jsonl=args.jsonl,
+            output_markdown=args.markdown,
+        )
         return
 
     if command == 'split':
