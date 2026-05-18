@@ -1671,10 +1671,9 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
         print('No revision chunks built.')
         return None
 
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     package_name = f'{timestamp}_{guess_project_slug()}_revisions'
-    package_dir = os.path.join(BATCH_JOBS_DIR, package_name)
-    os.makedirs(package_dir, exist_ok=True)
+    package_dir = create_batch_package_dir(package_name)
 
     display_name = display_name_override.strip() if display_name_override else ''
     if not display_name:
@@ -1722,7 +1721,7 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
             for job in file_jobs
         },
         'chunks': chunks,
-        'warnings': build_warnings,
+        'build_warnings': build_warnings,
     }
 
     if RAG_ENABLED:
@@ -3017,6 +3016,32 @@ def make_revision_preview_entry(target_item, result_item, status, error=''):
     }
 
 
+def reconcile_revision_preview_entries(preview_entries, validation_failures):
+    failures_by_item = {}
+    for failure in validation_failures:
+        item_id = failure.get('item_id') or failure.get('id')
+        if item_id:
+            failures_by_item[str(item_id)] = failure
+    if not failures_by_item:
+        return preview_entries
+
+    reconciled = []
+    for entry in preview_entries:
+        failure = failures_by_item.get(str(entry.get('id') or ''))
+        if entry.get('status') != 'pending' or not failure:
+            reconciled.append(entry)
+            continue
+        error = str(failure.get('error') or 'Source validation skipped this revision.')
+        status = 'source_mismatch' if 'Source text mismatch' in error else 'skipped'
+        updated = dict(entry)
+        updated['status'] = status
+        updated['error'] = error
+        if failure.get('current_text') is not None:
+            updated['current_text'] = failure.get('current_text')
+        reconciled.append(updated)
+    return reconciled
+
+
 def collect_revision_actions(manifest, validate_sources=False):
     result_path = resolve_manifest_result_path(manifest)
     if not os.path.isfile(result_path):
@@ -3248,6 +3273,7 @@ def collect_revision_actions(manifest, validate_sources=False):
             summary,
         )
         failure_entries.extend(validation_failures)
+        preview_entries = reconcile_revision_preview_entries(preview_entries, validation_failures)
         summary['failure_items'] = len(failure_entries)
     else:
         summarize_pending_replacements(replacements_by_file, revised_lines_by_file, summary)
@@ -3286,6 +3312,28 @@ def resolve_revision_output_path(manifest, value, default_name, field_name):
     if value:
         return resolve_path_under_dir(package_dir, value, field_name)
     return os.path.join(package_dir, default_name)
+
+
+def validate_revision_output_paths(manifest, jsonl_path, markdown_path):
+    normalized_jsonl = _normalized_abs_path(jsonl_path)
+    normalized_markdown = _normalized_abs_path(markdown_path)
+    if normalized_jsonl == normalized_markdown:
+        raise SystemExit('Revision preview JSONL and Markdown outputs must be different files.')
+
+    reserved_paths = {
+        os.path.join(manifest.get('_package_dir', ''), 'manifest.json'),
+        os.path.join(manifest.get('_package_dir', ''), 'requests.jsonl'),
+        os.path.join(manifest.get('_package_dir', ''), 'results.jsonl'),
+        os.path.join(manifest.get('_package_dir', ''), 'failures.jsonl'),
+    }
+    for manifest_key in ('_manifest_path', 'input_jsonl_path', 'result_jsonl_path'):
+        value = manifest.get(manifest_key)
+        if value:
+            reserved_paths.add(value)
+    normalized_reserved = {_normalized_abs_path(path) for path in reserved_paths if path}
+    for output_path in (jsonl_path, markdown_path):
+        if _normalized_abs_path(output_path) in normalized_reserved:
+            raise SystemExit(f'Revision preview output would overwrite reserved package file: {output_path}')
 
 
 def write_revision_markdown(path, entries, summary):
@@ -3328,6 +3376,9 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
     )
     jsonl_path = resolve_revision_output_path(manifest, output_jsonl, 'revision_preview.jsonl', 'revision JSONL output')
     markdown_path = resolve_revision_output_path(manifest, output_markdown, 'revision_preview.md', 'revision Markdown output')
+    validate_revision_output_paths(manifest, jsonl_path, markdown_path)
+    os.makedirs(os.path.dirname(jsonl_path), exist_ok=True)
+    os.makedirs(os.path.dirname(markdown_path), exist_ok=True)
     with open(jsonl_path, 'w', encoding='utf-8') as handle:
         for entry in preview_entries:
             handle.write(json.dumps(entry, ensure_ascii=False) + '\n')
