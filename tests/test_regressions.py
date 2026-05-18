@@ -994,6 +994,19 @@ class RagMemoryStoreTests(unittest.TestCase):
         self.assertIn('Skipping invalid RAG history row', warnings)
         self.assertIn('Skipping non-object RAG history row', warnings)
 
+    def test_json_rag_store_ranks_revision_applied_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = rag_memory.JsonRagStore(tmp)
+            unknown_record = self.make_record('unknown')
+            unknown_record['quality_state'] = 'unknown'
+            revision_record = self.make_record('revision')
+            revision_record['quality_state'] = 'revision_applied'
+
+            store.upsert_history([unknown_record, revision_record])
+            results = store.search_history([1.0, 0.0, 0.0], top_k=2, min_similarity=0.0)
+
+        self.assertEqual(results[0]['quality_state'], 'revision_applied')
+
     def test_json_rag_store_writes_history_atomically(self):
         with tempfile.TemporaryDirectory() as tmp:
             store_dir = Path(tmp)
@@ -2181,7 +2194,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
         finally:
             batch_mod.BATCH_JOBS_DIR = old_jobs_dir
 
-    def test_check_and_apply_reject_keyword_manifests(self):
+    def test_check_and_apply_reject_non_translation_manifests(self):
         for mode in (batch_mod.MANIFEST_MODE_KEYWORD_EXTRACTION, batch_mod.MANIFEST_MODE_REVISION):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
                 manifest_path = Path(tmp) / 'manifest.json'
@@ -2239,6 +2252,8 @@ class BatchRepairRegressionTests(unittest.TestCase):
         target_text = request_rows[0]['request']['contents'][0]['parts'][0]['text']
         self.assertEqual(manifest['mode'], batch_mod.MANIFEST_MODE_REVISION)
         self.assertEqual(manifest['summary']['item_count'], 1)
+        self.assertIn('build_warnings', manifest)
+        self.assertNotIn('warnings', manifest)
         self.assertIn('should_update', schema['items']['required'])
         self.assertIn('current_translation', target_text)
 
@@ -2339,6 +2354,45 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(applied_manifest['revision_apply_summary']['recoverable_items'], 1)
         update_progress.assert_called_once_with('script.rpy', [2])
 
+    def test_preview_revisions_validates_output_paths_and_creates_parent_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            result_path.write_text('', encoding='utf-8')
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'mode': batch_mod.MANIFEST_MODE_REVISION,
+                        'input_jsonl_path': str(package_dir / 'requests.jsonl'),
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            with self.assertRaisesRegex(SystemExit, 'reserved package file'):
+                batch_mod.preview_revisions(str(manifest_path), output_jsonl='results.jsonl')
+            with self.assertRaisesRegex(SystemExit, 'must be different files'):
+                batch_mod.preview_revisions(
+                    str(manifest_path),
+                    output_jsonl='same.jsonl',
+                    output_markdown='same.jsonl',
+                )
+
+            manifest = batch_mod.preview_revisions(
+                str(manifest_path),
+                output_jsonl='reports/revision_preview.jsonl',
+                output_markdown='reports/revision_preview.md',
+            )
+            jsonl_exists = Path(manifest['last_revision_preview']['jsonl_path']).is_file()
+            markdown_exists = Path(manifest['last_revision_preview']['markdown_path']).is_file()
+
+        self.assertTrue(jsonl_exists)
+        self.assertTrue(markdown_exists)
+
     def test_apply_revisions_revalidates_current_translation_before_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2422,11 +2476,20 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 mock.patch.object(batch_mod, 'append_failure_entries') as append_failures,
                 mock.patch.object(batch_mod, 'update_progress') as update_progress,
             ):
+                preview_manifest = batch_mod.preview_revisions(str(manifest_path))
+                preview_jsonl = Path(preview_manifest['last_revision_preview']['jsonl_path'])
+                preview_rows = [
+                    json.loads(line)
+                    for line in preview_jsonl.read_text(encoding='utf-8').splitlines()
+                ]
                 manifest = batch_mod.apply_revisions(str(manifest_path))
 
             final_script = target_file.read_text(encoding='utf-8')
 
         self.assertIn('new "星门"', final_script)
+        self.assertEqual(preview_manifest['last_revision_preview']['summary']['valid_items'], 0)
+        self.assertEqual(preview_rows[0]['status'], 'source_mismatch')
+        self.assertIn('Source text mismatch', preview_rows[0]['error'])
         self.assertEqual(manifest['revision_apply_summary']['applied_files'], 0)
         self.assertEqual(manifest['revision_apply_summary']['recoverable_items'], 0)
         self.assertEqual(manifest['revision_apply_summary']['skipped_items'], 1)
