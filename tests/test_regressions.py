@@ -2099,17 +2099,257 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertIn('Void Gate', markdown_text)
 
     def test_check_and_apply_reject_keyword_manifests(self):
+        for mode in (batch_mod.MANIFEST_MODE_KEYWORD_EXTRACTION, batch_mod.MANIFEST_MODE_REVISION):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                manifest_path = Path(tmp) / 'manifest.json'
+                manifest_path.write_text(
+                    json.dumps({'mode': mode}),
+                    encoding='utf-8',
+                )
+
+                with self.assertRaisesRegex(SystemExit, 'check only supports translation manifests'):
+                    batch_mod.check_results(str(manifest_path))
+                with self.assertRaisesRegex(SystemExit, 'apply only supports translation manifests'):
+                    batch_mod.apply_results(str(manifest_path))
+
+    def test_create_revision_package_uses_revision_mode_manifest(self):
+        old_values = {
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'log_dir': batch_mod.LOG_DIR,
+            'jobs_dir': batch_mod.BATCH_JOBS_DIR,
+            'repair_dir': batch_mod.REPAIR_RUNS_DIR,
+            'latest': batch_mod.LATEST_MANIFEST_FILE,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'tl'
+                jobs_dir = root / 'batch_jobs'
+                tl_dir.mkdir()
+                target_file = tl_dir / 'script.rpy'
+                target_file.write_text(
+                    'translate schinese start:\n'
+                    '    old "Void Gate"\n'
+                    '    new "虚空门"\n',
+                    encoding='utf-8',
+                )
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.LOG_DIR = str(root / 'logs')
+                batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+                batch_mod.REPAIR_RUNS_DIR = str(root / 'repair_runs')
+                batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
+
+                manifest_path = batch_mod.create_revision_package(skip_prepare=True, chunk_size=1)
+                manifest = json.loads(Path(manifest_path).read_text(encoding='utf-8'))
+                request_rows = [
+                    json.loads(line)
+                    for line in Path(manifest['input_jsonl_path']).read_text(encoding='utf-8').splitlines()
+                ]
+        finally:
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.LOG_DIR = old_values['log_dir']
+            batch_mod.BATCH_JOBS_DIR = old_values['jobs_dir']
+            batch_mod.REPAIR_RUNS_DIR = old_values['repair_dir']
+            batch_mod.LATEST_MANIFEST_FILE = old_values['latest']
+
+        schema = request_rows[0]['request']['generation_config']['response_json_schema']
+        target_text = request_rows[0]['request']['contents'][0]['parts'][0]['text']
+        self.assertEqual(manifest['mode'], batch_mod.MANIFEST_MODE_REVISION)
+        self.assertEqual(manifest['summary']['item_count'], 1)
+        self.assertIn('should_update', schema['items']['required'])
+        self.assertIn('current_translation', target_text)
+
+    def test_preview_and_apply_revisions_updates_existing_new_line(self):
         with tempfile.TemporaryDirectory() as tmp:
-            manifest_path = Path(tmp) / 'manifest.json'
+            root = Path(tmp)
+            tl_dir = root / 'tl'
+            package_dir = root / 'package'
+            tl_dir.mkdir()
+            package_dir.mkdir()
+            target_file = tl_dir / 'script.rpy'
+            new_line = '    new "虚空门"\n'
+            start = new_line.index('"虚空门"')
+            end = start + len('"虚空门"')
+            target_file.write_text(
+                'translate schinese start:\n'
+                '    old "Void Gate"\n'
+                + new_line,
+                encoding='utf-8',
+            )
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            item_id = f'script.rpy:2:{start}:revision:0'
+            response_text = json.dumps(
+                [
+                    {
+                        'id': item_id,
+                        'should_update': True,
+                        'revised_translation': '虚空之门',
+                        'reason': '统一术语',
+                    }
+                ],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'rv-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
             manifest_path.write_text(
-                json.dumps({'mode': batch_mod.MANIFEST_MODE_KEYWORD_EXTRACTION}),
+                json.dumps(
+                    {
+                        'mode': batch_mod.MANIFEST_MODE_REVISION,
+                        'files': {'script.rpy': {'path': str(target_file)}},
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'rv-1',
+                                'file_rel_path': 'script.rpy',
+                                'items': [
+                                    {
+                                        'id': item_id,
+                                        'line': 2,
+                                        'line_number': 3,
+                                        'start': start,
+                                        'end': end,
+                                        'text': 'Void Gate',
+                                        'source': 'Void Gate',
+                                        'current_translation': '虚空门',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
                 encoding='utf-8',
             )
 
-            with self.assertRaisesRegex(SystemExit, 'check only supports translation manifests'):
-                batch_mod.check_results(str(manifest_path))
-            with self.assertRaisesRegex(SystemExit, 'apply only supports translation manifests'):
-                batch_mod.apply_results(str(manifest_path))
+            with (
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod, 'update_progress') as update_progress,
+            ):
+                preview_manifest = batch_mod.preview_revisions(str(manifest_path))
+                before_apply = target_file.read_text(encoding='utf-8')
+                preview_jsonl = Path(preview_manifest['last_revision_preview']['jsonl_path'])
+                preview_jsonl_exists = preview_jsonl.is_file()
+                applied_manifest = batch_mod.apply_revisions(str(manifest_path))
+
+            updated_script = target_file.read_text(encoding='utf-8')
+
+        self.assertIn('new "虚空门"', before_apply)
+        self.assertIn('new "虚空之门"', updated_script)
+        self.assertTrue(preview_jsonl_exists)
+        self.assertEqual(preview_manifest['last_revision_preview']['summary']['valid_items'], 1)
+        self.assertEqual(applied_manifest['revision_apply_summary']['applied_files'], 1)
+        self.assertEqual(applied_manifest['revision_apply_summary']['recoverable_items'], 1)
+        update_progress.assert_called_once_with('script.rpy', [2])
+
+    def test_apply_revisions_revalidates_current_translation_before_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'tl'
+            package_dir = root / 'package'
+            tl_dir.mkdir()
+            package_dir.mkdir()
+            target_file = tl_dir / 'script.rpy'
+            original_new_line = '    new "虚空门"\n'
+            changed_new_line = '    new "星门"\n'
+            start = original_new_line.index('"虚空门"')
+            end = start + len('"虚空门"')
+            target_file.write_text(
+                'translate schinese start:\n'
+                '    old "Void Gate"\n'
+                + changed_new_line,
+                encoding='utf-8',
+            )
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            item_id = f'script.rpy:2:{start}:revision:0'
+            response_text = json.dumps(
+                [
+                    {
+                        'id': item_id,
+                        'should_update': True,
+                        'revised_translation': '虚空之门',
+                        'reason': '统一术语',
+                    }
+                ],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'rv-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'mode': batch_mod.MANIFEST_MODE_REVISION,
+                        'files': {'script.rpy': {'path': str(target_file)}},
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'rv-1',
+                                'file_rel_path': 'script.rpy',
+                                'items': [
+                                    {
+                                        'id': item_id,
+                                        'line': 2,
+                                        'line_number': 3,
+                                        'start': start,
+                                        'end': end,
+                                        'text': 'Void Gate',
+                                        'source': 'Void Gate',
+                                        'current_translation': '虚空门',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod, 'append_failure_entries') as append_failures,
+                mock.patch.object(batch_mod, 'update_progress') as update_progress,
+            ):
+                manifest = batch_mod.apply_revisions(str(manifest_path))
+
+            final_script = target_file.read_text(encoding='utf-8')
+
+        self.assertIn('new "星门"', final_script)
+        self.assertEqual(manifest['revision_apply_summary']['applied_files'], 0)
+        self.assertEqual(manifest['revision_apply_summary']['recoverable_items'], 0)
+        self.assertEqual(manifest['revision_apply_summary']['skipped_items'], 1)
+        self.assertEqual(manifest['revision_apply_summary']['source_mismatch_items'], 1)
+        append_failures.assert_called_once()
+        update_progress.assert_not_called()
 
     def test_collect_result_actions_ignores_duplicate_result_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
