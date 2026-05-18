@@ -125,6 +125,16 @@ python gemini_translate_batch.py check
 python gemini_translate_batch.py apply
 ```
 
+关键词提取模式（只生成候选报告，不写回 `.rpy` / `glossary.json` / `story_graph.json`）：
+
+```bash
+python gemini_translate_batch.py build-keywords
+python gemini_translate_batch.py submit logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py status logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py download logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py export-keywords logs/batch_jobs/<package>/manifest.json
+```
+
 说明：
 
 - `python gemini_translate.py --help` 会显示同步脚本的最小 CLI 帮助
@@ -136,6 +146,9 @@ python gemini_translate_batch.py apply
 - `probe` 会用同步请求做最小 smoke test
 - `check` 是干跑校验，不会修改 `.rpy`
 - `apply` 只会写回通过校验的结果
+- `build-keywords` 会复用 include 过滤和 Batch manifest，默认不运行 prepare，按较大 chunk 扫描 TL 文本并要求模型输出 `source`、`suggested_target`、`category`、`confidence`、`evidence`、`source_item_ids`；如果确实要先刷新 TL 模板，可显式传 `--prepare`
+- `export-keywords` 会导出去重后的 `keyword_candidates.jsonl` 和 `keyword_candidates.md`，并在报告里标出缺失 chunk row 或无法精确定位的候选来源
+- 关键词 manifest 的 `mode=keyword_extraction`，普通 `check/apply` 会拒绝处理，避免把非翻译结果误写回 `.rpy`
 - 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包
 - 本地 RAG store 写入会使用 `.rag_store.lock` 和临时文件 + 原子替换保护 `history.jsonl` / `metadata.json`；如果另一个进程正在写同一个 store，后启动的进程会明确失败并显示锁持有者信息；同机写入进程崩溃后留下的 stale lock 会在确认 PID 已退出时自动回收
 - 如果确认没有进程正在写入同一个 RAG store，可手动删除残留的 `.rag_store.lock` 或 `*.tmp.*` 文件来恢复写入；自动清理失败时会输出包含文件路径的 warning
