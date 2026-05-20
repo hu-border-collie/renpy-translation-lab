@@ -2335,6 +2335,8 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 tl_dir = root / 'tl'
                 jobs_dir = root / 'batch_jobs'
                 tl_dir.mkdir()
+                jobs_dir.mkdir()
+                previous_latest = root / 'previous_manifest.json'
                 target_file = tl_dir / 'script.rpy'
                 target_file.write_text(
                     'translate schinese start:\n'
@@ -2348,6 +2350,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 batch_mod.REPAIR_RUNS_DIR = str(root / 'repair_runs')
                 batch_mod.SYNC_RUNS_DIR = str(root / 'sync_runs')
                 batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
+                Path(batch_mod.LATEST_MANIFEST_FILE).write_text(str(previous_latest), encoding='utf-8')
                 response_text = json.dumps(
                     [
                         {
@@ -2381,6 +2384,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     json.loads(line)
                     for line in jsonl_path.read_text(encoding='utf-8').splitlines()
                 ]
+                latest_after = Path(batch_mod.LATEST_MANIFEST_FILE).read_text(encoding='utf-8')
         finally:
             batch_mod.legacy.TL_DIR = old_values['tl_dir']
             batch_mod.LOG_DIR = old_values['log_dir']
@@ -2393,6 +2397,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(export['summary']['candidate_count_deduped'], 1)
         self.assertEqual(rows[0]['source'], 'Void Gate')
         self.assertEqual(rows[0]['suggested_target'], '虚空门')
+        self.assertEqual(latest_after, str(previous_latest))
 
     def test_sync_revisions_previews_and_optionally_applies(self):
         old_values = {
@@ -2409,6 +2414,8 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 tl_dir = root / 'tl'
                 jobs_dir = root / 'batch_jobs'
                 tl_dir.mkdir()
+                jobs_dir.mkdir()
+                previous_latest = root / 'previous_manifest.json'
                 target_file = tl_dir / 'script.rpy'
                 new_line = '    new "虚空门"\n'
                 start = new_line.index('"虚空门"')
@@ -2425,6 +2432,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 batch_mod.REPAIR_RUNS_DIR = str(root / 'repair_runs')
                 batch_mod.SYNC_RUNS_DIR = str(root / 'sync_runs')
                 batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
+                Path(batch_mod.LATEST_MANIFEST_FILE).write_text(str(previous_latest), encoding='utf-8')
                 response_text = json.dumps(
                     [
                         {
@@ -2460,6 +2468,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     )
 
                 updated_script = target_file.read_text(encoding='utf-8')
+                latest_after = Path(batch_mod.LATEST_MANIFEST_FILE).read_text(encoding='utf-8')
         finally:
             batch_mod.legacy.TL_DIR = old_values['tl_dir']
             batch_mod.LOG_DIR = old_values['log_dir']
@@ -2472,6 +2481,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
         update_progress.assert_called_once_with('script.rpy', [2])
         self.assertIn('new "虚空之门"', updated_script)
         self.assertEqual(manifest['revision_apply_summary']['applied_files'], 1)
+        self.assertEqual(latest_after, str(previous_latest))
 
     def test_preview_and_apply_revisions_updates_existing_new_line(self):
         with tempfile.TemporaryDirectory() as tmp:
