@@ -102,8 +102,8 @@ Game_Example/
 
 当前模型建议：
 
-- 正式 Batch 默认优先使用 `gemini-2.5-flash`
-- `gemini-3-flash-preview` 仍是目标模型，但 Batch 通道仍建议继续做小包稳定性验证
+- 正式 Batch 默认优先使用 `gemini-3.1-flash-lite`
+- 该模型支持 Batch API、结构化输出和 Thinking，定位更适合高频、低延迟、低成本翻译任务
 - RAG 当前默认搭配 `gemini-embedding-001`
 
 同步模式：
