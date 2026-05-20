@@ -136,6 +136,13 @@ python gemini_translate_batch.py preview-revisions logs/batch_jobs/<package>/man
 python gemini_translate_batch.py apply-revisions logs/batch_jobs/<package>/manifest.json
 ```
 
+同步订正模式（不走 Batch API；默认只写预览报告，传 `--apply` 才写回）：
+
+```bash
+python gemini_translate_batch.py sync-revisions --limit 3
+python gemini_translate_batch.py sync-revisions --apply
+```
+
 关键词提取模式（只生成候选报告，不写回 `.rpy` / `glossary.json` / `story_graph.json`）：
 
 ```bash
@@ -144,6 +151,12 @@ python gemini_translate_batch.py submit logs/batch_jobs/<package>/manifest.json
 python gemini_translate_batch.py status logs/batch_jobs/<package>/manifest.json
 python gemini_translate_batch.py download logs/batch_jobs/<package>/manifest.json
 python gemini_translate_batch.py export-keywords logs/batch_jobs/<package>/manifest.json
+```
+
+同步关键词提取模式（不走 Batch API，直接生成候选报告）：
+
+```bash
+python gemini_translate_batch.py sync-keywords --limit 3
 ```
 
 说明：
@@ -158,8 +171,10 @@ python gemini_translate_batch.py export-keywords logs/batch_jobs/<package>/manif
 - `check` 是干跑校验，不会修改 `.rpy`
 - `apply` 只会写回通过校验的结果
 - `build-revisions` 会复用 include 过滤、glossary、macro setting、可选 RAG / Story Memory，把已有原文和当前译文送入 Batch；`preview-revisions` 导出 `revision_preview.jsonl` 和 `revision_preview.md`，`apply-revisions` 会在写回前重新校验当前文件中的旧译文快照
+- `sync-revisions` 复用订正 prompt、schema、RAG / Story Memory 注入、预览报告和写回前源快照校验；默认只预览，传 `--apply` 才调用 `apply-revisions` 写回
 - `build-keywords` 会复用 include 过滤和 Batch manifest，默认不运行 prepare，按较大 chunk 扫描 TL 文本并要求模型输出 `source`、`suggested_target`、`category`、`confidence`、`evidence`、`source_item_ids`；如果确实要先刷新 TL 模板，可显式传 `--prepare`
 - `export-keywords` 会导出去重后的 `keyword_candidates.jsonl` 和 `keyword_candidates.md`，并在报告里标出缺失 chunk row 或无法精确定位的候选来源
+- `sync-keywords` 复用关键词 prompt、schema、候选去重和 JSONL / Markdown 导出逻辑，适合小范围即时跑报告
 - 订正 manifest 的 `mode=revision`，关键词 manifest 的 `mode=keyword_extraction`，普通 `check/apply` 会拒绝处理，避免把非翻译结果误写回 `.rpy`
 - 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包
 - 本地 RAG store 写入会使用 `.rag_store.lock` 和临时文件 + 原子替换保护 `history.jsonl` / `metadata.json`；如果另一个进程正在写同一个 store，后启动的进程会明确失败并显示锁持有者信息；同机写入进程崩溃后留下的 stale lock 会在确认 PID 已退出时自动回收
