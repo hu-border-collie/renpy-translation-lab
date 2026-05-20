@@ -16,6 +16,7 @@ import zlib
 from datetime import datetime
 
 from rag_memory import JsonRagStore, hash_text, truncate_text
+import prompt_context
 import story_memory
 
 # Configuration
@@ -1248,37 +1249,16 @@ def retrieve_sync_glossary_hits(target_items):
 
 
 def format_sync_glossary_hits_block(hits, empty_label="(none)"):
-    if not hits:
-        return empty_label
-    lines = []
-    for hit in hits:
-        source = hit.get("source", "")
-        target = hit.get("target", "")
-        if not source:
-            continue
-        if source == target:
-            lines.append(f"- Keep unchanged: {source}")
-        else:
-            lines.append(f"- {source} -> {target}")
-    return "\n".join(lines) if lines else empty_label
+    return prompt_context.format_glossary_hits_block(hits, empty_label)
 
 
 def format_sync_history_hits_block(hits, empty_label="(none)"):
-    if not hits:
-        return empty_label
-    lines = []
-    for hit in hits:
-        file_rel_path = hit.get("file_rel_path", "")
-        line_start = hit.get("line_start", "")
-        line_end = hit.get("line_end", "")
-        score = hit.get("score", 0.0)
-        quality = hit.get("quality_state", "")
-        translated_text = hit.get("translated_text", "") or hit.get("source_text", "")
-        translated_text = truncate_text(translated_text, SYNC_RAG_HISTORY_CHAR_LIMIT)
-        lines.append(
-            f"- [{file_rel_path}:{line_start}-{line_end} score={score:.3f} quality={quality}] {translated_text}"
-        )
-    return "\n".join(lines) if lines else empty_label
+    return prompt_context.format_history_hits_block(
+        hits,
+        empty_label,
+        char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
+        include_source_text=False,
+    )
 
 
 def get_sync_story_graph():
@@ -2092,18 +2072,18 @@ def build_prompt(items, glossary_hits=None, history_hits=None, story_hits=None):
     has_story_hits = story_memory.has_story_hits(story_hits)
     if SYNC_RAG_ENABLED or has_story_hits:
         parts = ["\nReference blocks:\n"]
-        if SYNC_RAG_ENABLED:
-            glossary_hits = glossary_hits or []
-            history_hits = history_hits or []
-            parts.append(
-                f"LOCKED TERMS:\n{format_sync_glossary_hits_block(glossary_hits, '(none)')}\n\n"
-                f"RETRIEVED MEMORY:\n{format_sync_history_hits_block(history_hits, '(none)')}\n\n"
+        parts.append(
+            prompt_context.build_reference_blocks(
+                include_translation_memory=SYNC_RAG_ENABLED,
+                glossary_hits=glossary_hits or [],
+                history_hits=history_hits or [],
+                story_hits=story_hits,
+                history_char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
+                story_char_limit=SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
+                include_source_text=False,
+                story_block_suffix="\n",
             )
-        if has_story_hits:
-            parts.append(
-                "STORY MEMORY:\n"
-                f"{story_memory.format_story_hits_block(story_hits, SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS)}\n"
-            )
+        )
         parts.append(
             "Use reference blocks only as style, terminology, and continuity reference; "
             "ignore them when unrelated.\n"

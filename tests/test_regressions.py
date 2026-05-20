@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
+import prompt_context
 import rag_memory
 import story_memory
 import translator_runtime as runtime
@@ -353,6 +354,65 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         )
         self.assertIn('Term: Aether', term_only_block)
         self.assertNotIn('Keep unchanged', term_only_block)
+
+    def test_sync_and_batch_reference_blocks_share_context_formatter(self):
+        story_hits = {
+            'terms': [
+                {
+                    'source': 'Void Gate',
+                    'target': '\u865a\u7a7a\u95e8',
+                    'note': '\u4e16\u754c\u89c2\u6838\u5fc3\u672f\u8bed',
+                },
+            ],
+        }
+        glossary_hits = [{'source': 'Alice', 'target': 'Alice'}]
+        history_hits = [
+            {
+                'file_rel_path': 'script.rpy',
+                'line_start': 2,
+                'line_end': 2,
+                'source_text': 'Open the Void Gate',
+                'translated_text': '\u6253\u5f00\u865a\u7a7a\u95e8',
+                'quality_state': 'sync_applied',
+                'score': 0.91,
+            }
+        ]
+
+        shared_block = prompt_context.build_reference_blocks(
+            glossary_hits=glossary_hits,
+            history_hits=history_hits,
+            story_hits=story_hits,
+            history_char_limit=120,
+            story_char_limit=160,
+        )
+        batch_prompt = batch_mod.build_user_prompt(
+            [],
+            [{'id': 'chapter1.rpy:0:1', 'text': 'Open the Void Gate'}],
+            [],
+            glossary_hits=glossary_hits,
+            history_hits=history_hits,
+            story_hits=story_hits,
+        )
+
+        old_sync_rag_enabled = runtime.SYNC_RAG_ENABLED
+        try:
+            runtime.SYNC_RAG_ENABLED = True
+            sync_prompt = runtime.build_prompt(
+                [{'id': 'chapter1.rpy:0:1', 'text': 'Open the Void Gate'}],
+                glossary_hits=glossary_hits,
+                history_hits=history_hits,
+                story_hits=story_hits,
+            )
+        finally:
+            runtime.SYNC_RAG_ENABLED = old_sync_rag_enabled
+
+        for marker in ('LOCKED TERMS', 'RETRIEVED MEMORY', 'STORY MEMORY'):
+            self.assertIn(marker, shared_block)
+            self.assertIn(marker, batch_prompt)
+            self.assertIn(marker, sync_prompt)
+        self.assertIn('- Keep unchanged: Alice', shared_block)
+        self.assertIn('Void Gate -> \u865a\u7a7a\u95e8', batch_prompt)
+        self.assertIn('\u6253\u5f00\u865a\u7a7a\u95e8', sync_prompt)
 
     def test_story_memory_hit_count_ignores_empty_categories(self):
         self.assertFalse(story_memory.has_story_hits({}))
@@ -2214,6 +2274,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
             'log_dir': batch_mod.LOG_DIR,
             'jobs_dir': batch_mod.BATCH_JOBS_DIR,
             'repair_dir': batch_mod.REPAIR_RUNS_DIR,
+            'sync_dir': batch_mod.SYNC_RUNS_DIR,
             'latest': batch_mod.LATEST_MANIFEST_FILE,
         }
         try:
@@ -2233,6 +2294,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 batch_mod.LOG_DIR = str(root / 'logs')
                 batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
                 batch_mod.REPAIR_RUNS_DIR = str(root / 'repair_runs')
+                batch_mod.SYNC_RUNS_DIR = str(root / 'sync_runs')
                 batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
 
                 manifest_path = batch_mod.create_revision_package(skip_prepare=True, chunk_size=1)
@@ -2246,6 +2308,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
             batch_mod.LOG_DIR = old_values['log_dir']
             batch_mod.BATCH_JOBS_DIR = old_values['jobs_dir']
             batch_mod.REPAIR_RUNS_DIR = old_values['repair_dir']
+            batch_mod.SYNC_RUNS_DIR = old_values['sync_dir']
             batch_mod.LATEST_MANIFEST_FILE = old_values['latest']
 
         schema = request_rows[0]['request']['generation_config']['response_json_schema']
@@ -2256,6 +2319,169 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertNotIn('warnings', manifest)
         self.assertIn('should_update', schema['items']['required'])
         self.assertIn('current_translation', target_text)
+
+    def test_sync_keyword_candidates_runs_requests_and_exports_reports(self):
+        old_values = {
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'log_dir': batch_mod.LOG_DIR,
+            'jobs_dir': batch_mod.BATCH_JOBS_DIR,
+            'repair_dir': batch_mod.REPAIR_RUNS_DIR,
+            'sync_dir': batch_mod.SYNC_RUNS_DIR,
+            'latest': batch_mod.LATEST_MANIFEST_FILE,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'tl'
+                jobs_dir = root / 'batch_jobs'
+                tl_dir.mkdir()
+                jobs_dir.mkdir()
+                previous_latest = root / 'previous_manifest.json'
+                target_file = tl_dir / 'script.rpy'
+                target_file.write_text(
+                    'translate schinese start:\n'
+                    '    old "Void Gate"\n'
+                    '    new "虚空门"\n',
+                    encoding='utf-8',
+                )
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.LOG_DIR = str(root / 'logs')
+                batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+                batch_mod.REPAIR_RUNS_DIR = str(root / 'repair_runs')
+                batch_mod.SYNC_RUNS_DIR = str(root / 'sync_runs')
+                batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
+                Path(batch_mod.LATEST_MANIFEST_FILE).write_text(str(previous_latest), encoding='utf-8')
+                response_text = json.dumps(
+                    [
+                        {
+                            'source': 'Void Gate',
+                            'suggested_target': '虚空门',
+                            'category': 'term',
+                            'confidence': 0.9,
+                            'evidence': 'script.rpy:2:keyword:0',
+                            'source_item_ids': ['script.rpy:2:keyword:0'],
+                        }
+                    ],
+                    ensure_ascii=False,
+                )
+
+                with mock.patch.object(
+                    batch_mod,
+                    'run_sync_request',
+                    return_value={
+                        'response_payload': {
+                            'candidates': [{'content': {'parts': [{'text': response_text}]}}],
+                        },
+                        'response_text': response_text,
+                        'finish_reason': 'STOP',
+                        'usage_metadata': {},
+                    },
+                ) as sync_request:
+                    export = batch_mod.sync_keyword_candidates(skip_prepare=True, chunk_size=1, limit=1)
+
+                jsonl_path = Path(export['jsonl_path'])
+                rows = [
+                    json.loads(line)
+                    for line in jsonl_path.read_text(encoding='utf-8').splitlines()
+                ]
+                latest_after = Path(batch_mod.LATEST_MANIFEST_FILE).read_text(encoding='utf-8')
+        finally:
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.LOG_DIR = old_values['log_dir']
+            batch_mod.BATCH_JOBS_DIR = old_values['jobs_dir']
+            batch_mod.REPAIR_RUNS_DIR = old_values['repair_dir']
+            batch_mod.SYNC_RUNS_DIR = old_values['sync_dir']
+            batch_mod.LATEST_MANIFEST_FILE = old_values['latest']
+
+        sync_request.assert_called_once()
+        self.assertEqual(export['summary']['candidate_count_deduped'], 1)
+        self.assertEqual(rows[0]['source'], 'Void Gate')
+        self.assertEqual(rows[0]['suggested_target'], '虚空门')
+        self.assertEqual(latest_after, str(previous_latest))
+
+    def test_sync_revisions_previews_and_optionally_applies(self):
+        old_values = {
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'log_dir': batch_mod.LOG_DIR,
+            'jobs_dir': batch_mod.BATCH_JOBS_DIR,
+            'repair_dir': batch_mod.REPAIR_RUNS_DIR,
+            'sync_dir': batch_mod.SYNC_RUNS_DIR,
+            'latest': batch_mod.LATEST_MANIFEST_FILE,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'tl'
+                jobs_dir = root / 'batch_jobs'
+                tl_dir.mkdir()
+                jobs_dir.mkdir()
+                previous_latest = root / 'previous_manifest.json'
+                target_file = tl_dir / 'script.rpy'
+                new_line = '    new "虚空门"\n'
+                start = new_line.index('"虚空门"')
+                item_id = f'script.rpy:2:{start}:revision:0'
+                target_file.write_text(
+                    'translate schinese start:\n'
+                    '    old "Void Gate"\n'
+                    + new_line,
+                    encoding='utf-8',
+                )
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.LOG_DIR = str(root / 'logs')
+                batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+                batch_mod.REPAIR_RUNS_DIR = str(root / 'repair_runs')
+                batch_mod.SYNC_RUNS_DIR = str(root / 'sync_runs')
+                batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
+                Path(batch_mod.LATEST_MANIFEST_FILE).write_text(str(previous_latest), encoding='utf-8')
+                response_text = json.dumps(
+                    [
+                        {
+                            'id': item_id,
+                            'should_update': True,
+                            'revised_translation': '虚空之门',
+                            'reason': '统一术语',
+                        }
+                    ],
+                    ensure_ascii=False,
+                )
+
+                with (
+                    mock.patch.object(
+                        batch_mod,
+                        'run_sync_request',
+                        return_value={
+                            'response_payload': {
+                                'candidates': [{'content': {'parts': [{'text': response_text}]}}],
+                            },
+                            'response_text': response_text,
+                            'finish_reason': 'STOP',
+                            'usage_metadata': {},
+                        },
+                    ) as sync_request,
+                    mock.patch.object(batch_mod, 'update_progress') as update_progress,
+                ):
+                    manifest = batch_mod.sync_revisions(
+                        skip_prepare=True,
+                        chunk_size=1,
+                        limit=1,
+                        apply=True,
+                    )
+
+                updated_script = target_file.read_text(encoding='utf-8')
+                latest_after = Path(batch_mod.LATEST_MANIFEST_FILE).read_text(encoding='utf-8')
+        finally:
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.LOG_DIR = old_values['log_dir']
+            batch_mod.BATCH_JOBS_DIR = old_values['jobs_dir']
+            batch_mod.REPAIR_RUNS_DIR = old_values['repair_dir']
+            batch_mod.SYNC_RUNS_DIR = old_values['sync_dir']
+            batch_mod.LATEST_MANIFEST_FILE = old_values['latest']
+
+        sync_request.assert_called_once()
+        update_progress.assert_called_once_with('script.rpy', [2])
+        self.assertIn('new "虚空之门"', updated_script)
+        self.assertEqual(manifest['revision_apply_summary']['applied_files'], 1)
+        self.assertEqual(latest_after, str(previous_latest))
 
     def test_preview_and_apply_revisions_updates_existing_new_line(self):
         with tempfile.TemporaryDirectory() as tmp:

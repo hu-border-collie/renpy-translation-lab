@@ -16,6 +16,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from rag_memory import JsonRagStore, hash_text, truncate_text
+import prompt_context
 import story_memory
 import translator_runtime as runtime
 
@@ -35,6 +36,7 @@ CONSOLE_LOG = os.path.join(LOG_DIR, 'translation_batch_console_output.log')
 BATCH_JOBS_DIR = os.path.join(LOG_DIR, 'batch_jobs')
 LATEST_MANIFEST_FILE = os.path.join(BATCH_JOBS_DIR, 'latest_manifest.txt')
 REPAIR_RUNS_DIR = os.path.join(LOG_DIR, 'repair_runs')
+SYNC_RUNS_DIR = os.path.join(LOG_DIR, 'sync_runs')
 
 
 class DualLogger(object):
@@ -56,6 +58,7 @@ def ensure_batch_dirs():
     os.makedirs(LOG_DIR, exist_ok=True)
     os.makedirs(BATCH_JOBS_DIR, exist_ok=True)
     os.makedirs(REPAIR_RUNS_DIR, exist_ok=True)
+    os.makedirs(SYNC_RUNS_DIR, exist_ok=True)
 
 
 def initialize_batch_logging():
@@ -616,41 +619,16 @@ def retrieve_glossary_hits(target_items):
 
 
 def format_glossary_hits_block(hits, empty_label='(none)'):
-    if not hits:
-        return empty_label
-    lines = []
-    for hit in hits:
-        source = hit.get('source', '')
-        target = hit.get('target', '')
-        if not source:
-            continue
-        if source == target:
-            lines.append(f'- Keep unchanged: {source}')
-        else:
-            lines.append(f'- {source} -> {target}')
-    return '\n'.join(lines) if lines else empty_label
+    return prompt_context.format_glossary_hits_block(hits, empty_label)
 
 
 def format_history_hits_block(hits, empty_label='(none)'):
-    if not hits:
-        return empty_label
-    lines = []
-    for hit in hits:
-        file_rel_path = hit.get('file_rel_path', '')
-        line_start = hit.get('line_start', '')
-        line_end = hit.get('line_end', '')
-        score = hit.get('score', 0.0)
-        quality = hit.get('quality_state', '')
-        raw_source_text = hit.get('source_text', '')
-        raw_translated_text = hit.get('translated_text', '') or raw_source_text
-        source_text = truncate_text(raw_source_text, RAG_HISTORY_CHAR_LIMIT)
-        translated_text = truncate_text(raw_translated_text, RAG_HISTORY_CHAR_LIMIT)
-        prefix = f'- [{file_rel_path}:{line_start}-{line_end} score={score:.3f} quality={quality}]'
-        if source_text and translated_text and raw_source_text != raw_translated_text:
-            lines.append(f'{prefix} Source: {source_text} -> Translation: {translated_text}')
-        else:
-            lines.append(f'{prefix} Translation: {translated_text}')
-    return '\n'.join(lines) if lines else empty_label
+    return prompt_context.format_history_hits_block(
+        hits,
+        empty_label,
+        char_limit=RAG_HISTORY_CHAR_LIMIT,
+        include_source_text=True,
+    )
 
 
 def retrieve_history_hits(target_items, context_past):
@@ -1109,17 +1087,17 @@ def build_user_prompt(
         ensure_ascii=False,
         separators=(',', ':'),
     )
-    glossary_hits = glossary_hits or []
-    history_hits = history_hits or []
     blocks = [
-        f'LOCKED TERMS:\n{format_glossary_hits_block(glossary_hits, "(none)")}\n\n'
-        f'RETRIEVED MEMORY:\n{format_history_hits_block(history_hits, "(none)")}\n\n',
+        prompt_context.build_reference_blocks(
+            include_translation_memory=True,
+            glossary_hits=glossary_hits or [],
+            history_hits=history_hits or [],
+            story_hits=story_hits,
+            history_char_limit=RAG_HISTORY_CHAR_LIMIT,
+            story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
+            include_source_text=True,
+        ),
     ]
-    if story_memory.has_story_hits(story_hits):
-        blocks.append(
-            'STORY MEMORY:\n'
-            f'{story_memory.format_story_hits_block(story_hits, STORY_MEMORY_MAX_CONTEXT_CHARS)}\n\n'
-        )
     blocks.extend(
         [
             f'CONTEXT BEFORE:\n{format_context_block(context_past, "(none)")}\n\n',
@@ -1584,14 +1562,16 @@ def build_revision_user_prompt(chunk):
         separators=(',', ':'),
     )
     blocks = [
-        f'LOCKED TERMS:\n{format_glossary_hits_block(chunk.get("glossary_hits") or [], "(none)")}\n\n',
-        f'RETRIEVED MEMORY:\n{format_history_hits_block(chunk.get("history_hits") or [], "(none)")}\n\n',
+        prompt_context.build_reference_blocks(
+            include_translation_memory=True,
+            glossary_hits=chunk.get('glossary_hits') or [],
+            history_hits=chunk.get('history_hits') or [],
+            story_hits=chunk.get('story_hits'),
+            history_char_limit=RAG_HISTORY_CHAR_LIMIT,
+            story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
+            include_source_text=True,
+        ),
     ]
-    if story_memory.has_story_hits(chunk.get('story_hits')):
-        blocks.append(
-            'STORY MEMORY:\n'
-            f'{story_memory.format_story_hits_block(chunk.get("story_hits"), STORY_MEMORY_MAX_CONTEXT_CHARS)}\n\n'
-        )
     blocks.extend(
         [
             f'CONTEXT BEFORE:\n{format_revision_context_block(chunk.get("context_past") or [], "(none)")}\n\n',
@@ -2247,7 +2227,7 @@ def refresh_manifest_status(manifest):
         if result_file_name:
             manifest['result_file_name'] = result_file_name
 
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     return manifest
 
 
@@ -2314,7 +2294,7 @@ def download_results(target=None, force=False):
 
     manifest['result_jsonl_path'] = result_path
     manifest['downloaded_at'] = datetime.now().isoformat(timespec='seconds')
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
     print(f'Saved results to: {result_path}')
     return result_path
@@ -2744,7 +2724,7 @@ def export_keyword_candidates(target=None, output_jsonl='', output_markdown=''):
         'markdown_path': markdown_path,
         'summary': summary,
     }
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
     print(f'Keyword candidates: {summary["candidate_count_deduped"]} deduped from {summary["candidate_count_raw"]} raw')
     print(f'JSONL: {jsonl_path}')
@@ -3390,7 +3370,7 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
         'markdown_path': markdown_path,
         'summary': summary,
     }
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     print_revision_summary(summary)
     print(f'Preview JSONL: {jsonl_path}')
     print(f'Preview Markdown: {markdown_path}')
@@ -3784,7 +3764,7 @@ def check_results(target=None):
     _replacements, _translated, _failures, summary = collect_result_actions(manifest, validate_sources=True)
     manifest['last_check_at'] = datetime.now().isoformat(timespec='seconds')
     manifest['last_check_summary'] = summary
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     print(f"Manifest: {manifest['_manifest_path']}")
     print_check_summary(summary)
     return manifest
@@ -3857,7 +3837,7 @@ def apply_results(target=None, force=False):
         'failure_count': len(failure_entries),
         'rag': rag_apply_summary,
     }
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
     print_check_summary(summary)
     print(f'Applied files: {applied_files}')
@@ -3939,7 +3919,7 @@ def apply_revisions(target=None, force=False):
         'rag': rag_apply_summary,
     }
     manifest['last_revision_apply_summary'] = summary
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
     print_revision_summary(summary)
     print(f'Applied files: {applied_files}')
@@ -4753,14 +4733,291 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
             retryable = is_quota_error(exc) or is_unavailable_error(exc)
             if api_key_index is None and retryable and attempt < attempts and legacy.rotate_api_key():
                 label = 'quota' if is_quota_error(exc) else 'service unavailable'
-                print(f'Repair hit {label}. Retrying with next API key ({attempt}/{attempts})...')
+                print(f'Sync request hit {label}. Retrying with next API key ({attempt}/{attempts})...')
                 time.sleep(min(attempt, 2))
                 continue
             raise
 
     if last_error is not None:
         raise last_error
-    raise RuntimeError('Repair request failed without a captured exception.')
+    raise RuntimeError('Sync request failed without a captured exception.')
+
+
+def create_sync_package_dir(package_name):
+    ensure_batch_dirs()
+    base_dir = os.path.join(SYNC_RUNS_DIR, package_name)
+    candidates = [base_dir]
+    candidates.extend(f'{base_dir}_{index:02d}' for index in range(1, 1000))
+    for candidate in candidates:
+        try:
+            os.makedirs(candidate, exist_ok=False)
+            return candidate
+        except FileExistsError:
+            continue
+    raise SystemExit(f'Could not create unique sync run directory for {package_name}.')
+
+
+def select_chunk_window(chunks, limit=0, offset=0):
+    if offset < 0:
+        offset = 0
+    if limit and limit > 0:
+        return chunks[offset:offset + limit]
+    return chunks[offset:]
+
+
+def write_request_rows(path, request_rows):
+    with open(path, 'w', encoding='utf-8') as handle:
+        for row in request_rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+
+
+def write_manifest_file(package_dir, manifest, update_latest=True):
+    manifest_path = os.path.join(package_dir, 'manifest.json')
+    with open(manifest_path, 'w', encoding='utf-8') as handle:
+        json.dump(manifest, handle, ensure_ascii=False, indent=2)
+    if update_latest:
+        remember_latest_manifest(manifest_path)
+    return manifest_path
+
+
+def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
+    manifest = load_manifest(manifest_path)
+    result_path = resolve_manifest_result_path(manifest)
+    summary = {
+        'request_count': len(request_rows),
+        'successful_request_count': 0,
+        'failed_request_count': 0,
+        'max_tokens_count': 0,
+        'missing_text_count': 0,
+        'reason_counts': {},
+    }
+    os.makedirs(os.path.dirname(result_path), exist_ok=True)
+    with open(result_path, 'w', encoding='utf-8') as handle:
+        for index, row in enumerate(request_rows, start=1):
+            key = row.get('key', f'sync-{index}')
+            print(f'[{index}/{len(request_rows)}] {key}')
+            result_row = {'key': key}
+            try:
+                result = run_sync_request(
+                    row.get('request') or {},
+                    manifest.get('batch_model') or BATCH_MODEL,
+                    api_key_index=api_key_index,
+                )
+                result_row['response'] = result.get('response_payload') or {}
+                result_row['finish_reason'] = result.get('finish_reason', '')
+                result_row['usage_metadata'] = result.get('usage_metadata') or {}
+                summary['successful_request_count'] += 1
+                if result.get('finish_reason') == 'MAX_TOKENS':
+                    summary['max_tokens_count'] += 1
+                    bump_counter(summary['reason_counts'], 'max_tokens')
+                if not result.get('response_text'):
+                    summary['missing_text_count'] += 1
+                    bump_counter(summary['reason_counts'], 'missing_response_text')
+                print(f"  finish_reason: {result.get('finish_reason') or '(none)'}")
+            except Exception as exc:
+                summary['failed_request_count'] += 1
+                bump_counter(summary['reason_counts'], 'request_error')
+                result_row['error'] = str(exc)
+                print(f'  error: {str(exc)[:160]}')
+            handle.write(json.dumps(result_row, ensure_ascii=False) + '\n')
+
+    manifest['sync_completed_at'] = datetime.now().isoformat(timespec='seconds')
+    manifest['job_state'] = 'SYNC_COMPLETED' if summary['failed_request_count'] == 0 else 'SYNC_PARTIAL'
+    manifest['sync_summary'] = summary
+    manifest['result_jsonl_path'] = result_path
+    save_manifest(manifest, update_latest=False)
+    return manifest
+
+
+def make_sync_manifest(
+    *,
+    package_dir,
+    mode,
+    display_name,
+    chunks,
+    request_rows,
+    settings,
+    extra_fields=None,
+):
+    input_jsonl_path = os.path.join(package_dir, 'requests.jsonl')
+    result_jsonl_path = os.path.join(package_dir, 'results.jsonl')
+    write_request_rows(input_jsonl_path, request_rows)
+    manifest = {
+        'version': 1,
+        'mode': mode,
+        'execution': 'sync',
+        'created_at': datetime.now().isoformat(timespec='seconds'),
+        'display_name': display_name,
+        'batch_model': BATCH_MODEL,
+        'base_dir': legacy.BASE_DIR,
+        'tl_dir': legacy.TL_DIR,
+        'input_jsonl_path': input_jsonl_path,
+        'result_jsonl_path': result_jsonl_path,
+        'job_name': '',
+        'job_state': 'SYNC_LOCAL',
+        'uploaded_file_name': '',
+        'result_file_name': '',
+        'settings': settings,
+        'summary': {
+            'file_count': len(summarize_files_for_chunks(chunks)),
+            'chunk_count': len(chunks),
+            'item_count': sum(len(chunk.get('items') or []) for chunk in chunks),
+        },
+        'files': summarize_files_for_chunks(chunks),
+        'chunks': chunks,
+        'build_warnings': get_batch_risk_warnings(),
+    }
+    if extra_fields:
+        manifest.update(extra_fields)
+    return write_manifest_file(package_dir, manifest, update_latest=manifest.get('execution') != 'sync')
+
+
+def sync_keyword_candidates(
+    display_name_override='',
+    skip_prepare=True,
+    chunk_size=None,
+    max_candidates_per_chunk=None,
+    limit=0,
+    offset=0,
+    output_jsonl='',
+    output_markdown='',
+    api_key_index=None,
+):
+    if not skip_prepare:
+        legacy.run_prepare_steps()
+    if not os.path.isdir(legacy.TL_DIR):
+        raise SystemExit(f'TL dir does not exist: {legacy.TL_DIR}')
+
+    file_jobs = collect_keyword_file_jobs()
+    if not file_jobs:
+        print('No keyword source lines found.')
+        return None
+
+    chunk_size = max(1, int(chunk_size or KEYWORD_CHUNK_SIZE))
+    max_candidates = max(1, int(max_candidates_per_chunk or KEYWORD_MAX_CANDIDATES_PER_CHUNK))
+    chunks = select_chunk_window(build_keyword_chunks(file_jobs, chunk_size=chunk_size), limit=limit, offset=offset)
+    if not chunks:
+        raise SystemExit('No keyword chunks available for the requested range.')
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    package_dir = create_sync_package_dir(f'{timestamp}_{guess_project_slug()}_sync_keywords')
+    display_name = display_name_override.strip() if display_name_override else ''
+    if not display_name:
+        display_name = f'sync-{KEYWORD_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
+    request_rows = [build_keyword_request(chunk, max_candidates) for chunk in chunks]
+    manifest_path = make_sync_manifest(
+        package_dir=package_dir,
+        mode=MANIFEST_MODE_KEYWORD_EXTRACTION,
+        display_name=display_name,
+        chunks=chunks,
+        request_rows=request_rows,
+        settings={
+            'keyword_chunk_size': chunk_size,
+            'max_candidates_per_chunk': max_candidates,
+            'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
+            'temperature': BATCH_TEMPERATURE,
+            'thinking_level': BATCH_THINKING_LEVEL,
+        },
+        extra_fields={
+            'keyword_settings': {
+                'chunk_size': chunk_size,
+                'max_candidates_per_chunk': max_candidates,
+            },
+        },
+    )
+    manifest = execute_sync_request_rows(manifest_path, request_rows, api_key_index=api_key_index)
+    print(f"Sync keyword run: {manifest['_package_dir']}")
+    return export_keyword_candidates(
+        target=manifest['_manifest_path'],
+        output_jsonl=output_jsonl,
+        output_markdown=output_markdown,
+    )
+
+
+def sync_revisions(
+    display_name_override='',
+    skip_prepare=False,
+    chunk_size=None,
+    limit=0,
+    offset=0,
+    output_jsonl='',
+    output_markdown='',
+    apply=False,
+    force=False,
+    api_key_index=None,
+):
+    if not skip_prepare:
+        legacy.run_prepare_steps()
+    if not os.path.isdir(legacy.TL_DIR):
+        raise SystemExit(f'TL dir does not exist: {legacy.TL_DIR}')
+
+    file_jobs = collect_revision_file_jobs()
+    if not file_jobs:
+        print('No revision source lines found.')
+        return None
+
+    chunk_size = max(1, int(chunk_size or REVISION_CHUNK_SIZE))
+    rag_prepare_summary = prepare_rag_store(file_jobs)
+    chunks = select_chunk_window(build_revision_chunks(file_jobs, chunk_size=chunk_size), limit=limit, offset=offset)
+    if not chunks:
+        raise SystemExit('No revision chunks available for the requested range.')
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    package_dir = create_sync_package_dir(f'{timestamp}_{guess_project_slug()}_sync_revisions')
+    display_name = display_name_override.strip() if display_name_override else ''
+    if not display_name:
+        display_name = f'sync-{REVISION_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
+    request_rows = [build_revision_request(chunk) for chunk in chunks]
+    extra_fields = {
+        'revision_settings': {
+            'chunk_size': chunk_size,
+        },
+    }
+    if RAG_ENABLED:
+        extra_fields['rag_enabled'] = True
+        extra_fields['rag_store_path'] = RAG_STORE_DIR or get_default_rag_store_dir()
+        extra_fields['rag_settings'] = {
+            'top_k_history': RAG_TOP_K_HISTORY,
+            'top_k_terms': RAG_TOP_K_TERMS,
+            'min_similarity': RAG_MIN_SIMILARITY,
+            'segment_lines': RAG_SEGMENT_LINES,
+        }
+        extra_fields['rag_summary'] = summarize_batch_rag(chunks, rag_prepare_summary)
+    if STORY_MEMORY_ENABLED:
+        extra_fields['story_memory_enabled'] = True
+        extra_fields['story_memory_graph_file'] = STORY_MEMORY_GRAPH_FILE
+        extra_fields['story_memory_settings'] = {
+            'top_k_terms': STORY_MEMORY_TOP_K_TERMS,
+            'top_k_characters': STORY_MEMORY_TOP_K_CHARACTERS,
+            'top_k_relations': STORY_MEMORY_TOP_K_RELATIONS,
+            'top_k_scenes': STORY_MEMORY_TOP_K_SCENES,
+            'max_context_chars': STORY_MEMORY_MAX_CONTEXT_CHARS,
+        }
+        extra_fields['story_memory_summary'] = summarize_batch_story_memory(chunks)
+    manifest_path = make_sync_manifest(
+        package_dir=package_dir,
+        mode=MANIFEST_MODE_REVISION,
+        display_name=display_name,
+        chunks=chunks,
+        request_rows=request_rows,
+        settings={
+            'revision_chunk_size': chunk_size,
+            'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
+            'temperature': BATCH_TEMPERATURE,
+            'thinking_level': BATCH_THINKING_LEVEL,
+        },
+        extra_fields=extra_fields,
+    )
+    manifest = execute_sync_request_rows(manifest_path, request_rows, api_key_index=api_key_index)
+    print(f"Sync revision run: {manifest['_package_dir']}")
+    preview_manifest = preview_revisions(
+        target=manifest['_manifest_path'],
+        output_jsonl=output_jsonl,
+        output_markdown=output_markdown,
+    )
+    if apply:
+        return apply_revisions(preview_manifest['_manifest_path'], force=force)
+    return preview_manifest
 
 
 def print_repair_summary(summary):
@@ -5236,6 +5493,71 @@ def build_arg_parser():
         help='Bypass the revision_applied_at guard; source validation still applies.',
     )
 
+    sync_keyword_parser = subparsers.add_parser(
+        'sync-keywords',
+        help='Synchronously extract keyword candidates and export JSONL/Markdown reports.',
+    )
+    sync_keyword_parser.add_argument('--display-name', default='', help='Override sync run display name.')
+    sync_keyword_parser.add_argument(
+        '--skip-prepare',
+        action='store_true',
+        help='Compatibility no-op; sync keyword runs skip prepare by default.',
+    )
+    sync_keyword_parser.add_argument(
+        '--prepare',
+        action='store_true',
+        help='Run auto prepare steps before collecting keyword sources.',
+    )
+    sync_keyword_parser.add_argument(
+        '--chunk-size',
+        type=int,
+        default=0,
+        help='Source line count per sync keyword request. Defaults to batch.keyword_extraction.chunk_size.',
+    )
+    sync_keyword_parser.add_argument(
+        '--max-candidates-per-chunk',
+        type=int,
+        default=0,
+        help='Maximum keyword candidates requested from each sync request.',
+    )
+    sync_keyword_parser.add_argument('--limit', type=int, default=0, help='Maximum request chunks to run. Set 0 for all.')
+    sync_keyword_parser.add_argument('--offset', type=int, default=0, help='Start offset within built keyword chunks.')
+    sync_keyword_parser.add_argument('--jsonl', default='', help='Relative output JSONL path inside the sync run dir.')
+    sync_keyword_parser.add_argument('--markdown', default='', help='Relative output Markdown path inside the sync run dir.')
+    sync_keyword_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
+
+    sync_revision_parser = subparsers.add_parser(
+        'sync-revisions',
+        help='Synchronously revise existing old/new TL translations, preview by default, and optionally apply.',
+    )
+    sync_revision_parser.add_argument('--display-name', default='', help='Override sync run display name.')
+    sync_revision_parser.add_argument(
+        '--skip-prepare',
+        action='store_true',
+        help='Skip auto prepare steps before collecting revision sources.',
+    )
+    sync_revision_parser.add_argument(
+        '--chunk-size',
+        type=int,
+        default=0,
+        help='Old/new pair count per sync revision request. Defaults to batch.revision.chunk_size.',
+    )
+    sync_revision_parser.add_argument('--limit', type=int, default=0, help='Maximum request chunks to run. Set 0 for all.')
+    sync_revision_parser.add_argument('--offset', type=int, default=0, help='Start offset within built revision chunks.')
+    sync_revision_parser.add_argument('--jsonl', default='', help='Relative preview JSONL path inside the sync run dir.')
+    sync_revision_parser.add_argument('--markdown', default='', help='Relative preview Markdown path inside the sync run dir.')
+    sync_revision_parser.add_argument(
+        '--apply',
+        action='store_true',
+        help='Apply validated revisions after writing the preview report.',
+    )
+    sync_revision_parser.add_argument(
+        '--force',
+        action='store_true',
+        help='When used with --apply, bypass the revision_applied_at guard; source validation still applies.',
+    )
+    sync_revision_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
+
     split_parser = subparsers.add_parser('split', help='Split an existing batch package into smaller local packages.')
     split_parser.add_argument(
         'target',
@@ -5367,6 +5689,35 @@ def main(argv=None):
 
     if command == 'apply-revisions':
         apply_revisions(args.target or None, force=args.force)
+        return
+
+    if command == 'sync-keywords':
+        sync_keyword_candidates(
+            display_name_override=args.display_name,
+            skip_prepare=(not args.prepare) or args.skip_prepare,
+            chunk_size=args.chunk_size,
+            max_candidates_per_chunk=args.max_candidates_per_chunk,
+            limit=args.limit,
+            offset=args.offset,
+            output_jsonl=args.jsonl,
+            output_markdown=args.markdown,
+            api_key_index=args.api_key_index,
+        )
+        return
+
+    if command == 'sync-revisions':
+        sync_revisions(
+            display_name_override=args.display_name,
+            skip_prepare=args.skip_prepare,
+            chunk_size=args.chunk_size,
+            limit=args.limit,
+            offset=args.offset,
+            output_jsonl=args.jsonl,
+            output_markdown=args.markdown,
+            apply=args.apply,
+            force=args.force,
+            api_key_index=args.api_key_index,
+        )
         return
 
     if command == 'split':
