@@ -2227,7 +2227,7 @@ def refresh_manifest_status(manifest):
         if result_file_name:
             manifest['result_file_name'] = result_file_name
 
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     return manifest
 
 
@@ -2294,7 +2294,7 @@ def download_results(target=None, force=False):
 
     manifest['result_jsonl_path'] = result_path
     manifest['downloaded_at'] = datetime.now().isoformat(timespec='seconds')
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
     print(f'Saved results to: {result_path}')
     return result_path
@@ -2724,7 +2724,7 @@ def export_keyword_candidates(target=None, output_jsonl='', output_markdown=''):
         'markdown_path': markdown_path,
         'summary': summary,
     }
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
     print(f'Keyword candidates: {summary["candidate_count_deduped"]} deduped from {summary["candidate_count_raw"]} raw')
     print(f'JSONL: {jsonl_path}')
@@ -3370,7 +3370,7 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
         'markdown_path': markdown_path,
         'summary': summary,
     }
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     print_revision_summary(summary)
     print(f'Preview JSONL: {jsonl_path}')
     print(f'Preview Markdown: {markdown_path}')
@@ -3764,7 +3764,7 @@ def check_results(target=None):
     _replacements, _translated, _failures, summary = collect_result_actions(manifest, validate_sources=True)
     manifest['last_check_at'] = datetime.now().isoformat(timespec='seconds')
     manifest['last_check_summary'] = summary
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     print(f"Manifest: {manifest['_manifest_path']}")
     print_check_summary(summary)
     return manifest
@@ -3837,7 +3837,7 @@ def apply_results(target=None, force=False):
         'failure_count': len(failure_entries),
         'rag': rag_apply_summary,
     }
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
     print_check_summary(summary)
     print(f'Applied files: {applied_files}')
@@ -3919,7 +3919,7 @@ def apply_revisions(target=None, force=False):
         'rag': rag_apply_summary,
     }
     manifest['last_revision_apply_summary'] = summary
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
     print_revision_summary(summary)
     print(f'Applied files: {applied_files}')
@@ -4740,7 +4740,7 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
 
     if last_error is not None:
         raise last_error
-    raise RuntimeError('Repair request failed without a captured exception.')
+    raise RuntimeError('Sync request failed without a captured exception.')
 
 
 def create_sync_package_dir(package_name):
@@ -4771,11 +4771,12 @@ def write_request_rows(path, request_rows):
             handle.write(json.dumps(row, ensure_ascii=False) + '\n')
 
 
-def write_manifest_file(package_dir, manifest):
+def write_manifest_file(package_dir, manifest, update_latest=True):
     manifest_path = os.path.join(package_dir, 'manifest.json')
     with open(manifest_path, 'w', encoding='utf-8') as handle:
         json.dump(manifest, handle, ensure_ascii=False, indent=2)
-    remember_latest_manifest(manifest_path)
+    if update_latest:
+        remember_latest_manifest(manifest_path)
     return manifest_path
 
 
@@ -4824,7 +4825,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
     manifest['job_state'] = 'SYNC_COMPLETED' if summary['failed_request_count'] == 0 else 'SYNC_PARTIAL'
     manifest['sync_summary'] = summary
     manifest['result_jsonl_path'] = result_path
-    save_manifest(manifest)
+    save_manifest(manifest, update_latest=False)
     return manifest
 
 
@@ -4868,7 +4869,7 @@ def make_sync_manifest(
     }
     if extra_fields:
         manifest.update(extra_fields)
-    return write_manifest_file(package_dir, manifest)
+    return write_manifest_file(package_dir, manifest, update_latest=manifest.get('execution') != 'sync')
 
 
 def sync_keyword_candidates(
