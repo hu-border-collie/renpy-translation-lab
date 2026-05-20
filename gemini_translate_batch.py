@@ -64,7 +64,7 @@ def initialize_batch_logging():
     ensure_batch_dirs()
     sys.stdout = DualLogger(CONSOLE_LOG)
 
-BATCH_MODEL = 'gemini-3-flash-preview'
+BATCH_MODEL = 'gemini-3.1-flash-lite'
 BATCH_TARGET_SIZE = 4
 BATCH_CONTEXT_BEFORE = 8
 BATCH_CONTEXT_AFTER = 4
