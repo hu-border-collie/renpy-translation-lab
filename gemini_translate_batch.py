@@ -2298,12 +2298,17 @@ def parse_json_payload(text):
         return json.loads(cleaned)
     except json.JSONDecodeError:
         decoder = json.JSONDecoder()
-        for start, char in sorted((index, char) for index, char in enumerate(cleaned) if char in '[{'):
+        embedded_payloads = []
+        for start, char in enumerate(cleaned):
+            if char not in '[{':
+                continue
             try:
-                payload, _end = decoder.raw_decode(cleaned[start:])
-                return payload
+                payload, end = decoder.raw_decode(cleaned[start:])
+                embedded_payloads.append((start + end, -start, payload))
             except json.JSONDecodeError:
                 continue
+        if embedded_payloads:
+            return max(embedded_payloads, key=lambda item: (item[0], item[1]))[2]
 
         start = cleaned.find('[')
         end = cleaned.rfind(']')
@@ -2513,8 +2518,8 @@ def write_keyword_summary_markdown(path, summaries, summary):
         f"- Parsed chunks: {summary.get('parsed_chunks', 0)}/{summary.get('expected_chunks', summary.get('result_rows', 0))}",
         f"- Ambiguous summary provenance chunks: {summary.get('ambiguous_summary_chunks', 0)}",
         '',
-        '| File | Lines | Summary | Evidence item ids |',
-        '| --- | ---: | --- | --- |',
+        '| File | Chunk lines | Evidence lines | Summary | Evidence item ids |',
+        '| --- | ---: | ---: | --- | --- |',
     ]
     for item in summaries:
         lines.append(
@@ -2522,6 +2527,7 @@ def write_keyword_summary_markdown(path, summaries, summary):
             + ' | '.join(
                 [
                     markdown_escape_cell(item.get('file_rel_path')),
+                    markdown_escape_cell(', '.join(str(value) for value in item.get('line_numbers') or [])),
                     markdown_escape_cell(', '.join(str(value) for value in item.get('source_lines') or [])),
                     markdown_escape_cell(item.get('chunk_summary')),
                     markdown_escape_cell(', '.join(item.get('summary_evidence_item_ids') or [])),

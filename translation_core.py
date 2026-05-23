@@ -657,7 +657,7 @@ def build_keyword_schema(max_candidates_per_chunk=12):
         'maxItems': max_candidates,
         'items': {
             'type': 'object',
-            'required': ['source', 'suggested_target', 'category', 'confidence', 'evidence'],
+            'required': ['source', 'suggested_target', 'category', 'confidence', 'evidence', 'source_item_ids'],
             'additionalProperties': False,
             'properties': {
                 'source': {'type': 'string'},
