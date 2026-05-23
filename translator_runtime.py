@@ -2073,19 +2073,13 @@ def build_prompt(items, glossary_hits=None, history_hits=None, story_hits=None):
         history_hits=history_hits or [],
         story_hits=story_hits,
     )
-    return (
-        translation_core.build_translation_system_instruction(PRESERVE_TERMS)
-        + "\n\n"
-        + translation_core.build_translation_user_prompt(
-            translation_core.ContextWindow([], []),
-            units,
-            context_bundle,
-            history_char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
-            story_char_limit=SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
-            include_translation_memory=SYNC_RAG_ENABLED,
-            include_source_text=False,
-            story_block_suffix="\n",
-        )
+    return translation_core.build_sync_translation_prompt(
+        units,
+        PRESERVE_TERMS,
+        context_bundle,
+        history_char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
+        story_char_limit=SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
+        include_translation_memory=SYNC_RAG_ENABLED,
     )
 
 def get_nested(source, *candidates):
@@ -2171,7 +2165,7 @@ def extract_prompt_feedback(response_payload):
 
 def build_response_json_schema(items):
     return translation_core.build_response_json_schema(
-        translation_core.units_from_items(items, translation_core.MODE_TRANSLATION),
+        items,
         mode=translation_core.MODE_TRANSLATION,
     )
 
