@@ -2181,7 +2181,9 @@ class BatchRagRegressionTests(unittest.TestCase):
 class BatchRepairRegressionTests(unittest.TestCase):
     def test_parse_json_payload_recovers_prefixed_keyword_object(self):
         payload = batch_mod.parse_json_payload(
-            'Here is the JSON: {"candidates":[],"chunk_summary":"片段概要","summary_evidence_item_ids":["line-1"]}'
+            'Earlier attempt: []\n'
+            'Here is the JSON: {"candidates":[],"chunk_summary":"片段概要","summary_evidence_item_ids":["line-1"]}\n'
+            'Done.'
         )
 
         self.assertEqual(payload['chunk_summary'], '片段概要')
@@ -2335,6 +2337,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertIn('summary_evidence_item_ids', schema['required'])
         self.assertEqual(candidate_schema['maxItems'], 3)
         self.assertIn('source', candidate_schema['items']['required'])
+        self.assertIn('source_item_ids', candidate_schema['items']['required'])
         self.assertIn('source_item_ids', candidate_schema['items']['properties'])
         system_text = request_rows[0]['request']['system_instruction']['parts'][0]['text']
         self.assertIn('Existing glossary entries', system_text)
@@ -2455,6 +2458,8 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(export['summary']['missing_chunk_rows'], 1)
         self.assertIn('Void Gate', markdown_text)
         self.assertIn('虚空门', summary_markdown_text)
+        self.assertIn('Chunk lines', summary_markdown_text)
+        self.assertIn('Evidence lines', summary_markdown_text)
 
     def test_export_keyword_candidates_accepts_legacy_candidate_array(self):
         with tempfile.TemporaryDirectory() as tmp:
