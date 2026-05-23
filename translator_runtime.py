@@ -18,6 +18,7 @@ from datetime import datetime
 from rag_memory import JsonRagStore, hash_text, truncate_text
 import prompt_context
 import story_memory
+import translation_core
 
 # Configuration
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -2063,42 +2064,22 @@ def log_failure(batch, error):
 
 
 def build_prompt(items, glossary_hits=None, history_hits=None, story_hits=None):
-    glossary = ", ".join(PRESERVE_TERMS)
-    payload = json.dumps(
-        [{"id": item["id"], "text": item["text"]} for item in items],
-        ensure_ascii=False,
+    units = translation_core.units_from_items(
+        items,
+        translation_core.MODE_TRANSLATION,
     )
-    reference_blocks = ""
-    has_story_hits = story_memory.has_story_hits(story_hits)
-    if SYNC_RAG_ENABLED or has_story_hits:
-        parts = ["\nReference blocks:\n"]
-        parts.append(
-            prompt_context.build_reference_blocks(
-                include_translation_memory=SYNC_RAG_ENABLED,
-                glossary_hits=glossary_hits or [],
-                history_hits=history_hits or [],
-                story_hits=story_hits,
-                history_char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
-                story_char_limit=SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
-                include_source_text=False,
-                story_block_suffix="\n",
-            )
-        )
-        parts.append(
-            "Use reference blocks only as style, terminology, and continuity reference; "
-            "ignore them when unrelated.\n"
-        )
-        reference_blocks = "".join(parts)
-    return (
-        "You are translating a Ren'Py visual novel into Simplified Chinese (zh-CN).\n"
-        "Rules:\n"
-        f"1. Preserve these terms exactly (do not translate): {glossary}\n"
-        "1.1 Keep all person names in English; do not translate names.\n"
-        "2. Preserve Ren'Py tags like {i}, {/i}, {color=...}, [name], %s.\n"
-        "3. Output plain Chinese text. No markdown, no Pinyin, no explanations.\n"
-        "4. Return ONLY a JSON array matching the requested id/translation structure.\n"
-        f"{reference_blocks}"
-        f"Input JSON:\n{payload}"
+    context_bundle = translation_core.build_context_bundle(
+        glossary_hits=glossary_hits or [],
+        history_hits=history_hits or [],
+        story_hits=story_hits,
+    )
+    return translation_core.build_sync_translation_prompt(
+        units,
+        PRESERVE_TERMS,
+        context_bundle,
+        history_char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
+        story_char_limit=SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
+        include_translation_memory=SYNC_RAG_ENABLED,
     )
 
 def get_nested(source, *candidates):
@@ -2183,21 +2164,10 @@ def extract_prompt_feedback(response_payload):
 
 
 def build_response_json_schema(items):
-    target_ids = [item["id"] for item in items]
-    return {
-        "type": "array",
-        "minItems": len(items),
-        "maxItems": len(items),
-        "items": {
-            "type": "object",
-            "required": ["id", "translation"],
-            "additionalProperties": False,
-            "properties": {
-                "id": {"type": "string", "enum": target_ids},
-                "translation": {"type": "string"},
-            },
-        },
-    }
+    return translation_core.build_response_json_schema(
+        items,
+        mode=translation_core.MODE_TRANSLATION,
+    )
 
 
 def parse_json_payload(text):
@@ -2220,26 +2190,10 @@ def parse_json_payload(text):
 
 
 def normalize_result_items(payload):
-    data = payload
-    if isinstance(data, dict):
-        if isinstance(data.get("items"), list):
-            data = data["items"]
-        elif isinstance(data.get("translations"), list):
-            data = data["translations"]
-
-    if not isinstance(data, list):
-        raise ValueError(f"Response JSON is not a list: {type(data)}")
-
-    normalized = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        item_id = item.get("id")
-        translation = item.get("translation")
-        if item_id is None or translation is None:
-            continue
-        normalized.append({"id": str(item_id), "translation": str(translation)})
-    return normalized
+    return translation_core.normalize_model_results(
+        payload,
+        mode=translation_core.MODE_TRANSLATION,
+    )
 
 
 def call_gemini_sdk(prompt, items):
@@ -2329,9 +2283,10 @@ def process_batch(batch, replacements):
 
         valid_progress_entries.append(entry["progress_entry"])
         entry["translated_text"] = memory_translation
-        line_idx = entry["line"]
-        replacements.setdefault(line_idx, []).append(
-            (entry["start"], entry["end"], translated, entry.get("prefix", ""), entry["quote"])
+        unit = translation_core.unit_from_sync_task(entry)
+        action = translation_core.translation_writeback_action(unit, item)
+        replacements.setdefault(action.line, []).append(
+            translation_core.writeback_tuple(action, include_expected=False)
         )
 
     if not valid_progress_entries:
