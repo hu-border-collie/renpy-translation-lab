@@ -1849,7 +1849,10 @@ def build_keyword_system_instruction(max_candidates_per_chunk=None):
         f'Return at most {max_candidates} candidates for this chunk. '
         'Avoid generic words, common function words, UI filler, and candidates already covered by existing glossary entries. '
         'Set source_item_ids to the input id values that support the candidate. '
-        'Use concise evidence that cites the relevant input id or phrase. Return JSON only.'
+        'Use concise evidence that cites the relevant input id or phrase.\n'
+        'Also write a compact chunk_summary in Chinese that summarizes only the visible story events in this chunk. '
+        'Use 1-3 sentences, avoid invented continuity, and leave chunk_summary empty if the lines do not contain usable story content. '
+        'Set summary_evidence_item_ids to the input ids that support the summary. Return JSON only.'
     )
 
 
@@ -1871,13 +1874,14 @@ def build_keyword_user_prompt(target_items):
     return (
         'TARGET LINES:\n'
         f'{target_payload}\n\n'
-        'Return candidate objects with source, suggested_target, category, confidence, evidence, and source_item_ids.'
+        'Return a JSON object with candidates, chunk_summary, and summary_evidence_item_ids. '
+        'Each candidate must include source, suggested_target, category, confidence, evidence, and source_item_ids.'
     )
 
 
 def build_keyword_response_json_schema(max_candidates_per_chunk=None):
     max_candidates = max(1, int(max_candidates_per_chunk or KEYWORD_MAX_CANDIDATES_PER_CHUNK))
-    return {
+    candidate_schema = {
         'type': 'array',
         'maxItems': max_candidates,
         'items': {
@@ -1897,6 +1901,19 @@ def build_keyword_response_json_schema(max_candidates_per_chunk=None):
                     'type': 'array',
                     'items': {'type': 'string'},
                 },
+            },
+        },
+    }
+    return {
+        'type': 'object',
+        'required': ['candidates', 'chunk_summary', 'summary_evidence_item_ids'],
+        'additionalProperties': False,
+        'properties': {
+            'candidates': candidate_schema,
+            'chunk_summary': {'type': 'string'},
+            'summary_evidence_item_ids': {
+                'type': 'array',
+                'items': {'type': 'string'},
             },
         },
     }
@@ -2486,6 +2503,38 @@ def normalize_keyword_candidates(payload):
     return normalized
 
 
+def normalize_keyword_summary(payload):
+    if not isinstance(payload, dict):
+        return {'chunk_summary': '', 'summary_evidence_item_ids': []}
+
+    summary_text = ''
+    for key in ('chunk_summary', 'plot_summary', 'scene_summary', 'summary'):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            summary_text = value
+            break
+
+    raw_source_item_ids = payload.get('summary_evidence_item_ids')
+    if not isinstance(raw_source_item_ids, list):
+        raw_source_item_ids = payload.get('summary_source_item_ids')
+    if not isinstance(raw_source_item_ids, list):
+        raw_source_item_ids = []
+
+    return {
+        'chunk_summary': compact_text(str(summary_text or '')),
+        'summary_evidence_item_ids': [
+            str(value) for value in raw_source_item_ids if str(value).strip()
+        ],
+    }
+
+
+def normalize_keyword_extraction_payload(payload):
+    return {
+        'candidates': normalize_keyword_candidates(payload),
+        **normalize_keyword_summary(payload),
+    }
+
+
 def keyword_candidate_key(candidate):
     return (
         compact_text(candidate.get('source', '')).lower(),
@@ -2520,11 +2569,10 @@ def resolve_keyword_export_path(manifest, value, default_name, field_name):
     return os.path.join(package_dir, default_name)
 
 
-def validate_keyword_export_paths(manifest, jsonl_path, markdown_path):
-    normalized_jsonl = _normalized_abs_path(jsonl_path)
-    normalized_markdown = _normalized_abs_path(markdown_path)
-    if normalized_jsonl == normalized_markdown:
-        raise SystemExit('Keyword export JSONL and Markdown outputs must be different files.')
+def validate_keyword_export_paths(manifest, *output_paths):
+    normalized_outputs = [_normalized_abs_path(path) for path in output_paths if path]
+    if len(normalized_outputs) != len(set(normalized_outputs)):
+        raise SystemExit('Keyword export outputs must be different files.')
 
     reserved_paths = {
         os.path.join(manifest.get('_package_dir', ''), 'manifest.json'),
@@ -2537,9 +2585,21 @@ def validate_keyword_export_paths(manifest, jsonl_path, markdown_path):
         if value:
             reserved_paths.add(value)
     normalized_reserved = {_normalized_abs_path(path) for path in reserved_paths if path}
-    for output_path in (jsonl_path, markdown_path):
+    for output_path in output_paths:
         if _normalized_abs_path(output_path) in normalized_reserved:
             raise SystemExit(f'Keyword export output would overwrite reserved package file: {output_path}')
+
+
+def match_keyword_items_by_ids(source_item_ids, chunk):
+    requested_ids = {str(value) for value in source_item_ids or [] if str(value).strip()}
+    if not requested_ids:
+        return []
+
+    matched = []
+    for item in chunk.get('items') or []:
+        if str(item.get('id') or '') in requested_ids:
+            matched.append(item)
+    return matched
 
 
 def match_keyword_candidate_items(candidate, chunk):
@@ -2609,7 +2669,41 @@ def write_keyword_markdown(path, candidates, summary):
         handle.write('\n'.join(lines) + '\n')
 
 
-def export_keyword_candidates(target=None, output_jsonl='', output_markdown=''):
+def write_keyword_summary_markdown(path, summaries, summary):
+    lines = [
+        '# Keyword Chunk Summaries',
+        '',
+        f"- Summary count: {len(summaries)}",
+        f"- Parsed chunks: {summary.get('parsed_chunks', 0)}/{summary.get('expected_chunks', summary.get('result_rows', 0))}",
+        f"- Ambiguous summary provenance chunks: {summary.get('ambiguous_summary_chunks', 0)}",
+        '',
+        '| File | Lines | Summary | Evidence item ids |',
+        '| --- | ---: | --- | --- |',
+    ]
+    for item in summaries:
+        lines.append(
+            '| '
+            + ' | '.join(
+                [
+                    markdown_escape_cell(item.get('file_rel_path')),
+                    markdown_escape_cell(', '.join(str(value) for value in item.get('source_lines') or [])),
+                    markdown_escape_cell(item.get('chunk_summary')),
+                    markdown_escape_cell(', '.join(item.get('summary_evidence_item_ids') or [])),
+                ]
+            )
+            + ' |'
+        )
+    with open(path, 'w', encoding='utf-8') as handle:
+        handle.write('\n'.join(lines) + '\n')
+
+
+def export_keyword_candidates(
+    target=None,
+    output_jsonl='',
+    output_markdown='',
+    output_summary_jsonl='',
+    output_summary_markdown='',
+):
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_KEYWORD_EXTRACTION, 'export-keywords')
     result_path = resolve_manifest_result_path(manifest)
@@ -2631,9 +2725,12 @@ def export_keyword_candidates(target=None, output_jsonl='', output_markdown=''):
         'missing_response_chunks': 0,
         'missing_chunk_rows': 0,
         'ambiguous_provenance_candidates': 0,
+        'chunk_summary_count': 0,
+        'ambiguous_summary_chunks': 0,
         'parse_errors': 0,
         'reason_counts': {},
     }
+    chunk_summaries = []
 
     with open(result_path, 'r', encoding='utf-8') as handle:
         for raw_line in handle:
@@ -2665,13 +2762,39 @@ def export_keyword_candidates(target=None, output_jsonl='', output_markdown=''):
                 bump_counter(summary['reason_counts'], 'missing_response_text')
                 continue
             try:
-                candidates = normalize_keyword_candidates(parse_json_payload(response_text))
+                keyword_payload = normalize_keyword_extraction_payload(parse_json_payload(response_text))
+                candidates = keyword_payload['candidates']
             except Exception:
                 summary['parse_errors'] += 1
                 bump_counter(summary['reason_counts'], 'failed_to_parse_keyword_json')
                 continue
 
             summary['parsed_chunks'] += 1
+            chunk_summary = keyword_payload.get('chunk_summary', '')
+            if chunk_summary:
+                matched_summary_items = match_keyword_items_by_ids(
+                    keyword_payload.get('summary_evidence_item_ids'),
+                    chunk,
+                )
+                if not matched_summary_items:
+                    summary['ambiguous_summary_chunks'] += 1
+                    bump_counter(summary['reason_counts'], 'ambiguous_summary_provenance')
+                summary['chunk_summary_count'] += 1
+                chunk_summaries.append(
+                    {
+                        'key': key,
+                        'file_rel_path': chunk.get('file_rel_path', ''),
+                        'chunk_index': chunk.get('chunk_index', 0),
+                        'line_numbers': chunk.get('line_numbers') or [],
+                        'chunk_summary': chunk_summary,
+                        'summary_evidence_item_ids': [
+                            item.get('id') for item in matched_summary_items if item.get('id')
+                        ],
+                        'source_lines': sorted(
+                            {item.get('line_number', 0) for item in matched_summary_items if item.get('line_number')}
+                        ),
+                    }
+                )
             summary['candidate_count_raw'] += len(candidates)
             for candidate in candidates:
                 matched_items = match_keyword_candidate_items(candidate, chunk)
@@ -2708,27 +2831,50 @@ def export_keyword_candidates(target=None, output_jsonl='', output_markdown=''):
 
     jsonl_path = resolve_keyword_export_path(manifest, output_jsonl, 'keyword_candidates.jsonl', 'keyword JSONL output')
     markdown_path = resolve_keyword_export_path(manifest, output_markdown, 'keyword_candidates.md', 'keyword Markdown output')
-    validate_keyword_export_paths(manifest, jsonl_path, markdown_path)
+    summary_jsonl_path = resolve_keyword_export_path(
+        manifest,
+        output_summary_jsonl,
+        'keyword_chunk_summaries.jsonl',
+        'keyword summary JSONL output',
+    )
+    summary_markdown_path = resolve_keyword_export_path(
+        manifest,
+        output_summary_markdown,
+        'keyword_chunk_summaries.md',
+        'keyword summary Markdown output',
+    )
+    validate_keyword_export_paths(manifest, jsonl_path, markdown_path, summary_jsonl_path, summary_markdown_path)
     os.makedirs(os.path.dirname(jsonl_path), exist_ok=True)
     os.makedirs(os.path.dirname(markdown_path), exist_ok=True)
+    os.makedirs(os.path.dirname(summary_jsonl_path), exist_ok=True)
+    os.makedirs(os.path.dirname(summary_markdown_path), exist_ok=True)
     with open(jsonl_path, 'w', encoding='utf-8') as handle:
         for candidate in candidates:
             serializable = dict(candidate)
             serializable.pop('evidence_items', None)
             handle.write(json.dumps(serializable, ensure_ascii=False) + '\n')
+    with open(summary_jsonl_path, 'w', encoding='utf-8') as handle:
+        for item in chunk_summaries:
+            handle.write(json.dumps(item, ensure_ascii=False) + '\n')
     write_keyword_markdown(markdown_path, candidates, summary)
+    write_keyword_summary_markdown(summary_markdown_path, chunk_summaries, summary)
 
     manifest['keyword_exported_at'] = datetime.now().isoformat(timespec='seconds')
     manifest['keyword_export'] = {
         'jsonl_path': jsonl_path,
         'markdown_path': markdown_path,
+        'summary_jsonl_path': summary_jsonl_path,
+        'summary_markdown_path': summary_markdown_path,
         'summary': summary,
     }
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
     print(f'Keyword candidates: {summary["candidate_count_deduped"]} deduped from {summary["candidate_count_raw"]} raw')
+    print(f'Chunk summaries: {summary["chunk_summary_count"]}')
     print(f'JSONL: {jsonl_path}')
     print(f'Markdown: {markdown_path}')
+    print(f'Summary JSONL: {summary_jsonl_path}')
+    print(f'Summary Markdown: {summary_markdown_path}')
     if summary.get('reason_counts'):
         print('Warnings:')
         for name in sorted(summary['reason_counts']):
@@ -4881,6 +5027,8 @@ def sync_keyword_candidates(
     offset=0,
     output_jsonl='',
     output_markdown='',
+    output_summary_jsonl='',
+    output_summary_markdown='',
     api_key_index=None,
 ):
     if not skip_prepare:
@@ -4931,6 +5079,8 @@ def sync_keyword_candidates(
         target=manifest['_manifest_path'],
         output_jsonl=output_jsonl,
         output_markdown=output_markdown,
+        output_summary_jsonl=output_summary_jsonl,
+        output_summary_markdown=output_summary_markdown,
     )
 
 
@@ -5463,6 +5613,16 @@ def build_arg_parser():
     )
     keyword_export_parser.add_argument('--jsonl', default='', help='Relative output JSONL path inside the package.')
     keyword_export_parser.add_argument('--markdown', default='', help='Relative output Markdown path inside the package.')
+    keyword_export_parser.add_argument(
+        '--summary-jsonl',
+        default='',
+        help='Relative chunk summary JSONL path inside the package.',
+    )
+    keyword_export_parser.add_argument(
+        '--summary-markdown',
+        default='',
+        help='Relative chunk summary Markdown path inside the package.',
+    )
 
     revision_preview_parser = subparsers.add_parser(
         'preview-revisions',
@@ -5524,6 +5684,16 @@ def build_arg_parser():
     sync_keyword_parser.add_argument('--offset', type=int, default=0, help='Start offset within built keyword chunks.')
     sync_keyword_parser.add_argument('--jsonl', default='', help='Relative output JSONL path inside the sync run dir.')
     sync_keyword_parser.add_argument('--markdown', default='', help='Relative output Markdown path inside the sync run dir.')
+    sync_keyword_parser.add_argument(
+        '--summary-jsonl',
+        default='',
+        help='Relative chunk summary JSONL path inside the sync run dir.',
+    )
+    sync_keyword_parser.add_argument(
+        '--summary-markdown',
+        default='',
+        help='Relative chunk summary Markdown path inside the sync run dir.',
+    )
     sync_keyword_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
 
     sync_revision_parser = subparsers.add_parser(
@@ -5676,6 +5846,8 @@ def main(argv=None):
             target=args.target or None,
             output_jsonl=args.jsonl,
             output_markdown=args.markdown,
+            output_summary_jsonl=args.summary_jsonl,
+            output_summary_markdown=args.summary_markdown,
         )
         return
 
@@ -5701,6 +5873,8 @@ def main(argv=None):
             offset=args.offset,
             output_jsonl=args.jsonl,
             output_markdown=args.markdown,
+            output_summary_jsonl=args.summary_jsonl,
+            output_summary_markdown=args.summary_markdown,
             api_key_index=args.api_key_index,
         )
         return
