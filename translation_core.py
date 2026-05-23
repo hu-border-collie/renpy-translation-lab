@@ -61,6 +61,8 @@ class TranslationUnit:
 
     @property
     def display_line_number(self):
+        # ``line_number`` is 1-indexed. A zero value means "not supplied", so
+        # display falls back to the internal 0-indexed ``line`` value.
         if self.line_number:
             return self.line_number
         return self.line + 1 if self.line >= 0 else 0
@@ -96,6 +98,25 @@ class ModelResult:
     source_item_ids: list = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
 
+    def to_legacy_dict(self):
+        if self.mode == MODE_REVISION:
+            return {
+                'id': self.id,
+                'should_update': self.should_update,
+                'revised_translation': self.revised_translation,
+                'reason': self.reason,
+            }
+        if self.mode == MODE_KEYWORD_EXTRACTION:
+            return {
+                'source': self.source,
+                'suggested_target': self.suggested_target,
+                'category': self.category,
+                'confidence': self.confidence,
+                'evidence': self.evidence,
+                'source_item_ids': list(self.source_item_ids),
+            }
+        return {'id': self.id, 'translation': self.translation}
+
 
 @dataclass
 class WritebackAction:
@@ -124,6 +145,7 @@ def _coerce_int(value, default=0):
 
 
 def _coerce_line(item):
+    """Return the internal 0-indexed line; legacy line_number is 1-indexed."""
     if 'line' in item:
         return max(0, _coerce_int(item.get('line'), 0))
     if 'line_number' in item:
@@ -193,17 +215,19 @@ def unit_from_sync_task(task, file_rel_path='', file_path=''):
 
 
 def unit_from_revision_item(item, file_rel_path='', file_path=''):
+    item = dict(item or {})
     unit = unit_from_translation_item(
         item,
         file_rel_path=file_rel_path,
         file_path=file_path,
         mode=MODE_REVISION,
     )
-    source = str(item.get('source') if isinstance(item, dict) else '')
+    source = str(item.get('source') or '')
     if source:
+        # Revision manifests may carry an empty text field; reviewers should
+        # still see the original source string in that case.
         unit.source = source
         unit.text = str(item.get('text') or source)
-    unit.current_translation = str((item or {}).get('current_translation') or '')
     return unit
 
 
@@ -350,7 +374,7 @@ def build_context_bundle(glossary_hits=None, history_hits=None, story_hits=None,
     )
 
 
-def _reference_blocks(
+def build_reference_blocks(
     context_bundle,
     history_char_limit=220,
     story_char_limit=1200,
@@ -404,7 +428,7 @@ def build_translation_user_prompt(
     )
     return ''.join(
         [
-            _reference_blocks(
+            build_reference_blocks(
                 context_bundle,
                 history_char_limit=history_char_limit,
                 story_char_limit=story_char_limit,
@@ -417,6 +441,49 @@ def build_translation_user_prompt(
             f'CONTEXT AFTER:\n{format_context_block(context_window.after, "(none)")}\n\n',
             'Return the result now.',
         ]
+    )
+
+
+def build_sync_translation_prompt(
+    units,
+    preserve_terms,
+    context_bundle=None,
+    history_char_limit=220,
+    story_char_limit=1200,
+    include_translation_memory=True,
+):
+    units = units_from_items(units, MODE_TRANSLATION)
+    glossary = ', '.join(str(term) for term in preserve_terms or [])
+    payload = json.dumps(
+        [{'id': unit.id, 'text': unit.text} for unit in units],
+        ensure_ascii=False,
+    )
+    reference_body = build_reference_blocks(
+        context_bundle,
+        history_char_limit=history_char_limit,
+        story_char_limit=story_char_limit,
+        include_translation_memory=include_translation_memory,
+        include_source_text=False,
+        story_block_suffix='\n',
+    )
+    reference_blocks = ''
+    if reference_body:
+        reference_blocks = (
+            '\nReference blocks:\n'
+            f'{reference_body}'
+            'Use reference blocks only as style, terminology, and continuity reference; '
+            'ignore them when unrelated.\n'
+        )
+    return (
+        "You are translating a Ren'Py visual novel into Simplified Chinese (zh-CN).\n"
+        'Rules:\n'
+        f'1. Preserve these terms exactly (do not translate): {glossary}\n'
+        '1.1 Keep all person names in English; do not translate names.\n'
+        "2. Preserve Ren'Py tags like {i}, {/i}, {color=...}, [name], %s.\n"
+        '3. Output plain Chinese text. No markdown, no Pinyin, no explanations.\n'
+        '4. Return ONLY a JSON array matching the requested id/translation structure.\n'
+        f'{reference_blocks}'
+        f'Input JSON:\n{payload}'
     )
 
 
@@ -463,7 +530,7 @@ def build_revision_user_prompt(
     )
     return ''.join(
         [
-            _reference_blocks(
+            build_reference_blocks(
                 context_bundle,
                 history_char_limit=history_char_limit,
                 story_char_limit=story_char_limit,
@@ -633,7 +700,13 @@ def normalize_translation_results(payload):
         translation = item.get('translation')
         if item_id is None or translation is None:
             continue
-        normalized.append({'id': str(item_id), 'translation': str(translation)})
+        normalized.append(
+            ModelResult(
+                id=str(item_id),
+                mode=MODE_TRANSLATION,
+                translation=str(translation),
+            ).to_legacy_dict()
+        )
     return normalized
 
 
@@ -670,12 +743,13 @@ def normalize_revision_results(payload):
         if revised is None:
             revised = item.get('revised')
         normalized.append(
-            {
-                'id': str(item_id),
-                'should_update': coerce_revision_should_update(item.get('should_update')),
-                'revised_translation': str(revised or ''),
-                'reason': compact_text(str(item.get('reason') or '')),
-            }
+            ModelResult(
+                id=str(item_id),
+                mode=MODE_REVISION,
+                should_update=coerce_revision_should_update(item.get('should_update')),
+                revised_translation=str(revised or ''),
+                reason=compact_text(str(item.get('reason') or '')),
+            ).to_legacy_dict()
         )
     return normalized
 
@@ -716,14 +790,15 @@ def normalize_keyword_results(payload):
         if not isinstance(raw_source_item_ids, list):
             raw_source_item_ids = []
         normalized.append(
-            {
-                'source': source,
-                'suggested_target': compact_text(str(item.get('suggested_target') or '')),
-                'category': category,
-                'confidence': coerce_keyword_confidence(item.get('confidence')),
-                'evidence': compact_text(str(item.get('evidence') or '')),
-                'source_item_ids': [str(value) for value in raw_source_item_ids if str(value).strip()],
-            }
+            ModelResult(
+                mode=MODE_KEYWORD_EXTRACTION,
+                source=source,
+                suggested_target=compact_text(str(item.get('suggested_target') or '')),
+                category=category,
+                confidence=coerce_keyword_confidence(item.get('confidence')),
+                evidence=compact_text(str(item.get('evidence') or '')),
+                source_item_ids=[str(value) for value in raw_source_item_ids if str(value).strip()],
+            ).to_legacy_dict()
         )
     return normalized
 
@@ -771,6 +846,7 @@ def revision_writeback_action(unit, result, chunk_key=''):
 
 
 def keyword_writeback_action(unit, result, chunk_key=''):
+    """Keyword extraction produces glossary candidates and never edits scripts."""
     return None
 
 

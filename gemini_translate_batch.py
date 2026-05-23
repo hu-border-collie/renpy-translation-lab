@@ -1076,7 +1076,7 @@ def build_user_prompt(
 ):
     return translation_core.build_translation_user_prompt(
         translation_core.ContextWindow(context_past, context_future),
-        translation_core.units_from_items(target_items, translation_core.MODE_TRANSLATION),
+        target_items,
         translation_core.build_context_bundle(
             glossary_hits=glossary_hits,
             history_hits=history_hits,
@@ -1092,7 +1092,7 @@ def build_user_prompt(
 
 def build_response_json_schema(target_items):
     return translation_core.build_response_json_schema(
-        translation_core.units_from_items(target_items, translation_core.MODE_TRANSLATION),
+        target_items,
         mode=translation_core.MODE_TRANSLATION,
     )
 
@@ -1530,7 +1530,7 @@ def build_revision_user_prompt(chunk):
 
 def build_revision_response_json_schema(target_items):
     return translation_core.build_response_json_schema(
-        translation_core.units_from_items(target_items, translation_core.MODE_REVISION),
+        target_items,
         mode=translation_core.MODE_REVISION,
     )
 
@@ -1785,12 +1785,7 @@ def build_keyword_system_instruction(max_candidates_per_chunk=None):
 
 
 def build_keyword_user_prompt(target_items):
-    return translation_core.build_keyword_user_prompt(
-        translation_core.units_from_items(
-            target_items,
-            translation_core.MODE_KEYWORD_EXTRACTION,
-        )
-    )
+    return translation_core.build_keyword_user_prompt(target_items)
 
 
 def build_keyword_response_json_schema(max_candidates_per_chunk=None):

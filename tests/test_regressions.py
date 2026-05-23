@@ -168,6 +168,59 @@ class TranslationCoreRegressionTests(unittest.TestCase):
             translation_core.writeback_tuple(action),
             (4, 11, '\u4f60\u597d', '', '"', 'Hello', 'script.rpy:0:4', 'chunk-1'),
         )
+        keyword_unit = translation_core.unit_from_keyword_item(
+            {'id': 'kw-1', 'text': 'Void Gate'},
+            file_rel_path='script.rpy',
+        )
+        self.assertIsNone(
+            translation_core.build_writeback_action(
+                keyword_unit,
+                keyword_results[0],
+                mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            )
+        )
+
+    def test_manifest_item_dispatches_by_mode_with_chunk_defaults(self):
+        revision_unit = translation_core.unit_from_manifest_item(
+            {
+                'id': 'script.rpy:2:4',
+                'text': '',
+                'source': 'Hello Alice',
+                'current_translation': None,
+                'line_number': 3,
+            },
+            mode=translation_core.MODE_REVISION,
+            chunk={'file_rel_path': 'script.rpy', 'file_path': '/tmp/script.rpy'},
+        )
+        self.assertEqual(revision_unit.mode, translation_core.MODE_REVISION)
+        self.assertEqual(revision_unit.file_rel_path, 'script.rpy')
+        self.assertEqual(revision_unit.text, 'Hello Alice')
+        self.assertEqual(revision_unit.current_translation, '')
+        self.assertEqual(revision_unit.line, 2)
+
+        keyword_unit = translation_core.unit_from_manifest_item(
+            {'id': 'kw-1', 'text': 'Void Gate', 'translation_line_number': 8},
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            chunk={'file_rel_path': 'script.rpy'},
+        )
+        self.assertEqual(keyword_unit.mode, translation_core.MODE_KEYWORD_EXTRACTION)
+        self.assertEqual(keyword_unit.file_rel_path, 'script.rpy')
+        self.assertEqual(keyword_unit.metadata['translation_line_number'], 8)
+
+    def test_revision_context_block_accepts_units_and_dicts(self):
+        block = translation_core.format_revision_context_block(
+            [
+                translation_core.TranslationUnit(
+                    id='unit-1',
+                    source='Hello Alice',
+                    current_translation='\u4f60\u597d Alice',
+                ),
+                {'source': 'Goodbye', 'current_translation': '\u518d\u89c1'},
+            ]
+        )
+
+        self.assertIn('- Hello Alice => \u4f60\u597d Alice', block)
+        self.assertIn('- Goodbye => \u518d\u89c1', block)
 
 
 class TranslatorRuntimeRegressionTests(unittest.TestCase):
@@ -410,15 +463,33 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         try:
             runtime.NORMALIZE_TRANSLATION_MAP = {'\u65e7\u79f0': '\u65b0\u79f0'}
             runtime.USE_TRANSLATION_MEMORY = True
+            replacements = {}
             with mock.patch.object(runtime, 'call_gemini_sdk', return_value=[
                 {'id': 'file:0:1', 'translation': '\u65e7\u79f0\u4f60\u597d'},
             ]):
-                runtime.process_batch(batch, {})
+                runtime.process_batch(batch, replacements)
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / 'script.rpy'
+                lines = ['x"Hello"\n']
+                runtime.commit_replacements(str(path), lines, replacements)
+                committed_text = path.read_text(encoding='utf-8')
         finally:
             runtime.NORMALIZE_TRANSLATION_MAP = old_normalize_map
             runtime.USE_TRANSLATION_MEMORY = old_use_memory
 
         self.assertEqual(batch[0]['translated_text'], '\u65b0\u79f0\u4f60\u597d')
+        self.assertEqual(replacements[0][0], (1, 8, '\u65e7\u79f0\u4f60\u597d', '', '"'))
+        self.assertEqual(committed_text, 'x"\u65b0\u79f0\u4f60\u597d"\n')
+
+    def test_sync_prompt_preserves_legacy_wrapper(self):
+        prompt = runtime.build_prompt(
+            [{'id': 'file:0:1', 'text': 'Hello Alice'}],
+        )
+
+        self.assertIn("You are translating a Ren'Py visual novel", prompt)
+        self.assertIn('1.1 Keep all person names in English; do not translate names.', prompt)
+        self.assertIn('Input JSON:', prompt)
+        self.assertNotIn('CONTEXT BEFORE:', prompt)
 
     def test_sync_rag_prompt_includes_retrieved_memory_when_enabled(self):
         old_enabled = runtime.SYNC_RAG_ENABLED
