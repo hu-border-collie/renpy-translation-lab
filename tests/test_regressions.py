@@ -36,6 +36,8 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         sync_unit = translation_core.unit_from_sync_task(sync_task, file_rel_path='script.rpy')
         self.assertEqual(sync_unit.mode, translation_core.MODE_TRANSLATION)
         self.assertEqual(sync_unit.source_text, 'Hello Alice')
+        self.assertEqual(sync_unit.line_number, 0)
+        self.assertEqual(sync_unit.display_line_number, 1)
         self.assertEqual(sync_unit.progress_entry, 'task:0:4')
         self.assertEqual(
             translation_core.unit_to_translation_item(sync_unit),

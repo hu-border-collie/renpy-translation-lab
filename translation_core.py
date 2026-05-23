@@ -156,7 +156,7 @@ def _coerce_line(item):
 def _coerce_line_number(item, line):
     if 'line_number' in item:
         return max(0, _coerce_int(item.get('line_number'), 0))
-    return line + 1 if line >= 0 else 0
+    return 0
 
 
 def _metadata_for(item, known_keys):
