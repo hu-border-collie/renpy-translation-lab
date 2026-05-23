@@ -18,6 +18,7 @@ if SCRIPT_DIR not in sys.path:
 from rag_memory import JsonRagStore, hash_text, truncate_text
 import prompt_context
 import story_memory
+import translation_core
 import translator_runtime as runtime
 
 try:
@@ -1055,22 +1056,13 @@ def collect_pending_file_jobs():
 
 
 def format_context_block(lines, empty_label):
-    if not lines:
-        return empty_label
-    return '\n'.join(f'- {line}' for line in lines)
+    return translation_core.format_context_block(lines, empty_label)
 
 
 def build_system_instruction():
-    glossary = ', '.join(legacy.PRESERVE_TERMS)
-    return (
-        'Setting:\n'
-        f'{BATCH_MACRO_SETTING}\n\n'
-        'Task:\n'
-        'Translate only TARGET lines into Simplified Chinese. CONTEXT lines are reference only.\n'
-        f'Keep these terms unchanged: {glossary}\n'
-        "Keep names, Ren'Py tags, placeholders, variables, and format strings unchanged.\n"
-        'Return JSON only. Preserve every id exactly. Item count must match. '
-        'translation must contain only the translated Chinese text.'
+    return translation_core.build_translation_system_instruction(
+        legacy.PRESERVE_TERMS,
+        macro_setting=BATCH_MACRO_SETTING,
     )
 
 
@@ -1082,50 +1074,27 @@ def build_user_prompt(
     history_hits=None,
     story_hits=None,
 ):
-    target_payload = json.dumps(
-        [{'id': item['id'], 'text': item['text']} for item in target_items],
-        ensure_ascii=False,
-        separators=(',', ':'),
-    )
-    blocks = [
-        prompt_context.build_reference_blocks(
-            include_translation_memory=True,
-            glossary_hits=glossary_hits or [],
-            history_hits=history_hits or [],
+    return translation_core.build_translation_user_prompt(
+        translation_core.ContextWindow(context_past, context_future),
+        target_items,
+        translation_core.build_context_bundle(
+            glossary_hits=glossary_hits,
+            history_hits=history_hits,
             story_hits=story_hits,
-            history_char_limit=RAG_HISTORY_CHAR_LIMIT,
-            story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
-            include_source_text=True,
         ),
-    ]
-    blocks.extend(
-        [
-            f'CONTEXT BEFORE:\n{format_context_block(context_past, "(none)")}\n\n',
-            f'TARGET:\n{target_payload}\n\n',
-            f'CONTEXT AFTER:\n{format_context_block(context_future, "(none)")}\n\n',
-            'Return the result now.',
-        ]
+        history_char_limit=RAG_HISTORY_CHAR_LIMIT,
+        story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
+        include_translation_memory=True,
+        include_source_text=True,
     )
-    return ''.join(blocks)
 
 
 
 def build_response_json_schema(target_items):
-    target_ids = [item['id'] for item in target_items]
-    return {
-        'type': 'array',
-        'minItems': len(target_items),
-        'maxItems': len(target_items),
-        'items': {
-            'type': 'object',
-            'required': ['id', 'translation'],
-            'additionalProperties': False,
-            'properties': {
-                'id': {'type': 'string', 'enum': target_ids},
-                'translation': {'type': 'string'},
-            },
-        },
-    }
+    return translation_core.build_response_json_schema(
+        target_items,
+        mode=translation_core.MODE_TRANSLATION,
+    )
 
 
 def build_generation_config(target_items):
@@ -1178,6 +1147,12 @@ def build_chunks(file_jobs):
         for start in range(0, total, BATCH_TARGET_SIZE):
             end = min(start + BATCH_TARGET_SIZE, total)
             target_items = tasks[start:end]
+            target_units = translation_core.units_from_items(
+                target_items,
+                translation_core.MODE_TRANSLATION,
+                file_rel_path=job['file_rel_path'],
+                file_path=job['file_path'],
+            )
             context_past = [item['text'] for item in tasks[max(0, start - BATCH_CONTEXT_BEFORE):start]]
             context_future = [item['text'] for item in tasks[end:min(total, end + BATCH_CONTEXT_AFTER)]]
             glossary_hits = retrieve_glossary_hits(target_items) if RAG_ENABLED else []
@@ -1192,28 +1167,19 @@ def build_chunks(file_jobs):
             chunk_key = f"{hash_key(job['file_rel_path'])}-{chunk_number:05d}"
             chunk = {
                 'key': chunk_key,
+                'mode': MANIFEST_MODE_TRANSLATION,
                 'file_rel_path': job['file_rel_path'],
                 'file_path': job['file_path'],
                 'chunk_index': chunk_number,
-                'line_numbers': [item['line'] for item in target_items],
+                'line_numbers': [unit.line for unit in target_units],
                 'context_past': context_past,
                 'context_future': context_future,
                 'glossary_hits': glossary_hits,
                 'history_hits': history_hits,
                 'rag_stats': rag_stats,
                 'items': [
-                    {
-                        'id': item['id'],
-                        'text': item['text'],
-                        'line': item['line'],
-                        'start': item['start'],
-                        'end': item['end'],
-                        'prefix': item.get('prefix', ''),
-                        'quote': item['quote'],
-                        'speaker_id': item.get('speaker_id', ''),
-                        'speaker': item.get('speaker', ''),
-                    }
-                    for item in target_items
+                    translation_core.legacy_item_from_unit(unit, translation_core.MODE_TRANSLATION)
+                    for unit in target_units
                 ],
             }
             if STORY_MEMORY_ENABLED and story_memory.has_story_hits(story_hits):
@@ -1333,6 +1299,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
 
     manifest = {
         'version': 1,
+        'core_schema_version': translation_core.CORE_SCHEMA_VERSION,
         'mode': MANIFEST_MODE_TRANSLATION,
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
@@ -1463,15 +1430,7 @@ def collect_revision_file_jobs():
 
 
 def format_revision_context_block(items, empty_label):
-    if not items:
-        return empty_label
-    lines = []
-    for item in items:
-        source = compact_text(item.get('source', ''))
-        current = compact_text(item.get('current_translation', ''))
-        if source or current:
-            lines.append(f'- {source} => {current}')
-    return '\n'.join(lines) if lines else empty_label
+    return translation_core.format_revision_context_block(items, empty_label)
 
 
 def build_revision_chunks(file_jobs, chunk_size=None):
@@ -1483,6 +1442,12 @@ def build_revision_chunks(file_jobs, chunk_size=None):
         for start in range(0, total, chunk_size):
             end = min(start + chunk_size, total)
             target_items = items[start:end]
+            target_units = translation_core.units_from_items(
+                target_items,
+                translation_core.MODE_REVISION,
+                file_rel_path=job['file_rel_path'],
+                file_path=job['file_path'],
+            )
             context_past_items = items[max(0, start - BATCH_CONTEXT_BEFORE):start]
             context_future_items = items[end:min(total, end + BATCH_CONTEXT_AFTER)]
             glossary_hits = retrieve_glossary_hits(target_items) if RAG_ENABLED else []
@@ -1521,7 +1486,10 @@ def build_revision_chunks(file_jobs, chunk_size=None):
                 'glossary_hits': glossary_hits,
                 'history_hits': history_hits,
                 'rag_stats': rag_stats,
-                'items': target_items,
+                'items': [
+                    translation_core.legacy_item_from_unit(unit, translation_core.MODE_REVISION)
+                    for unit in target_units
+                ],
             }
             if STORY_MEMORY_ENABLED and story_memory.has_story_hits(story_hits):
                 chunk['story_hits'] = story_hits
@@ -1530,77 +1498,41 @@ def build_revision_chunks(file_jobs, chunk_size=None):
 
 
 def build_revision_system_instruction():
-    glossary = ', '.join(legacy.PRESERVE_TERMS)
-    return (
-        'Setting:\n'
-        f'{BATCH_MACRO_SETTING}\n\n'
-        'Task:\n'
-        'Review existing Simplified Chinese Ren\'Py TL translations. '
-        'For each TARGET item, decide whether the current translation should be revised. '
-        'Preserve meaning, tone, Ren\'Py tags, placeholders, variables, format strings, and locked terms. '
-        f'Keep these terms unchanged: {glossary}\n'
-        'If the current translation is already acceptable, set should_update=false and repeat it as revised_translation. '
-        'If it needs a change, set should_update=true and provide only the revised Chinese translation. '
-        'Return JSON only. Preserve every id exactly. Item count must match.'
+    return translation_core.build_revision_system_instruction(
+        legacy.PRESERVE_TERMS,
+        macro_setting=BATCH_MACRO_SETTING,
     )
 
 
 def build_revision_user_prompt(chunk):
-    target_payload = json.dumps(
-        [
-            {
-                'id': item['id'],
-                'file': item.get('file_rel_path', ''),
-                'line': item.get('line_number', 0),
-                'speaker_id': item.get('speaker_id', ''),
-                'source': item.get('source', ''),
-                'current_translation': item.get('current_translation', ''),
-            }
-            for item in chunk['items']
-        ],
-        ensure_ascii=False,
-        separators=(',', ':'),
-    )
-    blocks = [
-        prompt_context.build_reference_blocks(
-            include_translation_memory=True,
+    return translation_core.build_revision_user_prompt(
+        translation_core.ContextWindow(
+            chunk.get('context_past') or [],
+            chunk.get('context_future') or [],
+        ),
+        translation_core.units_from_items(
+            chunk['items'],
+            translation_core.MODE_REVISION,
+            file_rel_path=chunk.get('file_rel_path', ''),
+            file_path=chunk.get('file_path', ''),
+        ),
+        translation_core.build_context_bundle(
             glossary_hits=chunk.get('glossary_hits') or [],
             history_hits=chunk.get('history_hits') or [],
             story_hits=chunk.get('story_hits'),
-            history_char_limit=RAG_HISTORY_CHAR_LIMIT,
-            story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
-            include_source_text=True,
+            rag_stats=chunk.get('rag_stats') or {},
         ),
-    ]
-    blocks.extend(
-        [
-            f'CONTEXT BEFORE:\n{format_revision_context_block(chunk.get("context_past") or [], "(none)")}\n\n',
-            f'TARGET:\n{target_payload}\n\n',
-            f'CONTEXT AFTER:\n{format_revision_context_block(chunk.get("context_future") or [], "(none)")}\n\n',
-            'Return objects with id, should_update, revised_translation, and reason.',
-        ]
+        history_char_limit=RAG_HISTORY_CHAR_LIMIT,
+        story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
+        include_source_text=True,
     )
-    return ''.join(blocks)
 
 
 def build_revision_response_json_schema(target_items):
-    target_ids = [item['id'] for item in target_items]
-    return {
-        'type': 'array',
-        'minItems': len(target_items),
-        'maxItems': len(target_items),
-        'items': {
-            'type': 'object',
-            'required': ['id', 'should_update', 'revised_translation', 'reason'],
-            'additionalProperties': False,
-            'properties': {
-                'id': {'type': 'string', 'enum': target_ids},
-                'should_update': {'type': 'boolean'},
-                'revised_translation': {'type': 'string'},
-                'reason': {'type': 'string'},
-            },
-        },
-    }
+    return translation_core.build_response_json_schema(
+        target_items,
+        mode=translation_core.MODE_REVISION,
+    )
 
 
 def build_revision_generation_config(target_items):
@@ -1667,6 +1599,7 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
     build_warnings = get_batch_risk_warnings()
     manifest = {
         'version': 1,
+        'core_schema_version': translation_core.CORE_SCHEMA_VERSION,
         'mode': MANIFEST_MODE_REVISION,
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
@@ -1806,6 +1739,12 @@ def build_keyword_chunks(file_jobs, chunk_size=None):
         items = job['items']
         for start in range(0, len(items), chunk_size):
             target_items = items[start:start + chunk_size]
+            target_units = translation_core.units_from_items(
+                target_items,
+                translation_core.MODE_KEYWORD_EXTRACTION,
+                file_rel_path=job['file_rel_path'],
+                file_path=job['file_path'],
+            )
             chunk_number = start // chunk_size + 1
             chunks.append(
                 {
@@ -1814,109 +1753,46 @@ def build_keyword_chunks(file_jobs, chunk_size=None):
                     'file_rel_path': job['file_rel_path'],
                     'file_path': job['file_path'],
                     'chunk_index': chunk_number,
-                    'line_numbers': [item.get('line_number', 0) for item in target_items],
-                    'items': target_items,
+                    'line_numbers': [unit.display_line_number for unit in target_units],
+                    'items': [
+                        translation_core.legacy_item_from_unit(
+                            unit,
+                            translation_core.MODE_KEYWORD_EXTRACTION,
+                        )
+                        for unit in target_units
+                    ],
                 }
             )
     return chunks
 
 
 def format_keyword_glossary_block():
-    lines = []
-    for term in legacy.PRESERVE_TERMS:
-        if isinstance(term, str) and term.strip():
-            lines.append(f'- Preserve: {term.strip()}')
-    for source, target in (legacy.NORMALIZE_TRANSLATION_MAP or {}).items():
-        if source:
-            lines.append(f'- Existing mapping: {source} -> {target}')
-    for term in sorted(getattr(legacy, 'NON_TRANSLATABLE_EXACT', set()) or []):
-        if isinstance(term, str) and term.strip():
-            lines.append(f'- Non-translatable: {term.strip()}')
-    return '\n'.join(lines) if lines else '(none)'
+    return translation_core.build_keyword_glossary_block(
+        legacy.PRESERVE_TERMS,
+        legacy.NORMALIZE_TRANSLATION_MAP,
+        getattr(legacy, 'NON_TRANSLATABLE_EXACT', set()),
+    )
 
 
 def build_keyword_system_instruction(max_candidates_per_chunk=None):
-    max_candidates = max(1, int(max_candidates_per_chunk or KEYWORD_MAX_CANDIDATES_PER_CHUNK))
-    return (
-        'Setting:\n'
-        f'{BATCH_MACRO_SETTING}\n\n'
-        'Existing glossary entries:\n'
-        f'{format_keyword_glossary_block()}\n\n'
-        'Task:\n'
-        'Extract glossary or story-memory keyword candidates from Ren\'Py TL source text. '
-        'Do not translate full lines. Return only high-value terms, names, places, items, concepts, abilities, '
-        'relationship labels, or recurring phrasing that a human may want to add to glossary.json or story_graph.json.\n'
-        f'Return at most {max_candidates} candidates for this chunk. '
-        'Avoid generic words, common function words, UI filler, and candidates already covered by existing glossary entries. '
-        'Set source_item_ids to the input id values that support the candidate. '
-        'Use concise evidence that cites the relevant input id or phrase.\n'
-        'Also write a compact chunk_summary in Chinese that summarizes only the visible story events in this chunk. '
-        'Use 1-3 sentences, avoid invented continuity, and leave chunk_summary empty if the lines do not contain usable story content. '
-        'Set summary_evidence_item_ids to the input ids that support the summary. Return JSON only.'
+    return translation_core.build_keyword_system_instruction(
+        legacy.PRESERVE_TERMS,
+        legacy.NORMALIZE_TRANSLATION_MAP,
+        getattr(legacy, 'NON_TRANSLATABLE_EXACT', set()),
+        macro_setting=BATCH_MACRO_SETTING,
+        max_candidates_per_chunk=max_candidates_per_chunk or KEYWORD_MAX_CANDIDATES_PER_CHUNK,
     )
 
 
 def build_keyword_user_prompt(target_items):
-    target_payload = json.dumps(
-        [
-            {
-                'id': item['id'],
-                'file': item.get('file_rel_path', ''),
-                'line': item.get('line_number', 0),
-                'speaker_id': item.get('speaker_id', ''),
-                'text': item['text'],
-            }
-            for item in target_items
-        ],
-        ensure_ascii=False,
-        separators=(',', ':'),
-    )
-    return (
-        'TARGET LINES:\n'
-        f'{target_payload}\n\n'
-        'Return a JSON object with candidates, chunk_summary, and summary_evidence_item_ids. '
-        'Each candidate must include source, suggested_target, category, confidence, evidence, and source_item_ids.'
-    )
+    return translation_core.build_keyword_user_prompt(target_items)
 
 
 def build_keyword_response_json_schema(max_candidates_per_chunk=None):
-    max_candidates = max(1, int(max_candidates_per_chunk or KEYWORD_MAX_CANDIDATES_PER_CHUNK))
-    candidate_schema = {
-        'type': 'array',
-        'maxItems': max_candidates,
-        'items': {
-            'type': 'object',
-            'required': ['source', 'suggested_target', 'category', 'confidence', 'evidence'],
-            'additionalProperties': False,
-            'properties': {
-                'source': {'type': 'string'},
-                'suggested_target': {'type': 'string'},
-                'category': {
-                    'type': 'string',
-                    'enum': ['term', 'character', 'place', 'item', 'ability', 'concept', 'relationship', 'style', 'other'],
-                },
-                'confidence': {'type': 'number'},
-                'evidence': {'type': 'string'},
-                'source_item_ids': {
-                    'type': 'array',
-                    'items': {'type': 'string'},
-                },
-            },
-        },
-    }
-    return {
-        'type': 'object',
-        'required': ['candidates', 'chunk_summary', 'summary_evidence_item_ids'],
-        'additionalProperties': False,
-        'properties': {
-            'candidates': candidate_schema,
-            'chunk_summary': {'type': 'string'},
-            'summary_evidence_item_ids': {
-                'type': 'array',
-                'items': {'type': 'string'},
-            },
-        },
-    }
+    return translation_core.build_response_json_schema(
+        mode=translation_core.MODE_KEYWORD_EXTRACTION,
+        max_candidates_per_chunk=max_candidates_per_chunk or KEYWORD_MAX_CANDIDATES_PER_CHUNK,
+    )
 
 
 def build_keyword_generation_config(max_candidates_per_chunk=None):
@@ -1984,6 +1860,7 @@ def create_keyword_package(display_name_override='', skip_prepare=True, chunk_si
 
     manifest = {
         'version': 1,
+        'core_schema_version': translation_core.CORE_SCHEMA_VERSION,
         'mode': MANIFEST_MODE_KEYWORD_EXTRACTION,
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
@@ -2097,6 +1974,10 @@ def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix
         part_files = summarize_files_for_chunks(part_chunks)
         part_manifest = {
             'version': manifest.get('version', 1),
+            'core_schema_version': manifest.get(
+                'core_schema_version',
+                translation_core.CORE_SCHEMA_VERSION,
+            ),
             'mode': manifest_mode(manifest),
             'created_at': now,
             'display_name': f'{part_name_prefix}-part{index:02d}',
@@ -2416,6 +2297,14 @@ def parse_json_payload(text):
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        for start, char in sorted((index, char) for index, char in enumerate(cleaned) if char in '[{'):
+            try:
+                payload, _end = decoder.raw_decode(cleaned[start:])
+                return payload
+            except json.JSONDecodeError:
+                continue
+
         start = cleaned.find('[')
         end = cleaned.rfind(']')
         if start >= 0 and end > start:
@@ -2430,77 +2319,24 @@ def parse_json_payload(text):
 
 
 def normalize_result_items(payload):
-    data = payload
-    if isinstance(data, dict):
-        if isinstance(data.get('items'), list):
-            data = data['items']
-        elif isinstance(data.get('translations'), list):
-            data = data['translations']
-
-    if not isinstance(data, list):
-        raise ValueError(f'Response JSON is not a list: {type(data)}')
-
-    normalized = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        item_id = item.get('id')
-        translation = item.get('translation')
-        if item_id is None or translation is None:
-            continue
-        normalized.append({'id': str(item_id), 'translation': str(translation)})
-    return normalized
+    return translation_core.normalize_model_results(
+        payload,
+        mode=translation_core.MODE_TRANSLATION,
+    )
 
 
-KEYWORD_CATEGORIES = {'term', 'character', 'place', 'item', 'ability', 'concept', 'relationship', 'style', 'other'}
+KEYWORD_CATEGORIES = translation_core.KEYWORD_CATEGORIES
 
 
 def coerce_keyword_confidence(value):
-    try:
-        confidence = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    if not confidence == confidence:
-        return 0.0
-    return max(0.0, min(confidence, 1.0))
+    return translation_core.coerce_keyword_confidence(value)
 
 
 def normalize_keyword_candidates(payload):
-    data = payload
-    if isinstance(data, dict):
-        if isinstance(data.get('candidates'), list):
-            data = data['candidates']
-        elif isinstance(data.get('items'), list):
-            data = data['items']
-        elif isinstance(data.get('keywords'), list):
-            data = data['keywords']
-    if not isinstance(data, list):
-        raise ValueError(f'Response JSON is not a candidate list: {type(data)}')
-
-    normalized = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        source = compact_text(str(item.get('source') or ''))
-        if not source:
-            continue
-        category = compact_text(str(item.get('category') or 'other')).lower()
-        if category not in KEYWORD_CATEGORIES:
-            category = 'other'
-        raw_source_item_ids = item.get('source_item_ids')
-        if not isinstance(raw_source_item_ids, list):
-            raw_source_item_ids = []
-        normalized.append(
-            {
-                'source': source,
-                'suggested_target': compact_text(str(item.get('suggested_target') or '')),
-                'category': category,
-                'confidence': coerce_keyword_confidence(item.get('confidence')),
-                'evidence': compact_text(str(item.get('evidence') or '')),
-                'source_item_ids': [str(value) for value in raw_source_item_ids if str(value).strip()],
-            }
-        )
-    return normalized
+    return translation_core.normalize_model_results(
+        payload,
+        mode=translation_core.MODE_KEYWORD_EXTRACTION,
+    )
 
 
 def normalize_keyword_summary(payload):
@@ -3085,46 +2921,14 @@ def summarize_pending_replacements(replacements_by_file, translated_lines_by_fil
 
 
 def coerce_revision_should_update(value):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        return value.strip().lower() in {'1', 'true', 'yes', 'y', 'update', 'revise', 'change', 'changed'}
-    return False
+    return translation_core.coerce_revision_should_update(value)
 
 
 def normalize_revision_items(payload):
-    data = payload
-    if isinstance(data, dict):
-        for key in ('revisions', 'items', 'results'):
-            if isinstance(data.get(key), list):
-                data = data[key]
-                break
-    if not isinstance(data, list):
-        raise ValueError(f'Response JSON is not a revision list: {type(data)}')
-
-    normalized = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        item_id = item.get('id')
-        if item_id is None:
-            continue
-        revised = item.get('revised_translation')
-        if revised is None:
-            revised = item.get('translation')
-        if revised is None:
-            revised = item.get('revised')
-        normalized.append(
-            {
-                'id': str(item_id),
-                'should_update': coerce_revision_should_update(item.get('should_update')),
-                'revised_translation': str(revised or ''),
-                'reason': compact_text(str(item.get('reason') or '')),
-            }
-        )
-    return normalized
+    return translation_core.normalize_model_results(
+        payload,
+        mode=translation_core.MODE_REVISION,
+    )
 
 
 def make_revision_preview_entry(target_item, result_item, status, error=''):
@@ -3299,7 +3103,12 @@ def collect_revision_actions(manifest, validate_sources=False):
                 seen_ids.add(result_id)
                 summary['parsed_items'] += 1
 
-                current_translation = target_item.get('current_translation', '')
+                target_unit = translation_core.unit_from_manifest_item(
+                    target_item,
+                    mode=translation_core.MODE_REVISION,
+                    chunk=chunk,
+                )
+                current_translation = target_unit.current_translation
                 revised_translation = result_item.get('revised_translation', '')
                 if not revised_translation and not result_item.get('should_update'):
                     revised_translation = current_translation
@@ -3310,14 +3119,12 @@ def collect_revision_actions(manifest, validate_sources=False):
                     preview_entries.append(make_revision_preview_entry(target_item, result_item, 'unchanged'))
                     continue
 
-                valid, reason = legacy.validate_translation(
-                    target_item.get('source', target_item.get('text', '')),
-                    revised_translation,
-                )
+                source_text = target_unit.source_text
+                valid, reason = legacy.validate_translation(source_text, revised_translation)
                 if not valid and reason == 'No Chinese characters' and allow_non_chinese_batch_translation(
                     manifest,
                     chunk,
-                    target_item.get('source', target_item.get('text', '')),
+                    source_text,
                     revised_translation,
                 ):
                     valid = True
@@ -3330,7 +3137,7 @@ def collect_revision_actions(manifest, validate_sources=False):
                         file_rel_path=chunk['file_rel_path'],
                         item_id=target_item['id'],
                         line=target_item['line'],
-                        text=target_item.get('source', target_item.get('text', '')),
+                        text=source_text,
                         key=key,
                         translation=revised_translation,
                         finish_reason=finish_reason,
@@ -3342,18 +3149,14 @@ def collect_revision_actions(manifest, validate_sources=False):
                 summary['valid_items'] += 1
                 summary['revision_candidate_items'] += 1
                 preview_entries.append(make_revision_preview_entry(target_item, result_item, 'pending'))
+                action = translation_core.revision_writeback_action(
+                    target_unit,
+                    result_item,
+                    chunk_key=key,
+                )
                 file_key = chunk['file_rel_path']
                 replacements_by_file.setdefault(file_key, {}).setdefault(target_item['line'], []).append(
-                    (
-                        target_item['start'],
-                        target_item['end'],
-                        revised_translation,
-                        target_item.get('prefix', ''),
-                        target_item['quote'],
-                        current_translation,
-                        target_item['id'],
-                        key,
-                    )
+                    translation_core.writeback_tuple(action, include_expected=True)
                 )
                 revised_lines_by_file.setdefault(file_key, set()).add(target_item['line'])
 
@@ -3673,11 +3476,16 @@ def collect_result_actions(manifest, validate_sources=False):
                     continue
                 seen_ids.add(result_id)
 
-                valid, reason = legacy.validate_translation(target_item['text'], result_item['translation'])
+                target_unit = translation_core.unit_from_manifest_item(
+                    target_item,
+                    mode=translation_core.MODE_TRANSLATION,
+                    chunk=chunk,
+                )
+                valid, reason = legacy.validate_translation(target_unit.text, result_item['translation'])
                 if not valid and reason == 'No Chinese characters' and allow_non_chinese_batch_translation(
                     manifest,
                     chunk,
-                    target_item['text'],
+                    target_unit.text,
                     result_item['translation'],
                 ):
                     valid = True
@@ -3692,7 +3500,7 @@ def collect_result_actions(manifest, validate_sources=False):
                             'file_rel_path': chunk['file_rel_path'],
                             'id': target_item['id'],
                             'line': target_item['line'],
-                            'text': target_item['text'],
+                            'text': target_unit.text,
                             'error': f'Validation failed: {reason}',
                             'translation': result_item['translation'],
                             'finish_reason': finish_reason,
@@ -3702,18 +3510,14 @@ def collect_result_actions(manifest, validate_sources=False):
                     continue
 
                 summary['valid_items'] += 1
+                action = translation_core.translation_writeback_action(
+                    target_unit,
+                    result_item,
+                    chunk_key=key,
+                )
                 file_key = chunk['file_rel_path']
                 replacements_by_file.setdefault(file_key, {}).setdefault(target_item['line'], []).append(
-                    (
-                        target_item['start'],
-                        target_item['end'],
-                        result_item['translation'],
-                        target_item.get('prefix', ''),
-                        target_item['quote'],
-                        target_item['text'],
-                        target_item['id'],
-                        key,
-                    )
+                    translation_core.writeback_tuple(action, include_expected=True)
                 )
                 translated_lines_by_file.setdefault(file_key, set()).add(target_item['line'])
 
@@ -4990,6 +4794,7 @@ def make_sync_manifest(
     write_request_rows(input_jsonl_path, request_rows)
     manifest = {
         'version': 1,
+        'core_schema_version': translation_core.CORE_SCHEMA_VERSION,
         'mode': mode,
         'execution': 'sync',
         'created_at': datetime.now().isoformat(timespec='seconds'),
