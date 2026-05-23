@@ -579,7 +579,10 @@ def build_keyword_system_instruction(
         f'Return at most {max_candidates} candidates for this chunk. '
         'Avoid generic words, common function words, UI filler, and candidates already covered by existing glossary entries. '
         'Set source_item_ids to the input id values that support the candidate. '
-        'Use concise evidence that cites the relevant input id or phrase. Return JSON only.'
+        'Use concise evidence that cites the relevant input id or phrase.\n'
+        'Also write a compact chunk_summary in Chinese that summarizes only the visible story events in this chunk. '
+        'Use 1-3 sentences, avoid invented continuity, and leave chunk_summary empty if the lines do not contain usable story content. '
+        'Set summary_evidence_item_ids to the input ids that support the summary. Return JSON only.'
     )
 
 
@@ -602,7 +605,8 @@ def build_keyword_user_prompt(units):
     return (
         'TARGET LINES:\n'
         f'{target_payload}\n\n'
-        'Return candidate objects with source, suggested_target, category, confidence, evidence, and source_item_ids.'
+        'Return a JSON object with candidates, chunk_summary, and summary_evidence_item_ids. '
+        'Each candidate must include source, suggested_target, category, confidence, evidence, and source_item_ids.'
     )
 
 
@@ -648,12 +652,12 @@ def build_revision_schema(units):
 
 def build_keyword_schema(max_candidates_per_chunk=12):
     max_candidates = max(1, _coerce_int(max_candidates_per_chunk, 12))
-    return {
+    candidate_schema = {
         'type': 'array',
         'maxItems': max_candidates,
         'items': {
             'type': 'object',
-            'required': ['source', 'suggested_target', 'category', 'confidence', 'evidence'],
+            'required': ['source', 'suggested_target', 'category', 'confidence', 'evidence', 'source_item_ids'],
             'additionalProperties': False,
             'properties': {
                 'source': {'type': 'string'},
@@ -668,6 +672,19 @@ def build_keyword_schema(max_candidates_per_chunk=12):
                     'type': 'array',
                     'items': {'type': 'string'},
                 },
+            },
+        },
+    }
+    return {
+        'type': 'object',
+        'required': ['candidates', 'chunk_summary', 'summary_evidence_item_ids'],
+        'additionalProperties': False,
+        'properties': {
+            'candidates': candidate_schema,
+            'chunk_summary': {'type': 'string'},
+            'summary_evidence_item_ids': {
+                'type': 'array',
+                'items': {'type': 'string'},
             },
         },
     }

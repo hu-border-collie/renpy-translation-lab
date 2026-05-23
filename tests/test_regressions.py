@@ -132,7 +132,9 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         )
         keyword_schema = batch_mod.build_keyword_response_json_schema(5)
         self.assertIn('source_item_ids', keyword_prompt)
-        self.assertEqual(keyword_schema['maxItems'], 5)
+        self.assertIn('chunk_summary', keyword_prompt)
+        self.assertEqual(keyword_schema['properties']['candidates']['maxItems'], 5)
+        self.assertIn('chunk_summary', keyword_schema['required'])
 
     def test_core_result_parsers_and_writeback_actions_are_mode_aware(self):
         translation_results = translation_core.normalize_model_results(
@@ -2177,6 +2179,24 @@ class BatchRagRegressionTests(unittest.TestCase):
 
 
 class BatchRepairRegressionTests(unittest.TestCase):
+    def test_parse_json_payload_recovers_prefixed_keyword_object(self):
+        payload = batch_mod.parse_json_payload(
+            'Earlier attempt: []\n'
+            'Here is the JSON: {"candidates":[],"chunk_summary":"片段概要","summary_evidence_item_ids":["line-1"]}\n'
+            'Done.'
+        )
+
+        self.assertEqual(payload['chunk_summary'], '片段概要')
+        self.assertEqual(payload['summary_evidence_item_ids'], ['line-1'])
+
+    def test_parse_json_payload_preserves_partial_array_salvage(self):
+        payload = batch_mod.parse_json_payload(
+            '[{"id":"line-1","translation":"第一行"},{"id":"line-2","translation":"第二行"'
+        )
+
+        self.assertIsInstance(payload, list)
+        self.assertEqual(payload, [{'id': 'line-1', 'translation': '第一行'}])
+
     def test_split_manifest_keeps_first_child_latest_and_context_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2317,10 +2337,19 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(manifest['summary']['chunk_count'], 2)
         self.assertEqual(manifest['chunks'][0]['items'][0]['line_number'], 2)
         prepare_mock.assert_not_called()
-        self.assertEqual(request_rows[0]['request']['generation_config']['response_json_schema']['maxItems'], 3)
-        self.assertIn('source', request_rows[0]['request']['generation_config']['response_json_schema']['items']['required'])
-        self.assertIn('source_item_ids', request_rows[0]['request']['generation_config']['response_json_schema']['items']['properties'])
-        self.assertIn('Existing glossary entries', request_rows[0]['request']['system_instruction']['parts'][0]['text'])
+        schema = request_rows[0]['request']['generation_config']['response_json_schema']
+        candidate_schema = schema['properties']['candidates']
+        self.assertEqual(schema['type'], 'object')
+        self.assertIn('candidates', schema['required'])
+        self.assertIn('chunk_summary', schema['required'])
+        self.assertIn('summary_evidence_item_ids', schema['required'])
+        self.assertEqual(candidate_schema['maxItems'], 3)
+        self.assertIn('source', candidate_schema['items']['required'])
+        self.assertIn('source_item_ids', candidate_schema['items']['required'])
+        self.assertIn('source_item_ids', candidate_schema['items']['properties'])
+        system_text = request_rows[0]['request']['system_instruction']['parts'][0]['text']
+        self.assertIn('Existing glossary entries', system_text)
+        self.assertIn('chunk_summary', system_text)
 
     def test_export_keyword_candidates_dedupes_jsonl_and_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2328,23 +2357,27 @@ class BatchRepairRegressionTests(unittest.TestCase):
             result_path = package_dir / 'results.jsonl'
             manifest_path = package_dir / 'manifest.json'
             response_text = json.dumps(
-                [
-                    {
-                        'source': 'Void Gate',
-                        'suggested_target': '虚空门',
-                        'category': 'term',
-                        'confidence': 0.7,
-                        'evidence': 'script.rpy:2',
-                        'source_item_ids': ['script.rpy:2:keyword:0'],
-                    },
-                    {
-                        'source': 'Void Gate',
-                        'suggested_target': '虚空门',
-                        'category': 'term',
-                        'confidence': 0.9,
-                        'evidence': 'script.rpy:3',
-                    },
-                ],
+                {
+                    'candidates': [
+                        {
+                            'source': 'Void Gate',
+                            'suggested_target': '虚空门',
+                            'category': 'term',
+                            'confidence': 0.7,
+                            'evidence': 'script.rpy:2',
+                            'source_item_ids': ['script.rpy:2:keyword:0'],
+                        },
+                        {
+                            'source': 'Void Gate',
+                            'suggested_target': '虚空门',
+                            'category': 'term',
+                            'confidence': 0.9,
+                            'evidence': 'script.rpy:3',
+                        },
+                    ],
+                    'chunk_summary': '一行提到虚空门，另一行提到其他术语。',
+                    'summary_evidence_item_ids': ['script.rpy:2:keyword:0', 'script.rpy:3:keyword:1'],
+                },
                 ensure_ascii=False,
             )
             result_path.write_text(
@@ -2407,21 +2440,104 @@ class BatchRepairRegressionTests(unittest.TestCase):
             export = batch_mod.export_keyword_candidates(str(manifest_path))
             jsonl_path = Path(export['jsonl_path'])
             markdown_path = Path(export['markdown_path'])
+            summary_jsonl_path = Path(export['summary_jsonl_path'])
+            summary_markdown_path = Path(export['summary_markdown_path'])
             rows = [
                 json.loads(line)
                 for line in jsonl_path.read_text(encoding='utf-8').splitlines()
             ]
+            summary_rows = [
+                json.loads(line)
+                for line in summary_jsonl_path.read_text(encoding='utf-8').splitlines()
+            ]
             markdown_text = markdown_path.read_text(encoding='utf-8')
+            summary_markdown_text = summary_markdown_path.read_text(encoding='utf-8')
 
         self.assertEqual(export['summary']['candidate_count_raw'], 2)
         self.assertEqual(export['summary']['candidate_count_deduped'], 1)
+        self.assertEqual(export['summary']['chunk_summary_count'], 1)
         self.assertEqual(rows[0]['source'], 'Void Gate')
         self.assertEqual(rows[0]['confidence'], 0.9)
         self.assertEqual(rows[0]['occurrences'], 2)
         self.assertEqual(rows[0]['source_lines'], [2])
         self.assertEqual(rows[0]['source_item_ids'], ['script.rpy:2:keyword:0'])
+        self.assertEqual(summary_rows[0]['chunk_summary'], '一行提到虚空门，另一行提到其他术语。')
+        self.assertEqual(summary_rows[0]['source_lines'], [2, 3])
         self.assertEqual(export['summary']['missing_chunk_rows'], 1)
         self.assertIn('Void Gate', markdown_text)
+        self.assertIn('虚空门', summary_markdown_text)
+        self.assertIn('Chunk lines', summary_markdown_text)
+        self.assertIn('Evidence lines', summary_markdown_text)
+
+    def test_export_keyword_candidates_accepts_legacy_candidate_array(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            response_text = json.dumps(
+                [
+                    {
+                        'source': 'Legacy Term',
+                        'suggested_target': '旧术语',
+                        'category': 'term',
+                        'confidence': 0.8,
+                        'evidence': 'script.rpy:2',
+                        'source_item_ids': ['script.rpy:2:keyword:0'],
+                    }
+                ],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'kw-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'version': 1,
+                        'mode': batch_mod.MANIFEST_MODE_KEYWORD_EXTRACTION,
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'kw-1',
+                                'file_rel_path': 'script.rpy',
+                                'line_numbers': [2],
+                                'items': [
+                                    {
+                                        'id': 'script.rpy:2:keyword:0',
+                                        'line_number': 2,
+                                        'text': 'Legacy Term',
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            export = batch_mod.export_keyword_candidates(str(manifest_path))
+            rows = [
+                json.loads(line)
+                for line in Path(export['jsonl_path']).read_text(encoding='utf-8').splitlines()
+            ]
+            summary_jsonl_text = Path(export['summary_jsonl_path']).read_text(encoding='utf-8')
+
+        self.assertEqual(rows[0]['source'], 'Legacy Term')
+        self.assertEqual(export['summary']['candidate_count_deduped'], 1)
+        self.assertEqual(export['summary']['chunk_summary_count'], 0)
+        self.assertEqual(summary_jsonl_text, '')
 
     def test_export_keyword_candidates_rejects_reserved_output_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2576,16 +2692,20 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
                 Path(batch_mod.LATEST_MANIFEST_FILE).write_text(str(previous_latest), encoding='utf-8')
                 response_text = json.dumps(
-                    [
-                        {
-                            'source': 'Void Gate',
-                            'suggested_target': '虚空门',
-                            'category': 'term',
-                            'confidence': 0.9,
-                            'evidence': 'script.rpy:2:keyword:0',
-                            'source_item_ids': ['script.rpy:2:keyword:0'],
-                        }
-                    ],
+                    {
+                        'candidates': [
+                            {
+                                'source': 'Void Gate',
+                                'suggested_target': '虚空门',
+                                'category': 'term',
+                                'confidence': 0.9,
+                                'evidence': 'script.rpy:2:keyword:0',
+                                'source_item_ids': ['script.rpy:2:keyword:0'],
+                            }
+                        ],
+                        'chunk_summary': '这里提到了虚空门。',
+                        'summary_evidence_item_ids': ['script.rpy:2:keyword:0'],
+                    },
                     ensure_ascii=False,
                 )
 
@@ -2608,6 +2728,10 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     json.loads(line)
                     for line in jsonl_path.read_text(encoding='utf-8').splitlines()
                 ]
+                summary_rows = [
+                    json.loads(line)
+                    for line in Path(export['summary_jsonl_path']).read_text(encoding='utf-8').splitlines()
+                ]
                 latest_after = Path(batch_mod.LATEST_MANIFEST_FILE).read_text(encoding='utf-8')
         finally:
             batch_mod.legacy.TL_DIR = old_values['tl_dir']
@@ -2619,8 +2743,10 @@ class BatchRepairRegressionTests(unittest.TestCase):
 
         sync_request.assert_called_once()
         self.assertEqual(export['summary']['candidate_count_deduped'], 1)
+        self.assertEqual(export['summary']['chunk_summary_count'], 1)
         self.assertEqual(rows[0]['source'], 'Void Gate')
         self.assertEqual(rows[0]['suggested_target'], '虚空门')
+        self.assertEqual(summary_rows[0]['chunk_summary'], '这里提到了虚空门。')
         self.assertEqual(latest_after, str(previous_latest))
 
     def test_sync_revisions_previews_and_optionally_applies(self):
