@@ -2308,7 +2308,19 @@ def parse_json_payload(text):
             except json.JSONDecodeError:
                 continue
         if embedded_payloads:
-            return max(embedded_payloads, key=lambda item: (item[0], item[1]))[2]
+            _end, neg_start, payload = max(embedded_payloads, key=lambda item: (item[0], item[1]))
+            start = -neg_start
+            previous_index = start - 1
+            while previous_index >= 0 and cleaned[previous_index].isspace():
+                previous_index -= 1
+            salvaged = salvage_partial_json_array(cleaned)
+            if (
+                salvaged
+                and previous_index >= 0
+                and cleaned[previous_index] in '[,'
+            ):
+                return salvaged
+            return payload
 
         start = cleaned.find('[')
         end = cleaned.rfind(']')

@@ -2189,6 +2189,14 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(payload['chunk_summary'], '片段概要')
         self.assertEqual(payload['summary_evidence_item_ids'], ['line-1'])
 
+    def test_parse_json_payload_preserves_partial_array_salvage(self):
+        payload = batch_mod.parse_json_payload(
+            '[{"id":"line-1","translation":"第一行"},{"id":"line-2","translation":"第二行"'
+        )
+
+        self.assertIsInstance(payload, list)
+        self.assertEqual(payload, [{'id': 'line-1', 'translation': '第一行'}])
+
     def test_split_manifest_keeps_first_child_latest_and_context_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
