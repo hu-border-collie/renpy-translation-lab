@@ -19,6 +19,7 @@ from rag_memory import JsonRagStore, hash_text, truncate_text
 import prompt_context
 import story_memory
 import translation_core
+from relation_analyzer.parsing import CHARACTER_DEFINE_RE, extract_character_definitions
 
 # Configuration
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -2398,6 +2399,7 @@ def collect_tasks(lines, skip_translated=True):
         line.lstrip().startswith("translate ")
         for line in lines
     )
+    speaker_names = extract_character_definitions(lines)
 
     # Simple parser for Ren'Py strings
     for idx, line in enumerate(lines):
@@ -2407,6 +2409,7 @@ def collect_tasks(lines, skip_translated=True):
             not sline
             or sline.startswith("#")
             or sline.startswith("translate ")
+            or CHARACTER_DEFINE_RE.match(line)
             or (is_translation_file and sline.startswith("old "))
         ):
             continue
@@ -2455,6 +2458,9 @@ def collect_tasks(lines, skip_translated=True):
                         if speaker_id:
                             task["speaker_id"] = speaker_id
                             task["speaker"] = speaker_id
+                            speaker_name = speaker_names.get(speaker_id)
+                            if speaker_name:
+                                task["speaker_name"] = speaker_name
                         tasks.append(task)
         except Exception:
             continue
