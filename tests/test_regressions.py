@@ -31,6 +31,7 @@ class TranslationCoreRegressionTests(unittest.TestCase):
             'prefix': '',
             'quote': '"',
             'speaker_id': 'e',
+            'speaker_name': 'Eileen',
             'progress_entry': 'task:0:4',
         }
         sync_unit = translation_core.unit_from_sync_task(sync_task, file_rel_path='script.rpy')
@@ -51,6 +52,7 @@ class TranslationCoreRegressionTests(unittest.TestCase):
                 'quote': '"',
                 'speaker_id': 'e',
                 'speaker': 'e',
+                'speaker_name': 'Eileen',
             },
         )
 
@@ -88,8 +90,8 @@ class TranslationCoreRegressionTests(unittest.TestCase):
 
     def test_prompt_wrappers_use_core_schema_for_all_modes(self):
         translation_prompt = batch_mod.build_user_prompt(
-            ['Before line'],
-            [{'id': 'script.rpy:0:4', 'text': 'Hello Alice'}],
+            [{'id': 'script.rpy:0:0', 'text': 'Before line', 'speaker_id': 'n', 'speaker_name': 'Noah'}],
+            [{'id': 'script.rpy:0:4', 'text': 'Hello Alice', 'speaker_id': 'e', 'speaker_name': 'Eileen'}],
             ['After line'],
             glossary_hits=[{'source': 'Alice', 'target': 'Alice'}],
         )
@@ -99,6 +101,9 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertIn('LOCKED TERMS', translation_prompt)
         self.assertIn('TARGET', translation_prompt)
         self.assertIn('script.rpy:0:4', translation_prompt)
+        self.assertIn('Noah (n): Before line', translation_prompt)
+        self.assertIn('"speaker_id":"e"', translation_prompt)
+        self.assertIn('"speaker_name":"Eileen"', translation_prompt)
         self.assertEqual(translation_schema['items']['required'], ['id', 'translation'])
 
         revision_chunk = {
@@ -314,6 +319,22 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(by_text['Hello Noah'].get('speaker_id'), 'e')
         self.assertEqual(by_text['Hello Noah'].get('speaker'), 'e')
         self.assertNotIn('speaker_id', by_text['Start Game'])
+
+    def test_collect_tasks_uses_character_defines_for_speaker_name(self):
+        tasks = runtime.collect_tasks([
+            'define e = Character("Eileen")\n',
+            'define n = Character(_("Noah"), color="#fff")\n',
+            'e "Hello Noah"\n',
+            'n "Hi Eileen"\n',
+        ])
+        by_text = {task['text']: task for task in tasks}
+
+        self.assertNotIn('Eileen', by_text)
+        self.assertNotIn('Noah', by_text)
+        self.assertEqual(by_text['Hello Noah'].get('speaker_id'), 'e')
+        self.assertEqual(by_text['Hello Noah'].get('speaker_name'), 'Eileen')
+        self.assertEqual(by_text['Hi Eileen'].get('speaker_id'), 'n')
+        self.assertEqual(by_text['Hi Eileen'].get('speaker_name'), 'Noah')
 
     def test_collect_tasks_allows_new_as_dialogue_speaker_id(self):
         tasks = runtime.collect_tasks(['new "Hello Noah"\n'])

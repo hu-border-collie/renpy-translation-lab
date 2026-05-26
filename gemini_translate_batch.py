@@ -560,10 +560,24 @@ def compact_text(text):
     return re.sub(r'\s+', ' ', text or '').strip()
 
 
+def item_text(item):
+    if isinstance(item, dict):
+        return item.get('text') or item.get('source') or ''
+    return item
+
+
 def build_rag_query_text(target_items, context_past):
     parts = []
-    local_past = [compact_text(text) for text in context_past[-2:] if compact_text(text)]
-    target_lines = [compact_text(item.get('text', '')) for item in target_items if compact_text(item.get('text', ''))]
+    local_past = [
+        compact_text(item_text(item))
+        for item in context_past[-2:]
+        if compact_text(item_text(item))
+    ]
+    target_lines = [
+        compact_text(item_text(item))
+        for item in target_items
+        if compact_text(item_text(item))
+    ]
     if local_past:
         parts.append('Context before:\n' + '\n'.join(f'- {text}' for text in local_past))
     if target_lines:
@@ -1153,8 +1167,24 @@ def build_chunks(file_jobs):
                 file_rel_path=job['file_rel_path'],
                 file_path=job['file_path'],
             )
-            context_past = [item['text'] for item in tasks[max(0, start - BATCH_CONTEXT_BEFORE):start]]
-            context_future = [item['text'] for item in tasks[end:min(total, end + BATCH_CONTEXT_AFTER)]]
+            context_past = [
+                translation_core.legacy_item_from_unit(unit, translation_core.MODE_TRANSLATION)
+                for unit in translation_core.units_from_items(
+                    tasks[max(0, start - BATCH_CONTEXT_BEFORE):start],
+                    translation_core.MODE_TRANSLATION,
+                    file_rel_path=job['file_rel_path'],
+                    file_path=job['file_path'],
+                )
+            ]
+            context_future = [
+                translation_core.legacy_item_from_unit(unit, translation_core.MODE_TRANSLATION)
+                for unit in translation_core.units_from_items(
+                    tasks[end:min(total, end + BATCH_CONTEXT_AFTER)],
+                    translation_core.MODE_TRANSLATION,
+                    file_rel_path=job['file_rel_path'],
+                    file_path=job['file_path'],
+                )
+            ]
             glossary_hits = retrieve_glossary_hits(target_items) if RAG_ENABLED else []
             history_hits, rag_stats = retrieve_history_hits(target_items, context_past) if RAG_ENABLED else ([], {})
             story_hits = retrieve_batch_story_hits(
