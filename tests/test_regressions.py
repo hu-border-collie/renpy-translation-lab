@@ -336,6 +336,43 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(by_text['Hi Eileen'].get('speaker_id'), 'n')
         self.assertEqual(by_text['Hi Eileen'].get('speaker_name'), 'Noah')
 
+    def test_collect_tasks_keeps_character_kwargs_after_display_name(self):
+        tasks = runtime.collect_tasks([
+            'define e = Character("Eileen", what_prefix=" says ")\n',
+            'e "Hello Noah"\n',
+        ])
+        by_text = {task['text']: task for task in tasks}
+
+        self.assertNotIn('Eileen', by_text)
+        self.assertIn(' says ', by_text)
+        self.assertEqual(by_text['Hello Noah'].get('speaker_name'), 'Eileen')
+
+    def test_collect_tasks_resolves_character_defines_in_file_order(self):
+        tasks = runtime.collect_tasks([
+            'define e = Character("Eileen")\n',
+            'e "Before"\n',
+            'define e = Character("Echo")\n',
+            'e "After"\n',
+        ])
+        by_text = {task['text']: task for task in tasks}
+
+        self.assertEqual(by_text['Before'].get('speaker_name'), 'Eileen')
+        self.assertEqual(by_text['After'].get('speaker_name'), 'Echo')
+
+    def test_collect_tasks_skips_multiline_character_display_name(self):
+        tasks = runtime.collect_tasks([
+            'define e = Character(\n',
+            '    _("Eileen"),\n',
+            '    what_prefix=" says ",\n',
+            ')\n',
+            'e "Hello Noah"\n',
+        ])
+        by_text = {task['text']: task for task in tasks}
+
+        self.assertNotIn('Eileen', by_text)
+        self.assertIn(' says ', by_text)
+        self.assertEqual(by_text['Hello Noah'].get('speaker_name'), 'Eileen')
+
     def test_collect_tasks_allows_new_as_dialogue_speaker_id(self):
         tasks = runtime.collect_tasks(['new "Hello Noah"\n'])
 
@@ -1600,6 +1637,70 @@ class RagMemoryStoreTests(unittest.TestCase):
 
 
 class BatchRagRegressionTests(unittest.TestCase):
+    def test_build_chunks_keeps_context_task_dicts(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 1
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+
+            chunks = batch_mod.build_chunks([
+                {
+                    'file_rel_path': 'script.rpy',
+                    'file_path': 'script.rpy',
+                    'tasks': [
+                        {
+                            'id': 'script.rpy:1:0',
+                            'text': 'Before line',
+                            'line': 1,
+                            'start': 0,
+                            'end': 11,
+                            'speaker_id': 'e',
+                            'speaker_name': 'Eileen',
+                            'progress_entry': 'task:1:0',
+                        },
+                        {
+                            'id': 'script.rpy:2:0',
+                            'text': 'Target line',
+                            'line': 2,
+                            'start': 0,
+                            'end': 11,
+                            'speaker_id': 'n',
+                            'speaker_name': 'Noah',
+                            'progress_entry': 'task:2:0',
+                        },
+                        {
+                            'id': 'script.rpy:3:0',
+                            'text': 'After line',
+                            'line': 3,
+                            'start': 0,
+                            'end': 10,
+                            'speaker_id': 'e',
+                            'speaker_name': 'Eileen',
+                            'progress_entry': 'task:3:0',
+                        },
+                    ],
+                }
+            ])
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+
+        self.assertEqual(chunks[1]['context_past'][0]['speaker_name'], 'Eileen')
+        self.assertEqual(chunks[1]['context_past'][0]['progress_entry'], 'task:1:0')
+        self.assertEqual(chunks[1]['context_future'][0]['speaker_name'], 'Eileen')
+
     def test_format_history_hits_block_shows_source_translation_pair(self):
         block = batch_mod.format_history_hits_block([
             {
