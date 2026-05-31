@@ -19,7 +19,6 @@ from rag_memory import JsonRagStore, hash_text, truncate_text
 import prompt_context
 import story_memory
 import translation_core
-from relation_analyzer.parsing import CHARACTER_DEFINE_RE, normalize_character_display_name
 
 # Configuration
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -183,6 +182,14 @@ STRING_LITERAL_PREFIX_RE = re.compile(r"(?is)^(?P<prefix>[rubf]*)(?P<quote>'''|\
 TL_COMMENT_SOURCE_RE = re.compile(r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"\s*$')
 TL_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 TL_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
+CHARACTER_DEFINE_RE = re.compile(
+    r"^\s*define\s+(?P<speaker>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<call>Character\s*\(.*)"
+)
+CHARACTER_DISPLAY_ASSET_RE = re.compile(
+    r"^[\w./\\-]+\.(png|jpg|jpeg|bmp|gif|webp|ogg|mp3|wav|webm|mp4|avi|txt|json|rpy)$",
+    re.IGNORECASE,
+)
+CHARACTER_DISPLAY_SYMBOLS_RE = re.compile(r"^[\s\W_]+$", re.UNICODE)
 RENPY_NON_SPEAKER_NAMES = {
     "_",
     "call",
@@ -2416,6 +2423,17 @@ def _character_display_arg(call):
         if keyword_arg.arg == "name":
             return keyword_arg.value
     return None
+
+
+def normalize_character_display_name(text):
+    text = " ".join(str(text).split()).strip()
+    if not text:
+        return ""
+    if CHARACTER_DISPLAY_SYMBOLS_RE.match(text):
+        return ""
+    if CHARACTER_DISPLAY_ASSET_RE.match(text):
+        return ""
+    return text
 
 
 def _literal_character_display_name(node):
