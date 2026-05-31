@@ -4,6 +4,7 @@ import io
 import json
 import os
 import pickle
+import subprocess
 import sys
 import tempfile
 import time
@@ -372,6 +373,25 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertNotIn('Eileen', by_text)
         self.assertIn(' says ', by_text)
         self.assertEqual(by_text['Hello Noah'].get('speaker_name'), 'Eileen')
+
+    def test_runtime_import_does_not_load_relation_analyzer_common(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                '-c',
+                (
+                    'import sys\n'
+                    'import translator_runtime\n'
+                    'print("COMMON_IMPORTED=%s" % ("relation_analyzer.common" in sys.modules))\n'
+                ),
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+        self.assertIn('COMMON_IMPORTED=False', result.stdout)
 
     def test_collect_tasks_allows_new_as_dialogue_speaker_id(self):
         tasks = runtime.collect_tasks(['new "Hello Noah"\n'])
