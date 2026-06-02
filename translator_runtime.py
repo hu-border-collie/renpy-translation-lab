@@ -1329,7 +1329,7 @@ def run_prepare_steps():
                     template_info["cwd"],
                     "Generate tl template",
                 )
-                if not ok and not templates_exist and not _has_translation_templates():
+                if not ok and not templates_exist:
                     raise SystemExit(
                         "[Prepare] Translation template generation failed and no TL files exist. "
                         "Install Ren'Py SDK, set RENPY_SDK_DIR, or prepare game/tl/<language> manually."
