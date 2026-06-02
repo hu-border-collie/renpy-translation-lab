@@ -2,6 +2,8 @@
   "game_root": "C:/games/Game_Example/work",
   "glossary_file": "glossary.json",
   "tl_subdir": "game/tl/schinese",
+  "include_files": [],
+  "include_prefixes": [],
   "prepare": {
     "enabled": true,
     "source_game_dir": "../original/game",
@@ -13,6 +15,10 @@
     "python_exe": ""
   },
   "sync": {
+    "model": "gemini-3.1-flash-lite",
+    "chunk_size": 20,
+    "max_source_chars": 6000,
+    "max_output_tokens": 16384,
     "rag": {
       "enabled": false,
       "embedding_model": "gemini-embedding-001",
@@ -38,10 +44,11 @@
   },
   "batch": {
     "model": "gemini-3.1-flash-lite",
-    "chunk_size": 10,
+    "chunk_size": 20,
+    "max_source_chars": 6000,
     "context_before": 30,
     "context_after": 10,
-    "max_output_tokens": 1024,
+    "max_output_tokens": 16384,
     "temperature": 0.4,
     "display_name_prefix": "renpy-translate",
     "macro_setting_file": "macro_setting.md",

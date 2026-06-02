@@ -1,12 +1,5 @@
 {
   "api_keys": [
     "your-key-here"
-  ],
-  "models": [
-    "gemini-3.1-flash-lite"
-  ],
-  "batch_size": 10,
-  "max_chars": 4000,
-  "include_files": [],
-  "include_prefixes": []
+  ]
 }
