@@ -5286,6 +5286,142 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
     return summary
 
 
+DOCTOR_TRANSLATE_BLOCK_RE = re.compile(r'^translate\s+\S+\s+(?!strings\b)(?!python\b)\S+\s*:')
+DOCTOR_STRING_BLOCK_RE = re.compile(r'^translate\s+\S+\s+strings\s*:')
+
+
+def _stringify_command(command):
+    if command is None:
+        return ''
+    if isinstance(command, list):
+        return ' '.join(str(part) for part in command)
+    return str(command)
+
+
+def collect_tl_doctor_counts():
+    counts = {
+        'rpy_files': 0,
+        'translate_blocks': 0,
+        'string_sections': 0,
+        'old_lines': 0,
+        'new_lines': 0,
+        'commented_original_lines': 0,
+    }
+    if not os.path.isdir(legacy.TL_DIR):
+        return counts
+
+    for root, _, files in os.walk(legacy.TL_DIR):
+        for file_name in files:
+            if not file_name.endswith('.rpy'):
+                continue
+            counts['rpy_files'] += 1
+            path = os.path.join(root, file_name)
+            try:
+                with open(path, 'r', encoding='utf-8-sig') as handle:
+                    lines = handle.readlines()
+            except Exception:
+                continue
+
+            for line in lines:
+                if DOCTOR_TRANSLATE_BLOCK_RE.match(line):
+                    counts['translate_blocks'] += 1
+                if DOCTOR_STRING_BLOCK_RE.match(line):
+                    counts['string_sections'] += 1
+                if legacy.TL_OLD_LINE_RE.match(line):
+                    counts['old_lines'] += 1
+                if legacy.TL_NEW_LINE_RE.match(line):
+                    counts['new_lines'] += 1
+                if legacy.TL_COMMENT_SOURCE_RE.match(line):
+                    counts['commented_original_lines'] += 1
+
+    return counts
+
+
+def collect_doctor_report():
+    source_game_dir = legacy._guess_source_game_dir()
+    template_info = legacy.get_prepare_template_command_info(source_game_dir)
+    counts = collect_tl_doctor_counts()
+    tl_exists = os.path.isdir(legacy.TL_DIR)
+    has_tl_files = counts['rpy_files'] > 0
+    can_generate_template = bool(template_info.get('available'))
+
+    warnings = []
+    if counts['old_lines'] != counts['new_lines']:
+        warnings.append('old/new line counts differ; string translation blocks may be malformed.')
+    if counts['translate_blocks'] and not counts['commented_original_lines']:
+        warnings.append(
+            'Dialogue translation blocks do not include source comments; revision/RAG source pairing may be limited.'
+        )
+    if not can_generate_template and not has_tl_files:
+        warnings.append('No TL files and no Ren\'Py SDK/game launcher found; template generation is required.')
+    elif not can_generate_template and has_tl_files:
+        warnings.append('Ren\'Py SDK/game launcher not found; existing TL files can still be processed.')
+
+    if can_generate_template:
+        mode = 'can_generate_template'
+    elif has_tl_files:
+        mode = 'existing_tl_only'
+    else:
+        mode = 'blocked_missing_template'
+
+    return {
+        'base_dir': legacy.BASE_DIR,
+        'tl_dir': legacy.TL_DIR,
+        'tl_subdir': legacy.TL_SUBDIR,
+        'language': legacy.PREP_LANGUAGE,
+        'source_game_dir': source_game_dir,
+        'prepare_enabled': legacy.PREP_ENABLED,
+        'generate_template': legacy.PREP_GENERATE_TEMPLATE,
+        'refresh_existing_template': legacy.PREP_REFRESH_EXISTING_TEMPLATE,
+        'renpy_sdk_dir': legacy.PREP_RENPY_SDK_DIR,
+        'tl_exists': tl_exists,
+        'can_generate_template': can_generate_template,
+        'template_command_kind': template_info.get('kind', ''),
+        'template_command': _stringify_command(template_info.get('command')),
+        'template_reason': template_info.get('reason', ''),
+        'python_exe': template_info.get('python_exe', ''),
+        'launcher_py': template_info.get('launcher_py', ''),
+        'mode': mode,
+        'counts': counts,
+        'warnings': warnings,
+    }
+
+
+def print_doctor_report(report):
+    counts = report['counts']
+    print('Doctor report:')
+    print(f"- Base dir: {report['base_dir']}")
+    print(f"- TL dir: {report['tl_dir']} (exists: {report['tl_exists']})")
+    print(f"- Language: {report['language']}")
+    print(
+        f"- Prepare: enabled={report['prepare_enabled']}, "
+        f"generate_template={report['generate_template']}, "
+        f"refresh_existing_template={report['refresh_existing_template']}"
+    )
+    print(f"- Ren'Py SDK dir: {report['renpy_sdk_dir'] or '(not configured)'}")
+    print(f"- Launcher: {report['launcher_py'] or '(not found)'}")
+    print(f"- Python: {report['python_exe'] or '(not resolved)'}")
+    if report['can_generate_template']:
+        print(f"- Template generation: available ({report['template_command_kind']})")
+        print(f"- Template command: {report['template_command']}")
+    else:
+        print(f"- Template generation: unavailable ({report['template_reason'] or 'no command resolved'})")
+    print(f"- Mode: {report['mode']}")
+    print(
+        '- TL scan: '
+        f"rpy_files={counts['rpy_files']}, "
+        f"translate_blocks={counts['translate_blocks']}, "
+        f"string_sections={counts['string_sections']}, "
+        f"old_lines={counts['old_lines']}, "
+        f"new_lines={counts['new_lines']}, "
+        f"commented_original_lines={counts['commented_original_lines']}"
+    )
+    if report['warnings']:
+        print('Warnings:')
+        for warning in report['warnings']:
+            print(f'- {warning}')
+
+
 def print_banner():
     print('=' * 60)
     print('Gemini Batch Translator (Ren\'Py)')
@@ -5301,7 +5437,11 @@ def print_banner():
     )
     print(f'Max output tokens: {BATCH_MAX_OUTPUT_TOKENS}')
     print(f'Thinking level: {BATCH_THINKING_LEVEL or "(default)"}')
-    print(f'Prepare enabled: {legacy.PREP_ENABLED}')
+    print(
+        f'Prepare: enabled={legacy.PREP_ENABLED}, language={legacy.PREP_LANGUAGE}, '
+        f'generate_template={legacy.PREP_GENERATE_TEMPLATE}, '
+        f'refresh_existing_template={legacy.PREP_REFRESH_EXISTING_TEMPLATE}'
+    )
     print('=' * 60)
 
 
@@ -5310,6 +5450,8 @@ def build_arg_parser():
         description='Batch translator for Ren\'Py tl files using Gemini Batch API.'
     )
     subparsers = parser.add_subparsers(dest='command')
+
+    subparsers.add_parser('doctor', help='Inspect prepare, SDK, and TL template compatibility without writing files.')
 
     build_parser = subparsers.add_parser('build', help='Build local batch package and JSONL only.')
     build_parser.add_argument('--display-name', default='', help='Override Batch display name.')
@@ -5612,11 +5754,16 @@ def main(argv=None):
         return
 
     initialize_batch_logging()
-    legacy.load_config()
+    if command != 'doctor':
+        legacy.load_config()
     legacy.load_translator_settings()
     legacy.load_glossary()
     load_batch_settings()
     print_banner()
+
+    if command == 'doctor':
+        print_doctor_report(collect_doctor_report())
+        return
 
     if command == 'build':
         create_batch_package(
