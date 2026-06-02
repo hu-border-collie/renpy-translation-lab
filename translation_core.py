@@ -52,6 +52,7 @@ class TranslationUnit:
     quote: str = '"'
     speaker_id: str = ''
     speaker: str = ''
+    speaker_name: str = ''
     progress_entry: str = ''
     metadata: dict = field(default_factory=dict)
 
@@ -179,6 +180,7 @@ _TRANSLATION_KEYS = {
     'quote',
     'speaker_id',
     'speaker',
+    'speaker_name',
     'progress_entry',
 }
 
@@ -189,6 +191,12 @@ def unit_from_translation_item(item, file_rel_path='', file_path='', mode=MODE_T
     text = str(item.get('text') if item.get('text') is not None else item.get('source') or '')
     source = str(item.get('source') or text)
     speaker_id = str(item.get('speaker_id') or item.get('speaker') or '')
+    speaker_name = str(
+        item.get('speaker_name')
+        or item.get('speaker_display_name')
+        or item.get('character_name')
+        or ''
+    )
     return TranslationUnit(
         id=str(item.get('id') or ''),
         mode=mode or MODE_TRANSLATION,
@@ -205,6 +213,7 @@ def unit_from_translation_item(item, file_rel_path='', file_path='', mode=MODE_T
         quote=str(item.get('quote') or '"'),
         speaker_id=speaker_id,
         speaker=str(item.get('speaker') or speaker_id),
+        speaker_name=speaker_name,
         progress_entry=str(item.get('progress_entry') or ''),
         metadata=_metadata_for(item, _TRANSLATION_KEYS),
     )
@@ -291,6 +300,8 @@ def unit_to_translation_item(unit):
         'speaker_id': unit.speaker_id,
         'speaker': unit.speaker,
     }
+    if unit.speaker_name:
+        item['speaker_name'] = unit.speaker_name
     return item
 
 
@@ -310,6 +321,8 @@ def unit_to_revision_item(unit):
     }
     if unit.speaker_id:
         item['speaker_id'] = unit.speaker_id
+    if unit.speaker_name:
+        item['speaker_name'] = unit.speaker_name
     return item
 
 
@@ -325,6 +338,8 @@ def unit_to_keyword_item(unit):
         item['translation_line_number'] = translation_line_number
     if unit.speaker_id:
         item['speaker_id'] = unit.speaker_id
+    if unit.speaker_name:
+        item['speaker_name'] = unit.speaker_name
     return item
 
 
@@ -337,15 +352,44 @@ def legacy_item_from_unit(unit, mode=None):
     return unit_to_translation_item(unit)
 
 
+def _speaker_label(speaker_id='', speaker_name=''):
+    speaker_id = str(speaker_id or '').strip()
+    speaker_name = str(speaker_name or '').strip()
+    if speaker_id and speaker_name and speaker_id != speaker_name:
+        return f'{speaker_name} ({speaker_id})'
+    return speaker_name or speaker_id
+
+
+def _format_context_line(line):
+    speaker_id = ''
+    speaker_name = ''
+    if isinstance(line, TranslationUnit):
+        text = line.source_text
+        speaker_id = line.speaker_id
+        speaker_name = line.speaker_name
+    elif isinstance(line, dict):
+        text = line.get('text') or line.get('source') or ''
+        speaker_id = line.get('speaker_id') or line.get('speaker') or ''
+        speaker_name = (
+            line.get('speaker_name')
+            or line.get('speaker_display_name')
+            or line.get('character_name')
+            or ''
+        )
+    else:
+        text = str(line)
+    label = _speaker_label(speaker_id, speaker_name)
+    if label and text:
+        return f'{label}: {text}'
+    return text
+
+
 def format_context_block(lines, empty_label='(none)'):
     if not lines:
         return empty_label
     rendered = []
     for line in lines:
-        if isinstance(line, TranslationUnit):
-            rendered.append(line.source_text)
-        else:
-            rendered.append(str(line))
+        rendered.append(_format_context_line(line))
     return '\n'.join(f'- {line}' for line in rendered if line) or empty_label
 
 
@@ -395,6 +439,15 @@ def build_reference_blocks(
     )
 
 
+def translation_target_payload_item(unit):
+    item = {'id': unit.id, 'text': unit.text}
+    if unit.speaker_id:
+        item['speaker_id'] = unit.speaker_id
+    if unit.speaker_name:
+        item['speaker_name'] = unit.speaker_name
+    return item
+
+
 def build_translation_system_instruction(preserve_terms, macro_setting=''):
     glossary = ', '.join(str(term) for term in preserve_terms or [])
     return (
@@ -404,6 +457,7 @@ def build_translation_system_instruction(preserve_terms, macro_setting=''):
         'Translate only TARGET lines into Simplified Chinese. CONTEXT lines are reference only.\n'
         f'Keep these terms unchanged: {glossary}\n'
         "Keep names, Ren'Py tags, placeholders, variables, and format strings unchanged.\n"
+        'When TARGET items include speaker_id or speaker_name, use them only to identify the speaker and voice.\n'
         'Return JSON only. Preserve every id exactly. Item count must match. '
         'translation must contain only the translated Chinese text.'
     )
@@ -422,7 +476,7 @@ def build_translation_user_prompt(
     context_window = context_window or ContextWindow()
     units = units_from_items(units, MODE_TRANSLATION)
     target_payload = json.dumps(
-        [{'id': unit.id, 'text': unit.text} for unit in units],
+        [translation_target_payload_item(unit) for unit in units],
         ensure_ascii=False,
         separators=(',', ':'),
     )
@@ -455,7 +509,7 @@ def build_sync_translation_prompt(
     units = units_from_items(units, MODE_TRANSLATION)
     glossary = ', '.join(str(term) for term in preserve_terms or [])
     payload = json.dumps(
-        [{'id': unit.id, 'text': unit.text} for unit in units],
+        [translation_target_payload_item(unit) for unit in units],
         ensure_ascii=False,
     )
     reference_body = build_reference_blocks(
@@ -480,6 +534,7 @@ def build_sync_translation_prompt(
         f'1. Preserve these terms exactly (do not translate): {glossary}\n'
         '1.1 Keep all person names in English; do not translate names.\n'
         "2. Preserve Ren'Py tags like {i}, {/i}, {color=...}, [name], %s.\n"
+        '2.1 If an input item includes speaker_id or speaker_name, use it only to identify who is speaking and their voice.\n'
         '3. Output plain Chinese text. No markdown, no Pinyin, no explanations.\n'
         '4. Return ONLY a JSON array matching the requested id/translation structure.\n'
         f'{reference_blocks}'
@@ -513,18 +568,21 @@ def build_revision_user_prompt(
 ):
     context_window = context_window or ContextWindow()
     units = units_from_items(units, MODE_REVISION)
+    payload_items = []
+    for unit in units:
+        item = {
+            'id': unit.id,
+            'file': unit.file_rel_path,
+            'line': unit.display_line_number,
+            'speaker_id': unit.speaker_id,
+            'source': unit.source_text,
+            'current_translation': unit.current_translation,
+        }
+        if unit.speaker_name:
+            item['speaker_name'] = unit.speaker_name
+        payload_items.append(item)
     target_payload = json.dumps(
-        [
-            {
-                'id': unit.id,
-                'file': unit.file_rel_path,
-                'line': unit.display_line_number,
-                'speaker_id': unit.speaker_id,
-                'source': unit.source_text,
-                'current_translation': unit.current_translation,
-            }
-            for unit in units
-        ],
+        payload_items,
         ensure_ascii=False,
         separators=(',', ':'),
     )
@@ -588,17 +646,20 @@ def build_keyword_system_instruction(
 
 def build_keyword_user_prompt(units):
     units = units_from_items(units, MODE_KEYWORD_EXTRACTION)
+    payload_items = []
+    for unit in units:
+        item = {
+            'id': unit.id,
+            'file': unit.file_rel_path,
+            'line': unit.display_line_number,
+            'speaker_id': unit.speaker_id,
+            'text': unit.text,
+        }
+        if unit.speaker_name:
+            item['speaker_name'] = unit.speaker_name
+        payload_items.append(item)
     target_payload = json.dumps(
-        [
-            {
-                'id': unit.id,
-                'file': unit.file_rel_path,
-                'line': unit.display_line_number,
-                'speaker_id': unit.speaker_id,
-                'text': unit.text,
-            }
-            for unit in units
-        ],
+        payload_items,
         ensure_ascii=False,
         separators=(',', ':'),
     )

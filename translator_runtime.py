@@ -182,6 +182,14 @@ STRING_LITERAL_PREFIX_RE = re.compile(r"(?is)^(?P<prefix>[rubf]*)(?P<quote>'''|\
 TL_COMMENT_SOURCE_RE = re.compile(r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"\s*$')
 TL_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 TL_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
+CHARACTER_DEFINE_RE = re.compile(
+    r"^\s*define\s+(?P<speaker>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<call>Character\s*\(.*)"
+)
+CHARACTER_DISPLAY_ASSET_RE = re.compile(
+    r"^[\w./\\-]+\.(png|jpg|jpeg|bmp|gif|webp|ogg|mp3|wav|webm|mp4|avi|txt|json|rpy)$",
+    re.IGNORECASE,
+)
+CHARACTER_DISPLAY_SYMBOLS_RE = re.compile(r"^[\s\W_]+$", re.UNICODE)
 RENPY_NON_SPEAKER_NAMES = {
     "_",
     "call",
@@ -2388,6 +2396,133 @@ def infer_dialogue_speaker_id(line, string_start_col):
     return ""
 
 
+def _character_display_value_node(expr):
+    if isinstance(expr, ast.Constant):
+        if isinstance(expr.value, str):
+            return expr
+        return None
+    if (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Name)
+        and expr.func.id == "_"
+        and len(expr.args) == 1
+        and not expr.keywords
+    ):
+        return _character_display_value_node(expr.args[0])
+    return None
+
+
+def _character_display_arg(call):
+    if not isinstance(call, ast.Call):
+        return None
+    if not isinstance(call.func, ast.Name) or call.func.id != "Character":
+        return None
+    if call.args:
+        return call.args[0]
+    for keyword_arg in call.keywords:
+        if keyword_arg.arg == "name":
+            return keyword_arg.value
+    return None
+
+
+def normalize_character_display_name(text):
+    text = " ".join(str(text).split()).strip()
+    if not text:
+        return ""
+    if CHARACTER_DISPLAY_SYMBOLS_RE.match(text):
+        return ""
+    if CHARACTER_DISPLAY_ASSET_RE.match(text):
+        return ""
+    return text
+
+
+def _literal_character_display_name(node):
+    if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+        return ""
+    return normalize_character_display_name(node.value)
+
+
+def _source_col_for_node(node, call_start_col):
+    col = getattr(node, "col_offset", None)
+    if col is None:
+        return None
+    if getattr(node, "lineno", 1) == 1:
+        return col + call_start_col
+    return col
+
+
+def _source_end_col_for_node(node, call_start_col):
+    col = getattr(node, "end_col_offset", None)
+    if col is None:
+        return None
+    if getattr(node, "end_lineno", 1) == 1:
+        return col + call_start_col
+    return col
+
+
+def _parse_character_definition(lines, start_idx, max_lines=80):
+    match = CHARACTER_DEFINE_RE.match(lines[start_idx])
+    if not match:
+        return None
+
+    call_start_col = match.start("call")
+    pieces = []
+    parsed_call = None
+    end_limit = min(len(lines), start_idx + max_lines)
+    for line_idx in range(start_idx, end_limit):
+        if line_idx == start_idx:
+            pieces.append(lines[line_idx][call_start_col:])
+        else:
+            pieces.append(lines[line_idx])
+        try:
+            parsed = ast.parse("".join(pieces), mode="eval")
+        except SyntaxError:
+            continue
+        parsed_call = parsed.body
+        break
+
+    if parsed_call is None:
+        return None
+
+    display_arg = _character_display_arg(parsed_call)
+    display_node = _character_display_value_node(display_arg)
+    display_spans = []
+    display_name = _literal_character_display_name(display_node)
+    if display_node is not None:
+        start_line = start_idx + getattr(display_node, "lineno", 1) - 1
+        end_line = start_idx + getattr(display_node, "end_lineno", getattr(display_node, "lineno", 1)) - 1
+        start_col = _source_col_for_node(display_node, call_start_col)
+        end_col = _source_end_col_for_node(display_node, call_start_col)
+        if start_col is not None and end_col is not None:
+            display_spans.append((start_line, end_line, start_col, end_col))
+
+    return {
+        "speaker_id": match.group("speaker"),
+        "speaker_name": display_name,
+        "display_spans": display_spans,
+    }
+
+
+def _token_matches_span(line_idx, token, span):
+    start_line, end_line, start_col, end_col = span
+    token_start_line = line_idx
+    token_end_line = line_idx + token.end[0] - token.start[0]
+    token_start_col = token.start[1]
+    token_end_col = token.end[1]
+
+    if token_start_line < start_line or token_end_line > end_line:
+        return False
+    if token_start_line == start_line and token_start_col < start_col:
+        return False
+    if token_end_line == end_line and token_end_col > end_col:
+        return False
+    return True
+
+
+def _is_character_display_token(line_idx, token, display_spans):
+    return any(_token_matches_span(line_idx, token, span) for span in display_spans)
+
+
 def collect_tasks(lines, skip_translated=True):
     # Logic to parse Ren'Py files
     # Note: caller handles filename lookup, this function just parses
@@ -2398,9 +2533,21 @@ def collect_tasks(lines, skip_translated=True):
         line.lstrip().startswith("translate ")
         for line in lines
     )
+    speaker_names = {}
+    character_display_spans = []
 
     # Simple parser for Ren'Py strings
     for idx, line in enumerate(lines):
+        definition = _parse_character_definition(lines, idx)
+        if definition:
+            speaker_id = definition["speaker_id"]
+            speaker_name = definition["speaker_name"]
+            if speaker_name:
+                speaker_names[speaker_id] = speaker_name
+            else:
+                speaker_names.pop(speaker_id, None)
+            character_display_spans.extend(definition["display_spans"])
+
         sline = line.strip()
         # In translation templates, `old` is a lookup key and must never be edited.
         if (
@@ -2419,6 +2566,8 @@ def collect_tasks(lines, skip_translated=True):
             tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
             for token in tokens:
                 if token.type != tokenize.STRING:
+                    continue
+                if _is_character_display_token(idx, token, character_display_spans):
                     continue
                 try:
                     text_val = ast.literal_eval(token.string)
@@ -2455,6 +2604,9 @@ def collect_tasks(lines, skip_translated=True):
                         if speaker_id:
                             task["speaker_id"] = speaker_id
                             task["speaker"] = speaker_id
+                            speaker_name = speaker_names.get(speaker_id)
+                            if speaker_name:
+                                task["speaker_name"] = speaker_name
                         tasks.append(task)
         except Exception:
             continue
