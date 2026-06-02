@@ -45,7 +45,9 @@ SOURCE_GAME_DIR = ""
 PREP_ENABLED = True
 PREP_UNPACK_RPA = True
 PREP_GENERATE_TEMPLATE = True
+PREP_REFRESH_EXISTING_TEMPLATE = True
 PREP_LANGUAGE = "schinese"
+PREP_RENPY_SDK_DIR = ""
 PREP_LAUNCHER_PY = ""
 PREP_PYTHON_EXE = ""
 PREP_UNPACK_COMMAND = None
@@ -393,6 +395,48 @@ def _resolve_preferred_path(primary_base_dir, secondary_base_dir, value):
     return _resolve_preferred_path_from_bases(value, (primary_base_dir, secondary_base_dir))
 
 
+def _is_filesystem_root(path):
+    if not path:
+        return False
+    normalized = os.path.abspath(path)
+    parent = os.path.dirname(normalized)
+    return normalized == parent
+
+
+def _discover_renpy_sdk_dir():
+    if _is_filesystem_root(BASE_DIR):
+        return ""
+
+    base_dirs = _dedupe_keep_order(
+        [
+            BASE_DIR,
+            os.path.dirname(BASE_DIR),
+            os.path.dirname(os.path.dirname(BASE_DIR)),
+            ROOT_DIR,
+            os.path.dirname(ROOT_DIR),
+            TOOL_DIR,
+        ]
+    )
+    candidates = []
+    for base_dir in base_dirs:
+        if not base_dir or not os.path.isdir(base_dir):
+            continue
+        if os.path.isfile(os.path.join(base_dir, "renpy.py")):
+            candidates.append(base_dir)
+        for pattern in ("renpy-*-sdk", "renpy-*sdk", "renpy-sdk"):
+            candidates.extend(glob.glob(os.path.join(base_dir, pattern)))
+
+    candidates = sorted(
+        {
+            os.path.abspath(candidate)
+            for candidate in candidates
+            if os.path.isdir(candidate) and os.path.isfile(os.path.join(candidate, "renpy.py"))
+        },
+        reverse=True,
+    )
+    return candidates[0] if candidates else ""
+
+
 def resolve_story_memory_graph_path(value):
     return _resolve_preferred_path_from_bases(value, (ROOT_DIR, BASE_DIR, TOOL_DIR))
 
@@ -553,8 +597,8 @@ def load_sync_story_memory_settings(config):
 def load_translator_settings():
     """Loads per-game settings (game root, tl subdir) from translator_config.json or env."""
     global BASE_DIR, TL_DIR, TL_SUBDIR, ENV_GAME_ROOT, WORK_GAME_DIR, SOURCE_GAME_DIR, GLOSSARY_FILE
-    global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_LANGUAGE
-    global PREP_LAUNCHER_PY, PREP_PYTHON_EXE, PREP_UNPACK_COMMAND, PREP_TEMPLATE_COMMAND
+    global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_REFRESH_EXISTING_TEMPLATE, PREP_LANGUAGE
+    global PREP_RENPY_SDK_DIR, PREP_LAUNCHER_PY, PREP_PYTHON_EXE, PREP_UNPACK_COMMAND, PREP_TEMPLATE_COMMAND
 
     config = {}
     if os.path.exists(TRANSLATOR_CONFIG):
@@ -598,10 +642,19 @@ def load_translator_settings():
     PREP_ENABLED = _coerce_bool(prepare.get("enabled"), True)
     PREP_UNPACK_RPA = _coerce_bool(prepare.get("unpack_rpa"), True)
     PREP_GENERATE_TEMPLATE = _coerce_bool(prepare.get("generate_template"), True)
+    PREP_REFRESH_EXISTING_TEMPLATE = _coerce_bool(prepare.get("refresh_existing_template"), True)
 
     prep_language = prepare.get("language")
     if isinstance(prep_language, str) and prep_language.strip():
         PREP_LANGUAGE = prep_language.strip()
+
+    renpy_sdk_dir = prepare.get("renpy_sdk_dir")
+    if not (isinstance(renpy_sdk_dir, str) and renpy_sdk_dir.strip()):
+        renpy_sdk_dir = os.environ.get("RENPY_SDK_DIR")
+    PREP_RENPY_SDK_DIR = _resolve_preferred_path_from_bases(
+        renpy_sdk_dir,
+        (BASE_DIR, ROOT_DIR, TOOL_DIR),
+    ) or _discover_renpy_sdk_dir()
 
     source_game_dir = prepare.get("source_game_dir")
     if source_game_dir is not None:
@@ -929,24 +982,59 @@ def _extract_rpa_scripts(archive_path, target_game_dir):
     return extracted
 
 
-def _resolve_prepare_python():
-    if PREP_PYTHON_EXE and os.path.isfile(PREP_PYTHON_EXE):
-        return PREP_PYTHON_EXE
+def _find_bundled_python(base_dir):
+    if not base_dir:
+        return ""
 
-    bundled = os.path.join(BASE_DIR, "lib", "py3-windows-x86_64", "python.exe")
+    bundled = os.path.join(base_dir, "lib", "py3-windows-x86_64", "python.exe")
     if os.path.isfile(bundled):
         return bundled
 
-    for candidate in glob.glob(os.path.join(BASE_DIR, "lib", "py*", "python.exe")):
+    for candidate in glob.glob(os.path.join(base_dir, "lib", "py*", "python.exe")):
         if os.path.isfile(candidate):
             return candidate
 
+    return ""
+
+
+def _resolve_prepare_python(runtime_root=""):
+    if PREP_PYTHON_EXE and os.path.isfile(PREP_PYTHON_EXE):
+        return PREP_PYTHON_EXE
+
+    for base_dir in (runtime_root, PREP_RENPY_SDK_DIR, BASE_DIR):
+        bundled = _find_bundled_python(base_dir)
+        if bundled:
+            return bundled
+
     return sys.executable
+
+
+def _resolve_sdk_launcher(sdk_dir):
+    if not sdk_dir:
+        return ""
+    launcher = os.path.join(sdk_dir, "renpy.py")
+    if os.path.isfile(launcher):
+        return launcher
+    return ""
+
+
+def _is_sdk_launcher(launcher_py):
+    return bool(launcher_py) and os.path.basename(launcher_py).lower() == "renpy.py"
+
+
+def _prepare_launcher_root(launcher_py):
+    if not launcher_py:
+        return ""
+    return os.path.dirname(os.path.abspath(launcher_py))
 
 
 def _resolve_prepare_launcher():
     if PREP_LAUNCHER_PY and os.path.isfile(PREP_LAUNCHER_PY):
         return PREP_LAUNCHER_PY
+
+    sdk_launcher = _resolve_sdk_launcher(PREP_RENPY_SDK_DIR)
+    if sdk_launcher:
+        return sdk_launcher
 
     py_files = sorted(glob.glob(os.path.join(BASE_DIR, "*.py")))
     if not py_files:
@@ -1007,6 +1095,74 @@ def _run_prepare_command(command, cwd, step_name):
         return False
 
     return True
+
+
+def get_prepare_template_command_info(source_game_dir=""):
+    if not source_game_dir:
+        source_game_dir = _guess_source_game_dir()
+
+    launcher_py = _resolve_prepare_launcher()
+    python_exe = _resolve_prepare_python(_prepare_launcher_root(launcher_py))
+    variables = {
+        "python_exe": python_exe,
+        "launcher_py": launcher_py,
+        "language": PREP_LANGUAGE,
+        "base_dir": BASE_DIR,
+        "tl_dir": TL_DIR,
+        "work_game_dir": WORK_GAME_DIR,
+        "source_game_dir": source_game_dir,
+    }
+
+    if PREP_TEMPLATE_COMMAND:
+        try:
+            rendered, _ = _render_prepare_command(PREP_TEMPLATE_COMMAND, variables)
+        except Exception as e:
+            return {
+                "available": False,
+                "kind": "custom",
+                "reason": str(e),
+                "command": None,
+                "cwd": BASE_DIR,
+                "python_exe": python_exe,
+                "launcher_py": launcher_py,
+            }
+        return {
+            "available": True,
+            "kind": "custom",
+            "reason": "",
+            "command": rendered,
+            "cwd": BASE_DIR,
+            "python_exe": python_exe,
+            "launcher_py": launcher_py,
+        }
+
+    if not launcher_py:
+        return {
+            "available": False,
+            "kind": "auto",
+            "reason": "Ren'Py SDK or game launcher was not found.",
+            "command": None,
+            "cwd": BASE_DIR,
+            "python_exe": python_exe,
+            "launcher_py": "",
+        }
+
+    if _is_sdk_launcher(launcher_py):
+        command = [python_exe, launcher_py, BASE_DIR, "translate", PREP_LANGUAGE]
+        kind = "sdk"
+    else:
+        command = [python_exe, launcher_py, "translate", PREP_LANGUAGE]
+        kind = "game-launcher"
+
+    return {
+        "available": True,
+        "kind": kind,
+        "reason": "",
+        "command": command,
+        "cwd": BASE_DIR,
+        "python_exe": python_exe,
+        "launcher_py": launcher_py,
+    }
 
 
 def _run_unpack_command(command, archives, source_game_dir):
@@ -1092,31 +1248,37 @@ def run_prepare_steps():
         print("[Prepare] RPA unpack disabled.")
 
     if PREP_GENERATE_TEMPLATE:
-        if _has_translation_templates():
+        templates_exist = _has_translation_templates()
+        if templates_exist and not PREP_REFRESH_EXISTING_TEMPLATE:
             print("[Prepare] Translation template already exists; skipping generation.")
         else:
-            launcher_py = _resolve_prepare_launcher()
-            python_exe = _resolve_prepare_python()
-            if PREP_TEMPLATE_COMMAND:
-                variables = {
-                    "python_exe": python_exe,
-                    "launcher_py": launcher_py,
-                    "language": PREP_LANGUAGE,
-                    "base_dir": BASE_DIR,
-                    "tl_dir": TL_DIR,
-                    "work_game_dir": WORK_GAME_DIR,
-                    "source_game_dir": source_game_dir,
-                }
-                try:
-                    rendered, _ = _render_prepare_command(PREP_TEMPLATE_COMMAND, variables)
-                    _run_prepare_command(rendered, BASE_DIR, "Generate tl template")
-                except Exception as e:
-                    print(f"[Prepare] Template command error: {e}")
-            elif launcher_py:
-                command = [python_exe, launcher_py, "translate", PREP_LANGUAGE]
-                _run_prepare_command(command, BASE_DIR, "Generate tl template")
+            if templates_exist:
+                print("[Prepare] Translation template exists; refreshing missing entries.")
+            template_info = get_prepare_template_command_info(source_game_dir)
+            if template_info["available"]:
+                ok = _run_prepare_command(
+                    template_info["command"],
+                    template_info["cwd"],
+                    "Generate tl template",
+                )
+                if not ok and not templates_exist and not _has_translation_templates():
+                    raise SystemExit(
+                        "[Prepare] Translation template generation failed and no TL files exist. "
+                        "Install Ren'Py SDK, set RENPY_SDK_DIR, or prepare game/tl/<language> manually."
+                    )
+                if not ok and templates_exist:
+                    print("[Prepare] Template refresh failed; continuing with existing TL files.")
+            elif templates_exist:
+                print(
+                    "[Prepare] Could not locate Ren'Py SDK or game launcher; "
+                    "continuing with existing TL files."
+                )
             else:
-                print("[Prepare] Could not locate <Game>.py launcher; skip template generation.")
+                raise SystemExit(
+                    "[Prepare] Cannot generate translation template because Ren'Py SDK or game launcher "
+                    "was not found. Install Ren'Py SDK and set RENPY_SDK_DIR or prepare.renpy_sdk_dir, "
+                    "or create the TL template manually."
+                )
     else:
         print("[Prepare] Template generation disabled.")
 
@@ -2629,6 +2791,9 @@ def run_translation():
     print(f"Prepare enabled: {PREP_ENABLED}")
     print(f"Prepare source game dir: {SOURCE_GAME_DIR or '(auto)'}")
     print(f"Prepare language: {PREP_LANGUAGE}")
+    print(f"Prepare generate template: {PREP_GENERATE_TEMPLATE}")
+    print(f"Prepare refresh existing template: {PREP_REFRESH_EXISTING_TEMPLATE}")
+    print(f"Prepare Ren'Py SDK dir: {PREP_RENPY_SDK_DIR or '(not configured)'}")
     print("="*60)
 
     run_prepare_steps()

@@ -7,7 +7,9 @@
     "source_game_dir": "../original/game",
     "unpack_rpa": true,
     "generate_template": true,
+    "refresh_existing_template": true,
     "language": "schinese",
+    "renpy_sdk_dir": "",
     "python_exe": ""
   },
   "sync": {
