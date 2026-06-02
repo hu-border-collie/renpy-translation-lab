@@ -68,8 +68,8 @@ pip install -r requirements.txt
 
 说明：
 
-- `api_keys.json` 保存 Gemini API Key，不要提交到公开仓库
-- `translator_config.json` 保存本地游戏路径与批处理参数，不要提交到公开仓库
+- `api_keys.json` 保存 Gemini API Key，不要提交到公开仓库；旧的 `batch_size/max_chars` 等字段仍兼容，但不再推荐写在这里
+- `translator_config.json` 保存本地游戏路径、模型、include 过滤和同步/Batch 分块参数，不要提交到公开仓库
 - `glossary.json` 通常包含项目私有术语，也建议本地维护
 - `macro_setting.md` 往往包含剧情、角色口吻、世界观约束，也建议本地维护
 - 如果你不想使用 `api_keys.json`，也可以改用环境变量 `GEMINI_API_KEY`、`GEMINI_API_KEY_2`、`GEMINI_API_KEY_3`
@@ -124,7 +124,7 @@ python gemini_translate_batch.py doctor
 
 ### 4. 运行
 
-当前更推荐优先使用 Batch 模式；同步模式仍可用，并且现在与 Batch 一样统一基于 `google-genai` SDK。同步模式可以通过 `translator_config.json` 里的 `sync.rag.enabled=true` 启用可选 RAG 滚动记忆。
+当前更推荐优先使用 Batch 模式；同步模式仍可用，并且现在与 Batch 一样统一基于 `google-genai` SDK。同步模式的 `model/chunk_size/max_source_chars/max_output_tokens` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。
 
 当前模型建议：
 
@@ -193,6 +193,7 @@ python gemini_translate_batch.py sync-keywords --limit 3
 - Structured Story Memory 默认关闭；需要分别通过 `batch.story_memory.enabled=true` 或 `sync.story_memory.enabled=true` 启用
 - `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出
 - Batch 产物默认会写到本地 `logs/` 目录
+- 同步和普通 Batch 翻译默认每个 chunk 最多 20 条，同时受 `max_source_chars=6000` 保护；短句会合并，长句会自动提前切块，避免单个请求输出过长
 - `doctor` 会检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，适合在正式翻译前确认项目是否已准备好
 - `bootstrap-rag` 会扫描当前允许处理的全部 TL `.rpy` 文件，把已有译文预先写入本地 history store；适合在正式 `build / submit` 前先暖库
 - `probe` 会用同步请求做最小 smoke test

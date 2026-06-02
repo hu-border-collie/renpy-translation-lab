@@ -69,10 +69,11 @@ def initialize_batch_logging():
     sys.stdout = DualLogger(CONSOLE_LOG)
 
 BATCH_MODEL = 'gemini-3.1-flash-lite'
-BATCH_TARGET_SIZE = 4
+BATCH_TARGET_SIZE = 20
+BATCH_TARGET_CHARS = 6000
 BATCH_CONTEXT_BEFORE = 8
 BATCH_CONTEXT_AFTER = 4
-BATCH_MAX_OUTPUT_TOKENS = 4096
+BATCH_MAX_OUTPUT_TOKENS = 16384
 BATCH_TEMPERATURE = 0.2
 BATCH_THINKING_LEVEL = 'minimal'
 BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
@@ -175,7 +176,7 @@ def normalize_task_type(value, default):
 
 def load_batch_settings():
     global BATCH_MODEL, BATCH_TARGET_SIZE, BATCH_CONTEXT_BEFORE, BATCH_CONTEXT_AFTER
-    global BATCH_MAX_OUTPUT_TOKENS, BATCH_TEMPERATURE, BATCH_THINKING_LEVEL
+    global BATCH_TARGET_CHARS, BATCH_MAX_OUTPUT_TOKENS, BATCH_TEMPERATURE, BATCH_THINKING_LEVEL
     global BATCH_DISPLAY_NAME_PREFIX, BATCH_MACRO_SETTING
     global KEYWORD_DISPLAY_NAME_PREFIX, KEYWORD_CHUNK_SIZE, KEYWORD_MAX_CANDIDATES_PER_CHUNK
     global REVISION_DISPLAY_NAME_PREFIX, REVISION_CHUNK_SIZE
@@ -197,6 +198,10 @@ def load_batch_settings():
     BATCH_TARGET_SIZE = coerce_positive_int(
         config.get('batch_target_size', config.get('batch_size')),
         BATCH_TARGET_SIZE,
+    )
+    BATCH_TARGET_CHARS = coerce_positive_int(
+        config.get('batch_target_chars', config.get('batch_max_source_chars')),
+        BATCH_TARGET_CHARS,
     )
     BATCH_CONTEXT_BEFORE = coerce_positive_int(config.get('batch_context_before'), BATCH_CONTEXT_BEFORE)
     BATCH_CONTEXT_AFTER = coerce_positive_int(config.get('batch_context_after'), BATCH_CONTEXT_AFTER)
@@ -230,6 +235,10 @@ def load_batch_settings():
         BATCH_DISPLAY_NAME_PREFIX = display_name_prefix.strip()
 
     BATCH_TARGET_SIZE = coerce_positive_int(batch.get('chunk_size'), BATCH_TARGET_SIZE)
+    BATCH_TARGET_CHARS = coerce_positive_int(
+        batch.get('max_source_chars', batch.get('target_chars')),
+        BATCH_TARGET_CHARS,
+    )
     BATCH_CONTEXT_BEFORE = coerce_positive_int(batch.get('context_before'), BATCH_CONTEXT_BEFORE)
     BATCH_CONTEXT_AFTER = coerce_positive_int(batch.get('context_after'), BATCH_CONTEXT_AFTER)
     BATCH_MAX_OUTPUT_TOKENS = coerce_positive_int(
@@ -1154,13 +1163,35 @@ def build_batch_request(chunk):
 
 
 
+def task_text_char_count(task):
+    text = task.get('text', '') if isinstance(task, dict) else ''
+    return len(text) if isinstance(text, str) else len(str(text))
+
+
+def iter_translation_chunk_ranges(tasks):
+    total = len(tasks)
+    start = 0
+    while start < total:
+        end = start
+        current_chars = 0
+        while end < total and (end - start) < BATCH_TARGET_SIZE:
+            item_chars = task_text_char_count(tasks[end])
+            if end > start and current_chars + item_chars > BATCH_TARGET_CHARS:
+                break
+            current_chars += item_chars
+            end += 1
+        if end == start:
+            end = start + 1
+        yield start, end
+        start = end
+
+
 def build_chunks(file_jobs):
     chunks = []
     for job in file_jobs:
         tasks = job['tasks']
         total = len(tasks)
-        for start in range(0, total, BATCH_TARGET_SIZE):
-            end = min(start + BATCH_TARGET_SIZE, total)
+        for chunk_number, (start, end) in enumerate(iter_translation_chunk_ranges(tasks), start=1):
             target_items = tasks[start:end]
             target_units = translation_core.units_from_items(
                 target_items,
@@ -1178,7 +1209,6 @@ def build_chunks(file_jobs):
                 context_past,
                 context_future,
             ) if STORY_MEMORY_ENABLED else None
-            chunk_number = start // BATCH_TARGET_SIZE + 1
             chunk_key = f"{hash_key(job['file_rel_path'])}-{chunk_number:05d}"
             chunk = {
                 'key': chunk_key,
@@ -1187,6 +1217,7 @@ def build_chunks(file_jobs):
                 'file_path': job['file_path'],
                 'chunk_index': chunk_number,
                 'line_numbers': [unit.line for unit in target_units],
+                'source_char_count': sum(task_text_char_count(item) for item in target_items),
                 'context_past': context_past,
                 'context_future': context_future,
                 'glossary_hits': glossary_hits,
@@ -1263,7 +1294,7 @@ def summarize_batch_story_memory(chunks, graph_file=None, max_context_chars=None
 
 def get_batch_risk_warnings():
     warnings_list = []
-    if BATCH_TARGET_SIZE > 4:
+    if BATCH_TARGET_SIZE > 20:
         warnings_list.append(f'chunk_size={BATCH_TARGET_SIZE} is aggressive for Gemini 3 Flash structured output.')
     if BATCH_CONTEXT_BEFORE > 12 or BATCH_CONTEXT_AFTER > 6:
         warnings_list.append(
@@ -1329,6 +1360,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
         'result_file_name': '',
         'settings': {
             'target_size': BATCH_TARGET_SIZE,
+            'target_chars': BATCH_TARGET_CHARS,
             'context_before': BATCH_CONTEXT_BEFORE,
             'context_after': BATCH_CONTEXT_AFTER,
             'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
@@ -5442,6 +5474,7 @@ def print_banner():
     print(f'Batch model: {BATCH_MODEL}')
     print(
         f'Chunk settings: target={BATCH_TARGET_SIZE}, '
+        f'target_chars={BATCH_TARGET_CHARS}, '
         f'context_before={BATCH_CONTEXT_BEFORE}, context_after={BATCH_CONTEXT_AFTER}'
     )
     print(f'Max output tokens: {BATCH_MAX_OUTPUT_TOKENS}')
