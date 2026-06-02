@@ -622,7 +622,7 @@ def load_sync_story_memory_settings(config):
 
 
 def load_sync_translation_settings(config):
-    global MODELS, MAX_ITEMS, MAX_CHARS, SYNC_MAX_OUTPUT_TOKENS
+    global MAX_ITEMS, MAX_CHARS, SYNC_MAX_OUTPUT_TOKENS
 
     sync = config.get("sync")
     if not isinstance(sync, dict):
@@ -635,8 +635,7 @@ def load_sync_translation_settings(config):
     elif isinstance(custom_models, str):
         custom_models = [custom_models]
     if custom_models:
-        MODELS = [str(m) for m in custom_models if m]
-        print(f"Using sync model list: {MODELS}")
+        replace_model_list(custom_models, "sync")
 
     previous_items = MAX_ITEMS
     previous_chars = MAX_CHARS
@@ -676,6 +675,23 @@ def coerce_normalized_rel_path_set(value):
         if path:
             normalized.add(path)
     return normalized
+
+
+def replace_model_list(values, label):
+    global MODELS, CURRENT_MODEL_INDEX
+
+    models = []
+    for value in values:
+        model = str(value).strip()
+        if model:
+            models.append(model)
+    if not models:
+        return False
+
+    MODELS = models
+    CURRENT_MODEL_INDEX = 0
+    print(f"Using {label} model list: {MODELS}")
+    return True
 
 
 def load_include_filters_from_config(config):
@@ -817,8 +833,7 @@ def load_config():
                     custom_models = [custom_models]
 
                 if custom_models:
-                    MODELS = [str(m) for m in custom_models if m]
-                    print(f"Using custom model list: {MODELS}")
+                    replace_model_list(custom_models, "custom")
 
                 try:
                     if batch_size is not None:

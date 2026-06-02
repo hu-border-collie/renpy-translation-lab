@@ -574,6 +574,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
     def test_translator_config_sync_settings_override_sync_defaults(self):
         old_values = {
             'models': runtime.MODELS,
+            'model_index': runtime.CURRENT_MODEL_INDEX,
             'max_items': runtime.MAX_ITEMS,
             'max_chars': runtime.MAX_CHARS,
             'max_output_tokens': runtime.SYNC_MAX_OUTPUT_TOKENS,
@@ -592,7 +593,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                         'include_files': ['game/tl/schinese/script.rpy'],
                         'include_prefixes': ['game/tl/schinese/chapter1'],
                         'sync': {
-                            'model': 'gemini-sync-test',
+                            'models': [' ', 'gemini-sync-test'],
                             'chunk_size': 7,
                             'max_source_chars': 1234,
                             'max_output_tokens': 5678,
@@ -606,6 +607,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                     mock.patch.dict(os.environ, {}, clear=True),
                     mock.patch('sys.stdout', io.StringIO()),
                 ):
+                    runtime.CURRENT_MODEL_INDEX = 3
                     runtime.MAX_ITEMS = 20
                     runtime.MAX_CHARS = 6000
                     runtime.SYNC_MAX_OUTPUT_TOKENS = 16384
@@ -614,6 +616,8 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                     runtime.load_translator_settings()
 
                 self.assertEqual(runtime.MODELS, ['gemini-sync-test'])
+                self.assertEqual(runtime.CURRENT_MODEL_INDEX, 0)
+                self.assertEqual(runtime.get_current_model(), 'gemini-sync-test')
                 self.assertEqual(runtime.MAX_ITEMS, 7)
                 self.assertEqual(runtime.MAX_CHARS, 1234)
                 self.assertEqual(runtime.SYNC_MAX_OUTPUT_TOKENS, 5678)
@@ -621,6 +625,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 self.assertEqual(runtime.INCLUDE_PREFIXES, {'game/tl/schinese/chapter1'})
         finally:
             runtime.MODELS = old_values['models']
+            runtime.CURRENT_MODEL_INDEX = old_values['model_index']
             runtime.MAX_ITEMS = old_values['max_items']
             runtime.MAX_CHARS = old_values['max_chars']
             runtime.SYNC_MAX_OUTPUT_TOKENS = old_values['max_output_tokens']
@@ -630,6 +635,8 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
     def test_legacy_api_config_still_sets_sync_chunk_defaults(self):
         old_values = {
             'api_keys': runtime.API_KEYS,
+            'models': runtime.MODELS,
+            'model_index': runtime.CURRENT_MODEL_INDEX,
             'max_items': runtime.MAX_ITEMS,
             'max_chars': runtime.MAX_CHARS,
             'max_output_tokens': runtime.SYNC_MAX_OUTPUT_TOKENS,
@@ -640,6 +647,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 config_path.write_text(
                     json.dumps({
                         'api_keys': ['test-key'],
+                        'models': [' ', 'gemini-legacy-test'],
                         'batch_size': 9,
                         'max_chars': 2222,
                         'sync_max_output_tokens': 3333,
@@ -652,16 +660,22 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                     mock.patch('sys.stdout', io.StringIO()),
                 ):
                     runtime.API_KEYS = []
+                    runtime.CURRENT_MODEL_INDEX = 2
                     runtime.MAX_ITEMS = 20
                     runtime.MAX_CHARS = 6000
                     runtime.SYNC_MAX_OUTPUT_TOKENS = 16384
                     runtime.load_config()
 
+                self.assertEqual(runtime.MODELS, ['gemini-legacy-test'])
+                self.assertEqual(runtime.CURRENT_MODEL_INDEX, 0)
+                self.assertEqual(runtime.get_current_model(), 'gemini-legacy-test')
                 self.assertEqual(runtime.MAX_ITEMS, 9)
                 self.assertEqual(runtime.MAX_CHARS, 2222)
                 self.assertEqual(runtime.SYNC_MAX_OUTPUT_TOKENS, 3333)
         finally:
             runtime.API_KEYS = old_values['api_keys']
+            runtime.MODELS = old_values['models']
+            runtime.CURRENT_MODEL_INDEX = old_values['model_index']
             runtime.MAX_ITEMS = old_values['max_items']
             runtime.MAX_CHARS = old_values['max_chars']
             runtime.SYNC_MAX_OUTPUT_TOKENS = old_values['max_output_tokens']
