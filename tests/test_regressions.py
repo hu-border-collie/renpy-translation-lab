@@ -494,6 +494,333 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             ):
                 self.assertEqual(runtime._resolve_prepare_launcher(), str(launcher))
 
+    def test_prepare_launcher_uses_configured_renpy_sdk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sdk = root / 'renpy-sdk'
+            sdk.mkdir()
+            launcher = sdk / 'renpy.py'
+            launcher.write_text('import renpy.bootstrap\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(root / 'work')),
+                mock.patch.object(runtime, 'PREP_RENPY_SDK_DIR', str(sdk)),
+                mock.patch.object(runtime, 'PREP_LAUNCHER_PY', ''),
+            ):
+                self.assertEqual(runtime._resolve_prepare_launcher(), str(launcher))
+
+    def test_prepare_discovers_workspace_renpy_sdk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            base = workspace / 'Game_Example' / 'work'
+            sdk = workspace / 'renpy-8.5.2-sdk'
+            sdk.mkdir(parents=True)
+            (sdk / 'renpy.py').write_text('import renpy.bootstrap\n', encoding='utf-8')
+            base.mkdir(parents=True)
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'renpy-translation-lab')),
+                mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'renpy-translation-lab')),
+            ):
+                self.assertEqual(runtime._discover_renpy_sdk_dir(), str(sdk))
+
+    def test_prepare_discovers_newest_sdk_by_parsed_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            base = workspace / 'Game_Example' / 'work'
+            older = workspace / 'renpy-8.9-sdk'
+            newer = workspace / 'renpy-8.10-sdk'
+            for sdk in (older, newer):
+                sdk.mkdir(parents=True)
+                (sdk / 'renpy.py').write_text('import renpy.bootstrap\n', encoding='utf-8')
+            base.mkdir(parents=True)
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'renpy-translation-lab')),
+                mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'renpy-translation-lab')),
+            ):
+                self.assertEqual(runtime._discover_renpy_sdk_dir(), str(newer))
+
+    def test_prepare_invalid_configured_sdk_falls_back_to_discovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            base = workspace / 'Game_Example' / 'work'
+            sdk = workspace / 'renpy-8.5.2-sdk'
+            sdk.mkdir(parents=True)
+            (sdk / 'renpy.py').write_text('import renpy.bootstrap\n', encoding='utf-8')
+            base.mkdir(parents=True)
+            config_path = workspace / 'translator_config.json'
+            config_path.write_text(
+                json.dumps(
+                    {
+                        'game_root': str(base),
+                        'prepare': {'renpy_sdk_dir': 'missing-sdk'},
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'renpy-translation-lab')),
+                mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'renpy-translation-lab')),
+                mock.patch.dict(os.environ, {}, clear=True),
+            ):
+                runtime.load_translator_settings()
+                self.assertEqual(runtime.PREP_RENPY_SDK_DIR, str(sdk))
+
+    def test_prepare_does_not_discover_sdk_when_base_dir_is_filesystem_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            sdk = workspace / 'renpy-8.5.2-sdk'
+            sdk.mkdir()
+            (sdk / 'renpy.py').write_text('import renpy.bootstrap\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', os.path.abspath(os.sep)),
+                mock.patch.object(runtime, 'ROOT_DIR', str(workspace)),
+                mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'renpy-translation-lab')),
+            ):
+                self.assertEqual(runtime._discover_renpy_sdk_dir(), '')
+
+    def test_prepare_template_command_uses_sdk_with_project_base(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            sdk = root / 'renpy-sdk'
+            python_dir = sdk / 'lib' / 'py3-windows-x86_64'
+            python_dir.mkdir(parents=True)
+            python_exe = python_dir / 'python.exe'
+            python_exe.write_text('', encoding='utf-8')
+            launcher = sdk / 'renpy.py'
+            launcher.write_text('import renpy.bootstrap\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(runtime.sys, 'platform', 'win32'),
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(runtime, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(runtime, 'PREP_RENPY_SDK_DIR', str(sdk)),
+                mock.patch.object(runtime, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(runtime, 'PREP_PYTHON_EXE', ''),
+                mock.patch.object(runtime, 'PREP_TEMPLATE_COMMAND', None),
+                mock.patch.object(runtime, 'PREP_LANGUAGE', 'schinese'),
+            ):
+                info = runtime.get_prepare_template_command_info(str(base / 'game'))
+
+            self.assertTrue(info['available'])
+            self.assertEqual(info['kind'], 'sdk')
+            self.assertEqual(info['command'], [str(python_exe), str(launcher), str(base), 'translate', 'schinese'])
+
+    def test_prepare_template_command_uses_renpy_sh_on_non_windows_sdk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            sdk = root / 'renpy-sdk'
+            windows_python = sdk / 'lib' / 'py3-windows-x86_64' / 'python.exe'
+            windows_python.parent.mkdir(parents=True)
+            windows_python.write_text('', encoding='utf-8')
+            launcher = sdk / 'renpy.py'
+            launcher.write_text('import renpy.bootstrap\n', encoding='utf-8')
+            shell_launcher = sdk / 'renpy.sh'
+            shell_launcher.write_text('#!/bin/sh\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(runtime.sys, 'platform', 'linux'),
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(runtime, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(runtime, 'PREP_RENPY_SDK_DIR', str(sdk)),
+                mock.patch.object(runtime, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(runtime, 'PREP_PYTHON_EXE', ''),
+                mock.patch.object(runtime, 'PREP_TEMPLATE_COMMAND', None),
+                mock.patch.object(runtime, 'PREP_LANGUAGE', 'schinese'),
+            ):
+                info = runtime.get_prepare_template_command_info(str(base / 'game'))
+
+            self.assertTrue(info['available'])
+            self.assertEqual(info['kind'], 'sdk')
+            self.assertEqual(info['command'], [str(shell_launcher), str(base), 'translate', 'schinese'])
+            self.assertEqual(info['cwd'], str(sdk))
+            self.assertEqual(info['python_exe'], '')
+
+    def test_find_bundled_python_ignores_windows_python_on_linux(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sdk = Path(tmp) / 'renpy-sdk'
+            windows_python = sdk / 'lib' / 'py3-windows-x86_64' / 'python.exe'
+            windows_python.parent.mkdir(parents=True)
+            windows_python.write_text('', encoding='utf-8')
+
+            with mock.patch.object(runtime.sys, 'platform', 'linux'):
+                self.assertEqual(runtime._find_bundled_python(str(sdk)), '')
+
+    def test_prepare_existing_tl_without_launcher_continues(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'script.rpy').write_text('translate schinese strings:\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(runtime, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(runtime, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(runtime, 'PREP_ENABLED', True),
+                mock.patch.object(runtime, 'PREP_UNPACK_RPA', False),
+                mock.patch.object(runtime, 'PREP_GENERATE_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_REFRESH_EXISTING_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(runtime, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(runtime, 'PREP_TEMPLATE_COMMAND', None),
+                mock.patch.object(runtime, '_run_prepare_command') as run_mock,
+                mock.patch('sys.stdout', io.StringIO()),
+            ):
+                runtime.run_prepare_steps()
+
+            run_mock.assert_not_called()
+
+    def test_prepare_missing_tl_without_launcher_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(runtime, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(runtime, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(runtime, 'PREP_ENABLED', True),
+                mock.patch.object(runtime, 'PREP_UNPACK_RPA', False),
+                mock.patch.object(runtime, 'PREP_GENERATE_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_REFRESH_EXISTING_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(runtime, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(runtime, 'PREP_TEMPLATE_COMMAND', None),
+                mock.patch('sys.stdout', io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit):
+                    runtime.run_prepare_steps()
+
+    def test_prepare_missing_tl_custom_template_command_error_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(runtime, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(runtime, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(runtime, 'PREP_ENABLED', True),
+                mock.patch.object(runtime, 'PREP_UNPACK_RPA', False),
+                mock.patch.object(runtime, 'PREP_GENERATE_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_REFRESH_EXISTING_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(runtime, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(runtime, 'PREP_TEMPLATE_COMMAND', ['{missing_placeholder}']),
+                mock.patch('sys.stdout', io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    runtime.run_prepare_steps()
+
+            self.assertIn('Custom template command error', str(raised.exception))
+            self.assertIn('missing_placeholder', str(raised.exception))
+
+    def test_prepare_first_time_template_failure_blocks_even_with_partial_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+
+            def fail_after_partial_file(*_args):
+                tl_dir.mkdir(parents=True)
+                (tl_dir / 'partial.rpy').write_text('translate schinese strings:\n', encoding='utf-8')
+                return False
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(runtime, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(runtime, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(runtime, 'PREP_ENABLED', True),
+                mock.patch.object(runtime, 'PREP_UNPACK_RPA', False),
+                mock.patch.object(runtime, 'PREP_GENERATE_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_REFRESH_EXISTING_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_TEMPLATE_COMMAND', ['generate-template']),
+                mock.patch.object(runtime, '_run_prepare_command', side_effect=fail_after_partial_file),
+                mock.patch('sys.stdout', io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    runtime.run_prepare_steps()
+
+            self.assertIn('Translation template generation failed', str(raised.exception))
+
+    def test_prepare_existing_tl_refresh_runs_template_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'script.rpy').write_text('translate schinese strings:\n', encoding='utf-8')
+            sdk = root / 'renpy-sdk'
+            sdk.mkdir()
+            launcher = sdk / 'renpy.py'
+            launcher.write_text('import renpy.bootstrap\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(runtime, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(runtime, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(runtime, 'PREP_ENABLED', True),
+                mock.patch.object(runtime, 'PREP_UNPACK_RPA', False),
+                mock.patch.object(runtime, 'PREP_GENERATE_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_REFRESH_EXISTING_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_RENPY_SDK_DIR', str(sdk)),
+                mock.patch.object(runtime, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(runtime, 'PREP_PYTHON_EXE', sys.executable),
+                mock.patch.object(runtime, 'PREP_TEMPLATE_COMMAND', None),
+                mock.patch.object(runtime, '_run_prepare_command', return_value=True) as run_mock,
+                mock.patch('sys.stdout', io.StringIO()),
+            ):
+                runtime.run_prepare_steps()
+
+            run_mock.assert_called_once()
+            command = run_mock.call_args.args[0]
+            self.assertEqual(command, [sys.executable, str(launcher), str(base), 'translate', 'schinese'])
+
+    def test_prepare_existing_tl_refresh_disabled_skips_template_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'script.rpy').write_text('translate schinese strings:\n', encoding='utf-8')
+            sdk = root / 'renpy-sdk'
+            sdk.mkdir()
+            (sdk / 'renpy.py').write_text('import renpy.bootstrap\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(runtime, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(runtime, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(runtime, 'PREP_ENABLED', True),
+                mock.patch.object(runtime, 'PREP_UNPACK_RPA', False),
+                mock.patch.object(runtime, 'PREP_GENERATE_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_REFRESH_EXISTING_TEMPLATE', False),
+                mock.patch.object(runtime, 'PREP_RENPY_SDK_DIR', str(sdk)),
+                mock.patch.object(runtime, '_run_prepare_command') as run_mock,
+                mock.patch('sys.stdout', io.StringIO()),
+            ):
+                runtime.run_prepare_steps()
+
+            run_mock.assert_not_called()
+
     def test_process_batch_returns_only_successful_progress_entries(self):
         batch = [
             {
@@ -2183,6 +2510,139 @@ class BatchRagRegressionTests(unittest.TestCase):
         parser.parse_args(['bootstrap-rag', '--seed-jsonl', 'first.jsonl'])
         parsed_without_seed = parser.parse_args(['bootstrap-rag'])
         self.assertIsNone(parsed_without_seed.seed_jsonl)
+
+    def test_build_arg_parser_accepts_doctor_command(self):
+        args = batch_mod.build_arg_parser().parse_args(['doctor'])
+
+        self.assertEqual(args.command, 'doctor')
+
+    def test_doctor_report_classifies_existing_tl_without_sdk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'script.rpy').write_text(
+                'translate schinese start_123:\n'
+                '    # e "Hello"\n'
+                '    e "\u4f60\u597d"\n'
+                '\n'
+                'translate schinese strings:\n'
+                '    old "Start"\n'
+                '    new "\u5f00\u59cb"\n',
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(base)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod.legacy, 'TL_SUBDIR', 'game/tl/schinese'),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LANGUAGE', 'schinese'),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_TEMPLATE_COMMAND', None),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        self.assertEqual(report['mode'], 'existing_tl_only')
+        self.assertFalse(report['can_generate_template'])
+        self.assertEqual(report['counts']['rpy_files'], 1)
+        self.assertEqual(report['counts']['translate_blocks'], 1)
+        self.assertEqual(report['counts']['string_sections'], 1)
+        self.assertEqual(report['counts']['old_lines'], 1)
+        self.assertEqual(report['counts']['new_lines'], 1)
+        self.assertEqual(report['counts']['commented_original_lines'], 1)
+
+    def test_doctor_report_warns_when_dialogue_comments_are_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'script.rpy').write_text(
+                'translate schinese start_123:\n'
+                '    e "\u4f60\u597d"\n',
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(base)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_TEMPLATE_COMMAND', None),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        self.assertIn('Dialogue translation blocks do not include source comments', ' '.join(report['warnings']))
+
+    def test_doctor_report_does_not_treat_translate_python_as_dialogue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'style.rpy').write_text(
+                'translate schinese python:\n'
+                '    gui.text_font = "SourceHanSansLite.ttf"\n',
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(base)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_TEMPLATE_COMMAND', None),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        self.assertEqual(report['counts']['translate_blocks'], 0)
+        self.assertNotIn('Dialogue translation blocks do not include source comments', ' '.join(report['warnings']))
+
+    def test_doctor_command_does_not_require_api_keys(self):
+        with (
+            mock.patch.object(batch_mod, 'initialize_batch_logging') as logging_mock,
+            mock.patch.object(batch_mod.legacy, 'load_translator_settings'),
+            mock.patch.object(batch_mod.legacy, 'load_glossary'),
+            mock.patch.object(batch_mod, 'load_batch_settings'),
+            mock.patch.object(batch_mod, 'print_banner'),
+            mock.patch.object(batch_mod, 'collect_doctor_report', return_value={'counts': {}, 'warnings': []}),
+            mock.patch.object(batch_mod, 'print_doctor_report'),
+            mock.patch.object(batch_mod.legacy, 'load_config') as load_config_mock,
+        ):
+            batch_mod.main(['doctor'])
+
+        load_config_mock.assert_not_called()
+        logging_mock.assert_not_called()
+
+    def test_doctor_report_explains_custom_template_command_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(base)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_TEMPLATE_COMMAND', ['{missing_placeholder}']),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        joined_warnings = ' '.join(report['warnings'])
+        self.assertFalse(report['can_generate_template'])
+        self.assertEqual(report['template_command_kind'], 'custom')
+        self.assertIn('missing_placeholder', report['template_reason'])
+        self.assertIn('Custom template command cannot be rendered', joined_warnings)
 
     def test_summarize_batch_rag_reports_hit_count_rate_and_errors(self):
         summary = batch_mod.summarize_batch_rag(
