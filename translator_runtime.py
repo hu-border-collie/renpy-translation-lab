@@ -660,21 +660,33 @@ def load_sync_translation_settings(config):
         print(f"Using sync max output tokens: {SYNC_MAX_OUTPUT_TOKENS}")
 
 
+def coerce_normalized_rel_path_set(value):
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        values = []
+
+    normalized = set()
+    for item in values:
+        path = _normalize_rel_path(item)
+        if path:
+            normalized.add(path)
+    return normalized
+
+
 def load_include_filters_from_config(config):
     global INCLUDE_FILES, INCLUDE_PREFIXES
 
-    include_files = config.get("include_files")
-    if include_files:
-        if isinstance(include_files, str):
-            include_files = [include_files]
-        INCLUDE_FILES = {_normalize_rel_path(p) for p in include_files if _normalize_rel_path(p)}
+    if "include_files" in config:
+        INCLUDE_FILES = coerce_normalized_rel_path_set(config.get("include_files"))
         print(f"Using include_files allowlist ({len(INCLUDE_FILES)}).")
 
-    include_prefixes = config.get("include_prefixes")
-    if include_prefixes:
-        if isinstance(include_prefixes, str):
-            include_prefixes = [include_prefixes]
-        INCLUDE_PREFIXES = {_normalize_rel_path(p) for p in include_prefixes if _normalize_rel_path(p)}
+    if "include_prefixes" in config:
+        INCLUDE_PREFIXES = coerce_normalized_rel_path_set(config.get("include_prefixes"))
         print(f"Using include_prefixes allowlist ({len(INCLUDE_PREFIXES)}).")
 
 
@@ -835,16 +847,12 @@ def load_config():
                 except (TypeError, ValueError):
                     print("Warning: Invalid sync_max_output_tokens in config; using default.")
 
-                if include_files:
-                    if isinstance(include_files, str):
-                        include_files = [include_files]
-                    INCLUDE_FILES = {_normalize_rel_path(p) for p in include_files if _normalize_rel_path(p)}
+                if "include_files" in config:
+                    INCLUDE_FILES = coerce_normalized_rel_path_set(include_files)
                     print(f"Using include_files allowlist ({len(INCLUDE_FILES)}).")
 
-                if include_prefixes:
-                    if isinstance(include_prefixes, str):
-                        include_prefixes = [include_prefixes]
-                    INCLUDE_PREFIXES = {_normalize_rel_path(p) for p in include_prefixes if _normalize_rel_path(p)}
+                if "include_prefixes" in config:
+                    INCLUDE_PREFIXES = coerce_normalized_rel_path_set(include_prefixes)
                     print(f"Using include_prefixes allowlist ({len(INCLUDE_PREFIXES)}).")
                     
         except Exception as e:

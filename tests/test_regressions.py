@@ -571,7 +571,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 runtime.load_translator_settings()
                 self.assertEqual(runtime.PREP_RENPY_SDK_DIR, str(sdk))
 
-    def test_translator_config_sync_settings_override_legacy_batch_defaults(self):
+    def test_translator_config_sync_settings_override_sync_defaults(self):
         old_values = {
             'models': runtime.MODELS,
             'max_items': runtime.MAX_ITEMS,
@@ -665,6 +665,75 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             runtime.MAX_ITEMS = old_values['max_items']
             runtime.MAX_CHARS = old_values['max_chars']
             runtime.SYNC_MAX_OUTPUT_TOKENS = old_values['max_output_tokens']
+
+    def test_translator_config_empty_include_lists_clear_existing_filters(self):
+        old_values = {
+            'include_files': runtime.INCLUDE_FILES,
+            'include_prefixes': runtime.INCLUDE_PREFIXES,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                workspace = Path(tmp)
+                base = workspace / 'work'
+                base.mkdir()
+                config_path = workspace / 'translator_config.json'
+                config_path.write_text(
+                    json.dumps({
+                        'game_root': str(base),
+                        'include_files': [],
+                        'include_prefixes': [],
+                    }),
+                    encoding='utf-8',
+                )
+
+                with (
+                    mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                    mock.patch.dict(os.environ, {}, clear=True),
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    runtime.INCLUDE_FILES = {'game/tl/schinese/old.rpy'}
+                    runtime.INCLUDE_PREFIXES = {'game/tl/schinese/old'}
+                    runtime.load_translator_settings()
+
+                self.assertEqual(runtime.INCLUDE_FILES, set())
+                self.assertEqual(runtime.INCLUDE_PREFIXES, set())
+        finally:
+            runtime.INCLUDE_FILES = old_values['include_files']
+            runtime.INCLUDE_PREFIXES = old_values['include_prefixes']
+
+    def test_legacy_api_config_empty_include_lists_clear_existing_filters(self):
+        old_values = {
+            'api_keys': runtime.API_KEYS,
+            'include_files': runtime.INCLUDE_FILES,
+            'include_prefixes': runtime.INCLUDE_PREFIXES,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / 'api_keys.json'
+                config_path.write_text(
+                    json.dumps({
+                        'api_keys': ['test-key'],
+                        'include_files': [],
+                        'include_prefixes': [],
+                    }),
+                    encoding='utf-8',
+                )
+
+                with (
+                    mock.patch.object(runtime, 'CONFIG_FILE', str(config_path)),
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    runtime.API_KEYS = []
+                    runtime.INCLUDE_FILES = {'game/tl/schinese/old.rpy'}
+                    runtime.INCLUDE_PREFIXES = {'game/tl/schinese/old'}
+                    runtime.load_config()
+
+                self.assertEqual(runtime.INCLUDE_FILES, set())
+                self.assertEqual(runtime.INCLUDE_PREFIXES, set())
+        finally:
+            runtime.API_KEYS = old_values['api_keys']
+            runtime.INCLUDE_FILES = old_values['include_files']
+            runtime.INCLUDE_PREFIXES = old_values['include_prefixes']
 
     def test_prepare_does_not_discover_sdk_when_base_dir_is_filesystem_root(self):
         with tempfile.TemporaryDirectory() as tmp:
