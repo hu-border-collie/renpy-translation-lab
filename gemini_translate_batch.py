@@ -5352,10 +5352,19 @@ def collect_doctor_report():
         warnings.append(
             'Dialogue translation blocks do not include source comments; revision/RAG source pairing may be limited.'
         )
+    template_reason = template_info.get('reason', '')
+    if not can_generate_template and template_info.get('kind') == 'custom':
+        warnings.append(f'Custom template command cannot be rendered: {template_reason or "unknown error"}.')
     if not can_generate_template and not has_tl_files:
-        warnings.append('No TL files and no Ren\'Py SDK/game launcher found; template generation is required.')
+        if template_info.get('kind') == 'custom':
+            warnings.append('No TL files and custom template command is unavailable; template generation is required.')
+        else:
+            warnings.append('No TL files and no Ren\'Py SDK/game launcher found; template generation is required.')
     elif not can_generate_template and has_tl_files:
-        warnings.append('Ren\'Py SDK/game launcher not found; existing TL files can still be processed.')
+        if template_info.get('kind') == 'custom':
+            warnings.append('Custom template command is unavailable; existing TL files can still be processed.')
+        else:
+            warnings.append('Ren\'Py SDK/game launcher not found; existing TL files can still be processed.')
 
     if can_generate_template:
         mode = 'can_generate_template'
@@ -5753,17 +5762,20 @@ def main(argv=None):
         parser.print_help()
         return
 
+    if command == 'doctor':
+        legacy.load_translator_settings()
+        legacy.load_glossary()
+        load_batch_settings()
+        print_banner()
+        print_doctor_report(collect_doctor_report())
+        return
+
     initialize_batch_logging()
-    if command != 'doctor':
-        legacy.load_config()
+    legacy.load_config()
     legacy.load_translator_settings()
     legacy.load_glossary()
     load_batch_settings()
     print_banner()
-
-    if command == 'doctor':
-        print_doctor_report(collect_doctor_report())
-        return
 
     if command == 'build':
         create_batch_package(

@@ -403,6 +403,23 @@ def _is_filesystem_root(path):
     return normalized == parent
 
 
+def _parse_renpy_sdk_version(path):
+    name = os.path.basename(os.path.abspath(path)).lower()
+    match = re.search(r"renpy[-_](\d+(?:\.\d+)*)", name)
+    if not match:
+        return ()
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def _renpy_sdk_sort_key(path):
+    normalized = os.path.abspath(path)
+    return (
+        _parse_renpy_sdk_version(normalized),
+        os.path.basename(normalized).lower(),
+        normalized.lower(),
+    )
+
+
 def _discover_renpy_sdk_dir():
     if _is_filesystem_root(BASE_DIR):
         return ""
@@ -432,6 +449,7 @@ def _discover_renpy_sdk_dir():
             for candidate in candidates
             if os.path.isdir(candidate) and os.path.isfile(os.path.join(candidate, "renpy.py"))
         },
+        key=_renpy_sdk_sort_key,
         reverse=True,
     )
     return candidates[0] if candidates else ""
@@ -986,13 +1004,26 @@ def _find_bundled_python(base_dir):
     if not base_dir:
         return ""
 
-    bundled = os.path.join(base_dir, "lib", "py3-windows-x86_64", "python.exe")
-    if os.path.isfile(bundled):
-        return bundled
+    if sys.platform.startswith("win"):
+        patterns = [
+            os.path.join(base_dir, "lib", "py3-windows-x86_64", "python.exe"),
+            os.path.join(base_dir, "lib", "py3-windows-*", "python.exe"),
+        ]
+    elif sys.platform == "darwin":
+        patterns = [
+            os.path.join(base_dir, "lib", "py3-mac*", "python"),
+            os.path.join(base_dir, "lib", "py3-macos*", "python"),
+            os.path.join(base_dir, "lib", "py3-darwin*", "python"),
+        ]
+    else:
+        patterns = [
+            os.path.join(base_dir, "lib", "py3-linux*", "python"),
+        ]
 
-    for candidate in glob.glob(os.path.join(base_dir, "lib", "py*", "python.exe")):
-        if os.path.isfile(candidate):
-            return candidate
+    for pattern in patterns:
+        for candidate in sorted(glob.glob(pattern)):
+            if os.path.isfile(candidate):
+                return candidate
 
     return ""
 
@@ -1013,6 +1044,15 @@ def _resolve_sdk_launcher(sdk_dir):
     if not sdk_dir:
         return ""
     launcher = os.path.join(sdk_dir, "renpy.py")
+    if os.path.isfile(launcher):
+        return launcher
+    return ""
+
+
+def _resolve_sdk_shell_launcher(sdk_dir):
+    if not sdk_dir or sys.platform.startswith("win"):
+        return ""
+    launcher = os.path.join(sdk_dir, "renpy.sh")
     if os.path.isfile(launcher):
         return launcher
     return ""
@@ -1148,10 +1188,19 @@ def get_prepare_template_command_info(source_game_dir=""):
         }
 
     if _is_sdk_launcher(launcher_py):
-        command = [python_exe, launcher_py, BASE_DIR, "translate", PREP_LANGUAGE]
+        sdk_dir = _prepare_launcher_root(launcher_py)
+        shell_launcher = _resolve_sdk_shell_launcher(sdk_dir)
+        if shell_launcher and not PREP_PYTHON_EXE:
+            command = [shell_launcher, BASE_DIR, "translate", PREP_LANGUAGE]
+            cwd = sdk_dir
+            python_exe = ""
+        else:
+            command = [python_exe, launcher_py, BASE_DIR, "translate", PREP_LANGUAGE]
+            cwd = BASE_DIR
         kind = "sdk"
     else:
         command = [python_exe, launcher_py, "translate", PREP_LANGUAGE]
+        cwd = BASE_DIR
         kind = "game-launcher"
 
     return {
@@ -1159,7 +1208,7 @@ def get_prepare_template_command_info(source_game_dir=""):
         "kind": kind,
         "reason": "",
         "command": command,
-        "cwd": BASE_DIR,
+        "cwd": cwd,
         "python_exe": python_exe,
         "launcher_py": launcher_py,
     }
@@ -1208,6 +1257,13 @@ def _run_unpack_command(command, archives, source_game_dir):
 
 def _has_translation_templates():
     return _has_files_with_extensions(TL_DIR, {".rpy"})
+
+
+def _describe_template_unavailable(template_info):
+    reason = template_info.get("reason") or "no command resolved"
+    if template_info.get("kind") == "custom":
+        return f"Custom template command error: {reason}"
+    return reason
 
 
 def run_prepare_steps():
@@ -1270,14 +1326,15 @@ def run_prepare_steps():
                     print("[Prepare] Template refresh failed; continuing with existing TL files.")
             elif templates_exist:
                 print(
-                    "[Prepare] Could not locate Ren'Py SDK or game launcher; "
+                    f"[Prepare] {_describe_template_unavailable(template_info)}; "
                     "continuing with existing TL files."
                 )
             else:
+                reason = _describe_template_unavailable(template_info)
                 raise SystemExit(
-                    "[Prepare] Cannot generate translation template because Ren'Py SDK or game launcher "
-                    "was not found. Install Ren'Py SDK and set RENPY_SDK_DIR or prepare.renpy_sdk_dir, "
-                    "or create the TL template manually."
+                    f"[Prepare] Cannot generate translation template: {reason}. "
+                    "Install Ren'Py SDK and set RENPY_SDK_DIR or prepare.renpy_sdk_dir, "
+                    "fix prepare.template_command, or create the TL template manually."
                 )
     else:
         print("[Prepare] Template generation disabled.")

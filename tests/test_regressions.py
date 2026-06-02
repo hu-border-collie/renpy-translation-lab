@@ -525,6 +525,24 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             ):
                 self.assertEqual(runtime._discover_renpy_sdk_dir(), str(sdk))
 
+    def test_prepare_discovers_newest_sdk_by_parsed_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            base = workspace / 'Game_Example' / 'work'
+            older = workspace / 'renpy-8.9-sdk'
+            newer = workspace / 'renpy-8.10-sdk'
+            for sdk in (older, newer):
+                sdk.mkdir(parents=True)
+                (sdk / 'renpy.py').write_text('import renpy.bootstrap\n', encoding='utf-8')
+            base.mkdir(parents=True)
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'renpy-translation-lab')),
+                mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'renpy-translation-lab')),
+            ):
+                self.assertEqual(runtime._discover_renpy_sdk_dir(), str(newer))
+
     def test_prepare_does_not_discover_sdk_when_base_dir_is_filesystem_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -552,6 +570,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             launcher.write_text('import renpy.bootstrap\n', encoding='utf-8')
 
             with (
+                mock.patch.object(runtime.sys, 'platform', 'win32'),
                 mock.patch.object(runtime, 'BASE_DIR', str(base)),
                 mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
                 mock.patch.object(runtime, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
@@ -566,6 +585,48 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             self.assertTrue(info['available'])
             self.assertEqual(info['kind'], 'sdk')
             self.assertEqual(info['command'], [str(python_exe), str(launcher), str(base), 'translate', 'schinese'])
+
+    def test_prepare_template_command_uses_renpy_sh_on_non_windows_sdk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            sdk = root / 'renpy-sdk'
+            windows_python = sdk / 'lib' / 'py3-windows-x86_64' / 'python.exe'
+            windows_python.parent.mkdir(parents=True)
+            windows_python.write_text('', encoding='utf-8')
+            launcher = sdk / 'renpy.py'
+            launcher.write_text('import renpy.bootstrap\n', encoding='utf-8')
+            shell_launcher = sdk / 'renpy.sh'
+            shell_launcher.write_text('#!/bin/sh\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(runtime.sys, 'platform', 'linux'),
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(runtime, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(runtime, 'PREP_RENPY_SDK_DIR', str(sdk)),
+                mock.patch.object(runtime, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(runtime, 'PREP_PYTHON_EXE', ''),
+                mock.patch.object(runtime, 'PREP_TEMPLATE_COMMAND', None),
+                mock.patch.object(runtime, 'PREP_LANGUAGE', 'schinese'),
+            ):
+                info = runtime.get_prepare_template_command_info(str(base / 'game'))
+
+            self.assertTrue(info['available'])
+            self.assertEqual(info['kind'], 'sdk')
+            self.assertEqual(info['command'], [str(shell_launcher), str(base), 'translate', 'schinese'])
+            self.assertEqual(info['cwd'], str(sdk))
+            self.assertEqual(info['python_exe'], '')
+
+    def test_find_bundled_python_ignores_windows_python_on_linux(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sdk = Path(tmp) / 'renpy-sdk'
+            windows_python = sdk / 'lib' / 'py3-windows-x86_64' / 'python.exe'
+            windows_python.parent.mkdir(parents=True)
+            windows_python.write_text('', encoding='utf-8')
+
+            with mock.patch.object(runtime.sys, 'platform', 'linux'):
+                self.assertEqual(runtime._find_bundled_python(str(sdk)), '')
 
     def test_prepare_existing_tl_without_launcher_continues(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -615,6 +676,31 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             ):
                 with self.assertRaises(SystemExit):
                     runtime.run_prepare_steps()
+
+    def test_prepare_missing_tl_custom_template_command_error_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(runtime, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(runtime, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(runtime, 'PREP_ENABLED', True),
+                mock.patch.object(runtime, 'PREP_UNPACK_RPA', False),
+                mock.patch.object(runtime, 'PREP_GENERATE_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_REFRESH_EXISTING_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(runtime, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(runtime, 'PREP_TEMPLATE_COMMAND', ['{missing_placeholder}']),
+                mock.patch('sys.stdout', io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    runtime.run_prepare_steps()
+
+            self.assertIn('Custom template command error', str(raised.exception))
+            self.assertIn('missing_placeholder', str(raised.exception))
 
     def test_prepare_existing_tl_refresh_runs_template_command(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2465,7 +2551,7 @@ class BatchRagRegressionTests(unittest.TestCase):
 
     def test_doctor_command_does_not_require_api_keys(self):
         with (
-            mock.patch.object(batch_mod, 'initialize_batch_logging'),
+            mock.patch.object(batch_mod, 'initialize_batch_logging') as logging_mock,
             mock.patch.object(batch_mod.legacy, 'load_translator_settings'),
             mock.patch.object(batch_mod.legacy, 'load_glossary'),
             mock.patch.object(batch_mod, 'load_batch_settings'),
@@ -2477,6 +2563,29 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod.main(['doctor'])
 
         load_config_mock.assert_not_called()
+        logging_mock.assert_not_called()
+
+    def test_doctor_report_explains_custom_template_command_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(base)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_TEMPLATE_COMMAND', ['{missing_placeholder}']),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        joined_warnings = ' '.join(report['warnings'])
+        self.assertFalse(report['can_generate_template'])
+        self.assertEqual(report['template_command_kind'], 'custom')
+        self.assertIn('missing_placeholder', report['template_reason'])
+        self.assertIn('Custom template command cannot be rendered', joined_warnings)
 
     def test_summarize_batch_rag_reports_hit_count_rate_and_errors(self):
         summary = batch_mod.summarize_batch_rag(
