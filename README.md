@@ -94,7 +94,33 @@ Game_Example/
 
 - 默认目标语言是 `schinese`
 - 可以通过 `translator_config.json` 里的 `tl_subdir` 和 `prepare.language` 调整
-- 如果启用了 `prepare`，脚本会尝试从 `original/game` 提取脚本并自动生成 `tl/schinese` 模板
+- 推荐先使用 Ren'Py SDK 生成标准 `tl/<language>` 模板；如果启用了 `prepare`，脚本会尝试从 `original/game` 提取脚本并自动调用 Ren'Py 生成或刷新 `tl/schinese` 模板
+- 自动模板生成需要 Ren'Py SDK 或目标游戏自带的 Ren'Py launcher；如果已经有可用 TL 文件，缺少 SDK 时仍可直接处理现有 TL
+- 不要用 Ren'Py 的 `--empty` 生成空模板。本工具的初译流程需要目标行保留原文，之后再把目标行或 `new` 行替换成中文
+
+可以通过 `translator_config.json` 或环境变量 `RENPY_SDK_DIR` 指定 SDK 位置；如果没有配置，脚本会尝试在 `game_root` 附近和工具工作区里自动查找 `renpy-*-sdk`：
+
+```json
+{
+  "game_root": "C:/games/Game_Example/work",
+  "tl_subdir": "game/tl/schinese",
+  "prepare": {
+    "enabled": true,
+    "generate_template": true,
+    "refresh_existing_template": true,
+    "language": "schinese",
+    "renpy_sdk_dir": "C:/RenPy/renpy-8.5.2-sdk"
+  }
+}
+```
+
+如果已有第三方汉化或非标准 TL 文件，建议先跑诊断：
+
+```bash
+python gemini_translate_batch.py doctor
+```
+
+`doctor` 只检查配置、SDK/launcher 和 TL 文件形态，不调用 Gemini，也不会写回 `.rpy`。
 
 ### 4. 运行
 
@@ -115,6 +141,7 @@ python gemini_translate.py
 Batch 模式：
 
 ```bash
+python gemini_translate_batch.py doctor
 python gemini_translate_batch.py bootstrap-rag
 python gemini_translate_batch.py build
 python gemini_translate_batch.py submit
@@ -164,8 +191,9 @@ python gemini_translate_batch.py sync-keywords --limit 3
 - `python gemini_translate.py --help` 会显示同步脚本的最小 CLI 帮助
 - 同步 RAG 启用后，每个成功写回的小批次会更新本地 history store，后续同步批次会在请求前重新检索并注入相关历史
 - Structured Story Memory 默认关闭；需要分别通过 `batch.story_memory.enabled=true` 或 `sync.story_memory.enabled=true` 启用
-- 不带子命令直接运行 `gemini_translate_batch.py` 时，默认等价于 `submit`
+- `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出
 - Batch 产物默认会写到本地 `logs/` 目录
+- `doctor` 会检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，适合在正式翻译前确认项目是否已准备好
 - `bootstrap-rag` 会扫描当前允许处理的全部 TL `.rpy` 文件，把已有译文预先写入本地 history store；适合在正式 `build / submit` 前先暖库
 - `probe` 会用同步请求做最小 smoke test
 - `check` 是干跑校验，不会修改 `.rpy`
@@ -407,6 +435,6 @@ python extract_relations.py /path/to/game/tl/schinese --mode semantic
 更适合下面这类使用者：
 
 - 已经熟悉 Ren'Py 项目目录结构
-- 能自行准备 `work/game/tl/schinese` 或理解 `prepare` 行为
+- 能自行准备 `work/game/tl/schinese`、安装 Ren'Py SDK，或理解 `prepare` 行为
 - 能阅读 Python 脚本并按需修改本地配置
 - 接受这是实验性工具，而不是稳定打包好的最终产品
