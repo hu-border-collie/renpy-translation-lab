@@ -191,7 +191,7 @@ python gemini_translate_batch.py sync-keywords --limit 3
 - `python gemini_translate.py --help` 会显示同步脚本的最小 CLI 帮助
 - 同步 RAG 启用后，每个成功写回的小批次会更新本地 history store，后续同步批次会在请求前重新检索并注入相关历史
 - Structured Story Memory 默认关闭；需要分别通过 `batch.story_memory.enabled=true` 或 `sync.story_memory.enabled=true` 启用
-- 不带子命令直接运行 `gemini_translate_batch.py` 时，默认等价于 `submit`
+- `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出
 - Batch 产物默认会写到本地 `logs/` 目录
 - `doctor` 会检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，适合在正式翻译前确认项目是否已准备好
 - `bootstrap-rag` 会扫描当前允许处理的全部 TL `.rpy` 文件，把已有译文预先写入本地 history store；适合在正式 `build / submit` 前先暖库
