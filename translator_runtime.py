@@ -91,8 +91,9 @@ PRESERVE_TERMS = [
 ]
 
 # Config Defaults
-MAX_CHARS = 3000  # Reduced slightly to be safer
+MAX_CHARS = 6000
 MAX_ITEMS = 20    # Back to a safer batch size (50 was too aggressive)
+SYNC_MAX_OUTPUT_TOKENS = 16384
 MIN_DELAY = 1.0  # Reduced delay for SDK
 MAX_DELAY = 3.0
 BATCH_RETRIES = 3
@@ -620,6 +621,63 @@ def load_sync_story_memory_settings(config):
     _SYNC_STORY_GRAPH_PATH = ""
 
 
+def load_sync_translation_settings(config):
+    global MODELS, MAX_ITEMS, MAX_CHARS, SYNC_MAX_OUTPUT_TOKENS
+
+    sync = config.get("sync")
+    if not isinstance(sync, dict):
+        sync = {}
+
+    custom_models = sync.get("models")
+    single_model = sync.get("model")
+    if not custom_models and single_model:
+        custom_models = [single_model]
+    elif isinstance(custom_models, str):
+        custom_models = [custom_models]
+    if custom_models:
+        MODELS = [str(m) for m in custom_models if m]
+        print(f"Using sync model list: {MODELS}")
+
+    previous_items = MAX_ITEMS
+    previous_chars = MAX_CHARS
+    previous_output_tokens = SYNC_MAX_OUTPUT_TOKENS
+
+    MAX_ITEMS = _coerce_positive_int(sync.get("chunk_size"), MAX_ITEMS)
+    MAX_CHARS = _coerce_positive_int(
+        sync.get("max_source_chars", sync.get("target_chars")),
+        MAX_CHARS,
+    )
+    SYNC_MAX_OUTPUT_TOKENS = _coerce_positive_int(
+        sync.get("max_output_tokens"),
+        SYNC_MAX_OUTPUT_TOKENS,
+    )
+
+    if MAX_ITEMS != previous_items:
+        print(f"Using sync chunk size: {MAX_ITEMS}")
+    if MAX_CHARS != previous_chars:
+        print(f"Using sync max source chars: {MAX_CHARS}")
+    if SYNC_MAX_OUTPUT_TOKENS != previous_output_tokens:
+        print(f"Using sync max output tokens: {SYNC_MAX_OUTPUT_TOKENS}")
+
+
+def load_include_filters_from_config(config):
+    global INCLUDE_FILES, INCLUDE_PREFIXES
+
+    include_files = config.get("include_files")
+    if include_files:
+        if isinstance(include_files, str):
+            include_files = [include_files]
+        INCLUDE_FILES = {_normalize_rel_path(p) for p in include_files if _normalize_rel_path(p)}
+        print(f"Using include_files allowlist ({len(INCLUDE_FILES)}).")
+
+    include_prefixes = config.get("include_prefixes")
+    if include_prefixes:
+        if isinstance(include_prefixes, str):
+            include_prefixes = [include_prefixes]
+        INCLUDE_PREFIXES = {_normalize_rel_path(p) for p in include_prefixes if _normalize_rel_path(p)}
+        print(f"Using include_prefixes allowlist ({len(INCLUDE_PREFIXES)}).")
+
+
 def load_translator_settings():
     """Loads per-game settings (game root, tl subdir) from translator_config.json or env."""
     global BASE_DIR, TL_DIR, TL_SUBDIR, ENV_GAME_ROOT, WORK_GAME_DIR, SOURCE_GAME_DIR, GLOSSARY_FILE
@@ -706,13 +764,16 @@ def load_translator_settings():
 
     PREP_UNPACK_COMMAND = _coerce_command(prepare.get("unpack_command"))
     PREP_TEMPLATE_COMMAND = _coerce_command(prepare.get("template_command"))
+    load_include_filters_from_config(config)
+    load_sync_translation_settings(config)
     load_sync_rag_settings(config)
     load_sync_story_memory_settings(config)
 
 
 def load_config():
     """Loads API keys and settings from api_keys.json or environment."""
-    global API_KEYS, MODELS, MAX_CHARS, MAX_ITEMS, INCLUDE_FILES, INCLUDE_PREFIXES
+    global API_KEYS, MODELS, MAX_CHARS, MAX_ITEMS, SYNC_MAX_OUTPUT_TOKENS
+    global INCLUDE_FILES, INCLUDE_PREFIXES
     
     # Try loading from JSON
     if os.path.exists(CONFIG_FILE):
@@ -722,8 +783,12 @@ def load_config():
                 keys = config.get("api_keys", [])
                 custom_models = config.get("models", [])
                 single_model = config.get("model")
-                batch_size = config.get("batch_size")
+                batch_size = config.get("sync_chunk_size", config.get("batch_size"))
                 max_chars = config.get("max_chars")
+                sync_max_chars = config.get("sync_max_source_chars")
+                if sync_max_chars is not None:
+                    max_chars = sync_max_chars
+                sync_max_output_tokens = config.get("sync_max_output_tokens")
                 include_files = config.get("include_files")
                 include_prefixes = config.get("include_prefixes")
                 
@@ -760,6 +825,15 @@ def load_config():
                             print(f"Using custom max_chars: {MAX_CHARS}")
                 except (TypeError, ValueError):
                     print("Warning: Invalid max_chars in config; using default.")
+
+                try:
+                    if sync_max_output_tokens is not None:
+                        sync_max_output_tokens = int(sync_max_output_tokens)
+                        if sync_max_output_tokens > 0:
+                            SYNC_MAX_OUTPUT_TOKENS = sync_max_output_tokens
+                            print(f"Using custom sync max output tokens: {SYNC_MAX_OUTPUT_TOKENS}")
+                except (TypeError, ValueError):
+                    print("Warning: Invalid sync_max_output_tokens in config; using default.")
 
                 if include_files:
                     if isinstance(include_files, str):
@@ -2446,7 +2520,7 @@ def call_gemini_sdk(prompt, items):
         # Generation config
         generation_config = {
             "temperature": 0.2,
-            "max_output_tokens": 8192,
+            "max_output_tokens": SYNC_MAX_OUTPUT_TOKENS,
             "response_mime_type": "application/json",
             "response_json_schema": build_response_json_schema(items),
         }

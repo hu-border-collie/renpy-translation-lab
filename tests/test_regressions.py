@@ -571,6 +571,101 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 runtime.load_translator_settings()
                 self.assertEqual(runtime.PREP_RENPY_SDK_DIR, str(sdk))
 
+    def test_translator_config_sync_settings_override_legacy_batch_defaults(self):
+        old_values = {
+            'models': runtime.MODELS,
+            'max_items': runtime.MAX_ITEMS,
+            'max_chars': runtime.MAX_CHARS,
+            'max_output_tokens': runtime.SYNC_MAX_OUTPUT_TOKENS,
+            'include_files': runtime.INCLUDE_FILES,
+            'include_prefixes': runtime.INCLUDE_PREFIXES,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                workspace = Path(tmp)
+                base = workspace / 'work'
+                base.mkdir()
+                config_path = workspace / 'translator_config.json'
+                config_path.write_text(
+                    json.dumps({
+                        'game_root': str(base),
+                        'include_files': ['game/tl/schinese/script.rpy'],
+                        'include_prefixes': ['game/tl/schinese/chapter1'],
+                        'sync': {
+                            'model': 'gemini-sync-test',
+                            'chunk_size': 7,
+                            'max_source_chars': 1234,
+                            'max_output_tokens': 5678,
+                        },
+                    }),
+                    encoding='utf-8',
+                )
+
+                with (
+                    mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                    mock.patch.dict(os.environ, {}, clear=True),
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    runtime.MAX_ITEMS = 20
+                    runtime.MAX_CHARS = 6000
+                    runtime.SYNC_MAX_OUTPUT_TOKENS = 16384
+                    runtime.INCLUDE_FILES = set()
+                    runtime.INCLUDE_PREFIXES = set()
+                    runtime.load_translator_settings()
+
+                self.assertEqual(runtime.MODELS, ['gemini-sync-test'])
+                self.assertEqual(runtime.MAX_ITEMS, 7)
+                self.assertEqual(runtime.MAX_CHARS, 1234)
+                self.assertEqual(runtime.SYNC_MAX_OUTPUT_TOKENS, 5678)
+                self.assertEqual(runtime.INCLUDE_FILES, {'game/tl/schinese/script.rpy'})
+                self.assertEqual(runtime.INCLUDE_PREFIXES, {'game/tl/schinese/chapter1'})
+        finally:
+            runtime.MODELS = old_values['models']
+            runtime.MAX_ITEMS = old_values['max_items']
+            runtime.MAX_CHARS = old_values['max_chars']
+            runtime.SYNC_MAX_OUTPUT_TOKENS = old_values['max_output_tokens']
+            runtime.INCLUDE_FILES = old_values['include_files']
+            runtime.INCLUDE_PREFIXES = old_values['include_prefixes']
+
+    def test_legacy_api_config_still_sets_sync_chunk_defaults(self):
+        old_values = {
+            'api_keys': runtime.API_KEYS,
+            'max_items': runtime.MAX_ITEMS,
+            'max_chars': runtime.MAX_CHARS,
+            'max_output_tokens': runtime.SYNC_MAX_OUTPUT_TOKENS,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / 'api_keys.json'
+                config_path.write_text(
+                    json.dumps({
+                        'api_keys': ['test-key'],
+                        'batch_size': 9,
+                        'max_chars': 2222,
+                        'sync_max_output_tokens': 3333,
+                    }),
+                    encoding='utf-8',
+                )
+
+                with (
+                    mock.patch.object(runtime, 'CONFIG_FILE', str(config_path)),
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    runtime.API_KEYS = []
+                    runtime.MAX_ITEMS = 20
+                    runtime.MAX_CHARS = 6000
+                    runtime.SYNC_MAX_OUTPUT_TOKENS = 16384
+                    runtime.load_config()
+
+                self.assertEqual(runtime.MAX_ITEMS, 9)
+                self.assertEqual(runtime.MAX_CHARS, 2222)
+                self.assertEqual(runtime.SYNC_MAX_OUTPUT_TOKENS, 3333)
+        finally:
+            runtime.API_KEYS = old_values['api_keys']
+            runtime.MAX_ITEMS = old_values['max_items']
+            runtime.MAX_CHARS = old_values['max_chars']
+            runtime.SYNC_MAX_OUTPUT_TOKENS = old_values['max_output_tokens']
+
     def test_prepare_does_not_discover_sdk_when_base_dir_is_filesystem_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -1987,6 +2082,7 @@ class BatchRagRegressionTests(unittest.TestCase):
     def test_build_chunks_keeps_context_task_dicts(self):
         old_values = {
             'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
             'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
             'context_after': batch_mod.BATCH_CONTEXT_AFTER,
             'rag_enabled': batch_mod.RAG_ENABLED,
@@ -2039,6 +2135,7 @@ class BatchRagRegressionTests(unittest.TestCase):
             ])
         finally:
             batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
             batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
             batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
             batch_mod.RAG_ENABLED = old_values['rag_enabled']
@@ -2047,6 +2144,50 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertEqual(chunks[1]['context_past'][0]['speaker_name'], 'Eileen')
         self.assertEqual(chunks[1]['context_past'][0]['progress_entry'], 'task:1:0')
         self.assertEqual(chunks[1]['context_future'][0]['speaker_name'], 'Eileen')
+
+    def test_build_chunks_respects_source_char_limit(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 20
+            batch_mod.BATCH_TARGET_CHARS = 10
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+
+            tasks = []
+            for index, text in enumerate(['x' * 12, 'short', 'small', 'tiny']):
+                tasks.append({
+                    'id': f'script.rpy:{index}:0',
+                    'text': text,
+                    'line': index,
+                    'start': 0,
+                    'end': len(text),
+                })
+
+            chunks = batch_mod.build_chunks([{
+                'file_rel_path': 'script.rpy',
+                'file_path': 'script.rpy',
+                'tasks': tasks,
+            }])
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+
+        self.assertEqual([len(chunk['items']) for chunk in chunks], [1, 2, 1])
+        self.assertEqual([chunk['source_char_count'] for chunk in chunks], [12, 10, 4])
+        self.assertEqual(chunks[0]['items'][0]['text'], 'x' * 12)
 
     def test_format_history_hits_block_shows_source_translation_pair(self):
         block = batch_mod.format_history_hits_block([
