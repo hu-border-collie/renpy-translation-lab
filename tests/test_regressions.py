@@ -730,6 +730,35 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             self.assertIn('Custom template command error', str(raised.exception))
             self.assertIn('missing_placeholder', str(raised.exception))
 
+    def test_prepare_first_time_template_failure_blocks_even_with_partial_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+
+            def fail_after_partial_file(*_args):
+                tl_dir.mkdir(parents=True)
+                (tl_dir / 'partial.rpy').write_text('translate schinese strings:\n', encoding='utf-8')
+                return False
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(runtime, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(runtime, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(runtime, 'PREP_ENABLED', True),
+                mock.patch.object(runtime, 'PREP_UNPACK_RPA', False),
+                mock.patch.object(runtime, 'PREP_GENERATE_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_REFRESH_EXISTING_TEMPLATE', True),
+                mock.patch.object(runtime, 'PREP_TEMPLATE_COMMAND', ['generate-template']),
+                mock.patch.object(runtime, '_run_prepare_command', side_effect=fail_after_partial_file),
+                mock.patch('sys.stdout', io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    runtime.run_prepare_steps()
+
+            self.assertIn('Translation template generation failed', str(raised.exception))
+
     def test_prepare_existing_tl_refresh_runs_template_command(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
