@@ -543,6 +543,34 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             ):
                 self.assertEqual(runtime._discover_renpy_sdk_dir(), str(newer))
 
+    def test_prepare_invalid_configured_sdk_falls_back_to_discovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            base = workspace / 'Game_Example' / 'work'
+            sdk = workspace / 'renpy-8.5.2-sdk'
+            sdk.mkdir(parents=True)
+            (sdk / 'renpy.py').write_text('import renpy.bootstrap\n', encoding='utf-8')
+            base.mkdir(parents=True)
+            config_path = workspace / 'translator_config.json'
+            config_path.write_text(
+                json.dumps(
+                    {
+                        'game_root': str(base),
+                        'prepare': {'renpy_sdk_dir': 'missing-sdk'},
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'renpy-translation-lab')),
+                mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'renpy-translation-lab')),
+                mock.patch.dict(os.environ, {}, clear=True),
+            ):
+                runtime.load_translator_settings()
+                self.assertEqual(runtime.PREP_RENPY_SDK_DIR, str(sdk))
+
     def test_prepare_does_not_discover_sdk_when_base_dir_is_filesystem_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

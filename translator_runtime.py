@@ -420,6 +420,14 @@ def _renpy_sdk_sort_key(path):
     )
 
 
+def _is_renpy_sdk_dir(path):
+    return bool(
+        path
+        and os.path.isdir(path)
+        and os.path.isfile(os.path.join(path, "renpy.py"))
+    )
+
+
 def _discover_renpy_sdk_dir():
     if _is_filesystem_root(BASE_DIR):
         return ""
@@ -447,7 +455,7 @@ def _discover_renpy_sdk_dir():
         {
             os.path.abspath(candidate)
             for candidate in candidates
-            if os.path.isdir(candidate) and os.path.isfile(os.path.join(candidate, "renpy.py"))
+            if _is_renpy_sdk_dir(candidate)
         },
         key=_renpy_sdk_sort_key,
         reverse=True,
@@ -669,10 +677,14 @@ def load_translator_settings():
     renpy_sdk_dir = prepare.get("renpy_sdk_dir")
     if not (isinstance(renpy_sdk_dir, str) and renpy_sdk_dir.strip()):
         renpy_sdk_dir = os.environ.get("RENPY_SDK_DIR")
-    PREP_RENPY_SDK_DIR = _resolve_preferred_path_from_bases(
+    resolved_renpy_sdk_dir = _resolve_preferred_path_from_bases(
         renpy_sdk_dir,
         (BASE_DIR, ROOT_DIR, TOOL_DIR),
-    ) or _discover_renpy_sdk_dir()
+    )
+    if _is_renpy_sdk_dir(resolved_renpy_sdk_dir):
+        PREP_RENPY_SDK_DIR = resolved_renpy_sdk_dir
+    else:
+        PREP_RENPY_SDK_DIR = _discover_renpy_sdk_dir()
 
     source_game_dir = prepare.get("source_game_dir")
     if source_game_dir is not None:
