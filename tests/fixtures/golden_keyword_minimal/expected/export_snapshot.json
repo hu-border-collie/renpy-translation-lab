@@ -1,0 +1,114 @@
+{
+  "summary": {
+    "expected_chunks": 2,
+    "result_rows": 2,
+    "processed_chunks": 2,
+    "parsed_chunks": 2,
+    "candidate_count_raw": 5,
+    "candidate_count_deduped": 3,
+    "chunk_row_errors": 0,
+    "unknown_chunk_keys": 0,
+    "missing_response_chunks": 0,
+    "missing_chunk_rows": 0,
+    "ambiguous_provenance_candidates": 0,
+    "chunk_summary_count": 2,
+    "ambiguous_summary_chunks": 0,
+    "parse_errors": 0,
+    "reason_counts": {}
+  },
+  "candidate_rows": [
+    {
+      "source": "Aether Compass",
+      "suggested_target": "以太罗盘",
+      "category": "item",
+      "confidence": 0.92,
+      "evidence": "Navigation item found by Noah.",
+      "source_item_ids": [
+        "chapter01/keywords.rpy:9:keyword:2"
+      ],
+      "source_files": [
+        "chapter01/keywords.rpy"
+      ],
+      "source_lines": [
+        9
+      ],
+      "occurrences": 1
+    },
+    {
+      "source": "Void Gate",
+      "suggested_target": "虚空门",
+      "category": "place",
+      "confidence": 0.86,
+      "evidence": "Recurring gate name.",
+      "source_item_ids": [
+        "chapter01/keywords.rpy:2:keyword:0",
+        "chapter01/keywords.rpy:9:keyword:2"
+      ],
+      "source_files": [
+        "chapter01/keywords.rpy"
+      ],
+      "source_lines": [
+        2,
+        9
+      ],
+      "occurrences": 2
+    },
+    {
+      "source": "Crystal Key",
+      "suggested_target": "水晶钥匙",
+      "category": "item",
+      "confidence": 0.74,
+      "evidence": "Quest key item.",
+      "source_item_ids": [
+        "chapter01/keywords.rpy:5:keyword:1",
+        "chapter01/keywords.rpy:12:keyword:3"
+      ],
+      "source_files": [
+        "chapter01/keywords.rpy"
+      ],
+      "source_lines": [
+        5,
+        12
+      ],
+      "occurrences": 2
+    }
+  ],
+  "summary_rows": [
+    {
+      "key": "kw-cd03d6447e-00001",
+      "file_rel_path": "chapter01/keywords.rpy",
+      "chunk_index": 1,
+      "line_numbers": [
+        2,
+        5
+      ],
+      "chunk_summary": "术语表片段介绍虚空门和水晶钥匙。",
+      "summary_evidence_item_ids": [
+        "chapter01/keywords.rpy:2:keyword:0",
+        "chapter01/keywords.rpy:5:keyword:1"
+      ],
+      "source_lines": [
+        2,
+        5
+      ]
+    },
+    {
+      "key": "kw-cd03d6447e-00002",
+      "file_rel_path": "chapter01/keywords.rpy",
+      "chunk_index": 2,
+      "line_numbers": [
+        9,
+        12
+      ],
+      "chunk_summary": "诺亚在虚空门附近找到以太罗盘，水晶钥匙随后发光。",
+      "summary_evidence_item_ids": [
+        "chapter01/keywords.rpy:9:keyword:2",
+        "chapter01/keywords.rpy:12:keyword:3"
+      ],
+      "source_lines": [
+        9,
+        12
+      ]
+    }
+  ]
+}
