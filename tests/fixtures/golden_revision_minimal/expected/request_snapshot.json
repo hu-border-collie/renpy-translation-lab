@@ -1,0 +1,72 @@
+{
+  "rows": [
+    {
+      "key": "rv-4e4faec80d-00001",
+      "file_rel_path": "chapter01/revisions.rpy",
+      "request_keys": [
+        "contents",
+        "generation_config",
+        "system_instruction"
+      ],
+      "content_roles": [
+        "user"
+      ],
+      "target_item_ids": [
+        "chapter01/revisions.rpy:2:8:revision:0",
+        "chapter01/revisions.rpy:5:8:revision:1",
+        "chapter01/revisions.rpy:8:8:revision:2"
+      ],
+      "system_instruction_sha256": "cea23eba3b14e7f566e675b00756c4c2a506f233ba7c41330de78ac76205cf1a",
+      "user_prompt_sha256": "a10edb06b82a7554c276dc9a0d2b0c37d1aa74c0bb81e5bd9e05e17123124bfc",
+      "generation_config": {
+        "keys": [
+          "max_output_tokens",
+          "response_json_schema",
+          "response_mime_type",
+          "temperature",
+          "thinking_config"
+        ],
+        "temperature": 0.2,
+        "max_output_tokens": 16384,
+        "response_mime_type": "application/json",
+        "thinking_config": {
+          "thinking_level": "MINIMAL"
+        },
+        "response_json_schema": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "should_update",
+              "revised_translation",
+              "reason"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "chapter01/revisions.rpy:2:8:revision:0",
+                  "chapter01/revisions.rpy:5:8:revision:1",
+                  "chapter01/revisions.rpy:8:8:revision:2"
+                ]
+              },
+              "should_update": {
+                "type": "boolean"
+              },
+              "revised_translation": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

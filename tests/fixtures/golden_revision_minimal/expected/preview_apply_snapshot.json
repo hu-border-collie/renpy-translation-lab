@@ -1,0 +1,99 @@
+{
+  "last_revision_preview_summary": {
+    "expected_chunks": 1,
+    "result_rows": 1,
+    "processed_chunks": 1,
+    "expected_items": 3,
+    "parsed_items": 3,
+    "candidate_valid_items": 2,
+    "revision_candidate_items": 2,
+    "valid_items": 2,
+    "unchanged_items": 1,
+    "pending_files": 1,
+    "pending_lines": 2,
+    "skipped_items": 0,
+    "source_mismatch_items": 0,
+    "failure_items": 0,
+    "chunk_row_errors": 0,
+    "missing_response_chunks": 0,
+    "partial_chunks": 0,
+    "max_tokens_chunks": 0,
+    "reason_counts": {}
+  },
+  "preview_rows": [
+    {
+      "id": "chapter01/revisions.rpy:2:8:revision:0",
+      "file_rel_path": "chapter01/revisions.rpy",
+      "line": 3,
+      "source": "Void Gate",
+      "current_translation": "虚空门",
+      "revised_translation": "虚空之门",
+      "should_update": true,
+      "reason": "统一核心术语",
+      "status": "pending",
+      "error": ""
+    },
+    {
+      "id": "chapter01/revisions.rpy:5:8:revision:1",
+      "file_rel_path": "chapter01/revisions.rpy",
+      "line": 6,
+      "source": "Crystal Key",
+      "current_translation": "水晶钥匙",
+      "revised_translation": "晶核钥匙",
+      "should_update": true,
+      "reason": "统一物品名",
+      "status": "pending",
+      "error": ""
+    },
+    {
+      "id": "chapter01/revisions.rpy:8:8:revision:2",
+      "file_rel_path": "chapter01/revisions.rpy",
+      "line": 9,
+      "source": "Already Good",
+      "current_translation": "已经很好",
+      "revised_translation": "已经很好",
+      "should_update": false,
+      "reason": "当前译文可保留",
+      "status": "unchanged",
+      "error": ""
+    }
+  ],
+  "revision_apply_summary": {
+    "applied_files": 1,
+    "applied_lines": 2,
+    "candidate_items": 2,
+    "recoverable_items": 2,
+    "unchanged_items": 1,
+    "skipped_items": 0,
+    "source_mismatch_items": 0,
+    "failure_count": 0,
+    "rag": {}
+  },
+  "last_revision_apply_summary": {
+    "expected_chunks": 1,
+    "result_rows": 1,
+    "processed_chunks": 1,
+    "expected_items": 3,
+    "parsed_items": 3,
+    "candidate_valid_items": 2,
+    "revision_candidate_items": 2,
+    "valid_items": 2,
+    "unchanged_items": 1,
+    "pending_files": 1,
+    "pending_lines": 2,
+    "skipped_items": 0,
+    "source_mismatch_items": 0,
+    "failure_items": 0,
+    "chunk_row_errors": 0,
+    "missing_response_chunks": 0,
+    "partial_chunks": 0,
+    "max_tokens_chunks": 0,
+    "reason_counts": {}
+  },
+  "progress": {
+    "chapter01/revisions.rpy": [
+      2,
+      5
+    ]
+  }
+}

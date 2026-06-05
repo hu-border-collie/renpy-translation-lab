@@ -1,0 +1,17 @@
+{
+  "Void Gate": {
+    "should_update": true,
+    "revised_translation": "虚空之门",
+    "reason": "统一核心术语"
+  },
+  "Crystal Key": {
+    "should_update": true,
+    "revised_translation": "晶核钥匙",
+    "reason": "统一物品名"
+  },
+  "Already Good": {
+    "should_update": false,
+    "revised_translation": "已经很好",
+    "reason": "当前译文可保留"
+  }
+}
