@@ -3272,6 +3272,7 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                 )
 
                 checked_manifest = batch_mod.check_results(str(manifest_path))
+                self.assertEqual(checked_manifest['last_check_summary']['safety_level'], 'safe')
                 applied_manifest = batch_mod.apply_results(str(manifest_path))
                 progress = json.loads(Path(batch_mod.PROGRESS_LOG).read_text(encoding='utf-8'))
 
@@ -3311,6 +3312,20 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                     )
                 )
                 self._write_mock_results(manifest_path)
+                with self.assertRaisesRegex(SystemExit, 'no valid check summary'):
+                    batch_mod.apply_results(str(manifest_path))
+
+                batch_mod.check_results(str(manifest_path))
+                results_path = manifest_path.parent / 'results.jsonl'
+                results_path.write_text(
+                    results_path.read_text(encoding='utf-8') + '\n',
+                    encoding='utf-8',
+                )
+                with self.assertRaisesRegex(SystemExit, 'changed after the last check'):
+                    batch_mod.apply_results(str(manifest_path))
+
+                self._write_mock_results(manifest_path)
+                batch_mod.check_results(str(manifest_path))
                 dialogue_path = tl_dir / 'chapter01' / 'dialogue.rpy'
                 dialogue_path.write_text(
                     dialogue_path.read_text(encoding='utf-8').replace(
@@ -3320,17 +3335,16 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                     encoding='utf-8',
                 )
 
-                applied_manifest = batch_mod.apply_results(str(manifest_path))
+                with self.assertRaisesRegex(SystemExit, 'current results are not safe'):
+                    batch_mod.apply_results(str(manifest_path))
                 final_dialogue = dialogue_path.read_text(encoding='utf-8')
+                saved_manifest = self._load_manifest(manifest_path)
 
                 self.assertIn('e "Welcome home, traveler."', final_dialogue)
                 self.assertNotIn('e "旅人，欢迎回来。"', final_dialogue)
-                self.assertIn('e "请勿触碰水晶。"', final_dialogue)
-                self.assertEqual(applied_manifest['apply_summary']['candidate_items'], 6)
-                self.assertEqual(applied_manifest['apply_summary']['recoverable_items'], 5)
-                self.assertEqual(applied_manifest['apply_summary']['skipped_items'], 1)
-                self.assertEqual(applied_manifest['apply_summary']['source_mismatch_items'], 1)
-                self.assertEqual(applied_manifest['apply_summary']['failure_count'], 1)
+                self.assertIn('e "Don\'t touch the crystal."', final_dialogue)
+                self.assertNotIn('e "请勿触碰水晶。"', final_dialogue)
+                self.assertIn('last_apply_failure_report_path', saved_manifest)
             finally:
                 self._restore_batch_environment(old_values)
 
@@ -5078,6 +5092,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
                 mock.patch.object(batch_mod, 'update_progress') as update_progress,
             ):
+                batch_mod.check_results(str(manifest_path))
                 manifest = batch_mod.apply_results(str(manifest_path))
 
             updated_script = target_file.read_text(encoding='utf-8')
@@ -5158,23 +5173,25 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 target_file.write_text(changed_line, encoding='utf-8')
                 return result
 
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                batch_mod.check_results(str(manifest_path))
+
             with (
                 mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
                 mock.patch.object(batch_mod, 'collect_result_actions', side_effect=mutate_after_initial_validation),
                 mock.patch.object(batch_mod, 'update_progress') as update_progress,
                 mock.patch.object(batch_mod, 'append_failure_entries') as append_failures,
             ):
-                manifest = batch_mod.apply_results(str(manifest_path))
+                with self.assertRaisesRegex(SystemExit, 'source revalidation is not safe'):
+                    batch_mod.apply_results(str(manifest_path))
 
             final_script = target_file.read_text(encoding='utf-8')
+            saved_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
 
         self.assertEqual(final_script, changed_line)
         update_progress.assert_not_called()
         append_failures.assert_called_once()
-        self.assertEqual(manifest['apply_summary']['applied_files'], 0)
-        self.assertEqual(manifest['apply_summary']['recoverable_items'], 0)
-        self.assertEqual(manifest['apply_summary']['skipped_items'], 1)
-        self.assertEqual(manifest['apply_summary']['source_mismatch_items'], 1)
+        self.assertIn('last_apply_failure_report_path', saved_manifest)
 
     def test_apply_results_rejects_already_applied_manifest_without_force(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -5253,16 +5270,108 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
                 mock.patch.object(batch_mod, 'append_failure_entries') as append_failures,
             ):
-                manifest = batch_mod.apply_results(str(manifest_path), force=True)
+                batch_mod.check_results(str(manifest_path))
+                with self.assertRaisesRegex(SystemExit, 'not safe'):
+                    batch_mod.apply_results(str(manifest_path), force=True)
 
             unchanged_script = target_file.read_text(encoding='utf-8')
 
         self.assertEqual(unchanged_script, line)
-        self.assertEqual(manifest['apply_summary']['applied_files'], 0)
-        self.assertEqual(manifest['apply_summary']['recoverable_items'], 0)
-        self.assertEqual(manifest['apply_summary']['skipped_items'], 1)
-        self.assertEqual(manifest['apply_summary']['source_mismatch_items'], 1)
-        append_failures.assert_called_once()
+        append_failures.assert_not_called()
+
+    def test_apply_results_rejects_warn_check_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'tl'
+            package_dir = root / 'package'
+            tl_dir.mkdir()
+            package_dir.mkdir()
+            target_file = tl_dir / 'script.rpy'
+            first_line = '    e "Hello"\n'
+            second_line = '    e "World"\n'
+            first_start = first_line.index('"Hello"')
+            first_end = first_start + len('"Hello"')
+            second_start = second_line.index('"World"')
+            second_end = second_start + len('"World"')
+            target_file.write_text(first_line + second_line, encoding='utf-8')
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            response_text = json.dumps(
+                [{'id': f'script.rpy:0:{first_start}', 'translation': '\u4f60\u597d'}],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'chunk-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'files': {'script.rpy': {'path': str(target_file)}},
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'chunk-1',
+                                'file_rel_path': 'script.rpy',
+                                'items': [
+                                    {
+                                        'id': f'script.rpy:0:{first_start}',
+                                        'line': 0,
+                                        'start': first_start,
+                                        'end': first_end,
+                                        'text': 'Hello',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    },
+                                    {
+                                        'id': f'script.rpy:1:{second_start}',
+                                        'line': 1,
+                                        'start': second_start,
+                                        'end': second_end,
+                                        'text': 'World',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod, 'update_progress') as update_progress,
+            ):
+                checked = batch_mod.check_results(str(manifest_path))
+                with self.assertRaisesRegex(SystemExit, 'not safe'):
+                    batch_mod.apply_results(str(manifest_path))
+
+            final_script = target_file.read_text(encoding='utf-8')
+            check_failures = [
+                json.loads(line)
+                for line in (package_dir / 'check_failures.jsonl').read_text(encoding='utf-8').splitlines()
+                if line.strip()
+            ]
+
+        self.assertEqual(checked['last_check_summary']['safety_level'], 'warn')
+        self.assertEqual(checked['last_check_summary']['safety_reasons']['warn']['response_missing_item_id'], 1)
+        self.assertEqual(final_script, first_line + second_line)
+        update_progress.assert_not_called()
+        self.assertEqual(check_failures[0]['status'], 'warn')
+        self.assertEqual(check_failures[0]['reason_code'], 'response_missing_item_id')
 
     def test_manifest_result_path_must_stay_in_package_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -5346,7 +5455,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
 
             with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
                 with self.assertRaisesRegex(SystemExit, 'escapes'):
-                    batch_mod.apply_results(str(manifest_path))
+                    batch_mod.check_results(str(manifest_path))
 
     def test_load_repair_report_items_accepts_batch_failure_log_shape(self):
         with tempfile.TemporaryDirectory() as tmp:

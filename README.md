@@ -197,9 +197,13 @@ python gemini_translate_batch.py sync-keywords --limit 3
 - `doctor` 会检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，适合在正式翻译前确认项目是否已准备好
 - `bootstrap-rag` 会扫描当前允许处理的全部 TL `.rpy` 文件，把已有译文预先写入本地 history store；适合在正式 `build / submit` 前先暖库
 - `probe` 会用同步请求做最小 smoke test
-- `check` 是干跑校验，不会修改 `.rpy`
-- `apply` 只会写回通过校验的结果
+- `check` 是干跑校验，不会修改 `.rpy`；它会把当前 manifest、results、目标 item 形状和 check contract version 写入 `last_check_summary.check_fingerprint`
+- `check` 会输出 `safe / warn / block` 安全等级，并在包目录写入 `check_failures.jsonl`
+- `apply` 默认要求最近一次 `check` 对应当前 manifest/results，且安全等级必须是 `safe`；未 check、results 变化、manifest item 变化、`warn` 或 `block` 都会拒绝写回
+- `--force` 只绕过“manifest 已经 apply 过”的重复写回保护，不会绕过 stale check、source snapshot 校验或 `block`
+- `apply` 写回前会再次校验当前源文本；如果 apply 阶段发现漂移，会拒绝写回并在包目录写入 `apply_failure_report.json` / `failures.jsonl`
 - `build-revisions` 会复用 include 过滤、glossary、macro setting、可选 RAG / Story Memory，把已有原文和当前译文送入 Batch；`preview-revisions` 导出 `revision_preview.jsonl` 和 `revision_preview.md`，`apply-revisions` 会在写回前重新校验当前文件中的旧译文快照
+- 当前 `safe / warn / block` 强制闸门只覆盖普通 translation manifest 的 `check/apply`；订正写回仍走 `preview-revisions -> apply-revisions` 的独立快照校验，如需同类 fingerprint 闸门应另开 follow-up
 - `sync-revisions` 复用订正 prompt、schema、RAG / Story Memory 注入、预览报告和写回前源快照校验；默认只预览，传 `--apply` 才调用 `apply-revisions` 写回
 - `build-keywords` 会复用 include 过滤和 Batch manifest，默认不运行 prepare，按较大 chunk 扫描 TL 文本并要求模型输出 `candidates`、`chunk_summary`、`summary_evidence_item_ids`；候选项里包含 `source`、`suggested_target`、`category`、`confidence`、`evidence`、`source_item_ids`。如果确实要先刷新 TL 模板，可显式传 `--prepare`
 - `export-keywords` 会导出去重后的 `keyword_candidates.jsonl` / `keyword_candidates.md`，并额外导出 chunk 级剧情概要 `keyword_chunk_summaries.jsonl` / `keyword_chunk_summaries.md`；报告会标出缺失 chunk row 或无法精确定位的候选 / 概要来源
