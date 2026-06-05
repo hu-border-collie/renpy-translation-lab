@@ -81,11 +81,37 @@ BATCH_MACRO_SETTING = ''
 MANIFEST_MODE_TRANSLATION = 'translation'
 MANIFEST_MODE_KEYWORD_EXTRACTION = 'keyword_extraction'
 MANIFEST_MODE_REVISION = 'revision'
+CHECK_CONTRACT_VERSION = 1
+CHECK_SAFETY_SAFE = 'safe'
+CHECK_SAFETY_WARN = 'warn'
+CHECK_SAFETY_BLOCK = 'block'
 KEYWORD_DISPLAY_NAME_PREFIX = 'renpy-keywords'
 KEYWORD_CHUNK_SIZE = 40
 KEYWORD_MAX_CANDIDATES_PER_CHUNK = 12
 REVISION_DISPLAY_NAME_PREFIX = 'renpy-revise'
 REVISION_CHUNK_SIZE = 6
+
+CHECK_WARN_REASON_CODES = {
+    'partial_result_items',
+    'response_missing_item_id',
+    'schema_or_item_mismatch',
+    'validation_failed',
+    'missing_chunk_rows',
+}
+CHECK_BLOCK_REASON_CODES = {
+    'invalid_result_jsonl_row',
+    'unknown_chunk_key',
+    'row_error',
+    'missing_response_text',
+    'failed_to_parse_model_json',
+    'truncated_output',
+    'duplicate_result_id',
+    'source_line_missing',
+    'source_text_mismatch',
+    'missing_manifest_file',
+    'target_file_missing',
+    'target_file_path_escaped',
+}
 
 RAG_ENABLED = False
 RAG_STORE_DIR = ''
@@ -851,6 +877,284 @@ def save_manifest(manifest, update_latest=True):
         json.dump(data, handle, ensure_ascii=False, indent=2)
     if update_latest:
         remember_latest_manifest(manifest_path)
+
+
+def stable_json_dumps(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+
+def stable_json_sha256(value):
+    return hashlib.sha256(stable_json_dumps(value).encode('utf-8')).hexdigest()
+
+
+def file_content_fingerprint(path):
+    digest = hashlib.sha256()
+    row_count = 0
+    size = 0
+    with open(path, 'rb') as handle:
+        for raw_line in handle:
+            size += len(raw_line)
+            digest.update(raw_line)
+            if raw_line.strip():
+                row_count += 1
+    return {
+        'path': os.path.abspath(path),
+        'size': size,
+        'sha256': digest.hexdigest(),
+        'row_count': row_count,
+    }
+
+
+def manifest_target_shape(manifest):
+    chunks = []
+    item_count = 0
+    for chunk in manifest.get('chunks') or []:
+        items = []
+        for item in chunk.get('items') or []:
+            source_text = item.get('source', item.get('text', ''))
+            items.append(
+                {
+                    'id': item.get('id', ''),
+                    'file_rel_path': item.get('file_rel_path', chunk.get('file_rel_path', '')),
+                    'line': item.get('line', item.get('line_number')),
+                    'start': item.get('start'),
+                    'end': item.get('end'),
+                    'source_checksum': hash_text(source_text),
+                }
+            )
+        item_count += len(items)
+        chunks.append(
+            {
+                'key': chunk.get('key', ''),
+                'file_rel_path': chunk.get('file_rel_path', ''),
+                'chunk_index': chunk.get('chunk_index'),
+                'item_count': len(items),
+                'items': items,
+            }
+        )
+    return {
+        'chunk_count': len(chunks),
+        'item_count': item_count,
+        'chunk_keys': [chunk['key'] for chunk in chunks],
+        'digest': stable_json_sha256(chunks),
+    }
+
+
+def build_check_fingerprint(manifest):
+    result_path = resolve_manifest_result_path(manifest)
+    package_dir = manifest.get('_package_dir', '')
+    payload = {
+        'check_contract_version': CHECK_CONTRACT_VERSION,
+        'manifest_path': os.path.abspath(manifest.get('_manifest_path', '')) if manifest.get('_manifest_path') else '',
+        'package_id': os.path.basename(os.path.abspath(package_dir)) if package_dir else '',
+        'mode': manifest_mode(manifest),
+        'manifest_version': manifest.get('manifest_version', 1),
+        'core_schema_version': manifest.get('core_schema_version', 1),
+        'batch_model': manifest.get('batch_model', ''),
+        'settings': manifest.get('settings') or {},
+        'result': file_content_fingerprint(result_path),
+        'target_shape': manifest_target_shape(manifest),
+    }
+    payload['fingerprint_sha256'] = stable_json_sha256(payload)
+    return payload
+
+
+def check_fingerprint_id(fingerprint):
+    if not isinstance(fingerprint, dict):
+        return ''
+    return fingerprint.get('fingerprint_sha256') or stable_json_sha256(fingerprint)
+
+
+def safety_status_for_reason(reason_code):
+    if reason_code in CHECK_BLOCK_REASON_CODES:
+        return CHECK_SAFETY_BLOCK
+    if reason_code in CHECK_WARN_REASON_CODES:
+        return CHECK_SAFETY_WARN
+    return CHECK_SAFETY_BLOCK
+
+
+def summarize_check_safety(summary):
+    reason_counts = summary.get('reason_counts') or {}
+    warn_reasons = {}
+    block_reasons = {}
+    for reason_code, count in sorted(reason_counts.items()):
+        if not count:
+            continue
+        status = safety_status_for_reason(reason_code)
+        if status == CHECK_SAFETY_WARN:
+            warn_reasons[reason_code] = count
+        else:
+            block_reasons[reason_code] = count
+
+    if summary.get('failure_items', 0) and not warn_reasons and not block_reasons:
+        block_reasons['unclassified_failure'] = summary.get('failure_items', 0)
+
+    warn_count = sum(warn_reasons.values())
+    block_count = sum(block_reasons.values())
+    if block_count:
+        level = CHECK_SAFETY_BLOCK
+    elif warn_count:
+        level = CHECK_SAFETY_WARN
+    else:
+        level = CHECK_SAFETY_SAFE
+
+    return {
+        'level': level,
+        'counts': {
+            'safe': summary.get('valid_items', 0),
+            'warn': warn_count,
+            'block': block_count,
+        },
+        'reasons': {
+            CHECK_SAFETY_WARN: warn_reasons,
+            CHECK_SAFETY_BLOCK: block_reasons,
+        },
+    }
+
+
+def attach_check_contract(manifest, summary):
+    safety = summarize_check_safety(summary)
+    summary['check_contract_version'] = CHECK_CONTRACT_VERSION
+    summary['check_fingerprint'] = build_check_fingerprint(manifest)
+    summary['safety_level'] = safety['level']
+    summary['safety_counts'] = safety['counts']
+    summary['safety_reasons'] = safety['reasons']
+    return summary
+
+
+def infer_failure_reason_code(entry):
+    reason_code = entry.get('reason_code')
+    if isinstance(reason_code, str) and reason_code:
+        return reason_code
+    error = str(entry.get('error') or '').lower()
+    if 'invalid result jsonl row' in error:
+        return 'invalid_result_jsonl_row'
+    if 'unknown chunk key' in error:
+        return 'unknown_chunk_key'
+    if 'missing text in response payload' in error:
+        return 'missing_response_text'
+    if 'failed to parse model json' in error:
+        return 'failed_to_parse_model_json'
+    if 'response missing item id' in error:
+        return 'response_missing_item_id'
+    if 'validation failed' in error:
+        return 'validation_failed'
+    if 'no result row found' in error:
+        return 'missing_chunk_rows'
+    if 'source line missing' in error:
+        return 'source_line_missing'
+    if 'source text mismatch' in error:
+        return 'source_text_mismatch'
+    if 'manifest file entry missing' in error:
+        return 'missing_manifest_file'
+    if 'target file missing' in error:
+        return 'target_file_missing'
+    if 'escapes' in error:
+        return 'target_file_path_escaped'
+    return 'unclassified_failure'
+
+
+def annotate_failure_entries(entries):
+    for entry in entries:
+        reason_code = infer_failure_reason_code(entry)
+        entry.setdefault('reason_code', reason_code)
+        entry.setdefault('status', safety_status_for_reason(reason_code))
+        if entry.get('id') and not entry.get('item_id'):
+            entry['item_id'] = entry['id']
+        if entry.get('text') and not entry.get('source_checksum'):
+            entry['source_checksum'] = hash_text(entry.get('text', ''))
+    return entries
+
+
+def write_json_report(path, payload):
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+
+
+def write_jsonl_report(path, entries):
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as handle:
+        for entry in entries:
+            handle.write(json.dumps(entry, ensure_ascii=False) + '\n')
+
+
+def write_check_failure_report(manifest, failure_entries):
+    path = os.path.join(manifest.get('_package_dir', ''), 'check_failures.jsonl')
+    write_jsonl_report(path, annotate_failure_entries(failure_entries))
+    return path
+
+
+def write_apply_failure_report(manifest, reason_code, message, summary=None, failure_entries=None, current_fingerprint=None):
+    failure_entries = annotate_failure_entries(failure_entries or [])
+    failures_path = os.path.join(manifest.get('_package_dir', ''), 'failures.jsonl')
+    report_path = os.path.join(manifest.get('_package_dir', ''), 'apply_failure_report.json')
+    payload = {
+        'timestamp': datetime.now().isoformat(timespec='seconds'),
+        'status': CHECK_SAFETY_BLOCK,
+        'reason_code': reason_code,
+        'error': message,
+        'manifest_path': manifest.get('_manifest_path', ''),
+        'last_check_at': manifest.get('last_check_at', ''),
+        'last_check_safety_level': (manifest.get('last_check_summary') or {}).get('safety_level', ''),
+        'current_check_fingerprint': current_fingerprint or {},
+        'summary': summary or {},
+        'failure_count': len(failure_entries),
+        'failures_path': failures_path if failure_entries else '',
+    }
+    write_json_report(report_path, payload)
+    manifest['last_apply_failure_report_path'] = report_path
+    return report_path
+
+
+def fail_apply_preflight(manifest, reason_code, message, current_fingerprint=None):
+    report_path = write_apply_failure_report(
+        manifest,
+        reason_code,
+        message,
+        current_fingerprint=current_fingerprint,
+    )
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    raise SystemExit(f'{message} Report: {report_path}')
+
+
+def require_safe_check_for_apply(manifest):
+    last_summary = manifest.get('last_check_summary')
+    if not isinstance(last_summary, dict):
+        fail_apply_preflight(
+            manifest,
+            'missing_check',
+            'Manifest has no valid check summary. Run check before apply.',
+        )
+    if last_summary.get('check_contract_version') != CHECK_CONTRACT_VERSION:
+        fail_apply_preflight(
+            manifest,
+            'stale_check_contract',
+            'Manifest check summary was produced by an older check contract. Run check again before apply.',
+        )
+
+    checked_fingerprint = last_summary.get('check_fingerprint')
+    current_fingerprint = build_check_fingerprint(manifest)
+    if check_fingerprint_id(checked_fingerprint) != check_fingerprint_id(current_fingerprint):
+        fail_apply_preflight(
+            manifest,
+            'stale_check_fingerprint',
+            'Manifest or results changed after the last check. Run check again before apply.',
+            current_fingerprint=current_fingerprint,
+        )
+
+    safety_level = last_summary.get('safety_level')
+    if safety_level != CHECK_SAFETY_SAFE:
+        reason_code = 'unsafe_check_status'
+        message = (
+            f'Last check safety status is {safety_level or "unknown"}, not safe. '
+            'Repair the results or run check again before apply.'
+        )
+        fail_apply_preflight(manifest, reason_code, message, current_fingerprint=current_fingerprint)
 
 
 
@@ -2787,6 +3091,7 @@ def append_failure_entries(entries, package_dir=''):
     if not entries:
         return
 
+    entries = annotate_failure_entries(entries)
     ensure_batch_dirs()
     paths = [FAILED_LOG]
     if package_dir:
@@ -3661,6 +3966,15 @@ def print_check_summary(summary):
         print('Failure categories:')
         for name in sorted(summary['reason_counts']):
             print(f"- {name}: {summary['reason_counts'][name]}")
+    if summary.get('safety_level'):
+        print(f"Safety status: {summary['safety_level']}")
+        safety_reasons = summary.get('safety_reasons') or {}
+        for status in (CHECK_SAFETY_WARN, CHECK_SAFETY_BLOCK):
+            reasons = safety_reasons.get(status) or {}
+            if reasons:
+                print(f"{status.capitalize()} reasons:")
+                for name in sorted(reasons):
+                    print(f"- {name}: {reasons[name]}")
 
 
 def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
@@ -3776,12 +4090,16 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
 def check_results(target=None):
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'check')
-    _replacements, _translated, _failures, summary = collect_result_actions(manifest, validate_sources=True)
+    _replacements, _translated, failure_entries, summary = collect_result_actions(manifest, validate_sources=True)
+    attach_check_contract(manifest, summary)
+    check_report_path = write_check_failure_report(manifest, failure_entries)
     manifest['last_check_at'] = datetime.now().isoformat(timespec='seconds')
     manifest['last_check_summary'] = summary
+    manifest['last_check_report_path'] = check_report_path
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     print(f"Manifest: {manifest['_manifest_path']}")
     print_check_summary(summary)
+    print(f"Check failure report: {check_report_path}")
     return manifest
 
 
@@ -3790,16 +4108,32 @@ def apply_results(target=None, force=False):
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'apply')
     if manifest.get('applied_at') and not force:
         raise SystemExit('Manifest was already applied. Re-run apply with --force to bypass this guard; source validation still applies.')
+    require_safe_check_for_apply(manifest)
 
     replacements_by_file, _translated_lines_by_file, failure_entries, summary = collect_result_actions(
         manifest,
         validate_sources=True,
     )
+    attach_check_contract(manifest, summary)
+    if summary.get('safety_level') != CHECK_SAFETY_SAFE:
+        append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
+        report_path = write_apply_failure_report(
+            manifest,
+            'unsafe_apply_recheck',
+            f'Apply recheck status is {summary.get("safety_level")}, not safe. No files were written.',
+            summary=summary,
+            failure_entries=failure_entries,
+            current_fingerprint=summary.get('check_fingerprint'),
+        )
+        save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+        raise SystemExit(f'Apply refused because current results are not safe. Report: {report_path}')
 
     applied_files = 0
     applied_lines = 0
-    final_pending_files = 0
-    final_pending_lines = 0
+    revalidated_replacements_by_file = {}
+    revalidated_line_numbers_by_file = {}
+    revalidated_file_paths = {}
+    revalidated_file_lines = {}
     rag_jobs = []
     for file_key, replacements in replacements_by_file.items():
         file_info = manifest['files'].get(file_key)
@@ -3823,19 +4157,38 @@ def apply_results(target=None, force=False):
             summary['failure_items'] = len(failure_entries)
         if not replacements:
             continue
+        revalidated_replacements_by_file[file_key] = replacements
+        revalidated_line_numbers_by_file[file_key] = set(line_numbers_set)
+        revalidated_file_paths[file_key] = file_path
+        revalidated_file_lines[file_key] = lines
+
+    attach_check_contract(manifest, summary)
+    if summary.get('safety_level') != CHECK_SAFETY_SAFE:
+        append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
+        report_path = write_apply_failure_report(
+            manifest,
+            'unsafe_apply_revalidation',
+            f'Apply source revalidation status is {summary.get("safety_level")}, not safe. No files were written.',
+            summary=summary,
+            failure_entries=failure_entries,
+            current_fingerprint=summary.get('check_fingerprint'),
+        )
+        save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+        raise SystemExit(f'Apply refused because source revalidation is not safe. Report: {report_path}')
+
+    for file_key, replacements in revalidated_replacements_by_file.items():
+        file_path = revalidated_file_paths[file_key]
+        lines = revalidated_file_lines[file_key]
         legacy.commit_replacements(file_path, lines, replacements)
-        line_numbers = sorted(line_numbers_set)
+        line_numbers = sorted(revalidated_line_numbers_by_file[file_key])
         update_progress(file_key, line_numbers)
         applied_files += 1
         applied_lines += len(line_numbers)
-        final_pending_files += 1
-        final_pending_lines += len(line_numbers)
         if line_numbers:
             rag_jobs.append({'file_rel_path': file_key, 'file_path': file_path})
 
-    summary['pending_files'] = final_pending_files
-    summary['pending_lines'] = final_pending_lines
-    append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
+    summary['pending_files'] = applied_files
+    summary['pending_lines'] = applied_lines
 
     rag_apply_summary = {}
     if RAG_ENABLED and rag_jobs:
