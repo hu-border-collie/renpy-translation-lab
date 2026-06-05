@@ -224,6 +224,12 @@ python -m unittest tests.test_regressions.BatchGoldenCorpusTests -q
 python -m unittest tests.test_regressions.RevisionGoldenCorpusTests -q
 ```
 
+`tests/fixtures/golden_keyword_minimal/` 保存了一个最小关键词提取 fixture，用来离线验证 `build-keywords -> export-keywords` 合约，覆盖候选项去重、来源行定位和 chunk 剧情概要导出。
+
+```bash
+python -m unittest tests.test_regressions.KeywordGoldenCorpusTests -q
+```
+
 如果有意修改 prompt、manifest、schema 或写回行为，先确认差异合理，再更新 golden 输出：
 
 ```powershell
@@ -234,6 +240,10 @@ Remove-Item Env:UPDATE_GOLDEN_BATCH
 $env:UPDATE_GOLDEN_REVISION = "1"
 python -m unittest tests.test_regressions.RevisionGoldenCorpusTests -q
 Remove-Item Env:UPDATE_GOLDEN_REVISION
+
+$env:UPDATE_GOLDEN_KEYWORD = "1"
+python -m unittest tests.test_regressions.KeywordGoldenCorpusTests -q
+Remove-Item Env:UPDATE_GOLDEN_KEYWORD
 ```
 
 ### 可选：Batch RAG 预建库
