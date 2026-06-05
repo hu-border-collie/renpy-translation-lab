@@ -1,0 +1,76 @@
+{
+  "mode": "revision",
+  "core_schema_version": 1,
+  "summary": {
+    "file_count": 1,
+    "chunk_count": 1,
+    "item_count": 3
+  },
+  "settings": {
+    "revision_chunk_size": 3,
+    "max_output_tokens": 16384,
+    "temperature": 0.2,
+    "thinking_level": "minimal"
+  },
+  "revision_settings": {
+    "chunk_size": 3
+  },
+  "files": {
+    "chapter01/revisions.rpy": {
+      "task_count": 3
+    }
+  },
+  "chunks": [
+    {
+      "key": "rv-4e4faec80d-00001",
+      "mode": "revision",
+      "file_rel_path": "chapter01/revisions.rpy",
+      "chunk_index": 1,
+      "line_numbers": [
+        3,
+        6,
+        9
+      ],
+      "context_past": [],
+      "context_future": [],
+      "items": [
+        {
+          "id": "chapter01/revisions.rpy:2:8:revision:0",
+          "text": "Void Gate",
+          "source": "Void Gate",
+          "current_translation": "虚空门",
+          "line": 2,
+          "line_number": 3,
+          "start": 8,
+          "end": 13,
+          "prefix": "",
+          "quote": "\""
+        },
+        {
+          "id": "chapter01/revisions.rpy:5:8:revision:1",
+          "text": "Crystal Key",
+          "source": "Crystal Key",
+          "current_translation": "水晶钥匙",
+          "line": 5,
+          "line_number": 6,
+          "start": 8,
+          "end": 14,
+          "prefix": "",
+          "quote": "\""
+        },
+        {
+          "id": "chapter01/revisions.rpy:8:8:revision:2",
+          "text": "Already Good",
+          "source": "Already Good",
+          "current_translation": "已经很好",
+          "line": 8,
+          "line_number": 9,
+          "start": 8,
+          "end": 14,
+          "prefix": "",
+          "quote": "\""
+        }
+      ]
+    }
+  ]
+}
