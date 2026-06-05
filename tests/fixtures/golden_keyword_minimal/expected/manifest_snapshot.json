@@ -1,0 +1,80 @@
+{
+  "mode": "keyword_extraction",
+  "core_schema_version": 1,
+  "summary": {
+    "file_count": 1,
+    "chunk_count": 2,
+    "item_count": 4
+  },
+  "settings": {
+    "keyword_chunk_size": 2,
+    "keyword_max_candidates_per_chunk": 4,
+    "max_output_tokens": 16384,
+    "temperature": 0.2,
+    "thinking_level": "minimal"
+  },
+  "keyword_settings": {
+    "chunk_size": 2,
+    "max_candidates_per_chunk": 4
+  },
+  "files": {
+    "chapter01/keywords.rpy": {
+      "task_count": 4
+    }
+  },
+  "chunks": [
+    {
+      "key": "kw-cd03d6447e-00001",
+      "mode": "keyword_extraction",
+      "file_rel_path": "chapter01/keywords.rpy",
+      "chunk_index": 1,
+      "line_numbers": [
+        2,
+        5
+      ],
+      "items": [
+        {
+          "id": "chapter01/keywords.rpy:2:keyword:0",
+          "text": "Void Gate",
+          "file_rel_path": "chapter01/keywords.rpy",
+          "line_number": 2,
+          "translation_line_number": 3
+        },
+        {
+          "id": "chapter01/keywords.rpy:5:keyword:1",
+          "text": "Crystal Key",
+          "file_rel_path": "chapter01/keywords.rpy",
+          "line_number": 5,
+          "translation_line_number": 6
+        }
+      ]
+    },
+    {
+      "key": "kw-cd03d6447e-00002",
+      "mode": "keyword_extraction",
+      "file_rel_path": "chapter01/keywords.rpy",
+      "chunk_index": 2,
+      "line_numbers": [
+        9,
+        12
+      ],
+      "items": [
+        {
+          "id": "chapter01/keywords.rpy:9:keyword:2",
+          "text": "Noah found the Aether Compass near the Void Gate.",
+          "file_rel_path": "chapter01/keywords.rpy",
+          "line_number": 9,
+          "translation_line_number": 10,
+          "speaker_id": "e"
+        },
+        {
+          "id": "chapter01/keywords.rpy:12:keyword:3",
+          "text": "The Crystal Key pulsed once.",
+          "file_rel_path": "chapter01/keywords.rpy",
+          "line_number": 12,
+          "translation_line_number": 13
+        }
+      ]
+    }
+  ]
+}
