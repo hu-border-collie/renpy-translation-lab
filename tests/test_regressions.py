@@ -3025,6 +3025,8 @@ class BatchGoldenCorpusTests(unittest.TestCase):
             'include_prefixes': set(batch_mod.legacy.INCLUDE_PREFIXES),
             'log_dir': batch_mod.LOG_DIR,
             'jobs_dir': batch_mod.BATCH_JOBS_DIR,
+            'repair_dir': batch_mod.REPAIR_RUNS_DIR,
+            'sync_dir': batch_mod.SYNC_RUNS_DIR,
             'latest': batch_mod.LATEST_MANIFEST_FILE,
             'progress': batch_mod.PROGRESS_LOG,
             'rag_enabled': batch_mod.RAG_ENABLED,
@@ -3035,12 +3037,16 @@ class BatchGoldenCorpusTests(unittest.TestCase):
         }
         log_dir = root / 'logs'
         jobs_dir = log_dir / 'batch_jobs'
+        repair_dir = log_dir / 'repair_runs'
+        sync_dir = log_dir / 'sync_runs'
         batch_mod.legacy.BASE_DIR = str(root)
         batch_mod.legacy.TL_DIR = str(tl_dir)
         batch_mod.legacy.INCLUDE_FILES = set()
         batch_mod.legacy.INCLUDE_PREFIXES = set()
         batch_mod.LOG_DIR = str(log_dir)
         batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+        batch_mod.REPAIR_RUNS_DIR = str(repair_dir)
+        batch_mod.SYNC_RUNS_DIR = str(sync_dir)
         batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
         batch_mod.PROGRESS_LOG = str(log_dir / 'translation_progress_batch.json')
         batch_mod.RAG_ENABLED = False
@@ -3057,6 +3063,8 @@ class BatchGoldenCorpusTests(unittest.TestCase):
         batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
         batch_mod.LOG_DIR = old_values['log_dir']
         batch_mod.BATCH_JOBS_DIR = old_values['jobs_dir']
+        batch_mod.REPAIR_RUNS_DIR = old_values['repair_dir']
+        batch_mod.SYNC_RUNS_DIR = old_values['sync_dir']
         batch_mod.LATEST_MANIFEST_FILE = old_values['latest']
         batch_mod.PROGRESS_LOG = old_values['progress']
         batch_mod.RAG_ENABLED = old_values['rag_enabled']
