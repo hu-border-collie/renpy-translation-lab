@@ -1,9 +1,11 @@
 import ast
+import hashlib
 import importlib
 import io
 import json
 import os
 import pickle
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,6 +21,10 @@ import rag_memory
 import story_memory
 import translation_core
 import translator_runtime as runtime
+
+
+GOLDEN_BATCH_FIXTURE_DIR = Path(__file__).parent / 'fixtures' / 'golden_batch_minimal'
+UPDATE_GOLDEN_BATCH_ENV = 'UPDATE_GOLDEN_BATCH'
 
 
 class TranslationCoreRegressionTests(unittest.TestCase):
@@ -3002,6 +3008,319 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod._RAG_STORE = old_values['rag_store']
             batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
             batch_mod.RAG_SEGMENT_LINES = old_values['rag_segment_lines']
+
+
+class BatchGoldenCorpusTests(unittest.TestCase):
+    def _copy_fixture_tl(self, root):
+        tl_dir = root / 'game' / 'tl' / 'schinese'
+        tl_dir.parent.mkdir(parents=True)
+        shutil.copytree(GOLDEN_BATCH_FIXTURE_DIR / 'tl', tl_dir)
+        return tl_dir
+
+    def _patch_batch_environment(self, root, tl_dir):
+        old_values = {
+            'base_dir': batch_mod.legacy.BASE_DIR,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'include_files': set(batch_mod.legacy.INCLUDE_FILES),
+            'include_prefixes': set(batch_mod.legacy.INCLUDE_PREFIXES),
+            'log_dir': batch_mod.LOG_DIR,
+            'jobs_dir': batch_mod.BATCH_JOBS_DIR,
+            'latest': batch_mod.LATEST_MANIFEST_FILE,
+            'progress': batch_mod.PROGRESS_LOG,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_store': batch_mod._RAG_STORE,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+            'story_graph': batch_mod._STORY_GRAPH,
+            'story_graph_path': batch_mod._STORY_GRAPH_PATH,
+        }
+        log_dir = root / 'logs'
+        jobs_dir = log_dir / 'batch_jobs'
+        batch_mod.legacy.BASE_DIR = str(root)
+        batch_mod.legacy.TL_DIR = str(tl_dir)
+        batch_mod.legacy.INCLUDE_FILES = set()
+        batch_mod.legacy.INCLUDE_PREFIXES = set()
+        batch_mod.LOG_DIR = str(log_dir)
+        batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+        batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
+        batch_mod.PROGRESS_LOG = str(log_dir / 'translation_progress_batch.json')
+        batch_mod.RAG_ENABLED = False
+        batch_mod._RAG_STORE = None
+        batch_mod.STORY_MEMORY_ENABLED = False
+        batch_mod._STORY_GRAPH = None
+        batch_mod._STORY_GRAPH_PATH = ''
+        return old_values
+
+    def _restore_batch_environment(self, old_values):
+        batch_mod.legacy.BASE_DIR = old_values['base_dir']
+        batch_mod.legacy.TL_DIR = old_values['tl_dir']
+        batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
+        batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
+        batch_mod.LOG_DIR = old_values['log_dir']
+        batch_mod.BATCH_JOBS_DIR = old_values['jobs_dir']
+        batch_mod.LATEST_MANIFEST_FILE = old_values['latest']
+        batch_mod.PROGRESS_LOG = old_values['progress']
+        batch_mod.RAG_ENABLED = old_values['rag_enabled']
+        batch_mod._RAG_STORE = old_values['rag_store']
+        batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+        batch_mod._STORY_GRAPH = old_values['story_graph']
+        batch_mod._STORY_GRAPH_PATH = old_values['story_graph_path']
+
+    def _load_manifest(self, manifest_path):
+        return json.loads(Path(manifest_path).read_text(encoding='utf-8'))
+
+    def _manifest_snapshot(self, manifest):
+        return {
+            'mode': manifest['mode'],
+            'core_schema_version': manifest['core_schema_version'],
+            'summary': manifest['summary'],
+            'settings': manifest['settings'],
+            'files': {
+                rel_path: {'task_count': info['task_count']}
+                for rel_path, info in manifest['files'].items()
+            },
+            'chunks': [
+                {
+                    'key': chunk['key'],
+                    'file_rel_path': chunk['file_rel_path'],
+                    'chunk_index': chunk['chunk_index'],
+                    'line_numbers': chunk['line_numbers'],
+                    'source_char_count': chunk['source_char_count'],
+                    'context_past': [
+                        {'line': item['line'], 'text': item['text']}
+                        for item in chunk['context_past']
+                    ],
+                    'context_future': [
+                        {'line': item['line'], 'text': item['text']}
+                        for item in chunk['context_future']
+                    ],
+                    'items': [
+                        {
+                            key: item[key]
+                            for key in (
+                                'id',
+                                'text',
+                                'line',
+                                'line_number',
+                                'start',
+                                'end',
+                                'prefix',
+                                'quote',
+                                'speaker_id',
+                                'speaker',
+                                'speaker_name',
+                            )
+                            if key in item
+                        }
+                        for item in chunk['items']
+                    ],
+                }
+                for chunk in manifest['chunks']
+            ],
+        }
+
+    def _request_snapshot(self, manifest):
+        chunk_by_key = {chunk['key']: chunk for chunk in manifest['chunks']}
+        request_rows = [
+            json.loads(line)
+            for line in Path(manifest['input_jsonl_path']).read_text(encoding='utf-8').splitlines()
+            if line.strip()
+        ]
+        rows = []
+        for row in request_rows:
+            request = row['request']
+            chunk = chunk_by_key[row['key']]
+            config = request['generation_config']
+            user_prompt = request['contents'][0]['parts'][0]['text']
+            system_text = request['system_instruction']['parts'][0]['text']
+            rows.append(
+                {
+                    'key': row['key'],
+                    'file_rel_path': chunk['file_rel_path'],
+                    'request_keys': sorted(request.keys()),
+                    'content_roles': [content.get('role') for content in request['contents']],
+                    'target_item_ids': [item['id'] for item in chunk['items']],
+                    'system_instruction_sha256': hashlib.sha256(system_text.encode('utf-8')).hexdigest(),
+                    'user_prompt_sha256': hashlib.sha256(user_prompt.encode('utf-8')).hexdigest(),
+                    'generation_config': {
+                        'keys': sorted(config.keys()),
+                        'temperature': config['temperature'],
+                        'max_output_tokens': config['max_output_tokens'],
+                        'response_mime_type': config['response_mime_type'],
+                        'thinking_config': config.get('thinking_config', {}),
+                        'response_json_schema': config['response_json_schema'],
+                    },
+                }
+            )
+        return {'rows': rows}
+
+    def _stable_summary(self, summary):
+        return {
+            'expected_chunks': summary['expected_chunks'],
+            'result_rows': summary['result_rows'],
+            'processed_chunks': summary['processed_chunks'],
+            'expected_items': summary['expected_items'],
+            'candidate_valid_items': summary['candidate_valid_items'],
+            'valid_items': summary['valid_items'],
+            'pending_files': summary['pending_files'],
+            'pending_lines': summary['pending_lines'],
+            'skipped_items': summary['skipped_items'],
+            'source_mismatch_items': summary['source_mismatch_items'],
+            'failure_items': summary['failure_items'],
+            'chunk_row_errors': summary['chunk_row_errors'],
+            'missing_response_chunks': summary['missing_response_chunks'],
+            'partial_chunks': summary['partial_chunks'],
+            'max_tokens_chunks': summary['max_tokens_chunks'],
+            'reason_counts': summary['reason_counts'],
+        }
+
+    def _assert_or_update_json(self, relative_path, actual):
+        expected_path = GOLDEN_BATCH_FIXTURE_DIR / relative_path
+        text = json.dumps(actual, ensure_ascii=False, indent=2) + '\n'
+        if os.environ.get(UPDATE_GOLDEN_BATCH_ENV):
+            expected_path.parent.mkdir(parents=True, exist_ok=True)
+            expected_path.write_text(text, encoding='utf-8')
+            return
+        self.assertTrue(expected_path.is_file(), f'Missing golden file: {expected_path}')
+        expected = json.loads(expected_path.read_text(encoding='utf-8'))
+        self.assertEqual(actual, expected)
+
+    def _assert_or_update_text(self, relative_path, actual):
+        expected_path = GOLDEN_BATCH_FIXTURE_DIR / relative_path
+        if os.environ.get(UPDATE_GOLDEN_BATCH_ENV):
+            expected_path.parent.mkdir(parents=True, exist_ok=True)
+            expected_path.write_text(actual, encoding='utf-8')
+            return
+        self.assertTrue(expected_path.is_file(), f'Missing golden file: {expected_path}')
+        self.assertEqual(actual, expected_path.read_text(encoding='utf-8'))
+
+    def _write_mock_results(self, manifest_path):
+        manifest_path = Path(manifest_path)
+        manifest = self._load_manifest(manifest_path)
+        translations = json.loads(
+            (GOLDEN_BATCH_FIXTURE_DIR / 'model_results.json').read_text(encoding='utf-8')
+        )
+        result_path = manifest_path.parent / 'results.jsonl'
+        rows = []
+        for chunk in manifest['chunks']:
+            result_items = [
+                {'id': item['id'], 'translation': translations[item['text']]}
+                for item in chunk['items']
+            ]
+            response_text = json.dumps(result_items, ensure_ascii=False)
+            rows.append(
+                {
+                    'key': chunk['key'],
+                    'response': {
+                        'candidates': [
+                            {
+                                'content': {'parts': [{'text': response_text}]},
+                                'finishReason': 'STOP',
+                            }
+                        ],
+                        'usageMetadata': {
+                            'promptTokenCount': 100,
+                            'candidatesTokenCount': 40,
+                            'totalTokenCount': 140,
+                        },
+                    },
+                }
+            )
+        result_path.write_text(
+            ''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows),
+            encoding='utf-8',
+        )
+        manifest['result_jsonl_path'] = 'results.jsonl'
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding='utf-8',
+        )
+
+    def test_golden_batch_build_check_apply_end_to_end(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = self._copy_fixture_tl(root)
+            old_values = self._patch_batch_environment(root, tl_dir)
+            try:
+                manifest_path = Path(
+                    batch_mod.create_batch_package(
+                        display_name_override='golden-batch-minimal',
+                        skip_prepare=True,
+                    )
+                )
+                self._write_mock_results(manifest_path)
+                manifest = self._load_manifest(manifest_path)
+
+                self._assert_or_update_json(
+                    'expected/manifest_snapshot.json',
+                    self._manifest_snapshot(manifest),
+                )
+                self._assert_or_update_json(
+                    'expected/request_snapshot.json',
+                    self._request_snapshot(manifest),
+                )
+
+                checked_manifest = batch_mod.check_results(str(manifest_path))
+                applied_manifest = batch_mod.apply_results(str(manifest_path))
+                progress = json.loads(Path(batch_mod.PROGRESS_LOG).read_text(encoding='utf-8'))
+
+                check_apply_snapshot = {
+                    'last_check_summary': self._stable_summary(checked_manifest['last_check_summary']),
+                    'apply_summary': applied_manifest['apply_summary'],
+                    'progress': progress,
+                }
+                self._assert_or_update_json(
+                    'expected/check_apply_snapshot.json',
+                    check_apply_snapshot,
+                )
+                self._assert_or_update_text(
+                    'expected/applied/chapter01/dialogue.rpy',
+                    (tl_dir / 'chapter01' / 'dialogue.rpy').read_text(encoding='utf-8'),
+                )
+                self._assert_or_update_text(
+                    'expected/applied/chapter02/strings.rpy',
+                    (tl_dir / 'chapter02' / 'strings.rpy').read_text(encoding='utf-8'),
+                )
+
+                with self.assertRaisesRegex(SystemExit, 'already applied'):
+                    batch_mod.apply_results(str(manifest_path))
+            finally:
+                self._restore_batch_environment(old_values)
+
+    def test_golden_batch_apply_rejects_changed_source_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = self._copy_fixture_tl(root)
+            old_values = self._patch_batch_environment(root, tl_dir)
+            try:
+                manifest_path = Path(
+                    batch_mod.create_batch_package(
+                        display_name_override='golden-batch-minimal',
+                        skip_prepare=True,
+                    )
+                )
+                self._write_mock_results(manifest_path)
+                dialogue_path = tl_dir / 'chapter01' / 'dialogue.rpy'
+                dialogue_path.write_text(
+                    dialogue_path.read_text(encoding='utf-8').replace(
+                        'e "Welcome back, traveler."',
+                        'e "Welcome home, traveler."',
+                    ),
+                    encoding='utf-8',
+                )
+
+                applied_manifest = batch_mod.apply_results(str(manifest_path))
+                final_dialogue = dialogue_path.read_text(encoding='utf-8')
+
+                self.assertIn('e "Welcome home, traveler."', final_dialogue)
+                self.assertNotIn('e "旅人，欢迎回来。"', final_dialogue)
+                self.assertIn('e "请勿触碰水晶。"', final_dialogue)
+                self.assertEqual(applied_manifest['apply_summary']['candidate_items'], 6)
+                self.assertEqual(applied_manifest['apply_summary']['recoverable_items'], 5)
+                self.assertEqual(applied_manifest['apply_summary']['skipped_items'], 1)
+                self.assertEqual(applied_manifest['apply_summary']['source_mismatch_items'], 1)
+                self.assertEqual(applied_manifest['apply_summary']['failure_count'], 1)
+            finally:
+                self._restore_batch_environment(old_values)
 
 
 class BatchRepairRegressionTests(unittest.TestCase):

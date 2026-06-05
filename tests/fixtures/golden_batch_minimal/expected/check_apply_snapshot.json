@@ -1,0 +1,42 @@
+{
+  "last_check_summary": {
+    "expected_chunks": 2,
+    "result_rows": 2,
+    "processed_chunks": 2,
+    "expected_items": 6,
+    "candidate_valid_items": 6,
+    "valid_items": 6,
+    "pending_files": 2,
+    "pending_lines": 6,
+    "skipped_items": 0,
+    "source_mismatch_items": 0,
+    "failure_items": 0,
+    "chunk_row_errors": 0,
+    "missing_response_chunks": 0,
+    "partial_chunks": 0,
+    "max_tokens_chunks": 0,
+    "reason_counts": {}
+  },
+  "apply_summary": {
+    "applied_files": 2,
+    "applied_lines": 6,
+    "candidate_items": 6,
+    "recoverable_items": 6,
+    "skipped_items": 0,
+    "source_mismatch_items": 0,
+    "failure_count": 0,
+    "rag": {}
+  },
+  "progress": {
+    "chapter01/dialogue.rpy": [
+      2,
+      5,
+      8,
+      11
+    ],
+    "chapter02/strings.rpy": [
+      2,
+      5
+    ]
+  }
+}
