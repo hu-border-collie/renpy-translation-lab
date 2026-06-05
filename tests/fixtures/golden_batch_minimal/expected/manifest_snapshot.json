@@ -1,0 +1,124 @@
+{
+  "mode": "translation",
+  "core_schema_version": 1,
+  "summary": {
+    "file_count": 2,
+    "chunk_count": 2,
+    "item_count": 6
+  },
+  "settings": {
+    "target_size": 20,
+    "target_chars": 6000,
+    "context_before": 8,
+    "context_after": 4,
+    "max_output_tokens": 16384,
+    "temperature": 0.2,
+    "thinking_level": "minimal"
+  },
+  "files": {
+    "chapter01/dialogue.rpy": {
+      "task_count": 4
+    },
+    "chapter02/strings.rpy": {
+      "task_count": 2
+    }
+  },
+  "chunks": [
+    {
+      "key": "004851531f-00001",
+      "file_rel_path": "chapter01/dialogue.rpy",
+      "chunk_index": 1,
+      "line_numbers": [
+        2,
+        5,
+        8,
+        11
+      ],
+      "source_char_count": 102,
+      "context_past": [],
+      "context_future": [],
+      "items": [
+        {
+          "id": "chapter01/dialogue.rpy:2:6",
+          "text": "Welcome back, traveler.",
+          "line": 2,
+          "start": 6,
+          "end": 31,
+          "prefix": "",
+          "quote": "\"",
+          "speaker_id": "e",
+          "speaker": "e"
+        },
+        {
+          "id": "chapter01/dialogue.rpy:5:4",
+          "text": "The gate is quiet tonight.",
+          "line": 5,
+          "start": 4,
+          "end": 32,
+          "prefix": "",
+          "quote": "\"",
+          "speaker_id": "",
+          "speaker": ""
+        },
+        {
+          "id": "chapter01/dialogue.rpy:8:6",
+          "text": "Don't touch the crystal.",
+          "line": 8,
+          "start": 6,
+          "end": 32,
+          "prefix": "",
+          "quote": "\"",
+          "speaker_id": "e",
+          "speaker": "e"
+        },
+        {
+          "id": "chapter01/dialogue.rpy:11:4",
+          "text": "Say \"hello\" before you leave.",
+          "line": 11,
+          "start": 4,
+          "end": 37,
+          "prefix": "",
+          "quote": "\"",
+          "speaker_id": "",
+          "speaker": ""
+        }
+      ]
+    },
+    {
+      "key": "029e98ba77-00001",
+      "file_rel_path": "chapter02/strings.rpy",
+      "chunk_index": 1,
+      "line_numbers": [
+        2,
+        5
+      ],
+      "source_char_count": 19,
+      "context_past": [],
+      "context_future": [],
+      "items": [
+        {
+          "id": "chapter02/strings.rpy:2:8",
+          "text": "Start Game",
+          "line": 2,
+          "start": 8,
+          "end": 20,
+          "prefix": "",
+          "quote": "\"",
+          "speaker_id": "",
+          "speaker": ""
+        },
+        {
+          "id": "chapter02/strings.rpy:5:8",
+          "text": "Load Game",
+          "line": 5,
+          "start": 8,
+          "end": 19,
+          "prefix": "",
+          "quote": "\"",
+          "speaker_id": "",
+          "speaker": ""
+        }
+      ]
+    }
+  ]
+}

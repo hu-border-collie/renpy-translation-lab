@@ -1,0 +1,124 @@
+{
+  "rows": [
+    {
+      "key": "004851531f-00001",
+      "file_rel_path": "chapter01/dialogue.rpy",
+      "request_keys": [
+        "contents",
+        "generation_config",
+        "system_instruction"
+      ],
+      "content_roles": [
+        "user"
+      ],
+      "target_item_ids": [
+        "chapter01/dialogue.rpy:2:6",
+        "chapter01/dialogue.rpy:5:4",
+        "chapter01/dialogue.rpy:8:6",
+        "chapter01/dialogue.rpy:11:4"
+      ],
+      "system_instruction_sha256": "ed66ec81d9c32d4234192d16005de338331e27e05443a46ce36adcfedaa22648",
+      "user_prompt_sha256": "15f6c9f1cdb47e127d158c5292990a5998fb09e7466877fa2d6c598d63863267",
+      "generation_config": {
+        "keys": [
+          "max_output_tokens",
+          "response_json_schema",
+          "response_mime_type",
+          "temperature",
+          "thinking_config"
+        ],
+        "temperature": 0.2,
+        "max_output_tokens": 16384,
+        "response_mime_type": "application/json",
+        "thinking_config": {
+          "thinking_level": "MINIMAL"
+        },
+        "response_json_schema": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "translation"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "chapter01/dialogue.rpy:2:6",
+                  "chapter01/dialogue.rpy:5:4",
+                  "chapter01/dialogue.rpy:8:6",
+                  "chapter01/dialogue.rpy:11:4"
+                ]
+              },
+              "translation": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "key": "029e98ba77-00001",
+      "file_rel_path": "chapter02/strings.rpy",
+      "request_keys": [
+        "contents",
+        "generation_config",
+        "system_instruction"
+      ],
+      "content_roles": [
+        "user"
+      ],
+      "target_item_ids": [
+        "chapter02/strings.rpy:2:8",
+        "chapter02/strings.rpy:5:8"
+      ],
+      "system_instruction_sha256": "ed66ec81d9c32d4234192d16005de338331e27e05443a46ce36adcfedaa22648",
+      "user_prompt_sha256": "283aef76e3aa3ddf073df41dd9ecb8c9f1ee4062ad6be8032c2fa6ecc9d02314",
+      "generation_config": {
+        "keys": [
+          "max_output_tokens",
+          "response_json_schema",
+          "response_mime_type",
+          "temperature",
+          "thinking_config"
+        ],
+        "temperature": 0.2,
+        "max_output_tokens": 16384,
+        "response_mime_type": "application/json",
+        "thinking_config": {
+          "thinking_level": "MINIMAL"
+        },
+        "response_json_schema": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "translation"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "chapter02/strings.rpy:2:8",
+                  "chapter02/strings.rpy:5:8"
+                ]
+              },
+              "translation": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
