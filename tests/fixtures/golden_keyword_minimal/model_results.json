@@ -1,0 +1,42 @@
+{
+  "candidates": [
+    {
+      "source": "Void Gate",
+      "suggested_target": "虚空门",
+      "category": "place",
+      "confidence": 0.86,
+      "evidence": "Recurring gate name."
+    },
+    {
+      "source": "Crystal Key",
+      "suggested_target": "水晶钥匙",
+      "category": "item",
+      "confidence": 0.74,
+      "evidence": "Quest key item."
+    },
+    {
+      "source": "Aether Compass",
+      "suggested_target": "以太罗盘",
+      "category": "item",
+      "confidence": 0.92,
+      "evidence": "Navigation item found by Noah."
+    }
+  ],
+  "chunk_summaries": {
+    "1": {
+      "chunk_summary": "术语表片段介绍虚空门和水晶钥匙。",
+      "sources": [
+        "Void Gate",
+        "Crystal Key"
+      ]
+    },
+    "2": {
+      "chunk_summary": "诺亚在虚空门附近找到以太罗盘，水晶钥匙随后发光。",
+      "sources": [
+        "Aether Compass",
+        "Void Gate",
+        "Crystal Key"
+      ]
+    }
+  }
+}
