@@ -210,12 +210,18 @@ python gemini_translate_batch.py sync-keywords --limit 3
 - 如果确认没有进程正在写入同一个 RAG store，可手动删除残留的 `.rag_store.lock` 或 `*.tmp.*` 文件来恢复写入；自动清理失败时会输出包含文件路径的 warning
 - 加载 RAG store 时，损坏的 metadata 或坏 JSONL 行会输出 warning；可恢复的 history 记录会继续保留
 
-### Batch golden corpus 测试
+### Golden corpus 测试
 
 `tests/fixtures/golden_batch_minimal/` 保存了一个最小 TL fixture、固定 mock 模型结果和预期输出，用来离线验证普通 Batch 翻译的 `build -> check -> apply` 合约。这个测试不调用 Gemini，也不需要真实 API key。
 
 ```bash
 python -m unittest tests.test_regressions.BatchGoldenCorpusTests -q
+```
+
+`tests/fixtures/golden_revision_minimal/` 保存了一个最小订正 fixture，用来离线验证 `build-revisions -> preview-revisions -> apply-revisions` 合约，覆盖已有 `new` 行订正、保持不变项和写回前源快照校验。
+
+```bash
+python -m unittest tests.test_regressions.RevisionGoldenCorpusTests -q
 ```
 
 如果有意修改 prompt、manifest、schema 或写回行为，先确认差异合理，再更新 golden 输出：
@@ -224,6 +230,10 @@ python -m unittest tests.test_regressions.BatchGoldenCorpusTests -q
 $env:UPDATE_GOLDEN_BATCH = "1"
 python -m unittest tests.test_regressions.BatchGoldenCorpusTests -q
 Remove-Item Env:UPDATE_GOLDEN_BATCH
+
+$env:UPDATE_GOLDEN_REVISION = "1"
+python -m unittest tests.test_regressions.RevisionGoldenCorpusTests -q
+Remove-Item Env:UPDATE_GOLDEN_REVISION
 ```
 
 ### 可选：Batch RAG 预建库
