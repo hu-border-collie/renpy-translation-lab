@@ -3376,6 +3376,45 @@ class BatchGoldenCorpusTests(unittest.TestCase):
             finally:
                 self._restore_batch_environment(old_values)
 
+    def test_golden_batch_apply_rejects_changed_manifest_items_after_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = self._copy_fixture_tl(root)
+            old_values = self._patch_batch_environment(root, tl_dir)
+            try:
+                manifest_path = Path(
+                    batch_mod.create_batch_package(
+                        display_name_override='golden-batch-minimal',
+                        skip_prepare=True,
+                    )
+                )
+                self._write_mock_results(manifest_path)
+                checked_manifest = batch_mod.check_results(str(manifest_path))
+                self.assertEqual(checked_manifest['last_check_summary']['safety_level'], 'safe')
+
+                manifest = self._load_manifest(manifest_path)
+                manifest['chunks'][0]['items'].append(
+                    {
+                        'id': 'chapter01/dialogue.rpy:999:0',
+                        'file_rel_path': 'chapter01/dialogue.rpy',
+                        'line': 999,
+                        'start': 0,
+                        'end': 5,
+                        'text': 'extra',
+                        'prefix': '',
+                        'quote': '"',
+                    }
+                )
+                manifest_path.write_text(
+                    json.dumps(manifest, ensure_ascii=False, indent=2),
+                    encoding='utf-8',
+                )
+
+                with self.assertRaisesRegex(SystemExit, 'changed after the last check'):
+                    batch_mod.apply_results(str(manifest_path))
+            finally:
+                self._restore_batch_environment(old_values)
+
 
 class RevisionGoldenCorpusTests(unittest.TestCase):
     def _copy_fixture_tl(self, root):
