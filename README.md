@@ -193,7 +193,7 @@ python gemini_translate_batch.py sync-keywords --limit 3
 - Structured Story Memory 默认关闭；需要分别通过 `batch.story_memory.enabled=true` 或 `sync.story_memory.enabled=true` 启用
 - `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出
 - Batch 产物默认会写到本地 `logs/` 目录
-- 同步和普通 Batch 翻译默认每个 chunk 最多 20 条，同时受 `max_source_chars=6000` 保护；短句会合并，长句会自动提前切块，避免单个请求输出过长
+- 同步翻译默认每个 chunk 最多 40 条、`max_source_chars=12000`；普通 Batch 翻译默认每个 chunk 最多 60 条、`max_source_chars=18000`，并会继续按源文本长度提前切块，避免单个请求输出过长
 - `doctor` 会检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，适合在正式翻译前确认项目是否已准备好
 - `bootstrap-rag` 会扫描当前允许处理的全部 TL `.rpy` 文件，把已有译文预先写入本地 history store；适合在正式 `build / submit` 前先暖库
 - `probe` 会用同步请求做最小 smoke test

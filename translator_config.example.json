@@ -16,9 +16,9 @@
   },
   "sync": {
     "model": "gemini-3.1-flash-lite",
-    "chunk_size": 20,
-    "max_source_chars": 6000,
-    "max_output_tokens": 16384,
+    "chunk_size": 40,
+    "max_source_chars": 12000,
+    "max_output_tokens": 24576,
     "rag": {
       "enabled": false,
       "embedding_model": "gemini-embedding-001",
@@ -44,11 +44,11 @@
   },
   "batch": {
     "model": "gemini-3.1-flash-lite",
-    "chunk_size": 20,
-    "max_source_chars": 6000,
+    "chunk_size": 60,
+    "max_source_chars": 18000,
     "context_before": 30,
     "context_after": 10,
-    "max_output_tokens": 16384,
+    "max_output_tokens": 32768,
     "temperature": 0.4,
     "display_name_prefix": "renpy-translate",
     "macro_setting_file": "macro_setting.md",
