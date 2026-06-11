@@ -871,6 +871,34 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
 
             run_mock.assert_not_called()
 
+    def test_prepare_tl_files_do_not_skip_rpa_unpack(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            source_game = root / 'original' / 'game'
+            work_tl = base / 'game' / 'tl' / 'schinese'
+            work_tl.mkdir(parents=True)
+            (work_tl / 'script.rpy').write_text('translate schinese strings:\n', encoding='utf-8')
+            source_game.mkdir(parents=True)
+            archive = source_game / 'scripts.rpa'
+            archive.write_bytes(b'RPA-3.0 placeholder')
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(runtime, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(runtime, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(runtime, 'PREP_ENABLED', True),
+                mock.patch.object(runtime, 'PREP_UNPACK_RPA', True),
+                mock.patch.object(runtime, 'PREP_GENERATE_TEMPLATE', False),
+                mock.patch.object(runtime, '_extract_rpa_scripts', return_value=2) as extract_mock,
+                mock.patch('sys.stdout', io.StringIO()),
+            ):
+                runtime.run_prepare_steps()
+
+            self.assertTrue((base / 'game' / 'tl' / 'schinese' / 'script.rpy').is_file())
+            extract_mock.assert_called_once_with(str(archive), str(base / 'game'))
+
     def test_prepare_missing_tl_without_launcher_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

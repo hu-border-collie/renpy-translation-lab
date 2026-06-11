@@ -904,6 +904,25 @@ def _has_files_with_extensions(base_dir, extensions):
     return False
 
 
+def _is_translation_relpath(rel_path):
+    parts = rel_path.replace("\\", "/").split("/")
+    return bool(parts) and parts[0].lower() == "tl"
+
+
+def _has_non_translation_files_with_extensions(base_dir, extensions):
+    if not os.path.isdir(base_dir):
+        return False
+    for root, _, files in os.walk(base_dir):
+        for file in files:
+            if os.path.splitext(file)[1].lower() not in extensions:
+                continue
+            rel = os.path.relpath(os.path.join(root, file), base_dir)
+            if _is_translation_relpath(rel):
+                continue
+            return True
+    return False
+
+
 def _list_rpa_files(game_dir):
     if not game_dir or not os.path.isdir(game_dir):
         return []
@@ -939,7 +958,7 @@ def _guess_source_game_dir():
     for candidate in ordered:
         if not os.path.isdir(candidate):
             continue
-        if _has_files_with_extensions(candidate, SCRIPT_FILE_EXTENSIONS):
+        if _has_non_translation_files_with_extensions(candidate, SCRIPT_FILE_EXTENSIONS):
             return candidate
         if _list_rpa_files(candidate):
             return candidate
@@ -1390,7 +1409,7 @@ def run_prepare_steps():
         print(f"[Prepare] Copied {copied_scripts} script files into work/game.")
 
     if PREP_UNPACK_RPA:
-        has_scripts = _has_files_with_extensions(WORK_GAME_DIR, SCRIPT_FILE_EXTENSIONS)
+        has_scripts = _has_non_translation_files_with_extensions(WORK_GAME_DIR, SCRIPT_FILE_EXTENSIONS)
         if has_scripts:
             print("[Prepare] Script files already exist in work/game; skipping RPA unpack.")
         else:
