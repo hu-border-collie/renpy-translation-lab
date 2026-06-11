@@ -74,6 +74,8 @@ pip install -r requirements.txt
 - `macro_setting.md` 往往包含剧情、角色口吻、世界观约束，也建议本地维护
 - 如果你不想使用 `api_keys.json`，也可以改用环境变量 `GEMINI_API_KEY`、`GEMINI_API_KEY_2`、`GEMINI_API_KEY_3`
 - 如果你不想使用 `translator_config.json`，也可以至少通过 `GAME_ROOT` 或 `SA_GAME_ROOT` 指向目标 `work` 目录
+- 也可以把 `.env.example` 复制为 `.env`，填写后供本地 shell/启动器加载；`.env` 只用于本机私有配置，不应提交
+- `.env` 不是必需文件；当前脚本不会自动加载 `.env`，默认复制并填写 `api_keys.json` / `translator_config.json` 即可使用
 - `glossary.json` 是可选文件；不存在时脚本会退回内置默认术语规则
 
 ### 3. 准备项目目录
