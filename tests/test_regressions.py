@@ -618,9 +618,9 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                     mock.patch('sys.stdout', io.StringIO()),
                 ):
                     runtime.CURRENT_MODEL_INDEX = 3
-                    runtime.MAX_ITEMS = 20
-                    runtime.MAX_CHARS = 6000
-                    runtime.SYNC_MAX_OUTPUT_TOKENS = 16384
+                    runtime.MAX_ITEMS = 40
+                    runtime.MAX_CHARS = 12000
+                    runtime.SYNC_MAX_OUTPUT_TOKENS = 24576
                     runtime.INCLUDE_FILES = set()
                     runtime.INCLUDE_PREFIXES = set()
                     runtime.load_translator_settings()
@@ -671,9 +671,9 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 ):
                     runtime.API_KEYS = []
                     runtime.CURRENT_MODEL_INDEX = 2
-                    runtime.MAX_ITEMS = 20
-                    runtime.MAX_CHARS = 6000
-                    runtime.SYNC_MAX_OUTPUT_TOKENS = 16384
+                    runtime.MAX_ITEMS = 40
+                    runtime.MAX_CHARS = 12000
+                    runtime.SYNC_MAX_OUTPUT_TOKENS = 24576
                     runtime.load_config()
 
                 self.assertEqual(runtime.MODELS, ['gemini-legacy-test'])

@@ -69,11 +69,11 @@ def initialize_batch_logging():
     sys.stdout = DualLogger(CONSOLE_LOG)
 
 BATCH_MODEL = 'gemini-3.1-flash-lite'
-BATCH_TARGET_SIZE = 20
-BATCH_TARGET_CHARS = 6000
-BATCH_CONTEXT_BEFORE = 8
-BATCH_CONTEXT_AFTER = 4
-BATCH_MAX_OUTPUT_TOKENS = 16384
+BATCH_TARGET_SIZE = 60
+BATCH_TARGET_CHARS = 18000
+BATCH_CONTEXT_BEFORE = 30
+BATCH_CONTEXT_AFTER = 10
+BATCH_MAX_OUTPUT_TOKENS = 32768
 BATCH_TEMPERATURE = 0.2
 BATCH_THINKING_LEVEL = 'minimal'
 BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
@@ -1598,9 +1598,9 @@ def summarize_batch_story_memory(chunks, graph_file=None, max_context_chars=None
 
 def get_batch_risk_warnings():
     warnings_list = []
-    if BATCH_TARGET_SIZE > 20:
+    if BATCH_TARGET_SIZE > 80:
         warnings_list.append(f'chunk_size={BATCH_TARGET_SIZE} is aggressive for Gemini 3 Flash structured output.')
-    if BATCH_CONTEXT_BEFORE > 12 or BATCH_CONTEXT_AFTER > 6:
+    if BATCH_CONTEXT_BEFORE > 40 or BATCH_CONTEXT_AFTER > 20:
         warnings_list.append(
             f'context_before/context_after ({BATCH_CONTEXT_BEFORE}/{BATCH_CONTEXT_AFTER}) may inflate prompt tokens.'
         )
