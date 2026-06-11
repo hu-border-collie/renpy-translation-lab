@@ -10,6 +10,7 @@ import sys
 import time
 import tokenize
 from datetime import datetime
+from pathlib import Path
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
@@ -807,8 +808,16 @@ def require_manifest_mode(manifest, expected_mode, command_name):
         )
 
 
+def _canonical_abs_path(path):
+    abs_path = os.path.abspath(path)
+    try:
+        return str(Path(abs_path).resolve(strict=False))
+    except OSError:
+        return abs_path
+
+
 def _normalized_abs_path(path):
-    return os.path.normcase(os.path.abspath(path))
+    return os.path.normcase(_canonical_abs_path(path))
 
 
 def path_is_within_dir(base_dir, candidate):
@@ -845,9 +854,9 @@ def resolve_path_under_dir(base_dir, value, field_name):
         raise SystemExit(f'Unsafe {field_name}: empty path.')
     raw = value.strip()
     if os.path.isabs(raw):
-        candidate = os.path.abspath(raw)
+        candidate = _canonical_abs_path(raw)
     else:
-        candidate = os.path.abspath(os.path.join(base_dir, normalize_safe_rel_path(raw, field_name)))
+        candidate = _canonical_abs_path(os.path.join(base_dir, normalize_safe_rel_path(raw, field_name)))
     if not path_is_within_dir(base_dir, candidate):
         raise SystemExit(f'Unsafe {field_name}: {value} escapes {base_dir}.')
     return candidate
