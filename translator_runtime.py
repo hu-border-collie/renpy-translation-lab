@@ -91,9 +91,9 @@ PRESERVE_TERMS = [
 ]
 
 # Config Defaults
-MAX_CHARS = 6000
-MAX_ITEMS = 20    # Back to a safer batch size (50 was too aggressive)
-SYNC_MAX_OUTPUT_TOKENS = 16384
+MAX_CHARS = 12000
+MAX_ITEMS = 40
+SYNC_MAX_OUTPUT_TOKENS = 24576
 MIN_DELAY = 1.0  # Reduced delay for SDK
 MAX_DELAY = 3.0
 BATCH_RETRIES = 3

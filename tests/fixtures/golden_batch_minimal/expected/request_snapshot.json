@@ -28,7 +28,7 @@
           "thinking_config"
         ],
         "temperature": 0.2,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 32768,
         "response_mime_type": "application/json",
         "thinking_config": {
           "thinking_level": "MINIMAL"
@@ -88,7 +88,7 @@
           "thinking_config"
         ],
         "temperature": 0.2,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 32768,
         "response_mime_type": "application/json",
         "thinking_config": {
           "thinking_level": "MINIMAL"
