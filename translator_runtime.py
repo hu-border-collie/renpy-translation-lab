@@ -2892,7 +2892,35 @@ def find_source_text_for_translation_line(lines, idx):
     return None
 
 
-def scan_all_translation_units(lines, file_rel_path):
+def _translate_block_name(line):
+    match = re.match(r'^\s*translate\s+\w+\s+(\w+):', line)
+    return match.group(1) if match else None
+
+
+def _is_translation_target_text(text_val):
+    if not text_val or contains_chinese(text_val) or len(text_val) <= 1:
+        return False
+    if is_non_translatable(text_val):
+        return False
+    if (" " not in text_val) and ("/" in text_val or "\\" in text_val):
+        return False
+    return (
+        " " in text_val
+        or len(text_val) > 15
+        or (text_val and text_val[0].isupper())
+        or (ALLOW_SINGLE_WORD_TRANSLATION and is_english_like(text_val))
+    )
+
+
+def _ensure_identity_block_occurrence(block_occurrences, block_name, current_occurrence):
+    if current_occurrence:
+        return current_occurrence
+    next_occurrence = block_occurrences.get(block_name, 0) + 1
+    block_occurrences[block_name] = next_occurrence
+    return next_occurrence
+
+
+def scan_all_translation_units(lines, file_rel_path, mode=translation_core.MODE_TRANSLATION):
     mapping = {}
     is_translation_file = any(
         line.lstrip().startswith("translate ")
@@ -2902,6 +2930,8 @@ def scan_all_translation_units(lines, file_rel_path):
     character_display_spans = []
 
     current_block = "_global"
+    current_block_occurrence = None
+    block_occurrences = {}
     block_index = 0
 
     for idx, line in enumerate(lines):
@@ -2911,9 +2941,10 @@ def scan_all_translation_units(lines, file_rel_path):
 
         sline = line.strip()
         if sline.startswith("translate "):
-            translate_match = re.match(r'^\s*translate\s+\w+\s+(\w+):', line)
-            if translate_match:
-                current_block = translate_match.group(1)
+            block_name = _translate_block_name(line)
+            if block_name:
+                current_block = block_name
+                current_block_occurrence = None
                 block_index = 0
 
         if (
@@ -2938,13 +2969,29 @@ def scan_all_translation_units(lines, file_rel_path):
                 if not isinstance(text_val, str):
                     continue
 
-                block_index += 1
-
-                source_for_id = find_source_text_for_translation_line(lines, idx) if is_translation_file else text_val
+                source_marker = find_source_text_for_translation_line(lines, idx) if is_translation_file else None
+                source_for_id = source_marker if source_marker is not None else text_val
                 if source_for_id is None:
                     source_for_id = text_val
 
-                identity = translation_core.build_identity_v2(file_rel_path, current_block, block_index, source_for_id)
+                if mode == translation_core.MODE_TRANSLATION and not _is_translation_target_text(text_val):
+                    continue
+                if mode == translation_core.MODE_REVISION and is_translation_file and source_marker is None:
+                    continue
+
+                current_block_occurrence = _ensure_identity_block_occurrence(
+                    block_occurrences,
+                    current_block,
+                    current_block_occurrence,
+                )
+                block_index += 1
+                identity = translation_core.build_identity_v2(
+                    file_rel_path,
+                    current_block,
+                    block_index,
+                    source_for_id,
+                    block_occurrence=current_block_occurrence,
+                )
                 mapping[identity] = (idx, token.start[1], token.end[1], text_val)
         except Exception:
             continue
@@ -2966,6 +3013,8 @@ def collect_tasks(lines, skip_translated=True):
     character_display_spans = []
 
     current_block = "_global"
+    current_block_occurrence = None
+    block_occurrences = {}
     block_index = 0
 
     # Simple parser for Ren'Py strings
@@ -2982,9 +3031,10 @@ def collect_tasks(lines, skip_translated=True):
 
         sline = line.strip()
         if sline.startswith("translate "):
-            translate_match = re.match(r'^\s*translate\s+\w+\s+(\w+):', line)
-            if translate_match:
-                current_block = translate_match.group(1)
+            block_name = _translate_block_name(line)
+            if block_name:
+                current_block = block_name
+                current_block_occurrence = None
                 block_index = 0
 
         # In translation templates, `old` is a lookup key and must never be edited.
@@ -3014,49 +3064,52 @@ def collect_tasks(lines, skip_translated=True):
                 if not isinstance(text_val, str):
                     continue
 
-                block_index += 1
-
                 prefix, quote = parse_string_literal_format(token.string)
 
                 # Simple heuristic: if it contains Chinese, it's already translated or source is CN
                 # If it's pure ASCII/English, we want to translate it.
-                if text_val and not contains_chinese(text_val) and len(text_val) > 1:
-                    if is_non_translatable(text_val):
-                        continue
-                    # Skip if it's likely a bare file path (no spaces)
-                    if (" " not in text_val) and ("/" in text_val or "\\" in text_val):
-                        continue
+                if _is_translation_target_text(text_val):
+                    source_for_id = find_source_text_for_translation_line(lines, idx) if is_translation_file else text_val
+                    if source_for_id is None:
+                        source_for_id = text_val
 
-                    if (" " in text_val or len(text_val) > 15 or (text_val and text_val[0].isupper())
-                            or (ALLOW_SINGLE_WORD_TRANSLATION and is_english_like(text_val))):
-                        source_for_id = find_source_text_for_translation_line(lines, idx) if is_translation_file else text_val
-                        if source_for_id is None:
-                            source_for_id = text_val
-
-                        task_id = translation_core.build_identity_v2("", current_block, block_index, source_for_id)
-                        task = {
-                            "id": task_id,
-                            "text": text_val,
-                            "line": idx,
-                            "start": token.start[1],
-                            "end": token.end[1],
-                            "quote": quote,
-                            "prefix": prefix,
-                            "progress_entry": f"task:{idx}:{token.start[1]}",
-                            "block_name": current_block,
-                            "block_index": block_index,
-                            "source_for_id": source_for_id,
-                        }
-                        speaker_id = ""
-                        if not (is_translation_file and sline.startswith("new ")):
-                            speaker_id = infer_dialogue_speaker_id(line, token.start[1])
-                        if speaker_id:
-                            task["speaker_id"] = speaker_id
-                            task["speaker"] = speaker_id
-                            speaker_name = speaker_names.get(speaker_id)
-                            if speaker_name:
-                                task["speaker_name"] = speaker_name
-                        tasks.append(task)
+                    current_block_occurrence = _ensure_identity_block_occurrence(
+                        block_occurrences,
+                        current_block,
+                        current_block_occurrence,
+                    )
+                    block_index += 1
+                    task_id = translation_core.build_identity_v2(
+                        "",
+                        current_block,
+                        block_index,
+                        source_for_id,
+                        block_occurrence=current_block_occurrence,
+                    )
+                    task = {
+                        "id": task_id,
+                        "text": text_val,
+                        "line": idx,
+                        "start": token.start[1],
+                        "end": token.end[1],
+                        "quote": quote,
+                        "prefix": prefix,
+                        "progress_entry": f"task:{idx}:{token.start[1]}",
+                        "block_name": current_block,
+                        "block_index": block_index,
+                        "block_occurrence": current_block_occurrence,
+                        "source_for_id": source_for_id,
+                    }
+                    speaker_id = ""
+                    if not (is_translation_file and sline.startswith("new ")):
+                        speaker_id = infer_dialogue_speaker_id(line, token.start[1])
+                    if speaker_id:
+                        task["speaker_id"] = speaker_id
+                        task["speaker"] = speaker_id
+                        speaker_name = speaker_names.get(speaker_id)
+                        if speaker_name:
+                            task["speaker_name"] = speaker_name
+                    tasks.append(task)
         except Exception:
             continue
 
@@ -3154,7 +3207,8 @@ def run_translation():
                 progress_key,
                 task.get("block_name", "_global"),
                 task.get("block_index", 0),
-                task.get("source_for_id") or task["text"]
+                task.get("source_for_id") or task["text"],
+                block_occurrence=task.get("block_occurrence", 1),
             )
             task["progress_entry"] = _progress_entry_for_task(task)
             task["file_rel_path"] = progress_key

@@ -1371,7 +1371,8 @@ def collect_pending_file_jobs():
                 rel_path,
                 current.get('block_name', '_global'),
                 current.get('block_index', 0),
-                current.get('source_for_id') or current['text']
+                current.get('source_for_id') or current['text'],
+                block_occurrence=current.get('block_occurrence', 1),
             )
             pending.append(current)
 
@@ -3496,7 +3497,11 @@ def collect_revision_actions(manifest, validate_sources=False):
                         if os.path.exists(file_path):
                             with open(file_path, 'r', encoding='utf-8-sig') as f:
                                 file_lines = f.readlines()
-                        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(file_lines, file_key)
+                        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(
+                            file_lines,
+                            file_key,
+                            mode=translation_core.MODE_REVISION,
+                        )
                     scanned_map = scanned_units_by_file.get(file_key, {})
                     if result_id in scanned_map:
                         scanned_line, scanned_start, scanned_end, scanned_source = scanned_map[result_id]
@@ -3889,7 +3894,11 @@ def collect_result_actions(manifest, validate_sources=False):
                         if os.path.exists(file_path):
                             with open(file_path, 'r', encoding='utf-8-sig') as f:
                                 file_lines = f.readlines()
-                        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(file_lines, file_key)
+                        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(
+                            file_lines,
+                            file_key,
+                            mode=translation_core.MODE_TRANSLATION,
+                        )
                     scanned_map = scanned_units_by_file.get(file_key, {})
                     if result_id in scanned_map:
                         scanned_line, scanned_start, scanned_end, scanned_source = scanned_map[result_id]
@@ -4406,7 +4415,11 @@ def build_identity_v2_by_span(lines, file_rel_path):
     if not file_rel_path:
         return {}
     try:
-        units = legacy.scan_all_translation_units(lines, file_rel_path)
+        units = legacy.scan_all_translation_units(
+            lines,
+            file_rel_path,
+            mode=translation_core.MODE_REVISION,
+        )
     except Exception:
         return {}
     return {
