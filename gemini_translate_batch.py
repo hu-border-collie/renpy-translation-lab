@@ -1367,7 +1367,12 @@ def collect_pending_file_jobs():
             current = dict(task)
             current['file_rel_path'] = rel_path
             current['file_path'] = file_path
-            current['id'] = f"{rel_path}:{current['line']}:{current['start']}"
+            current['id'] = translation_core.build_identity_v2(
+                rel_path,
+                current.get('block_name', '_global'),
+                current.get('block_index', 0),
+                current.get('source_for_id') or current['text']
+            )
             pending.append(current)
 
         if pending:
@@ -1648,8 +1653,9 @@ def create_batch_package(display_name_override='', skip_prepare=False):
     build_warnings = get_batch_risk_warnings()
 
     manifest = {
-        'version': 1,
-        'core_schema_version': translation_core.CORE_SCHEMA_VERSION,
+        'version': 2,
+        'manifest_version': 2,
+        'core_schema_version': 2,
         'mode': MANIFEST_MODE_TRANSLATION,
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
@@ -1738,7 +1744,7 @@ def collect_revision_file_jobs():
     jobs = []
     for rel_path, file_path in collect_files_to_process():
         with open(file_path, 'r', encoding='utf-8-sig') as handle:
-            entries = collect_translation_entries_from_lines(handle.readlines())
+            entries = collect_translation_entries_from_lines(handle.readlines(), file_rel_path=rel_path)
 
         items = []
         for entry in entries:
@@ -1751,7 +1757,10 @@ def collect_revision_file_jobs():
             line_index = max(0, line_number - 1)
             start = int(entry.get('start', 0) or 0)
             item = {
-                'id': f"{rel_path}:{line_index}:{start}:revision:{entry.get('entry_index', len(items))}",
+                'id': (
+                    entry.get('identity_v2')
+                    or f"{rel_path}:{line_index}:{start}:revision:{entry.get('entry_index', len(items))}"
+                ),
                 'text': entry.get('source', ''),
                 'source': entry.get('source', ''),
                 'current_translation': entry.get('translation', ''),
@@ -1949,8 +1958,9 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
 
     build_warnings = get_batch_risk_warnings()
     manifest = {
-        'version': 1,
-        'core_schema_version': translation_core.CORE_SCHEMA_VERSION,
+        'version': 2,
+        'manifest_version': 2,
+        'core_schema_version': 2,
         'mode': MANIFEST_MODE_REVISION,
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
@@ -2210,8 +2220,9 @@ def create_keyword_package(display_name_override='', skip_prepare=True, chunk_si
             handle.write(json.dumps(build_keyword_request(chunk, max_candidates), ensure_ascii=False) + '\n')
 
     manifest = {
-        'version': 1,
-        'core_schema_version': translation_core.CORE_SCHEMA_VERSION,
+        'version': 2,
+        'manifest_version': 2,
+        'core_schema_version': 2,
         'mode': MANIFEST_MODE_KEYWORD_EXTRACTION,
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
@@ -3350,6 +3361,7 @@ def collect_revision_actions(manifest, validate_sources=False):
     chunk_map = {chunk['key']: chunk for chunk in manifest.get('chunks', [])}
     replacements_by_file = {}
     revised_lines_by_file = {}
+    scanned_units_by_file = {}
     processed_keys = set()
     failure_entries = []
     preview_entries = []
@@ -3472,6 +3484,25 @@ def collect_revision_actions(manifest, validate_sources=False):
                     continue
                 seen_ids.add(result_id)
                 summary['parsed_items'] += 1
+
+                is_v2 = (manifest.get('manifest_version', 1) == 2 or manifest.get('version', 1) == 2)
+                if is_v2:
+                    file_key = chunk['file_rel_path']
+                    if file_key not in scanned_units_by_file:
+                        file_path = manifest.get('files', {}).get(file_key, {}).get('path')
+                        if not file_path or not os.path.exists(file_path):
+                            file_path = os.path.join(legacy.TL_DIR, file_key)
+                        file_lines = []
+                        if os.path.exists(file_path):
+                            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                                file_lines = f.readlines()
+                        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(file_lines, file_key)
+                    scanned_map = scanned_units_by_file.get(file_key, {})
+                    if result_id in scanned_map:
+                        scanned_line, scanned_start, scanned_end, scanned_source = scanned_map[result_id]
+                        target_item['line'] = scanned_line
+                        target_item['start'] = scanned_start
+                        target_item['end'] = scanned_end
 
                 target_unit = translation_core.unit_from_manifest_item(
                     target_item,
@@ -3704,6 +3735,7 @@ def collect_result_actions(manifest, validate_sources=False):
     chunk_map = {chunk['key']: chunk for chunk in manifest.get('chunks', [])}
     replacements_by_file = {}
     translated_lines_by_file = {}
+    scanned_units_by_file = {}
     processed_keys = set()
     failure_entries = []
     summary = {
@@ -3845,6 +3877,25 @@ def collect_result_actions(manifest, validate_sources=False):
                     bump_counter(summary['reason_counts'], 'duplicate_result_id')
                     continue
                 seen_ids.add(result_id)
+
+                is_v2 = (manifest.get('manifest_version', 1) == 2 or manifest.get('version', 1) == 2)
+                if is_v2:
+                    file_key = chunk['file_rel_path']
+                    if file_key not in scanned_units_by_file:
+                        file_path = manifest.get('files', {}).get(file_key, {}).get('path')
+                        if not file_path or not os.path.exists(file_path):
+                            file_path = os.path.join(legacy.TL_DIR, file_key)
+                        file_lines = []
+                        if os.path.exists(file_path):
+                            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                                file_lines = f.readlines()
+                        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(file_lines, file_key)
+                    scanned_map = scanned_units_by_file.get(file_key, {})
+                    if result_id in scanned_map:
+                        scanned_line, scanned_start, scanned_end, scanned_source = scanned_map[result_id]
+                        target_item['line'] = scanned_line
+                        target_item['start'] = scanned_start
+                        target_item['end'] = scanned_end
 
                 target_unit = translation_core.unit_from_manifest_item(
                     target_item,
@@ -4351,8 +4402,35 @@ def infer_repair_speaker_id(prefix='', line='', string_start_col=None):
     return legacy.infer_dialogue_speaker_id(f'{prefix}"x"', len(prefix))
 
 
-def collect_translation_entries_from_lines(lines):
+def build_identity_v2_by_span(lines, file_rel_path):
+    if not file_rel_path:
+        return {}
+    try:
+        units = legacy.scan_all_translation_units(lines, file_rel_path)
+    except Exception:
+        return {}
+    return {
+        (line_idx + 1, start, end): unit_id
+        for unit_id, (line_idx, start, end, _text) in units.items()
+    }
+
+
+def attach_identity_v2(entry, identity_v2_by_span):
+    identity = identity_v2_by_span.get(
+        (
+            entry.get('line_number'),
+            entry.get('start'),
+            entry.get('end'),
+        )
+    )
+    if identity:
+        entry['identity_v2'] = identity
+    return entry
+
+
+def collect_translation_entries_from_lines(lines, file_rel_path=''):
     entries = []
+    identity_v2_by_span = build_identity_v2_by_span(lines, file_rel_path)
     index = 0
     while index < len(lines):
         raw_line = lines[index].rstrip('\n')
@@ -4382,9 +4460,7 @@ def collect_translation_entries_from_lines(lines):
                     if speaker_id:
                         entry['speaker_id'] = speaker_id
                         entry['speaker'] = speaker_id
-                    entries.append(
-                        entry
-                    )
+                    entries.append(attach_identity_v2(entry, identity_v2_by_span))
             index = next_index
         else:
             old_match = REPAIR_OLD_LINE_RE.match(raw_line)
@@ -4395,17 +4471,16 @@ def collect_translation_entries_from_lines(lines):
                 if next_index < len(lines) and REPAIR_NEW_LINE_RE.match(lines[next_index].rstrip('\n')):
                     token = extract_string_token_from_line(lines[next_index])
                     if token:
-                        entries.append(
-                            {
-                                'line_number': next_index + 1,
-                                'source_line_number': index + 1,
-                                'source': old_match.group('text'),
-                                'translation': token['text'],
-                                'start': token['start'],
-                                'end': token['end'],
-                                'quote': token['quote'],
-                            }
-                        )
+                        entry = {
+                            'line_number': next_index + 1,
+                            'source_line_number': index + 1,
+                            'source': old_match.group('text'),
+                            'translation': token['text'],
+                            'start': token['start'],
+                            'end': token['end'],
+                            'quote': token['quote'],
+                        }
+                        entries.append(attach_identity_v2(entry, identity_v2_by_span))
                 index = next_index
         index += 1
 
@@ -4732,8 +4807,15 @@ def sync_rag_store_for_jobs(
     records_with_reused_embedding = []
     for record in base_records:
         existing = store.get_history_record(record['memory_id'])
+        if not existing:
+            store.load()
+            for hist_rec in store.history.values():
+                if hist_rec.get('source_checksum') == record['source_checksum']:
+                    existing = hist_rec
+                    break
         if has_current_source_embedding(existing, record):
-            if existing.get('translation_checksum') == record['translation_checksum']:
+            if (existing.get('translation_checksum') == record['translation_checksum']
+                    and existing.get('memory_id') == record['memory_id']):
                 continue
             records_with_reused_embedding.append(reuse_existing_source_embedding(record, existing))
         else:
@@ -5211,8 +5293,9 @@ def make_sync_manifest(
     result_jsonl_path = os.path.join(package_dir, 'results.jsonl')
     write_request_rows(input_jsonl_path, request_rows)
     manifest = {
-        'version': 1,
-        'core_schema_version': translation_core.CORE_SCHEMA_VERSION,
+        'version': 2,
+        'manifest_version': 2,
+        'core_schema_version': 2,
         'mode': mode,
         'execution': 'sync',
         'created_at': datetime.now().isoformat(timespec='seconds'),
@@ -5731,6 +5814,48 @@ def collect_doctor_report():
     can_generate_template = bool(template_info.get('available'))
 
     warnings = []
+
+    legacy_manifests = []
+    if os.path.isdir(BATCH_JOBS_DIR):
+        for name in os.listdir(BATCH_JOBS_DIR):
+            sub_dir = os.path.join(BATCH_JOBS_DIR, name)
+            if not os.path.isdir(sub_dir):
+                continue
+            manifest_path = os.path.join(sub_dir, 'manifest.json')
+            if os.path.isfile(manifest_path):
+                try:
+                    with open(manifest_path, 'r', encoding='utf-8') as f:
+                        m_data = json.load(f)
+                    version = m_data.get('manifest_version', m_data.get('version', 1))
+                    if version < 2:
+                        legacy_manifests.append(name)
+                except Exception:
+                    pass
+    if legacy_manifests:
+        warnings.append(
+            f"Found {len(legacy_manifests)} legacy manifest(s) (v1) in batch jobs "
+            f"(e.g., {legacy_manifests[0]}). They will run in compatibility fallback mode."
+        )
+
+    if RAG_ENABLED:
+        try:
+            store = get_rag_store()
+            if store:
+                store.load()
+                if store.history:
+                    has_legacy_keys = False
+                    for key in store.history.keys():
+                        if len(key.split(':')) != 4:
+                            has_legacy_keys = True
+                            break
+                    if has_legacy_keys:
+                        warnings.append(
+                            "RAG store contains legacy ID format keys. They will be seamlessly "
+                            "migrated on the next successful writeback (checksum fallback enabled)."
+                        )
+        except Exception:
+            pass
+
     if counts['old_lines'] != counts['new_lines']:
         warnings.append('old/new line counts differ; string translation blocks may be malformed.')
     if counts['translate_blocks'] and not counts['commented_original_lines']:

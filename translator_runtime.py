@@ -2870,6 +2870,88 @@ def _is_character_display_token(line_idx, token, display_spans):
     return any(_token_matches_span(line_idx, token, span) for span in display_spans)
 
 
+def find_source_text_for_translation_line(lines, idx):
+    # 向上寻找最近的非空行
+    for prev_idx in range(idx - 1, max(-1, idx - 6), -1):
+        prev_line = lines[prev_idx].strip()
+        if not prev_line:
+            continue
+        # 如果碰到了 translate 或者其它非注释、非 old 行，说明没有对应的注释
+        if prev_line.startswith("translate ") or (not prev_line.startswith("#") and not prev_line.startswith("old ")):
+            break
+
+        # 尝试匹配 comment
+        comment_match = TL_COMMENT_SOURCE_RE.match(lines[prev_idx].rstrip("\n"))
+        if comment_match:
+            return decode_string_literal_text(comment_match.group("text"))
+
+        # 尝试匹配 old
+        old_match = TL_OLD_LINE_RE.match(lines[prev_idx].rstrip("\n"))
+        if old_match:
+            return decode_string_literal_text(old_match.group("text"))
+    return None
+
+
+def scan_all_translation_units(lines, file_rel_path):
+    mapping = {}
+    is_translation_file = any(
+        line.lstrip().startswith("translate ")
+        for line in lines
+    )
+    speaker_names = {}
+    character_display_spans = []
+
+    current_block = "_global"
+    block_index = 0
+
+    for idx, line in enumerate(lines):
+        definition = _parse_character_definition(lines, idx)
+        if definition:
+            character_display_spans.extend(definition["display_spans"])
+
+        sline = line.strip()
+        if sline.startswith("translate "):
+            translate_match = re.match(r'^\s*translate\s+\w+\s+(\w+):', line)
+            if translate_match:
+                current_block = translate_match.group(1)
+                block_index = 0
+
+        if (
+            not sline
+            or sline.startswith("#")
+            or sline.startswith("translate ")
+            or (is_translation_file and sline.startswith("old "))
+        ):
+            continue
+
+        try:
+            tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
+            for token in tokens:
+                if token.type != tokenize.STRING:
+                    continue
+                if _is_character_display_token(idx, token, character_display_spans):
+                    continue
+                try:
+                    text_val = ast.literal_eval(token.string)
+                except Exception:
+                    continue
+                if not isinstance(text_val, str):
+                    continue
+
+                block_index += 1
+
+                source_for_id = find_source_text_for_translation_line(lines, idx) if is_translation_file else text_val
+                if source_for_id is None:
+                    source_for_id = text_val
+
+                identity = translation_core.build_identity_v2(file_rel_path, current_block, block_index, source_for_id)
+                mapping[identity] = (idx, token.start[1], token.end[1], text_val)
+        except Exception:
+            continue
+
+    return mapping
+
+
 def collect_tasks(lines, skip_translated=True):
     # Logic to parse Ren'Py files
     # Note: caller handles filename lookup, this function just parses
@@ -2882,6 +2964,9 @@ def collect_tasks(lines, skip_translated=True):
     )
     speaker_names = {}
     character_display_spans = []
+
+    current_block = "_global"
+    block_index = 0
 
     # Simple parser for Ren'Py strings
     for idx, line in enumerate(lines):
@@ -2896,6 +2981,12 @@ def collect_tasks(lines, skip_translated=True):
             character_display_spans.extend(definition["display_spans"])
 
         sline = line.strip()
+        if sline.startswith("translate "):
+            translate_match = re.match(r'^\s*translate\s+\w+\s+(\w+):', line)
+            if translate_match:
+                current_block = translate_match.group(1)
+                block_index = 0
+
         # In translation templates, `old` is a lookup key and must never be edited.
         if (
             not sline
@@ -2922,6 +3013,9 @@ def collect_tasks(lines, skip_translated=True):
                     continue
                 if not isinstance(text_val, str):
                     continue
+
+                block_index += 1
+
                 prefix, quote = parse_string_literal_format(token.string)
 
                 # Simple heuristic: if it contains Chinese, it's already translated or source is CN
@@ -2935,8 +3029,13 @@ def collect_tasks(lines, skip_translated=True):
 
                     if (" " in text_val or len(text_val) > 15 or (text_val and text_val[0].isupper())
                             or (ALLOW_SINGLE_WORD_TRANSLATION and is_english_like(text_val))):
+                        source_for_id = find_source_text_for_translation_line(lines, idx) if is_translation_file else text_val
+                        if source_for_id is None:
+                            source_for_id = text_val
+
+                        task_id = translation_core.build_identity_v2("", current_block, block_index, source_for_id)
                         task = {
-                            "id": f"line_{idx}_{token.start[1]}", # Temp ID, updated later
+                            "id": task_id,
                             "text": text_val,
                             "line": idx,
                             "start": token.start[1],
@@ -2944,6 +3043,9 @@ def collect_tasks(lines, skip_translated=True):
                             "quote": quote,
                             "prefix": prefix,
                             "progress_entry": f"task:{idx}:{token.start[1]}",
+                            "block_name": current_block,
+                            "block_index": block_index,
+                            "source_for_id": source_for_id,
                         }
                         speaker_id = ""
                         if not (is_translation_file and sline.startswith("new ")):
@@ -3048,7 +3150,12 @@ def run_translation():
 
         for task in tasks:
             # Update ID to be unique per file and string literal
-            task["id"] = f"{progress_key}:{task['line']}:{task['start']}"
+            task["id"] = translation_core.build_identity_v2(
+                progress_key,
+                task.get("block_name", "_global"),
+                task.get("block_index", 0),
+                task.get("source_for_id") or task["text"]
+            )
             task["progress_entry"] = _progress_entry_for_task(task)
             task["file_rel_path"] = progress_key
 
