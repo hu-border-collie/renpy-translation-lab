@@ -135,9 +135,15 @@ class WritebackAction:
     chunk_key: str = ''
 
 
-def build_identity_v2(file_rel_path, block_name, block_index, source_text):
+def build_identity_v2(file_rel_path, block_name, block_index, source_text, block_occurrence=1):
     clean_path = str(file_rel_path or '').replace('\\', '/').strip()
     clean_block = str(block_name or '_global').strip()
+    try:
+        occurrence = max(1, int(block_occurrence or 1))
+    except (TypeError, ValueError):
+        occurrence = 1
+    if occurrence > 1:
+        clean_block = f"{clean_block}#{occurrence}"
     clean_text = str(source_text or '')
     source_hash = hashlib.sha1(clean_text.encode('utf-8')).hexdigest()[:8]
     return f"{clean_path}:{clean_block}:{block_index}:{source_hash}"

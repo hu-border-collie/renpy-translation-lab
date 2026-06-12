@@ -86,6 +86,49 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         self.assertEqual(tasks[2]["block_name"], "chapter1_next")
         self.assertEqual(tasks[2]["block_index"], 1)
 
+    def test_repeated_translate_block_names_do_not_collide(self):
+        lines = [
+            "translate schinese strings:\n",
+            "    old \"Start Game\"\n",
+            "    new \"Start Game\"\n",
+            "translate schinese strings:\n",
+            "    old \"Start Game\"\n",
+            "    new \"Start Game\"\n",
+        ]
+
+        mapping = runtime.scan_all_translation_units(lines, "script.rpy")
+        self.assertEqual(len(mapping), 2)
+        ids = sorted(mapping)
+        self.assertNotEqual(ids[0], ids[1])
+        self.assertTrue(any(":strings:1:" in item_id for item_id in ids))
+        self.assertTrue(any(":strings#2:1:" in item_id for item_id in ids))
+
+    def test_non_targets_do_not_shift_translation_identity(self):
+        original_lines = [
+            "translate schinese start:\n",
+            "    # \"Line 1\"\n",
+            "    \"Line 1\"\n",
+            "    # \"Line 2\"\n",
+            "    \"Line 2\"\n",
+        ]
+        drifted_lines = [
+            "translate schinese start:\n",
+            "    # \"Line 1\"\n",
+            "    \"Line 1\"\n",
+            "    \"images/title.png\"\n",
+            "    \"已经翻译\"\n",
+            "    # \"Line 2\"\n",
+            "    \"Line 2\"\n",
+        ]
+
+        original = runtime.scan_all_translation_units(original_lines, "script.rpy")
+        drifted = runtime.scan_all_translation_units(drifted_lines, "script.rpy")
+        self.assertEqual(set(original), set(drifted))
+        line2_id = next(item_id for item_id, value in original.items() if value[3] == "Line 2")
+        self.assertIn(":start:2:", line2_id)
+        self.assertEqual(original[line2_id][0], 4)
+        self.assertEqual(drifted[line2_id][0], 6)
+
     def test_line_drift_resolution(self):
         # 原始文件
         orig_lines = [
