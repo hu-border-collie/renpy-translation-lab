@@ -8,6 +8,7 @@ applying replacements.
 """
 
 from dataclasses import dataclass, field
+import hashlib
 import json
 import math
 import re
@@ -15,7 +16,7 @@ import re
 import prompt_context
 
 
-CORE_SCHEMA_VERSION = 1
+CORE_SCHEMA_VERSION = 2
 
 MODE_TRANSLATION = 'translation'
 MODE_KEYWORD_EXTRACTION = 'keyword_extraction'
@@ -132,6 +133,14 @@ class WritebackAction:
     expected_text: str = ''
     item_id: str = ''
     chunk_key: str = ''
+
+
+def build_identity_v2(file_rel_path, block_name, block_index, source_text):
+    clean_path = str(file_rel_path or '').replace('\\', '/').strip()
+    clean_block = str(block_name or '_global').strip()
+    clean_text = str(source_text or '')
+    source_hash = hashlib.sha1(clean_text.encode('utf-8')).hexdigest()[:8]
+    return f"{clean_path}:{clean_block}:{block_index}:{source_hash}"
 
 
 def compact_text(text):
