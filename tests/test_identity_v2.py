@@ -129,6 +129,54 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         self.assertEqual(original[line2_id][0], 4)
         self.assertEqual(drifted[line2_id][0], 6)
 
+    def test_translated_tl_entries_preserve_scan_ordinals(self):
+        original_lines = [
+            "translate schinese start:\n",
+            "    # \"Line 1\"\n",
+            "    \"Line 1\"\n",
+            "    # \"Line 2\"\n",
+            "    \"Line 2\"\n",
+        ]
+        partially_translated_lines = [
+            "translate schinese start:\n",
+            "    # \"Line 1\"\n",
+            "    \"第一行\"\n",
+            "    # \"Line 2\"\n",
+            "    \"Line 2\"\n",
+        ]
+
+        original = runtime.scan_all_translation_units(original_lines, "script.rpy")
+        partially_translated = runtime.scan_all_translation_units(partially_translated_lines, "script.rpy")
+        self.assertEqual(set(original), set(partially_translated))
+        line1_id = next(item_id for item_id, value in original.items() if value[3] == "Line 1")
+        line2_id = next(item_id for item_id, value in original.items() if value[3] == "Line 2")
+        self.assertIn(":start:1:", line1_id)
+        self.assertIn(":start:2:", line2_id)
+        self.assertEqual(partially_translated[line1_id][3], "第一行")
+        self.assertEqual(partially_translated[line2_id][3], "Line 2")
+
+    def test_revision_identity_lookup_tolerates_blank_lines(self):
+        file_rel_path = "script.rpy"
+        file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
+        lines = [
+            "translate schinese chapter1:\n",
+            "    old \"Void Gate\"\n",
+            "\n",
+            "\n",
+            "\n",
+            "    new \"虚空门\"\n",
+        ]
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+
+        jobs = batch_mod.collect_revision_file_jobs()
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(len(jobs[0]["items"]), 1)
+        item = jobs[0]["items"][0]
+        expected_id = translation_core.build_identity_v2(file_rel_path, "chapter1", 1, "Void Gate")
+        self.assertEqual(item["id"], expected_id)
+        self.assertNotIn(":revision:", item["id"])
+
     def test_line_drift_resolution(self):
         # 原始文件
         orig_lines = [
