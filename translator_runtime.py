@@ -2872,13 +2872,10 @@ def _is_character_display_token(line_idx, token, display_spans):
 
 def find_source_text_for_translation_line(lines, idx):
     # 向上寻找最近的非空行
-    for prev_idx in range(idx - 1, max(-1, idx - 6), -1):
+    for prev_idx in range(idx - 1, -1, -1):
         prev_line = lines[prev_idx].strip()
         if not prev_line:
             continue
-        # 如果碰到了 translate 或者其它非注释、非 old 行，说明没有对应的注释
-        if prev_line.startswith("translate ") or (not prev_line.startswith("#") and not prev_line.startswith("old ")):
-            break
 
         # 尝试匹配 comment
         comment_match = TL_COMMENT_SOURCE_RE.match(lines[prev_idx].rstrip("\n"))
@@ -2889,6 +2886,7 @@ def find_source_text_for_translation_line(lines, idx):
         old_match = TL_OLD_LINE_RE.match(lines[prev_idx].rstrip("\n"))
         if old_match:
             return decode_string_literal_text(old_match.group("text"))
+        break
     return None
 
 
@@ -2974,7 +2972,11 @@ def scan_all_translation_units(lines, file_rel_path, mode=translation_core.MODE_
                 if source_for_id is None:
                     source_for_id = text_val
 
-                if mode == translation_core.MODE_TRANSLATION and not _is_translation_target_text(text_val):
+                if (
+                    mode == translation_core.MODE_TRANSLATION
+                    and not (is_translation_file and source_marker is not None)
+                    and not _is_translation_target_text(text_val)
+                ):
                     continue
                 if mode == translation_core.MODE_REVISION and is_translation_file and source_marker is None:
                     continue
