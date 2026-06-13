@@ -214,6 +214,29 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         self.assertIn(expected_line2_id, mapping)
         self.assertEqual(mapping[expected_line1_id][3], "第一行")
 
+    def test_revision_entry_scanners_skip_voice_source_comments(self):
+        file_rel_path = "script.rpy"
+        lines = [
+            "translate schinese start:\n",
+            "    # voice \"audio/line_1.ogg\"\n",
+            "    # e \"Line 1\"\n",
+            "    voice \"audio/line_1.ogg\"\n",
+            "    e \"第一行\"\n",
+        ]
+
+        entries = batch_mod.collect_translation_entries_from_lines(lines, file_rel_path=file_rel_path)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["source"], "Line 1")
+        self.assertEqual(entries[0]["translation"], "第一行")
+        self.assertEqual(entries[0]["line_number"], 5)
+        expected_id = translation_core.build_identity_v2(file_rel_path, "start", 1, "Line 1")
+        self.assertEqual(entries[0]["identity_v2"], expected_id)
+
+        runtime_entries = runtime.collect_translation_entries_from_lines(lines)
+        self.assertEqual(len(runtime_entries), 1)
+        self.assertEqual(runtime_entries[0]["source"], "Line 1")
+        self.assertEqual(runtime_entries[0]["translation"], "第一行")
+
     def test_revision_identity_lookup_tolerates_blank_lines(self):
         file_rel_path = "script.rpy"
         file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
