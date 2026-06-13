@@ -473,6 +473,86 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         missing = [failure for failure in failures if failure.get("id") == id2][0]
         self.assertEqual(missing["line"], 8)
 
+    def test_collect_result_actions_blocks_missing_v2_relocation(self):
+        file_rel_path = "script.rpy"
+        file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        current_lines = [
+            "translate schinese new_block:\n",
+            "    # \"Same text\"\n",
+            "    \"Same text\"\n",
+        ]
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.writelines(current_lines)
+
+        missing_id = translation_core.build_identity_v2(file_rel_path, "old_block", 1, "Same text")
+        result_path = os.path.join(self.tmp_dir, "missing_relocation_results.jsonl")
+        manifest = {
+            "version": 2,
+            "manifest_version": 2,
+            "core_schema_version": 2,
+            "mode": batch_mod.MANIFEST_MODE_TRANSLATION,
+            "input_jsonl_path": os.path.join(self.tmp_dir, "requests.jsonl"),
+            "result_jsonl_path": result_path,
+            "settings": {},
+            "files": {
+                file_rel_path: {
+                    "path": file_path,
+                    "task_count": 1,
+                }
+            },
+            "chunks": [
+                {
+                    "key": "chunk_0",
+                    "file_rel_path": file_rel_path,
+                    "chunk_index": 1,
+                    "items": [
+                        {
+                            "id": missing_id,
+                            "text": "Same text",
+                            "line": 2,
+                            "start": 4,
+                            "end": 15,
+                            "quote": "\"",
+                        }
+                    ],
+                }
+            ],
+            "_manifest_path": os.path.join(self.tmp_dir, "manifest.json"),
+            "_package_dir": self.tmp_dir,
+        }
+
+        response_text = json.dumps([{"id": missing_id, "translation": "同一文本"}], ensure_ascii=False)
+        with open(result_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "key": "chunk_0",
+                "response": {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"text": response_text}
+                                ]
+                            }
+                        }
+                    ]
+                },
+            }, ensure_ascii=False) + "\n")
+
+        replacements, _, failures, summary = batch_mod.collect_result_actions(
+            manifest,
+            validate_sources=True,
+        )
+
+        self.assertEqual(replacements, {})
+        self.assertEqual(summary["reason_counts"]["v2_relocation_missing"], 1)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["id"], missing_id)
+        self.assertEqual(failures[0]["reason_code"], "v2_relocation_missing")
+        safety = batch_mod.summarize_check_safety(summary)
+        self.assertEqual(safety["level"], batch_mod.CHECK_SAFETY_BLOCK)
+
     def test_collect_revision_actions_uses_v2_identity_after_line_drift(self):
         file_rel_path = "script.rpy"
         file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
@@ -554,7 +634,7 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
                 },
             }, ensure_ascii=False) + "\n")
 
-        replacements, _, failures, summary, _ = batch_mod.collect_revision_actions(
+        replacements, _, failures, summary, preview_entries = batch_mod.collect_revision_actions(
             manifest,
             validate_sources=True,
         )
@@ -564,6 +644,7 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         self.assertIn(6, replacements[file_rel_path])
         action_tuple = replacements[file_rel_path][6][0]
         self.assertEqual(action_tuple[2], "虚空之门")
+        self.assertEqual(preview_entries[0]["line"], 7)
 
     def test_collect_result_actions_compatibility_v1_fallback(self):
         # 测试旧版 V1 Manifest。如果 Manifest v1 发生漂移，我们将不会进行扫描修复，而是继续使用其内部的 line 定位。
