@@ -216,6 +216,20 @@ python gemini_translate_batch.py sync-keywords --limit 3
 - 如果确认没有进程正在写入同一个 RAG store，可手动删除残留的 `.rag_store.lock` 或 `*.tmp.*` 文件来恢复写入；自动清理失败时会输出包含文件路径的 warning
 - 加载 RAG store 时，损坏的 metadata 或坏 JSONL 行会输出 warning；可恢复的 history 记录会继续保留
 
+### Manifest / identity v2
+
+新建的普通翻译、订正和关键词 manifest 会写入 `manifest_version=2` 与 `core_schema_version=2`。普通翻译和订正 item 的 `id` 现在使用 identity v2：归一化后的文件相对路径、Ren'Py translate block 名、重复 block occurrence、block 内可翻译单元序号，以及原文 checksum。行号和列位置仍保存在 item 上，但它们是当前写回 location hint，不再是唯一身份。
+
+这个拆分的含义是：
+
+- `identity` 用于跨 `build / check / apply / repair` 识别同一个翻译单元。
+- `location` 是当前文件里的行号、列位置、translate block 等写回定位信息，可能因为插入空行、局部手改或模板刷新而漂移。
+- `snapshot` 是写回前校验用的当前源文本或当前译文；即使 identity 能重定位，`check/apply` 和 `apply-revisions` 仍会复核快照，不会盲写。
+
+v2 重定位覆盖普通 translation 和 revision manifest：`check`、`apply`、`preview-revisions` 和 `apply-revisions` 会在处理 v2 结果前重扫当前 TL 文件，用 v2 id 刷新行号和列位置；结果缺项、解析失败和 repair failure 报告也会尽量使用重扫后的当前位置。旧 manifest 保持兼容 fallback：`manifest_version` 缺失或为 `1` 时继续使用 manifest 内原始 location，不做 v2 重定位；`doctor` 会提示本地 `logs/batch_jobs` 中的旧 manifest。
+
+RAG / history store 继续以 `memory_id` 关联记录。升级到 v2 后，已有旧 key 不会立即强制迁移；写入新记录时会先尝试按 `source_checksum` 复用旧记录的 source embedding，避免因为 id 升级就全量重算。`doctor` 会提示 history store 中仍存在旧格式 key；如原文大量变动或文件结构重排，仍建议重新 `bootstrap-rag`。
+
 ### Golden corpus 测试
 
 `tests/fixtures/golden_batch_minimal/` 保存了一个最小 TL fixture、固定 mock 模型结果和预期输出，用来离线验证普通 Batch 翻译的 `build -> check -> apply` 合约。这个测试不调用 Gemini，也不需要真实 API key。

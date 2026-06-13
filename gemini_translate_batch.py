@@ -111,6 +111,7 @@ CHECK_BLOCK_REASON_CODES = {
     'missing_manifest_file',
     'target_file_missing',
     'target_file_path_escaped',
+    'v2_relocation_missing',
 }
 
 RAG_ENABLED = False
@@ -1049,6 +1050,8 @@ def infer_failure_reason_code(entry):
         return 'missing_manifest_file'
     if 'target file missing' in error:
         return 'target_file_missing'
+    if 'v2 relocation missing' in error:
+        return 'v2_relocation_missing'
     if 'escapes' in error:
         return 'target_file_path_escaped'
     return 'unclassified_failure'
@@ -3354,6 +3357,65 @@ def reconcile_revision_preview_entries(preview_entries, validation_failures):
     return reconciled
 
 
+def is_v2_manifest(manifest):
+    return manifest.get('manifest_version', 1) == 2 or manifest.get('version', 1) == 2
+
+
+def relocate_v2_chunk_items(manifest, chunk, scanned_units_by_file, mode):
+    if not is_v2_manifest(manifest):
+        return []
+    file_key = chunk['file_rel_path']
+    if file_key not in scanned_units_by_file:
+        file_path = manifest.get('files', {}).get(file_key, {}).get('path')
+        if not file_path or not os.path.exists(file_path):
+            file_path = os.path.join(legacy.TL_DIR, file_key)
+        file_lines = []
+        if os.path.exists(file_path):
+            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                file_lines = f.readlines()
+        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(
+            file_lines,
+            file_key,
+            mode=mode,
+        )
+
+    scanned_map = scanned_units_by_file.get(file_key, {})
+    missing_items = []
+    for item in chunk.get('items') or []:
+        scanned = scanned_map.get(item.get('id'))
+        if not scanned:
+            missing_items.append(item)
+            continue
+        scanned_line, scanned_start, scanned_end, _scanned_source = scanned
+        item['line'] = scanned_line
+        item['line_number'] = scanned_line + 1
+        item['start'] = scanned_start
+        item['end'] = scanned_end
+    return missing_items
+
+
+def record_v2_relocation_failures(manifest, chunk, missing_items, summary, failure_entries, key=''):
+    if not missing_items:
+        return set()
+    bump_counter(summary['reason_counts'], 'v2_relocation_missing', len(missing_items))
+    missing_ids = set()
+    for item in missing_items:
+        item_id = str(item.get('id') or '')
+        if item_id:
+            missing_ids.add(item_id)
+        failure_entries.append(make_failure_entry(
+            manifest,
+            'V2 relocation missing for result item',
+            file_rel_path=chunk.get('file_rel_path', ''),
+            item_id=item_id,
+            line=item.get('line'),
+            text=item.get('source', item.get('text', '')),
+            key=key or chunk.get('key', ''),
+            reason_code='v2_relocation_missing',
+        ))
+    return missing_ids
+
+
 def collect_revision_actions(manifest, validate_sources=False):
     result_path = resolve_manifest_result_path(manifest)
     if not os.path.isfile(result_path):
@@ -3404,7 +3466,27 @@ def collect_revision_actions(manifest, validate_sources=False):
             processed_keys.add(key)
             chunk = chunk_map[key]
             chunk_items = chunk['items']
-            item_map = {item['id']: item for item in chunk_items}
+            relocation_missing = relocate_v2_chunk_items(
+                manifest,
+                chunk,
+                scanned_units_by_file,
+                translation_core.MODE_REVISION,
+            )
+            relocation_missing_ids = record_v2_relocation_failures(
+                manifest,
+                chunk,
+                relocation_missing,
+                summary,
+                failure_entries,
+                key=key,
+            )
+            active_chunk_items = [
+                item for item in chunk_items
+                if str(item.get('id') or '') not in relocation_missing_ids
+            ]
+            if relocation_missing_ids and not active_chunk_items:
+                continue
+            item_map = {item['id']: item for item in active_chunk_items}
             response_payload = row.get('response', {})
             finish_reason = extract_finish_reason(response_payload)
             usage_metadata = summarize_usage_metadata(extract_usage_metadata(response_payload))
@@ -3414,7 +3496,7 @@ def collect_revision_actions(manifest, validate_sources=False):
             if row.get('error'):
                 summary['chunk_row_errors'] += 1
                 bump_counter(summary['reason_counts'], 'row_error')
-                for item in chunk_items:
+                for item in active_chunk_items:
                     failure_entries.append(make_failure_entry(
                         manifest,
                         serialize_unknown(row.get('error')),
@@ -3432,7 +3514,7 @@ def collect_revision_actions(manifest, validate_sources=False):
             if not response_text:
                 summary['missing_response_chunks'] += 1
                 bump_counter(summary['reason_counts'], 'missing_response_text')
-                for item in chunk_items:
+                for item in active_chunk_items:
                     failure_entries.append(make_failure_entry(
                         manifest,
                         'Missing text in response payload',
@@ -3453,7 +3535,7 @@ def collect_revision_actions(manifest, validate_sources=False):
                 summary['partial_chunks'] += 1
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'failed_to_parse_revision_json'
                 bump_counter(summary['reason_counts'], reason_name)
-                for item in chunk_items:
+                for item in active_chunk_items:
                     failure_entries.append(make_failure_entry(
                         manifest,
                         f'Failed to parse revision JSON: {exc}',
@@ -3468,7 +3550,7 @@ def collect_revision_actions(manifest, validate_sources=False):
                     ))
                 continue
 
-            if len(result_items) < len(chunk_items):
+            if len(result_items) < len(active_chunk_items):
                 summary['partial_chunks'] += 1
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_revision_items'
                 bump_counter(summary['reason_counts'], reason_name)
@@ -3476,6 +3558,8 @@ def collect_revision_actions(manifest, validate_sources=False):
             seen_ids = set()
             for result_item in result_items:
                 result_id = result_item['id']
+                if result_id in relocation_missing_ids:
+                    continue
                 target_item = item_map.get(result_id)
                 if not target_item:
                     bump_counter(summary['reason_counts'], 'schema_or_item_mismatch')
@@ -3485,29 +3569,6 @@ def collect_revision_actions(manifest, validate_sources=False):
                     continue
                 seen_ids.add(result_id)
                 summary['parsed_items'] += 1
-
-                is_v2 = (manifest.get('manifest_version', 1) == 2 or manifest.get('version', 1) == 2)
-                if is_v2:
-                    file_key = chunk['file_rel_path']
-                    if file_key not in scanned_units_by_file:
-                        file_path = manifest.get('files', {}).get(file_key, {}).get('path')
-                        if not file_path or not os.path.exists(file_path):
-                            file_path = os.path.join(legacy.TL_DIR, file_key)
-                        file_lines = []
-                        if os.path.exists(file_path):
-                            with open(file_path, 'r', encoding='utf-8-sig') as f:
-                                file_lines = f.readlines()
-                        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(
-                            file_lines,
-                            file_key,
-                            mode=translation_core.MODE_REVISION,
-                        )
-                    scanned_map = scanned_units_by_file.get(file_key, {})
-                    if result_id in scanned_map:
-                        scanned_line, scanned_start, scanned_end, scanned_source = scanned_map[result_id]
-                        target_item['line'] = scanned_line
-                        target_item['start'] = scanned_start
-                        target_item['end'] = scanned_end
 
                 target_unit = translation_core.unit_from_manifest_item(
                     target_item,
@@ -3588,7 +3649,23 @@ def collect_revision_actions(manifest, validate_sources=False):
         bump_counter(summary['reason_counts'], 'missing_chunk_rows', len(missing_keys))
     for key in sorted(missing_keys):
         chunk = chunk_map[key]
+        relocation_missing = relocate_v2_chunk_items(
+            manifest,
+            chunk,
+            scanned_units_by_file,
+            translation_core.MODE_REVISION,
+        )
+        relocation_missing_ids = record_v2_relocation_failures(
+            manifest,
+            chunk,
+            relocation_missing,
+            summary,
+            failure_entries,
+            key=key,
+        )
         for item in chunk['items']:
+            if str(item.get('id') or '') in relocation_missing_ids:
+                continue
             failure_entries.append(make_failure_entry(
                 manifest,
                 'No result row found for chunk',
@@ -3793,7 +3870,27 @@ def collect_result_actions(manifest, validate_sources=False):
             processed_keys.add(key)
             chunk = chunk_map[key]
             chunk_items = chunk['items']
-            item_map = {item['id']: item for item in chunk_items}
+            relocation_missing = relocate_v2_chunk_items(
+                manifest,
+                chunk,
+                scanned_units_by_file,
+                translation_core.MODE_TRANSLATION,
+            )
+            relocation_missing_ids = record_v2_relocation_failures(
+                manifest,
+                chunk,
+                relocation_missing,
+                summary,
+                failure_entries,
+                key=key,
+            )
+            active_chunk_items = [
+                item for item in chunk_items
+                if str(item.get('id') or '') not in relocation_missing_ids
+            ]
+            if relocation_missing_ids and not active_chunk_items:
+                continue
+            item_map = {item['id']: item for item in active_chunk_items}
             response_payload = row.get('response', {})
             finish_reason = extract_finish_reason(response_payload)
             usage_metadata = summarize_usage_metadata(extract_usage_metadata(response_payload))
@@ -3803,7 +3900,7 @@ def collect_result_actions(manifest, validate_sources=False):
             if row.get('error'):
                 summary['chunk_row_errors'] += 1
                 bump_counter(summary['reason_counts'], 'row_error')
-                for item in chunk_items:
+                for item in active_chunk_items:
                     failure_entries.append(
                         {
                             'timestamp': datetime.now().isoformat(timespec='seconds'),
@@ -3824,7 +3921,7 @@ def collect_result_actions(manifest, validate_sources=False):
             if not response_text:
                 summary['missing_response_chunks'] += 1
                 bump_counter(summary['reason_counts'], 'missing_response_text')
-                for item in chunk_items:
+                for item in active_chunk_items:
                     failure_entries.append(
                         {
                             'timestamp': datetime.now().isoformat(timespec='seconds'),
@@ -3848,7 +3945,7 @@ def collect_result_actions(manifest, validate_sources=False):
                 summary['partial_chunks'] += 1
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'failed_to_parse_model_json'
                 bump_counter(summary['reason_counts'], reason_name)
-                for item in chunk_items:
+                for item in active_chunk_items:
                     failure_entries.append(
                         {
                             'timestamp': datetime.now().isoformat(timespec='seconds'),
@@ -3866,7 +3963,7 @@ def collect_result_actions(manifest, validate_sources=False):
                     )
                 continue
 
-            if len(result_items) < len(chunk_items):
+            if len(result_items) < len(active_chunk_items):
                 summary['partial_chunks'] += 1
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_result_items'
                 bump_counter(summary['reason_counts'], reason_name)
@@ -3874,6 +3971,8 @@ def collect_result_actions(manifest, validate_sources=False):
             seen_ids = set()
             for result_item in result_items:
                 result_id = result_item['id']
+                if result_id in relocation_missing_ids:
+                    continue
                 target_item = item_map.get(result_id)
                 if not target_item:
                     bump_counter(summary['reason_counts'], 'schema_or_item_mismatch')
@@ -3882,29 +3981,6 @@ def collect_result_actions(manifest, validate_sources=False):
                     bump_counter(summary['reason_counts'], 'duplicate_result_id')
                     continue
                 seen_ids.add(result_id)
-
-                is_v2 = (manifest.get('manifest_version', 1) == 2 or manifest.get('version', 1) == 2)
-                if is_v2:
-                    file_key = chunk['file_rel_path']
-                    if file_key not in scanned_units_by_file:
-                        file_path = manifest.get('files', {}).get(file_key, {}).get('path')
-                        if not file_path or not os.path.exists(file_path):
-                            file_path = os.path.join(legacy.TL_DIR, file_key)
-                        file_lines = []
-                        if os.path.exists(file_path):
-                            with open(file_path, 'r', encoding='utf-8-sig') as f:
-                                file_lines = f.readlines()
-                        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(
-                            file_lines,
-                            file_key,
-                            mode=translation_core.MODE_TRANSLATION,
-                        )
-                    scanned_map = scanned_units_by_file.get(file_key, {})
-                    if result_id in scanned_map:
-                        scanned_line, scanned_start, scanned_end, scanned_source = scanned_map[result_id]
-                        target_item['line'] = scanned_line
-                        target_item['start'] = scanned_start
-                        target_item['end'] = scanned_end
 
                 target_unit = translation_core.unit_from_manifest_item(
                     target_item,
@@ -3976,7 +4052,23 @@ def collect_result_actions(manifest, validate_sources=False):
         bump_counter(summary['reason_counts'], 'missing_chunk_rows', len(missing_keys))
     for key in sorted(missing_keys):
         chunk = chunk_map[key]
+        relocation_missing = relocate_v2_chunk_items(
+            manifest,
+            chunk,
+            scanned_units_by_file,
+            translation_core.MODE_TRANSLATION,
+        )
+        relocation_missing_ids = record_v2_relocation_failures(
+            manifest,
+            chunk,
+            relocation_missing,
+            summary,
+            failure_entries,
+            key=key,
+        )
         for item in chunk['items']:
+            if str(item.get('id') or '') in relocation_missing_ids:
+                continue
             failure_entries.append(
                 {
                     'timestamp': datetime.now().isoformat(timespec='seconds'),
@@ -4365,6 +4457,29 @@ REPAIR_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 REPAIR_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
 
 
+def is_voice_comment_match(match):
+    if not match:
+        return False
+    prefix = str(match.group('prefix') or '').strip()
+    return prefix.split(None, 1)[0:1] == ['voice']
+
+
+def is_voice_statement_line(line):
+    stripped = str(line or '').strip()
+    return stripped == 'voice' or stripped.startswith('voice ')
+
+
+def next_translation_entry_target_index(lines, index):
+    next_index = index + 1
+    while next_index < len(lines):
+        candidate = lines[next_index]
+        if not candidate.strip() or is_voice_statement_line(candidate):
+            next_index += 1
+            continue
+        break
+    return next_index
+
+
 def write_jsonl_file(path, entries):
     with open(path, 'w', encoding='utf-8') as handle:
         for entry in entries:
@@ -4449,9 +4564,10 @@ def collect_translation_entries_from_lines(lines, file_rel_path=''):
         raw_line = lines[index].rstrip('\n')
         comment_match = REPAIR_LINE_COMMENT_RE.match(raw_line)
         if comment_match:
-            next_index = index + 1
-            while next_index < len(lines) and not lines[next_index].strip():
-                next_index += 1
+            if is_voice_comment_match(comment_match):
+                index += 1
+                continue
+            next_index = next_translation_entry_target_index(lines, index)
             if next_index < len(lines):
                 token = extract_string_token_from_line(lines[next_index])
                 if token:

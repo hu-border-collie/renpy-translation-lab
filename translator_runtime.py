@@ -2128,6 +2128,29 @@ def decode_string_literal_text(raw_text):
     return value if isinstance(value, str) else raw_text
 
 
+def is_voice_comment_match(match):
+    if not match:
+        return False
+    prefix = str(match.group("prefix") or "").strip()
+    return prefix.split(None, 1)[0:1] == ["voice"]
+
+
+def is_voice_statement_line(line):
+    stripped = str(line or "").strip()
+    return stripped == "voice" or stripped.startswith("voice ")
+
+
+def next_translation_entry_target_index(lines, index):
+    next_index = index + 1
+    while next_index < len(lines):
+        candidate = lines[next_index]
+        if not candidate.strip() or is_voice_statement_line(candidate):
+            next_index += 1
+            continue
+        break
+    return next_index
+
+
 def collect_translation_entries_from_lines(lines):
     entries = []
     index = 0
@@ -2135,9 +2158,10 @@ def collect_translation_entries_from_lines(lines):
         raw_line = lines[index].rstrip("\n")
         comment_match = TL_COMMENT_SOURCE_RE.match(raw_line)
         if comment_match:
-            next_index = index + 1
-            while next_index < len(lines) and not lines[next_index].strip():
-                next_index += 1
+            if is_voice_comment_match(comment_match):
+                index += 1
+                continue
+            next_index = next_translation_entry_target_index(lines, index)
             if next_index < len(lines):
                 candidate_line = lines[next_index].rstrip("\n")
                 if not TL_OLD_LINE_RE.match(candidate_line):
@@ -2871,27 +2895,29 @@ def _is_character_display_token(line_idx, token, display_spans):
 
 
 def find_source_text_for_translation_line(lines, idx):
-    # 向上寻找最近的非空行
     for prev_idx in range(idx - 1, -1, -1):
         prev_line = lines[prev_idx].strip()
         if not prev_line:
             continue
 
-        # 尝试匹配 comment
         comment_match = TL_COMMENT_SOURCE_RE.match(lines[prev_idx].rstrip("\n"))
         if comment_match:
+            if is_voice_comment_match(comment_match):
+                continue
             return decode_string_literal_text(comment_match.group("text"))
 
-        # 尝试匹配 old
         old_match = TL_OLD_LINE_RE.match(lines[prev_idx].rstrip("\n"))
         if old_match:
             return decode_string_literal_text(old_match.group("text"))
+
+        if is_voice_statement_line(prev_line):
+            continue
         break
     return None
 
 
 def _translate_block_name(line):
-    match = re.match(r'^\s*translate\s+\w+\s+(\w+):', line)
+    match = re.match(r'^\s*translate\s+\S+\s+([^\s:]+)\s*:', line)
     return match.group(1) if match else None
 
 
@@ -2949,6 +2975,8 @@ def scan_all_translation_units(lines, file_rel_path, mode=translation_core.MODE_
             not sline
             or sline.startswith("#")
             or sline.startswith("translate ")
+            or sline == "voice"
+            or sline.startswith("voice ")
             or (is_translation_file and sline.startswith("old "))
         ):
             continue
@@ -3044,6 +3072,8 @@ def collect_tasks(lines, skip_translated=True):
             not sline
             or sline.startswith("#")
             or sline.startswith("translate ")
+            or sline == "voice"
+            or sline.startswith("voice ")
             or (is_translation_file and sline.startswith("old "))
         ):
             continue
