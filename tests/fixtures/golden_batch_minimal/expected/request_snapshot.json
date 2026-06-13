@@ -12,13 +12,13 @@
         "user"
       ],
       "target_item_ids": [
-        "chapter01/dialogue.rpy:2:6",
-        "chapter01/dialogue.rpy:5:4",
-        "chapter01/dialogue.rpy:8:6",
-        "chapter01/dialogue.rpy:11:4"
+        "chapter01/dialogue.rpy:chapter01_start:1:8dfe92d9",
+        "chapter01/dialogue.rpy:chapter01_start:2:3fbd4128",
+        "chapter01/dialogue.rpy:chapter01_start:3:2ecaab1c",
+        "chapter01/dialogue.rpy:chapter01_start:4:8c8bd881"
       ],
       "system_instruction_sha256": "ed66ec81d9c32d4234192d16005de338331e27e05443a46ce36adcfedaa22648",
-      "user_prompt_sha256": "15f6c9f1cdb47e127d158c5292990a5998fb09e7466877fa2d6c598d63863267",
+      "user_prompt_sha256": "748b4fcf7f31e78fd71ca064d4febcc9f1e54cf54ab7febaaabb509ee50836bb",
       "generation_config": {
         "keys": [
           "max_output_tokens",
@@ -48,10 +48,10 @@
               "id": {
                 "type": "string",
                 "enum": [
-                  "chapter01/dialogue.rpy:2:6",
-                  "chapter01/dialogue.rpy:5:4",
-                  "chapter01/dialogue.rpy:8:6",
-                  "chapter01/dialogue.rpy:11:4"
+                  "chapter01/dialogue.rpy:chapter01_start:1:8dfe92d9",
+                  "chapter01/dialogue.rpy:chapter01_start:2:3fbd4128",
+                  "chapter01/dialogue.rpy:chapter01_start:3:2ecaab1c",
+                  "chapter01/dialogue.rpy:chapter01_start:4:8c8bd881"
                 ]
               },
               "translation": {
@@ -74,11 +74,11 @@
         "user"
       ],
       "target_item_ids": [
-        "chapter02/strings.rpy:2:8",
-        "chapter02/strings.rpy:5:8"
+        "chapter02/strings.rpy:strings:1:365f992a",
+        "chapter02/strings.rpy:strings:2:802aa657"
       ],
       "system_instruction_sha256": "ed66ec81d9c32d4234192d16005de338331e27e05443a46ce36adcfedaa22648",
-      "user_prompt_sha256": "283aef76e3aa3ddf073df41dd9ecb8c9f1ee4062ad6be8032c2fa6ecc9d02314",
+      "user_prompt_sha256": "92f2fad5cd380e2587fc6d74df688935b79ecb76b7157e367d96ec9aa74bdfa2",
       "generation_config": {
         "keys": [
           "max_output_tokens",
@@ -108,8 +108,8 @@
               "id": {
                 "type": "string",
                 "enum": [
-                  "chapter02/strings.rpy:2:8",
-                  "chapter02/strings.rpy:5:8"
+                  "chapter02/strings.rpy:strings:1:365f992a",
+                  "chapter02/strings.rpy:strings:2:802aa657"
                 ]
               },
               "translation": {

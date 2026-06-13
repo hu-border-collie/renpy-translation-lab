@@ -622,8 +622,6 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 previous_latest = root / 'previous_manifest.json'
                 target_file = tl_dir / 'script.rpy'
                 new_line = '    new "虚空门"\n'
-                start = new_line.index('"虚空门"')
-                item_id = f'script.rpy:2:{start}:revision:0'
                 target_file.write_text(
                     'translate schinese start:\n'
                     '    old "Void Gate"\n'
@@ -637,30 +635,34 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 batch_mod.SYNC_RUNS_DIR = str(root / 'sync_runs')
                 batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
                 Path(batch_mod.LATEST_MANIFEST_FILE).write_text(str(previous_latest), encoding='utf-8')
-                response_text = json.dumps(
-                    [
-                        {
-                            'id': item_id,
-                            'should_update': True,
-                            'revised_translation': '虚空之门',
-                            'reason': '统一术语',
-                        }
-                    ],
-                    ensure_ascii=False,
-                )
+
+                def run_sync_revision_response(request, *_args, **_kwargs):
+                    id_enum = request['generation_config']['response_json_schema']['items']['properties']['id']['enum']
+                    response_text = json.dumps(
+                        [
+                            {
+                                'id': id_enum[0],
+                                'should_update': True,
+                                'revised_translation': '虚空之门',
+                                'reason': '统一术语',
+                            }
+                        ],
+                        ensure_ascii=False,
+                    )
+                    return {
+                        'response_payload': {
+                            'candidates': [{'content': {'parts': [{'text': response_text}]}}],
+                        },
+                        'response_text': response_text,
+                        'finish_reason': 'STOP',
+                        'usage_metadata': {},
+                    }
 
                 with (
                     mock.patch.object(
                         batch_mod,
                         'run_sync_request',
-                        return_value={
-                            'response_payload': {
-                                'candidates': [{'content': {'parts': [{'text': response_text}]}}],
-                            },
-                            'response_text': response_text,
-                            'finish_reason': 'STOP',
-                            'usage_metadata': {},
-                        },
+                        side_effect=run_sync_revision_response,
                     ) as sync_request,
                     mock.patch.object(batch_mod, 'update_progress') as update_progress,
                 ):
