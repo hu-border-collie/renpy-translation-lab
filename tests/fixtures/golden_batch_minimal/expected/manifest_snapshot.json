@@ -1,6 +1,6 @@
 {
   "mode": "translation",
-  "core_schema_version": 1,
+  "core_schema_version": 2,
   "summary": {
     "file_count": 2,
     "chunk_count": 2,
@@ -39,7 +39,7 @@
       "context_future": [],
       "items": [
         {
-          "id": "chapter01/dialogue.rpy:2:6",
+          "id": "chapter01/dialogue.rpy:chapter01_start:1:8dfe92d9",
           "text": "Welcome back, traveler.",
           "line": 2,
           "start": 6,
@@ -50,7 +50,7 @@
           "speaker": "e"
         },
         {
-          "id": "chapter01/dialogue.rpy:5:4",
+          "id": "chapter01/dialogue.rpy:chapter01_start:2:3fbd4128",
           "text": "The gate is quiet tonight.",
           "line": 5,
           "start": 4,
@@ -61,7 +61,7 @@
           "speaker": ""
         },
         {
-          "id": "chapter01/dialogue.rpy:8:6",
+          "id": "chapter01/dialogue.rpy:chapter01_start:3:2ecaab1c",
           "text": "Don't touch the crystal.",
           "line": 8,
           "start": 6,
@@ -72,7 +72,7 @@
           "speaker": "e"
         },
         {
-          "id": "chapter01/dialogue.rpy:11:4",
+          "id": "chapter01/dialogue.rpy:chapter01_start:4:8c8bd881",
           "text": "Say \"hello\" before you leave.",
           "line": 11,
           "start": 4,
@@ -97,7 +97,7 @@
       "context_future": [],
       "items": [
         {
-          "id": "chapter02/strings.rpy:2:8",
+          "id": "chapter02/strings.rpy:strings:1:365f992a",
           "text": "Start Game",
           "line": 2,
           "start": 8,
@@ -108,7 +108,7 @@
           "speaker": ""
         },
         {
-          "id": "chapter02/strings.rpy:5:8",
+          "id": "chapter02/strings.rpy:strings:2:802aa657",
           "text": "Load Game",
           "line": 5,
           "start": 8,
