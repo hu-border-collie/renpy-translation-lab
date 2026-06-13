@@ -3354,6 +3354,39 @@ def reconcile_revision_preview_entries(preview_entries, validation_failures):
     return reconciled
 
 
+def is_v2_manifest(manifest):
+    return manifest.get('manifest_version', 1) == 2 or manifest.get('version', 1) == 2
+
+
+def relocate_v2_chunk_items(manifest, chunk, scanned_units_by_file, mode):
+    if not is_v2_manifest(manifest):
+        return
+    file_key = chunk['file_rel_path']
+    if file_key not in scanned_units_by_file:
+        file_path = manifest.get('files', {}).get(file_key, {}).get('path')
+        if not file_path or not os.path.exists(file_path):
+            file_path = os.path.join(legacy.TL_DIR, file_key)
+        file_lines = []
+        if os.path.exists(file_path):
+            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                file_lines = f.readlines()
+        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(
+            file_lines,
+            file_key,
+            mode=mode,
+        )
+
+    scanned_map = scanned_units_by_file.get(file_key, {})
+    for item in chunk.get('items') or []:
+        scanned = scanned_map.get(item.get('id'))
+        if not scanned:
+            continue
+        scanned_line, scanned_start, scanned_end, _scanned_source = scanned
+        item['line'] = scanned_line
+        item['start'] = scanned_start
+        item['end'] = scanned_end
+
+
 def collect_revision_actions(manifest, validate_sources=False):
     result_path = resolve_manifest_result_path(manifest)
     if not os.path.isfile(result_path):
@@ -3404,6 +3437,12 @@ def collect_revision_actions(manifest, validate_sources=False):
             processed_keys.add(key)
             chunk = chunk_map[key]
             chunk_items = chunk['items']
+            relocate_v2_chunk_items(
+                manifest,
+                chunk,
+                scanned_units_by_file,
+                translation_core.MODE_REVISION,
+            )
             item_map = {item['id']: item for item in chunk_items}
             response_payload = row.get('response', {})
             finish_reason = extract_finish_reason(response_payload)
@@ -3485,29 +3524,6 @@ def collect_revision_actions(manifest, validate_sources=False):
                     continue
                 seen_ids.add(result_id)
                 summary['parsed_items'] += 1
-
-                is_v2 = (manifest.get('manifest_version', 1) == 2 or manifest.get('version', 1) == 2)
-                if is_v2:
-                    file_key = chunk['file_rel_path']
-                    if file_key not in scanned_units_by_file:
-                        file_path = manifest.get('files', {}).get(file_key, {}).get('path')
-                        if not file_path or not os.path.exists(file_path):
-                            file_path = os.path.join(legacy.TL_DIR, file_key)
-                        file_lines = []
-                        if os.path.exists(file_path):
-                            with open(file_path, 'r', encoding='utf-8-sig') as f:
-                                file_lines = f.readlines()
-                        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(
-                            file_lines,
-                            file_key,
-                            mode=translation_core.MODE_REVISION,
-                        )
-                    scanned_map = scanned_units_by_file.get(file_key, {})
-                    if result_id in scanned_map:
-                        scanned_line, scanned_start, scanned_end, scanned_source = scanned_map[result_id]
-                        target_item['line'] = scanned_line
-                        target_item['start'] = scanned_start
-                        target_item['end'] = scanned_end
 
                 target_unit = translation_core.unit_from_manifest_item(
                     target_item,
@@ -3793,6 +3809,12 @@ def collect_result_actions(manifest, validate_sources=False):
             processed_keys.add(key)
             chunk = chunk_map[key]
             chunk_items = chunk['items']
+            relocate_v2_chunk_items(
+                manifest,
+                chunk,
+                scanned_units_by_file,
+                translation_core.MODE_TRANSLATION,
+            )
             item_map = {item['id']: item for item in chunk_items}
             response_payload = row.get('response', {})
             finish_reason = extract_finish_reason(response_payload)
@@ -3882,29 +3904,6 @@ def collect_result_actions(manifest, validate_sources=False):
                     bump_counter(summary['reason_counts'], 'duplicate_result_id')
                     continue
                 seen_ids.add(result_id)
-
-                is_v2 = (manifest.get('manifest_version', 1) == 2 or manifest.get('version', 1) == 2)
-                if is_v2:
-                    file_key = chunk['file_rel_path']
-                    if file_key not in scanned_units_by_file:
-                        file_path = manifest.get('files', {}).get(file_key, {}).get('path')
-                        if not file_path or not os.path.exists(file_path):
-                            file_path = os.path.join(legacy.TL_DIR, file_key)
-                        file_lines = []
-                        if os.path.exists(file_path):
-                            with open(file_path, 'r', encoding='utf-8-sig') as f:
-                                file_lines = f.readlines()
-                        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(
-                            file_lines,
-                            file_key,
-                            mode=translation_core.MODE_TRANSLATION,
-                        )
-                    scanned_map = scanned_units_by_file.get(file_key, {})
-                    if result_id in scanned_map:
-                        scanned_line, scanned_start, scanned_end, scanned_source = scanned_map[result_id]
-                        target_item['line'] = scanned_line
-                        target_item['start'] = scanned_start
-                        target_item['end'] = scanned_end
 
                 target_unit = translation_core.unit_from_manifest_item(
                     target_item,
