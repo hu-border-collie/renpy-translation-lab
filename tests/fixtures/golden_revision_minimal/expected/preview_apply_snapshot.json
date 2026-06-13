@@ -22,7 +22,7 @@
   },
   "preview_rows": [
     {
-      "id": "chapter01/revisions.rpy:2:8:revision:0",
+      "id": "chapter01/revisions.rpy:chapter01_terms:1:43a18a7f",
       "file_rel_path": "chapter01/revisions.rpy",
       "line": 3,
       "source": "Void Gate",
@@ -34,7 +34,7 @@
       "error": ""
     },
     {
-      "id": "chapter01/revisions.rpy:5:8:revision:1",
+      "id": "chapter01/revisions.rpy:chapter01_terms:2:6010c123",
       "file_rel_path": "chapter01/revisions.rpy",
       "line": 6,
       "source": "Crystal Key",
@@ -46,7 +46,7 @@
       "error": ""
     },
     {
-      "id": "chapter01/revisions.rpy:8:8:revision:2",
+      "id": "chapter01/revisions.rpy:chapter01_terms:3:f9326bcb",
       "file_rel_path": "chapter01/revisions.rpy",
       "line": 9,
       "source": "Already Good",

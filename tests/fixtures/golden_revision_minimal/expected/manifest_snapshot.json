@@ -1,6 +1,6 @@
 {
   "mode": "revision",
-  "core_schema_version": 1,
+  "core_schema_version": 2,
   "summary": {
     "file_count": 1,
     "chunk_count": 1,
@@ -35,7 +35,7 @@
       "context_future": [],
       "items": [
         {
-          "id": "chapter01/revisions.rpy:2:8:revision:0",
+          "id": "chapter01/revisions.rpy:chapter01_terms:1:43a18a7f",
           "text": "Void Gate",
           "source": "Void Gate",
           "current_translation": "虚空门",
@@ -47,7 +47,7 @@
           "quote": "\""
         },
         {
-          "id": "chapter01/revisions.rpy:5:8:revision:1",
+          "id": "chapter01/revisions.rpy:chapter01_terms:2:6010c123",
           "text": "Crystal Key",
           "source": "Crystal Key",
           "current_translation": "水晶钥匙",
@@ -59,7 +59,7 @@
           "quote": "\""
         },
         {
-          "id": "chapter01/revisions.rpy:8:8:revision:2",
+          "id": "chapter01/revisions.rpy:chapter01_terms:3:f9326bcb",
           "text": "Already Good",
           "source": "Already Good",
           "current_translation": "已经很好",
