@@ -86,6 +86,27 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         self.assertEqual(tasks[2]["block_name"], "chapter1_next")
         self.assertEqual(tasks[2]["block_index"], 1)
 
+    def test_dotted_translate_block_names_are_identity_boundaries(self):
+        lines = [
+            "translate schinese chapter_1.part_1:\n",
+            "    # \"Line 1\"\n",
+            "    \"Line 1\"\n",
+            "translate schinese chapter_1.part_2:\n",
+            "    # \"Line 2\"\n",
+            "    \"Line 2\"\n",
+        ]
+
+        tasks = runtime.collect_tasks(lines)
+        self.assertEqual([task["block_name"] for task in tasks], [
+            "chapter_1.part_1",
+            "chapter_1.part_2",
+        ])
+        self.assertEqual([task["block_index"] for task in tasks], [1, 1])
+
+        mapping = runtime.scan_all_translation_units(lines, "script.rpy")
+        self.assertTrue(any(":chapter_1.part_1:1:" in item_id for item_id in mapping))
+        self.assertTrue(any(":chapter_1.part_2:1:" in item_id for item_id in mapping))
+
     def test_repeated_translate_block_names_do_not_collide(self):
         lines = [
             "translate schinese strings:\n",
@@ -172,6 +193,49 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
 
         expected_id = translation_core.build_identity_v2("", "start", 2, "Line 2")
         self.assertEqual(tasks[0]["id"], expected_id)
+
+    def test_voice_statement_does_not_hide_dialogue_source_marker(self):
+        lines = [
+            "translate schinese start:\n",
+            "    # voice \"audio/line_1.ogg\"\n",
+            "    # e \"Line 1\"\n",
+            "    voice \"audio/line_1.ogg\"\n",
+            "    e \"第一行\"\n",
+            "    # \"Line 2\"\n",
+            "    \"Line 2\"\n",
+        ]
+
+        self.assertEqual(runtime.find_source_text_for_translation_line(lines, 4), "Line 1")
+
+        mapping = runtime.scan_all_translation_units(lines, "script.rpy")
+        expected_line1_id = translation_core.build_identity_v2("script.rpy", "start", 1, "Line 1")
+        expected_line2_id = translation_core.build_identity_v2("script.rpy", "start", 2, "Line 2")
+        self.assertIn(expected_line1_id, mapping)
+        self.assertIn(expected_line2_id, mapping)
+        self.assertEqual(mapping[expected_line1_id][3], "第一行")
+
+    def test_revision_entry_scanners_skip_voice_source_comments(self):
+        file_rel_path = "script.rpy"
+        lines = [
+            "translate schinese start:\n",
+            "    # voice \"audio/line_1.ogg\"\n",
+            "    # e \"Line 1\"\n",
+            "    voice \"audio/line_1.ogg\"\n",
+            "    e \"第一行\"\n",
+        ]
+
+        entries = batch_mod.collect_translation_entries_from_lines(lines, file_rel_path=file_rel_path)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["source"], "Line 1")
+        self.assertEqual(entries[0]["translation"], "第一行")
+        self.assertEqual(entries[0]["line_number"], 5)
+        expected_id = translation_core.build_identity_v2(file_rel_path, "start", 1, "Line 1")
+        self.assertEqual(entries[0]["identity_v2"], expected_id)
+
+        runtime_entries = runtime.collect_translation_entries_from_lines(lines)
+        self.assertEqual(len(runtime_entries), 1)
+        self.assertEqual(runtime_entries[0]["source"], "Line 1")
+        self.assertEqual(runtime_entries[0]["translation"], "第一行")
 
     def test_revision_identity_lookup_tolerates_blank_lines(self):
         file_rel_path = "script.rpy"
@@ -318,6 +382,177 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         action_tuple = replacements[file_rel_path][6][0]
         self.assertEqual(action_tuple[2], "你好世界")
 
+    def test_collect_result_actions_relocates_missing_v2_response_items(self):
+        file_rel_path = "script.rpy"
+        file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        drifted_lines = [
+            "\n",
+            "init python:\n",
+            "    pass\n",
+            "\n",
+            "translate schinese chapter1:\n",
+            "    # \"Line 1\"\n",
+            "    \"Line 1\"\n",
+            "    # \"Line 2\"\n",
+            "    \"Line 2\"\n",
+        ]
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.writelines(drifted_lines)
+
+        id1 = translation_core.build_identity_v2(file_rel_path, "chapter1", 1, "Line 1")
+        id2 = translation_core.build_identity_v2(file_rel_path, "chapter1", 2, "Line 2")
+        result_path = os.path.join(self.tmp_dir, "results.jsonl")
+        manifest = {
+            "version": 2,
+            "manifest_version": 2,
+            "core_schema_version": 2,
+            "mode": batch_mod.MANIFEST_MODE_TRANSLATION,
+            "input_jsonl_path": os.path.join(self.tmp_dir, "requests.jsonl"),
+            "result_jsonl_path": result_path,
+            "settings": {},
+            "files": {
+                file_rel_path: {
+                    "path": file_path,
+                    "task_count": 2,
+                }
+            },
+            "chunks": [
+                {
+                    "key": "chunk_0",
+                    "file_rel_path": file_rel_path,
+                    "chunk_index": 1,
+                    "items": [
+                        {
+                            "id": id1,
+                            "text": "Line 1",
+                            "line": 2,
+                            "start": 4,
+                            "end": 12,
+                            "quote": "\"",
+                        },
+                        {
+                            "id": id2,
+                            "text": "Line 2",
+                            "line": 4,
+                            "start": 4,
+                            "end": 12,
+                            "quote": "\"",
+                        },
+                    ],
+                }
+            ],
+            "_manifest_path": os.path.join(self.tmp_dir, "manifest.json"),
+            "_package_dir": self.tmp_dir,
+        }
+
+        response_text = json.dumps([{"id": id1, "translation": "第一行"}], ensure_ascii=False)
+        with open(result_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "key": "chunk_0",
+                "response": {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"text": response_text}
+                                ]
+                            }
+                        }
+                    ]
+                },
+            }, ensure_ascii=False) + "\n")
+
+        replacements, _, failures, summary = batch_mod.collect_result_actions(
+            manifest,
+            validate_sources=False,
+        )
+        self.assertIn(6, replacements[file_rel_path])
+        self.assertEqual(summary["reason_counts"]["response_missing_item_id"], 1)
+        missing = [failure for failure in failures if failure.get("id") == id2][0]
+        self.assertEqual(missing["line"], 8)
+
+    def test_collect_result_actions_blocks_missing_v2_relocation(self):
+        file_rel_path = "script.rpy"
+        file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        current_lines = [
+            "translate schinese new_block:\n",
+            "    # \"Same text\"\n",
+            "    \"Same text\"\n",
+        ]
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.writelines(current_lines)
+
+        missing_id = translation_core.build_identity_v2(file_rel_path, "old_block", 1, "Same text")
+        result_path = os.path.join(self.tmp_dir, "missing_relocation_results.jsonl")
+        manifest = {
+            "version": 2,
+            "manifest_version": 2,
+            "core_schema_version": 2,
+            "mode": batch_mod.MANIFEST_MODE_TRANSLATION,
+            "input_jsonl_path": os.path.join(self.tmp_dir, "requests.jsonl"),
+            "result_jsonl_path": result_path,
+            "settings": {},
+            "files": {
+                file_rel_path: {
+                    "path": file_path,
+                    "task_count": 1,
+                }
+            },
+            "chunks": [
+                {
+                    "key": "chunk_0",
+                    "file_rel_path": file_rel_path,
+                    "chunk_index": 1,
+                    "items": [
+                        {
+                            "id": missing_id,
+                            "text": "Same text",
+                            "line": 2,
+                            "start": 4,
+                            "end": 15,
+                            "quote": "\"",
+                        }
+                    ],
+                }
+            ],
+            "_manifest_path": os.path.join(self.tmp_dir, "manifest.json"),
+            "_package_dir": self.tmp_dir,
+        }
+
+        response_text = json.dumps([{"id": missing_id, "translation": "同一文本"}], ensure_ascii=False)
+        with open(result_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "key": "chunk_0",
+                "response": {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"text": response_text}
+                                ]
+                            }
+                        }
+                    ]
+                },
+            }, ensure_ascii=False) + "\n")
+
+        replacements, _, failures, summary = batch_mod.collect_result_actions(
+            manifest,
+            validate_sources=True,
+        )
+
+        self.assertEqual(replacements, {})
+        self.assertEqual(summary["reason_counts"]["v2_relocation_missing"], 1)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["id"], missing_id)
+        self.assertEqual(failures[0]["reason_code"], "v2_relocation_missing")
+        safety = batch_mod.summarize_check_safety(summary)
+        self.assertEqual(safety["level"], batch_mod.CHECK_SAFETY_BLOCK)
+
     def test_collect_revision_actions_uses_v2_identity_after_line_drift(self):
         file_rel_path = "script.rpy"
         file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
@@ -399,7 +634,7 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
                 },
             }, ensure_ascii=False) + "\n")
 
-        replacements, _, failures, summary, _ = batch_mod.collect_revision_actions(
+        replacements, _, failures, summary, preview_entries = batch_mod.collect_revision_actions(
             manifest,
             validate_sources=True,
         )
@@ -409,6 +644,7 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         self.assertIn(6, replacements[file_rel_path])
         action_tuple = replacements[file_rel_path][6][0]
         self.assertEqual(action_tuple[2], "虚空之门")
+        self.assertEqual(preview_entries[0]["line"], 7)
 
     def test_collect_result_actions_compatibility_v1_fallback(self):
         # 测试旧版 V1 Manifest。如果 Manifest v1 发生漂移，我们将不会进行扫描修复，而是继续使用其内部的 line 定位。
