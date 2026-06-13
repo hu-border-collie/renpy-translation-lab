@@ -3070,48 +3070,56 @@ def collect_tasks(lines, skip_translated=True):
 
                 # Simple heuristic: if it contains Chinese, it's already translated or source is CN
                 # If it's pure ASCII/English, we want to translate it.
-                if _is_translation_target_text(text_val):
-                    source_for_id = find_source_text_for_translation_line(lines, idx) if is_translation_file else text_val
-                    if source_for_id is None:
-                        source_for_id = text_val
+                source_marker = find_source_text_for_translation_line(lines, idx) if is_translation_file else None
+                should_translate = _is_translation_target_text(text_val)
+                identity_bearing = (is_translation_file and source_marker is not None) or should_translate
+                if not identity_bearing:
+                    continue
 
-                    current_block_occurrence = _ensure_identity_block_occurrence(
-                        block_occurrences,
-                        current_block,
-                        current_block_occurrence,
-                    )
-                    block_index += 1
-                    task_id = translation_core.build_identity_v2(
-                        "",
-                        current_block,
-                        block_index,
-                        source_for_id,
-                        block_occurrence=current_block_occurrence,
-                    )
-                    task = {
-                        "id": task_id,
-                        "text": text_val,
-                        "line": idx,
-                        "start": token.start[1],
-                        "end": token.end[1],
-                        "quote": quote,
-                        "prefix": prefix,
-                        "progress_entry": f"task:{idx}:{token.start[1]}",
-                        "block_name": current_block,
-                        "block_index": block_index,
-                        "block_occurrence": current_block_occurrence,
-                        "source_for_id": source_for_id,
-                    }
-                    speaker_id = ""
-                    if not (is_translation_file and sline.startswith("new ")):
-                        speaker_id = infer_dialogue_speaker_id(line, token.start[1])
-                    if speaker_id:
-                        task["speaker_id"] = speaker_id
-                        task["speaker"] = speaker_id
-                        speaker_name = speaker_names.get(speaker_id)
-                        if speaker_name:
-                            task["speaker_name"] = speaker_name
-                    tasks.append(task)
+                source_for_id = source_marker if source_marker is not None else text_val
+                if source_for_id is None:
+                    source_for_id = text_val
+
+                current_block_occurrence = _ensure_identity_block_occurrence(
+                    block_occurrences,
+                    current_block,
+                    current_block_occurrence,
+                )
+                block_index += 1
+                if not should_translate:
+                    continue
+
+                task_id = translation_core.build_identity_v2(
+                    "",
+                    current_block,
+                    block_index,
+                    source_for_id,
+                    block_occurrence=current_block_occurrence,
+                )
+                task = {
+                    "id": task_id,
+                    "text": text_val,
+                    "line": idx,
+                    "start": token.start[1],
+                    "end": token.end[1],
+                    "quote": quote,
+                    "prefix": prefix,
+                    "progress_entry": f"task:{idx}:{token.start[1]}",
+                    "block_name": current_block,
+                    "block_index": block_index,
+                    "block_occurrence": current_block_occurrence,
+                    "source_for_id": source_for_id,
+                }
+                speaker_id = ""
+                if not (is_translation_file and sline.startswith("new ")):
+                    speaker_id = infer_dialogue_speaker_id(line, token.start[1])
+                if speaker_id:
+                    task["speaker_id"] = speaker_id
+                    task["speaker"] = speaker_id
+                    speaker_name = speaker_names.get(speaker_id)
+                    if speaker_name:
+                        task["speaker_name"] = speaker_name
+                tasks.append(task)
         except Exception:
             continue
 

@@ -155,6 +155,24 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         self.assertEqual(partially_translated[line1_id][3], "第一行")
         self.assertEqual(partially_translated[line2_id][3], "Line 2")
 
+    def test_collect_tasks_counts_translated_tl_entries_for_later_ids(self):
+        lines = [
+            "translate schinese start:\n",
+            "    # \"Line 1\"\n",
+            "    \"第一行\"\n",
+            "    # \"Line 2\"\n",
+            "    \"Line 2\"\n",
+        ]
+
+        tasks = runtime.collect_tasks(lines)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["text"], "Line 2")
+        self.assertEqual(tasks[0]["block_index"], 2)
+        self.assertEqual(tasks[0]["source_for_id"], "Line 2")
+
+        expected_id = translation_core.build_identity_v2("", "start", 2, "Line 2")
+        self.assertEqual(tasks[0]["id"], expected_id)
+
     def test_revision_identity_lookup_tolerates_blank_lines(self):
         file_rel_path = "script.rpy"
         file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
