@@ -4364,6 +4364,29 @@ REPAIR_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 REPAIR_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
 
 
+def is_voice_comment_match(match):
+    if not match:
+        return False
+    prefix = str(match.group('prefix') or '').strip()
+    return prefix.split(None, 1)[0:1] == ['voice']
+
+
+def is_voice_statement_line(line):
+    stripped = str(line or '').strip()
+    return stripped == 'voice' or stripped.startswith('voice ')
+
+
+def next_translation_entry_target_index(lines, index):
+    next_index = index + 1
+    while next_index < len(lines):
+        candidate = lines[next_index]
+        if not candidate.strip() or is_voice_statement_line(candidate):
+            next_index += 1
+            continue
+        break
+    return next_index
+
+
 def write_jsonl_file(path, entries):
     with open(path, 'w', encoding='utf-8') as handle:
         for entry in entries:
@@ -4448,9 +4471,10 @@ def collect_translation_entries_from_lines(lines, file_rel_path=''):
         raw_line = lines[index].rstrip('\n')
         comment_match = REPAIR_LINE_COMMENT_RE.match(raw_line)
         if comment_match:
-            next_index = index + 1
-            while next_index < len(lines) and not lines[next_index].strip():
-                next_index += 1
+            if is_voice_comment_match(comment_match):
+                index += 1
+                continue
+            next_index = next_translation_entry_target_index(lines, index)
             if next_index < len(lines):
                 token = extract_string_token_from_line(lines[next_index])
                 if token:
