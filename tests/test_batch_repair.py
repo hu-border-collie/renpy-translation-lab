@@ -1523,6 +1523,31 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(items[0]['source'], 'Hello')
         self.assertEqual(items[0]['line'], 1)
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows path alias regression')
+    def test_resolve_path_under_dir_accepts_windows_short_path_alias(self):
+        short_base = r'C:\Users\RUNNER~1\AppData\Local\Temp\case'
+        long_base = r'C:\Users\runneradmin\AppData\Local\Temp\case'
+        short_file = short_base + r'\script.rpy'
+        long_file = long_base + r'\script.rpy'
+
+        def canonical(path):
+            normalized = os.path.normcase(os.path.abspath(path))
+            if normalized == os.path.normcase(os.path.abspath(short_base)):
+                return long_base
+            if normalized == os.path.normcase(os.path.abspath(short_file)):
+                return long_file
+            return os.path.abspath(path)
+
+        with mock.patch.object(batch_mod, '_canonical_abs_path', side_effect=canonical):
+            self.assertEqual(
+                batch_mod.resolve_path_under_dir(short_base, 'script.rpy', 'repair file'),
+                long_file,
+            )
+            self.assertEqual(
+                batch_mod.resolve_path_under_dir(short_base, long_file, 'repair file'),
+                long_file,
+            )
+
     def test_load_repair_report_items_rejects_file_outside_tl_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
