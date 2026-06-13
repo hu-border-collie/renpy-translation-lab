@@ -266,6 +266,10 @@ python -m unittest tests.test_batch_golden_corpus.KeywordGoldenCorpusTests -q
 Remove-Item Env:UPDATE_GOLDEN_KEYWORD
 ```
 
+> [!NOTE]
+> 项目的持续集成 (CI) 分别在 Ubuntu 和 Windows 环境下自动运行上述全部单元测试，以验证跨平台路径、文件读写及数据格式合约。CI 中的测试仅使用离线 Mock，不覆盖真实的 Ren'Py SDK 模板生成和 Gemini 网络请求。
+
+
 ### 可选：Batch RAG 预建库
 
 如果项目里已经有一部分人工译文或旧译文，可以先运行：
