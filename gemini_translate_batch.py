@@ -134,6 +134,9 @@ _RAG_PRESERVED_TERMS_CACHE_KEY = None
 SOURCE_INDEX_ENABLED = False
 SOURCE_INDEX_STORE_DIR = ''
 _SOURCE_INDEX_STORE = None
+SOURCE_INDEX_TOP_K = 4
+SOURCE_INDEX_MIN_SIMILARITY = 0.72
+SOURCE_INDEX_CHAR_LIMIT = 220
 
 STORY_MEMORY_ENABLED = False
 STORY_MEMORY_GRAPH_FILE = ''
@@ -217,6 +220,7 @@ def load_batch_settings():
     global RAG_TOP_K_TERMS, RAG_MIN_SIMILARITY, RAG_SEGMENT_LINES
     global RAG_BOOTSTRAP_ON_BUILD, RAG_HISTORY_CHAR_LIMIT, _RAG_STORE
     global SOURCE_INDEX_ENABLED, SOURCE_INDEX_STORE_DIR, _SOURCE_INDEX_STORE
+    global SOURCE_INDEX_TOP_K, SOURCE_INDEX_MIN_SIMILARITY, SOURCE_INDEX_CHAR_LIMIT
     global STORY_MEMORY_ENABLED, STORY_MEMORY_GRAPH_FILE, STORY_MEMORY_MAX_CONTEXT_CHARS
     global STORY_MEMORY_TOP_K_RELATIONS, STORY_MEMORY_TOP_K_TERMS
     global STORY_MEMORY_INCLUDE_SCENE_SUMMARY, _STORY_GRAPH, _STORY_GRAPH_PATH
@@ -353,6 +357,9 @@ def load_batch_settings():
         source_index_config = {}
 
     SOURCE_INDEX_ENABLED = coerce_bool(source_index_config.get('enabled'), SOURCE_INDEX_ENABLED)
+    SOURCE_INDEX_TOP_K = coerce_positive_int(source_index_config.get('top_k'), SOURCE_INDEX_TOP_K)
+    SOURCE_INDEX_MIN_SIMILARITY = coerce_float(source_index_config.get('min_similarity'), SOURCE_INDEX_MIN_SIMILARITY)
+    SOURCE_INDEX_CHAR_LIMIT = coerce_positive_int(source_index_config.get('char_limit'), SOURCE_INDEX_CHAR_LIMIT)
     source_index_store_dir = source_index_config.get('store_dir')
     if source_index_store_dir:
         SOURCE_INDEX_STORE_DIR = legacy._resolve_path(legacy.BASE_DIR, source_index_store_dir)
@@ -550,12 +557,13 @@ def get_default_source_index_store_dir():
     return os.path.join(LOG_DIR, 'source_index_store', guess_project_slug())
 
 
-def get_source_index_store():
+def get_source_index_store(update_metadata=True):
     global _SOURCE_INDEX_STORE, SOURCE_INDEX_STORE_DIR
     if not SOURCE_INDEX_STORE_DIR:
         SOURCE_INDEX_STORE_DIR = get_default_source_index_store_dir()
     if _SOURCE_INDEX_STORE is None or os.path.abspath(_SOURCE_INDEX_STORE.store_dir) != os.path.abspath(SOURCE_INDEX_STORE_DIR):
         _SOURCE_INDEX_STORE = JsonSourceIndexStore(SOURCE_INDEX_STORE_DIR)
+    if update_metadata:
         _SOURCE_INDEX_STORE.set_metadata(
             project_slug=guess_project_slug(),
             embedding_model=RAG_EMBEDDING_MODEL,
@@ -757,6 +765,51 @@ def retrieve_history_hits(target_items, context_past):
                 'score': float(match.get('score', 0.0)),
             }
         )
+
+    return hits, {
+        'enabled': True,
+        'query_text': truncate_text(query_text, 400),
+        'hit_count': len(hits),
+    }
+
+
+def retrieve_source_hits(target_items, context_past):
+    if not SOURCE_INDEX_ENABLED:
+        return [], {'enabled': False}
+
+    query_text = build_rag_query_text(target_items, context_past)
+    if not query_text:
+        return [], {'enabled': True, 'reason': 'empty_query'}
+
+    try:
+        store = get_source_index_store(update_metadata=False)
+        if store is None or store.count_segments() <= 0:
+            return [], {'enabled': True, 'reason': 'empty_source_store'}
+        query_vector = embed_query_text(query_text)
+        matches = store.search_segments(
+            query_vector,
+            top_k=SOURCE_INDEX_TOP_K,
+            min_similarity=SOURCE_INDEX_MIN_SIMILARITY,
+            embedding_model=RAG_EMBEDDING_MODEL,
+            embedding_task_type=RAG_DOCUMENT_TASK_TYPE,
+            embedding_dim=RAG_OUTPUT_DIMENSIONALITY,
+        )
+    except Exception as exc:
+        print(f'Warning: Source index retrieval failed: {exc}')
+        return [], {'enabled': True, 'error': str(exc)}
+
+    hits = []
+    for match in matches:
+        source_text = match.get('source_text', '')
+        hit = {
+            'source_id': match.get('source_id', ''),
+            'file_rel_path': match.get('file_rel_path', ''),
+            'line_start': match.get('line_start', 0),
+            'line_end': match.get('line_end', 0),
+            'source_text': truncate_text(source_text, SOURCE_INDEX_CHAR_LIMIT),
+            'score': float(match.get('score', 0.0)),
+        }
+        hits.append(hit)
 
     return hits, {
         'enabled': True,
@@ -1456,6 +1509,7 @@ def build_user_prompt(
     glossary_hits=None,
     history_hits=None,
     story_hits=None,
+    source_hits=None,
 ):
     return translation_core.build_translation_user_prompt(
         translation_core.ContextWindow(context_past, context_future),
@@ -1464,6 +1518,7 @@ def build_user_prompt(
             glossary_hits=glossary_hits,
             history_hits=history_hits,
             story_hits=story_hits,
+            source_hits=source_hits,
         ),
         history_char_limit=RAG_HISTORY_CHAR_LIMIT,
         story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
@@ -1511,6 +1566,7 @@ def build_batch_request(chunk):
                                 glossary_hits=chunk.get('glossary_hits') or [],
                                 history_hits=chunk.get('history_hits') or [],
                                 story_hits=chunk.get('story_hits') if 'story_hits' in chunk else None,
+                                source_hits=chunk.get('source_hits') or [],
                             )
                         }
                     ],
@@ -1562,6 +1618,7 @@ def build_chunks(file_jobs):
             context_future = tasks[end:min(total, end + BATCH_CONTEXT_AFTER)]
             glossary_hits = retrieve_glossary_hits(target_items) if RAG_ENABLED else []
             history_hits, rag_stats = retrieve_history_hits(target_items, context_past) if RAG_ENABLED else ([], {})
+            source_hits, source_index_stats = retrieve_source_hits(target_items, context_past) if SOURCE_INDEX_ENABLED else ([], {})
             story_hits = retrieve_batch_story_hits(
                 job['file_rel_path'],
                 target_items,
@@ -1582,6 +1639,8 @@ def build_chunks(file_jobs):
                 'glossary_hits': glossary_hits,
                 'history_hits': history_hits,
                 'rag_stats': rag_stats,
+                'source_hits': source_hits,
+                'source_index_stats': source_index_stats,
                 'items': [
                     translation_core.legacy_item_from_unit(unit, translation_core.MODE_TRANSLATION)
                     for unit in target_units
@@ -1606,6 +1665,23 @@ def summarize_batch_rag(chunks, prepare_summary):
         'history_retrieval_errors': sum(
             1 for chunk in chunks
             if (chunk.get('rag_stats') or {}).get('error')
+        ),
+    }
+
+
+def summarize_batch_source_index(chunks):
+    chunk_count = len(chunks)
+    chunks_with_source_hits = sum(1 for chunk in chunks if chunk.get('source_hits'))
+    source_hit_count = sum(len(chunk.get('source_hits') or []) for chunk in chunks)
+    return {
+        'enabled': SOURCE_INDEX_ENABLED,
+        'store_dir': SOURCE_INDEX_STORE_DIR or get_default_source_index_store_dir(),
+        'chunks_with_source_hits': chunks_with_source_hits,
+        'source_hit_count': source_hit_count,
+        'source_hit_rate': (chunks_with_source_hits / chunk_count) if chunk_count else 0.0,
+        'source_retrieval_errors': sum(
+            1 for chunk in chunks
+            if (chunk.get('source_index_stats') or {}).get('error')
         ),
     }
 
@@ -1742,6 +1818,14 @@ def create_batch_package(display_name_override='', skip_prepare=False):
             'bootstrap_on_build': RAG_BOOTSTRAP_ON_BUILD,
         } if RAG_ENABLED else {},
         'rag_summary': summarize_batch_rag(chunks, rag_prepare_summary) if RAG_ENABLED else {},
+        'source_index_enabled': SOURCE_INDEX_ENABLED,
+        'source_index_store_path': SOURCE_INDEX_STORE_DIR if SOURCE_INDEX_ENABLED else '',
+        'source_index_settings': {
+            'top_k': SOURCE_INDEX_TOP_K,
+            'min_similarity': SOURCE_INDEX_MIN_SIMILARITY,
+            'char_limit': SOURCE_INDEX_CHAR_LIMIT,
+        } if SOURCE_INDEX_ENABLED else {},
+        'source_index_summary': summarize_batch_source_index(chunks) if SOURCE_INDEX_ENABLED else {},
         'story_memory_enabled': STORY_MEMORY_ENABLED,
         'story_memory_graph_file': STORY_MEMORY_GRAPH_FILE if STORY_MEMORY_ENABLED else '',
         'story_memory_settings': {
@@ -5538,6 +5622,7 @@ def build_repair_request(job):
                                 job['items'],
                                 job['context_future'],
                                 story_hits=job.get('story_hits') if 'story_hits' in job else None,
+                                source_hits=job.get('source_hits') or [],
                             )
                         }
                     ],

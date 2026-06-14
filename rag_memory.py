@@ -930,13 +930,29 @@ class JsonSourceIndexStore(object):
         self.load()
         return list(self.file_index.get(file_rel_path, set()))
 
-    def search_segments(self, query_vector, top_k=4, min_similarity=0.72):
+    def search_segments(
+        self,
+        query_vector,
+        top_k=4,
+        min_similarity=0.72,
+        embedding_model=None,
+        embedding_task_type=None,
+        embedding_dim=None,
+    ):
         self.load()
         results = []
         for record in self.segments.values():
             vector = record.get('embedding')
             if not isinstance(vector, list) or not vector:
                 continue
+            metadata = record.get('embedding_metadata') or {}
+            if embedding_model is not None and metadata.get('embedding_model') != embedding_model:
+                continue
+            if embedding_task_type is not None and metadata.get('embedding_task_type') != embedding_task_type:
+                continue
+            if embedding_dim is not None:
+                if metadata.get('embedding_dim') != embedding_dim or len(vector) != embedding_dim:
+                    continue
             score = cosine_similarity(query_vector, vector)
             if score < min_similarity:
                 continue

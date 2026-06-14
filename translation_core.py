@@ -82,6 +82,7 @@ class ContextBundle:
     history_hits: list = field(default_factory=list)
     story_hits: object = None
     rag_stats: dict = field(default_factory=dict)
+    source_hits: list = field(default_factory=list)
 
 
 @dataclass
@@ -424,12 +425,13 @@ def format_revision_context_block(items, empty_label='(none)'):
     return '\n'.join(lines) if lines else empty_label
 
 
-def build_context_bundle(glossary_hits=None, history_hits=None, story_hits=None, rag_stats=None):
+def build_context_bundle(glossary_hits=None, history_hits=None, story_hits=None, rag_stats=None, source_hits=None):
     return ContextBundle(
         glossary_hits=list(glossary_hits or []),
         history_hits=list(history_hits or []),
         story_hits=story_hits,
         rag_stats=dict(rag_stats or {}),
+        source_hits=list(source_hits or []),
     )
 
 
@@ -447,6 +449,7 @@ def build_reference_blocks(
         glossary_hits=context_bundle.glossary_hits,
         history_hits=context_bundle.history_hits,
         story_hits=context_bundle.story_hits,
+        source_hits=context_bundle.source_hits,
         history_char_limit=history_char_limit,
         story_char_limit=story_char_limit,
         include_source_text=include_source_text,
