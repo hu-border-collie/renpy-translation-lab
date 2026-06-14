@@ -16,7 +16,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from rag_memory import JsonRagStore, hash_text, truncate_text
+from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
 import prompt_context
 import story_memory
 import translation_core
@@ -131,6 +131,10 @@ _RAG_STORE = None
 _RAG_PRESERVED_TERMS_CACHE = None
 _RAG_PRESERVED_TERMS_CACHE_KEY = None
 
+SOURCE_INDEX_ENABLED = False
+SOURCE_INDEX_STORE_DIR = ''
+_SOURCE_INDEX_STORE = None
+
 STORY_MEMORY_ENABLED = False
 STORY_MEMORY_GRAPH_FILE = ''
 STORY_MEMORY_MAX_CONTEXT_CHARS = 1200
@@ -212,6 +216,7 @@ def load_batch_settings():
     global RAG_DOCUMENT_TASK_TYPE, RAG_OUTPUT_DIMENSIONALITY, RAG_TOP_K_HISTORY
     global RAG_TOP_K_TERMS, RAG_MIN_SIMILARITY, RAG_SEGMENT_LINES
     global RAG_BOOTSTRAP_ON_BUILD, RAG_HISTORY_CHAR_LIMIT, _RAG_STORE
+    global SOURCE_INDEX_ENABLED, SOURCE_INDEX_STORE_DIR, _SOURCE_INDEX_STORE
     global STORY_MEMORY_ENABLED, STORY_MEMORY_GRAPH_FILE, STORY_MEMORY_MAX_CONTEXT_CHARS
     global STORY_MEMORY_TOP_K_RELATIONS, STORY_MEMORY_TOP_K_TERMS
     global STORY_MEMORY_INCLUDE_SCENE_SUMMARY, _STORY_GRAPH, _STORY_GRAPH_PATH
@@ -342,6 +347,19 @@ def load_batch_settings():
         RAG_STORE_DIR = ''
 
     _RAG_STORE = None
+
+    source_index_config = batch.get('source_index')
+    if not isinstance(source_index_config, dict):
+        source_index_config = {}
+
+    SOURCE_INDEX_ENABLED = coerce_bool(source_index_config.get('enabled'), SOURCE_INDEX_ENABLED)
+    source_index_store_dir = source_index_config.get('store_dir')
+    if source_index_store_dir:
+        SOURCE_INDEX_STORE_DIR = legacy._resolve_path(legacy.BASE_DIR, source_index_store_dir)
+    else:
+        SOURCE_INDEX_STORE_DIR = ''
+
+    _SOURCE_INDEX_STORE = None
 
     story_config = batch.get('story_memory')
     if not isinstance(story_config, dict):
@@ -526,6 +544,25 @@ def hash_key(text):
 
 def get_default_rag_store_dir():
     return os.path.join(LOG_DIR, 'rag_store', guess_project_slug())
+
+
+def get_default_source_index_store_dir():
+    return os.path.join(LOG_DIR, 'source_index_store', guess_project_slug())
+
+
+def get_source_index_store():
+    global _SOURCE_INDEX_STORE, SOURCE_INDEX_STORE_DIR
+    if not SOURCE_INDEX_STORE_DIR:
+        SOURCE_INDEX_STORE_DIR = get_default_source_index_store_dir()
+    if _SOURCE_INDEX_STORE is None or os.path.abspath(_SOURCE_INDEX_STORE.store_dir) != os.path.abspath(SOURCE_INDEX_STORE_DIR):
+        _SOURCE_INDEX_STORE = JsonSourceIndexStore(SOURCE_INDEX_STORE_DIR)
+        _SOURCE_INDEX_STORE.set_metadata(
+            project_slug=guess_project_slug(),
+            embedding_model=RAG_EMBEDDING_MODEL,
+            document_task_type=RAG_DOCUMENT_TASK_TYPE,
+            output_dimensionality=RAG_OUTPUT_DIMENSIONALITY,
+        )
+    return _SOURCE_INDEX_STORE
 
 
 def get_rag_store():
@@ -4768,6 +4805,50 @@ def collect_rag_seed_records_for_jobs(file_jobs, quality_state='seed'):
     return records
 
 
+def build_source_segment(file_rel_path, group):
+    source_text = '\n'.join(entry.get('source', '') for entry in group).strip()
+    line_start = group[0]['line_number']
+    line_end = group[-1]['line_number']
+    source_id = hash_key(f"{file_rel_path}:{line_start}:{line_end}")
+    source_checksum = hash_text(source_text)
+    now = datetime.now().isoformat(timespec='seconds')
+    return {
+        'source_id': source_id,
+        'file_rel_path': file_rel_path,
+        'line_start': line_start,
+        'line_end': line_end,
+        'line_span': [line_start, line_end],
+        'source_text': source_text,
+        'source_checksum': source_checksum,
+        'embedding': [],
+        'embedding_metadata': {},
+        'created_at': now,
+        'updated_at': now,
+    }
+
+
+def collect_source_segments_for_jobs(file_jobs):
+    records = []
+    segment_size = max(1, RAG_SEGMENT_LINES)
+    for job in file_jobs:
+        file_rel_path = job.get('file_rel_path')
+        file_path = job.get('file_path')
+        if not file_rel_path or not file_path or not os.path.isfile(file_path):
+            continue
+        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+            entries = collect_translation_entries_from_lines(handle.readlines(), file_rel_path=file_rel_path)
+        usable_entries = []
+        for entry in entries:
+            src = (entry.get('source') or '').strip()
+            if src:
+                usable_entries.append(entry)
+        for start in range(0, len(usable_entries), segment_size):
+            group = usable_entries[start:start + segment_size]
+            if group:
+                records.append(build_source_segment(file_rel_path, group))
+    return records
+
+
 def coerce_external_seed_text(row, keys):
     for key in keys:
         value = row.get(key)
@@ -5033,6 +5114,180 @@ def print_rag_bootstrap_summary(summary):
             print(f'- {key}: {summary[key]}')
     if summary.get('error'):
         print(f"- error: {summary['error']}")
+
+
+def embed_source_segments(records):
+    embedded_records = []
+    batch_size = 16
+    for start in range(0, len(records), batch_size):
+        batch = records[start:start + batch_size]
+        vectors = embed_texts([record['source_text'] for record in batch], RAG_DOCUMENT_TASK_TYPE)
+        for record, vector in zip(batch, vectors):
+            enriched = dict(record)
+            enriched['embedding'] = vector
+            enriched['embedding_metadata'] = {
+                'embedding_model': RAG_EMBEDDING_MODEL,
+                'embedding_task_type': RAG_DOCUMENT_TASK_TYPE,
+                'embedding_dim': len(vector),
+                'embedding_text_checksum': hash_text(record.get('source_text', '')),
+            }
+            enriched['updated_at'] = datetime.now().isoformat(timespec='seconds')
+            embedded_records.append(enriched)
+    return embedded_records
+
+
+def source_segment_has_current_embedding(existing, record):
+    if not existing or existing.get('source_checksum') != record.get('source_checksum'):
+        return False
+    embedding = existing.get('embedding')
+    if not isinstance(embedding, list) or not embedding:
+        return False
+    if len(embedding) != RAG_OUTPUT_DIMENSIONALITY:
+        return False
+    metadata = existing.get('embedding_metadata') or {}
+    return (
+        metadata.get('embedding_model') == RAG_EMBEDDING_MODEL
+        and metadata.get('embedding_task_type') == RAG_DOCUMENT_TASK_TYPE
+        and metadata.get('embedding_dim') == RAG_OUTPUT_DIMENSIONALITY
+        and metadata.get('embedding_text_checksum') == hash_text(record.get('source_text', ''))
+    )
+
+
+def print_source_index_bootstrap_summary(summary):
+    print('Source Index bootstrap final summary:')
+    for key in (
+        'store_dir',
+        'files_scanned',
+        'scanned',
+        'history_records_before',
+        'reused_embeddings',
+        'embedding_pending',
+        'embedded',
+        'upserted',
+        'stale_count',
+        'prune_enabled',
+        'pruned',
+        'history_records_after',
+    ):
+        if key in summary:
+            print(f'- {key}: {summary[key]}')
+    if summary.get('error'):
+        print(f"- error: {summary['error']}")
+
+
+def bootstrap_source_index(skip_prepare=False, prune=True):
+    if not skip_prepare:
+        legacy.run_prepare_steps()
+    if not os.path.isdir(legacy.TL_DIR):
+        raise SystemExit(f'TL dir does not exist: {legacy.TL_DIR}')
+
+    store = get_source_index_store()
+    store.load()
+
+    scan_jobs = all_rag_file_jobs()
+    scanned_segments = collect_source_segments_for_jobs(scan_jobs)
+
+    stored_before = store.count_segments()
+    scanned_ids = {seg['source_id'] for seg in scanned_segments}
+
+    records_to_embed = []
+    records_with_reused_embedding = []
+
+    for record in scanned_segments:
+        existing = store.get_segment(record['source_id'])
+        if not existing:
+            for seg in store.segments.values():
+                if source_segment_has_current_embedding(seg, record):
+                    existing = seg
+                    break
+
+        if source_segment_has_current_embedding(existing, record):
+            enriched = dict(record)
+            enriched['embedding'] = existing['embedding']
+            enriched['embedding_metadata'] = existing['embedding_metadata']
+            if 'created_at' in existing:
+                enriched['created_at'] = existing['created_at']
+            records_with_reused_embedding.append(enriched)
+        else:
+            records_to_embed.append(record)
+
+    stale_segments = []
+    for source_id, seg in store.segments.items():
+        if source_id not in scanned_ids:
+            stale_segments.append(seg)
+
+    stale_count = len(stale_segments)
+    stale_details = [
+        {
+            'source_id': seg['source_id'],
+            'file_rel_path': seg['file_rel_path'],
+            'line_start': seg['line_start'],
+            'line_end': seg['line_end'],
+        }
+        for seg in stale_segments
+    ]
+
+    print("=" * 60)
+    print("Source Index Sync Stats (Pre-run):")
+    print(f"- Store directory: {store.store_dir}")
+    print(f"- Files scanned: {len(scan_jobs)}")
+    print(f"- Total segments scanned from files: {len(scanned_segments)}")
+    print(f"- Total segments stored previously: {stored_before}")
+    print(f"- Unchanged segments (reusing embeddings): {len(records_with_reused_embedding)}")
+    print(f"- New/updated segments (need embeddings): {len(records_to_embed)}")
+    print(f"- Stale segments in database: {stale_count}")
+    if stale_count > 0:
+        print("  Stale segments details:")
+        for item in stale_details:
+            print(f"    * {item['file_rel_path']}:{item['line_start']}-{item['line_end']} (ID: {item['source_id']})")
+    print("=" * 60)
+    sys.stdout.flush()
+
+    summary = {
+        'enabled': True,
+        'store_dir': store.store_dir,
+        'files_scanned': len(scan_jobs),
+        'scanned': len(scanned_segments),
+        'history_records_before': stored_before,
+        'reused_embeddings': len(records_with_reused_embedding),
+        'embedding_pending': len(records_to_embed),
+        'stale_count': stale_count,
+        'prune_enabled': prune,
+        'embedded': 0,
+        'upserted': 0,
+        'pruned': 0,
+    }
+
+    if not records_to_embed and (not stale_segments or not prune):
+        summary['history_records_after'] = store.count_segments()
+        print("No new embeddings required, and no stale segments to prune.")
+        return summary
+
+    try:
+        embedded_records = []
+        if records_to_embed:
+            print(f"Generating embeddings for {len(records_to_embed)} segments...")
+            sys.stdout.flush()
+            embedded_records = embed_source_segments(records_to_embed)
+            summary['embedded'] = len(embedded_records)
+
+        upsert_count = store.upsert_segments(records_with_reused_embedding + embedded_records)
+        summary['upserted'] = upsert_count
+
+        if stale_segments and prune:
+            print(f"Pruning {stale_count} stale segments...")
+            sys.stdout.flush()
+            prune_count = store.delete_segments([seg['source_id'] for seg in stale_segments])
+            summary['pruned'] = prune_count
+
+        summary['history_records_after'] = store.count_segments()
+        print(f"Sync complete. Stored segments count is now: {summary['history_records_after']}.")
+    except Exception as exc:
+        print(f'Warning: Failed to update Source Index store: {exc}')
+        summary['error'] = str(exc)
+        summary['history_records_after'] = store.count_segments()
+
+    return summary
 
 
 def bootstrap_rag_store(skip_prepare=False, seed_jsonl_paths=None):
@@ -6180,6 +6435,21 @@ def build_arg_parser():
         help='Import external parallel corpus JSONL rows as additional RAG seed records. Can be repeated.',
     )
 
+    bootstrap_source_index_parser = subparsers.add_parser(
+        'bootstrap-source-index',
+        help='Prebuild or refresh the Batch source-only index store from all allowed TL files.',
+    )
+    bootstrap_source_index_parser.add_argument(
+        '--skip-prepare',
+        action='store_true',
+        help='Skip auto prepare steps before scanning TL files.',
+    )
+    bootstrap_source_index_parser.add_argument(
+        '--no-prune',
+        action='store_true',
+        help='Do not prune stale segments from the index store after indexing.',
+    )
+
     submit_parser = subparsers.add_parser('submit', help='Create and submit a batch job.')
     submit_parser.add_argument(
         'target',
@@ -6452,6 +6722,11 @@ def main(argv=None):
 
     if command == 'bootstrap-rag':
         bootstrap_rag_store(skip_prepare=args.skip_prepare, seed_jsonl_paths=args.seed_jsonl)
+        return
+
+    if command == 'bootstrap-source-index':
+        summary = bootstrap_source_index(skip_prepare=args.skip_prepare, prune=(not args.no_prune))
+        print_source_index_bootstrap_summary(summary)
         return
 
     if command == 'submit':
