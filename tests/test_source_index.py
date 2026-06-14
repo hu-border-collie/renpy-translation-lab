@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
+import prompt_context
 from rag_memory import JsonSourceIndexStore, JsonSourceIndexStoreLockError, now_iso
 
 
@@ -301,6 +302,244 @@ class SourceIndexStoreTests(unittest.TestCase):
             finally:
                 batch_mod.SOURCE_INDEX_STORE_DIR = old_store_dir
                 batch_mod.legacy.TL_DIR = old_tl_dir
+
+
+class SourceIndexIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.old_source_index_enabled = batch_mod.SOURCE_INDEX_ENABLED
+        self.old_source_index_store_dir = batch_mod.SOURCE_INDEX_STORE_DIR
+        self.old_source_index_store = batch_mod._SOURCE_INDEX_STORE
+        self.old_rag_store_dir = batch_mod.RAG_STORE_DIR
+        self.old_source_index_top_k = batch_mod.SOURCE_INDEX_TOP_K
+        self.old_source_index_min_similarity = batch_mod.SOURCE_INDEX_MIN_SIMILARITY
+        self.old_source_index_char_limit = batch_mod.SOURCE_INDEX_CHAR_LIMIT
+
+    def tearDown(self):
+        batch_mod.SOURCE_INDEX_ENABLED = self.old_source_index_enabled
+        batch_mod.SOURCE_INDEX_STORE_DIR = self.old_source_index_store_dir
+        batch_mod._SOURCE_INDEX_STORE = self.old_source_index_store
+        batch_mod.RAG_STORE_DIR = self.old_rag_store_dir
+        batch_mod.SOURCE_INDEX_TOP_K = self.old_source_index_top_k
+        batch_mod.SOURCE_INDEX_MIN_SIMILARITY = self.old_source_index_min_similarity
+        batch_mod.SOURCE_INDEX_CHAR_LIMIT = self.old_source_index_char_limit
+
+    def make_segment(self, source_id, file_rel_path='script.rpy', source='Hello', start=10, end=13, embedding=None):
+        return {
+            'source_id': source_id,
+            'file_rel_path': file_rel_path,
+            'line_start': start,
+            'line_end': end,
+            'line_span': [start, end],
+            'source_text': source,
+            'source_checksum': batch_mod.hash_text(source),
+            'embedding': embedding or [1.0, 0.0, 0.0],
+            'embedding_metadata': {
+                'embedding_model': 'gemini-embedding-001',
+                'embedding_task_type': 'RETRIEVAL_DOCUMENT',
+                'embedding_dim': 3,
+                'embedding_text_checksum': batch_mod.hash_text(source),
+            },
+            'created_at': '2026-06-14T09:00:00',
+            'updated_at': '2026-06-14T09:00:00',
+        }
+
+    def test_retrieve_source_hits_enabled_and_lookup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_store_dir = tmp_path / 'source_store'
+            unused_rag_store_dir = tmp_path / 'unused_rag_store'
+            source_store_dir.mkdir()
+
+            batch_mod.SOURCE_INDEX_ENABLED = True
+            batch_mod.SOURCE_INDEX_STORE_DIR = str(source_store_dir)
+            batch_mod._SOURCE_INDEX_STORE = None
+            batch_mod.RAG_STORE_DIR = str(unused_rag_store_dir)
+            batch_mod.SOURCE_INDEX_TOP_K = 2
+            batch_mod.SOURCE_INDEX_MIN_SIMILARITY = 0.5
+            batch_mod.SOURCE_INDEX_CHAR_LIMIT = 50
+
+            store = JsonSourceIndexStore(str(source_store_dir))
+            seg1 = self.make_segment('s1', source='Good morning everyone', embedding=[1.0, 0.0, 0.0])
+            seg2 = self.make_segment('s2', source='See you tomorrow', embedding=[0.0, 1.0, 0.0])
+            store.upsert_segments([seg1, seg2])
+
+            target_items = [{'text': 'Good morning'}]
+            context_past = []
+
+            with (
+                mock.patch('gemini_translate_batch.embed_query_text', return_value=[1.0, 0.0, 0.0]) as mock_embed,
+                mock.patch('gemini_translate_batch.RAG_OUTPUT_DIMENSIONALITY', 3),
+            ):
+                hits, stats = batch_mod.retrieve_source_hits(target_items, context_past)
+
+            self.assertTrue(stats['enabled'])
+            self.assertEqual(stats['hit_count'], 1)
+            self.assertEqual(len(hits), 1)
+
+            mock_embed.assert_called_once()
+            hit = hits[0]
+            self.assertEqual(hit['source_id'], 's1')
+            self.assertEqual(hit['source_text'], 'Good morning everyone')
+            self.assertNotIn('translated_text', hit)
+            self.assertAlmostEqual(hit['score'], 1.0)
+            self.assertFalse(unused_rag_store_dir.exists())
+
+    def test_retrieve_source_hits_filters_stale_embedding_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_store_dir = tmp_path / 'source_store'
+            source_store_dir.mkdir()
+
+            batch_mod.SOURCE_INDEX_ENABLED = True
+            batch_mod.SOURCE_INDEX_STORE_DIR = str(source_store_dir)
+            batch_mod._SOURCE_INDEX_STORE = None
+            batch_mod.SOURCE_INDEX_TOP_K = 5
+            batch_mod.SOURCE_INDEX_MIN_SIMILARITY = 0.0
+            batch_mod.SOURCE_INDEX_CHAR_LIMIT = 50
+
+            stale = self.make_segment('stale', source='Stale source', embedding=[1.0, 0.0, 0.0])
+            stale['embedding_metadata']['embedding_task_type'] = 'SEMANTIC_SIMILARITY'
+            current = self.make_segment('current', source='Current source', embedding=[0.9, 0.1, 0.0])
+            JsonSourceIndexStore(str(source_store_dir)).upsert_segments([stale, current])
+
+            with (
+                mock.patch('gemini_translate_batch.embed_query_text', return_value=[1.0, 0.0, 0.0]),
+                mock.patch('gemini_translate_batch.RAG_OUTPUT_DIMENSIONALITY', 3),
+            ):
+                hits, stats = batch_mod.retrieve_source_hits([{'text': 'source'}], [])
+
+            self.assertTrue(stats['enabled'])
+            self.assertEqual([hit['source_id'] for hit in hits], ['current'])
+
+    def test_format_source_hits_block_and_prompt_injection(self):
+        hits = [
+            {
+                'source_id': 's1',
+                'file_rel_path': 'script.rpy',
+                'line_start': 10,
+                'line_end': 12,
+                'source_text': 'Hello world',
+                'translated_text': '你好世界',
+                'score': 0.95,
+            },
+            {
+                'source_id': 's2',
+                'file_rel_path': 'other.rpy',
+                'line_start': 5,
+                'line_end': 5,
+                'source_text': 'Untranslated text',
+                'score': 0.82,
+            }
+        ]
+
+        formatted = prompt_context.format_source_hits_block(hits)
+        expected_line1 = "- [script.rpy:10-12 score=0.950] Source excerpt: Hello world"
+        expected_line2 = "- [other.rpy:5-5 score=0.820] Source excerpt: Untranslated text"
+        self.assertIn(expected_line1, formatted)
+        self.assertIn(expected_line2, formatted)
+        self.assertNotIn('你好世界', formatted)
+        self.assertNotIn('Translation:', formatted)
+        self.assertNotIn('(untranslated)', formatted)
+
+        ref_blocks = prompt_context.build_reference_blocks(source_hits=hits)
+        self.assertIn('RELATED PROJECT CONTEXT:', ref_blocks)
+        self.assertIn(expected_line1, ref_blocks)
+        self.assertIn(expected_line2, ref_blocks)
+
+    def test_create_batch_package_source_index_integration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+
+            tl_dir = tmp_path / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            rpy_path = tl_dir / 'script.rpy'
+            rpy_path.write_text(
+                "# game/script.rpy:10\n"
+                "translate schinese start_f3396d11:\n"
+                "    # \"Hello world\"\n"
+                "    \"你好世界\"\n",
+                encoding='utf-8',
+            )
+
+            jobs_dir = tmp_path / 'jobs'
+            jobs_dir.mkdir()
+
+            old_tl_dir = batch_mod.legacy.TL_DIR
+            old_base_dir = batch_mod.legacy.BASE_DIR
+            old_jobs_dir = batch_mod.BATCH_JOBS_DIR
+
+            try:
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.legacy.BASE_DIR = str(tmp_path)
+                batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+
+                batch_mod.SOURCE_INDEX_ENABLED = True
+                source_store_dir = tmp_path / 'source_store'
+                source_store_dir.mkdir()
+                batch_mod.SOURCE_INDEX_STORE_DIR = str(source_store_dir)
+                batch_mod._SOURCE_INDEX_STORE = None
+
+                store = JsonSourceIndexStore(str(source_store_dir))
+                seg = self.make_segment('s1', source='Hello world', embedding=[1.0, 0.0, 0.0])
+                store.upsert_segments([seg])
+
+                # Mock pending file jobs so we bypass the file scanner
+                mock_jobs = [
+                    {
+                        'file_rel_path': 'script.rpy',
+                        'file_path': str(rpy_path),
+                        'task_count': 1,
+                        'tasks': [
+                            {
+                                'id': 'script.rpy:4:0',
+                                'text': 'Hello world',
+                                'line': 4,
+                                'start': 0,
+                                'end': 11,
+                                'speaker_id': 'n',
+                                'speaker_name': 'Noah',
+                                'progress_entry': 'task:4:0',
+                            }
+                        ]
+                    }
+                ]
+
+                with (
+                    mock.patch('gemini_translate_batch.collect_pending_file_jobs', return_value=mock_jobs),
+                    mock.patch('gemini_translate_batch.embed_query_text', return_value=[1.0, 0.0, 0.0]),
+                    mock.patch('gemini_translate_batch.RAG_OUTPUT_DIMENSIONALITY', 3),
+                    mock.patch('gemini_translate_batch.legacy.run_prepare_steps'),
+                ):
+                    manifest_path = batch_mod.create_batch_package(skip_prepare=True)
+
+                self.assertIsNotNone(manifest_path)
+                self.assertTrue(os.path.exists(manifest_path))
+
+                with open(manifest_path, 'r', encoding='utf-8') as f:
+                    manifest_data = json.load(f)
+
+                self.assertTrue(manifest_data.get('source_index_enabled'))
+                self.assertEqual(manifest_data['source_index_settings']['top_k'], batch_mod.SOURCE_INDEX_TOP_K)
+                self.assertIn('source_index_summary', manifest_data)
+
+                summary = manifest_data['source_index_summary']
+                self.assertEqual(summary['chunks_with_source_hits'], 1)
+                self.assertEqual(summary['source_hit_count'], 1)
+
+                requests_path = os.path.join(os.path.dirname(manifest_path), 'requests.jsonl')
+                self.assertTrue(os.path.exists(requests_path))
+                with open(requests_path, 'r', encoding='utf-8') as f:
+                    request_line = json.loads(f.readline())
+
+                user_prompt = request_line['request']['contents'][0]['parts'][0]['text']
+                self.assertIn('RELATED PROJECT CONTEXT:', user_prompt)
+                self.assertIn('Source excerpt: Hello world', user_prompt)
+                self.assertNotIn('Hello world -> (untranslated)', user_prompt)
+
+            finally:
+                batch_mod.legacy.TL_DIR = old_tl_dir
+                batch_mod.legacy.BASE_DIR = old_base_dir
+                batch_mod.BATCH_JOBS_DIR = old_jobs_dir
 
 
 if __name__ == '__main__':
