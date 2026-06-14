@@ -4,38 +4,26 @@
 
 ## 这是什么
 
-这个仓库有几个主要入口/支持脚本，以及一个内部共享 runtime：
+这个仓库主要提供：
 
-- `gemini_translate.py`
-  - Ren'Py 主翻译脚本
-  - 负责加载配置、预处理项目、扫描待翻译文本、调用 Gemini 并写回结果
-- `gemini_translate_batch.py`
-  - 当前更推荐的公开入口
-  - Batch 异步批处理脚本
-  - 负责 `build / submit / status / probe / download / check / apply / split / repair`
-- `rag_memory.py`
-  - 轻量 RAG / history store 模块
-  - 提供本地 JSON 历史库存储、文本哈希和相似度检索
-- `story_memory.py`
-  - 可选的结构化剧情记忆模块
-  - 从本地 `story_graph.json` 读取角色、关系、术语和场景摘要，并在启用后注入 `STORY MEMORY` prompt 块
-- `translator_runtime.py`
-  - 内部共享 runtime
-  - 为同步脚本和 Batch 脚本提供共用的配置、SDK、校验、响应解析和文件处理逻辑
+- `gemini_translate.py`：同步翻译入口，适合直接运行、补译、局部修复和 smoke test。
+- `gemini_translate_batch.py`：当前更推荐的 Batch 入口，覆盖 `build / submit / status / probe / download / check / apply / split / repair`。
+- `rag_memory.py`：本地 JSON history store、文本哈希和相似度检索。
+- `story_memory.py`：可选结构化剧情记忆，从本地 `story_graph.json` 注入角色、关系、术语和场景上下文。
+- `translator_runtime.py`：同步脚本和 Batch 脚本共用的配置、SDK、校验、响应解析和文件处理 runtime。
+- `extract_relations.py`：独立的关系 / 语义分析入口。
 
 如果你想找的是 GUI、一键打包、面向普通用户的整套发行流程，这个仓库不是那个方向。
 
 ## 核心能力
 
-- 扫描 `game/tl/schinese` 下的 `.rpy` 文件
-- 抽取待翻译条目并跳过 `old`
-- 构造带上下文的 Gemini 请求
-- 自动预处理项目，包括提取脚本和生成 `tl/schinese` 模板
-- 生成 Batch 请求包并执行完整的 `build / submit / status / probe / download / check / apply / split / repair` 流程
-- 使用本地 history store 做轻量 RAG 检索
-- 将历史译文注入后续请求，提升术语和语气一致性
-- 可选注入结构化剧情记忆，补充角色、关系、场景和术语上下文
-- 允许已知术语按规则保留英文，不再把这类结果一律判成失败
+- 扫描 Ren'Py `game/tl/schinese` 下的 `.rpy` 文件，抽取待翻译条目并跳过 `old`。
+- 自动预处理项目，包括提取脚本和生成 `tl/schinese` 模板。
+- 构造带 glossary、macro setting、RAG 和可选 Story Memory 的 Gemini 请求。
+- 生成 Batch 请求包并执行完整异步流程。
+- 用 `check/apply/repair` 对写回做快照校验和安全分级。
+- 从已有译文、全文原文或结构化剧情图谱中补充上下文。
+- 支持订正、关键词候选提取和独立关系 / 语义分析工作流。
 
 ## 快速开始
 
@@ -59,28 +47,18 @@ pip install -r requirements.txt
 
 ### 2. 准备本地配置
 
-把示例文件复制为你自己的本地配置文件：
+复制示例配置并按本地项目修改：
 
 - `api_keys.example.json` -> `api_keys.json`
 - `translator_config.example.json` -> `translator_config.json`
 - `glossary.example.json` -> `glossary.json`
-- `macro_setting.example.md` -> `macro_setting.md`（可选，供 Batch 的 `macro_setting_file` 使用）
+- `macro_setting.example.md` -> `macro_setting.md`（可选）
 
-说明：
-
-- `api_keys.json` 保存 Gemini API Key，不要提交到公开仓库；旧的 `batch_size/max_chars` 等字段仍兼容，但不再推荐写在这里
-- `translator_config.json` 保存本地游戏路径、模型、include 过滤和同步/Batch 分块参数，不要提交到公开仓库
-- `glossary.json` 通常包含项目私有术语，也建议本地维护
-- `macro_setting.md` 往往包含剧情、角色口吻、世界观约束，也建议本地维护
-- 如果你不想使用 `api_keys.json`，也可以改用环境变量 `GEMINI_API_KEY`、`GEMINI_API_KEY_2`、`GEMINI_API_KEY_3`
-- 如果你不想使用 `translator_config.json`，也可以至少通过 `GAME_ROOT` 或 `SA_GAME_ROOT` 指向目标 `work` 目录
-- 也可以把 `.env.example` 复制为 `.env`，填写后供本地 shell/启动器加载；`.env` 只用于本机私有配置，不应提交
-- `.env` 不是必需文件；当前脚本不会自动加载 `.env`，默认复制并填写 `api_keys.json` / `translator_config.json` 即可使用
-- `glossary.json` 是可选文件；不存在时脚本会退回内置默认术语规则
+至少需要提供 Gemini API key，并让 `translator_config.json`、`GAME_ROOT` 或 `SA_GAME_ROOT` 指向目标游戏的 `work` 目录。详细配置说明见 [Setup and local configuration](docs/setup.md)。
 
 ### 3. 准备项目目录
 
-脚本默认假设你最终指向的是某个游戏的 `work` 目录，典型结构如下：
+脚本默认处理某个游戏的 `work` 目录，典型结构如下：
 
 ```text
 Game_Example/
@@ -92,47 +70,17 @@ Game_Example/
 └─ build/
 ```
 
-说明：
-
-- 默认目标语言是 `schinese`
-- 可以通过 `translator_config.json` 里的 `tl_subdir` 和 `prepare.language` 调整
-- 推荐先使用 Ren'Py SDK 生成标准 `tl/<language>` 模板；如果启用了 `prepare`，脚本会尝试从 `original/game` 提取脚本并自动调用 Ren'Py 生成或刷新 `tl/schinese` 模板
-- 自动模板生成需要 Ren'Py SDK 或目标游戏自带的 Ren'Py launcher；如果已经有可用 TL 文件，缺少 SDK 时仍可直接处理现有 TL
-- 不要用 Ren'Py 的 `--empty` 生成空模板。本工具的初译流程需要目标行保留原文，之后再把目标行或 `new` 行替换成中文
-
-可以通过 `translator_config.json` 或环境变量 `RENPY_SDK_DIR` 指定 SDK 位置；如果没有配置，脚本会尝试在 `game_root` 附近和工具工作区里自动查找 `renpy-*-sdk`：
-
-```json
-{
-  "game_root": "C:/games/Game_Example/work",
-  "tl_subdir": "game/tl/schinese",
-  "prepare": {
-    "enabled": true,
-    "generate_template": true,
-    "refresh_existing_template": true,
-    "language": "schinese",
-    "renpy_sdk_dir": "C:/RenPy/renpy-8.5.2-sdk"
-  }
-}
-```
-
-如果已有第三方汉化或非标准 TL 文件，建议先跑诊断：
+如果已有第三方汉化或非标准 TL 文件，先跑诊断：
 
 ```bash
 python gemini_translate_batch.py doctor
 ```
 
-`doctor` 只检查配置、SDK/launcher 和 TL 文件形态，不调用 Gemini，也不会写回 `.rpy`。
+`doctor` 不调用 Gemini，也不会写回 `.rpy`。
 
 ### 4. 运行
 
-当前更推荐优先使用 Batch 模式；同步模式仍可用，并且现在与 Batch 一样统一基于 `google-genai` SDK。同步模式的 `model/chunk_size/max_source_chars/max_output_tokens` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。
-
-当前模型建议：
-
-- 正式 Batch 默认优先使用 `gemini-3.1-flash-lite`
-- 该模型支持 Batch API、结构化输出和 Thinking，定位更适合高频、低延迟、低成本翻译任务
-- RAG 当前默认搭配 `gemini-embedding-001`
+当前更推荐优先使用 Batch 模式；同步模式仍可用于小范围即时翻译或补修。
 
 同步模式：
 
@@ -155,398 +103,28 @@ python gemini_translate_batch.py check
 python gemini_translate_batch.py apply
 ```
 
-订正模式（扫描已有 `old/new` / TL 注释译文，先生成预览，显式 apply 后才写回当前译文行）：
-
-```bash
-python gemini_translate_batch.py build-revisions
-python gemini_translate_batch.py submit logs/batch_jobs/<package>/manifest.json
-python gemini_translate_batch.py status logs/batch_jobs/<package>/manifest.json
-python gemini_translate_batch.py download logs/batch_jobs/<package>/manifest.json
-python gemini_translate_batch.py preview-revisions logs/batch_jobs/<package>/manifest.json
-python gemini_translate_batch.py apply-revisions logs/batch_jobs/<package>/manifest.json
-```
-
-同步订正模式（不走 Batch API；默认只写预览报告，传 `--apply` 才写回）：
-
-```bash
-python gemini_translate_batch.py sync-revisions --limit 3
-python gemini_translate_batch.py sync-revisions --apply
-```
-
-关键词提取模式（只生成候选报告，不写回 `.rpy` / `glossary.json` / `story_graph.json`）：
-
-```bash
-python gemini_translate_batch.py build-keywords
-python gemini_translate_batch.py submit logs/batch_jobs/<package>/manifest.json
-python gemini_translate_batch.py status logs/batch_jobs/<package>/manifest.json
-python gemini_translate_batch.py download logs/batch_jobs/<package>/manifest.json
-python gemini_translate_batch.py export-keywords logs/batch_jobs/<package>/manifest.json
-```
-
-同步关键词提取模式（不走 Batch API，直接生成候选报告）：
-
-```bash
-python gemini_translate_batch.py sync-keywords --limit 3
-```
-
 说明：
 
-- `python gemini_translate.py --help` 会显示同步脚本的最小 CLI 帮助
-- 同步 RAG 启用后，每个成功写回的小批次会更新本地 history store，后续同步批次会在请求前重新检索并注入相关历史
-- Structured Story Memory 默认关闭；需要分别通过 `batch.story_memory.enabled=true` 或 `sync.story_memory.enabled=true` 启用
-- `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出
-- Batch 产物默认会写到本地 `logs/` 目录
-- 同步翻译默认每个 chunk 最多 40 条、`max_source_chars=12000`；普通 Batch 翻译默认每个 chunk 最多 60 条、`max_source_chars=18000`，并会继续按源文本长度提前切块，避免单个请求输出过长
-- `doctor` 会检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，适合在正式翻译前确认项目是否已准备好
-- `bootstrap-rag` 会扫描当前允许处理的全部 TL `.rpy` 文件，把已有译文预先写入本地 history store；适合在正式 `build / submit` 前先暖库
-- `probe` 会用同步请求做最小 smoke test
-- `check` 是干跑校验，不会修改 `.rpy`；它会把当前 manifest、results、目标 item 形状和 check contract version 写入 `last_check_summary.check_fingerprint`
-- `check` 会输出 `safe / warn / block` 安全等级，并在包目录写入 `check_failures.jsonl`
-- `apply` 默认要求最近一次 `check` 对应当前 manifest/results，且安全等级必须是 `safe`；未 check、results 变化、manifest item 变化、`warn` 或 `block` 都会拒绝写回
-- `--force` 只绕过“manifest 已经 apply 过”的重复写回保护，不会绕过 stale check、source snapshot 校验或 `block`
-- `apply` 写回前会再次校验当前源文本；如果 apply 阶段发现漂移，会拒绝写回并在包目录写入 `apply_failure_report.json` / `failures.jsonl`
-- `build-revisions` 会复用 include 过滤、glossary、macro setting、可选 RAG / Story Memory，把已有原文和当前译文送入 Batch；`preview-revisions` 导出 `revision_preview.jsonl` 和 `revision_preview.md`，`apply-revisions` 会在写回前重新校验当前文件中的旧译文快照
-- 当前 `safe / warn / block` 强制闸门只覆盖普通 translation manifest 的 `check/apply`；订正写回仍走 `preview-revisions -> apply-revisions` 的独立快照校验，如需同类 fingerprint 闸门应另开 follow-up
-- `sync-revisions` 复用订正 prompt、schema、RAG / Story Memory 注入、预览报告和写回前源快照校验；默认只预览，传 `--apply` 才调用 `apply-revisions` 写回
-- `build-keywords` 会复用 include 过滤和 Batch manifest，默认不运行 prepare，按较大 chunk 扫描 TL 文本并要求模型输出 `candidates`、`chunk_summary`、`summary_evidence_item_ids`；候选项里包含 `source`、`suggested_target`、`category`、`confidence`、`evidence`、`source_item_ids`。如果确实要先刷新 TL 模板，可显式传 `--prepare`
-- `export-keywords` 会导出去重后的 `keyword_candidates.jsonl` / `keyword_candidates.md`，并额外导出 chunk 级剧情概要 `keyword_chunk_summaries.jsonl` / `keyword_chunk_summaries.md`；报告会标出缺失 chunk row 或无法精确定位的候选 / 概要来源
-- `sync-keywords` 复用关键词 prompt、schema、候选去重、chunk 概要和 JSONL / Markdown 导出逻辑，适合小范围即时跑报告
-- 订正 manifest 的 `mode=revision`，关键词 manifest 的 `mode=keyword_extraction`，普通 `check/apply` 会拒绝处理，避免把非翻译结果误写回 `.rpy`
-- 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包
-- 本地 RAG store 写入会使用 `.rag_store.lock` 和临时文件 + 原子替换保护 `history.jsonl` / `metadata.json`；如果另一个进程正在写同一个 store，后启动的进程会明确失败并显示锁持有者信息；同机写入进程崩溃后留下的 stale lock 会在确认 PID 已退出时自动回收
-- 如果确认没有进程正在写入同一个 RAG store，可手动删除残留的 `.rag_store.lock` 或 `*.tmp.*` 文件来恢复写入；自动清理失败时会输出包含文件路径的 warning
-- 加载 RAG store 时，损坏的 metadata 或坏 JSONL 行会输出 warning；可恢复的 history 记录会继续保留
-
-### Manifest / identity v2
-
-新建的普通翻译、订正和关键词 manifest 会写入 `manifest_version=2` 与 `core_schema_version=2`。普通翻译和订正 item 的 `id` 现在使用 identity v2：归一化后的文件相对路径、Ren'Py translate block 名、重复 block occurrence、block 内可翻译单元序号，以及原文 checksum。行号和列位置仍保存在 item 上，但它们是当前写回 location hint，不再是唯一身份。
-
-这个拆分的含义是：
-
-- `identity` 用于跨 `build / check / apply / repair` 识别同一个翻译单元。
-- `location` 是当前文件里的行号、列位置、translate block 等写回定位信息，可能因为插入空行、局部手改或模板刷新而漂移。
-- `snapshot` 是写回前校验用的当前源文本或当前译文；即使 identity 能重定位，`check/apply` 和 `apply-revisions` 仍会复核快照，不会盲写。
-
-v2 重定位覆盖普通 translation 和 revision manifest：`check`、`apply`、`preview-revisions` 和 `apply-revisions` 会在处理 v2 结果前重扫当前 TL 文件，用 v2 id 刷新行号和列位置；结果缺项、解析失败和 repair failure 报告也会尽量使用重扫后的当前位置。旧 manifest 保持兼容 fallback：`manifest_version` 缺失或为 `1` 时继续使用 manifest 内原始 location，不做 v2 重定位；`doctor` 会提示本地 `logs/batch_jobs` 中的旧 manifest。
-
-RAG / history store 继续以 `memory_id` 关联记录。升级到 v2 后，已有旧 key 不会立即强制迁移；写入新记录时会先尝试按 `source_checksum` 复用旧记录的 source embedding，避免因为 id 升级就全量重算。`doctor` 会提示 history store 中仍存在旧格式 key；如原文大量变动或文件结构重排，仍建议重新 `bootstrap-rag`。
-
-### Golden corpus 测试
-
-`tests/fixtures/golden_batch_minimal/` 保存了一个最小 TL fixture、固定 mock 模型结果和预期输出，用来离线验证普通 Batch 翻译的 `build -> check -> apply` 合约。这个测试不调用 Gemini，也不需要真实 API key。
-
-```bash
-python -m unittest tests.test_batch_golden_corpus.BatchGoldenCorpusTests -q
-```
-
-`tests/fixtures/golden_revision_minimal/` 保存了一个最小订正 fixture，用来离线验证 `build-revisions -> preview-revisions -> apply-revisions` 合约，覆盖已有 `new` 行订正、保持不变项和写回前源快照校验。
-
-```bash
-python -m unittest tests.test_batch_golden_corpus.RevisionGoldenCorpusTests -q
-```
-
-`tests/fixtures/golden_keyword_minimal/` 保存了一个最小关键词提取 fixture，用来离线验证 `build-keywords -> export-keywords` 合约，覆盖候选项去重、来源行定位和 chunk 剧情概要导出。
-
-```bash
-python -m unittest tests.test_batch_golden_corpus.KeywordGoldenCorpusTests -q
-```
-
-如果有意修改 prompt、manifest、schema 或写回行为，先确认差异合理，再更新 golden 输出：
-
-```powershell
-$env:UPDATE_GOLDEN_BATCH = "1"
-python -m unittest tests.test_batch_golden_corpus.BatchGoldenCorpusTests -q
-Remove-Item Env:UPDATE_GOLDEN_BATCH
-
-$env:UPDATE_GOLDEN_REVISION = "1"
-python -m unittest tests.test_batch_golden_corpus.RevisionGoldenCorpusTests -q
-Remove-Item Env:UPDATE_GOLDEN_REVISION
-
-$env:UPDATE_GOLDEN_KEYWORD = "1"
-python -m unittest tests.test_batch_golden_corpus.KeywordGoldenCorpusTests -q
-Remove-Item Env:UPDATE_GOLDEN_KEYWORD
-```
-
-> [!NOTE]
-> 项目的持续集成 (CI) 分别在 Ubuntu 和 Windows 环境下自动运行上述全部单元测试，以验证跨平台路径、文件读写及数据格式合约。CI 中的测试仅使用离线 Mock，不覆盖真实的 Ren'Py SDK 模板生成和 Gemini 网络请求。
-
-
-### 可选：Batch RAG 预建库
-
-如果项目里已经有一部分人工译文或旧译文，可以先运行：
-
-```bash
-python gemini_translate_batch.py bootstrap-rag
-```
-
-这个命令只刷新本地 RAG history store，不会创建 Batch package，也不会修改 `.rpy`。它会复用 `batch.rag` 配置，扫描 `game/tl/schinese` 下当前允许处理的 `.rpy` 文件，提取已有 `old/new` 译文记录并生成 source-only embedding。
-
-典型流程：
-
-```bash
-python gemini_translate_batch.py bootstrap-rag
-python gemini_translate_batch.py build
-python gemini_translate_batch.py submit
-```
-
-也可以导入外部平行语料 JSONL 作为额外 seed：
-
-```bash
-python gemini_translate_batch.py bootstrap-rag --seed-jsonl parallel_corpus.jsonl
-```
-
-如果只想导入外部 seed，`game/tl/schinese` 目录可以暂时不存在；此时 TL 扫描数量会是 0，只导入 JSONL 中的有效记录。
-
-JSONL 每行是一个对象，支持以下字段：
-
-```json
-{"source": "Aether Gate", "translation": "以太门", "file_rel_path": "external/memory.txt", "line": 1}
-```
-
-字段说明：
-
-- `source` 或 `source_text`：原文
-- `translation`、`translated_text` 或 `target`：译文
-- `file_rel_path` / `file`、`line` / `line_start` / `line_end`：可选定位信息，用于生成稳定 memory id 和 diagnostics；如果未提供文件路径，会使用带 seed 文件内容指纹的默认来源名，避免多个同名 JSONL 相互覆盖，同时保持移动文件后的重复导入可去重
-- `memory_id`：可选；不提供时会根据来源、行号和原文生成
-
-空行会被忽略；坏 JSON 会计入 `external_seed_invalid_json`，缺少原文/译文、或原文和译文完全相同的有效行会计入 `external_seed_filtered`，两者合计为 `external_seed_skipped`。
-
-命令输出会包含 `scan_scope`、`files_scanned`、`scanned`、`external_seed_records`、`external_seed_invalid_json`、`external_seed_filtered`、`external_seed_skipped`、`embedded`、`reused_embeddings`、`upserted` 和 history record 数量，方便确认预建库是否真的扫描并写入了内容。
-
-注意：`bootstrap-rag` 解决的是“build 前先用已有译文暖库”的问题；它不会让已经 build / split 完的旧请求动态吃到后续 apply 的新结果。需要滚动回灌时，仍要按波次重新 build，或等待后续动态波次编排能力。
-
-### 可选：Batch Source-Only 索引预建
-
-为了支持独立的原文字段索引（不混入翻译历史记忆库），可以使用 `bootstrap-source-index` 命令：
-
-```bash
-python gemini_translate_batch.py bootstrap-source-index
-```
-
-这个命令会：
-1. 扫描当前所有的 `.rpy` 翻译模板文件，将原文分组为 source segments。
-2. 对比本地数据库中已有的索引：
-   - 如果对应位置的内容和模型配置未发生变化，则直接**复用**现有的 Embedding 向量，避免重复调用 API 造成浪费。
-   - 如果发生变化或不存在，则分批调用 Embedding 接口生成向量。
-   - 识别并列出所有在数据库中存在但在当前项目中已失效的**过期片段（Stale segments）**。
-3. 优先输出详细的同步前统计信息（stats）。
-4. 默认会自动清理/Prune 过期的 stale 记录；如需保留，可传入 `--no-prune`。
-
-Batch 构建时是否检索 source index 由 `batch.source_index.enabled` 控制。当前 source index 复用 `batch.rag` 中的 embedding 模型、query/document task type、output dimensionality 和 `segment_lines`；`batch.source_index` 自身控制检索开关、命中数、相似度阈值、单条原文截断预算和独立存储目录：
-
-```json
-{
-  "batch": {
-    "rag": {
-      "embedding_model": "gemini-embedding-001",
-      "query_task_type": "RETRIEVAL_QUERY",
-      "document_task_type": "RETRIEVAL_DOCUMENT",
-      "output_dimensionality": 768,
-      "segment_lines": 4
-    },
-    "source_index": {
-      "enabled": true,
-      "top_k": 4,
-      "min_similarity": 0.72,
-      "char_limit": 220,
-      "store_dir": ""
-    }
-  }
-}
-```
-
-启用后，普通 Batch manifest 会写入：
-
-- `source_index_store_path`：实际使用的 source-only store 路径。
-- `source_index_settings`：schema version、`top_k`、`min_similarity`、`char_limit` 和每个 chunk 的字符预算。
-- `source_index_summary`：命中 chunk 数、source hit 数、命中率、截断次数、实际注入字符数、字符预算、metadata/stale 过滤数、相似度过滤数、检索失败数和失败原因。
-- 每个 chunk 的 `source_index_stats`：查询字符数、命中数、metadata 过滤明细、截断数、store schema version 和 store 路径。
-
-Prompt 中 source index 命中会进入独立的 `RELATED PROJECT CONTEXT` 分区，只包含 `Source excerpt`，不会混入 `RETRIEVED MEMORY`，也不会携带译文。`batch.source_index.enabled=false` 时不会读取 source store，也不会增加该 prompt 分区。
-
-
-### 可选：Structured Story Memory
-
-Structured Story Memory 是现有 glossary / translation-memory RAG 之外的可选上下文层。它不会调用额外 LLM 自动抽取图谱，也不依赖 Neo4j；启用后只读取本地 JSON，并把命中的结构化信息插入到 prompt 的 `STORY MEMORY` 分区。
-
-配置示例见 `translator_config.example.json`：
-
-```json
-{
-  "batch": {
-    "story_memory": {
-      "enabled": false,
-      "graph_file": "logs/story_memory/story_graph.json",
-      "max_context_chars": 1200,
-      "top_k_relations": 6,
-      "top_k_terms": 12,
-      "include_scene_summary": true
-    }
-  },
-  "sync": {
-    "story_memory": {
-      "enabled": false,
-      "graph_file": "logs/story_memory/story_graph.json",
-      "max_context_chars": 800,
-      "top_k_relations": 4,
-      "top_k_terms": 8,
-      "include_scene_summary": true
-    }
-  }
-}
-```
-
-仓库提供了两个公开参考文件：
-
-- `docs/story_graph.schema.json`：正式的 JSON Schema，描述推荐的 `schema_version=1` 结构
-- `docs/story_graph.example.json`：可复制后按项目修改的示例图谱
-
-`story_graph.json` 可以先手写或半自动维护，推荐结构类似：
-
-```json
-{
-  "schema_version": 1,
-  "characters": {
-    "eileen": {
-      "name": "Eileen",
-      "zh_name": "艾琳",
-      "speaker_ids": ["eileen", "eileen_side"],
-      "aliases": ["Miss Eileen"],
-      "style": "语气轻快，常吐槽，但关键时刻认真。"
-    }
-  },
-  "relations": [
-    {
-      "left": "eileen",
-      "right": "noah",
-      "type": "close_friend",
-      "note": "两人关系亲近，可以使用自然熟悉的中文语气。",
-      "confidence": 0.85
-    }
-  ],
-  "terms": [
-    {
-      "source": "Void Gate",
-      "target": "虚空门",
-      "note": "世界观核心术语，必须统一。"
-    }
-  ],
-  "scenes": [
-    {
-      "file_rel_path": "chapter1.rpy",
-      "line_start": 120,
-      "line_end": 220,
-      "summary": "艾琳和诺亚在天台讨论是否进入危险区域。",
-      "characters": ["eileen", "noah"]
-    }
-  ]
-}
-```
-
-为了兼容早期手写图谱，加载器仍接受 `terms` 对象映射、术语字符串条目，以及 `term` / `translation` 这类旧字段名；新图谱建议优先使用示例里的 `source` / `target` 写法。
-
-加载 `story_graph.json` 时会做轻量基础校验：顶层集合类型、角色别名字段、关系 `left/right/confidence`、术语有效内容、场景行号与角色列表等明显问题会输出 warning。校验是非阻塞的；有效部分仍会被规范化后继续用于检索，避免一个局部坏条目导致整个图谱不可用。
-
-Batch `build` 生成的 `manifest.json` 会在 `story_memory_summary` 中记录 diagnostics，包括 `graph_file`、命中 chunk 数、命中率、characters / relations / terms / scenes 各类命中数量、总命中数、预算内格式化字符数，以及有多少个 `STORY MEMORY` 块会被 `max_context_chars` 截断。`split` 会按子包重新计算这些统计。
-
-`repair` 在 `batch.story_memory.enabled=true` 时也会复用同一个 `story_memory.py` 读取和格式化路径，为 repair request 注入受 `max_context_chars` 限制的 `STORY MEMORY` 块，并在 `repair_summary.json` 记录 repair job 的 Story Memory 命中统计。`probe` 只探测当前 package 里的既有 `requests.jsonl`，不会重新读取或刷新 `story_graph.json`；如果这些请求是在 Story Memory 启用时 build 出来的，probe 会自然测试已经写入请求的 prompt。
-
-`relation_analyzer` 可以额外导出 `story_graph.seed.json` 候选数据，帮助从 Ren'Py 剧本里半自动整理 `speaker_ids`、候选角色和候选关系：
-
-```bash
-python extract_relations.py /path/to/game/tl/schinese --mode relation --story-seed-output logs/story_memory/story_graph.seed.json
-```
-
-seed 中的关系统一标记为 `candidate`，只包含共场景、对话往来、相互提及、来源文件和 speaker 统计等可审查信息；如果同一输入目录里存在 `define e = Character("Eileen")` 这类 Ren'Py 角色定义，seed 会优先用定义名作为 speaker 名称候选。它不会自动断言恋人、敌人、上下级等强语义关系。建议人工确认并编辑后，再作为正式 `story_graph.json` 使用。
-
-当前实现仍是 MVP：检索逻辑是轻量启发式，Neo4j 可视化导出，以及 sync 运行日志里的更完整 Story Memory diagnostics 还属于后续工作。
-
-## 角色关系 / 语义分析
-
-仓库同时提供一个独立的剧本分析入口：
-
-- `extract_relations.py`
-  - 用于分析 `game/tl/schinese` 下的角色关系或语义接近度
-  - 内部实现位于 `relation_analyzer/`
-
-常见命令：
-
-```bash
-python extract_relations.py /path/to/game/tl/schinese
-python extract_relations.py /path/to/game/tl/schinese --mode semantic
-```
-
-说明：
-
-- 默认 `--mode relation`
-  - 输出人物关系热力图、关系网络图和 `*_relations.csv`
-- `--mode semantic`
-  - 输出角色语义相似度热力图和网络图
-- 不传 `--characters` 时，会自动选择主要说话人
-- 可以用 `--auto-characters` 控制自动推断数量
-- 可以用 `--portraits off` 禁用从 `archive.rpa` 自动读取头像
-- 可以用 `--story-seed-output logs/story_memory/story_graph.seed.json` 在 relation 模式额外导出 Story Memory 候选 seed
-- `relation` 模式不需要 Gemini API
-- `semantic` 模式需要有效的 Gemini API key
-
-更具体的模块说明见 [relation_analyzer/README.md](relation_analyzer/README.md)。
-
-## 环境要求
-
-- Python 3.11+
-- `google-genai`，供同步脚本和 Batch 脚本使用
-- 有效的 Gemini API Key
-- Ren'Py 项目中的 `game/tl/schinese` 翻译目录
-
-## 当前边界
-
-目前项目更偏“核心引擎”，暂未重点覆盖：
-
-- 图形界面（GUI）
-- Excel / HTML 协作流
-- 面向普通用户的零配置体验
-- 完整的游戏解包 / 打包一体化发布流程
-- 面向超大项目的完整 RAG 生产工作流（例如严格的波次式回灌编排、多阶段调度策略）
-- 完整的结构化剧情图谱生产工作流（例如自动 seed 生成、Neo4j 可视化导出）
-
-## 项目状态
-
-这是一个仍在持续探索和改进中的个人实验项目。
-
-- 日常实验和更新会先在作者本地工作区中进行；这个公开仓库只同步已经跑通、适合公开发布的版本
-- 它不是已经打磨完成、可直接开箱使用的正式产品
-- 不保证在所有环境下稳定运行
-- 更适合作为思路实现、代码快照和进一步改造的基础
-- 项目开发过程中使用了 AI 辅助生成代码，整体方向、功能取舍、测试验证与集成决策由作者负责
-- 目前不承诺及时处理 issue、兼容性问题或长期更新
-- 当前更推荐使用 Batch 脚本；同步脚本保留用于直接运行、补译、局部修复、smoke test，以及可选的 RAG 滚动记忆验证
-- Batch / RAG 仍是主要验证方向；同步 RAG 更适合小批量即时反馈和局部精修，不是 Batch 吞吐流程的替代品
-- 当前的 RAG 能力更适合“小包验证 + 逐步扩展”，还不应被表述为已经完成的大项目生产级方案
-- Structured Story Memory 目前是可选 MVP，适合作为人工维护剧情上下文的 prompt 增强，不是完整自动图谱系统
-
-执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。
-
-## 安全说明
-
-不要把以下内容提交到公开仓库：
-
-- 真实 API key
-- 你本地的 `api_keys.json`
-- 你本地的 `translator_config.json`
-- 你本地的 `glossary.json` / `glossary_*.json`
-- 你本地的 `story_graph.json` / `story_graph.seed.json`
-- 你本地的 `macro_setting.md`
-- 私有游戏脚本
-- 本地 batch 结果
-- history / rag store
-- 日志和缓存
-
-## 适合谁使用
-
-更适合下面这类使用者：
-
-- 已经熟悉 Ren'Py 项目目录结构
-- 能自行准备 `work/game/tl/schinese`、安装 Ren'Py SDK，或理解 `prepare` 行为
-- 能阅读 Python 脚本并按需修改本地配置
-- 接受这是实验性工具，而不是稳定打包好的最终产品
+- `python gemini_translate.py --help` 会显示同步脚本的最小 CLI 帮助。
+- `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出。
+- Batch 产物默认会写到本地 `logs/` 目录。
+- `check` 是干跑校验，不会修改 `.rpy`；`apply` 默认只接受最近一次 `safe` check 对应的结果。
+- `bootstrap-rag` 用已有译文暖 history store；`bootstrap-source-index` 用全文原文建立 source-only 索引。
+- Structured Story Memory 默认关闭；需要通过 `batch.story_memory.enabled=true` 或 `sync.story_memory.enabled=true` 启用。
+
+## 文档索引
+
+- [Setup and local configuration](docs/setup.md)
+  - 本地配置、项目目录、Ren'Py SDK / TL 模板和运行模式
+- [Batch workflows and safety checks](docs/batch_workflows.md)
+  - manifest / identity v2、`check/apply` 安全闸门、订正、关键词和 golden corpus 测试
+- [Context systems](docs/context_systems.md)
+  - RAG history store、Batch source-only index 和 Structured Story Memory
+- [Relation and semantic analysis](docs/relation_analysis.md)
+  - `extract_relations.py`、relation / semantic 模式
+- [Project notes](docs/project_notes.md)
+  - 环境要求、当前边界、项目状态、安全说明和适用人群
+
+## 当前状态
+
+这是一个仍在持续探索和改进中的个人实验项目，更接近核心引擎和代码快照，不是已经打磨完成的零配置产品。执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。
