@@ -557,12 +557,13 @@ def get_default_source_index_store_dir():
     return os.path.join(LOG_DIR, 'source_index_store', guess_project_slug())
 
 
-def get_source_index_store():
+def get_source_index_store(update_metadata=True):
     global _SOURCE_INDEX_STORE, SOURCE_INDEX_STORE_DIR
     if not SOURCE_INDEX_STORE_DIR:
         SOURCE_INDEX_STORE_DIR = get_default_source_index_store_dir()
     if _SOURCE_INDEX_STORE is None or os.path.abspath(_SOURCE_INDEX_STORE.store_dir) != os.path.abspath(SOURCE_INDEX_STORE_DIR):
         _SOURCE_INDEX_STORE = JsonSourceIndexStore(SOURCE_INDEX_STORE_DIR)
+    if update_metadata:
         _SOURCE_INDEX_STORE.set_metadata(
             project_slug=guess_project_slug(),
             embedding_model=RAG_EMBEDDING_MODEL,
@@ -775,15 +776,15 @@ def retrieve_history_hits(target_items, context_past):
 def retrieve_source_hits(target_items, context_past):
     if not SOURCE_INDEX_ENABLED:
         return [], {'enabled': False}
-    store = get_source_index_store()
-    if store is None or store.count_segments() <= 0:
-        return [], {'enabled': True, 'reason': 'empty_source_store'}
 
     query_text = build_rag_query_text(target_items, context_past)
     if not query_text:
         return [], {'enabled': True, 'reason': 'empty_query'}
 
     try:
+        store = get_source_index_store(update_metadata=False)
+        if store is None or store.count_segments() <= 0:
+            return [], {'enabled': True, 'reason': 'empty_source_store'}
         query_vector = embed_query_text(query_text)
         matches = store.search_segments(
             query_vector,

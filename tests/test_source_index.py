@@ -411,6 +411,34 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             self.assertTrue(stats['enabled'])
             self.assertEqual([hit['source_id'] for hit in hits], ['current'])
 
+    def test_retrieve_source_hits_degrades_when_source_store_is_locked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_store_dir = tmp_path / 'source_store'
+            source_store_dir.mkdir()
+            lock_path = source_store_dir / '.source_index.lock'
+            lock_path.write_text(
+                json.dumps({
+                    'operation': 'bootstrap_source_index',
+                    'owner': socket.gethostname(),
+                    'pid': os.getpid(),
+                    'created_at': now_iso(),
+                }),
+                encoding='utf-8',
+            )
+
+            batch_mod.SOURCE_INDEX_ENABLED = True
+            batch_mod.SOURCE_INDEX_STORE_DIR = str(source_store_dir)
+            batch_mod._SOURCE_INDEX_STORE = None
+            batch_mod.SOURCE_INDEX_TOP_K = 5
+            batch_mod.SOURCE_INDEX_MIN_SIMILARITY = 0.0
+
+            hits, stats = batch_mod.retrieve_source_hits([{'text': 'Hello world'}], [])
+
+            self.assertEqual(hits, [])
+            self.assertTrue(stats['enabled'])
+            self.assertEqual(stats['reason'], 'empty_source_store')
+
     def test_format_source_hits_block_and_prompt_injection(self):
         hits = [
             {
@@ -467,11 +495,13 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             old_tl_dir = batch_mod.legacy.TL_DIR
             old_base_dir = batch_mod.legacy.BASE_DIR
             old_jobs_dir = batch_mod.BATCH_JOBS_DIR
+            old_latest_manifest_file = batch_mod.LATEST_MANIFEST_FILE
 
             try:
                 batch_mod.legacy.TL_DIR = str(tl_dir)
                 batch_mod.legacy.BASE_DIR = str(tmp_path)
                 batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+                batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
 
                 batch_mod.SOURCE_INDEX_ENABLED = True
                 source_store_dir = tmp_path / 'source_store'
@@ -540,6 +570,7 @@ class SourceIndexIntegrationTests(unittest.TestCase):
                 batch_mod.legacy.TL_DIR = old_tl_dir
                 batch_mod.legacy.BASE_DIR = old_base_dir
                 batch_mod.BATCH_JOBS_DIR = old_jobs_dir
+                batch_mod.LATEST_MANIFEST_FILE = old_latest_manifest_file
 
 
 if __name__ == '__main__':
