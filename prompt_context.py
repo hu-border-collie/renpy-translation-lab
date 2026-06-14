@@ -46,12 +46,28 @@ def format_history_hits_block(
     return "\n".join(lines) if lines else empty_label
 
 
+def format_source_hits_block(hits, empty_label="(none)"):
+    if not hits:
+        return empty_label
+    lines = []
+    for hit in hits:
+        file_rel_path = hit.get("file_rel_path", "")
+        line_start = hit.get("line_start", "")
+        line_end = hit.get("line_end", "")
+        score = float(hit.get("score", 0.0))
+        source_text = hit.get("source_text", "")
+        prefix = f"- [{file_rel_path}:{line_start}-{line_end} score={score:.3f}]"
+        lines.append(f"{prefix} Source excerpt: {source_text}")
+    return "\n".join(lines) if lines else empty_label
+
+
 def build_reference_blocks(
     *,
     include_translation_memory=True,
     glossary_hits=None,
     history_hits=None,
     story_hits=None,
+    source_hits=None,
     history_char_limit=220,
     story_char_limit=1200,
     include_source_text=True,
@@ -65,6 +81,11 @@ def build_reference_blocks(
             f"{format_glossary_hits_block(glossary_hits or [], empty_label)}\n\n"
             "RETRIEVED MEMORY:\n"
             f"{format_history_hits_block(history_hits or [], empty_label, history_char_limit, include_source_text)}\n\n"
+        )
+    if source_hits:
+        blocks.append(
+            "RELATED PROJECT CONTEXT:\n"
+            f"{format_source_hits_block(source_hits, empty_label)}\n\n"
         )
     if story_memory.has_story_hits(story_hits):
         blocks.append(
