@@ -151,6 +151,8 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertIn('source_item_ids', keyword_prompt)
         self.assertIn('chunk_summary', keyword_prompt)
         self.assertEqual(keyword_schema['properties']['candidates']['maxItems'], 5)
+        candidate_schema = keyword_schema['properties']['candidates']['items']
+        self.assertNotIn('enum', candidate_schema['properties']['category'])
         self.assertIn('chunk_summary', keyword_schema['required'])
 
     def test_core_result_parsers_and_writeback_actions_are_mode_aware(self):

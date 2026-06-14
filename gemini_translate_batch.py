@@ -195,6 +195,21 @@ def coerce_non_empty_string(value, default):
     return default
 
 
+def coerce_thinking_level(value, default):
+    if value is None or value is False:
+        return ''
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped.lower() in {'none', 'off', 'disabled', 'false', '0'}:
+            return ''
+        return stripped
+    return default
+
+
+def format_thinking_level_for_display():
+    return BATCH_THINKING_LEVEL or '(not sent)'
+
+
 def read_text_file(path):
     if not path or not os.path.isfile(path):
         return ''
@@ -247,10 +262,11 @@ def load_batch_settings():
         config.get('batch_max_output_tokens'),
         BATCH_MAX_OUTPUT_TOKENS,
     )
-    BATCH_THINKING_LEVEL = coerce_non_empty_string(
-        config.get('batch_thinking_level'),
-        BATCH_THINKING_LEVEL,
-    )
+    if 'batch_thinking_level' in config:
+        BATCH_THINKING_LEVEL = coerce_thinking_level(
+            config.get('batch_thinking_level'),
+            BATCH_THINKING_LEVEL,
+        )
 
     display_name_prefix = config.get('batch_display_name_prefix')
     if isinstance(display_name_prefix, str) and display_name_prefix.strip():
@@ -284,10 +300,11 @@ def load_batch_settings():
         BATCH_MAX_OUTPUT_TOKENS,
     )
     BATCH_TEMPERATURE = coerce_float(batch.get('temperature'), BATCH_TEMPERATURE)
-    BATCH_THINKING_LEVEL = coerce_non_empty_string(
-        batch.get('thinking_level'),
-        BATCH_THINKING_LEVEL,
-    )
+    if 'thinking_level' in batch:
+        BATCH_THINKING_LEVEL = coerce_thinking_level(
+            batch.get('thinking_level'),
+            BATCH_THINKING_LEVEL,
+        )
 
     keyword_config = batch.get('keyword_extraction')
     if not isinstance(keyword_config, dict):
@@ -471,7 +488,18 @@ def is_unavailable_error(exc):
     if status_code == 503:
         return True
     text = str(exc)
-    return '503' in text or 'UNAVAILABLE' in text
+    retryable_markers = (
+        '503',
+        'UNAVAILABLE',
+        'UNEXPECTED_EOF_WHILE_READING',
+        'EOF occurred in violation of protocol',
+        'ConnectError',
+        'ReadError',
+        'ConnectTimeout',
+        'ReadTimeout',
+        'RemoteProtocolError',
+    )
+    return any(marker in text for marker in retryable_markers)
 
 
 def allow_non_chinese_repair_translation(original, translated):
@@ -677,15 +705,36 @@ def build_rag_query_text(target_items, context_past):
 def embed_texts(contents, task_type):
     if not contents:
         return []
-    client = create_batch_client()
-    response = client.models.embed_content(
-        model=RAG_EMBEDDING_MODEL,
-        contents=contents,
-        config=genai_types.EmbedContentConfig(
-            task_type=task_type,
-            output_dimensionality=RAG_OUTPUT_DIMENSIONALITY,
-        ),
-    )
+    api_key_count = len(getattr(legacy, 'API_KEYS', []) or [])
+    attempts = max(3, api_key_count * 2)
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        client = create_batch_client()
+        try:
+            response = client.models.embed_content(
+                model=RAG_EMBEDDING_MODEL,
+                contents=contents,
+                config=genai_types.EmbedContentConfig(
+                    task_type=task_type,
+                    output_dimensionality=RAG_OUTPUT_DIMENSIONALITY,
+                ),
+            )
+            break
+        except Exception as exc:
+            last_error = exc
+            retryable = is_quota_error(exc) or is_unavailable_error(exc)
+            if retryable and attempt < attempts:
+                rotated = legacy.rotate_api_key()
+                label = 'quota' if is_quota_error(exc) else 'service unavailable'
+                key_action = 'next API key' if rotated else 'same API key'
+                print(f'Embedding request hit {label}. Retrying with {key_action} ({attempt}/{attempts})...')
+                time.sleep(min(attempt, 2))
+                continue
+            raise
+    else:
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError('Embedding request failed without a captured exception.')
     embeddings = getattr(response, 'embeddings', None) or []
     values = [list(getattr(item, 'values', None) or []) for item in embeddings]
     if len(values) != len(contents):
@@ -1642,8 +1691,20 @@ def iter_translation_chunk_ranges(tasks):
         start = end
 
 
+def count_translation_chunks(file_jobs):
+    total_chunks = 0
+    for job in file_jobs:
+        total_chunks += sum(1 for _ in iter_translation_chunk_ranges(job.get('tasks') or []))
+    return total_chunks
+
+
 def build_chunks(file_jobs):
     chunks = []
+    total_chunks = count_translation_chunks(file_jobs)
+    processed_chunks = 0
+    if SOURCE_INDEX_ENABLED and total_chunks:
+        print(f'Source index retrieval for build: {total_chunks} chunks to query.')
+        sys.stdout.flush()
     for job in file_jobs:
         tasks = job['tasks']
         total = len(tasks)
@@ -1659,7 +1720,15 @@ def build_chunks(file_jobs):
             context_future = tasks[end:min(total, end + BATCH_CONTEXT_AFTER)]
             glossary_hits = retrieve_glossary_hits(target_items) if RAG_ENABLED else []
             history_hits, rag_stats = retrieve_history_hits(target_items, context_past) if RAG_ENABLED else ([], {})
+            if SOURCE_INDEX_ENABLED:
+                print(
+                    'Source index retrieval progress: '
+                    f'{processed_chunks + 1}/{total_chunks} chunks, '
+                    f'file={job["file_rel_path"]}, chunk={chunk_number}.'
+                )
+                sys.stdout.flush()
             source_hits, source_index_stats = retrieve_source_hits(target_items, context_past) if SOURCE_INDEX_ENABLED else ([], {})
+            processed_chunks += 1
             story_hits = retrieve_batch_story_hits(
                 job['file_rel_path'],
                 target_items,
@@ -1690,6 +1759,9 @@ def build_chunks(file_jobs):
             if STORY_MEMORY_ENABLED and story_memory.has_story_hits(story_hits):
                 chunk['story_hits'] = story_hits
             chunks.append(chunk)
+    if SOURCE_INDEX_ENABLED and total_chunks:
+        print(f'Source index retrieval complete: {processed_chunks}/{total_chunks} chunks queried.')
+        sys.stdout.flush()
     return chunks
 
 
@@ -1800,9 +1872,9 @@ def get_batch_risk_warnings():
         )
     if BATCH_MAX_OUTPUT_TOKENS < 2048:
         warnings_list.append(f'max_output_tokens={BATCH_MAX_OUTPUT_TOKENS} is likely too low for JSON batch output.')
-    if BATCH_MODEL.startswith('gemini-3') and (BATCH_THINKING_LEVEL or '').lower() != 'minimal':
+    if BATCH_MODEL.startswith('gemini-3') and BATCH_THINKING_LEVEL and BATCH_THINKING_LEVEL.lower() != 'minimal':
         warnings_list.append(
-            f'thinking_level={BATCH_THINKING_LEVEL or "(default)"} may waste output budget on reasoning tokens.'
+            f'thinking_level={BATCH_THINKING_LEVEL} may waste output budget on reasoning tokens.'
         )
     return warnings_list
 
@@ -5413,15 +5485,29 @@ def bootstrap_source_index(skip_prepare=False, prune=True):
         return summary
 
     try:
-        embedded_records = []
+        if records_with_reused_embedding:
+            reused_upserted = store.upsert_segments(records_with_reused_embedding)
+            summary['upserted'] += reused_upserted
+            print(f"Reused embeddings written: {reused_upserted}.")
+            sys.stdout.flush()
+
         if records_to_embed:
             print(f"Generating embeddings for {len(records_to_embed)} segments...")
             sys.stdout.flush()
-            embedded_records = embed_source_segments(records_to_embed)
-            summary['embedded'] = len(embedded_records)
-
-        upsert_count = store.upsert_segments(records_with_reused_embedding + embedded_records)
-        summary['upserted'] = upsert_count
+            batch_size = 16
+            for start in range(0, len(records_to_embed), batch_size):
+                batch = records_to_embed[start:start + batch_size]
+                embedded_records = embed_source_segments(batch)
+                summary['embedded'] += len(embedded_records)
+                summary['upserted'] += store.upsert_segments(embedded_records)
+                processed = min(start + len(batch), len(records_to_embed))
+                print(
+                    "Source index embedding progress: "
+                    f"{processed}/{len(records_to_embed)} scanned, "
+                    f"{summary['embedded']} embedded, "
+                    f"{store.count_segments()} stored."
+                )
+                sys.stdout.flush()
 
         if stale_segments and prune:
             print(f"Pruning {stale_count} stale segments...")
@@ -6499,7 +6585,7 @@ def print_banner():
         f'context_before={BATCH_CONTEXT_BEFORE}, context_after={BATCH_CONTEXT_AFTER}'
     )
     print(f'Max output tokens: {BATCH_MAX_OUTPUT_TOKENS}')
-    print(f'Thinking level: {BATCH_THINKING_LEVEL or "(default)"}')
+    print(f'Thinking level: {format_thinking_level_for_display()}')
     print(
         f'Prepare: enabled={legacy.PREP_ENABLED}, language={legacy.PREP_LANGUAGE}, '
         f'generate_template={legacy.PREP_GENERATE_TEMPLATE}, '

@@ -33,6 +33,29 @@ UPDATE_GOLDEN_KEYWORD_ENV = 'UPDATE_GOLDEN_KEYWORD'
 
 
 class BatchRagRegressionTests(unittest.TestCase):
+    def test_empty_thinking_level_omits_thinking_config_and_warning(self):
+        old_values = {
+            'model': batch_mod.BATCH_MODEL,
+            'thinking_level': batch_mod.BATCH_THINKING_LEVEL,
+        }
+        try:
+            batch_mod.BATCH_MODEL = 'gemini-3.1-flash-lite'
+            batch_mod.BATCH_THINKING_LEVEL = ''
+
+            config = batch_mod.build_generation_config([
+                {
+                    'id': 'script.rpy:1:0',
+                    'text': 'Hello',
+                }
+            ])
+            warnings = batch_mod.get_batch_risk_warnings()
+        finally:
+            batch_mod.BATCH_MODEL = old_values['model']
+            batch_mod.BATCH_THINKING_LEVEL = old_values['thinking_level']
+
+        self.assertNotIn('thinking_config', config)
+        self.assertFalse(any('thinking_level' in warning for warning in warnings))
+
     def test_build_chunks_keeps_context_task_dicts(self):
         old_values = {
             'target_size': batch_mod.BATCH_TARGET_SIZE,
