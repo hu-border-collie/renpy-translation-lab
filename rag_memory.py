@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from contextlib import contextmanager
 import hashlib
 import json
@@ -494,7 +494,6 @@ class JsonRagStore(object):
         if top_k > 0:
             return results[:top_k]
         return results
-
     def _sort_key(self, record):
         quality_state = record.get('quality_state') or ''
         quality_rank = {
@@ -505,3 +504,446 @@ class JsonRagStore(object):
             'sync_applied': 1,
         }.get(quality_state, 0)
         return (float(record.get('score') or 0.0), quality_rank, record.get('created_at') or '')
+
+
+class JsonSourceIndexStoreLockError(RuntimeError):
+    pass
+
+
+class JsonSourceIndexStore(object):
+    def __init__(self, store_dir):
+        self.store_dir = os.path.abspath(store_dir)
+        self.metadata_path = os.path.join(self.store_dir, 'source_metadata.json')
+        self.segments_path = os.path.join(self.store_dir, 'source_segments.jsonl')
+        self.lock_path = os.path.join(self.store_dir, '.source_index.lock')
+        self._loaded = False
+        self._disk_snapshot = None
+        self.metadata = {}
+        self.segments = {}
+        self.file_index = {}
+
+    def _warn(self, message):
+        print(f'Warning: {message}')
+
+    def load(self):
+        if self._loaded:
+            return
+        self._load_from_disk()
+
+    def _load_from_disk(self):
+        os.makedirs(self.store_dir, exist_ok=True)
+        self.metadata = self._load_json_file(self.metadata_path)
+        self.segments = {}
+        self.file_index = {}
+        if os.path.isfile(self.segments_path):
+            with open(self.segments_path, 'r', encoding='utf-8-sig') as handle:
+                for line_number, raw_line in enumerate(handle, start=1):
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        self._warn(f'Skipping invalid source segment row {self.segments_path}:{line_number}: {exc}')
+                        continue
+                    if not isinstance(record, dict):
+                        self._warn(f'Skipping non-object source segment row {self.segments_path}:{line_number}')
+                        continue
+                    source_id = record.get('source_id')
+                    if source_id:
+                        self.segments[source_id] = record
+                        self._index_record(source_id, record)
+        self._loaded = True
+        self._disk_snapshot = self._disk_version()
+
+    def _file_version(self, path):
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _disk_version(self):
+        return (
+            self._file_version(self.metadata_path),
+            self._file_version(self.segments_path),
+        )
+
+    def _refresh_from_disk_if_changed(self):
+        if not self._loaded or self._disk_snapshot != self._disk_version():
+            self._load_from_disk()
+
+    def _load_json_file(self, path):
+        if not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, 'r', encoding='utf-8-sig') as handle:
+                data = json.load(handle)
+        except Exception as exc:
+            self._warn(f'Failed to load source metadata {path}: {exc}')
+            return {}
+        if not isinstance(data, dict):
+            self._warn(f'Ignoring non-object source metadata {path}')
+            return {}
+        return data
+
+    def count_segments(self):
+        self.load()
+        return len(self.segments)
+
+    def get_segment(self, source_id):
+        self.load()
+        return self.segments.get(source_id)
+
+    def set_metadata(self, **updates):
+        with self._locked('set_metadata') as lock_info:
+            self._refresh_from_disk_if_changed()
+            self._update_metadata_unlocked('set_metadata', updates, lock_info)
+
+    def _write_metadata(self):
+        def write(handle):
+            json.dump(self.metadata, handle, ensure_ascii=False, indent=2)
+
+        self._atomic_write(self.metadata_path, write)
+
+    def _write_segments(self):
+        def write(handle):
+            for source_id in sorted(self.segments):
+                handle.write(json.dumps(self.segments[source_id], ensure_ascii=False) + '\n')
+
+        self._atomic_write(self.segments_path, write)
+
+    def _atomic_write(self, path, writer):
+        os.makedirs(self.store_dir, exist_ok=True)
+        tmp_path = f'{path}.tmp.{os.getpid()}.{id(self)}'
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as handle:
+                writer(handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, path)
+            self._disk_snapshot = self._disk_version()
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError as exc:
+                    self._warn(f'Failed to remove temporary source store file {tmp_path}: {exc}')
+
+    def _lock_owner(self, operation):
+        return {
+            'operation': operation,
+            'owner': socket.gethostname(),
+            'pid': os.getpid(),
+            'created_at': now_iso(),
+        }
+
+    def _format_lock_owner(self, data):
+        if not isinstance(data, dict):
+            return 'unknown owner'
+        parts = []
+        operation = data.get('operation')
+        owner = data.get('owner')
+        pid = data.get('pid')
+        created_at = data.get('created_at')
+        released_at = data.get('released_at')
+        if operation:
+            parts.append(f'operation={operation}')
+        if owner:
+            parts.append(f'owner={owner}')
+        if pid:
+            parts.append(f'pid={pid}')
+        if created_at:
+            parts.append(f'created_at={created_at}')
+        if released_at:
+            parts.append(f'released_at={released_at}')
+        return ', '.join(parts) if parts else 'unknown owner'
+
+    def _read_lock_owner(self):
+        try:
+            with open(self.lock_path, 'r', encoding='utf-8-sig') as handle:
+                return json.load(handle)
+        except Exception:
+            return {}
+
+    def _lock_age_seconds(self, data):
+        if not isinstance(data, dict):
+            return None
+        created_at = data.get('created_at')
+        if not created_at:
+            return None
+        try:
+            created_at = datetime.fromisoformat(str(created_at))
+        except (TypeError, ValueError):
+            return None
+        return (datetime.now() - created_at).total_seconds()
+
+    def _lock_file_age_seconds(self):
+        try:
+            return datetime.now().timestamp() - os.path.getmtime(self.lock_path)
+        except OSError:
+            return None
+
+    def _is_lock_owner_alive(self, pid):
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return None
+        if pid <= 0:
+            return None
+        if os.name == 'nt':
+            return self._is_windows_process_alive(pid)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return None
+        return True
+
+    def _is_windows_process_alive(self, pid):
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        error_invalid_parameter = 87
+        still_active = 259
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        kernel32.CloseHandle.restype = ctypes.c_int
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            if ctypes.get_last_error() == error_invalid_parameter:
+                return False
+            return True
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def _is_stale_lock(self, data):
+        if not isinstance(data, dict):
+            age_seconds = self._lock_file_age_seconds()
+            return age_seconds is not None and age_seconds >= LOCK_STALE_AFTER_SECONDS
+        if data.get('released_at'):
+            return True
+        local_owner = data.get('owner') == socket.gethostname()
+        if local_owner and data.get('pid') is not None:
+            is_alive = self._is_lock_owner_alive(data.get('pid'))
+            if is_alive is False:
+                return True
+            if is_alive is True:
+                return False
+        age_seconds = self._lock_age_seconds(data)
+        if age_seconds is None and not data:
+            age_seconds = self._lock_file_age_seconds()
+        return age_seconds is not None and age_seconds >= LOCK_STALE_AFTER_SECONDS
+
+    def _recover_stale_lock(self, existing):
+        if not self._is_stale_lock(existing):
+            return False
+        try:
+            os.remove(self.lock_path)
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            self._warn(f'Failed to remove stale source store lock {self.lock_path}: {exc}')
+            return False
+        self._warn(f'Recovered stale source store lock {self.lock_path} ({self._format_lock_owner(existing)})')
+        return True
+
+    def _open_lock_file(self):
+        return os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+
+    def _lock_path_is_regular_file(self):
+        try:
+            lock_stat = os.lstat(self.lock_path)
+        except FileNotFoundError:
+            return True
+        return stat.S_ISREG(lock_stat.st_mode)
+
+    def _mark_lock_released(self, lock_info):
+        if not os.path.exists(self.lock_path):
+            return True
+        if not self._lock_path_is_regular_file():
+            self._warn(f'Failed to mark source store lock released {self.lock_path}: not a regular file')
+            return False
+        released_info = dict(lock_info)
+        released_info['released_at'] = now_iso()
+        tmp_path = f'{self.lock_path}.released.tmp.{os.getpid()}.{id(self)}'
+        try:
+            fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                handle = os.fdopen(fd, 'w', encoding='utf-8')
+            except OSError:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
+            with handle:
+                json.dump(released_info, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, self.lock_path)
+        except Exception as exc:
+            self._warn(f'Failed to mark source store lock released {self.lock_path}: {exc}')
+            return False
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError as exc:
+                    self._warn(f'Failed to remove temporary source store lock marker {tmp_path}: {exc}')
+        return True
+
+    @contextmanager
+    def _locked(self, operation):
+        os.makedirs(self.store_dir, exist_ok=True)
+        lock_info = self._lock_owner(operation)
+        try:
+            fd = self._open_lock_file()
+        except FileExistsError:
+            existing = self._read_lock_owner()
+            if not self._recover_stale_lock(existing):
+                raise JsonSourceIndexStoreLockError(
+                    f'Source store is locked at {self.lock_path} ({self._format_lock_owner(existing)}).'
+                )
+            try:
+                fd = self._open_lock_file()
+            except FileExistsError:
+                existing = self._read_lock_owner()
+                raise JsonSourceIndexStoreLockError(
+                    f'Source store is locked at {self.lock_path} ({self._format_lock_owner(existing)}).'
+                )
+
+        try:
+            operation_succeeded = False
+            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                json.dump(lock_info, handle, ensure_ascii=False)
+            yield lock_info
+            operation_succeeded = True
+        finally:
+            try:
+                os.remove(self.lock_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                self._mark_lock_released(lock_info)
+                self._warn(f'Failed to remove source store lock {self.lock_path}: {exc}')
+                if operation_succeeded:
+                    raise JsonSourceIndexStoreLockError(
+                        f'Failed to remove source store lock {self.lock_path}: {exc}'
+                    ) from exc
+
+    def _update_metadata_unlocked(self, operation, updates, lock_info):
+        if not isinstance(self.metadata, dict):
+            self.metadata = {}
+        for key, value in updates.items():
+            self.metadata[key] = value
+        updated_at = now_iso()
+        self.metadata['updated_at'] = updated_at
+        if 'created_at' not in self.metadata:
+            self.metadata['created_at'] = updated_at
+        self.metadata['last_write'] = {
+            'operation': operation,
+            'owner': lock_info.get('owner'),
+            'pid': lock_info.get('pid'),
+            'lock_created_at': lock_info.get('created_at'),
+            'updated_at': updated_at,
+        }
+        self._write_metadata()
+
+    def _index_record(self, source_id, record):
+        file_rel_path = record.get('file_rel_path')
+        if not file_rel_path:
+            return
+        self.file_index.setdefault(file_rel_path, set()).add(source_id)
+
+    def _unindex_record(self, source_id, record):
+        file_rel_path = record.get('file_rel_path')
+        if not file_rel_path:
+            return
+        bucket = self.file_index.get(file_rel_path)
+        if not bucket:
+            return
+        bucket.discard(source_id)
+        if not bucket:
+            self.file_index.pop(file_rel_path, None)
+
+    def upsert_segments(self, records):
+        with self._locked('upsert_segments') as lock_info:
+            self._refresh_from_disk_if_changed()
+            changed = 0
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                source_id = record.get('source_id')
+                embedding = record.get('embedding')
+                if not source_id or not isinstance(embedding, list) or not embedding:
+                    continue
+                existing = self.segments.get(source_id)
+                if existing == record:
+                    continue
+                if existing:
+                    self._unindex_record(source_id, existing)
+                self.segments[source_id] = record
+                self._index_record(source_id, record)
+                changed += 1
+            if changed:
+                self._write_segments()
+                self._update_metadata_unlocked(
+                    'upsert_segments',
+                    {'segment_count': len(self.segments)},
+                    lock_info,
+                )
+        return changed
+
+    def delete_segments(self, source_ids):
+        with self._locked('delete_segments') as lock_info:
+            self._refresh_from_disk_if_changed()
+            changed = 0
+            for source_id in source_ids:
+                existing = self.segments.pop(source_id, None)
+                if not existing:
+                    continue
+                self._unindex_record(source_id, existing)
+                changed += 1
+            if changed:
+                self._write_segments()
+                self._update_metadata_unlocked(
+                    'delete_segments',
+                    {'segment_count': len(self.segments)},
+                    lock_info,
+                )
+        return changed
+
+    def segment_ids_for_file(self, file_rel_path):
+        self.load()
+        return list(self.file_index.get(file_rel_path, set()))
+
+    def search_segments(self, query_vector, top_k=4, min_similarity=0.72):
+        self.load()
+        results = []
+        for record in self.segments.values():
+            vector = record.get('embedding')
+            if not isinstance(vector, list) or not vector:
+                continue
+            score = cosine_similarity(query_vector, vector)
+            if score < min_similarity:
+                continue
+            result = dict(record)
+            result['score'] = score
+            results.append(result)
+        results.sort(key=lambda item: float(item.get('score') or 0.0), reverse=True)
+        if top_k > 0:
+            return results[:top_k]
+        return results

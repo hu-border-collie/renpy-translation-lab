@@ -145,6 +145,7 @@ Batch 模式：
 ```bash
 python gemini_translate_batch.py doctor
 python gemini_translate_batch.py bootstrap-rag
+python gemini_translate_batch.py bootstrap-source-index
 python gemini_translate_batch.py build
 python gemini_translate_batch.py submit
 python gemini_translate_batch.py status
@@ -314,6 +315,24 @@ JSONL 每行是一个对象，支持以下字段：
 命令输出会包含 `scan_scope`、`files_scanned`、`scanned`、`external_seed_records`、`external_seed_invalid_json`、`external_seed_filtered`、`external_seed_skipped`、`embedded`、`reused_embeddings`、`upserted` 和 history record 数量，方便确认预建库是否真的扫描并写入了内容。
 
 注意：`bootstrap-rag` 解决的是“build 前先用已有译文暖库”的问题；它不会让已经 build / split 完的旧请求动态吃到后续 apply 的新结果。需要滚动回灌时，仍要按波次重新 build，或等待后续动态波次编排能力。
+
+### 可选：Batch Source-Only 索引预建
+
+为了支持独立的原文字段索引（不混入翻译历史记忆库），可以使用 `bootstrap-source-index` 命令：
+
+```bash
+python gemini_translate_batch.py bootstrap-source-index
+```
+
+这个命令会：
+1. 扫描当前所有的 `.rpy` 翻译模板文件，将原文分组为 source segments。
+2. 对比本地数据库中已有的索引：
+   - 如果对应位置的内容和模型配置未发生变化，则直接**复用**现有的 Embedding 向量，避免重复调用 API 造成浪费。
+   - 如果发生变化或不存在，则分批调用 Embedding 接口生成向量。
+   - 识别并列出所有在数据库中存在但在当前项目中已失效的**过期片段（Stale segments）**。
+3. 优先输出详细的同步前统计信息（stats）。
+4. 默认会自动清理/Prune 过期的 stale 记录；如需保留，可传入 `--no-prune`。
+
 
 ### 可选：Structured Story Memory
 
