@@ -67,6 +67,13 @@
       "history_char_limit": 220,
       "store_dir": ""
     },
+    "source_index": {
+      "enabled": false,
+      "top_k": 4,
+      "min_similarity": 0.72,
+      "char_limit": 220,
+      "store_dir": ""
+    },
     "story_memory": {
       "enabled": false,
       "graph_file": "logs/story_memory/story_graph.json",
