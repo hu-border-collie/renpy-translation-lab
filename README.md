@@ -333,6 +333,38 @@ python gemini_translate_batch.py bootstrap-source-index
 3. 优先输出详细的同步前统计信息（stats）。
 4. 默认会自动清理/Prune 过期的 stale 记录；如需保留，可传入 `--no-prune`。
 
+Batch 构建时是否检索 source index 由 `batch.source_index.enabled` 控制。当前 source index 复用 `batch.rag` 中的 embedding 模型、query/document task type、output dimensionality 和 `segment_lines`；`batch.source_index` 自身控制检索开关、命中数、相似度阈值、单条原文截断预算和独立存储目录：
+
+```json
+{
+  "batch": {
+    "rag": {
+      "embedding_model": "gemini-embedding-001",
+      "query_task_type": "RETRIEVAL_QUERY",
+      "document_task_type": "RETRIEVAL_DOCUMENT",
+      "output_dimensionality": 768,
+      "segment_lines": 4
+    },
+    "source_index": {
+      "enabled": true,
+      "top_k": 4,
+      "min_similarity": 0.72,
+      "char_limit": 220,
+      "store_dir": ""
+    }
+  }
+}
+```
+
+启用后，普通 Batch manifest 会写入：
+
+- `source_index_store_path`：实际使用的 source-only store 路径。
+- `source_index_settings`：schema version、`top_k`、`min_similarity`、`char_limit` 和每个 chunk 的字符预算。
+- `source_index_summary`：命中 chunk 数、source hit 数、命中率、截断次数、实际注入字符数、字符预算、metadata/stale 过滤数、相似度过滤数、检索失败数和失败原因。
+- 每个 chunk 的 `source_index_stats`：查询字符数、命中数、metadata 过滤明细、截断数、store schema version 和 store 路径。
+
+Prompt 中 source index 命中会进入独立的 `RELATED PROJECT CONTEXT` 分区，只包含 `Source excerpt`，不会混入 `RETRIEVED MEMORY`，也不会携带译文。`batch.source_index.enabled=false` 时不会读取 source store，也不会增加该 prompt 分区。
+
 
 ### 可选：Structured Story Memory
 

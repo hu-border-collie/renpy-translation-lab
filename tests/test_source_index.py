@@ -199,6 +199,7 @@ class SourceIndexStoreTests(unittest.TestCase):
 
                 reloaded = JsonSourceIndexStore(str(store_dir))
                 reloaded.load()
+                self.assertEqual(reloaded.metadata['schema_version'], batch_mod.SOURCE_INDEX_SCHEMA_VERSION)
                 self.assertEqual(reloaded.count_segments(), 1)
                 self.assertIn(unchanged_id, reloaded.segments)
                 self.assertNotIn('stale_id', reloaded.segments)
@@ -383,6 +384,13 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             self.assertNotIn('translated_text', hit)
             self.assertAlmostEqual(hit['score'], 1.0)
             self.assertFalse(unused_rag_store_dir.exists())
+            self.assertEqual(stats['matched_count'], 1)
+            self.assertEqual(stats['below_similarity_count'], 1)
+            self.assertEqual(stats['filtered_count'], 0)
+            self.assertEqual(stats['truncated_count'], 0)
+            self.assertEqual(stats['source_context_chars'], len('Good morning everyone'))
+            self.assertEqual(stats['source_context_char_budget'], 100)
+            self.assertEqual(stats['search_diagnostics']['segments_seen'], 2)
 
     def test_retrieve_source_hits_filters_stale_embedding_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -410,6 +418,64 @@ class SourceIndexIntegrationTests(unittest.TestCase):
 
             self.assertTrue(stats['enabled'])
             self.assertEqual([hit['source_id'] for hit in hits], ['current'])
+            self.assertEqual(stats['filtered_count'], 1)
+            self.assertEqual(stats['stale_hits_skipped'], 1)
+            self.assertEqual(stats['search_diagnostics']['filtered_embedding_task_type_count'], 1)
+
+    def test_retrieve_source_hits_reports_truncation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_store_dir = tmp_path / 'source_store'
+            source_store_dir.mkdir()
+
+            batch_mod.SOURCE_INDEX_ENABLED = True
+            batch_mod.SOURCE_INDEX_STORE_DIR = str(source_store_dir)
+            batch_mod._SOURCE_INDEX_STORE = None
+            batch_mod.SOURCE_INDEX_TOP_K = 1
+            batch_mod.SOURCE_INDEX_MIN_SIMILARITY = 0.0
+            batch_mod.SOURCE_INDEX_CHAR_LIMIT = 12
+
+            long_source = 'Long source text for truncation'
+            segment = self.make_segment('long', source=long_source, embedding=[1.0, 0.0, 0.0])
+            JsonSourceIndexStore(str(source_store_dir)).upsert_segments([segment])
+
+            with (
+                mock.patch('gemini_translate_batch.embed_query_text', return_value=[1.0, 0.0, 0.0]),
+                mock.patch('gemini_translate_batch.RAG_OUTPUT_DIMENSIONALITY', 3),
+            ):
+                hits, stats = batch_mod.retrieve_source_hits([{'text': 'Long source'}], [])
+
+            self.assertEqual(len(hits), 1)
+            self.assertEqual(hits[0]['source_text'], 'Long sour...')
+            self.assertTrue(hits[0]['source_text_truncated'])
+            self.assertEqual(stats['truncated_count'], 1)
+            self.assertEqual(stats['source_context_chars'], 12)
+            self.assertEqual(stats['source_context_char_budget'], 12)
+
+    def test_retrieve_source_hits_reports_failure_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_store_dir = tmp_path / 'source_store'
+            source_store_dir.mkdir()
+
+            batch_mod.SOURCE_INDEX_ENABLED = True
+            batch_mod.SOURCE_INDEX_STORE_DIR = str(source_store_dir)
+            batch_mod._SOURCE_INDEX_STORE = None
+            JsonSourceIndexStore(str(source_store_dir)).upsert_segments([
+                self.make_segment('s1', source='Hello world', embedding=[1.0, 0.0, 0.0])
+            ])
+
+            with mock.patch('gemini_translate_batch.embed_query_text', side_effect=RuntimeError('embed failed')):
+                hits, stats = batch_mod.retrieve_source_hits([{'text': 'Hello world'}], [])
+
+            self.assertEqual(hits, [])
+            self.assertTrue(stats['enabled'])
+            self.assertEqual(stats['failure_reason'], 'retrieval_error')
+            self.assertIn('embed failed', stats['error'])
+            self.assertEqual(
+                stats['source_context_char_budget'],
+                batch_mod.SOURCE_INDEX_TOP_K * batch_mod.SOURCE_INDEX_CHAR_LIMIT,
+            )
 
     def test_retrieve_source_hits_degrades_when_source_store_is_locked(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -438,6 +504,22 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             self.assertEqual(hits, [])
             self.assertTrue(stats['enabled'])
             self.assertEqual(stats['reason'], 'empty_source_store')
+            self.assertEqual(stats['source_context_char_budget'], 5 * batch_mod.SOURCE_INDEX_CHAR_LIMIT)
+
+    def test_source_index_disabled_does_not_read_store_or_add_prompt_context(self):
+        batch_mod.SOURCE_INDEX_ENABLED = False
+
+        with mock.patch('gemini_translate_batch.get_source_index_store') as store_mock:
+            hits, stats = batch_mod.retrieve_source_hits([{'text': 'Hello world'}], [])
+
+        self.assertEqual(hits, [])
+        self.assertEqual(stats, {'enabled': False})
+        store_mock.assert_not_called()
+        reference_blocks = prompt_context.build_reference_blocks(
+            include_translation_memory=False,
+            source_hits=hits,
+        )
+        self.assertNotIn('RELATED PROJECT CONTEXT:', reference_blocks)
 
     def test_format_source_hits_block_and_prompt_injection(self):
         hits = [
@@ -504,14 +586,20 @@ class SourceIndexIntegrationTests(unittest.TestCase):
                 batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / 'latest_manifest.txt')
 
                 batch_mod.SOURCE_INDEX_ENABLED = True
+                batch_mod.SOURCE_INDEX_TOP_K = 2
+                batch_mod.SOURCE_INDEX_MIN_SIMILARITY = 0.0
+                batch_mod.SOURCE_INDEX_CHAR_LIMIT = 20
                 source_store_dir = tmp_path / 'source_store'
                 source_store_dir.mkdir()
                 batch_mod.SOURCE_INDEX_STORE_DIR = str(source_store_dir)
                 batch_mod._SOURCE_INDEX_STORE = None
 
                 store = JsonSourceIndexStore(str(source_store_dir))
+                store.set_metadata(schema_version=batch_mod.SOURCE_INDEX_SCHEMA_VERSION)
                 seg = self.make_segment('s1', source='Hello world', embedding=[1.0, 0.0, 0.0])
-                store.upsert_segments([seg])
+                stale_seg = self.make_segment('stale', source='Stale source', embedding=[1.0, 0.0, 0.0])
+                stale_seg['embedding_metadata']['embedding_task_type'] = 'SEMANTIC_SIMILARITY'
+                store.upsert_segments([seg, stale_seg])
 
                 # Mock pending file jobs so we bypass the file scanner
                 mock_jobs = [
@@ -549,12 +637,25 @@ class SourceIndexIntegrationTests(unittest.TestCase):
                     manifest_data = json.load(f)
 
                 self.assertTrue(manifest_data.get('source_index_enabled'))
+                self.assertEqual(manifest_data['source_index_store_path'], str(source_store_dir))
                 self.assertEqual(manifest_data['source_index_settings']['top_k'], batch_mod.SOURCE_INDEX_TOP_K)
+                self.assertEqual(manifest_data['source_index_settings']['schema_version'], batch_mod.SOURCE_INDEX_SCHEMA_VERSION)
+                self.assertEqual(manifest_data['source_index_settings']['char_budget_per_chunk'], 40)
                 self.assertIn('source_index_summary', manifest_data)
 
                 summary = manifest_data['source_index_summary']
+                self.assertEqual(summary['schema_version'], batch_mod.SOURCE_INDEX_SCHEMA_VERSION)
+                self.assertEqual(summary['store_schema_versions'], [batch_mod.SOURCE_INDEX_SCHEMA_VERSION])
+                self.assertEqual(summary['per_chunk_char_budget'], 40)
                 self.assertEqual(summary['chunks_with_source_hits'], 1)
                 self.assertEqual(summary['source_hit_count'], 1)
+                self.assertEqual(summary['source_context_truncation_count'], 0)
+                self.assertEqual(summary['source_context_char_count'], len('Hello world'))
+                self.assertEqual(summary['source_context_char_budget'], 40)
+                self.assertEqual(summary['source_filtered_count'], 1)
+                self.assertEqual(summary['stale_hits_skipped'], 1)
+                self.assertEqual(summary['below_similarity_count'], 0)
+                self.assertEqual(summary['source_retrieval_failure_reasons'], {})
 
                 requests_path = os.path.join(os.path.dirname(manifest_path), 'requests.jsonl')
                 self.assertTrue(os.path.exists(requests_path))

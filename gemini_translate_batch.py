@@ -134,6 +134,7 @@ _RAG_PRESERVED_TERMS_CACHE_KEY = None
 SOURCE_INDEX_ENABLED = False
 SOURCE_INDEX_STORE_DIR = ''
 _SOURCE_INDEX_STORE = None
+SOURCE_INDEX_SCHEMA_VERSION = 1
 SOURCE_INDEX_TOP_K = 4
 SOURCE_INDEX_MIN_SIMILARITY = 0.72
 SOURCE_INDEX_CHAR_LIMIT = 220
@@ -557,6 +558,10 @@ def get_default_source_index_store_dir():
     return os.path.join(LOG_DIR, 'source_index_store', guess_project_slug())
 
 
+def get_source_index_char_budget():
+    return max(0, int(SOURCE_INDEX_TOP_K or 0)) * max(0, int(SOURCE_INDEX_CHAR_LIMIT or 0))
+
+
 def get_source_index_store(update_metadata=True):
     global _SOURCE_INDEX_STORE, SOURCE_INDEX_STORE_DIR
     if not SOURCE_INDEX_STORE_DIR:
@@ -565,6 +570,7 @@ def get_source_index_store(update_metadata=True):
         _SOURCE_INDEX_STORE = JsonSourceIndexStore(SOURCE_INDEX_STORE_DIR)
     if update_metadata:
         _SOURCE_INDEX_STORE.set_metadata(
+            schema_version=SOURCE_INDEX_SCHEMA_VERSION,
             project_slug=guess_project_slug(),
             embedding_model=RAG_EMBEDDING_MODEL,
             document_task_type=RAG_DOCUMENT_TASK_TYPE,
@@ -779,34 +785,58 @@ def retrieve_source_hits(target_items, context_past):
 
     query_text = build_rag_query_text(target_items, context_past)
     if not query_text:
-        return [], {'enabled': True, 'reason': 'empty_query'}
+        return [], {
+            'enabled': True,
+            'reason': 'empty_query',
+            'source_context_char_budget': get_source_index_char_budget(),
+        }
 
     try:
         store = get_source_index_store(update_metadata=False)
         if store is None or store.count_segments() <= 0:
-            return [], {'enabled': True, 'reason': 'empty_source_store'}
+            return [], {
+                'enabled': True,
+                'reason': 'empty_source_store',
+                'source_context_char_budget': get_source_index_char_budget(),
+                'store_dir': getattr(store, 'store_dir', SOURCE_INDEX_STORE_DIR or ''),
+                'store_schema_version': (getattr(store, 'metadata', {}) or {}).get('schema_version') if store else None,
+            }
         query_vector = embed_query_text(query_text)
-        matches = store.search_segments(
+        matches, search_diagnostics = store.search_segments(
             query_vector,
             top_k=SOURCE_INDEX_TOP_K,
             min_similarity=SOURCE_INDEX_MIN_SIMILARITY,
             embedding_model=RAG_EMBEDDING_MODEL,
             embedding_task_type=RAG_DOCUMENT_TASK_TYPE,
             embedding_dim=RAG_OUTPUT_DIMENSIONALITY,
+            return_diagnostics=True,
         )
     except Exception as exc:
         print(f'Warning: Source index retrieval failed: {exc}')
-        return [], {'enabled': True, 'error': str(exc)}
+        return [], {
+            'enabled': True,
+            'error': str(exc),
+            'failure_reason': 'retrieval_error',
+            'source_context_char_budget': get_source_index_char_budget(),
+        }
 
     hits = []
+    truncated_count = 0
+    source_context_chars = 0
     for match in matches:
         source_text = match.get('source_text', '')
+        truncated_source_text = truncate_text(source_text, SOURCE_INDEX_CHAR_LIMIT)
+        was_truncated = isinstance(source_text, str) and truncated_source_text != source_text
+        if was_truncated:
+            truncated_count += 1
+        source_context_chars += len(truncated_source_text)
         hit = {
             'source_id': match.get('source_id', ''),
             'file_rel_path': match.get('file_rel_path', ''),
             'line_start': match.get('line_start', 0),
             'line_end': match.get('line_end', 0),
-            'source_text': truncate_text(source_text, SOURCE_INDEX_CHAR_LIMIT),
+            'source_text': truncated_source_text,
+            'source_text_truncated': was_truncated,
             'score': float(match.get('score', 0.0)),
         }
         hits.append(hit)
@@ -814,7 +844,18 @@ def retrieve_source_hits(target_items, context_past):
     return hits, {
         'enabled': True,
         'query_text': truncate_text(query_text, 400),
+        'query_char_count': len(query_text),
         'hit_count': len(hits),
+        'matched_count': search_diagnostics.get('matched_before_top_k', len(matches)),
+        'filtered_count': search_diagnostics.get('metadata_filtered_count', 0),
+        'stale_hits_skipped': search_diagnostics.get('metadata_filtered_count', 0),
+        'below_similarity_count': search_diagnostics.get('below_similarity_count', 0),
+        'truncated_count': truncated_count,
+        'source_context_chars': source_context_chars,
+        'source_context_char_budget': get_source_index_char_budget(),
+        'store_dir': getattr(store, 'store_dir', SOURCE_INDEX_STORE_DIR or ''),
+        'store_schema_version': (getattr(store, 'metadata', {}) or {}).get('schema_version'),
+        'search_diagnostics': search_diagnostics,
     }
 
 
@@ -1673,16 +1714,38 @@ def summarize_batch_source_index(chunks):
     chunk_count = len(chunks)
     chunks_with_source_hits = sum(1 for chunk in chunks if chunk.get('source_hits'))
     source_hit_count = sum(len(chunk.get('source_hits') or []) for chunk in chunks)
+    stats_list = [chunk.get('source_index_stats') or {} for chunk in chunks]
+    source_retrieval_errors = sum(1 for stats in stats_list if stats.get('error'))
+    failure_reasons = {}
+    for stats in stats_list:
+        reason = stats.get('failure_reason') or stats.get('reason')
+        if reason:
+            failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+    store_schema_versions = sorted(
+        {
+            stats.get('store_schema_version')
+            for stats in stats_list
+            if stats.get('store_schema_version') is not None
+        },
+        key=str,
+    )
     return {
         'enabled': SOURCE_INDEX_ENABLED,
         'store_dir': SOURCE_INDEX_STORE_DIR or get_default_source_index_store_dir(),
+        'schema_version': SOURCE_INDEX_SCHEMA_VERSION,
+        'store_schema_versions': store_schema_versions,
+        'per_chunk_char_budget': get_source_index_char_budget(),
         'chunks_with_source_hits': chunks_with_source_hits,
         'source_hit_count': source_hit_count,
         'source_hit_rate': (chunks_with_source_hits / chunk_count) if chunk_count else 0.0,
-        'source_retrieval_errors': sum(
-            1 for chunk in chunks
-            if (chunk.get('source_index_stats') or {}).get('error')
-        ),
+        'source_retrieval_errors': source_retrieval_errors,
+        'source_retrieval_failure_reasons': failure_reasons,
+        'source_context_truncation_count': sum(int(stats.get('truncated_count') or 0) for stats in stats_list),
+        'source_context_char_count': sum(int(stats.get('source_context_chars') or 0) for stats in stats_list),
+        'source_context_char_budget': sum(int(stats.get('source_context_char_budget') or 0) for stats in stats_list),
+        'source_filtered_count': sum(int(stats.get('filtered_count') or 0) for stats in stats_list),
+        'stale_hits_skipped': sum(int(stats.get('stale_hits_skipped') or 0) for stats in stats_list),
+        'below_similarity_count': sum(int(stats.get('below_similarity_count') or 0) for stats in stats_list),
     }
 
 
@@ -1819,11 +1882,13 @@ def create_batch_package(display_name_override='', skip_prepare=False):
         } if RAG_ENABLED else {},
         'rag_summary': summarize_batch_rag(chunks, rag_prepare_summary) if RAG_ENABLED else {},
         'source_index_enabled': SOURCE_INDEX_ENABLED,
-        'source_index_store_path': SOURCE_INDEX_STORE_DIR if SOURCE_INDEX_ENABLED else '',
+        'source_index_store_path': (SOURCE_INDEX_STORE_DIR or get_default_source_index_store_dir()) if SOURCE_INDEX_ENABLED else '',
         'source_index_settings': {
+            'schema_version': SOURCE_INDEX_SCHEMA_VERSION,
             'top_k': SOURCE_INDEX_TOP_K,
             'min_similarity': SOURCE_INDEX_MIN_SIMILARITY,
             'char_limit': SOURCE_INDEX_CHAR_LIMIT,
+            'char_budget_per_chunk': get_source_index_char_budget(),
         } if SOURCE_INDEX_ENABLED else {},
         'source_index_summary': summarize_batch_source_index(chunks) if SOURCE_INDEX_ENABLED else {},
         'story_memory_enabled': STORY_MEMORY_ENABLED,
