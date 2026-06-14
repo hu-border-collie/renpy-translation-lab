@@ -938,28 +938,57 @@ class JsonSourceIndexStore(object):
         embedding_model=None,
         embedding_task_type=None,
         embedding_dim=None,
+        return_diagnostics=False,
     ):
         self.load()
         results = []
+        diagnostics = {
+            'segments_seen': 0,
+            'segments_with_embedding': 0,
+            'invalid_embedding_count': 0,
+            'filtered_embedding_model_count': 0,
+            'filtered_embedding_task_type_count': 0,
+            'filtered_embedding_dim_count': 0,
+            'metadata_filtered_count': 0,
+            'below_similarity_count': 0,
+            'matched_before_top_k': 0,
+            'returned_count': 0,
+        }
         for record in self.segments.values():
+            diagnostics['segments_seen'] += 1
             vector = record.get('embedding')
             if not isinstance(vector, list) or not vector:
+                diagnostics['invalid_embedding_count'] += 1
                 continue
+            diagnostics['segments_with_embedding'] += 1
             metadata = record.get('embedding_metadata') or {}
             if embedding_model is not None and metadata.get('embedding_model') != embedding_model:
+                diagnostics['filtered_embedding_model_count'] += 1
                 continue
             if embedding_task_type is not None and metadata.get('embedding_task_type') != embedding_task_type:
+                diagnostics['filtered_embedding_task_type_count'] += 1
                 continue
             if embedding_dim is not None:
                 if metadata.get('embedding_dim') != embedding_dim or len(vector) != embedding_dim:
+                    diagnostics['filtered_embedding_dim_count'] += 1
                     continue
             score = cosine_similarity(query_vector, vector)
             if score < min_similarity:
+                diagnostics['below_similarity_count'] += 1
                 continue
             result = dict(record)
             result['score'] = score
             results.append(result)
+        diagnostics['metadata_filtered_count'] = (
+            diagnostics['filtered_embedding_model_count']
+            + diagnostics['filtered_embedding_task_type_count']
+            + diagnostics['filtered_embedding_dim_count']
+        )
+        diagnostics['matched_before_top_k'] = len(results)
         results.sort(key=lambda item: float(item.get('score') or 0.0), reverse=True)
         if top_k > 0:
-            return results[:top_k]
+            results = results[:top_k]
+        diagnostics['returned_count'] = len(results)
+        if return_diagnostics:
+            return results, diagnostics
         return results
