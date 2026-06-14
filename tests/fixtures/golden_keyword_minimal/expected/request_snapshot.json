@@ -62,18 +62,7 @@
                     "type": "string"
                   },
                   "category": {
-                    "type": "string",
-                    "enum": [
-                      "term",
-                      "character",
-                      "place",
-                      "item",
-                      "ability",
-                      "concept",
-                      "relationship",
-                      "style",
-                      "other"
-                    ]
+                    "type": "string"
                   },
                   "confidence": {
                     "type": "number"
@@ -165,18 +154,7 @@
                     "type": "string"
                   },
                   "category": {
-                    "type": "string",
-                    "enum": [
-                      "term",
-                      "character",
-                      "place",
-                      "item",
-                      "ability",
-                      "concept",
-                      "relationship",
-                      "style",
-                      "other"
-                    ]
+                    "type": "string"
                   },
                   "confidence": {
                     "type": "number"

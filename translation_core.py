@@ -741,10 +741,7 @@ def build_keyword_schema(max_candidates_per_chunk=12):
             'properties': {
                 'source': {'type': 'string'},
                 'suggested_target': {'type': 'string'},
-                'category': {
-                    'type': 'string',
-                    'enum': KEYWORD_CATEGORY_ORDER,
-                },
+                'category': {'type': 'string'},
                 'confidence': {'type': 'number'},
                 'evidence': {'type': 'string'},
                 'source_item_ids': {
