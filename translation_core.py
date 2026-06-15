@@ -474,6 +474,8 @@ def build_translation_system_instruction(preserve_terms, macro_setting=''):
         'Task:\n'
         'Translate only TARGET lines into Simplified Chinese. CONTEXT lines are reference only.\n'
         f'Keep these terms unchanged: {glossary}\n'
+        'If a TARGET contains one of those terms, copy that exact source substring verbatim into the translation, '
+        'including honorifics, apostrophes, numbers, and spacing; do not localize, reorder, or partially translate it.\n'
         "Keep names, Ren'Py tags, placeholders, variables, and format strings unchanged.\n"
         'When TARGET items include speaker_id or speaker_name, use them only to identify the speaker and voice.\n'
         'Return JSON only. Preserve every id exactly. Item count must match. '
@@ -550,6 +552,8 @@ def build_sync_translation_prompt(
         "You are translating a Ren'Py visual novel into Simplified Chinese (zh-CN).\n"
         'Rules:\n'
         f'1. Preserve these terms exactly (do not translate): {glossary}\n'
+        '1.0 If an input contains a listed term, copy that exact source substring verbatim, '
+        'including honorifics, apostrophes, numbers, and spacing.\n'
         '1.1 Keep all person names in English; do not translate names.\n'
         "2. Preserve Ren'Py tags like {i}, {/i}, {color=...}, [name], %s.\n"
         '2.1 If an input item includes speaker_id or speaker_name, use it only to identify who is speaking and their voice.\n'
@@ -570,6 +574,8 @@ def build_revision_system_instruction(preserve_terms, macro_setting=''):
         'For each TARGET item, decide whether the current translation should be revised. '
         "Preserve meaning, tone, Ren'Py tags, placeholders, variables, format strings, and locked terms. "
         f'Keep these terms unchanged: {glossary}\n'
+        'If a TARGET contains one of those terms, copy that exact source substring verbatim into the revised translation, '
+        'including honorifics, apostrophes, numbers, and spacing. '
         'If the current translation is already acceptable, set should_update=false and repeat it as revised_translation. '
         'If it needs a change, set should_update=true and provide only the revised Chinese translation. '
         'Return JSON only. Preserve every id exactly. Item count must match.'

@@ -16,7 +16,7 @@
         "chapter01/revisions.rpy:chapter01_terms:2:6010c123",
         "chapter01/revisions.rpy:chapter01_terms:3:f9326bcb"
       ],
-      "system_instruction_sha256": "cea23eba3b14e7f566e675b00756c4c2a506f233ba7c41330de78ac76205cf1a",
+      "system_instruction_sha256": "e09a37995500b5fe3c1630a3d6257f3dcce92c57966bd34c8464c17482736c04",
       "user_prompt_sha256": "c014365c962d78edc09b77b113a96446ba3cd24e7d3ee129f376f115c1462d32",
       "generation_config": {
         "keys": [

@@ -1734,7 +1734,7 @@ def missing_preserved_terms(original, translated):
             continue
         # Avoid false positives for short alphabetic fragments (e.g., "Mo" in "Moon").
         if term.isalpha() and len(term) <= 3:
-            pattern = rf"\b{re.escape(term)}\b"
+            pattern = rf"(?<![A-Za-z0-9_]){re.escape(term)}(?![A-Za-z0-9_])"
             if not re.search(pattern, original):
                 continue
             if not re.search(pattern, translated):
