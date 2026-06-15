@@ -67,7 +67,10 @@ def initialize_batch_logging():
     if isinstance(sys.stdout, DualLogger):
         return
     ensure_batch_dirs()
-    sys.stdout = DualLogger(CONSOLE_LOG)
+    try:
+        sys.stdout = DualLogger(CONSOLE_LOG)
+    except OSError as exc:
+        print(f'Warning: Could not open console log {CONSOLE_LOG}: {exc}')
 
 BATCH_MODEL = 'gemini-3.1-flash-lite'
 BATCH_TARGET_SIZE = 60
@@ -195,6 +198,21 @@ def coerce_non_empty_string(value, default):
     return default
 
 
+def coerce_thinking_level(value, default):
+    if value is None or value is False:
+        return ''
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped.lower() in {'none', 'off', 'disabled', 'false', '0'}:
+            return ''
+        return stripped
+    return default
+
+
+def format_thinking_level_for_display():
+    return BATCH_THINKING_LEVEL or '(not sent)'
+
+
 def read_text_file(path):
     if not path or not os.path.isfile(path):
         return ''
@@ -247,10 +265,11 @@ def load_batch_settings():
         config.get('batch_max_output_tokens'),
         BATCH_MAX_OUTPUT_TOKENS,
     )
-    BATCH_THINKING_LEVEL = coerce_non_empty_string(
-        config.get('batch_thinking_level'),
-        BATCH_THINKING_LEVEL,
-    )
+    if 'batch_thinking_level' in config:
+        BATCH_THINKING_LEVEL = coerce_thinking_level(
+            config.get('batch_thinking_level'),
+            BATCH_THINKING_LEVEL,
+        )
 
     display_name_prefix = config.get('batch_display_name_prefix')
     if isinstance(display_name_prefix, str) and display_name_prefix.strip():
@@ -284,10 +303,11 @@ def load_batch_settings():
         BATCH_MAX_OUTPUT_TOKENS,
     )
     BATCH_TEMPERATURE = coerce_float(batch.get('temperature'), BATCH_TEMPERATURE)
-    BATCH_THINKING_LEVEL = coerce_non_empty_string(
-        batch.get('thinking_level'),
-        BATCH_THINKING_LEVEL,
-    )
+    if 'thinking_level' in batch:
+        BATCH_THINKING_LEVEL = coerce_thinking_level(
+            batch.get('thinking_level'),
+            BATCH_THINKING_LEVEL,
+        )
 
     keyword_config = batch.get('keyword_extraction')
     if not isinstance(keyword_config, dict):
@@ -471,7 +491,18 @@ def is_unavailable_error(exc):
     if status_code == 503:
         return True
     text = str(exc)
-    return '503' in text or 'UNAVAILABLE' in text
+    retryable_markers = (
+        '503',
+        'UNAVAILABLE',
+        'UNEXPECTED_EOF_WHILE_READING',
+        'EOF occurred in violation of protocol',
+        'ConnectError',
+        'ReadError',
+        'ConnectTimeout',
+        'ReadTimeout',
+        'RemoteProtocolError',
+    )
+    return any(marker in text for marker in retryable_markers)
 
 
 def allow_non_chinese_repair_translation(original, translated):
@@ -625,8 +656,10 @@ def collect_shared_rag_preserved_terms():
 def collect_chunk_known_terms(chunk):
     terms = collect_shared_rag_preserved_terms()
     for hit in chunk.get('glossary_hits') or []:
-        terms.update(extract_word_tokens(hit.get('source', '')))
-        terms.update(extract_word_tokens(hit.get('target', '')))
+        for value in (hit.get('source', ''), hit.get('target', '')):
+            if value:
+                terms.add(value)
+            terms.update(extract_word_tokens(value))
     for hit in chunk.get('history_hits') or []:
         source_tokens = set(extract_word_tokens(hit.get('source_text', '')))
         translated_tokens = set(extract_word_tokens(hit.get('translated_text', '')))
@@ -635,8 +668,6 @@ def collect_chunk_known_terms(chunk):
 
 
 def allow_non_chinese_batch_translation(manifest, chunk, original, translated):
-    if not manifest.get('rag_enabled'):
-        return False
     return legacy.allow_non_chinese_term_translation(
         original,
         translated,
@@ -677,15 +708,36 @@ def build_rag_query_text(target_items, context_past):
 def embed_texts(contents, task_type):
     if not contents:
         return []
-    client = create_batch_client()
-    response = client.models.embed_content(
-        model=RAG_EMBEDDING_MODEL,
-        contents=contents,
-        config=genai_types.EmbedContentConfig(
-            task_type=task_type,
-            output_dimensionality=RAG_OUTPUT_DIMENSIONALITY,
-        ),
-    )
+    api_key_count = len(getattr(legacy, 'API_KEYS', []) or [])
+    attempts = max(3, api_key_count * 2)
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        client = create_batch_client()
+        try:
+            response = client.models.embed_content(
+                model=RAG_EMBEDDING_MODEL,
+                contents=contents,
+                config=genai_types.EmbedContentConfig(
+                    task_type=task_type,
+                    output_dimensionality=RAG_OUTPUT_DIMENSIONALITY,
+                ),
+            )
+            break
+        except Exception as exc:
+            last_error = exc
+            retryable = is_quota_error(exc) or is_unavailable_error(exc)
+            if retryable and attempt < attempts:
+                rotated = legacy.rotate_api_key()
+                label = 'quota' if is_quota_error(exc) else 'service unavailable'
+                key_action = 'next API key' if rotated else 'same API key'
+                print(f'Embedding request hit {label}. Retrying with {key_action} ({attempt}/{attempts})...')
+                time.sleep(min(attempt, 2))
+                continue
+            raise
+    else:
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError('Embedding request failed without a captured exception.')
     embeddings = getattr(response, 'embeddings', None) or []
     values = [list(getattr(item, 'values', None) or []) for item in embeddings]
     if len(values) != len(contents):
@@ -1375,6 +1427,17 @@ def copy_split_context_metadata(source_manifest, part_manifest, part_chunks):
             max_context_chars=story_settings.get('max_context_chars'),
         )
 
+    for key in (
+        'source_index_enabled',
+        'source_index_store_path',
+        'source_index_settings',
+    ):
+        if key in source_manifest:
+            part_manifest[key] = source_manifest[key]
+
+    if source_manifest.get('source_index_enabled'):
+        part_manifest['source_index_summary'] = summarize_batch_source_index(part_chunks)
+
 
 def split_chunks_and_lines(chunks, request_lines, max_chunks=0, max_items=0):
     groups = []
@@ -1642,8 +1705,20 @@ def iter_translation_chunk_ranges(tasks):
         start = end
 
 
+def count_translation_chunks(file_jobs):
+    total_chunks = 0
+    for job in file_jobs:
+        total_chunks += sum(1 for _ in iter_translation_chunk_ranges(job.get('tasks') or []))
+    return total_chunks
+
+
 def build_chunks(file_jobs):
     chunks = []
+    total_chunks = count_translation_chunks(file_jobs)
+    processed_chunks = 0
+    if SOURCE_INDEX_ENABLED and total_chunks:
+        print(f'Source index retrieval for build: {total_chunks} chunks to query.')
+        sys.stdout.flush()
     for job in file_jobs:
         tasks = job['tasks']
         total = len(tasks)
@@ -1659,7 +1734,15 @@ def build_chunks(file_jobs):
             context_future = tasks[end:min(total, end + BATCH_CONTEXT_AFTER)]
             glossary_hits = retrieve_glossary_hits(target_items) if RAG_ENABLED else []
             history_hits, rag_stats = retrieve_history_hits(target_items, context_past) if RAG_ENABLED else ([], {})
+            if SOURCE_INDEX_ENABLED:
+                print(
+                    'Source index retrieval progress: '
+                    f'{processed_chunks + 1}/{total_chunks} chunks, '
+                    f'file={job["file_rel_path"]}, chunk={chunk_number}.'
+                )
+                sys.stdout.flush()
             source_hits, source_index_stats = retrieve_source_hits(target_items, context_past) if SOURCE_INDEX_ENABLED else ([], {})
+            processed_chunks += 1
             story_hits = retrieve_batch_story_hits(
                 job['file_rel_path'],
                 target_items,
@@ -1690,6 +1773,9 @@ def build_chunks(file_jobs):
             if STORY_MEMORY_ENABLED and story_memory.has_story_hits(story_hits):
                 chunk['story_hits'] = story_hits
             chunks.append(chunk)
+    if SOURCE_INDEX_ENABLED and total_chunks:
+        print(f'Source index retrieval complete: {processed_chunks}/{total_chunks} chunks queried.')
+        sys.stdout.flush()
     return chunks
 
 
@@ -1800,9 +1886,9 @@ def get_batch_risk_warnings():
         )
     if BATCH_MAX_OUTPUT_TOKENS < 2048:
         warnings_list.append(f'max_output_tokens={BATCH_MAX_OUTPUT_TOKENS} is likely too low for JSON batch output.')
-    if BATCH_MODEL.startswith('gemini-3') and (BATCH_THINKING_LEVEL or '').lower() != 'minimal':
+    if BATCH_MODEL.startswith('gemini-3') and BATCH_THINKING_LEVEL and BATCH_THINKING_LEVEL.lower() != 'minimal':
         warnings_list.append(
-            f'thinking_level={BATCH_THINKING_LEVEL or "(default)"} may waste output budget on reasoning tokens.'
+            f'thinking_level={BATCH_THINKING_LEVEL} may waste output budget on reasoning tokens.'
         )
     return warnings_list
 
@@ -2591,6 +2677,357 @@ def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix
     print(f'Latest manifest set to first split package: {created_manifests[0]}')
     return created_manifests
 
+
+def current_batch_settings_snapshot():
+    return {
+        'target_size': BATCH_TARGET_SIZE,
+        'target_chars': BATCH_TARGET_CHARS,
+        'context_before': BATCH_CONTEXT_BEFORE,
+        'context_after': BATCH_CONTEXT_AFTER,
+        'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
+        'temperature': BATCH_TEMPERATURE,
+        'thinking_level': BATCH_THINKING_LEVEL,
+    }
+
+
+def create_unique_child_dir(root_dir, name):
+    os.makedirs(root_dir, exist_ok=True)
+    base_dir = os.path.join(root_dir, name)
+    candidates = [base_dir]
+    candidates.extend(f'{base_dir}_{index:02d}' for index in range(1, 1000))
+    for candidate in candidates:
+        try:
+            os.makedirs(candidate, exist_ok=False)
+            return candidate
+        except FileExistsError:
+            continue
+    raise SystemExit(f'Could not create unique directory for {name}.')
+
+
+def chunk_target_signature(chunk):
+    items = []
+    for item in chunk.get('items') or []:
+        source_text = item.get('source', item.get('text', ''))
+        items.append(
+            {
+                'id': item.get('id', ''),
+                'file_rel_path': item.get('file_rel_path', chunk.get('file_rel_path', '')),
+                'line': item.get('line', item.get('line_number')),
+                'start': item.get('start'),
+                'end': item.get('end'),
+                'source_checksum': hash_text(source_text),
+            }
+        )
+    return stable_json_sha256(
+        {
+            'key': chunk.get('key', ''),
+            'file_rel_path': chunk.get('file_rel_path', ''),
+            'chunk_index': chunk.get('chunk_index'),
+            'items': items,
+        }
+    )
+
+
+def collect_result_integrity_issue_keys(manifest):
+    result_path = resolve_manifest_result_path(manifest)
+    if not os.path.isfile(result_path):
+        raise SystemExit('Result JSONL not found. Run download first.')
+
+    chunk_map = {chunk['key']: chunk for chunk in manifest.get('chunks', [])}
+    processed_keys = set()
+    issue_keys = set()
+    reason_counts = {}
+
+    with open(result_path, 'r', encoding='utf-8') as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                bump_counter(reason_counts, 'invalid_result_jsonl_row')
+                continue
+
+            key = row.get('key')
+            if not key or key not in chunk_map:
+                bump_counter(reason_counts, 'unknown_chunk_key')
+                continue
+
+            processed_keys.add(key)
+            chunk = chunk_map[key]
+            chunk_items = chunk.get('items') or []
+            item_ids = {item.get('id') for item in chunk_items}
+            response_payload = row.get('response') or {}
+            finish_reason = extract_finish_reason(response_payload)
+
+            if row.get('error'):
+                issue_keys.add(key)
+                bump_counter(reason_counts, 'row_error')
+                continue
+
+            response_text = extract_text_from_response_payload(response_payload)
+            if not response_text:
+                issue_keys.add(key)
+                bump_counter(reason_counts, 'missing_response_text')
+                continue
+
+            try:
+                payload = parse_json_payload(response_text)
+                result_items = normalize_result_items(payload)
+            except Exception:
+                issue_keys.add(key)
+                bump_counter(reason_counts, 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'failed_to_parse_model_json')
+                continue
+
+            seen_ids = set()
+            if len(result_items) < len(chunk_items):
+                issue_keys.add(key)
+                bump_counter(reason_counts, 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_result_items')
+
+            for result_item in result_items:
+                result_id = result_item.get('id')
+                if result_id not in item_ids:
+                    issue_keys.add(key)
+                    bump_counter(reason_counts, 'schema_or_item_mismatch')
+                    continue
+                if result_id in seen_ids:
+                    issue_keys.add(key)
+                    bump_counter(reason_counts, 'duplicate_result_id')
+                    continue
+                seen_ids.add(result_id)
+
+            missing_ids = item_ids - seen_ids
+            if missing_ids:
+                issue_keys.add(key)
+                bump_counter(reason_counts, 'response_missing_item_id', len(missing_ids))
+
+    missing_keys = set(chunk_map.keys()) - processed_keys
+    if missing_keys:
+        issue_keys.update(missing_keys)
+        bump_counter(reason_counts, 'missing_chunk_rows', len(missing_keys))
+
+    return issue_keys, reason_counts
+
+
+def collect_retry_chunk_keys(manifest):
+    chunk_map = {chunk['key']: chunk for chunk in manifest.get('chunks', [])}
+    _replacements, _translated, failure_entries, summary = collect_result_actions(
+        manifest,
+        validate_sources=True,
+    )
+    retry_keys = set()
+    for entry in failure_entries:
+        key = entry.get('key')
+        if key in chunk_map:
+            retry_keys.add(key)
+
+    integrity_keys, integrity_reason_counts = collect_result_integrity_issue_keys(manifest)
+    retry_keys.update(key for key in integrity_keys if key in chunk_map)
+
+    reason_counts = dict(summary.get('reason_counts') or {})
+    for reason_code, count in integrity_reason_counts.items():
+        reason_counts.setdefault(reason_code, count)
+
+    ordered_keys = [chunk['key'] for chunk in manifest.get('chunks', []) if chunk.get('key') in retry_keys]
+    return ordered_keys, failure_entries, summary, reason_counts
+
+
+def build_retry_package(target=None, display_name_override=''):
+    manifest = load_manifest(target)
+    require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'build-retry')
+    retry_keys, failure_entries, summary, reason_counts = collect_retry_chunk_keys(manifest)
+    if not retry_keys:
+        print('No retry chunks needed.')
+        return None
+
+    retry_key_set = set(retry_keys)
+    retry_chunks = [
+        chunk
+        for chunk in manifest.get('chunks') or []
+        if chunk.get('key') in retry_key_set
+    ]
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    retry_root = os.path.join(manifest['_package_dir'], 'retry_parts')
+    retry_dir = create_unique_child_dir(retry_root, f'{timestamp}_retry')
+
+    input_jsonl_path = os.path.join(retry_dir, 'requests.jsonl')
+    request_rows = [build_batch_request(chunk) for chunk in retry_chunks]
+    write_jsonl_file(input_jsonl_path, request_rows)
+
+    source_display_name = manifest.get('display_name') or os.path.basename(manifest['_package_dir'])
+    display_name = display_name_override.strip() if display_name_override else f'{source_display_name}-retry-{timestamp}'
+    retry_files = summarize_files_for_chunks(retry_chunks)
+    retry_manifest = {
+        'version': manifest.get('version', 2),
+        'manifest_version': manifest.get('manifest_version', 2),
+        'core_schema_version': translation_core.CORE_SCHEMA_VERSION,
+        'mode': MANIFEST_MODE_TRANSLATION,
+        'created_at': datetime.now().isoformat(timespec='seconds'),
+        'display_name': display_name,
+        'batch_model': BATCH_MODEL,
+        'base_dir': manifest.get('base_dir', legacy.BASE_DIR),
+        'tl_dir': manifest.get('tl_dir', legacy.TL_DIR),
+        'input_jsonl_path': input_jsonl_path,
+        'result_jsonl_path': '',
+        'job_name': '',
+        'job_state': 'LOCAL_ONLY',
+        'uploaded_file_name': '',
+        'result_file_name': '',
+        'settings': current_batch_settings_snapshot(),
+        'summary': {
+            'file_count': len(retry_files),
+            'chunk_count': len(retry_chunks),
+            'item_count': sum(len(chunk.get('items') or []) for chunk in retry_chunks),
+        },
+        'files': retry_files,
+        'chunks': retry_chunks,
+        'retry_of_manifest': manifest['_manifest_path'],
+        'retry_of_package': manifest['_package_dir'],
+        'retry_source_result_jsonl_path': resolve_manifest_result_path(manifest),
+        'retry_source_check_report_path': manifest.get('last_check_report_path', ''),
+        'retry_reason_counts': reason_counts,
+        'retry_failed_item_count': len(failure_entries),
+        'retry_chunk_keys': retry_keys,
+    }
+    copy_split_context_metadata(manifest, retry_manifest, retry_chunks)
+
+    retry_manifest_path = os.path.join(retry_dir, 'manifest.json')
+    with open(retry_manifest_path, 'w', encoding='utf-8') as handle:
+        json.dump(retry_manifest, handle, ensure_ascii=False, indent=2)
+
+    manifest.setdefault('retry_children', []).append(retry_manifest_path)
+    manifest['last_retry_manifest_path'] = retry_manifest_path
+    manifest['last_retry_generated_at'] = datetime.now().isoformat(timespec='seconds')
+    save_manifest(manifest, update_latest=False)
+    remember_latest_manifest(retry_manifest_path)
+
+    print(f'Created retry package: {retry_dir}')
+    print(f"Retry chunks: {retry_manifest['summary']['chunk_count']}")
+    print(f"Retry items: {retry_manifest['summary']['item_count']}")
+    print(f"Failure items considered: {len(failure_entries)}")
+    print(f'Manifest: {retry_manifest_path}')
+    return retry_manifest_path
+
+
+def load_result_rows_by_key(manifest, label):
+    result_path = resolve_manifest_result_path(manifest)
+    if not os.path.isfile(result_path):
+        raise SystemExit(f'{label} result JSONL not found: {result_path}')
+    rows = []
+    rows_by_key = {}
+    with open(result_path, 'r', encoding='utf-8') as handle:
+        for index, raw_line in enumerate(handle, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f'Invalid {label} result JSONL row #{index}: {exc}') from exc
+            key = row.get('key')
+            if not key:
+                raise SystemExit(f'Missing key in {label} result JSONL row #{index}.')
+            if key in rows_by_key:
+                raise SystemExit(f'Duplicate key in {label} result JSONL: {key}')
+            rows.append(row)
+            rows_by_key[key] = row
+    return rows, rows_by_key, result_path
+
+
+def assert_retry_manifest_matches_parent(parent_manifest, retry_manifest):
+    retry_of_manifest = retry_manifest.get('retry_of_manifest')
+    if retry_of_manifest and _normalized_abs_path(retry_of_manifest) != _normalized_abs_path(parent_manifest['_manifest_path']):
+        raise SystemExit(
+            'Retry manifest was generated for a different parent manifest: '
+            f'{retry_of_manifest}'
+        )
+
+    parent_chunks = {chunk['key']: chunk for chunk in parent_manifest.get('chunks') or []}
+    retry_chunks = retry_manifest.get('chunks') or []
+    if not retry_chunks:
+        raise SystemExit('Retry manifest has no chunks.')
+
+    for chunk in retry_chunks:
+        key = chunk.get('key')
+        parent_chunk = parent_chunks.get(key)
+        if not parent_chunk:
+            raise SystemExit(f'Retry chunk is not present in parent manifest: {key}')
+        if chunk_target_signature(chunk) != chunk_target_signature(parent_chunk):
+            raise SystemExit(f'Retry chunk target shape differs from parent manifest: {key}')
+
+
+def merge_retry_results(parent_target, retry_target):
+    parent_manifest = load_manifest(parent_target)
+    retry_manifest = load_manifest(retry_target)
+    require_manifest_mode(parent_manifest, MANIFEST_MODE_TRANSLATION, 'merge-retry')
+    require_manifest_mode(retry_manifest, MANIFEST_MODE_TRANSLATION, 'merge-retry')
+    assert_retry_manifest_matches_parent(parent_manifest, retry_manifest)
+
+    retry_keys = [chunk['key'] for chunk in retry_manifest.get('chunks') or []]
+    retry_key_set = set(retry_keys)
+    parent_rows, parent_rows_by_key, parent_result_path = load_result_rows_by_key(parent_manifest, 'parent')
+    retry_rows, retry_rows_by_key, retry_result_path = load_result_rows_by_key(retry_manifest, 'retry')
+
+    unknown_retry_rows = set(retry_rows_by_key) - retry_key_set
+    if unknown_retry_rows:
+        raise SystemExit(f'Retry result contains rows outside retry chunks: {sorted(unknown_retry_rows)[:5]}')
+
+    missing_retry_rows = retry_key_set - set(retry_rows_by_key)
+    if missing_retry_rows:
+        raise SystemExit(f'Retry result is missing rows for chunks: {sorted(missing_retry_rows)[:5]}')
+
+    merged_rows = []
+    replaced_keys = set()
+    for row in parent_rows:
+        key = row.get('key')
+        if key in retry_rows_by_key:
+            merged_rows.append(retry_rows_by_key[key])
+            replaced_keys.add(key)
+        else:
+            merged_rows.append(row)
+
+    for key in retry_keys:
+        if key not in parent_rows_by_key:
+            merged_rows.append(retry_rows_by_key[key])
+            replaced_keys.add(key)
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    merged_name = f'results.merged_{timestamp}.jsonl'
+    merged_path = os.path.join(parent_manifest['_package_dir'], merged_name)
+    write_jsonl_file(merged_path, merged_rows)
+
+    parent_manifest['result_jsonl_path'] = merged_name
+    parent_manifest['job_state'] = 'RESULTS_MERGED'
+    parent_manifest.setdefault('retry_merge_history', []).append(
+        {
+            'merged_at': datetime.now().isoformat(timespec='seconds'),
+            'retry_manifest': retry_manifest['_manifest_path'],
+            'retry_result_jsonl_path': retry_result_path,
+            'previous_result_jsonl_path': parent_result_path,
+            'merged_result_jsonl_path': merged_path,
+            'replaced_chunks': len(replaced_keys),
+            'replaced_items': sum(len(chunk.get('items') or []) for chunk in retry_manifest.get('chunks') or []),
+        }
+    )
+    parent_manifest['last_retry_merged_manifest_path'] = retry_manifest['_manifest_path']
+    parent_manifest['last_retry_merged_at'] = datetime.now().isoformat(timespec='seconds')
+    for key in (
+        'last_check_at',
+        'last_check_summary',
+        'last_check_report_path',
+    ):
+        parent_manifest.pop(key, None)
+    save_manifest(parent_manifest, update_latest=True)
+
+    print(f'Merged retry results into: {parent_manifest["_manifest_path"]}')
+    print(f'Previous result JSONL: {parent_result_path}')
+    print(f'Retry result JSONL: {retry_result_path}')
+    print(f'Merged result JSONL: {merged_path}')
+    print(f'Replaced chunks: {len(replaced_keys)}')
+    print('Run check on the parent manifest before apply.')
+    return parent_manifest['_manifest_path']
+
 def submit_manifest(target=None, display_name_override='', model_override=''):
     manifest = load_manifest(target) if target else None
     if manifest is None:
@@ -3371,7 +3808,7 @@ def validate_replacements_for_lines(manifest, file_key, replacements_by_line, li
 
     for line_idx, repls in replacements_by_line.items():
         for repl in repls:
-            start, end, _translated, _prefix, _quote, source_text, item_id, chunk_key = unpack_replacement_for_validation(repl)
+            start, end, translated, _prefix, _quote, source_text, item_id, chunk_key = unpack_replacement_for_validation(repl)
             if line_idx < 0 or line_idx >= len(lines):
                 skipped_items += 1
                 bump_counter(summary['reason_counts'], 'source_line_missing')
@@ -3390,6 +3827,15 @@ def validate_replacements_for_lines(manifest, file_key, replacements_by_line, li
 
             current_text = extract_string_token_text_at(lines[line_idx], start, end)
             if current_text != source_text:
+                already_applied_text = current_text
+                if already_applied_text is None:
+                    current_token = extract_string_token_from_line(lines[line_idx])
+                    if current_token:
+                        already_applied_text = current_token.get('text')
+                if already_applied_text in translated_text_variants(translated):
+                    summary['already_applied_items'] = summary.get('already_applied_items', 0) + 1
+                    validated_lines.add(line_idx)
+                    continue
                 skipped_items += 1
                 source_mismatch_items += 1
                 bump_counter(summary['reason_counts'], 'source_text_mismatch')
@@ -3474,7 +3920,7 @@ def validate_result_replacements(manifest, replacements_by_file, summary):
             lines,
             summary,
         )
-        if file_replacements:
+        if file_replacements or file_lines:
             validated_replacements[file_key] = file_replacements
             validated_lines_by_file[file_key] = file_lines
         failure_entries.extend(file_failures)
@@ -3609,6 +4055,49 @@ def record_v2_relocation_failures(manifest, chunk, missing_items, summary, failu
             reason_code='v2_relocation_missing',
         ))
     return missing_ids
+
+
+def translated_text_variants(translated):
+    variants = {translated}
+    if getattr(legacy, 'USE_TRANSLATION_MEMORY', False):
+        variants.add(legacy.apply_normalization(translated))
+    return variants
+
+
+def filter_already_applied_relocation_missing(manifest, chunk, missing_items, result_items, summary):
+    if not missing_items:
+        return []
+    result_by_id = {
+        str(item.get('id') or ''): item.get('translation', '')
+        for item in result_items or []
+        if isinstance(item, dict)
+    }
+    file_key = chunk.get('file_rel_path', '')
+    file_info = manifest.get('files', {}).get(file_key)
+    if not file_info:
+        return missing_items
+    file_path = resolve_manifest_file_path(manifest, file_key, file_info)
+    try:
+        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+            lines = handle.readlines()
+    except Exception:
+        return missing_items
+
+    remaining = []
+    for item in missing_items:
+        item_id = str(item.get('id') or '')
+        translated = result_by_id.get(item_id, '')
+        line_idx = item.get('line')
+        if not translated or not isinstance(line_idx, int) or line_idx < 0 or line_idx >= len(lines):
+            remaining.append(item)
+            continue
+        current_token = extract_string_token_from_line(lines[line_idx])
+        current_text = current_token.get('text') if current_token else None
+        if current_text in translated_text_variants(translated):
+            summary['already_applied_items'] = summary.get('already_applied_items', 0) + 1
+            continue
+        remaining.append(item)
+    return remaining
 
 
 def collect_revision_actions(manifest, validate_sources=False):
@@ -4071,21 +4560,6 @@ def collect_result_actions(manifest, validate_sources=False):
                 scanned_units_by_file,
                 translation_core.MODE_TRANSLATION,
             )
-            relocation_missing_ids = record_v2_relocation_failures(
-                manifest,
-                chunk,
-                relocation_missing,
-                summary,
-                failure_entries,
-                key=key,
-            )
-            active_chunk_items = [
-                item for item in chunk_items
-                if str(item.get('id') or '') not in relocation_missing_ids
-            ]
-            if relocation_missing_ids and not active_chunk_items:
-                continue
-            item_map = {item['id']: item for item in active_chunk_items}
             response_payload = row.get('response', {})
             finish_reason = extract_finish_reason(response_payload)
             usage_metadata = summarize_usage_metadata(extract_usage_metadata(response_payload))
@@ -4093,6 +4567,20 @@ def collect_result_actions(manifest, validate_sources=False):
                 summary['max_tokens_chunks'] += 1
 
             if row.get('error'):
+                relocation_missing_ids = record_v2_relocation_failures(
+                    manifest,
+                    chunk,
+                    relocation_missing,
+                    summary,
+                    failure_entries,
+                    key=key,
+                )
+                active_chunk_items = [
+                    item for item in chunk_items
+                    if str(item.get('id') or '') not in relocation_missing_ids
+                ]
+                if relocation_missing_ids and not active_chunk_items:
+                    continue
                 summary['chunk_row_errors'] += 1
                 bump_counter(summary['reason_counts'], 'row_error')
                 for item in active_chunk_items:
@@ -4114,6 +4602,20 @@ def collect_result_actions(manifest, validate_sources=False):
 
             response_text = extract_text_from_response_payload(response_payload)
             if not response_text:
+                relocation_missing_ids = record_v2_relocation_failures(
+                    manifest,
+                    chunk,
+                    relocation_missing,
+                    summary,
+                    failure_entries,
+                    key=key,
+                )
+                active_chunk_items = [
+                    item for item in chunk_items
+                    if str(item.get('id') or '') not in relocation_missing_ids
+                ]
+                if relocation_missing_ids and not active_chunk_items:
+                    continue
                 summary['missing_response_chunks'] += 1
                 bump_counter(summary['reason_counts'], 'missing_response_text')
                 for item in active_chunk_items:
@@ -4137,6 +4639,20 @@ def collect_result_actions(manifest, validate_sources=False):
                 payload = parse_json_payload(response_text)
                 result_items = normalize_result_items(payload)
             except Exception as exc:
+                relocation_missing_ids = record_v2_relocation_failures(
+                    manifest,
+                    chunk,
+                    relocation_missing,
+                    summary,
+                    failure_entries,
+                    key=key,
+                )
+                active_chunk_items = [
+                    item for item in chunk_items
+                    if str(item.get('id') or '') not in relocation_missing_ids
+                ]
+                if relocation_missing_ids and not active_chunk_items:
+                    continue
                 summary['partial_chunks'] += 1
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'failed_to_parse_model_json'
                 bump_counter(summary['reason_counts'], reason_name)
@@ -4157,6 +4673,29 @@ def collect_result_actions(manifest, validate_sources=False):
                         }
                     )
                 continue
+
+            relocation_missing = filter_already_applied_relocation_missing(
+                manifest,
+                chunk,
+                relocation_missing,
+                result_items,
+                summary,
+            )
+            relocation_missing_ids = record_v2_relocation_failures(
+                manifest,
+                chunk,
+                relocation_missing,
+                summary,
+                failure_entries,
+                key=key,
+            )
+            active_chunk_items = [
+                item for item in chunk_items
+                if str(item.get('id') or '') not in relocation_missing_ids
+            ]
+            if relocation_missing_ids and not active_chunk_items:
+                continue
+            item_map = {item['id']: item for item in active_chunk_items}
 
             if len(result_items) < len(active_chunk_items):
                 summary['partial_chunks'] += 1
@@ -4457,7 +4996,7 @@ def apply_results(target=None, force=False):
         raise SystemExit('Manifest was already applied. Re-run apply with --force to bypass this guard; source validation still applies.')
     require_safe_check_for_apply(manifest)
 
-    replacements_by_file, _translated_lines_by_file, failure_entries, summary = collect_result_actions(
+    replacements_by_file, translated_lines_by_file, failure_entries, summary = collect_result_actions(
         manifest,
         validate_sources=True,
     )
@@ -4482,7 +5021,9 @@ def apply_results(target=None, force=False):
     revalidated_file_paths = {}
     revalidated_file_lines = {}
     rag_jobs = []
-    for file_key, replacements in replacements_by_file.items():
+    file_keys = set(replacements_by_file) | set(translated_lines_by_file)
+    for file_key in file_keys:
+        replacements = replacements_by_file.get(file_key, {})
         file_info = manifest['files'].get(file_key)
         if not file_info:
             continue
@@ -4496,13 +5037,14 @@ def apply_results(target=None, force=False):
             lines,
             summary,
         )
+        line_numbers_set.update(translated_lines_by_file.get(file_key, set()))
         if revalidated_skipped:
             summary['valid_items'] = max(0, summary['valid_items'] - revalidated_skipped)
             summary['skipped_items'] = summary.get('skipped_items', 0) + revalidated_skipped
             summary['source_mismatch_items'] = summary.get('source_mismatch_items', 0) + revalidated_mismatches
             failure_entries.extend(revalidation_failures)
             summary['failure_items'] = len(failure_entries)
-        if not replacements:
+        if not replacements and not line_numbers_set:
             continue
         revalidated_replacements_by_file[file_key] = replacements
         revalidated_line_numbers_by_file[file_key] = set(line_numbers_set)
@@ -4526,7 +5068,8 @@ def apply_results(target=None, force=False):
     for file_key, replacements in revalidated_replacements_by_file.items():
         file_path = revalidated_file_paths[file_key]
         lines = revalidated_file_lines[file_key]
-        legacy.commit_replacements(file_path, lines, replacements)
+        if replacements:
+            legacy.commit_replacements(file_path, lines, replacements)
         line_numbers = sorted(revalidated_line_numbers_by_file[file_key])
         update_progress(file_key, line_numbers)
         applied_files += 1
@@ -4601,9 +5144,10 @@ def apply_revisions(target=None, force=False):
             summary['source_mismatch_items'] = summary.get('source_mismatch_items', 0) + revalidated_mismatches
             failure_entries.extend(revalidation_failures)
             summary['failure_items'] = len(failure_entries)
-        if not replacements:
+        if not replacements and not line_numbers_set:
             continue
-        legacy.commit_replacements(file_path, lines, replacements)
+        if replacements:
+            legacy.commit_replacements(file_path, lines, replacements)
         line_numbers = sorted(line_numbers_set)
         update_progress(file_key, line_numbers)
         applied_files += 1
@@ -5413,15 +5957,29 @@ def bootstrap_source_index(skip_prepare=False, prune=True):
         return summary
 
     try:
-        embedded_records = []
+        if records_with_reused_embedding:
+            reused_upserted = store.upsert_segments(records_with_reused_embedding)
+            summary['upserted'] += reused_upserted
+            print(f"Reused embeddings written: {reused_upserted}.")
+            sys.stdout.flush()
+
         if records_to_embed:
             print(f"Generating embeddings for {len(records_to_embed)} segments...")
             sys.stdout.flush()
-            embedded_records = embed_source_segments(records_to_embed)
-            summary['embedded'] = len(embedded_records)
-
-        upsert_count = store.upsert_segments(records_with_reused_embedding + embedded_records)
-        summary['upserted'] = upsert_count
+            batch_size = 16
+            for start in range(0, len(records_to_embed), batch_size):
+                batch = records_to_embed[start:start + batch_size]
+                embedded_records = embed_source_segments(batch)
+                summary['embedded'] += len(embedded_records)
+                summary['upserted'] += store.upsert_segments(embedded_records)
+                processed = min(start + len(batch), len(records_to_embed))
+                print(
+                    "Source index embedding progress: "
+                    f"{processed}/{len(records_to_embed)} scanned, "
+                    f"{summary['embedded']} embedded, "
+                    f"{store.count_segments()} stored."
+                )
+                sys.stdout.flush()
 
         if stale_segments and prune:
             print(f"Pruning {stale_count} stale segments...")
@@ -6499,7 +7057,7 @@ def print_banner():
         f'context_before={BATCH_CONTEXT_BEFORE}, context_after={BATCH_CONTEXT_AFTER}'
     )
     print(f'Max output tokens: {BATCH_MAX_OUTPUT_TOKENS}')
-    print(f'Thinking level: {BATCH_THINKING_LEVEL or "(default)"}')
+    print(f'Thinking level: {format_thinking_level_for_display()}')
     print(
         f'Prepare: enabled={legacy.PREP_ENABLED}, language={legacy.PREP_LANGUAGE}, '
         f'generate_template={legacy.PREP_GENERATE_TEMPLATE}, '
@@ -6811,6 +7369,25 @@ def build_arg_parser():
         help='Override display-name prefix for generated child packages.',
     )
 
+    retry_parser = subparsers.add_parser(
+        'build-retry',
+        help='Build a local retry package for unsafe translation chunks in a checked batch package.',
+    )
+    retry_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Parent translation manifest path or package dir. Defaults to latest package.',
+    )
+    retry_parser.add_argument('--display-name', default='', help='Override retry Batch display name.')
+
+    merge_retry_parser = subparsers.add_parser(
+        'merge-retry',
+        help='Merge downloaded retry package results back into the parent translation package.',
+    )
+    merge_retry_parser.add_argument('parent', help='Parent translation manifest path or package dir.')
+    merge_retry_parser.add_argument('retry', help='Retry translation manifest path or package dir.')
+
     repair_parser = subparsers.add_parser('repair', help='Synchronously repair specific remaining untranslated items from a JSONL report.')
     repair_parser.add_argument('report', help='JSONL report path, typically remaining_need_translate_*.jsonl')
     repair_parser.add_argument('--limit', type=int, default=0, help='Optional maximum number of report items to process.')
@@ -6972,6 +7549,17 @@ def main(argv=None):
             max_items=args.max_items,
             display_name_prefix=args.display_name_prefix,
         )
+        return
+
+    if command == 'build-retry':
+        build_retry_package(
+            target=args.target or None,
+            display_name_override=args.display_name,
+        )
+        return
+
+    if command == 'merge-retry':
+        merge_retry_results(args.parent, args.retry)
         return
 
     if command == 'repair':

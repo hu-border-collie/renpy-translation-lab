@@ -103,6 +103,60 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         setting_block = instruction.split('Task:', 1)[0]
         self.assertNotIn('????', setting_block)
 
+    def test_short_preserve_terms_allow_adjacent_chinese(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['Lou', 'Max', 'Mo']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'lou', 'max', 'mo'}),
+        ):
+            self.assertEqual(runtime.missing_preserved_terms('Lou laughs.', 'Lou笑了。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('Max cooks.', 'Max做饭。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('Moon rises.', '月亮升起。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('Lou laughs.', 'CloudLou笑了。'), ['Lou'])
+
+    def test_phrase_preserve_terms_allow_non_chinese_punctuation_change(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', [
+                'Raven Three',
+                'Mrs. de Bruin',
+                'New Lutetia',
+                'Pretty Bunny Angel Heart',
+            ]),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {
+                'raven three',
+                'mrs. de bruin',
+                'new lutetia',
+                'pretty bunny angel heart',
+            }),
+        ):
+            self.assertTrue(runtime.allow_non_chinese_term_translation('Raven Three!', 'Raven Three！'))
+            self.assertTrue(runtime.allow_non_chinese_term_translation('Mrs. de Bruin?', 'Mrs. de Bruin？'))
+            self.assertFalse(runtime.allow_non_chinese_term_translation('New Heart?', 'New Heart？'))
+
+    def test_batch_non_chinese_allowance_uses_glossary_without_rag_enabled(self):
+        chunk = {
+            'glossary_hits': [{'source': 'Raven Three', 'target': 'Raven Three'}],
+            'history_hits': [],
+        }
+        with (
+            mock.patch.object(batch_mod, 'RAG_ENABLED', False),
+            mock.patch.object(runtime, 'PRESERVE_TERMS', []),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', set()),
+            mock.patch.object(batch_mod, '_RAG_PRESERVED_TERMS_CACHE', None),
+            mock.patch.object(batch_mod, '_RAG_PRESERVED_TERMS_CACHE_KEY', None),
+        ):
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                {'rag_enabled': False},
+                chunk,
+                'Raven Three!',
+                'Raven Three！',
+            ))
+            self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+                {'rag_enabled': False},
+                {'glossary_hits': [], 'history_hits': []},
+                'Dawn Hound?',
+                'Dawn Hound？',
+            ))
+
     def test_collect_tasks_keeps_distinct_entries_on_same_line(self):
         tasks = runtime.collect_tasks(['call screen test("Hello", "World")\n'])
         self.assertEqual(len(tasks), 2)
@@ -239,6 +293,12 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         prefix, quote = runtime.parse_string_literal_format('"""Hello"""')
         literal = runtime.quote_with('\u4f60\u597d', quote, prefix=prefix)
         self.assertEqual(ast.literal_eval(literal), '\u4f60\u597d')
+
+        literal = runtime.quote_with('a"b"', '"')
+        self.assertEqual(ast.literal_eval(literal), 'a"b"')
+
+        literal = runtime.quote_with('a\n"b"\n', '"')
+        self.assertEqual(ast.literal_eval(literal), 'a\n"b"\n')
 
     def test_rpa_index_loads_primitive_pickle_index(self):
         with tempfile.TemporaryDirectory() as tmp:
