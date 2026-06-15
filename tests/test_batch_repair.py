@@ -637,11 +637,13 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 Path(batch_mod.LATEST_MANIFEST_FILE).write_text(str(previous_latest), encoding='utf-8')
 
                 def run_sync_revision_response(request, *_args, **_kwargs):
-                    id_enum = request['generation_config']['response_json_schema']['items']['properties']['id']['enum']
+                    prompt_text = request['contents'][0]['parts'][0]['text']
+                    target_text = prompt_text.split('TARGET:\n', 1)[1].split('\n\nCONTEXT AFTER:', 1)[0]
+                    target_id = json.loads(target_text)[0]['id']
                     response_text = json.dumps(
                         [
                             {
-                                'id': id_enum[0],
+                                'id': target_id,
                                 'should_update': True,
                                 'revised_translation': '虚空之门',
                                 'reason': '统一术语',

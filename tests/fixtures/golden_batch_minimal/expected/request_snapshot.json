@@ -46,13 +46,7 @@
             "additionalProperties": false,
             "properties": {
               "id": {
-                "type": "string",
-                "enum": [
-                  "chapter01/dialogue.rpy:chapter01_start:1:8dfe92d9",
-                  "chapter01/dialogue.rpy:chapter01_start:2:3fbd4128",
-                  "chapter01/dialogue.rpy:chapter01_start:3:2ecaab1c",
-                  "chapter01/dialogue.rpy:chapter01_start:4:8c8bd881"
-                ]
+                "type": "string"
               },
               "translation": {
                 "type": "string"
@@ -106,11 +100,7 @@
             "additionalProperties": false,
             "properties": {
               "id": {
-                "type": "string",
-                "enum": [
-                  "chapter02/strings.rpy:strings:1:365f992a",
-                  "chapter02/strings.rpy:strings:2:802aa657"
-                ]
+                "type": "string"
               },
               "translation": {
                 "type": "string"

@@ -117,6 +117,7 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertIn('"speaker_id":"e"', translation_prompt)
         self.assertIn('"speaker_name":"Eileen"', translation_prompt)
         self.assertEqual(translation_schema['items']['required'], ['id', 'translation'])
+        self.assertNotIn('enum', translation_schema['items']['properties']['id'])
 
         revision_chunk = {
             'file_rel_path': 'script.rpy',
@@ -143,6 +144,7 @@ class TranslationCoreRegressionTests(unittest.TestCase):
             revision_schema['items']['required'],
             ['id', 'should_update', 'revised_translation', 'reason'],
         )
+        self.assertNotIn('enum', revision_schema['items']['properties']['id'])
 
         keyword_prompt = batch_mod.build_keyword_user_prompt(
             [{'id': 'script.rpy:2:keyword:0', 'text': 'Void Gate', 'line_number': 2}]
