@@ -1338,6 +1338,99 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(manifest['apply_summary']['skipped_items'], 0)
         self.assertIn('applied_at', saved_manifest)
 
+    def test_apply_results_resumes_already_written_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'tl'
+            package_dir = root / 'package'
+            tl_dir.mkdir()
+            package_dir.mkdir()
+            target_file = tl_dir / 'script.rpy'
+            first_line = '    e "Hello"\n'
+            second_line = '    e "World"\n'
+            first_start = first_line.index('"Hello"')
+            first_end = first_start + len('"Hello"')
+            second_start = second_line.index('"World"')
+            second_end = second_start + len('"World"')
+            target_file.write_text(first_line + second_line, encoding='utf-8')
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            response_text = json.dumps(
+                [
+                    {'id': f'script.rpy:0:{first_start}', 'translation': '\u4f60\u597d'},
+                    {'id': f'script.rpy:1:{second_start}', 'translation': '\u4e16\u754c'},
+                ],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'chunk-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'execution': 'sync',
+                        'files': {'script.rpy': {'path': str(target_file)}},
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'chunk-1',
+                                'file_rel_path': 'script.rpy',
+                                'items': [
+                                    {
+                                        'id': f'script.rpy:0:{first_start}',
+                                        'line': 0,
+                                        'start': first_start,
+                                        'end': first_end,
+                                        'text': 'Hello',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    },
+                                    {
+                                        'id': f'script.rpy:1:{second_start}',
+                                        'line': 1,
+                                        'start': second_start,
+                                        'end': second_end,
+                                        'text': 'World',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod, 'update_progress') as update_progress,
+            ):
+                batch_mod.check_results(str(manifest_path))
+                target_file.write_text('    e "\u4f60\u597d"\n' + second_line, encoding='utf-8')
+                manifest = batch_mod.apply_results(str(manifest_path))
+
+            updated_script = target_file.read_text(encoding='utf-8')
+
+        self.assertEqual(updated_script, '    e "\u4f60\u597d"\n    e "\u4e16\u754c"\n')
+        update_progress.assert_called_once_with('script.rpy', [0, 1])
+        self.assertEqual(manifest['apply_summary']['applied_files'], 1)
+        self.assertEqual(manifest['apply_summary']['applied_lines'], 2)
+        self.assertEqual(manifest['apply_summary']['recoverable_items'], 2)
+        self.assertEqual(manifest['apply_summary']['skipped_items'], 0)
+
     def test_apply_results_revalidates_snapshot_before_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
