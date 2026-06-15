@@ -117,6 +117,7 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertIn('"speaker_id":"e"', translation_prompt)
         self.assertIn('"speaker_name":"Eileen"', translation_prompt)
         self.assertEqual(translation_schema['items']['required'], ['id', 'translation'])
+        self.assertNotIn('enum', translation_schema['items']['properties']['id'])
 
         revision_chunk = {
             'file_rel_path': 'script.rpy',
@@ -143,6 +144,7 @@ class TranslationCoreRegressionTests(unittest.TestCase):
             revision_schema['items']['required'],
             ['id', 'should_update', 'revised_translation', 'reason'],
         )
+        self.assertNotIn('enum', revision_schema['items']['properties']['id'])
 
         keyword_prompt = batch_mod.build_keyword_user_prompt(
             [{'id': 'script.rpy:2:keyword:0', 'text': 'Void Gate', 'line_number': 2}]
@@ -151,6 +153,8 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertIn('source_item_ids', keyword_prompt)
         self.assertIn('chunk_summary', keyword_prompt)
         self.assertEqual(keyword_schema['properties']['candidates']['maxItems'], 5)
+        candidate_schema = keyword_schema['properties']['candidates']['items']
+        self.assertNotIn('enum', candidate_schema['properties']['category'])
         self.assertIn('chunk_summary', keyword_schema['required'])
 
     def test_core_result_parsers_and_writeback_actions_are_mode_aware(self):

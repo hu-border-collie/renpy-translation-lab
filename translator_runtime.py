@@ -1713,9 +1713,11 @@ def parse_string_literal_format(token_string):
 
 def quote_with(text, quote, prefix=""):
     escaped = text
-    for old, new in SPECIAL_ESCAPES:
-        escaped = escaped.replace(old, new)
     quote_char = (quote or '"')[0]
+    for old, new in SPECIAL_ESCAPES:
+        if old == quote_char:
+            continue
+        escaped = escaped.replace(old, new)
     escaped = escaped.replace(quote_char, "\\" + quote_char)
     return f"{prefix}{quote}{escaped}{quote}"
 
@@ -1734,7 +1736,7 @@ def missing_preserved_terms(original, translated):
             continue
         # Avoid false positives for short alphabetic fragments (e.g., "Mo" in "Moon").
         if term.isalpha() and len(term) <= 3:
-            pattern = rf"\b{re.escape(term)}\b"
+            pattern = rf"(?<![A-Za-z0-9_]){re.escape(term)}(?![A-Za-z0-9_])"
             if not re.search(pattern, original):
                 continue
             if not re.search(pattern, translated):
@@ -1901,6 +1903,18 @@ def _extract_word_tokens(text):
     return [token.lower() for token in WORD_TOKEN_RE.findall(cleaned)]
 
 
+def _term_token_sequence_matches(tokens, terms):
+    token_tuple = tuple(tokens)
+    if not token_tuple:
+        return False
+    for term in terms:
+        if not isinstance(term, str) or not term.strip():
+            continue
+        if token_tuple == tuple(_extract_word_tokens(term)):
+            return True
+    return False
+
+
 def allow_non_chinese_term_translation(original, translated, known_terms=None):
     if not original or not translated:
         return False
@@ -1917,14 +1931,22 @@ def allow_non_chinese_term_translation(original, translated, known_terms=None):
         return False
 
     allowed_terms = set(PRESERVE_TERMS_LOWER)
+    known_term_strings = list(PRESERVE_TERMS)
     if known_terms:
+        known_term_strings.extend(
+            str(term).strip()
+            for term in known_terms
+            if isinstance(term, str) and str(term).strip()
+        )
         allowed_terms.update(
             str(term).strip().lower()
             for term in known_terms
             if isinstance(term, str) and str(term).strip()
         )
-    if not allowed_terms:
+    if not allowed_terms and not known_term_strings:
         return False
+    if _term_token_sequence_matches(original_tokens, known_term_strings):
+        return True
     return all(token in allowed_terms for token in original_tokens)
 
 
