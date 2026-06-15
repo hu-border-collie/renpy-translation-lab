@@ -103,6 +103,16 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         setting_block = instruction.split('Task:', 1)[0]
         self.assertNotIn('????', setting_block)
 
+    def test_short_preserve_terms_allow_adjacent_chinese(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['Lou', 'Max', 'Mo']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'lou', 'max', 'mo'}),
+        ):
+            self.assertEqual(runtime.missing_preserved_terms('Lou laughs.', 'Lou笑了。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('Max cooks.', 'Max做饭。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('Moon rises.', '月亮升起。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('Lou laughs.', 'CloudLou笑了。'), ['Lou'])
+
     def test_collect_tasks_keeps_distinct_entries_on_same_line(self):
         tasks = runtime.collect_tasks(['call screen test("Hello", "World")\n'])
         self.assertEqual(len(tasks), 2)
