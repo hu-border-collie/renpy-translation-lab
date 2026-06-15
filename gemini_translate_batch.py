@@ -656,8 +656,10 @@ def collect_shared_rag_preserved_terms():
 def collect_chunk_known_terms(chunk):
     terms = collect_shared_rag_preserved_terms()
     for hit in chunk.get('glossary_hits') or []:
-        terms.update(extract_word_tokens(hit.get('source', '')))
-        terms.update(extract_word_tokens(hit.get('target', '')))
+        for value in (hit.get('source', ''), hit.get('target', '')):
+            if value:
+                terms.add(value)
+            terms.update(extract_word_tokens(value))
     for hit in chunk.get('history_hits') or []:
         source_tokens = set(extract_word_tokens(hit.get('source_text', '')))
         translated_tokens = set(extract_word_tokens(hit.get('translated_text', '')))
@@ -666,8 +668,6 @@ def collect_chunk_known_terms(chunk):
 
 
 def allow_non_chinese_batch_translation(manifest, chunk, original, translated):
-    if not manifest.get('rag_enabled'):
-        return False
     return legacy.allow_non_chinese_term_translation(
         original,
         translated,
@@ -3808,7 +3808,7 @@ def validate_replacements_for_lines(manifest, file_key, replacements_by_line, li
 
     for line_idx, repls in replacements_by_line.items():
         for repl in repls:
-            start, end, _translated, _prefix, _quote, source_text, item_id, chunk_key = unpack_replacement_for_validation(repl)
+            start, end, translated, _prefix, _quote, source_text, item_id, chunk_key = unpack_replacement_for_validation(repl)
             if line_idx < 0 or line_idx >= len(lines):
                 skipped_items += 1
                 bump_counter(summary['reason_counts'], 'source_line_missing')
@@ -3827,6 +3827,15 @@ def validate_replacements_for_lines(manifest, file_key, replacements_by_line, li
 
             current_text = extract_string_token_text_at(lines[line_idx], start, end)
             if current_text != source_text:
+                already_applied_text = current_text
+                if already_applied_text is None:
+                    current_token = extract_string_token_from_line(lines[line_idx])
+                    if current_token:
+                        already_applied_text = current_token.get('text')
+                if already_applied_text in translated_text_variants(translated):
+                    summary['already_applied_items'] = summary.get('already_applied_items', 0) + 1
+                    validated_lines.add(line_idx)
+                    continue
                 skipped_items += 1
                 source_mismatch_items += 1
                 bump_counter(summary['reason_counts'], 'source_text_mismatch')
@@ -3911,7 +3920,7 @@ def validate_result_replacements(manifest, replacements_by_file, summary):
             lines,
             summary,
         )
-        if file_replacements:
+        if file_replacements or file_lines:
             validated_replacements[file_key] = file_replacements
             validated_lines_by_file[file_key] = file_lines
         failure_entries.extend(file_failures)
@@ -4046,6 +4055,49 @@ def record_v2_relocation_failures(manifest, chunk, missing_items, summary, failu
             reason_code='v2_relocation_missing',
         ))
     return missing_ids
+
+
+def translated_text_variants(translated):
+    variants = {translated}
+    if getattr(legacy, 'USE_TRANSLATION_MEMORY', False):
+        variants.add(legacy.apply_normalization(translated))
+    return variants
+
+
+def filter_already_applied_relocation_missing(manifest, chunk, missing_items, result_items, summary):
+    if not missing_items:
+        return []
+    result_by_id = {
+        str(item.get('id') or ''): item.get('translation', '')
+        for item in result_items or []
+        if isinstance(item, dict)
+    }
+    file_key = chunk.get('file_rel_path', '')
+    file_info = manifest.get('files', {}).get(file_key)
+    if not file_info:
+        return missing_items
+    file_path = resolve_manifest_file_path(manifest, file_key, file_info)
+    try:
+        with open(file_path, 'r', encoding='utf-8-sig') as handle:
+            lines = handle.readlines()
+    except Exception:
+        return missing_items
+
+    remaining = []
+    for item in missing_items:
+        item_id = str(item.get('id') or '')
+        translated = result_by_id.get(item_id, '')
+        line_idx = item.get('line')
+        if not translated or not isinstance(line_idx, int) or line_idx < 0 or line_idx >= len(lines):
+            remaining.append(item)
+            continue
+        current_token = extract_string_token_from_line(lines[line_idx])
+        current_text = current_token.get('text') if current_token else None
+        if current_text in translated_text_variants(translated):
+            summary['already_applied_items'] = summary.get('already_applied_items', 0) + 1
+            continue
+        remaining.append(item)
+    return remaining
 
 
 def collect_revision_actions(manifest, validate_sources=False):
@@ -4508,21 +4560,6 @@ def collect_result_actions(manifest, validate_sources=False):
                 scanned_units_by_file,
                 translation_core.MODE_TRANSLATION,
             )
-            relocation_missing_ids = record_v2_relocation_failures(
-                manifest,
-                chunk,
-                relocation_missing,
-                summary,
-                failure_entries,
-                key=key,
-            )
-            active_chunk_items = [
-                item for item in chunk_items
-                if str(item.get('id') or '') not in relocation_missing_ids
-            ]
-            if relocation_missing_ids and not active_chunk_items:
-                continue
-            item_map = {item['id']: item for item in active_chunk_items}
             response_payload = row.get('response', {})
             finish_reason = extract_finish_reason(response_payload)
             usage_metadata = summarize_usage_metadata(extract_usage_metadata(response_payload))
@@ -4530,6 +4567,20 @@ def collect_result_actions(manifest, validate_sources=False):
                 summary['max_tokens_chunks'] += 1
 
             if row.get('error'):
+                relocation_missing_ids = record_v2_relocation_failures(
+                    manifest,
+                    chunk,
+                    relocation_missing,
+                    summary,
+                    failure_entries,
+                    key=key,
+                )
+                active_chunk_items = [
+                    item for item in chunk_items
+                    if str(item.get('id') or '') not in relocation_missing_ids
+                ]
+                if relocation_missing_ids and not active_chunk_items:
+                    continue
                 summary['chunk_row_errors'] += 1
                 bump_counter(summary['reason_counts'], 'row_error')
                 for item in active_chunk_items:
@@ -4551,6 +4602,20 @@ def collect_result_actions(manifest, validate_sources=False):
 
             response_text = extract_text_from_response_payload(response_payload)
             if not response_text:
+                relocation_missing_ids = record_v2_relocation_failures(
+                    manifest,
+                    chunk,
+                    relocation_missing,
+                    summary,
+                    failure_entries,
+                    key=key,
+                )
+                active_chunk_items = [
+                    item for item in chunk_items
+                    if str(item.get('id') or '') not in relocation_missing_ids
+                ]
+                if relocation_missing_ids and not active_chunk_items:
+                    continue
                 summary['missing_response_chunks'] += 1
                 bump_counter(summary['reason_counts'], 'missing_response_text')
                 for item in active_chunk_items:
@@ -4574,6 +4639,20 @@ def collect_result_actions(manifest, validate_sources=False):
                 payload = parse_json_payload(response_text)
                 result_items = normalize_result_items(payload)
             except Exception as exc:
+                relocation_missing_ids = record_v2_relocation_failures(
+                    manifest,
+                    chunk,
+                    relocation_missing,
+                    summary,
+                    failure_entries,
+                    key=key,
+                )
+                active_chunk_items = [
+                    item for item in chunk_items
+                    if str(item.get('id') or '') not in relocation_missing_ids
+                ]
+                if relocation_missing_ids and not active_chunk_items:
+                    continue
                 summary['partial_chunks'] += 1
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'failed_to_parse_model_json'
                 bump_counter(summary['reason_counts'], reason_name)
@@ -4594,6 +4673,29 @@ def collect_result_actions(manifest, validate_sources=False):
                         }
                     )
                 continue
+
+            relocation_missing = filter_already_applied_relocation_missing(
+                manifest,
+                chunk,
+                relocation_missing,
+                result_items,
+                summary,
+            )
+            relocation_missing_ids = record_v2_relocation_failures(
+                manifest,
+                chunk,
+                relocation_missing,
+                summary,
+                failure_entries,
+                key=key,
+            )
+            active_chunk_items = [
+                item for item in chunk_items
+                if str(item.get('id') or '') not in relocation_missing_ids
+            ]
+            if relocation_missing_ids and not active_chunk_items:
+                continue
+            item_map = {item['id']: item for item in active_chunk_items}
 
             if len(result_items) < len(active_chunk_items):
                 summary['partial_chunks'] += 1
@@ -4894,7 +4996,7 @@ def apply_results(target=None, force=False):
         raise SystemExit('Manifest was already applied. Re-run apply with --force to bypass this guard; source validation still applies.')
     require_safe_check_for_apply(manifest)
 
-    replacements_by_file, _translated_lines_by_file, failure_entries, summary = collect_result_actions(
+    replacements_by_file, translated_lines_by_file, failure_entries, summary = collect_result_actions(
         manifest,
         validate_sources=True,
     )
@@ -4919,7 +5021,9 @@ def apply_results(target=None, force=False):
     revalidated_file_paths = {}
     revalidated_file_lines = {}
     rag_jobs = []
-    for file_key, replacements in replacements_by_file.items():
+    file_keys = set(replacements_by_file) | set(translated_lines_by_file)
+    for file_key in file_keys:
+        replacements = replacements_by_file.get(file_key, {})
         file_info = manifest['files'].get(file_key)
         if not file_info:
             continue
@@ -4933,13 +5037,14 @@ def apply_results(target=None, force=False):
             lines,
             summary,
         )
+        line_numbers_set.update(translated_lines_by_file.get(file_key, set()))
         if revalidated_skipped:
             summary['valid_items'] = max(0, summary['valid_items'] - revalidated_skipped)
             summary['skipped_items'] = summary.get('skipped_items', 0) + revalidated_skipped
             summary['source_mismatch_items'] = summary.get('source_mismatch_items', 0) + revalidated_mismatches
             failure_entries.extend(revalidation_failures)
             summary['failure_items'] = len(failure_entries)
-        if not replacements:
+        if not replacements and not line_numbers_set:
             continue
         revalidated_replacements_by_file[file_key] = replacements
         revalidated_line_numbers_by_file[file_key] = set(line_numbers_set)
@@ -4963,7 +5068,8 @@ def apply_results(target=None, force=False):
     for file_key, replacements in revalidated_replacements_by_file.items():
         file_path = revalidated_file_paths[file_key]
         lines = revalidated_file_lines[file_key]
-        legacy.commit_replacements(file_path, lines, replacements)
+        if replacements:
+            legacy.commit_replacements(file_path, lines, replacements)
         line_numbers = sorted(revalidated_line_numbers_by_file[file_key])
         update_progress(file_key, line_numbers)
         applied_files += 1
@@ -5038,9 +5144,10 @@ def apply_revisions(target=None, force=False):
             summary['source_mismatch_items'] = summary.get('source_mismatch_items', 0) + revalidated_mismatches
             failure_entries.extend(revalidation_failures)
             summary['failure_items'] = len(failure_entries)
-        if not replacements:
+        if not replacements and not line_numbers_set:
             continue
-        legacy.commit_replacements(file_path, lines, replacements)
+        if replacements:
+            legacy.commit_replacements(file_path, lines, replacements)
         line_numbers = sorted(line_numbers_set)
         update_progress(file_key, line_numbers)
         applied_files += 1
