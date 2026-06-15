@@ -691,7 +691,6 @@ def build_keyword_user_prompt(units):
 
 def build_translation_schema(units):
     units = units_from_items(units, MODE_TRANSLATION)
-    target_ids = [unit.id for unit in units]
     return {
         'type': 'array',
         'minItems': len(units),
@@ -701,7 +700,7 @@ def build_translation_schema(units):
             'required': ['id', 'translation'],
             'additionalProperties': False,
             'properties': {
-                'id': {'type': 'string', 'enum': target_ids},
+                'id': {'type': 'string'},
                 'translation': {'type': 'string'},
             },
         },
@@ -710,7 +709,6 @@ def build_translation_schema(units):
 
 def build_revision_schema(units):
     units = units_from_items(units, MODE_REVISION)
-    target_ids = [unit.id for unit in units]
     return {
         'type': 'array',
         'minItems': len(units),
@@ -720,7 +718,7 @@ def build_revision_schema(units):
             'required': ['id', 'should_update', 'revised_translation', 'reason'],
             'additionalProperties': False,
             'properties': {
-                'id': {'type': 'string', 'enum': target_ids},
+                'id': {'type': 'string'},
                 'should_update': {'type': 'boolean'},
                 'revised_translation': {'type': 'string'},
                 'reason': {'type': 'string'},
