@@ -140,6 +140,194 @@ class BatchRepairRegressionTests(unittest.TestCase):
             self.assertEqual(first_child['story_memory_summary']['truncated_story_blocks'], 0)
             self.assertGreater(first_child['story_memory_summary']['formatted_char_count'], 0)
 
+    def test_retry_package_and_merge_replace_only_failed_chunks(self):
+        old_tl_dir = batch_mod.legacy.TL_DIR
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'tl'
+                package_dir = root / 'package'
+                latest_path = root / 'latest_manifest.txt'
+                tl_dir.mkdir()
+                package_dir.mkdir()
+                target_file = tl_dir / 'script.rpy'
+                target_file.write_text(
+                    '    "Hello"\n'
+                    '    "World"\n',
+                    encoding='utf-8',
+                )
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+
+                chunks = [
+                    {
+                        'key': 'chunk-ok',
+                        'file_rel_path': 'script.rpy',
+                        'file_path': str(target_file),
+                        'chunk_index': 1,
+                        'context_past': [],
+                        'context_future': [],
+                        'items': [
+                            {
+                                'id': 'script.rpy:0:4:11:hello',
+                                'text': 'Hello',
+                                'line': 0,
+                                'start': 4,
+                                'end': 11,
+                                'prefix': '',
+                                'quote': '"',
+                            }
+                        ],
+                    },
+                    {
+                        'key': 'chunk-bad',
+                        'file_rel_path': 'script.rpy',
+                        'file_path': str(target_file),
+                        'chunk_index': 2,
+                        'context_past': [],
+                        'context_future': [],
+                        'items': [
+                            {
+                                'id': 'script.rpy:1:4:11:world',
+                                'text': 'World',
+                                'line': 1,
+                                'start': 4,
+                                'end': 11,
+                                'prefix': '',
+                                'quote': '"',
+                            }
+                        ],
+                    },
+                ]
+
+                parent_result_path = package_dir / 'results.jsonl'
+                batch_mod.write_jsonl_file(
+                    str(parent_result_path),
+                    [
+                        {
+                            'key': 'chunk-ok',
+                            'response': {
+                                'candidates': [
+                                    {
+                                        'content': {
+                                            'parts': [
+                                                {
+                                                    'text': json.dumps(
+                                                        [{'id': 'script.rpy:0:4:11:hello', 'translation': '你好'}],
+                                                        ensure_ascii=False,
+                                                    )
+                                                }
+                                            ]
+                                        },
+                                        'finishReason': 'STOP',
+                                    }
+                                ]
+                            },
+                        },
+                        {
+                            'key': 'chunk-bad',
+                            'response': {
+                                'candidates': [
+                                    {
+                                        'content': {'parts': [{'text': '[]'}]},
+                                        'finishReason': 'STOP',
+                                    }
+                                ]
+                            },
+                        },
+                    ],
+                )
+
+                manifest_path = package_dir / 'manifest.json'
+                manifest_path.write_text(
+                    json.dumps(
+                        {
+                            'version': 1,
+                            'core_schema_version': translation_core.CORE_SCHEMA_VERSION,
+                            'mode': batch_mod.MANIFEST_MODE_TRANSLATION,
+                            'display_name': 'demo',
+                            'batch_model': 'gemini-test',
+                            'input_jsonl_path': str(package_dir / 'requests.jsonl'),
+                            'result_jsonl_path': 'results.jsonl',
+                            'settings': {'target_size': 2},
+                            'files': {'script.rpy': {'path': str(target_file), 'task_count': 2}},
+                            'summary': {'file_count': 1, 'chunk_count': 2, 'item_count': 2},
+                            'source_index_enabled': True,
+                            'source_index_store_path': str(root / 'source_index'),
+                            'source_index_settings': {'top_k': 4},
+                            'chunks': chunks,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding='utf-8',
+                )
+                batch_mod.write_jsonl_file(
+                    str(package_dir / 'requests.jsonl'),
+                    [batch_mod.build_batch_request(chunk) for chunk in chunks],
+                )
+
+                with mock.patch.object(batch_mod, 'LATEST_MANIFEST_FILE', str(latest_path)):
+                    checked = batch_mod.check_results(str(manifest_path))
+                    self.assertEqual(checked['last_check_summary']['safety_level'], batch_mod.CHECK_SAFETY_WARN)
+
+                    retry_manifest_path = batch_mod.build_retry_package(str(manifest_path))
+                    retry_manifest = json.loads(Path(retry_manifest_path).read_text(encoding='utf-8'))
+                    self.assertEqual([chunk['key'] for chunk in retry_manifest['chunks']], ['chunk-bad'])
+                    self.assertEqual(retry_manifest['summary']['item_count'], 1)
+                    self.assertTrue(retry_manifest['source_index_enabled'])
+                    self.assertEqual(latest_path.read_text(encoding='utf-8'), retry_manifest_path)
+                    retry_request = json.loads(Path(retry_manifest['input_jsonl_path']).read_text(encoding='utf-8').splitlines()[0])
+                    self.assertEqual(retry_request['key'], 'chunk-bad')
+                    self.assertIn(
+                        'copy that exact source substring verbatim',
+                        retry_request['request']['system_instruction']['parts'][0]['text'],
+                    )
+
+                    retry_result_path = Path(retry_manifest_path).parent / 'results.jsonl'
+                    batch_mod.write_jsonl_file(
+                        str(retry_result_path),
+                        [
+                            {
+                                'key': 'chunk-bad',
+                                'response': {
+                                    'candidates': [
+                                        {
+                                            'content': {
+                                                'parts': [
+                                                    {
+                                                        'text': json.dumps(
+                                                            [{'id': 'script.rpy:1:4:11:world', 'translation': '世界'}],
+                                                            ensure_ascii=False,
+                                                        )
+                                                    }
+                                                ]
+                                            },
+                                            'finishReason': 'STOP',
+                                        }
+                                    ]
+                                },
+                            }
+                        ],
+                    )
+                    retry_manifest['result_jsonl_path'] = 'results.jsonl'
+                    Path(retry_manifest_path).write_text(json.dumps(retry_manifest, ensure_ascii=False), encoding='utf-8')
+
+                    merged_parent_path = batch_mod.merge_retry_results(str(manifest_path), retry_manifest_path)
+                    merged_manifest = json.loads(Path(merged_parent_path).read_text(encoding='utf-8'))
+                    self.assertNotEqual(merged_manifest['result_jsonl_path'], 'results.jsonl')
+                    self.assertNotIn('last_check_summary', merged_manifest)
+
+                    merged_rows = [
+                        json.loads(line)
+                        for line in (package_dir / merged_manifest['result_jsonl_path']).read_text(encoding='utf-8').splitlines()
+                    ]
+                    self.assertEqual([row['key'] for row in merged_rows], ['chunk-ok', 'chunk-bad'])
+                    self.assertIn('世界', json.dumps(merged_rows[1], ensure_ascii=False))
+
+                    rechecked = batch_mod.check_results(str(manifest_path))
+                    self.assertEqual(rechecked['last_check_summary']['safety_level'], batch_mod.CHECK_SAFETY_SAFE)
+        finally:
+            batch_mod.legacy.TL_DIR = old_tl_dir
+
     def test_create_keyword_package_uses_keyword_mode_manifest(self):
         old_values = {
             'tl_dir': batch_mod.legacy.TL_DIR,

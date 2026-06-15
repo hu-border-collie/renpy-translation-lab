@@ -67,7 +67,10 @@ def initialize_batch_logging():
     if isinstance(sys.stdout, DualLogger):
         return
     ensure_batch_dirs()
-    sys.stdout = DualLogger(CONSOLE_LOG)
+    try:
+        sys.stdout = DualLogger(CONSOLE_LOG)
+    except OSError as exc:
+        print(f'Warning: Could not open console log {CONSOLE_LOG}: {exc}')
 
 BATCH_MODEL = 'gemini-3.1-flash-lite'
 BATCH_TARGET_SIZE = 60
@@ -1424,6 +1427,17 @@ def copy_split_context_metadata(source_manifest, part_manifest, part_chunks):
             max_context_chars=story_settings.get('max_context_chars'),
         )
 
+    for key in (
+        'source_index_enabled',
+        'source_index_store_path',
+        'source_index_settings',
+    ):
+        if key in source_manifest:
+            part_manifest[key] = source_manifest[key]
+
+    if source_manifest.get('source_index_enabled'):
+        part_manifest['source_index_summary'] = summarize_batch_source_index(part_chunks)
+
 
 def split_chunks_and_lines(chunks, request_lines, max_chunks=0, max_items=0):
     groups = []
@@ -2662,6 +2676,357 @@ def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix
     print(f'Source manifest updated: {manifest["_manifest_path"]}')
     print(f'Latest manifest set to first split package: {created_manifests[0]}')
     return created_manifests
+
+
+def current_batch_settings_snapshot():
+    return {
+        'target_size': BATCH_TARGET_SIZE,
+        'target_chars': BATCH_TARGET_CHARS,
+        'context_before': BATCH_CONTEXT_BEFORE,
+        'context_after': BATCH_CONTEXT_AFTER,
+        'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
+        'temperature': BATCH_TEMPERATURE,
+        'thinking_level': BATCH_THINKING_LEVEL,
+    }
+
+
+def create_unique_child_dir(root_dir, name):
+    os.makedirs(root_dir, exist_ok=True)
+    base_dir = os.path.join(root_dir, name)
+    candidates = [base_dir]
+    candidates.extend(f'{base_dir}_{index:02d}' for index in range(1, 1000))
+    for candidate in candidates:
+        try:
+            os.makedirs(candidate, exist_ok=False)
+            return candidate
+        except FileExistsError:
+            continue
+    raise SystemExit(f'Could not create unique directory for {name}.')
+
+
+def chunk_target_signature(chunk):
+    items = []
+    for item in chunk.get('items') or []:
+        source_text = item.get('source', item.get('text', ''))
+        items.append(
+            {
+                'id': item.get('id', ''),
+                'file_rel_path': item.get('file_rel_path', chunk.get('file_rel_path', '')),
+                'line': item.get('line', item.get('line_number')),
+                'start': item.get('start'),
+                'end': item.get('end'),
+                'source_checksum': hash_text(source_text),
+            }
+        )
+    return stable_json_sha256(
+        {
+            'key': chunk.get('key', ''),
+            'file_rel_path': chunk.get('file_rel_path', ''),
+            'chunk_index': chunk.get('chunk_index'),
+            'items': items,
+        }
+    )
+
+
+def collect_result_integrity_issue_keys(manifest):
+    result_path = resolve_manifest_result_path(manifest)
+    if not os.path.isfile(result_path):
+        raise SystemExit('Result JSONL not found. Run download first.')
+
+    chunk_map = {chunk['key']: chunk for chunk in manifest.get('chunks', [])}
+    processed_keys = set()
+    issue_keys = set()
+    reason_counts = {}
+
+    with open(result_path, 'r', encoding='utf-8') as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                bump_counter(reason_counts, 'invalid_result_jsonl_row')
+                continue
+
+            key = row.get('key')
+            if not key or key not in chunk_map:
+                bump_counter(reason_counts, 'unknown_chunk_key')
+                continue
+
+            processed_keys.add(key)
+            chunk = chunk_map[key]
+            chunk_items = chunk.get('items') or []
+            item_ids = {item.get('id') for item in chunk_items}
+            response_payload = row.get('response') or {}
+            finish_reason = extract_finish_reason(response_payload)
+
+            if row.get('error'):
+                issue_keys.add(key)
+                bump_counter(reason_counts, 'row_error')
+                continue
+
+            response_text = extract_text_from_response_payload(response_payload)
+            if not response_text:
+                issue_keys.add(key)
+                bump_counter(reason_counts, 'missing_response_text')
+                continue
+
+            try:
+                payload = parse_json_payload(response_text)
+                result_items = normalize_result_items(payload)
+            except Exception:
+                issue_keys.add(key)
+                bump_counter(reason_counts, 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'failed_to_parse_model_json')
+                continue
+
+            seen_ids = set()
+            if len(result_items) < len(chunk_items):
+                issue_keys.add(key)
+                bump_counter(reason_counts, 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_result_items')
+
+            for result_item in result_items:
+                result_id = result_item.get('id')
+                if result_id not in item_ids:
+                    issue_keys.add(key)
+                    bump_counter(reason_counts, 'schema_or_item_mismatch')
+                    continue
+                if result_id in seen_ids:
+                    issue_keys.add(key)
+                    bump_counter(reason_counts, 'duplicate_result_id')
+                    continue
+                seen_ids.add(result_id)
+
+            missing_ids = item_ids - seen_ids
+            if missing_ids:
+                issue_keys.add(key)
+                bump_counter(reason_counts, 'response_missing_item_id', len(missing_ids))
+
+    missing_keys = set(chunk_map.keys()) - processed_keys
+    if missing_keys:
+        issue_keys.update(missing_keys)
+        bump_counter(reason_counts, 'missing_chunk_rows', len(missing_keys))
+
+    return issue_keys, reason_counts
+
+
+def collect_retry_chunk_keys(manifest):
+    chunk_map = {chunk['key']: chunk for chunk in manifest.get('chunks', [])}
+    _replacements, _translated, failure_entries, summary = collect_result_actions(
+        manifest,
+        validate_sources=True,
+    )
+    retry_keys = set()
+    for entry in failure_entries:
+        key = entry.get('key')
+        if key in chunk_map:
+            retry_keys.add(key)
+
+    integrity_keys, integrity_reason_counts = collect_result_integrity_issue_keys(manifest)
+    retry_keys.update(key for key in integrity_keys if key in chunk_map)
+
+    reason_counts = dict(summary.get('reason_counts') or {})
+    for reason_code, count in integrity_reason_counts.items():
+        reason_counts.setdefault(reason_code, count)
+
+    ordered_keys = [chunk['key'] for chunk in manifest.get('chunks', []) if chunk.get('key') in retry_keys]
+    return ordered_keys, failure_entries, summary, reason_counts
+
+
+def build_retry_package(target=None, display_name_override=''):
+    manifest = load_manifest(target)
+    require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'build-retry')
+    retry_keys, failure_entries, summary, reason_counts = collect_retry_chunk_keys(manifest)
+    if not retry_keys:
+        print('No retry chunks needed.')
+        return None
+
+    retry_key_set = set(retry_keys)
+    retry_chunks = [
+        chunk
+        for chunk in manifest.get('chunks') or []
+        if chunk.get('key') in retry_key_set
+    ]
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    retry_root = os.path.join(manifest['_package_dir'], 'retry_parts')
+    retry_dir = create_unique_child_dir(retry_root, f'{timestamp}_retry')
+
+    input_jsonl_path = os.path.join(retry_dir, 'requests.jsonl')
+    request_rows = [build_batch_request(chunk) for chunk in retry_chunks]
+    write_jsonl_file(input_jsonl_path, request_rows)
+
+    source_display_name = manifest.get('display_name') or os.path.basename(manifest['_package_dir'])
+    display_name = display_name_override.strip() if display_name_override else f'{source_display_name}-retry-{timestamp}'
+    retry_files = summarize_files_for_chunks(retry_chunks)
+    retry_manifest = {
+        'version': manifest.get('version', 2),
+        'manifest_version': manifest.get('manifest_version', 2),
+        'core_schema_version': translation_core.CORE_SCHEMA_VERSION,
+        'mode': MANIFEST_MODE_TRANSLATION,
+        'created_at': datetime.now().isoformat(timespec='seconds'),
+        'display_name': display_name,
+        'batch_model': BATCH_MODEL,
+        'base_dir': manifest.get('base_dir', legacy.BASE_DIR),
+        'tl_dir': manifest.get('tl_dir', legacy.TL_DIR),
+        'input_jsonl_path': input_jsonl_path,
+        'result_jsonl_path': '',
+        'job_name': '',
+        'job_state': 'LOCAL_ONLY',
+        'uploaded_file_name': '',
+        'result_file_name': '',
+        'settings': current_batch_settings_snapshot(),
+        'summary': {
+            'file_count': len(retry_files),
+            'chunk_count': len(retry_chunks),
+            'item_count': sum(len(chunk.get('items') or []) for chunk in retry_chunks),
+        },
+        'files': retry_files,
+        'chunks': retry_chunks,
+        'retry_of_manifest': manifest['_manifest_path'],
+        'retry_of_package': manifest['_package_dir'],
+        'retry_source_result_jsonl_path': resolve_manifest_result_path(manifest),
+        'retry_source_check_report_path': manifest.get('last_check_report_path', ''),
+        'retry_reason_counts': reason_counts,
+        'retry_failed_item_count': len(failure_entries),
+        'retry_chunk_keys': retry_keys,
+    }
+    copy_split_context_metadata(manifest, retry_manifest, retry_chunks)
+
+    retry_manifest_path = os.path.join(retry_dir, 'manifest.json')
+    with open(retry_manifest_path, 'w', encoding='utf-8') as handle:
+        json.dump(retry_manifest, handle, ensure_ascii=False, indent=2)
+
+    manifest.setdefault('retry_children', []).append(retry_manifest_path)
+    manifest['last_retry_manifest_path'] = retry_manifest_path
+    manifest['last_retry_generated_at'] = datetime.now().isoformat(timespec='seconds')
+    save_manifest(manifest, update_latest=False)
+    remember_latest_manifest(retry_manifest_path)
+
+    print(f'Created retry package: {retry_dir}')
+    print(f"Retry chunks: {retry_manifest['summary']['chunk_count']}")
+    print(f"Retry items: {retry_manifest['summary']['item_count']}")
+    print(f"Failure items considered: {len(failure_entries)}")
+    print(f'Manifest: {retry_manifest_path}')
+    return retry_manifest_path
+
+
+def load_result_rows_by_key(manifest, label):
+    result_path = resolve_manifest_result_path(manifest)
+    if not os.path.isfile(result_path):
+        raise SystemExit(f'{label} result JSONL not found: {result_path}')
+    rows = []
+    rows_by_key = {}
+    with open(result_path, 'r', encoding='utf-8') as handle:
+        for index, raw_line in enumerate(handle, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f'Invalid {label} result JSONL row #{index}: {exc}') from exc
+            key = row.get('key')
+            if not key:
+                raise SystemExit(f'Missing key in {label} result JSONL row #{index}.')
+            if key in rows_by_key:
+                raise SystemExit(f'Duplicate key in {label} result JSONL: {key}')
+            rows.append(row)
+            rows_by_key[key] = row
+    return rows, rows_by_key, result_path
+
+
+def assert_retry_manifest_matches_parent(parent_manifest, retry_manifest):
+    retry_of_manifest = retry_manifest.get('retry_of_manifest')
+    if retry_of_manifest and _normalized_abs_path(retry_of_manifest) != _normalized_abs_path(parent_manifest['_manifest_path']):
+        raise SystemExit(
+            'Retry manifest was generated for a different parent manifest: '
+            f'{retry_of_manifest}'
+        )
+
+    parent_chunks = {chunk['key']: chunk for chunk in parent_manifest.get('chunks') or []}
+    retry_chunks = retry_manifest.get('chunks') or []
+    if not retry_chunks:
+        raise SystemExit('Retry manifest has no chunks.')
+
+    for chunk in retry_chunks:
+        key = chunk.get('key')
+        parent_chunk = parent_chunks.get(key)
+        if not parent_chunk:
+            raise SystemExit(f'Retry chunk is not present in parent manifest: {key}')
+        if chunk_target_signature(chunk) != chunk_target_signature(parent_chunk):
+            raise SystemExit(f'Retry chunk target shape differs from parent manifest: {key}')
+
+
+def merge_retry_results(parent_target, retry_target):
+    parent_manifest = load_manifest(parent_target)
+    retry_manifest = load_manifest(retry_target)
+    require_manifest_mode(parent_manifest, MANIFEST_MODE_TRANSLATION, 'merge-retry')
+    require_manifest_mode(retry_manifest, MANIFEST_MODE_TRANSLATION, 'merge-retry')
+    assert_retry_manifest_matches_parent(parent_manifest, retry_manifest)
+
+    retry_keys = [chunk['key'] for chunk in retry_manifest.get('chunks') or []]
+    retry_key_set = set(retry_keys)
+    parent_rows, parent_rows_by_key, parent_result_path = load_result_rows_by_key(parent_manifest, 'parent')
+    retry_rows, retry_rows_by_key, retry_result_path = load_result_rows_by_key(retry_manifest, 'retry')
+
+    unknown_retry_rows = set(retry_rows_by_key) - retry_key_set
+    if unknown_retry_rows:
+        raise SystemExit(f'Retry result contains rows outside retry chunks: {sorted(unknown_retry_rows)[:5]}')
+
+    missing_retry_rows = retry_key_set - set(retry_rows_by_key)
+    if missing_retry_rows:
+        raise SystemExit(f'Retry result is missing rows for chunks: {sorted(missing_retry_rows)[:5]}')
+
+    merged_rows = []
+    replaced_keys = set()
+    for row in parent_rows:
+        key = row.get('key')
+        if key in retry_rows_by_key:
+            merged_rows.append(retry_rows_by_key[key])
+            replaced_keys.add(key)
+        else:
+            merged_rows.append(row)
+
+    for key in retry_keys:
+        if key not in parent_rows_by_key:
+            merged_rows.append(retry_rows_by_key[key])
+            replaced_keys.add(key)
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    merged_name = f'results.merged_{timestamp}.jsonl'
+    merged_path = os.path.join(parent_manifest['_package_dir'], merged_name)
+    write_jsonl_file(merged_path, merged_rows)
+
+    parent_manifest['result_jsonl_path'] = merged_name
+    parent_manifest['job_state'] = 'RESULTS_MERGED'
+    parent_manifest.setdefault('retry_merge_history', []).append(
+        {
+            'merged_at': datetime.now().isoformat(timespec='seconds'),
+            'retry_manifest': retry_manifest['_manifest_path'],
+            'retry_result_jsonl_path': retry_result_path,
+            'previous_result_jsonl_path': parent_result_path,
+            'merged_result_jsonl_path': merged_path,
+            'replaced_chunks': len(replaced_keys),
+            'replaced_items': sum(len(chunk.get('items') or []) for chunk in retry_manifest.get('chunks') or []),
+        }
+    )
+    parent_manifest['last_retry_merged_manifest_path'] = retry_manifest['_manifest_path']
+    parent_manifest['last_retry_merged_at'] = datetime.now().isoformat(timespec='seconds')
+    for key in (
+        'last_check_at',
+        'last_check_summary',
+        'last_check_report_path',
+    ):
+        parent_manifest.pop(key, None)
+    save_manifest(parent_manifest, update_latest=True)
+
+    print(f'Merged retry results into: {parent_manifest["_manifest_path"]}')
+    print(f'Previous result JSONL: {parent_result_path}')
+    print(f'Retry result JSONL: {retry_result_path}')
+    print(f'Merged result JSONL: {merged_path}')
+    print(f'Replaced chunks: {len(replaced_keys)}')
+    print('Run check on the parent manifest before apply.')
+    return parent_manifest['_manifest_path']
 
 def submit_manifest(target=None, display_name_override='', model_override=''):
     manifest = load_manifest(target) if target else None
@@ -6897,6 +7262,25 @@ def build_arg_parser():
         help='Override display-name prefix for generated child packages.',
     )
 
+    retry_parser = subparsers.add_parser(
+        'build-retry',
+        help='Build a local retry package for unsafe translation chunks in a checked batch package.',
+    )
+    retry_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Parent translation manifest path or package dir. Defaults to latest package.',
+    )
+    retry_parser.add_argument('--display-name', default='', help='Override retry Batch display name.')
+
+    merge_retry_parser = subparsers.add_parser(
+        'merge-retry',
+        help='Merge downloaded retry package results back into the parent translation package.',
+    )
+    merge_retry_parser.add_argument('parent', help='Parent translation manifest path or package dir.')
+    merge_retry_parser.add_argument('retry', help='Retry translation manifest path or package dir.')
+
     repair_parser = subparsers.add_parser('repair', help='Synchronously repair specific remaining untranslated items from a JSONL report.')
     repair_parser.add_argument('report', help='JSONL report path, typically remaining_need_translate_*.jsonl')
     repair_parser.add_argument('--limit', type=int, default=0, help='Optional maximum number of report items to process.')
@@ -7058,6 +7442,17 @@ def main(argv=None):
             max_items=args.max_items,
             display_name_prefix=args.display_name_prefix,
         )
+        return
+
+    if command == 'build-retry':
+        build_retry_package(
+            target=args.target or None,
+            display_name_override=args.display_name,
+        )
+        return
+
+    if command == 'merge-retry':
+        merge_retry_results(args.parent, args.retry)
         return
 
     if command == 'repair':
