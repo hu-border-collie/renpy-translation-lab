@@ -257,3 +257,21 @@ python benchmark_rag_store.py --sizes 10,100 --queries 5 --dim 768
 运行结束后，脚本会根据实测数据动态提示优化建议：
 - **Search 耗时阈值（50ms）**：若大规模下的 Average Search 超过 50ms，建议开启 **Norm Caching**（在内存中缓存向量范数，避免在 Cosine Loop 中重复计算）或引入 **NumPy 向量化**。
 - **Upsert 耗时阈值（1.0s）**：若 Incremental Upsert 超过 1.0s，说明全量原子重写文件成为瓶颈，建议改用 **Append-only log + Compaction** 存储方案，或引入轻量数据库（如 **SQLite**）。
+
+### 当前参考基线
+
+以下结果来自 2026-06-16 在本地 Windows 开发环境运行默认命令：
+
+```bash
+python benchmark_rag_store.py
+```
+
+参数为 `--sizes 100,1000,10000 --queries 20 --dim 768 --seed 42`。这些数字不是测试断言，主要用于记录当前实现的大致量级；不同机器、磁盘和 Python 版本会有波动。
+
+| Scale (N) | Bulk Upsert (s) | Load Store (s) | Zero-Hit Search (ms) | Cache-Hit Search (ms) | All-Match Search (ms) | Incremental Upsert (s) | File Size (MB) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 0.0415 | 0.0261 | 10.87 | 10.88 | 10.83 | 0.0461 | 1.67 |
+| 1000 | 0.3703 | 0.2719 | 133.87 | 158.99 | 159.50 | 0.5616 | 16.68 |
+| 10000 | 5.1964 | 3.9065 | 1554.64 | 1569.88 | 1652.19 | 6.0499 | 166.84 |
+
+这组基线显示：当前 JSONL + 内存字典实现可以可靠完成 10,000 条合成记录的离线 benchmark，但 768 维向量的纯 Python 线性检索和增量写入时的全量重写已经在 10,000 级别明显超过阈值。后续优先级应是 search 侧的 norm cache / NumPy vectorization，以及 write 侧的 append-only log + compaction 或 SQLite 迁移评估。
