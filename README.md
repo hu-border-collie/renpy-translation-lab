@@ -1,6 +1,8 @@
 # Ren'Py Translation Lab
 
-一个面向 Ren'Py 视觉小说的实验性翻译工具仓库，聚焦 Gemini 同步翻译、Batch 作业流、上下文增强和轻量 RAG 记忆层。
+一个面向 Ren'Py 视觉小说的翻译工作台，聚焦 Gemini Batch 作业流、上下文增强、轻量 RAG 记忆层和写回前安全校验。
+
+当前核心 Batch 流程已经在约 11 万英文词规模的真实 Ren'Py 项目上完整跑通：从预建上下文、生成 Batch 包、提交和下载结果，到 `check` 安全校验、retry 合并和 `apply` 写回。它更适合作为高级用户工具和可改造的核心引擎，而不是面向普通用户的零配置图形化产品。
 
 ## 这是什么
 
@@ -21,7 +23,7 @@
 - 自动预处理项目，包括提取脚本和生成 `tl/schinese` 模板。
 - 构造带 glossary、macro setting、RAG 和可选 Story Memory 的 Gemini 请求。
 - 生成 Batch 请求包并执行完整异步流程。
-- 用 `check/apply/repair` 对写回做快照校验和安全分级。
+- 用 `check/apply/repair` 对写回做快照校验和安全分级；`apply` 默认只接受最近一次 `safe` check 对应的结果。
 - 从已有译文、全文原文或结构化剧情图谱中补充上下文。
 - 支持订正、关键词候选提取和独立关系 / 语义分析工作流。
 
@@ -127,4 +129,18 @@ python gemini_translate_batch.py apply
 
 ## 当前状态
 
-这是一个仍在持续探索和改进中的个人实验项目，更接近核心引擎和代码快照，不是已经打磨完成的零配置产品。执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。
+核心 Batch 翻译链路已经可以用于真实项目试跑，推荐口径是“高级用户稳定版”：适合熟悉 Ren'Py 目录结构、能维护本地配置、能阅读检查报告的使用者。
+
+它仍不是已经打磨完成的零配置产品，也不应直接在唯一原项目上整批写回。执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。推荐使用顺序仍是：
+
+```bash
+python gemini_translate_batch.py doctor
+python gemini_translate_batch.py build
+python gemini_translate_batch.py submit logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py status logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py download logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json
+```
+
+只有 `check` 输出 `safe` 时才继续 `apply`。如果出现 `warn` / `block`，先查看失败报告并使用 retry / repair / revision 等流程处理。
