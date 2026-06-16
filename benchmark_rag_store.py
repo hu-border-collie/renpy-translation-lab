@@ -157,6 +157,7 @@ def run_benchmark_for_size(size, queries_count, dim):
 
 
 def main():
+    """Parse CLI options, run benchmark cases, and print markdown results."""
     parser = argparse.ArgumentParser(
         description="Run performance benchmark for Ren'Py Translation Lab RAG memory store."
     )
