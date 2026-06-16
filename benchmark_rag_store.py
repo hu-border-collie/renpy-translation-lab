@@ -204,15 +204,15 @@ def main():
     if args.dim <= 0:
         parser.error("--dim must be a positive integer.")
         
-    print(f"============================================================")
-    print(f"RAG Store Performance Benchmark")
-    print(f"============================================================")
-    print(f"Parameters:")
+    print("============================================================")
+    print("RAG Store Performance Benchmark")
+    print("============================================================")
+    print("Parameters:")
     print(f"  - Database sizes: {sizes}")
     print(f"  - Query iterations: {args.queries}")
     print(f"  - Embedding dimension: {args.dim}")
     print(f"  - Random seed: {args.seed}")
-    print(f"============================================================")
+    print("============================================================")
     print("Running benchmarks... (this might take a few moments)")
     
     all_results = {}
@@ -222,8 +222,8 @@ def main():
         
     print("\n")
     print(f"### Benchmark Results (Embedding Dim: {args.dim}, Queries per test: {args.queries})")
-    print(f"| Scale (N) | Bulk Upsert (s) | Load Store (s) | Zero-Hit Search (ms) | Cache-Hit Search (ms) | All-Match Search (ms) | Incremental Upsert (s) | File Size (MB) |")
-    print(f"|---|---|---|---|---|---|---|---|")
+    print("| Scale (N) | Bulk Upsert (s) | Load Store (s) | Zero-Hit Search (ms) | Cache-Hit Search (ms) | All-Match Search (ms) | Incremental Upsert (s) | File Size (MB) |")
+    print("|---|---|---|---|---|---|---|---|")
     
     for size in sorted(sizes):
         res = all_results[size]
@@ -244,21 +244,21 @@ def main():
     print(f"- **Search Latency (at scale {max_size})**:")
     print(f"  - Measured max average search time: {search_worst_ms:.2f} ms (Warning threshold: {SEARCH_SLOW_THRESHOLD_MS} ms)")
     if search_worst_ms > SEARCH_SLOW_THRESHOLD_MS:
-        print(f"  - [WARNING] Search latency is high. It is recommended to implement:")
-        print(f"    1. **Norm Caching**: Pre-calculate and store the vector norms to avoid computing them inside the cosine similarity loop.")
-        print(f"    2. **NumPy Vectorization**: Replace the pure-Python cosine similarity loop with vectorized NumPy operations to handle high-dimensional computations.")
+        print("  - [WARNING] Search latency is high. It is recommended to implement:")
+        print("    1. **Norm Caching**: Pre-calculate and store the vector norms to avoid computing them inside the cosine similarity loop.")
+        print("    2. **NumPy Vectorization**: Replace the pure-Python cosine similarity loop with vectorized NumPy operations to handle high-dimensional computations.")
     else:
-        print(f"  - [OK] Search latency is within acceptable limits. Pure-Python linear scan is sufficient for this scale.")
+        print("  - [OK] Search latency is within acceptable limits. Pure-Python linear scan is sufficient for this scale.")
         
     # Check Upsert latency recommendations
     inc_upsert_s = max_res['incremental_upsert_s']
     print(f"- **Incremental Upsert Latency (at scale {max_size})**:")
     print(f"  - Measured write time for 10 records: {inc_upsert_s:.4f} s (Warning threshold: {UPSERT_SLOW_THRESHOLD_S} s)")
     if inc_upsert_s > UPSERT_SLOW_THRESHOLD_S:
-        print(f"  - [WARNING] Upsert latency is high. This is because the database is completely sorted and rewritten on every write.")
-        print(f"    - Recommendation: Switch from a single atomic-rewritten JSONL file to an **append-only log** with periodic **compaction**, or migrate to a lightweight database engine like **SQLite**.")
+        print("  - [WARNING] Upsert latency is high. This is because the database is completely sorted and rewritten on every write.")
+        print("    - Recommendation: Switch from a single atomic-rewritten JSONL file to an **append-only log** with periodic **compaction**, or migrate to a lightweight database engine like **SQLite**.")
     else:
-        print(f"  - [OK] Write latency is within acceptable limits. Atomic-replace JSONL is safe and reliable for this scale.")
+        print("  - [OK] Write latency is within acceptable limits. Atomic-replace JSONL is safe and reliable for this scale.")
         
     print("\nBenchmark completed successfully.")
 
