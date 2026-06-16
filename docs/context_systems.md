@@ -223,3 +223,55 @@ python extract_relations.py /path/to/game/tl/schinese --mode relation --story-se
 seed 中的关系统一标记为 `candidate`，只包含共场景、对话往来、相互提及、来源文件和 speaker 统计等可审查信息；如果同一输入目录里存在 `define e = Character("Eileen")` 这类 Ren'Py 角色定义，seed 会优先用定义名作为 speaker 名称候选。它不会自动断言恋人、敌人、上下级等强语义关系。建议人工确认并编辑后，再作为正式 `story_graph.json` 使用。
 
 当前实现仍是 MVP：检索逻辑是轻量启发式，Neo4j 可视化导出，以及 sync 运行日志里的更完整 Story Memory diagnostics 还属于后续工作。
+
+## RAG Store Performance Benchmark
+
+为了在大项目规模下评估本地 RAG Store（`JsonRagStore`）的性能极限并防止退化，项目中包含了一个离线性能基准脚本 [benchmark_rag_store.py](../benchmark_rag_store.py)。
+
+### 运行方式
+
+该脚本在本地离线运行，使用合成的随机向量记录，不依赖 Gemini Embedding API，也不需要真实的 API Key。
+
+```bash
+# 运行默认规模测试（100, 1000, 10000 条记录）
+python benchmark_rag_store.py
+
+# 快速 Smoke 测试或自定义参数
+python benchmark_rag_store.py --sizes 10,100 --queries 5 --dim 768
+```
+
+### 测量指标说明
+
+该基准工具在不同数据库规模（N）下测量并输出以下关键指标：
+
+1. **Bulk Upsert (s)**：首次将 N 条记录批量写入空数据库并刷盘的时间。
+2. **Load Store (s)**：清空内存后，重新从 `history.jsonl` 文件加载 N 条记录至内存的耗时。
+3. **Zero-Hit Search (ms)**：针对 N 条记录，执行指定的随机向量查询（默认 `min_similarity=0.72`，基本无命中）的平均耗时。主要评估纯线性 Cosine Similarity 计算的开销。
+4. **Cache-Hit Search (ms)**：针对 N 条记录，使用已存在于库中的记录向量进行查询（默认 `min_similarity=0.72`，保证至少 1 个匹配）的平均耗时。主要评估有命中时的排序、Slicing 和结果格式化开销。
+5. **All-Match Search (ms)**：设置 `min_similarity=-1.0` 强行匹配全部记录时的平均查询耗时。主要评估全量参与排序和裁剪时的开销。
+6. **Incremental Upsert (s)**：在已存在 N 条记录的数据库中，增量 Upsert 10 条新记录的耗时。由于当前实现需要全量重写 `history.jsonl`，该指标反映了频繁写入时的性能开销。
+7. **File Size (MB)**：存储 N 条记录时 `history.jsonl` 在磁盘上的文件大小。
+
+### 性能瓶颈与优化建议判定
+
+运行结束后，脚本会根据实测数据动态提示优化建议：
+- **Search 耗时阈值（50ms）**：若大规模下的 Average Search 超过 50ms，建议开启 **Norm Caching**（在内存中缓存向量范数，避免在 Cosine Loop 中重复计算）或引入 **NumPy 向量化**。
+- **Upsert 耗时阈值（1.0s）**：若 Incremental Upsert 超过 1.0s，说明全量原子重写文件成为瓶颈，建议改用 **Append-only log + Compaction** 存储方案，或引入轻量数据库（如 **SQLite**）。
+
+### 当前参考基线
+
+以下结果来自 2026-06-16 在本地 Windows 开发环境运行默认命令：
+
+```bash
+python benchmark_rag_store.py
+```
+
+参数为 `--sizes 100,1000,10000 --queries 20 --dim 768 --seed 42`。这些数字不是测试断言，主要用于记录当前实现的大致量级；不同机器、磁盘和 Python 版本会有波动。
+
+| Scale (N) | Bulk Upsert (s) | Load Store (s) | Zero-Hit Search (ms) | Cache-Hit Search (ms) | All-Match Search (ms) | Incremental Upsert (s) | File Size (MB) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 0.0415 | 0.0261 | 10.87 | 10.88 | 10.83 | 0.0461 | 1.67 |
+| 1000 | 0.3703 | 0.2719 | 133.87 | 158.99 | 159.50 | 0.5616 | 16.68 |
+| 10000 | 5.1964 | 3.9065 | 1554.64 | 1569.88 | 1652.19 | 6.0499 | 166.84 |
+
+这组基线显示：当前 JSONL + 内存字典实现可以可靠完成 10,000 条合成记录的离线 benchmark，但 768 维向量的纯 Python 线性检索和增量写入时的全量重写已经在 10,000 级别明显超过阈值。后续优先级应是 search 侧的 norm cache / NumPy vectorization，以及 write 侧的 append-only log + compaction 或 SQLite 迁移评估。
