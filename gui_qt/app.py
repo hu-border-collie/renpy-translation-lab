@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtWidgets import (
     QApplication,
@@ -62,7 +63,7 @@ class MainWindow(QMainWindow):
         proj_layout.setSpacing(10)
 
         proj_layout.addWidget(QLabel("当前游戏 work 目录："))
-        
+
         self.project_path_edit = QLineEdit("尚未选择项目")
         self.project_path_edit.setReadOnly(True)
         self.project_path_edit.setObjectName("project_path_edit")
@@ -132,6 +133,7 @@ class MainWindow(QMainWindow):
 
         self.batch_thinking_combo = QComboBox()
         self.batch_thinking_combo.addItem("（不启用）", "")
+        self.batch_thinking_combo.addItem("最小 (minimal)", "minimal")
         self.batch_thinking_combo.addItem("低 (low)", "low")
         self.batch_thinking_combo.addItem("中 (medium)", "medium")
         self.batch_thinking_combo.addItem("高 (high)", "high")
@@ -314,6 +316,17 @@ class MainWindow(QMainWindow):
 
     # --- Config loading/saving helpers ---
 
+    def _config_section(self, config: dict[str, Any], key: str) -> dict[str, Any]:
+        section = config.get(key)
+        return section if isinstance(section, dict) else {}
+
+    def _ensure_config_section(self, config: dict[str, Any], key: str) -> dict[str, Any]:
+        section = config.get(key)
+        if not isinstance(section, dict):
+            section = {}
+            config[key] = section
+        return section
+
     def _set_combo_value(self, combo: QComboBox, value: str):
         if not value:
             combo.setCurrentIndex(-1)
@@ -327,25 +340,29 @@ class MainWindow(QMainWindow):
 
     def _load_config_to_ui(self):
         config = self.state.load_translator_config()
-        
+        sync_config = self._config_section(config, "sync")
+        batch_config = self._config_section(config, "batch")
+        sync_rag_config = self._config_section(sync_config, "rag")
+        batch_rag_config = self._config_section(batch_config, "rag")
+
         # Populate sync model
-        sync_val = config.get("sync", {}).get("model", "")
+        sync_val = sync_config.get("model", "")
         self._set_combo_value(self.sync_model_combo, sync_val)
-        
+
         # Populate batch model
-        batch_val = config.get("batch", {}).get("model", "")
+        batch_val = batch_config.get("model", "")
         self._set_combo_value(self.batch_model_combo, batch_val)
-        
+
         # Populate sync embedding
-        sync_emb_val = config.get("sync", {}).get("rag", {}).get("embedding_model", "")
+        sync_emb_val = sync_rag_config.get("embedding_model", "")
         self._set_combo_value(self.sync_embedding_combo, sync_emb_val)
-        
+
         # Populate batch embedding
-        batch_emb_val = config.get("batch", {}).get("rag", {}).get("embedding_model", "")
+        batch_emb_val = batch_rag_config.get("embedding_model", "")
         self._set_combo_value(self.batch_embedding_combo, batch_emb_val)
-        
+
         # Populate thinking level
-        thinking_val = config.get("batch", {}).get("thinking_level", "")
+        thinking_val = batch_config.get("thinking_level", "")
         self._on_batch_model_changed(batch_val)
         idx = self.batch_thinking_combo.findData(thinking_val)
         if idx >= 0:
@@ -368,17 +385,21 @@ class MainWindow(QMainWindow):
         if not self.state.get_game_root():
             QMessageBox.information(self, "未选择项目", "请先选择游戏的 work 目录。")
             return
-        
+
         try:
             config = self.state.load_translator_config()
-            
-            config.setdefault("sync", {})["model"] = self.sync_model_combo.currentText().strip()
-            config.setdefault("batch", {})["model"] = self.batch_model_combo.currentText().strip()
-            config.setdefault("sync", {}).setdefault("rag", {})["embedding_model"] = self.sync_embedding_combo.currentText().strip()
-            config.setdefault("batch", {}).setdefault("rag", {})["embedding_model"] = self.batch_embedding_combo.currentText().strip()
+            sync_config = self._ensure_config_section(config, "sync")
+            batch_config = self._ensure_config_section(config, "batch")
+            sync_rag_config = self._ensure_config_section(sync_config, "rag")
+            batch_rag_config = self._ensure_config_section(batch_config, "rag")
+
+            sync_config["model"] = self.sync_model_combo.currentText().strip()
+            batch_config["model"] = self.batch_model_combo.currentText().strip()
+            sync_rag_config["embedding_model"] = self.sync_embedding_combo.currentText().strip()
+            batch_rag_config["embedding_model"] = self.batch_embedding_combo.currentText().strip()
             thinking_val = self.batch_thinking_combo.currentData()
-            config.setdefault("batch", {})["thinking_level"] = thinking_val if thinking_val is not None else ""
-            
+            batch_config["thinking_level"] = thinking_val if thinking_val is not None else ""
+
             self.state.save_translator_config(config)
             self._append_log("配置已成功保存至 translator_config.json。")
             self.statusBar().showMessage("配置已成功保存", 3000)
