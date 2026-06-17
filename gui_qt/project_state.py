@@ -31,7 +31,7 @@ class ProjectState:
             # Fallback for some layouts
             self.batch_script = self.tool_root / "gemini_translate_batch.py"
 
-        self.api_keys_path: Path = self.tool_root / "api_keys.json"
+        self.api_keys_path: Path = self._resolve_api_keys_path()
         self.config_path: Path = self.tool_root / "translator_config.json"
 
         self._game_root: Path | None = None
@@ -59,12 +59,27 @@ class ProjectState:
                 pass
         return None
 
+    def _resolve_api_keys_path(self) -> Path:
+        root_api_keys = self.tool_root / "api_keys.json"
+        if root_api_keys.exists():
+            return root_api_keys
+        return self.tool_root.parent / "data" / "api_keys.json"
+
+    def _path_without_resolve(self, path: str | Path) -> Path:
+        candidate = Path(path).expanduser()
+        if candidate.is_absolute():
+            return candidate
+        return candidate.absolute()
+
     # --- JSON helpers ---
 
     def _read_json_object(self, path: Path, description: str) -> dict[str, Any]:
         if not path.exists():
             return {}
-        raw = path.read_text(encoding="utf-8-sig")
+        try:
+            raw = path.read_text(encoding="utf-8-sig")
+        except OSError as exc:
+            raise ValueError(f"Failed to read {description}: {path}") from exc
         if not raw.strip():
             return {}
         try:
@@ -77,8 +92,22 @@ class ProjectState:
 
     def _write_json_object(self, path: Path, data: dict[str, Any]) -> None:
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            existing_mode = path.stat().st_mode & 0o777 if path.exists() else None
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            if existing_mode is not None:
+                os.chmod(tmp, existing_mode)
+            elif path.name == "api_keys.json":
+                os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except OSError as exc:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
+            raise ValueError(f"Failed to write JSON file: {path}") from exc
 
     # --- Game root (project directory) ---
 
@@ -87,7 +116,7 @@ class ProjectState:
 
     def set_game_root(self, path: str | Path) -> None:
         """Update current game root and persist it to translator_config.json."""
-        p = Path(path).resolve()
+        p = self._path_without_resolve(path)
         if not p.exists():
             # Still allow setting even if not exist yet (user may create later)
             pass
@@ -101,7 +130,7 @@ class ProjectState:
             data = json.loads(self.config_path.read_text(encoding="utf-8-sig") or "{}")
             game_root = data.get("game_root")
             if isinstance(game_root, str) and game_root.strip():
-                self._game_root = Path(game_root).resolve()
+                self._game_root = self._path_without_resolve(game_root)
         except Exception:
             # Non-fatal for GUI
             pass

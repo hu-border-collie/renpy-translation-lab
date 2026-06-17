@@ -43,7 +43,7 @@ class CliRunner(QObject):
 
         script = Path(script_path).resolve()
         if not script.exists():
-            self.error.emit(f"找不到命令行脚本：{script}")
+            self._fail(f"找不到命令行脚本：{script}")
             return
 
         python_exe = sys.executable
@@ -69,7 +69,8 @@ class CliRunner(QObject):
         self._proc.start(python_exe, cmd_args)
 
         if not self._proc.waitForStarted(3000):
-            self.error.emit("启动进程失败（超时）")
+            self._fail("启动进程失败（超时）")
+            return
 
     def kill(self) -> None:
         """Terminate the running process if any."""
@@ -86,23 +87,20 @@ class CliRunner(QObject):
             return
         self._pending_buffer += bytes(data)
 
-        # Split on newlines (handle \r\n and \n)
+        # Split on the earliest newline marker, including mixed line endings.
         while True:
-            pos = -1
-            for sep in (b"\n", b"\r\n", b"\r"):
-                p = self._pending_buffer.find(sep)
-                if p != -1:
-                    pos = p
-                    break
-            if pos == -1:
+            idx_n = self._pending_buffer.find(b"\n")
+            idx_r = self._pending_buffer.find(b"\r")
+            candidates = [idx for idx in (idx_n, idx_r) if idx != -1]
+            if not candidates:
                 break
+            pos = min(candidates)
 
             line_bytes = self._pending_buffer[:pos]
-            # Remove the separator
-            if self._pending_buffer[pos:pos+2] == b"\r\n":
-                self._pending_buffer = self._pending_buffer[pos+2:]
+            if self._pending_buffer[pos:pos + 2] == b"\r\n":
+                self._pending_buffer = self._pending_buffer[pos + 2:]
             else:
-                self._pending_buffer = self._pending_buffer[pos+1:]
+                self._pending_buffer = self._pending_buffer[pos + 1:]
 
             try:
                 line = line_bytes.decode("utf-8", errors="replace")
@@ -115,6 +113,8 @@ class CliRunner(QObject):
         # Flush any remaining partial line on process end (handled in finished too)
 
     def _on_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
+        if self._proc is None:
+            return
         # Flush any leftover data
         if self._pending_buffer:
             try:
@@ -132,5 +132,11 @@ class CliRunner(QObject):
         msg = f"进程错误：{error}"
         if self._proc:
             msg += f" - {self._proc.errorString()}"
-        self.error.emit(msg)
+        self._fail(msg)
+
+    def _fail(self, message: str) -> None:
+        if self._proc and self._proc.state() != QProcess.ProcessState.NotRunning:
+            self._proc.kill()
         self._proc = None
+        self.error.emit(message)
+        self.finished.emit(-1)
