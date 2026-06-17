@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QComboBox,
     QGridLayout,
+    QFrame,
+    QFormLayout,
 )
 
 from .cli_runner import CliRunner
@@ -44,35 +46,44 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
 
         # Header
         header = QLabel("实验性图形工作台 - 复用现有命令行流程")
-        header.setStyleSheet("color: #1f2937; font-size: 15px; font-weight: 600;")
+        header.setObjectName("header_label")
         layout.addWidget(header)
 
         # Project row
-        proj_box = QGroupBox("当前项目")
-        proj_layout = QHBoxLayout(proj_box)
+        project_frame = QFrame()
+        project_frame.setObjectName("project_frame")
+        proj_layout = QHBoxLayout(project_frame)
+        proj_layout.setContentsMargins(12, 10, 12, 10)
+        proj_layout.setSpacing(10)
 
-        self.project_label = QLabel("尚未选择项目")
-        self.project_label.setStyleSheet("color: #334155;")
-        proj_layout.addWidget(self.project_label, 1)
+        proj_layout.addWidget(QLabel("当前游戏 work 目录："))
+        
+        self.project_path_edit = QLineEdit("尚未选择项目")
+        self.project_path_edit.setReadOnly(True)
+        self.project_path_edit.setObjectName("project_path_edit")
+        proj_layout.addWidget(self.project_path_edit, 1)
 
-        self.select_btn = QPushButton("选择游戏 work 目录...")
+        self.select_btn = QPushButton("选择游戏目录...")
         self.select_btn.clicked.connect(self._on_select_project)
         proj_layout.addWidget(self.select_btn)
 
-        layout.addWidget(proj_box)
+        layout.addWidget(project_frame)
 
-        # Config box
-        config_box = QGroupBox("参数与模型配置")
-        config_layout = QGridLayout(config_box)
-        config_layout.setSpacing(10)
+        # Configuration Row (Sync + Batch side-by-side)
+        config_row = QHBoxLayout()
+        config_row.setSpacing(16)
 
-        # Sync Model
-        config_layout.addWidget(QLabel("Sync 翻译模型："), 0, 0)
+        # Sync Box
+        sync_box = QGroupBox("同步翻译配置 (Sync API)")
+        sync_layout = QFormLayout(sync_box)
+        sync_layout.setSpacing(8)
+        sync_layout.setContentsMargins(12, 16, 12, 12)
+
         self.sync_model_combo = QComboBox()
         self.sync_model_combo.addItems([
             "gemini-3.5-flash",
@@ -83,10 +94,23 @@ class MainWindow(QMainWindow):
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
         ])
-        config_layout.addWidget(self.sync_model_combo, 0, 1)
+        sync_layout.addRow("翻译模型：", self.sync_model_combo)
 
-        # Batch Model
-        config_layout.addWidget(QLabel("Batch 翻译模型："), 0, 2)
+        self.sync_embedding_combo = QComboBox()
+        self.sync_embedding_combo.addItems([
+            "gemini-embedding-2",
+            "gemini-embedding-001",
+        ])
+        sync_layout.addRow("RAG 向量模型：", self.sync_embedding_combo)
+
+        config_row.addWidget(sync_box, 1)
+
+        # Batch Box
+        batch_box = QGroupBox("批量离线配置 (Batch API)")
+        batch_layout = QFormLayout(batch_box)
+        batch_layout.setSpacing(8)
+        batch_layout.setContentsMargins(12, 16, 12, 12)
+
         self.batch_model_combo = QComboBox()
         self.batch_model_combo.addItems([
             "gemini-3.5-flash",
@@ -97,56 +121,52 @@ class MainWindow(QMainWindow):
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
         ])
-        config_layout.addWidget(self.batch_model_combo, 0, 3)
+        batch_layout.addRow("翻译模型：", self.batch_model_combo)
 
-        # Sync RAG embedding
-        config_layout.addWidget(QLabel("Sync RAG 向量模型："), 1, 0)
-        self.sync_embedding_combo = QComboBox()
-        self.sync_embedding_combo.addItems([
-            "gemini-embedding-2",
-            "gemini-embedding-001",
-        ])
-        config_layout.addWidget(self.sync_embedding_combo, 1, 1)
-
-        # Batch RAG embedding
-        config_layout.addWidget(QLabel("Batch RAG 向量模型："), 1, 2)
         self.batch_embedding_combo = QComboBox()
         self.batch_embedding_combo.addItems([
             "gemini-embedding-2",
             "gemini-embedding-001",
         ])
-        config_layout.addWidget(self.batch_embedding_combo, 1, 3)
+        batch_layout.addRow("RAG 向量模型：", self.batch_embedding_combo)
 
-        # Batch thinking level
-        config_layout.addWidget(QLabel("Batch 思考程度："), 2, 0)
         self.batch_thinking_combo = QComboBox()
         self.batch_thinking_combo.addItem("（不启用）", "")
         self.batch_thinking_combo.addItem("低 (low)", "low")
         self.batch_thinking_combo.addItem("中 (medium)", "medium")
         self.batch_thinking_combo.addItem("高 (high)", "high")
-        config_layout.addWidget(self.batch_thinking_combo, 2, 1)
+        batch_layout.addRow("Batch 思考程度：", self.batch_thinking_combo)
+
+        config_row.addWidget(batch_box, 1)
+
+        layout.addLayout(config_row)
+
+        # Save config row
+        save_layout = QHBoxLayout()
+        save_layout.addStretch()
+        self.save_config_btn = QPushButton("保存参数配置")
+        self.save_config_btn.setObjectName("save_config_btn")
+        self.save_config_btn.clicked.connect(self._on_save_config)
+        save_layout.addWidget(self.save_config_btn)
+        layout.addLayout(save_layout)
 
         # Connect model change signal to dynamically toggle thinking level
         self.batch_model_combo.currentTextChanged.connect(self._on_batch_model_changed)
 
-        # Save config button
-        self.save_config_btn = QPushButton("保存参数配置")
-        self.save_config_btn.clicked.connect(self._on_save_config)
-        config_layout.addWidget(self.save_config_btn, 2, 3)
-
-        layout.addWidget(config_box)
-
         # Actions row
         action_layout = QHBoxLayout()
         self.doctor_btn = QPushButton("检查项目（doctor）")
+        self.doctor_btn.setObjectName("doctor_btn")
         self.doctor_btn.clicked.connect(self._on_run_doctor)
         action_layout.addWidget(self.doctor_btn)
 
-        self.api_btn = QPushButton("管理 API Key（基础）")
+        self.api_btn = QPushButton("管理 API Key")
+        self.api_btn.setObjectName("api_btn")
         self.api_btn.clicked.connect(self._on_manage_api_keys)
         action_layout.addWidget(self.api_btn)
 
         self.kill_btn = QPushButton("停止当前任务")
+        self.kill_btn.setObjectName("kill_btn")
         self.kill_btn.clicked.connect(self._on_kill)
         self.kill_btn.setEnabled(False)
         action_layout.addWidget(self.kill_btn)
@@ -161,10 +181,7 @@ class MainWindow(QMainWindow):
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-        self.log_view.setStyleSheet(
-            "font-family: Consolas, 'Courier New', monospace; "
-            "font-size: 12px; background: #1e1e1e; color: #ddd;"
-        )
+        self.log_view.setObjectName("log_view")
         layout.addWidget(self.log_view, 1)
 
         # Connect runner
@@ -247,9 +264,9 @@ class MainWindow(QMainWindow):
     def _refresh_project_label(self):
         root = self.state.get_game_root()
         if root:
-            self.project_label.setText(str(root))
+            self.project_path_edit.setText(str(root))
         else:
-            self.project_label.setText("（尚未选择项目）")
+            self.project_path_edit.setText("（尚未选择项目）")
 
     def _on_run_doctor(self):
         if not self.state.get_game_root():
