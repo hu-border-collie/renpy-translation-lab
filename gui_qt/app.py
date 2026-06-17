@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QInputDialog,
     QLineEdit,
+    QComboBox,
+    QGridLayout,
 )
 
 from .cli_runner import CliRunner
@@ -64,6 +66,76 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(proj_box)
 
+        # Config box
+        config_box = QGroupBox("参数与模型配置")
+        config_layout = QGridLayout(config_box)
+        config_layout.setSpacing(10)
+
+        # Sync Model
+        config_layout.addWidget(QLabel("Sync 翻译模型："), 0, 0)
+        self.sync_model_combo = QComboBox()
+        self.sync_model_combo.addItems([
+            "gemini-3.5-flash",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-flash-lite",
+            "gemini-3-flash-preview",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+        ])
+        config_layout.addWidget(self.sync_model_combo, 0, 1)
+
+        # Batch Model
+        config_layout.addWidget(QLabel("Batch 翻译模型："), 0, 2)
+        self.batch_model_combo = QComboBox()
+        self.batch_model_combo.addItems([
+            "gemini-3.5-flash",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-flash-lite",
+            "gemini-3-flash-preview",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+        ])
+        config_layout.addWidget(self.batch_model_combo, 0, 3)
+
+        # Sync RAG embedding
+        config_layout.addWidget(QLabel("Sync RAG 向量模型："), 1, 0)
+        self.sync_embedding_combo = QComboBox()
+        self.sync_embedding_combo.addItems([
+            "gemini-embedding-2",
+            "gemini-embedding-001",
+        ])
+        config_layout.addWidget(self.sync_embedding_combo, 1, 1)
+
+        # Batch RAG embedding
+        config_layout.addWidget(QLabel("Batch RAG 向量模型："), 1, 2)
+        self.batch_embedding_combo = QComboBox()
+        self.batch_embedding_combo.addItems([
+            "gemini-embedding-2",
+            "gemini-embedding-001",
+        ])
+        config_layout.addWidget(self.batch_embedding_combo, 1, 3)
+
+        # Batch thinking level
+        config_layout.addWidget(QLabel("Batch 思考程度："), 2, 0)
+        self.batch_thinking_combo = QComboBox()
+        self.batch_thinking_combo.addItem("（不启用）", "")
+        self.batch_thinking_combo.addItem("低 (low)", "low")
+        self.batch_thinking_combo.addItem("中 (medium)", "medium")
+        self.batch_thinking_combo.addItem("高 (high)", "high")
+        config_layout.addWidget(self.batch_thinking_combo, 2, 1)
+
+        # Connect model change signal to dynamically toggle thinking level
+        self.batch_model_combo.currentTextChanged.connect(self._on_batch_model_changed)
+
+        # Save config button
+        self.save_config_btn = QPushButton("保存参数配置")
+        self.save_config_btn.clicked.connect(self._on_save_config)
+        config_layout.addWidget(self.save_config_btn, 2, 3)
+
+        layout.addWidget(config_box)
+
         # Actions row
         action_layout = QHBoxLayout()
         self.doctor_btn = QPushButton("检查项目（doctor）")
@@ -101,6 +173,7 @@ class MainWindow(QMainWindow):
         self.runner.error.connect(self._on_runner_error)
 
         self._refresh_project_label()
+        self._load_config_to_ui()
 
         # Status
         self.statusBar().showMessage(
@@ -124,6 +197,7 @@ class MainWindow(QMainWindow):
                 self._append_log(f"更新 translator_config.json 失败：{exc}")
                 return
             self._refresh_project_label()
+            self._load_config_to_ui()
             self._append_log(f"项目目录已设置为：{directory}")
 
     def _masked_key(self, key: str) -> str:
@@ -220,6 +294,80 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("项目检查完成。", 6000)
         else:
             self.statusBar().showMessage(f"项目检查失败（退出码：{exit_code}）", 6000)
+
+    # --- Config loading/saving helpers ---
+
+    def _set_combo_value(self, combo: QComboBox, value: str):
+        if not value:
+            combo.setCurrentIndex(-1)
+            return
+        idx = combo.findText(value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        else:
+            combo.addItem(value)
+            combo.setCurrentIndex(combo.count() - 1)
+
+    def _load_config_to_ui(self):
+        config = self.state.load_translator_config()
+        
+        # Populate sync model
+        sync_val = config.get("sync", {}).get("model", "")
+        self._set_combo_value(self.sync_model_combo, sync_val)
+        
+        # Populate batch model
+        batch_val = config.get("batch", {}).get("model", "")
+        self._set_combo_value(self.batch_model_combo, batch_val)
+        
+        # Populate sync embedding
+        sync_emb_val = config.get("sync", {}).get("rag", {}).get("embedding_model", "")
+        self._set_combo_value(self.sync_embedding_combo, sync_emb_val)
+        
+        # Populate batch embedding
+        batch_emb_val = config.get("batch", {}).get("rag", {}).get("embedding_model", "")
+        self._set_combo_value(self.batch_embedding_combo, batch_emb_val)
+        
+        # Populate thinking level
+        thinking_val = config.get("batch", {}).get("thinking_level", "")
+        self._on_batch_model_changed(batch_val)
+        idx = self.batch_thinking_combo.findData(thinking_val)
+        if idx >= 0:
+            self.batch_thinking_combo.setCurrentIndex(idx)
+        else:
+            if thinking_val:
+                self.batch_thinking_combo.addItem(f"{thinking_val} (自定义)", thinking_val)
+                self.batch_thinking_combo.setCurrentIndex(self.batch_thinking_combo.count() - 1)
+            else:
+                self.batch_thinking_combo.setCurrentIndex(0)
+
+    def _on_batch_model_changed(self, text: str):
+        model_name = text.strip()
+        is_thinking_supported = model_name.startswith("gemini-3") or model_name.startswith("gemini-2.5")
+        self.batch_thinking_combo.setEnabled(is_thinking_supported)
+        if not is_thinking_supported:
+            self.batch_thinking_combo.setCurrentIndex(0)
+
+    def _on_save_config(self):
+        if not self.state.get_game_root():
+            QMessageBox.information(self, "未选择项目", "请先选择游戏的 work 目录。")
+            return
+        
+        try:
+            config = self.state.load_translator_config()
+            
+            config.setdefault("sync", {})["model"] = self.sync_model_combo.currentText().strip()
+            config.setdefault("batch", {})["model"] = self.batch_model_combo.currentText().strip()
+            config.setdefault("sync", {}).setdefault("rag", {})["embedding_model"] = self.sync_embedding_combo.currentText().strip()
+            config.setdefault("batch", {}).setdefault("rag", {})["embedding_model"] = self.batch_embedding_combo.currentText().strip()
+            thinking_val = self.batch_thinking_combo.currentData()
+            config.setdefault("batch", {})["thinking_level"] = thinking_val if thinking_val is not None else ""
+            
+            self.state.save_translator_config(config)
+            self._append_log("配置已成功保存至 translator_config.json。")
+            self.statusBar().showMessage("配置已成功保存", 3000)
+        except Exception as exc:
+            QMessageBox.warning(self, "保存配置失败", str(exc))
+            self._append_log(f"保存配置失败：{exc}")
 
 
 def run_app(argv: list[str] | None = None) -> int:
