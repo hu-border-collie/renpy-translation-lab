@@ -1,0 +1,67 @@
+/* Minimal stable light theme for the first version GUI.
+   Explicit colors avoid unreadable text when Windows is using dark mode. */
+QMainWindow,
+QWidget {
+    background: #f6f7f9;
+    color: #202124;
+}
+
+QLabel {
+    background: transparent;
+    color: #202124;
+}
+
+QGroupBox {
+    background: #f6f7f9;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    color: #1f2937;
+    font-weight: 500;
+    margin-top: 12px;
+    padding: 10px 8px 8px 8px;
+}
+
+QGroupBox::title {
+    background: #f6f7f9;
+    color: #475569;
+    left: 10px;
+    padding: 0 4px;
+    subcontrol-origin: margin;
+}
+
+QPushButton {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    color: #1f2937;
+    min-height: 24px;
+    padding: 6px 14px;
+}
+
+QPushButton:hover {
+    background: #f8fafc;
+    border-color: #94a3b8;
+}
+
+QPushButton:pressed {
+    background: #e2e8f0;
+}
+
+QPushButton:disabled {
+    background: #f1f5f9;
+    border-color: #e2e8f0;
+    color: #94a3b8;
+}
+
+QTextEdit {
+    background: #1e1e1e;
+    border: 1px solid #444444;
+    color: #dddddd;
+    selection-background-color: #2563eb;
+    selection-color: #ffffff;
+}
+
+QStatusBar {
+    background: #f6f7f9;
+    color: #475569;
+}
