@@ -98,7 +98,7 @@ class MainWindow(QMainWindow):
         # Connect runner
         self.runner.line_ready.connect(self._append_log)
         self.runner.finished.connect(self._on_finished)
-        self.runner.error.connect(self._append_log)
+        self.runner.error.connect(self._on_runner_error)
 
         self._refresh_project_label()
 
@@ -206,11 +206,20 @@ class MainWindow(QMainWindow):
         scrollbar = self.log_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
+    def _on_runner_error(self, message: str):
+        self._append_log(message)
+        self.doctor_btn.setEnabled(True)
+        self.kill_btn.setEnabled(False)
+        self.statusBar().showMessage("项目检查失败，请查看诊断输出。", 6000)
+
     def _on_finished(self, exit_code: int):
         self.doctor_btn.setEnabled(True)
         self.kill_btn.setEnabled(False)
         self._append_log(f"\n[进程已结束，退出码：{exit_code}]")
-        self.statusBar().showMessage(f"项目检查完成（退出码：{exit_code}）", 6000)
+        if exit_code == 0:
+            self.statusBar().showMessage("项目检查完成。", 6000)
+        else:
+            self.statusBar().showMessage(f"项目检查失败（退出码：{exit_code}）", 6000)
 
 
 def run_app(argv: list[str] | None = None) -> int:
