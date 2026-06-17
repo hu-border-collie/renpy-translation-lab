@@ -220,6 +220,41 @@ class GuiProjectStateTests(unittest.TestCase):
 
             self.assertEqual(state.load_translator_config(), {})
 
+    def test_save_model_config_preserves_other_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            state.config_path.write_text(
+                json.dumps(
+                    {
+                        "game_root": "some_root",
+                        "sync": {
+                            "model": "gemini-old",
+                            "chunk_size": 40,
+                        },
+                        "batch": {
+                            "model": "gemini-old-batch",
+                            "thinking_level": "",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            config = state.load_translator_config()
+            config.setdefault("sync", {})["model"] = "gemini-new"
+            config.setdefault("batch", {})["model"] = "gemini-new-batch"
+            config.setdefault("batch", {})["thinking_level"] = "high"
+            state.save_translator_config(config)
+
+            saved = json.loads(state.config_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["sync"]["model"], "gemini-new")
+            self.assertEqual(saved["sync"]["chunk_size"], 40)
+            self.assertEqual(saved["batch"]["model"], "gemini-new-batch")
+            self.assertEqual(saved["batch"]["thinking_level"], "high")
+
 
 if __name__ == "__main__":
     unittest.main()
+
