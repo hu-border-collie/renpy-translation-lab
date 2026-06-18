@@ -1,0 +1,499 @@
+/* Premium Slate Dark Theme for the GUI Workbench */
+
+/* Global Window styling */
+QMainWindow {
+    background-color: #0f172a;
+}
+
+QWidget {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 13px;
+    color: #f1f5f9;
+}
+
+/* Header style */
+#header_label {
+    font-size: 18px;
+    font-weight: 700;
+    color: #93c5fd;
+    padding-bottom: 2px;
+}
+
+#subtitle_label,
+#config_hint_label {
+    color: #94a3b8;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.4;
+}
+
+/* Dialogs are top-level windows; set an explicit surface so native OS chrome
+   does not leak through when only QMainWindow is themed. */
+QDialog,
+QDialog#api_key_dialog {
+    background-color: #1e293b;
+    color: #f1f5f9;
+}
+
+QDialog QLabel {
+    background-color: transparent;
+    color: #cbd5e1;
+}
+
+QDialog#api_key_dialog QDialogButtonBox QPushButton {
+    min-width: 88px;
+}
+
+#api_status_label {
+    background-color: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #cbd5e1;
+    font-size: 12px;
+    padding: 10px 12px;
+}
+
+QLineEdit#api_key_input {
+    background-color: #0f172a;
+    border: 1px solid #475569;
+    border-radius: 6px;
+    color: #f1f5f9;
+    padding: 6px 10px;
+    min-height: 20px;
+}
+
+QLineEdit#api_key_input:focus {
+    border-color: #3b82f6;
+}
+
+QListWidget#api_key_list {
+    background-color: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #cbd5e1;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12px;
+    padding: 4px;
+}
+
+QListWidget#api_key_list QAbstractItemView {
+    background-color: #0f172a;
+    color: #cbd5e1;
+    selection-background-color: #1e40af;
+    selection-color: #dbeafe;
+}
+
+QListWidget#api_key_list::item {
+    padding: 6px 8px;
+}
+
+QListWidget#api_key_list::item:selected {
+    background-color: #1e40af;
+    color: #dbeafe;
+}
+
+/* Tab widget */
+QTabWidget#main_tabs::pane {
+    border: 1px solid #334155;
+    border-radius: 8px;
+    background-color: #1e293b;
+    top: -1px;
+}
+
+QTabWidget#main_tabs > QTabBar::tab {
+    background-color: #0f172a;
+    border: 1px solid #334155;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 9px 22px;
+    margin-right: 4px;
+    color: #94a3b8;
+    font-weight: 500;
+    min-width: 72px;
+}
+
+QTabWidget#main_tabs > QTabBar::tab:selected {
+    background-color: #1e293b;
+    color: #60a5fa;
+    font-weight: 600;
+}
+
+QTabWidget#main_tabs > QTabBar::tab:hover:!selected {
+    background-color: #334155;
+    color: #e2e8f0;
+}
+
+/* Project Path Frame styling */
+#project_frame {
+    background-color: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 8px;
+}
+
+#project_path_edit {
+    background-color: #0f172a;
+    border: 1px solid #475569;
+    border-radius: 6px;
+    color: #e2e8f0;
+    padding: 6px 10px;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12px;
+}
+
+/* GroupBox styling */
+QGroupBox {
+    background-color: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    margin-top: 16px;
+    font-weight: 600;
+    color: #f1f5f9;
+    padding-top: 24px;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    top: 6px;
+    background-color: #1e293b;
+    padding: 0 6px;
+    color: #60a5fa;
+    font-size: 13px;
+}
+
+/* Form layout labels */
+QLabel {
+    color: #cbd5e1;
+    font-weight: 500;
+}
+
+/* Input Elements (ComboBox) styling */
+QComboBox {
+    background-color: #0f172a;
+    border: 1px solid #475569;
+    border-radius: 6px;
+    color: #f1f5f9;
+    padding: 5px 10px;
+    min-height: 20px;
+}
+
+QComboBox:hover {
+    border-color: #60a5fa;
+}
+
+QComboBox:focus {
+    border-color: #3b82f6;
+}
+
+QComboBox:disabled {
+    background-color: #1e293b;
+    border-color: #334155;
+    color: #64748b;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 24px;
+}
+
+/* Default Buttons styling */
+QPushButton {
+    background-color: #1e293b;
+    border: 1px solid #475569;
+    border-radius: 6px;
+    color: #e2e8f0;
+    font-weight: 500;
+    padding: 8px 16px;
+    min-height: 18px;
+}
+
+QPushButton:hover {
+    background-color: #334155;
+    border-color: #64748b;
+    color: #f8fafc;
+}
+
+QPushButton:pressed {
+    background-color: #0f172a;
+}
+
+QPushButton:disabled {
+    background-color: #1e293b;
+    border-color: #334155;
+    color: #64748b;
+}
+
+/* Primary Action Buttons */
+QPushButton#save_config_btn,
+QPushButton#doctor_btn,
+QPushButton#api_btn,
+QPushButton#translate_btn {
+    background-color: #2563eb;
+    border: 1px solid #2563eb;
+    color: #ffffff;
+    font-weight: 600;
+    min-width: 108px;
+}
+
+QPushButton#save_config_btn:hover,
+QPushButton#doctor_btn:hover,
+QPushButton#api_btn:hover,
+QPushButton#translate_btn:hover {
+    background-color: #3b82f6;
+    border-color: #3b82f6;
+}
+
+QPushButton#save_config_btn:pressed,
+QPushButton#doctor_btn:pressed,
+QPushButton#api_btn:pressed,
+QPushButton#translate_btn:pressed {
+    background-color: #1d4ed8;
+    border-color: #1d4ed8;
+}
+
+/* Secondary Action Buttons */
+QPushButton#secondary_btn {
+    background-color: #1e293b;
+    border: 1px solid #475569;
+    color: #cbd5e1;
+    font-weight: 500;
+    min-width: 108px;
+}
+
+QPushButton#secondary_btn:hover {
+    background-color: #334155;
+    border-color: #64748b;
+    color: #f8fafc;
+}
+
+QPushButton#secondary_btn:pressed {
+    background-color: #0f172a;
+}
+
+QPushButton#secondary_btn:disabled {
+    background-color: #1e293b;
+    border-color: #334155;
+    color: #64748b;
+}
+
+/* Danger Action Button */
+QPushButton#kill_btn {
+    background-color: #ef4444;
+    border: 1px solid #ef4444;
+    color: #ffffff;
+    font-weight: 600;
+}
+
+QPushButton#kill_btn:hover {
+    background-color: #f87171;
+    border-color: #f87171;
+}
+
+QPushButton#kill_btn:pressed {
+    background-color: #dc2626;
+    border-color: #dc2626;
+}
+
+QPushButton#kill_btn:disabled {
+    background-color: #1e293b;
+    border-color: #334155;
+    color: #64748b;
+}
+
+/* Log View (QTextEdit) terminal styling */
+QTextEdit#log_view {
+    background-color: #020617;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    color: #e2e8f0;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12px;
+    padding: 12px;
+}
+
+QLabel#doctor_status_label {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#doctor_status_label[status="idle"],
+QLabel#doctor_status_label[status="running"] {
+    color: #60a5fa;
+}
+
+QLabel#doctor_status_label[status="ready"] {
+    color: #4ade80;
+}
+
+QLabel#doctor_status_label[status="warning"] {
+    color: #fbbf24;
+}
+
+QLabel#doctor_status_label[status="stale"] {
+    color: #fbbf24;
+}
+
+QLabel#doctor_status_label[status="blocked"] {
+    color: #f87171;
+}
+
+QLabel#doctor_facts_label {
+    color: #cbd5e1;
+}
+
+QLabel#workflow_status_label {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#workflow_status_label[status="idle"],
+QLabel#workflow_status_label[status="running"] {
+    color: #60a5fa;
+}
+
+QLabel#workflow_status_label[status="done"] {
+    color: #4ade80;
+}
+
+QLabel#workflow_status_label[status="waiting"],
+QLabel#workflow_status_label[status="stale"] {
+    color: #fbbf24;
+}
+
+QLabel#workflow_status_label[status="failed"] {
+    color: #f87171;
+}
+
+QLabel#workflow_facts_label {
+    color: #cbd5e1;
+}
+
+QFrame#workflow_separator {
+    color: #334155;
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+
+QLabel#workflow_section_label {
+    color: #60a5fa;
+    font-size: 12px;
+    font-weight: 600;
+    margin-top: 2px;
+}
+
+QLabel#writeback_status_label {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#writeback_status_label[status="idle"],
+QLabel#writeback_status_label[status="running"] {
+    color: #60a5fa;
+}
+
+QLabel#writeback_status_label[status="safe"] {
+    color: #4ade80;
+}
+
+QLabel#writeback_status_label[status="applied"] {
+    color: #4ade80;
+}
+
+QLabel#writeback_status_label[status="warn"],
+QLabel#writeback_status_label[status="stale"] {
+    color: #fbbf24;
+}
+
+QLabel#writeback_status_label[status="block"],
+QLabel#writeback_status_label[status="failed"],
+QLabel#writeback_status_label[status="unknown"] {
+    color: #f87171;
+}
+
+QLabel#writeback_facts_label {
+    color: #cbd5e1;
+}
+
+QTextEdit#writeback_findings_view {
+    background-color: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #cbd5e1;
+    padding: 8px;
+}
+
+QPushButton#apply_btn {
+    background-color: #15803d;
+    border: 1px solid #15803d;
+    color: #ffffff;
+    font-weight: 600;
+    min-width: 108px;
+}
+
+QPushButton#apply_btn:hover {
+    background-color: #22c55e;
+    border-color: #22c55e;
+}
+
+QPushButton#apply_btn:pressed {
+    background-color: #166534;
+    border-color: #166534;
+}
+
+QPushButton#apply_btn:disabled {
+    background-color: #1e293b;
+    border-color: #334155;
+    color: #64748b;
+}
+
+QTextEdit#doctor_findings_view {
+    background-color: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #cbd5e1;
+    padding: 8px;
+}
+
+/* ScrollBar Styling */
+QScrollBar:vertical {
+    background-color: #1e293b;
+    width: 10px;
+    margin: 0px;
+}
+
+QTextEdit#log_view QScrollBar:vertical {
+    background-color: #020617;
+    width: 12px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #475569;
+    min-height: 20px;
+    border-radius: 5px;
+    border: 2px solid #1e293b;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #64748b;
+}
+
+QTextEdit#log_view QScrollBar::handle:vertical {
+    background-color: #334155;
+    border: 2px solid #020617;
+}
+
+QTextEdit#log_view QScrollBar::handle:vertical:hover {
+    background-color: #475569;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+}
