@@ -211,6 +211,28 @@ class GuiProjectStateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "属于其他项目"):
                 state.load_resume_manifest(manifest)
 
+    def test_load_resume_manifest_allows_missing_game_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            manifest = root / "manifest.json"
+            base_dir = root / "Game Work"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "mode": "translation",
+                        "base_dir": str(base_dir),
+                        "job_name": "batches/example",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            loaded = state.load_resume_manifest(manifest)
+
+            self.assertEqual(loaded["base_dir"], str(base_dir))
+            self.assertEqual(loaded["job_name"], "batches/example")
+
     def test_save_api_keys_preserves_existing_file_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
