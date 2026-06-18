@@ -1001,7 +1001,11 @@ class MainWindow(QMainWindow):
     def _apply_theme(self) -> None:
         if self._qt_app is None:
             return
-        apply_theme(self._qt_app, self._resources_dir, self._theme_preference)
+        try:
+            apply_theme(self._qt_app, self._resources_dir, self._theme_preference)
+        except OSError as exc:
+            self.statusBar().showMessage("主题样式加载失败，已保留当前样式。", 6000)
+            self._append_log(f"加载主题样式失败：{exc}")
 
     def _set_theme_preference(self, preference: str, *, persist: bool) -> None:
         self._theme_preference = normalize_theme_preference(preference)
