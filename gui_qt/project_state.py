@@ -64,8 +64,13 @@ class ProjectState:
                 pass
         return None
 
-    def load_resume_manifest(self, manifest_path: str | Path) -> dict[str, Any]:
+    def load_manifest_file(self, manifest_path: str | Path) -> dict[str, Any]:
         manifest = self._read_json_object(Path(manifest_path), "batch manifest")
+        manifest["_manifest_path"] = str(Path(manifest_path))
+        return manifest
+
+    def load_resume_manifest(self, manifest_path: str | Path) -> dict[str, Any]:
+        manifest = self.load_manifest_file(manifest_path)
         mode = manifest.get("mode", "translation")
         if mode != "translation":
             raise ValueError("最新任务不是基础翻译任务，不能在这里继续。")
