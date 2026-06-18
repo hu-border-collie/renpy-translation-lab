@@ -166,6 +166,20 @@ class ProjectState:
         except Exception:
             return []
 
+    def get_api_key_status(self) -> tuple[int, str]:
+        file_keys = self.load_api_keys()
+        if file_keys:
+            return len(file_keys), "file"
+        env_keys = [
+            os.environ.get("GEMINI_API_KEY"),
+            os.environ.get("GEMINI_API_KEY_2"),
+            os.environ.get("GEMINI_API_KEY_3"),
+        ]
+        configured_env_keys = [key for key in env_keys if isinstance(key, str) and key.strip()]
+        if configured_env_keys:
+            return len(configured_env_keys), "environment"
+        return 0, ""
+
     def save_api_keys(self, keys: list[str]) -> None:
         """Save API keys while preserving legacy/unknown fields."""
         data = self._read_json_object(self.api_keys_path, "api_keys.json")
