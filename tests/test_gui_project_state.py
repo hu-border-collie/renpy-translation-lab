@@ -212,6 +212,14 @@ class GuiProjectStateTests(unittest.TestCase):
             self.assertEqual(state.config_path.read_text(encoding="utf-8"), "{bad json")
             self.assertIsNone(state.get_game_root())
 
+    def test_load_translator_config_returns_empty_dict_for_non_object_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            state.config_path.write_text('["not", "an", "object"]', encoding="utf-8")
+
+            self.assertEqual(state.load_translator_config(), {})
+
 
 if __name__ == "__main__":
     unittest.main()
