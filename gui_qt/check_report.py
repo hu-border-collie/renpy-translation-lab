@@ -298,8 +298,8 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
 def idle_writeback_summary() -> WritebackSummary:
     return WritebackSummary(
         status="idle",
-        heading="尚未检查结果",
-        message="完成翻译任务并运行 check 后，这里会显示是否可以写回。",
+        heading="等待翻译完成",
+        message="翻译任务跑完 check 后，这里会显示是否可以写回。",
         facts=[],
         findings=[],
         can_apply=False,

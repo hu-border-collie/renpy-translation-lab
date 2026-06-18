@@ -370,6 +370,19 @@ QLabel#workflow_facts_label {
     color: #334155;
 }
 
+QFrame#workflow_separator {
+    color: #e2e8f0;
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+
+QLabel#workflow_section_label {
+    color: #2563eb;
+    font-size: 12px;
+    font-weight: 600;
+    margin-top: 2px;
+}
+
 QLabel#writeback_status_label {
     font-size: 15px;
     font-weight: 700;

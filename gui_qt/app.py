@@ -81,7 +81,10 @@ class MainWindow(QMainWindow):
 
         header = QLabel("Ren'Py Translation Lab · 图形工作台")
         header.setObjectName("header_label")
-        subtitle = QLabel("选择项目、运行检查与翻译；详细日志请切换到「诊断日志」页。")
+        subtitle = QLabel(
+            "先环境检查，再开始翻译；翻译完成后的写回状态显示在右侧任务卡片内。"
+            "详细日志请切换到「诊断日志」页。"
+        )
         subtitle.setObjectName("subtitle_label")
         subtitle.setWordWrap(True)
         root_layout.addWidget(header)
@@ -111,7 +114,7 @@ class MainWindow(QMainWindow):
         self._set_workflow_summary(
             "idle",
             "尚未开始翻译任务",
-            "运行项目检查后，可以开始基础 Batch 翻译流程。",
+            "完成环境检查后，可以开始基础 Batch 翻译流程。",
         )
         self._refresh_writeback_from_latest_manifest()
 
@@ -152,7 +155,7 @@ class MainWindow(QMainWindow):
 
         primary_layout = QHBoxLayout()
         primary_layout.setSpacing(10)
-        self.doctor_btn = QPushButton("检查项目")
+        self.doctor_btn = QPushButton("环境检查")
         self.doctor_btn.setObjectName("doctor_btn")
         self.doctor_btn.clicked.connect(self._on_run_doctor)
         primary_layout.addWidget(self.doctor_btn)
@@ -181,45 +184,10 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(actions_box)
 
-        writeback_box = QGroupBox("检查结果与写回")
-        writeback_layout = QVBoxLayout(writeback_box)
-        writeback_layout.setSpacing(6)
-        writeback_layout.setContentsMargins(12, 16, 12, 12)
-
-        self.writeback_status_label = QLabel()
-        self.writeback_status_label.setObjectName("writeback_status_label")
-        writeback_layout.addWidget(self.writeback_status_label)
-
-        self.writeback_message_label = QLabel()
-        self.writeback_message_label.setWordWrap(True)
-        writeback_layout.addWidget(self.writeback_message_label)
-
-        self.writeback_facts_label = QLabel()
-        self.writeback_facts_label.setWordWrap(True)
-        self.writeback_facts_label.setObjectName("writeback_facts_label")
-        writeback_layout.addWidget(self.writeback_facts_label)
-
-        self.writeback_findings_view = QTextEdit()
-        self.writeback_findings_view.setReadOnly(True)
-        self.writeback_findings_view.setMaximumHeight(88)
-        self.writeback_findings_view.setObjectName("writeback_findings_view")
-        writeback_layout.addWidget(self.writeback_findings_view)
-
-        writeback_actions = QHBoxLayout()
-        self.apply_btn = QPushButton("写回翻译")
-        self.apply_btn.setObjectName("apply_btn")
-        self.apply_btn.clicked.connect(self._on_apply_writeback)
-        self.apply_btn.setEnabled(False)
-        writeback_actions.addWidget(self.apply_btn)
-        writeback_actions.addStretch()
-        writeback_layout.addLayout(writeback_actions)
-
-        layout.addWidget(writeback_box)
-
         status_row = QHBoxLayout()
         status_row.setSpacing(16)
 
-        doctor_summary_box = QGroupBox("项目检查")
+        doctor_summary_box = QGroupBox("环境检查 (doctor)")
         doctor_summary_layout = QVBoxLayout(doctor_summary_box)
         doctor_summary_layout.setSpacing(6)
         doctor_summary_layout.setContentsMargins(12, 16, 12, 12)
@@ -262,6 +230,43 @@ class MainWindow(QMainWindow):
         self.workflow_facts_label.setWordWrap(True)
         self.workflow_facts_label.setObjectName("workflow_facts_label")
         workflow_layout.addWidget(self.workflow_facts_label)
+
+        workflow_separator = QFrame()
+        workflow_separator.setFrameShape(QFrame.Shape.HLine)
+        workflow_separator.setObjectName("workflow_separator")
+        workflow_layout.addWidget(workflow_separator)
+
+        writeback_heading = QLabel("写回翻译")
+        writeback_heading.setObjectName("workflow_section_label")
+        workflow_layout.addWidget(writeback_heading)
+
+        self.writeback_status_label = QLabel()
+        self.writeback_status_label.setObjectName("writeback_status_label")
+        workflow_layout.addWidget(self.writeback_status_label)
+
+        self.writeback_message_label = QLabel()
+        self.writeback_message_label.setWordWrap(True)
+        workflow_layout.addWidget(self.writeback_message_label)
+
+        self.writeback_facts_label = QLabel()
+        self.writeback_facts_label.setWordWrap(True)
+        self.writeback_facts_label.setObjectName("writeback_facts_label")
+        workflow_layout.addWidget(self.writeback_facts_label)
+
+        self.writeback_findings_view = QTextEdit()
+        self.writeback_findings_view.setReadOnly(True)
+        self.writeback_findings_view.setMaximumHeight(72)
+        self.writeback_findings_view.setObjectName("writeback_findings_view")
+        workflow_layout.addWidget(self.writeback_findings_view)
+
+        writeback_actions = QHBoxLayout()
+        self.apply_btn = QPushButton("写回翻译")
+        self.apply_btn.setObjectName("apply_btn")
+        self.apply_btn.clicked.connect(self._on_apply_writeback)
+        self.apply_btn.setEnabled(False)
+        writeback_actions.addWidget(self.apply_btn)
+        writeback_actions.addStretch()
+        workflow_layout.addLayout(writeback_actions)
 
         status_row.addWidget(workflow_box, 1)
         layout.addLayout(status_row, 1)
@@ -695,9 +700,9 @@ class MainWindow(QMainWindow):
                 "\n".join(f"- {finding}" for finding in summary.findings)
             )
         elif summary.status in {"idle", "running"}:
-            self.writeback_findings_view.setPlainText("等待检查结果。")
+            self.writeback_findings_view.setPlainText("翻译任务完成 check 后，这里会显示写回建议。")
         elif summary.status == "stale":
-            self.writeback_findings_view.setPlainText("请针对当前任务重新运行 check。")
+            self.writeback_findings_view.setPlainText("请针对当前任务重新完成翻译与 check。")
         elif summary.status == "safe":
             self.writeback_findings_view.setPlainText("未发现阻止写回的问题。")
         elif summary.status == "applied":
