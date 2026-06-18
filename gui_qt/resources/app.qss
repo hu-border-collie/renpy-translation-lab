@@ -13,10 +13,115 @@ QWidget {
 
 /* Header style */
 #header_label {
-    font-size: 16px;
+    font-size: 18px;
     font-weight: 700;
     color: #1e3a8a;
-    padding-bottom: 4px;
+    padding-bottom: 2px;
+}
+
+#subtitle_label,
+#config_hint_label {
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.4;
+}
+
+/* Dialogs are top-level windows; set an explicit light surface so Windows
+   dark mode does not leak through when only QMainWindow is themed. */
+QDialog,
+QDialog#api_key_dialog {
+    background-color: #ffffff;
+    color: #0f172a;
+}
+
+QDialog QLabel {
+    background-color: transparent;
+    color: #475569;
+}
+
+QDialog#api_key_dialog QDialogButtonBox QPushButton {
+    min-width: 88px;
+}
+
+#api_status_label {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    color: #334155;
+    font-size: 12px;
+    padding: 10px 12px;
+}
+
+QLineEdit#api_key_input {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    color: #0f172a;
+    padding: 6px 10px;
+    min-height: 20px;
+}
+
+QLineEdit#api_key_input:focus {
+    border-color: #2563eb;
+}
+
+QListWidget#api_key_list {
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    color: #334155;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12px;
+    padding: 4px;
+}
+
+QListWidget#api_key_list QAbstractItemView {
+    background-color: #ffffff;
+    color: #334155;
+    selection-background-color: #dbeafe;
+    selection-color: #1e3a8a;
+}
+
+QListWidget#api_key_list::item {
+    padding: 6px 8px;
+}
+
+QListWidget#api_key_list::item:selected {
+    background-color: #dbeafe;
+    color: #1e3a8a;
+}
+
+/* Tab widget */
+QTabWidget#main_tabs::pane {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background-color: #ffffff;
+    top: -1px;
+}
+
+QTabWidget#main_tabs > QTabBar::tab {
+    background-color: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 9px 22px;
+    margin-right: 4px;
+    color: #64748b;
+    font-weight: 500;
+    min-width: 72px;
+}
+
+QTabWidget#main_tabs > QTabBar::tab:selected {
+    background-color: #ffffff;
+    color: #2563eb;
+    font-weight: 600;
+}
+
+QTabWidget#main_tabs > QTabBar::tab:hover:!selected {
+    background-color: #e2e8f0;
+    color: #334155;
 }
 
 /* Project Path Frame styling */
@@ -129,6 +234,7 @@ QPushButton#translate_btn {
     border: 1px solid #2563eb;
     color: #ffffff;
     font-weight: 600;
+    min-width: 108px;
 }
 
 QPushButton#save_config_btn:hover,
@@ -145,6 +251,31 @@ QPushButton#api_btn:pressed,
 QPushButton#translate_btn:pressed {
     background-color: #1e40af;
     border-color: #1e40af;
+}
+
+/* Secondary Action Buttons */
+QPushButton#secondary_btn {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    color: #475569;
+    font-weight: 500;
+    min-width: 108px;
+}
+
+QPushButton#secondary_btn:hover {
+    background-color: #f8fafc;
+    border-color: #94a3b8;
+    color: #0f172a;
+}
+
+QPushButton#secondary_btn:pressed {
+    background-color: #f1f5f9;
+}
+
+QPushButton#secondary_btn:disabled {
+    background-color: #f1f5f9;
+    border-color: #e2e8f0;
+    color: #cbd5e1;
 }
 
 /* Danger Action Button */
@@ -249,19 +380,33 @@ QTextEdit#doctor_findings_view {
 
 /* ScrollBar Styling */
 QScrollBar:vertical {
-    background-color: #0f172a;
-    width: 12px;
+    background-color: #f1f5f9;
+    width: 10px;
     margin: 0px;
 }
 
+QTextEdit#log_view QScrollBar:vertical {
+    background-color: #0f172a;
+    width: 12px;
+}
+
 QScrollBar::handle:vertical {
-    background-color: #334155;
+    background-color: #cbd5e1;
     min-height: 20px;
-    border-radius: 6px;
-    border: 2px solid #0f172a;
+    border-radius: 5px;
+    border: 2px solid #f1f5f9;
 }
 
 QScrollBar::handle:vertical:hover {
+    background-color: #94a3b8;
+}
+
+QTextEdit#log_view QScrollBar::handle:vertical {
+    background-color: #334155;
+    border: 2px solid #0f172a;
+}
+
+QTextEdit#log_view QScrollBar::handle:vertical:hover {
     background-color: #475569;
 }
 
