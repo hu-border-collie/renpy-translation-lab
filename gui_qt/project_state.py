@@ -177,7 +177,10 @@ class ProjectState:
             return {}
         try:
             raw = self.config_path.read_text(encoding="utf-8-sig")
-            return json.loads(raw) if raw.strip() else {}
+            if not raw.strip():
+                return {}
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
         except Exception:
             return {}
 
