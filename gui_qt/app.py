@@ -32,6 +32,13 @@ from PySide6.QtWidgets import (
 )
 
 from .cli_runner import CliRunner
+from .doctor_report import (
+    DoctorSummary,
+    idle_summary,
+    running_summary,
+    stale_summary,
+    summarize_doctor_output,
+)
 from .project_state import ProjectState
 
 
@@ -47,6 +54,8 @@ class MainWindow(QMainWindow):
         self._updating_batch_thinking_combo = False
         self._batch_thinking_config_has_key = False
         self._batch_thinking_user_changed = False
+        self._active_command = ""
+        self._doctor_output_lines: list[str] = []
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -181,6 +190,33 @@ class MainWindow(QMainWindow):
         action_layout.addStretch()
         layout.addLayout(action_layout)
 
+        # Doctor summary
+        doctor_summary_box = QGroupBox("项目检查摘要")
+        doctor_summary_layout = QVBoxLayout(doctor_summary_box)
+        doctor_summary_layout.setSpacing(6)
+        doctor_summary_layout.setContentsMargins(12, 16, 12, 12)
+
+        self.doctor_status_label = QLabel()
+        self.doctor_status_label.setObjectName("doctor_status_label")
+        doctor_summary_layout.addWidget(self.doctor_status_label)
+
+        self.doctor_message_label = QLabel()
+        self.doctor_message_label.setWordWrap(True)
+        doctor_summary_layout.addWidget(self.doctor_message_label)
+
+        self.doctor_facts_label = QLabel()
+        self.doctor_facts_label.setWordWrap(True)
+        self.doctor_facts_label.setObjectName("doctor_facts_label")
+        doctor_summary_layout.addWidget(self.doctor_facts_label)
+
+        self.doctor_findings_view = QTextEdit()
+        self.doctor_findings_view.setReadOnly(True)
+        self.doctor_findings_view.setMaximumHeight(92)
+        self.doctor_findings_view.setObjectName("doctor_findings_view")
+        doctor_summary_layout.addWidget(self.doctor_findings_view)
+
+        layout.addWidget(doctor_summary_box)
+
         # Output
         out_label = QLabel("诊断输出（来自命令行）")
         layout.addWidget(out_label)
@@ -192,12 +228,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.log_view, 1)
 
         # Connect runner
-        self.runner.line_ready.connect(self._append_log)
+        self.runner.line_ready.connect(self._on_cli_line_ready)
         self.runner.finished.connect(self._on_finished)
         self.runner.error.connect(self._on_runner_error)
 
         self._refresh_project_label()
         self._load_config_to_ui()
+        self._set_doctor_summary(idle_summary())
 
         # Status
         self.statusBar().showMessage(
@@ -222,6 +259,9 @@ class MainWindow(QMainWindow):
                 return
             self._refresh_project_label()
             self._load_config_to_ui()
+            self._active_command = ""
+            self._doctor_output_lines = []
+            self._set_doctor_summary(stale_summary())
             self._append_log(f"项目目录已设置为：{directory}")
 
     def _masked_key(self, key: str) -> str:
@@ -285,6 +325,9 @@ class MainWindow(QMainWindow):
             return
 
         self.log_view.clear()
+        self._active_command = "doctor"
+        self._doctor_output_lines = []
+        self._set_doctor_summary(running_summary())
         self._append_log("=== 正在运行：gemini_translate_batch.py doctor ===\n")
         self.doctor_btn.setEnabled(False)
         self.kill_btn.setEnabled(True)
@@ -298,14 +341,39 @@ class MainWindow(QMainWindow):
 
     # --- Runner callbacks ---
 
+    def _on_cli_line_ready(self, text: str):
+        if self._active_command == "doctor":
+            self._doctor_output_lines.append(text)
+        self._append_log(text)
+
     def _append_log(self, text: str):
         self.log_view.append(text.rstrip("\n"))
         # scroll to bottom
         scrollbar = self.log_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
+    def _set_doctor_summary(self, summary: DoctorSummary):
+        self.doctor_status_label.setText(summary.heading)
+        self.doctor_status_label.setProperty("status", summary.status)
+        self.doctor_status_label.style().unpolish(self.doctor_status_label)
+        self.doctor_status_label.style().polish(self.doctor_status_label)
+        self.doctor_message_label.setText(summary.message)
+        self.doctor_facts_label.setText("\n".join(summary.facts))
+        if summary.findings:
+            self.doctor_findings_view.setPlainText(
+                "\n".join(f"- {finding}" for finding in summary.findings)
+            )
+        elif summary.status in {"idle", "running"}:
+            self.doctor_findings_view.setPlainText("等待项目检查结果。")
+        elif summary.status == "stale":
+            self.doctor_findings_view.setPlainText("请重新运行项目检查。")
+        else:
+            self.doctor_findings_view.setPlainText("未发现需要处理的事项。")
+
     def _on_runner_error(self, message: str):
         self._append_log(message)
+        if self._active_command == "doctor":
+            self._doctor_output_lines.append(message)
         self.doctor_btn.setEnabled(True)
         self.kill_btn.setEnabled(False)
         self.statusBar().showMessage("项目检查失败，请查看诊断输出。", 6000)
@@ -314,6 +382,16 @@ class MainWindow(QMainWindow):
         self.doctor_btn.setEnabled(True)
         self.kill_btn.setEnabled(False)
         self._append_log(f"\n[进程已结束，退出码：{exit_code}]")
+        if self._active_command == "doctor":
+            api_key_count, api_key_source = self.state.get_api_key_status()
+            summary = summarize_doctor_output(
+                "\n".join(self._doctor_output_lines),
+                exit_code,
+                api_key_count=api_key_count,
+                api_key_source=api_key_source,
+            )
+            self._set_doctor_summary(summary)
+            self._active_command = ""
         if exit_code == 0:
             self.statusBar().showMessage("项目检查完成。", 6000)
         else:
