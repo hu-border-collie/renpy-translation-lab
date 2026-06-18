@@ -17,6 +17,22 @@
 
 如果你想找的是 GUI、一键打包、面向普通用户的整套发行流程，这个仓库不是那个方向。
 
+**实验性可选 GUI**（第一版正在开发中）：
+
+有一个使用 PySide6 的可选桌面 GUI（放在 `gui_qt/`），它作为现有 CLI 的外壳层工作：
+
+```powershell
+pip install -r requirements-gui.txt
+python -m gui_qt
+```
+
+目前第一版基础功能包括：
+- 选择 game/work 目录（会更新 `translator_config.json`）
+- 运行 `doctor` 并实时显示输出
+- 基本 API key 替换（默认隐藏 key，并保留已有多 key 配置）
+
+GUI 通过 `QProcess` 调用 `gemini_translate_batch.py` 的子命令，不会修改核心翻译逻辑。详见 issue #42。早期 PR 使用 `Refs #42`。
+
 ## 核心能力
 
 - 扫描 Ren'Py `game/tl/schinese` 下的 `.rpy` 文件，抽取待翻译条目并跳过 `old`。

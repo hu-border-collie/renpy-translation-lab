@@ -1,0 +1,4 @@
+# Optional desktop GUI (PySide6 + custom QSS)
+# Install with: pip install -r requirements-gui.txt
+# The main CLI and core remain usable without this file.
+PySide6>=6.7
