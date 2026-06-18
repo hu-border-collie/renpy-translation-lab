@@ -197,6 +197,10 @@ QLabel#doctor_status_label[status="warning"] {
     color: #b45309;
 }
 
+QLabel#doctor_status_label[status="stale"] {
+    color: #b45309;
+}
+
 QLabel#doctor_status_label[status="blocked"] {
     color: #b91c1c;
 }

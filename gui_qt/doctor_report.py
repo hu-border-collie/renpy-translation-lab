@@ -15,7 +15,7 @@ class DoctorSummary:
 
 
 MODE_MESSAGES = {
-    "can_generate_template": "Ren'Py 模板生成环境可用，可以检查或刷新翻译模板。",
+    "can_generate_template": "Ren'Py 模板生成环境可用；如翻译模板尚不存在，需要先生成或刷新模板。",
     "existing_tl_only": "已有翻译文件可处理；模板生成环境不可用，后续依赖现有 TL 文件。",
     "blocked_missing_template": "缺少可处理的翻译文件，也无法自动生成模板。",
 }
@@ -119,6 +119,16 @@ def summarize_doctor_output(
         facts.append(f"扫描到 {rpy_files} 个 .rpy 文件，old/new 行数 {old_lines}/{new_lines}")
 
     findings = list(warnings)
+    if mode == "can_generate_template":
+        if parsed.get("tl_exists") is False:
+            findings.append(
+                "翻译目录尚不存在；doctor 可以生成模板，但还没有可检查的 TL 文件。"
+                "请先生成或刷新翻译模板后重新检查。"
+            )
+        elif counts and int(counts.get("rpy_files", 0)) == 0:
+            findings.append(
+                "翻译目录中没有可处理的 .rpy 文件；请先生成或刷新翻译模板后重新检查。"
+            )
     if api_key_count is not None:
         if api_key_count > 0:
             if api_key_source == "environment":
@@ -172,6 +182,16 @@ def idle_summary() -> DoctorSummary:
         status="idle",
         heading="尚未运行项目检查",
         message="选择游戏 work 目录后运行 doctor。",
+        facts=[],
+        findings=[],
+    )
+
+
+def stale_summary() -> DoctorSummary:
+    return DoctorSummary(
+        status="stale",
+        heading="项目已切换，请重新运行检查",
+        message="当前摘要已清空；请针对新的 work 目录重新运行 doctor。",
         facts=[],
         findings=[],
     )

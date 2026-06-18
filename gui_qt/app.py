@@ -32,7 +32,13 @@ from PySide6.QtWidgets import (
 )
 
 from .cli_runner import CliRunner
-from .doctor_report import DoctorSummary, idle_summary, running_summary, summarize_doctor_output
+from .doctor_report import (
+    DoctorSummary,
+    idle_summary,
+    running_summary,
+    stale_summary,
+    summarize_doctor_output,
+)
 from .project_state import ProjectState
 
 
@@ -253,6 +259,9 @@ class MainWindow(QMainWindow):
                 return
             self._refresh_project_label()
             self._load_config_to_ui()
+            self._active_command = ""
+            self._doctor_output_lines = []
+            self._set_doctor_summary(stale_summary())
             self._append_log(f"项目目录已设置为：{directory}")
 
     def _masked_key(self, key: str) -> str:
@@ -356,6 +365,8 @@ class MainWindow(QMainWindow):
             )
         elif summary.status in {"idle", "running"}:
             self.doctor_findings_view.setPlainText("等待项目检查结果。")
+        elif summary.status == "stale":
+            self.doctor_findings_view.setPlainText("请重新运行项目检查。")
         else:
             self.doctor_findings_view.setPlainText("未发现需要处理的事项。")
 
