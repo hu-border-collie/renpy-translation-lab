@@ -95,11 +95,24 @@ class ProjectState:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             existing_mode = path.stat().st_mode & 0o777 if path.exists() else None
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            if existing_mode is not None:
-                os.chmod(tmp, existing_mode)
-            elif path.name == "api_keys.json":
-                os.chmod(tmp, 0o600)
+            target_mode = existing_mode
+            if target_mode is None and path.name == "api_keys.json":
+                target_mode = 0o600
+            payload = json.dumps(data, ensure_ascii=False, indent=2)
+            if target_mode is None:
+                tmp.write_text(payload, encoding="utf-8")
+            else:
+                if tmp.exists():
+                    tmp.unlink()
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, target_mode)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                        fd = None
+                        handle.write(payload)
+                finally:
+                    if fd is not None:
+                        os.close(fd)
+                os.chmod(tmp, target_mode)
             os.replace(tmp, path)
         except OSError as exc:
             try:
