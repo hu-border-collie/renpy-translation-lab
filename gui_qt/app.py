@@ -31,7 +31,8 @@ from PySide6.QtWidgets import (
     QTabWidget,
 )
 
-from .api_key_dialog import ApiKeyDialog, mask_api_key
+from .api_key_dialog import ApiKeyDialog
+from .api_key_helpers import mask_api_key
 from .check_report import (
     WritebackSummary,
     idle_writeback_summary,
