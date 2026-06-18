@@ -122,7 +122,8 @@ QPushButton:disabled {
 
 /* Primary Action Buttons */
 QPushButton#save_config_btn,
-QPushButton#doctor_btn {
+QPushButton#doctor_btn,
+QPushButton#api_btn {
     background-color: #2563eb;
     border: 1px solid #2563eb;
     color: #ffffff;
@@ -130,13 +131,15 @@ QPushButton#doctor_btn {
 }
 
 QPushButton#save_config_btn:hover,
-QPushButton#doctor_btn:hover {
+QPushButton#doctor_btn:hover,
+QPushButton#api_btn:hover {
     background-color: #1d4ed8;
     border-color: #1d4ed8;
 }
 
 QPushButton#save_config_btn:pressed,
-QPushButton#doctor_btn:pressed {
+QPushButton#doctor_btn:pressed,
+QPushButton#api_btn:pressed {
     background-color: #1e40af;
     border-color: #1e40af;
 }
