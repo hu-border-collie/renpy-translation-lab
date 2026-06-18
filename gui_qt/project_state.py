@@ -45,11 +45,16 @@ class ProjectState:
     def get_batch_script_path(self) -> Path:
         return self.batch_script
 
+    def get_cli_root_dir(self) -> Path:
+        if (self.tool_root / "api_keys.json").exists():
+            return self.tool_root
+        return self.tool_root.parent
+
     def get_logs_dir(self) -> Path:
-        return self.tool_root / "logs" / "batch_jobs"
+        return self.get_cli_root_dir() / "logs" / "batch_jobs"
 
     def get_latest_manifest_path(self) -> Path | None:
-        latest_file = self.tool_root / "logs" / "batch_jobs" / "latest_manifest.txt"
+        latest_file = self.get_logs_dir() / "latest_manifest.txt"
         if latest_file.exists():
             try:
                 content = latest_file.read_text(encoding="utf-8").strip()
@@ -58,6 +63,23 @@ class ProjectState:
             except Exception:
                 pass
         return None
+
+    def load_resume_manifest(self, manifest_path: str | Path) -> dict[str, Any]:
+        manifest = self._read_json_object(Path(manifest_path), "batch manifest")
+        mode = manifest.get("mode", "translation")
+        if mode != "translation":
+            raise ValueError("最新任务不是基础翻译任务，不能在这里继续。")
+
+        game_root = self.get_game_root()
+        base_dir = manifest.get("base_dir")
+        if not isinstance(base_dir, str) or not base_dir.strip():
+            raise ValueError("最新任务缺少项目目录信息，不能安全继续。")
+        if game_root is not None and self._normalized_path_text(base_dir) != self._normalized_path_text(game_root):
+            raise ValueError("最新任务属于其他项目，请先选择对应 work 目录。")
+        return manifest
+
+    def _normalized_path_text(self, path: str | Path) -> str:
+        return os.path.normcase(os.path.abspath(str(path)))
 
     def _resolve_api_keys_path(self) -> Path:
         root_api_keys = self.tool_root / "api_keys.json"
