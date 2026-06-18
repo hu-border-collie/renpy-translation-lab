@@ -5,6 +5,7 @@ from gui_qt.translation_workflow import (
     extract_created_package_path,
     extract_job_state,
     extract_safety_status,
+    manifest_path_for_package,
 )
 
 
@@ -17,6 +18,16 @@ Items: 10
 
 
 class GuiTranslationWorkflowTests(unittest.TestCase):
+    def test_manifest_path_for_package_preserves_input_path_style(self):
+        self.assertEqual(
+            manifest_path_for_package("C:\\Games\\Example\\work\\logs\\batch_jobs\\job1"),
+            "C:\\Games\\Example\\work\\logs\\batch_jobs\\job1\\manifest.json",
+        )
+        self.assertEqual(
+            manifest_path_for_package("/tmp/jobs/job1"),
+            "/tmp/jobs/job1/manifest.json",
+        )
+
     def test_extracts_cli_output_fields(self):
         self.assertEqual(
             extract_created_package_path(BUILD_OUTPUT),

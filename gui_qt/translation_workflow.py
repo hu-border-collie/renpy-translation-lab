@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import PurePosixPath, PureWindowsPath
 
 
 TERMINAL_FAILURE_STATES = {
@@ -57,6 +57,12 @@ def extract_job_state(output: str) -> str:
 
 def extract_safety_status(output: str) -> str:
     return _extract_line_value(output, "Safety status:")
+
+
+def manifest_path_for_package(package_path: str) -> str:
+    if re.match(r"^[A-Za-z]:", package_path) or package_path.startswith("\\\\") or "\\" in package_path:
+        return str(PureWindowsPath(package_path) / "manifest.json")
+    return str(PurePosixPath(package_path) / "manifest.json")
 
 
 def _extract_line_value(output: str, prefix: str) -> str:
@@ -143,7 +149,7 @@ class TranslationWorkflow:
                 facts=[],
             )
 
-        self.manifest_path = str(Path(package_path) / "manifest.json")
+        self.manifest_path = manifest_path_for_package(package_path)
         return self._continue_or_finish()
 
     def _finish_status(self, output: str) -> WorkflowUpdate | None:
