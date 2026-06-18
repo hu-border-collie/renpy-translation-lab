@@ -166,8 +166,31 @@ class ProjectState:
         except Exception:
             return []
 
+    def _is_placeholder_api_key(self, value: str) -> bool:
+        text = value.strip().lower()
+        if not text:
+            return True
+        placeholder_markers = (
+            "your-key",
+            "your api key",
+            "your-api-key",
+            "your_gemini_api_key",
+            "your-gemini-api-key",
+            "paste-key",
+            "paste-api-key",
+            "replace-me",
+        )
+        return any(marker in text for marker in placeholder_markers)
+
+    def _valid_api_keys(self, keys: list[str]) -> list[str]:
+        return [
+            key
+            for key in keys
+            if isinstance(key, str) and key.strip() and not self._is_placeholder_api_key(key)
+        ]
+
     def get_api_key_status(self) -> tuple[int, str]:
-        file_keys = self.load_api_keys()
+        file_keys = self._valid_api_keys(self.load_api_keys())
         if file_keys:
             return len(file_keys), "file"
         env_keys = [
@@ -175,7 +198,7 @@ class ProjectState:
             os.environ.get("GEMINI_API_KEY_2"),
             os.environ.get("GEMINI_API_KEY_3"),
         ]
-        configured_env_keys = [key for key in env_keys if isinstance(key, str) and key.strip()]
+        configured_env_keys = self._valid_api_keys([key for key in env_keys if isinstance(key, str)])
         if configured_env_keys:
             return len(configured_env_keys), "environment"
         return 0, ""

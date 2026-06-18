@@ -46,12 +46,36 @@ class GuiProjectStateTests(unittest.TestCase):
             root = Path(tmp)
             state = self.make_state(root)
             state.api_keys_path.write_text(
-                json.dumps({"api_keys": ["file-key"]}),
+                json.dumps({"api_keys": ["file-key", "your-key-here", " "]}),
                 encoding="utf-8",
             )
 
             with patch.dict(os.environ, {"GEMINI_API_KEY": "env-key"}):
                 self.assertEqual(state.get_api_key_status(), (1, "file"))
+
+    def test_api_key_status_ignores_file_placeholders_before_env_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            state.api_keys_path.write_text(
+                json.dumps({"api_keys": ["your-key-here", "replace-me", " "]}),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"GEMINI_API_KEY": "env-key"}):
+                self.assertEqual(state.get_api_key_status(), (1, "environment"))
+
+    def test_api_key_status_treats_only_placeholders_as_unconfigured(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            state.api_keys_path.write_text(
+                json.dumps({"api_keys": ["your_gemini_api_key", "paste-api-key"]}),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(state.get_api_key_status(), (0, ""))
 
     def test_api_key_status_falls_back_to_environment(self):
         with tempfile.TemporaryDirectory() as tmp:
