@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -40,6 +41,7 @@ from .doctor_report import (
     summarize_doctor_output,
 )
 from .project_state import ProjectState
+from .translation_workflow import TranslationWorkflow, WorkflowUpdate
 
 
 class MainWindow(QMainWindow):
@@ -56,6 +58,8 @@ class MainWindow(QMainWindow):
         self._batch_thinking_user_changed = False
         self._active_command = ""
         self._doctor_output_lines: list[str] = []
+        self._workflow: TranslationWorkflow | None = None
+        self._workflow_step_output_lines: list[str] = []
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -181,6 +185,15 @@ class MainWindow(QMainWindow):
         self.api_btn.clicked.connect(self._on_manage_api_keys)
         action_layout.addWidget(self.api_btn)
 
+        self.translate_btn = QPushButton("开始翻译任务")
+        self.translate_btn.setObjectName("translate_btn")
+        self.translate_btn.clicked.connect(self._on_start_translation)
+        action_layout.addWidget(self.translate_btn)
+
+        self.resume_btn = QPushButton("继续最新任务")
+        self.resume_btn.clicked.connect(self._on_resume_translation)
+        action_layout.addWidget(self.resume_btn)
+
         self.kill_btn = QPushButton("停止当前任务")
         self.kill_btn.setObjectName("kill_btn")
         self.kill_btn.clicked.connect(self._on_kill)
@@ -217,8 +230,29 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(doctor_summary_box)
 
+        # Translation workflow summary
+        workflow_box = QGroupBox("翻译任务进度")
+        workflow_layout = QVBoxLayout(workflow_box)
+        workflow_layout.setSpacing(6)
+        workflow_layout.setContentsMargins(12, 16, 12, 12)
+
+        self.workflow_status_label = QLabel()
+        self.workflow_status_label.setObjectName("workflow_status_label")
+        workflow_layout.addWidget(self.workflow_status_label)
+
+        self.workflow_message_label = QLabel()
+        self.workflow_message_label.setWordWrap(True)
+        workflow_layout.addWidget(self.workflow_message_label)
+
+        self.workflow_facts_label = QLabel()
+        self.workflow_facts_label.setWordWrap(True)
+        self.workflow_facts_label.setObjectName("workflow_facts_label")
+        workflow_layout.addWidget(self.workflow_facts_label)
+
+        layout.addWidget(workflow_box)
+
         # Output
-        out_label = QLabel("诊断输出（来自命令行）")
+        out_label = QLabel("诊断 / 任务输出（来自命令行）")
         layout.addWidget(out_label)
 
         self.log_view = QTextEdit()
@@ -235,6 +269,11 @@ class MainWindow(QMainWindow):
         self._refresh_project_label()
         self._load_config_to_ui()
         self._set_doctor_summary(idle_summary())
+        self._set_workflow_summary(
+            "idle",
+            "尚未开始翻译任务",
+            "运行项目检查后，可以开始基础 Batch 翻译流程。",
+        )
 
         # Status
         self.statusBar().showMessage(
@@ -261,7 +300,14 @@ class MainWindow(QMainWindow):
             self._load_config_to_ui()
             self._active_command = ""
             self._doctor_output_lines = []
+            self._workflow = None
+            self._workflow_step_output_lines = []
             self._set_doctor_summary(stale_summary())
+            self._set_workflow_summary(
+                "stale",
+                "项目已切换",
+                "翻译任务状态已清空；请先针对新项目重新检查。",
+            )
             self._append_log(f"项目目录已设置为：{directory}")
 
     def _masked_key(self, key: str) -> str:
@@ -329,12 +375,60 @@ class MainWindow(QMainWindow):
         self._doctor_output_lines = []
         self._set_doctor_summary(running_summary())
         self._append_log("=== 正在运行：gemini_translate_batch.py doctor ===\n")
-        self.doctor_btn.setEnabled(False)
-        self.kill_btn.setEnabled(True)
+        self._set_task_running(True)
 
         script = self.state.get_batch_script_path()
         # Run with no extra args — it will pick up translator_config.json
         self.runner.run(script, ["doctor"])
+
+    def _on_start_translation(self):
+        if not self.state.get_game_root():
+            QMessageBox.information(
+                self,
+                "请先选择项目",
+                "请先选择游戏的 work 目录。",
+            )
+            return
+
+        self.log_view.clear()
+        self._workflow = TranslationWorkflow.start_new()
+        self._active_command = "translation_workflow"
+        self._workflow_step_output_lines = []
+        self._append_log("=== 正在运行：基础 Batch 翻译流程 ===\n")
+        self._set_task_running(True)
+        self._run_workflow_current_step()
+
+    def _on_resume_translation(self):
+        if not self.state.get_game_root():
+            QMessageBox.information(
+                self,
+                "请先选择项目",
+                "请先选择游戏的 work 目录。",
+            )
+            return
+
+        latest_manifest = self.state.get_latest_manifest_path()
+        if latest_manifest is None:
+            QMessageBox.information(
+                self,
+                "没有可继续的任务",
+                "未找到 latest manifest；请先开始一个翻译任务。",
+            )
+            return
+
+        try:
+            manifest = self.state.load_resume_manifest(latest_manifest)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法继续最新任务", str(exc))
+            return
+
+        self.log_view.clear()
+        self._workflow = TranslationWorkflow.resume_manifest(str(latest_manifest), manifest)
+        self._active_command = "translation_workflow"
+        self._workflow_step_output_lines = []
+        self._append_log("=== 正在继续最新 Batch 翻译任务 ===\n")
+        self._set_task_running(True)
+        self._run_workflow_current_step()
 
     def _on_kill(self):
         self.runner.kill()
@@ -344,6 +438,8 @@ class MainWindow(QMainWindow):
     def _on_cli_line_ready(self, text: str):
         if self._active_command == "doctor":
             self._doctor_output_lines.append(text)
+        elif self._active_command == "translation_workflow":
+            self._workflow_step_output_lines.append(text)
         self._append_log(text)
 
     def _append_log(self, text: str):
@@ -351,6 +447,57 @@ class MainWindow(QMainWindow):
         # scroll to bottom
         scrollbar = self.log_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
+    def _set_task_running(self, running: bool):
+        self.select_btn.setEnabled(not running)
+        self.doctor_btn.setEnabled(not running)
+        self.api_btn.setEnabled(not running)
+        self.translate_btn.setEnabled(not running)
+        self.resume_btn.setEnabled(not running)
+        self.save_config_btn.setEnabled(not running)
+        self.kill_btn.setEnabled(running)
+
+    def _set_workflow_summary(
+        self,
+        status: str,
+        heading: str,
+        message: str,
+        facts: list[str] | None = None,
+    ):
+        self.workflow_status_label.setText(heading)
+        self.workflow_status_label.setProperty("status", status)
+        self.workflow_status_label.style().unpolish(self.workflow_status_label)
+        self.workflow_status_label.style().polish(self.workflow_status_label)
+        self.workflow_message_label.setText(message)
+        self.workflow_facts_label.setText("\n".join(facts or []))
+
+    def _set_workflow_update(self, update: WorkflowUpdate):
+        self._set_workflow_summary(
+            update.status,
+            update.heading,
+            update.message,
+            update.facts,
+        )
+
+    def _run_workflow_current_step(self):
+        if self._workflow is None:
+            self._set_task_running(False)
+            return
+
+        step = self._workflow.current_step()
+        if step is None:
+            self._set_task_running(False)
+            self._active_command = ""
+            self._workflow = None
+            return
+
+        facts = []
+        if self._workflow.manifest_path:
+            facts.append(f"Manifest：{self._workflow.manifest_path}")
+        self._workflow_step_output_lines = []
+        self._set_workflow_summary("running", step.heading, step.message, facts)
+        self._append_log(f"\n=== {step.heading}：gemini_translate_batch.py {' '.join(step.args)} ===\n")
+        self.runner.run(self.state.get_batch_script_path(), step.args)
 
     def _set_doctor_summary(self, summary: DoctorSummary):
         self.doctor_status_label.setText(summary.heading)
@@ -374,13 +521,11 @@ class MainWindow(QMainWindow):
         self._append_log(message)
         if self._active_command == "doctor":
             self._doctor_output_lines.append(message)
-        self.doctor_btn.setEnabled(True)
-        self.kill_btn.setEnabled(False)
-        self.statusBar().showMessage("项目检查失败，请查看诊断输出。", 6000)
+        elif self._active_command == "translation_workflow":
+            self._workflow_step_output_lines.append(message)
+        self.statusBar().showMessage("任务运行失败，请查看命令行输出。", 6000)
 
     def _on_finished(self, exit_code: int):
-        self.doctor_btn.setEnabled(True)
-        self.kill_btn.setEnabled(False)
         self._append_log(f"\n[进程已结束，退出码：{exit_code}]")
         if self._active_command == "doctor":
             api_key_count, api_key_source = self.state.get_api_key_status()
@@ -392,10 +537,46 @@ class MainWindow(QMainWindow):
             )
             self._set_doctor_summary(summary)
             self._active_command = ""
-        if exit_code == 0:
-            self.statusBar().showMessage("项目检查完成。", 6000)
+            self._set_task_running(False)
+            if exit_code == 0:
+                self.statusBar().showMessage("项目检查完成。", 6000)
+            else:
+                self.statusBar().showMessage(f"项目检查失败（退出码：{exit_code}）", 6000)
+            return
+
+        if self._active_command == "translation_workflow":
+            self._on_workflow_step_finished(exit_code)
+            return
+
+        self._set_task_running(False)
+
+    def _on_workflow_step_finished(self, exit_code: int):
+        if self._workflow is None:
+            self._active_command = ""
+            self._set_task_running(False)
+            return
+
+        update = self._workflow.complete_current_step(
+            exit_code,
+            "\n".join(self._workflow_step_output_lines),
+        )
+        self._set_workflow_update(update)
+        self._workflow_step_output_lines = []
+
+        if update.should_continue:
+            self.statusBar().showMessage(update.heading, 3000)
+            QTimer.singleShot(0, self._run_workflow_current_step)
+            return
+
+        self._active_command = ""
+        self._workflow = None
+        self._set_task_running(False)
+        if update.status == "failed":
+            self.statusBar().showMessage("翻译任务失败，请查看命令行输出。", 8000)
+        elif update.status == "waiting":
+            self.statusBar().showMessage("Batch 任务仍在处理，可稍后继续最新任务。", 8000)
         else:
-            self.statusBar().showMessage(f"项目检查失败（退出码：{exit_code}）", 6000)
+            self.statusBar().showMessage("翻译任务流程完成。", 6000)
 
     # --- Config loading/saving helpers ---
 
