@@ -1,9 +1,9 @@
 """Main GUI application for the optional workbench.
 
 This is the first version shell (per #42):
-- Pure PySide6
+- Pure PySide6 with tabbed layout (workbench / config / diagnostics)
 - Delegates everything to the existing CLI via QProcess
-- Starts with project selection + doctor execution + live logs
+- Workbench tab: project selection, doctor + translation workflow status
 """
 from __future__ import annotations
 
@@ -24,14 +24,24 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QGroupBox,
-    QInputDialog,
     QLineEdit,
     QComboBox,
-    QGridLayout,
     QFrame,
     QFormLayout,
+    QTabWidget,
 )
 
+from .api_key_dialog import ApiKeyDialog
+from .api_key_helpers import mask_api_key
+from .check_report import (
+    WritebackSummary,
+    idle_writeback_summary,
+    running_writeback_summary,
+    stale_writeback_summary,
+    summarize_apply_output,
+    summarize_check_output,
+    summarize_manifest_writeback,
+)
 from .cli_runner import CliRunner
 from .doctor_report import (
     DoctorSummary,
@@ -60,19 +70,65 @@ class MainWindow(QMainWindow):
         self._doctor_output_lines: list[str] = []
         self._workflow: TranslationWorkflow | None = None
         self._workflow_step_output_lines: list[str] = []
+        self._apply_output_lines: list[str] = []
+        self._writeback_manifest_path = ""
 
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        root_layout = QVBoxLayout(central)
+        root_layout.setContentsMargins(16, 16, 16, 16)
+        root_layout.setSpacing(12)
 
-        # Header
-        header = QLabel("实验性图形工作台 - 复用现有命令行流程")
+        header = QLabel("Ren'Py Translation Lab · 图形工作台")
         header.setObjectName("header_label")
-        layout.addWidget(header)
+        subtitle = QLabel(
+            "先环境检查，再开始翻译；翻译完成后的写回状态显示在右侧任务卡片内。"
+            "详细日志请切换到「诊断日志」页。"
+        )
+        subtitle.setObjectName("subtitle_label")
+        subtitle.setWordWrap(True)
+        root_layout.addWidget(header)
+        root_layout.addWidget(subtitle)
 
-        # Project row
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setObjectName("main_tabs")
+        root_layout.addWidget(self.tab_widget, 1)
+
+        self._build_workbench_tab()
+        self._build_config_tab()
+        self._build_log_tab()
+
+        self.batch_model_combo.currentTextChanged.connect(self._on_batch_model_changed)
+        self.batch_thinking_combo.currentIndexChanged.connect(self._on_batch_thinking_changed)
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+
+        # Connect runner
+        self.runner.line_ready.connect(self._on_cli_line_ready)
+        self.runner.finished.connect(self._on_finished)
+        self.runner.error.connect(self._on_runner_error)
+
+        self._refresh_project_label()
+        self._refresh_api_status()
+        self._load_config_to_ui()
+        self._set_doctor_summary(idle_summary())
+        self._set_workflow_summary(
+            "idle",
+            "尚未开始翻译任务",
+            "完成环境检查后，可以开始基础 Batch 翻译流程。",
+        )
+        self._refresh_writeback_from_latest_manifest()
+
+        # Status
+        self.statusBar().showMessage(
+            "图形界面是可选组件；核心命令行不受影响。"
+        )
+
+    def _build_workbench_tab(self) -> None:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setSpacing(14)
+
         project_frame = QFrame()
         project_frame.setObjectName("project_frame")
         proj_layout = QHBoxLayout(project_frame)
@@ -92,12 +148,170 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(project_frame)
 
-        # Configuration Row (Sync + Batch side-by-side)
+        actions_box = QGroupBox("操作")
+        actions_layout = QVBoxLayout(actions_box)
+        actions_layout.setSpacing(10)
+        actions_layout.setContentsMargins(12, 16, 12, 12)
+
+        primary_layout = QHBoxLayout()
+        primary_layout.setSpacing(10)
+        self.doctor_btn = QPushButton("环境检查")
+        self.doctor_btn.setObjectName("doctor_btn")
+        self.doctor_btn.clicked.connect(self._on_run_doctor)
+        primary_layout.addWidget(self.doctor_btn)
+
+        self.translate_btn = QPushButton("开始翻译任务")
+        self.translate_btn.setObjectName("translate_btn")
+        self.translate_btn.clicked.connect(self._on_start_translation)
+        primary_layout.addWidget(self.translate_btn)
+        primary_layout.addStretch()
+        actions_layout.addLayout(primary_layout)
+
+        secondary_layout = QHBoxLayout()
+        secondary_layout.setSpacing(10)
+        self.resume_btn = QPushButton("继续最新任务")
+        self.resume_btn.setObjectName("secondary_btn")
+        self.resume_btn.clicked.connect(self._on_resume_translation)
+        secondary_layout.addWidget(self.resume_btn)
+        secondary_layout.addStretch()
+
+        self.kill_btn = QPushButton("停止当前任务")
+        self.kill_btn.setObjectName("kill_btn")
+        self.kill_btn.clicked.connect(self._on_kill)
+        self.kill_btn.setEnabled(False)
+        secondary_layout.addWidget(self.kill_btn)
+        actions_layout.addLayout(secondary_layout)
+
+        layout.addWidget(actions_box)
+
+        status_row = QHBoxLayout()
+        status_row.setSpacing(16)
+
+        doctor_summary_box = QGroupBox("环境检查 (doctor)")
+        doctor_summary_layout = QVBoxLayout(doctor_summary_box)
+        doctor_summary_layout.setSpacing(6)
+        doctor_summary_layout.setContentsMargins(12, 16, 12, 12)
+
+        self.doctor_status_label = QLabel()
+        self.doctor_status_label.setObjectName("doctor_status_label")
+        doctor_summary_layout.addWidget(self.doctor_status_label)
+
+        self.doctor_message_label = QLabel()
+        self.doctor_message_label.setWordWrap(True)
+        doctor_summary_layout.addWidget(self.doctor_message_label)
+
+        self.doctor_facts_label = QLabel()
+        self.doctor_facts_label.setWordWrap(True)
+        self.doctor_facts_label.setObjectName("doctor_facts_label")
+        doctor_summary_layout.addWidget(self.doctor_facts_label)
+
+        self.doctor_findings_view = QTextEdit()
+        self.doctor_findings_view.setReadOnly(True)
+        self.doctor_findings_view.setMaximumHeight(110)
+        self.doctor_findings_view.setObjectName("doctor_findings_view")
+        doctor_summary_layout.addWidget(self.doctor_findings_view)
+
+        status_row.addWidget(doctor_summary_box, 1)
+
+        workflow_box = QGroupBox("翻译任务")
+        workflow_layout = QVBoxLayout(workflow_box)
+        workflow_layout.setSpacing(6)
+        workflow_layout.setContentsMargins(12, 16, 12, 12)
+
+        self.workflow_status_label = QLabel()
+        self.workflow_status_label.setObjectName("workflow_status_label")
+        workflow_layout.addWidget(self.workflow_status_label)
+
+        self.workflow_message_label = QLabel()
+        self.workflow_message_label.setWordWrap(True)
+        workflow_layout.addWidget(self.workflow_message_label)
+
+        self.workflow_facts_label = QLabel()
+        self.workflow_facts_label.setWordWrap(True)
+        self.workflow_facts_label.setObjectName("workflow_facts_label")
+        workflow_layout.addWidget(self.workflow_facts_label)
+
+        workflow_separator = QFrame()
+        workflow_separator.setFrameShape(QFrame.Shape.HLine)
+        workflow_separator.setObjectName("workflow_separator")
+        workflow_layout.addWidget(workflow_separator)
+
+        writeback_heading = QLabel("写回翻译")
+        writeback_heading.setObjectName("workflow_section_label")
+        workflow_layout.addWidget(writeback_heading)
+
+        self.writeback_status_label = QLabel()
+        self.writeback_status_label.setObjectName("writeback_status_label")
+        workflow_layout.addWidget(self.writeback_status_label)
+
+        self.writeback_message_label = QLabel()
+        self.writeback_message_label.setWordWrap(True)
+        workflow_layout.addWidget(self.writeback_message_label)
+
+        self.writeback_facts_label = QLabel()
+        self.writeback_facts_label.setWordWrap(True)
+        self.writeback_facts_label.setObjectName("writeback_facts_label")
+        workflow_layout.addWidget(self.writeback_facts_label)
+
+        self.writeback_findings_view = QTextEdit()
+        self.writeback_findings_view.setReadOnly(True)
+        self.writeback_findings_view.setMaximumHeight(72)
+        self.writeback_findings_view.setObjectName("writeback_findings_view")
+        workflow_layout.addWidget(self.writeback_findings_view)
+
+        writeback_actions = QHBoxLayout()
+        self.apply_btn = QPushButton("写回翻译")
+        self.apply_btn.setObjectName("apply_btn")
+        self.apply_btn.clicked.connect(self._on_apply_writeback)
+        self.apply_btn.setEnabled(False)
+        writeback_actions.addWidget(self.apply_btn)
+        writeback_actions.addStretch()
+        workflow_layout.addLayout(writeback_actions)
+
+        status_row.addWidget(workflow_box, 1)
+        layout.addLayout(status_row, 1)
+
+        self.tab_widget.addTab(tab, "工作台")
+
+    def _build_config_tab(self) -> None:
+        tab = QWidget()
+        self._config_tab = tab
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setSpacing(14)
+
+        api_box = QGroupBox("API Key")
+        api_layout = QVBoxLayout(api_box)
+        api_layout.setSpacing(10)
+        api_layout.setContentsMargins(12, 16, 12, 12)
+
+        api_hint = QLabel(
+            "翻译任务需要 Gemini API Key。Key 保存在本地 api_keys.json，"
+            "不会上传或代理。也可通过环境变量 GEMINI_API_KEY 配置。"
+        )
+        api_hint.setWordWrap(True)
+        api_hint.setObjectName("config_hint_label")
+        api_layout.addWidget(api_hint)
+
+        self.api_status_label = QLabel()
+        self.api_status_label.setWordWrap(True)
+        self.api_status_label.setObjectName("api_status_label")
+        api_layout.addWidget(self.api_status_label)
+
+        api_actions = QHBoxLayout()
+        self.api_btn = QPushButton("管理 API Key")
+        self.api_btn.setObjectName("api_btn")
+        self.api_btn.clicked.connect(self._on_manage_api_keys)
+        api_actions.addWidget(self.api_btn)
+        api_actions.addStretch()
+        api_layout.addLayout(api_actions)
+
+        layout.addWidget(api_box)
+
         config_row = QHBoxLayout()
         config_row.setSpacing(16)
 
-        # Sync Box
-        sync_box = QGroupBox("同步翻译配置 (Sync API)")
+        sync_box = QGroupBox("同步翻译 (Sync API)")
         sync_layout = QFormLayout(sync_box)
         sync_layout.setSpacing(8)
         sync_layout.setContentsMargins(12, 16, 12, 12)
@@ -123,8 +337,7 @@ class MainWindow(QMainWindow):
 
         config_row.addWidget(sync_box, 1)
 
-        # Batch Box
-        batch_box = QGroupBox("批量离线配置 (Batch API)")
+        batch_box = QGroupBox("批量离线 (Batch API)")
         batch_layout = QFormLayout(batch_box)
         batch_layout.setSpacing(8)
         batch_layout.setContentsMargins(12, 16, 12, 12)
@@ -157,10 +370,8 @@ class MainWindow(QMainWindow):
         batch_layout.addRow("Batch 思考程度：", self.batch_thinking_combo)
 
         config_row.addWidget(batch_box, 1)
+        layout.addLayout(config_row, 1)
 
-        layout.addLayout(config_row)
-
-        # Save config row
         save_layout = QHBoxLayout()
         save_layout.addStretch()
         self.save_config_btn = QPushButton("保存参数配置")
@@ -169,91 +380,21 @@ class MainWindow(QMainWindow):
         save_layout.addWidget(self.save_config_btn)
         layout.addLayout(save_layout)
 
-        # Connect model change signal to dynamically toggle thinking level
-        self.batch_model_combo.currentTextChanged.connect(self._on_batch_model_changed)
-        self.batch_thinking_combo.currentIndexChanged.connect(self._on_batch_thinking_changed)
+        self.tab_widget.addTab(tab, "配置")
 
-        # Actions row
-        action_layout = QHBoxLayout()
-        self.doctor_btn = QPushButton("检查项目（doctor）")
-        self.doctor_btn.setObjectName("doctor_btn")
-        self.doctor_btn.clicked.connect(self._on_run_doctor)
-        action_layout.addWidget(self.doctor_btn)
+    def _build_log_tab(self) -> None:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setSpacing(10)
 
-        self.api_btn = QPushButton("管理 API Key")
-        self.api_btn.setObjectName("api_btn")
-        self.api_btn.clicked.connect(self._on_manage_api_keys)
-        action_layout.addWidget(self.api_btn)
-
-        self.translate_btn = QPushButton("开始翻译任务")
-        self.translate_btn.setObjectName("translate_btn")
-        self.translate_btn.clicked.connect(self._on_start_translation)
-        action_layout.addWidget(self.translate_btn)
-
-        self.resume_btn = QPushButton("继续最新任务")
-        self.resume_btn.clicked.connect(self._on_resume_translation)
-        action_layout.addWidget(self.resume_btn)
-
-        self.kill_btn = QPushButton("停止当前任务")
-        self.kill_btn.setObjectName("kill_btn")
-        self.kill_btn.clicked.connect(self._on_kill)
-        self.kill_btn.setEnabled(False)
-        action_layout.addWidget(self.kill_btn)
-
-        action_layout.addStretch()
-        layout.addLayout(action_layout)
-
-        # Doctor summary
-        doctor_summary_box = QGroupBox("项目检查摘要")
-        doctor_summary_layout = QVBoxLayout(doctor_summary_box)
-        doctor_summary_layout.setSpacing(6)
-        doctor_summary_layout.setContentsMargins(12, 16, 12, 12)
-
-        self.doctor_status_label = QLabel()
-        self.doctor_status_label.setObjectName("doctor_status_label")
-        doctor_summary_layout.addWidget(self.doctor_status_label)
-
-        self.doctor_message_label = QLabel()
-        self.doctor_message_label.setWordWrap(True)
-        doctor_summary_layout.addWidget(self.doctor_message_label)
-
-        self.doctor_facts_label = QLabel()
-        self.doctor_facts_label.setWordWrap(True)
-        self.doctor_facts_label.setObjectName("doctor_facts_label")
-        doctor_summary_layout.addWidget(self.doctor_facts_label)
-
-        self.doctor_findings_view = QTextEdit()
-        self.doctor_findings_view.setReadOnly(True)
-        self.doctor_findings_view.setMaximumHeight(92)
-        self.doctor_findings_view.setObjectName("doctor_findings_view")
-        doctor_summary_layout.addWidget(self.doctor_findings_view)
-
-        layout.addWidget(doctor_summary_box)
-
-        # Translation workflow summary
-        workflow_box = QGroupBox("翻译任务进度")
-        workflow_layout = QVBoxLayout(workflow_box)
-        workflow_layout.setSpacing(6)
-        workflow_layout.setContentsMargins(12, 16, 12, 12)
-
-        self.workflow_status_label = QLabel()
-        self.workflow_status_label.setObjectName("workflow_status_label")
-        workflow_layout.addWidget(self.workflow_status_label)
-
-        self.workflow_message_label = QLabel()
-        self.workflow_message_label.setWordWrap(True)
-        workflow_layout.addWidget(self.workflow_message_label)
-
-        self.workflow_facts_label = QLabel()
-        self.workflow_facts_label.setWordWrap(True)
-        self.workflow_facts_label.setObjectName("workflow_facts_label")
-        workflow_layout.addWidget(self.workflow_facts_label)
-
-        layout.addWidget(workflow_box)
-
-        # Output
-        out_label = QLabel("诊断 / 任务输出（来自命令行）")
-        layout.addWidget(out_label)
+        log_hint = QLabel(
+            "此处显示 doctor 与翻译任务的原始终端输出。"
+            "开始翻译任务时会自动切换到此页；检查项目时留在工作台即可查看摘要。"
+        )
+        log_hint.setWordWrap(True)
+        log_hint.setObjectName("config_hint_label")
+        layout.addWidget(log_hint)
 
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
@@ -261,24 +402,10 @@ class MainWindow(QMainWindow):
         self.log_view.setObjectName("log_view")
         layout.addWidget(self.log_view, 1)
 
-        # Connect runner
-        self.runner.line_ready.connect(self._on_cli_line_ready)
-        self.runner.finished.connect(self._on_finished)
-        self.runner.error.connect(self._on_runner_error)
+        self.tab_widget.addTab(tab, "诊断日志")
 
-        self._refresh_project_label()
-        self._load_config_to_ui()
-        self._set_doctor_summary(idle_summary())
-        self._set_workflow_summary(
-            "idle",
-            "尚未开始翻译任务",
-            "运行项目检查后，可以开始基础 Batch 翻译流程。",
-        )
-
-        # Status
-        self.statusBar().showMessage(
-            "图形界面是可选组件；核心命令行不受影响。"
-        )
+    def _focus_log_tab(self) -> None:
+        self.tab_widget.setCurrentWidget(self.log_view.parentWidget())
 
     # --- UI actions ---
 
@@ -308,51 +435,54 @@ class MainWindow(QMainWindow):
                 "项目已切换",
                 "翻译任务状态已清空；请先针对新项目重新检查。",
             )
+            self._writeback_manifest_path = ""
+            self._set_writeback_summary(stale_writeback_summary())
             self._append_log(f"项目目录已设置为：{directory}")
 
-    def _masked_key(self, key: str) -> str:
-        stripped = key.strip()
-        if not stripped:
-            return "(none)"
-        suffix = stripped[-4:] if len(stripped) > 4 else "****"
-        return f"********{suffix}"
+    def _refresh_api_status(self) -> None:
+        count, source = self.state.get_api_key_status()
+        file_keys = self.state.load_api_keys()
+
+        if count == 0:
+            message = "当前状态：尚未配置有效 API Key。"
+        elif source == "environment":
+            message = f"当前状态：已通过环境变量配置 {count} 个有效 Key（只读）。"
+            if file_keys:
+                message += f" 本地文件另保存了 {len(file_keys)} 条 Key 记录。"
+        else:
+            masked = "、".join(mask_api_key(key) for key in file_keys if key.strip())
+            message = f"当前状态：已保存 {len(file_keys)} 个 Key（有效 {count} 个）。"
+            if masked:
+                message += f"\n{masked}"
+
+        self.api_status_label.setText(message)
+
+    def _on_tab_changed(self, index: int) -> None:
+        if self.tab_widget.widget(index) is self._config_tab:
+            self._refresh_api_status()
 
     def _on_manage_api_keys(self):
-        keys = self.state.load_api_keys()
-        current = keys[0] if keys else ""
+        env_count, env_source = self.state.get_api_key_status()
+        env_key_count = env_count if env_source == "environment" else 0
 
-        text, ok = QInputDialog.getText(
+        dialog = ApiKeyDialog(
             self,
-            "API Key",
-            "当前第一个 Key："
-            f"{self._masked_key(current)}\n"
-            f"已配置 Key 数量：{len(keys)}\n\n"
-            "输入新的 Key 会替换第一个 Key。\n"
-            "留空则保持现有 Key 不变。",
-            QLineEdit.EchoMode.Password,
-            "",
+            keys=self.state.load_api_keys(),
+            env_key_count=env_key_count,
         )
-        if ok:
-            replacement = text.strip()
-            if not replacement:
-                self._append_log("API Key 未修改。")
-                return
+        if dialog.exec() != ApiKeyDialog.DialogCode.Accepted:
+            return
 
-            new_keys = list(keys)
-            if new_keys:
-                new_keys[0] = replacement
-            else:
-                new_keys = [replacement]
-            try:
-                self.state.save_api_keys(new_keys)
-            except ValueError as exc:
-                QMessageBox.warning(self, "无法更新 API Key", str(exc))
-                self._append_log(f"更新 api_keys.json 失败：{exc}")
-                return
-            self._append_log(
-                f"API Key 已更新（当前数量：{len(new_keys)}）。"
-                "其他已配置 Key 已保留。"
-            )
+        new_keys = dialog.result_keys()
+        try:
+            self.state.save_api_keys(new_keys)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法更新 API Key", str(exc))
+            self._append_log(f"更新 api_keys.json 失败：{exc}")
+            return
+
+        self._refresh_api_status()
+        self._append_log(f"API Key 已保存（当前数量：{len(new_keys)}）。")
 
     def _refresh_project_label(self):
         root = self.state.get_game_root()
@@ -391,6 +521,9 @@ class MainWindow(QMainWindow):
             return
 
         self.log_view.clear()
+        self._focus_log_tab()
+        self._writeback_manifest_path = ""
+        self._set_writeback_summary(stale_writeback_summary())
         self._workflow = TranslationWorkflow.start_new()
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
@@ -423,6 +556,7 @@ class MainWindow(QMainWindow):
             return
 
         self.log_view.clear()
+        self._focus_log_tab()
         self._workflow = TranslationWorkflow.resume_manifest(str(latest_manifest), manifest)
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
@@ -433,6 +567,53 @@ class MainWindow(QMainWindow):
     def _on_kill(self):
         self.runner.kill()
 
+    def _on_apply_writeback(self):
+        if not self._writeback_manifest_path:
+            QMessageBox.information(self, "无法写回", "没有可写回的 manifest；请先完成 check。")
+            return
+
+        summary = self._current_writeback_summary()
+        if not summary.can_apply:
+            QMessageBox.information(
+                self,
+                "当前不能写回",
+                summary.message or "只有 safe 的 check 结果才允许写回。",
+            )
+            return
+
+        confirm_lines = [
+            "即将把翻译写回项目 .rpy 文件。",
+            "写回前请确认已在副本或备份上验证。",
+            "",
+            *summary.facts,
+        ]
+        if summary.findings:
+            confirm_lines.extend(["", "待处理问题：", *[f"- {item}" for item in summary.findings]])
+
+        reply = QMessageBox.question(
+            self,
+            "确认写回翻译",
+            "\n".join(confirm_lines),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.log_view.clear()
+        self._focus_log_tab()
+        self._active_command = "apply"
+        self._apply_output_lines = []
+        self._set_writeback_summary(running_writeback_summary())
+        self._append_log(
+            f"=== 正在写回：gemini_translate_batch.py apply {self._writeback_manifest_path} ===\n"
+        )
+        self._set_task_running(True)
+        self.runner.run(
+            self.state.get_batch_script_path(),
+            ["apply", self._writeback_manifest_path],
+        )
+
     # --- Runner callbacks ---
 
     def _on_cli_line_ready(self, text: str):
@@ -440,6 +621,8 @@ class MainWindow(QMainWindow):
             self._doctor_output_lines.append(text)
         elif self._active_command == "translation_workflow":
             self._workflow_step_output_lines.append(text)
+        elif self._active_command == "apply":
+            self._apply_output_lines.append(text)
         self._append_log(text)
 
     def _append_log(self, text: str):
@@ -455,6 +638,7 @@ class MainWindow(QMainWindow):
         self.translate_btn.setEnabled(not running)
         self.resume_btn.setEnabled(not running)
         self.save_config_btn.setEnabled(not running)
+        self.apply_btn.setEnabled(not running and self._current_writeback_summary().can_apply)
         self.kill_btn.setEnabled(running)
 
     def _set_workflow_summary(
@@ -499,6 +683,74 @@ class MainWindow(QMainWindow):
         self._append_log(f"\n=== {step.heading}：gemini_translate_batch.py {' '.join(step.args)} ===\n")
         self.runner.run(self.state.get_batch_script_path(), step.args)
 
+    def _current_writeback_summary(self) -> WritebackSummary:
+        return getattr(self, "_writeback_summary", idle_writeback_summary())
+
+    def _set_writeback_summary(self, summary: WritebackSummary) -> None:
+        self._writeback_summary = summary
+        self._writeback_manifest_path = summary.manifest_path
+        self.writeback_status_label.setText(summary.heading)
+        self.writeback_status_label.setProperty("status", summary.status)
+        self.writeback_status_label.style().unpolish(self.writeback_status_label)
+        self.writeback_status_label.style().polish(self.writeback_status_label)
+        self.writeback_message_label.setText(summary.message)
+        self.writeback_facts_label.setText("\n".join(summary.facts))
+        if summary.findings:
+            self.writeback_findings_view.setPlainText(
+                "\n".join(f"- {finding}" for finding in summary.findings)
+            )
+        elif summary.status in {"idle", "running"}:
+            self.writeback_findings_view.setPlainText("翻译任务完成 check 后，这里会显示写回建议。")
+        elif summary.status == "stale":
+            self.writeback_findings_view.setPlainText("请针对当前任务重新完成翻译与 check。")
+        elif summary.status == "safe":
+            self.writeback_findings_view.setPlainText("未发现阻止写回的问题。")
+        elif summary.status == "applied":
+            self.writeback_findings_view.setPlainText("写回已完成。")
+        else:
+            self.writeback_findings_view.setPlainText("请查看诊断日志了解详情。")
+        if not self.kill_btn.isEnabled():
+            self.apply_btn.setEnabled(summary.can_apply)
+
+    def _refresh_writeback_from_latest_manifest(self) -> None:
+        latest_manifest = self.state.get_latest_manifest_path()
+        if latest_manifest is None:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+        try:
+            manifest = self.state.load_resume_manifest(latest_manifest)
+        except ValueError:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+
+        summary = summarize_manifest_writeback(manifest)
+        if summary is None:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+        self._set_writeback_summary(summary)
+
+    def _update_writeback_from_check(
+        self,
+        output: str,
+        exit_code: int,
+        manifest_path: str,
+    ) -> None:
+        already_applied = False
+        if manifest_path:
+            try:
+                manifest = self.state.load_manifest_file(manifest_path)
+                already_applied = bool(manifest.get("applied_at"))
+            except ValueError:
+                pass
+        self._set_writeback_summary(
+            summarize_check_output(
+                output,
+                exit_code,
+                manifest_path=manifest_path,
+                already_applied=already_applied,
+            )
+        )
+
     def _set_doctor_summary(self, summary: DoctorSummary):
         self.doctor_status_label.setText(summary.heading)
         self.doctor_status_label.setProperty("status", summary.status)
@@ -523,7 +775,10 @@ class MainWindow(QMainWindow):
             self._doctor_output_lines.append(message)
         elif self._active_command == "translation_workflow":
             self._workflow_step_output_lines.append(message)
-        self.statusBar().showMessage("任务运行失败，请查看命令行输出。", 6000)
+        elif self._active_command == "apply":
+            self._apply_output_lines.append(message)
+        self._focus_log_tab()
+        self.statusBar().showMessage("任务运行失败，请查看诊断日志。", 6000)
 
     def _on_finished(self, exit_code: int):
         self._append_log(f"\n[进程已结束，退出码：{exit_code}]")
@@ -548,6 +803,21 @@ class MainWindow(QMainWindow):
             self._on_workflow_step_finished(exit_code)
             return
 
+        if self._active_command == "apply":
+            summary = summarize_apply_output(
+                "\n".join(self._apply_output_lines),
+                exit_code,
+                manifest_path=self._writeback_manifest_path,
+            )
+            self._set_writeback_summary(summary)
+            self._active_command = ""
+            self._set_task_running(False)
+            if exit_code == 0:
+                self.statusBar().showMessage("翻译写回完成。", 6000)
+            else:
+                self.statusBar().showMessage("翻译写回失败，请查看诊断日志。", 8000)
+            return
+
         self._set_task_running(False)
 
     def _on_workflow_step_finished(self, exit_code: int):
@@ -556,10 +826,11 @@ class MainWindow(QMainWindow):
             self._set_task_running(False)
             return
 
-        update = self._workflow.complete_current_step(
-            exit_code,
-            "\n".join(self._workflow_step_output_lines),
-        )
+        step_output = "\n".join(self._workflow_step_output_lines)
+        manifest_path = self._workflow.manifest_path
+        update = self._workflow.complete_current_step(exit_code, step_output)
+        if "Safety status:" in step_output:
+            self._update_writeback_from_check(step_output, exit_code, manifest_path)
         self._set_workflow_update(update)
         self._workflow_step_output_lines = []
 
@@ -572,7 +843,7 @@ class MainWindow(QMainWindow):
         self._workflow = None
         self._set_task_running(False)
         if update.status == "failed":
-            self.statusBar().showMessage("翻译任务失败，请查看命令行输出。", 8000)
+            self.statusBar().showMessage("翻译任务失败，请查看诊断日志。", 8000)
         elif update.status == "waiting":
             self.statusBar().showMessage("Batch 任务仍在处理，可稍后继续最新任务。", 8000)
         else:
