@@ -249,6 +249,7 @@ class GuiProjectStateTests(unittest.TestCase):
             state.save_translator_config(config)
 
             saved = json.loads(state.config_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["game_root"], "some_root")
             self.assertEqual(saved["sync"]["model"], "gemini-new")
             self.assertEqual(saved["sync"]["chunk_size"], 40)
             self.assertEqual(saved["batch"]["model"], "gemini-new-batch")

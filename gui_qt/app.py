@@ -327,7 +327,11 @@ class MainWindow(QMainWindow):
             config[key] = section
         return section
 
-    def _set_combo_value(self, combo: QComboBox, value: str):
+    def _config_string(self, value: Any) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
+    def _set_combo_value(self, combo: QComboBox, value: Any):
+        value = self._config_string(value)
         if not value:
             combo.setCurrentIndex(-1)
             return
@@ -346,7 +350,17 @@ class MainWindow(QMainWindow):
         batch_rag_config = self._config_section(batch_config, "rag")
 
         # Populate sync model
-        sync_val = sync_config.get("model", "")
+        sync_models = sync_config.get("models")
+        sync_val = ""
+        if isinstance(sync_models, list):
+            for model in sync_models:
+                sync_val = self._config_string(model)
+                if sync_val:
+                    break
+        elif isinstance(sync_models, str):
+            sync_val = self._config_string(sync_models)
+        if not sync_val:
+            sync_val = sync_config.get("model", "")
         self._set_combo_value(self.sync_model_combo, sync_val)
 
         # Populate batch model
@@ -362,7 +376,7 @@ class MainWindow(QMainWindow):
         self._set_combo_value(self.batch_embedding_combo, batch_emb_val)
 
         # Populate thinking level
-        thinking_val = batch_config.get("thinking_level", "")
+        thinking_val = self._config_string(batch_config.get("thinking_level", ""))
         self._on_batch_model_changed(batch_val)
         idx = self.batch_thinking_combo.findData(thinking_val)
         if idx >= 0:
@@ -375,8 +389,8 @@ class MainWindow(QMainWindow):
                 self.batch_thinking_combo.setCurrentIndex(0)
 
     def _on_batch_model_changed(self, text: str):
-        model_name = text.strip()
-        is_thinking_supported = model_name.startswith("gemini-3") or model_name.startswith("gemini-2.5")
+        model_name = self._config_string(text)
+        is_thinking_supported = model_name.startswith("gemini-3")
         self.batch_thinking_combo.setEnabled(is_thinking_supported)
         if not is_thinking_supported:
             self.batch_thinking_combo.setCurrentIndex(0)
@@ -393,12 +407,22 @@ class MainWindow(QMainWindow):
             sync_rag_config = self._ensure_config_section(sync_config, "rag")
             batch_rag_config = self._ensure_config_section(batch_config, "rag")
 
-            sync_config["model"] = self.sync_model_combo.currentText().strip()
+            sync_model = self.sync_model_combo.currentText().strip()
+            sync_config["model"] = sync_model
+            if "models" in sync_config:
+                if sync_model:
+                    sync_config["models"] = [sync_model]
+                else:
+                    sync_config.pop("models", None)
             batch_config["model"] = self.batch_model_combo.currentText().strip()
             sync_rag_config["embedding_model"] = self.sync_embedding_combo.currentText().strip()
             batch_rag_config["embedding_model"] = self.batch_embedding_combo.currentText().strip()
             thinking_val = self.batch_thinking_combo.currentData()
-            batch_config["thinking_level"] = thinking_val if thinking_val is not None else ""
+            thinking_level = thinking_val if isinstance(thinking_val, str) else ""
+            if thinking_level:
+                batch_config["thinking_level"] = thinking_level
+            elif "thinking_level" in batch_config:
+                batch_config["thinking_level"] = ""
 
             self.state.save_translator_config(config)
             self._append_log("配置已成功保存至 translator_config.json。")
