@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -84,14 +85,54 @@ class GuiProjectStateTests(unittest.TestCase):
                 encoding="utf-8",
             )
             existing_mode = state.api_keys_path.stat().st_mode & 0o777
+            open_calls = []
+            real_open = os.open
 
-            with patch("gui_qt.project_state.os.chmod") as chmod_mock:
+            def recording_open(path, flags, mode):
+                open_calls.append((Path(path), flags, mode))
+                return real_open(path, flags, mode)
+
+            with (
+                patch("gui_qt.project_state.os.open", side_effect=recording_open),
+                patch("gui_qt.project_state.os.chmod") as chmod_mock,
+            ):
                 state.save_api_keys(["new-key"])
 
+            self.assertEqual(
+                open_calls,
+                [(
+                    state.api_keys_path.with_suffix(".tmp"),
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    existing_mode,
+                )],
+            )
             chmod_mock.assert_called_once()
             chmod_path, chmod_mode = chmod_mock.call_args.args
             self.assertEqual(Path(chmod_path), state.api_keys_path.with_suffix(".tmp"))
             self.assertEqual(chmod_mode, existing_mode)
+
+    def test_save_new_api_keys_creates_temp_file_restrictively(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            open_calls = []
+            real_open = os.open
+
+            def recording_open(path, flags, mode):
+                open_calls.append((Path(path), flags, mode))
+                return real_open(path, flags, mode)
+
+            with patch("gui_qt.project_state.os.open", side_effect=recording_open):
+                state.save_api_keys(["new-key"])
+
+            self.assertEqual(
+                open_calls,
+                [(
+                    state.api_keys_path.with_suffix(".tmp"),
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )],
+            )
 
     def test_save_api_keys_rejects_invalid_json_without_overwriting(self):
         with tempfile.TemporaryDirectory() as tmp:
