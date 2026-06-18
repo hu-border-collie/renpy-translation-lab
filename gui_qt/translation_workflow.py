@@ -84,6 +84,12 @@ class TranslationWorkflow:
     def resume_latest(cls, manifest_path: str) -> "TranslationWorkflow":
         return cls(["status"], manifest_path=manifest_path)
 
+    @classmethod
+    def resume_manifest(cls, manifest_path: str, manifest: dict[str, object]) -> "TranslationWorkflow":
+        if not manifest.get("job_name"):
+            return cls(["submit", "status"], manifest_path=manifest_path)
+        return cls.resume_latest(manifest_path)
+
     def current_step(self) -> WorkflowStep | None:
         if not self._pending_steps:
             return None

@@ -127,6 +127,90 @@ class GuiProjectStateTests(unittest.TestCase):
 
             self.assertEqual(state._resolve_api_keys_path(), root_path)
 
+    def test_logs_dir_uses_legacy_root_when_root_api_keys_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            root = workspace / "renpy-translation-lab"
+            root.mkdir()
+            state = self.make_state(root)
+
+            self.assertEqual(state.get_logs_dir(), workspace / "logs" / "batch_jobs")
+
+    def test_logs_dir_prefers_tool_root_when_root_api_keys_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "api_keys.json").write_text(
+                json.dumps({"api_keys": ["root-key"]}),
+                encoding="utf-8",
+            )
+            state = self.make_state(root)
+
+            self.assertEqual(state.get_logs_dir(), root / "logs" / "batch_jobs")
+
+    def test_latest_manifest_path_uses_cli_log_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            root = workspace / "renpy-translation-lab"
+            root.mkdir()
+            jobs_dir = workspace / "logs" / "batch_jobs"
+            jobs_dir.mkdir(parents=True)
+            manifest = jobs_dir / "job1" / "manifest.json"
+            manifest.parent.mkdir()
+            manifest.write_text("{}", encoding="utf-8")
+            (jobs_dir / "latest_manifest.txt").write_text(str(manifest), encoding="utf-8")
+            state = self.make_state(root)
+
+            self.assertEqual(state.get_latest_manifest_path(), manifest)
+
+    def test_load_resume_manifest_accepts_current_translation_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            state._game_root = root / "Game Work"
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "mode": "translation",
+                        "base_dir": str(state._game_root),
+                        "job_name": "batches/example",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            loaded = state.load_resume_manifest(manifest)
+
+            self.assertEqual(loaded["job_name"], "batches/example")
+
+    def test_load_resume_manifest_rejects_non_translation_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            state._game_root = root / "Game Work"
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps({"mode": "revision", "base_dir": str(state._game_root)}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "不是基础翻译任务"):
+                state.load_resume_manifest(manifest)
+
+    def test_load_resume_manifest_rejects_other_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            state._game_root = root / "Game Work"
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps({"mode": "translation", "base_dir": str(root / "Other Work")}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "属于其他项目"):
+                state.load_resume_manifest(manifest)
+
     def test_save_api_keys_preserves_existing_file_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
