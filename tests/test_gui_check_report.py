@@ -47,6 +47,27 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertEqual(parsed["failure_items"], 2)
         self.assertTrue(any("source_mismatch" in finding for finding in parsed["findings"]))
 
+    def test_summarize_check_output_nonzero_exit_blocks_apply(self):
+        summary = summarize_check_output(
+            CHECK_OUTPUT_SAFE,
+            exit_code=1,
+            manifest_path="C:\\pkg\\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "failed")
+        self.assertFalse(summary.can_apply)
+
+    def test_summarize_check_output_already_applied_blocks_apply(self):
+        summary = summarize_check_output(
+            CHECK_OUTPUT_SAFE,
+            exit_code=0,
+            manifest_path="C:\\pkg\\manifest.json",
+            already_applied=True,
+        )
+
+        self.assertEqual(summary.status, "applied")
+        self.assertFalse(summary.can_apply)
+
     def test_summarize_safe_check_enables_apply(self):
         summary = summarize_check_output(
             CHECK_OUTPUT_SAFE,

@@ -1,6 +1,6 @@
 import unittest
 
-from gui_qt.api_key_dialog import commit_pending_key, mask_api_key
+from gui_qt.api_key_helpers import commit_pending_key, mask_api_key
 
 
 class GuiApiKeyDialogTests(unittest.TestCase):
@@ -26,6 +26,12 @@ class GuiApiKeyDialogTests(unittest.TestCase):
 
         self.assertEqual(error, "duplicate")
         self.assertEqual(keys, ["existing"])
+
+    def test_commit_pending_key_detects_whitespace_variant_duplicate(self):
+        keys, error = commit_pending_key(["key123 "], "key123")
+
+        self.assertEqual(error, "duplicate")
+        self.assertEqual(keys, ["key123 "])
 
 
 if __name__ == "__main__":
