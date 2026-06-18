@@ -330,6 +330,54 @@ class MainWindow(QMainWindow):
     def _config_string(self, value: Any) -> str:
         return value.strip() if isinstance(value, str) else ""
 
+    def _supports_batch_thinking(self, model_name: Any) -> bool:
+        return self._config_string(model_name).startswith("gemini-3")
+
+    def _sync_models_for_save(
+        self,
+        existing_models: Any,
+        selected_model: str,
+    ) -> list[str] | None:
+        existing: list[str] = []
+        if isinstance(existing_models, list):
+            for model in existing_models:
+                cleaned = self._config_string(model)
+                if cleaned and cleaned not in existing:
+                    existing.append(cleaned)
+        else:
+            cleaned = self._config_string(existing_models)
+            if cleaned:
+                existing.append(cleaned)
+
+        if not selected_model:
+            return existing or None
+
+        return [
+            selected_model,
+            *[model for model in existing if model != selected_model],
+        ]
+
+    def _batch_thinking_value_for_load(
+        self,
+        batch_config: dict[str, Any],
+        batch_model: Any,
+    ) -> str:
+        if "thinking_level" in batch_config:
+            return self._config_string(batch_config.get("thinking_level", ""))
+        return "minimal" if self._supports_batch_thinking(batch_model) else ""
+
+    def _should_save_batch_thinking_level(
+        self,
+        batch_config: dict[str, Any],
+        batch_model: str,
+        thinking_level: str,
+    ) -> bool:
+        return (
+            bool(thinking_level)
+            or self._supports_batch_thinking(batch_model)
+            or "thinking_level" in batch_config
+        )
+
     def _set_combo_value(self, combo: QComboBox, value: Any):
         value = self._config_string(value)
         if not value:
@@ -375,9 +423,10 @@ class MainWindow(QMainWindow):
         batch_emb_val = batch_rag_config.get("embedding_model", "")
         self._set_combo_value(self.batch_embedding_combo, batch_emb_val)
 
-        # Populate thinking level
-        thinking_val = self._config_string(batch_config.get("thinking_level", ""))
         self._on_batch_model_changed(batch_val)
+        # Populate thinking level. Missing config keeps the CLI's supported-model
+        # default visible; choosing "not enabled" then saves an explicit empty value.
+        thinking_val = self._batch_thinking_value_for_load(batch_config, batch_val)
         idx = self.batch_thinking_combo.findData(thinking_val)
         if idx >= 0:
             self.batch_thinking_combo.setCurrentIndex(idx)
@@ -389,8 +438,7 @@ class MainWindow(QMainWindow):
                 self.batch_thinking_combo.setCurrentIndex(0)
 
     def _on_batch_model_changed(self, text: str):
-        model_name = self._config_string(text)
-        is_thinking_supported = model_name.startswith("gemini-3")
+        is_thinking_supported = self._supports_batch_thinking(text)
         self.batch_thinking_combo.setEnabled(is_thinking_supported)
         if not is_thinking_supported:
             self.batch_thinking_combo.setCurrentIndex(0)
@@ -410,19 +458,19 @@ class MainWindow(QMainWindow):
             sync_model = self.sync_model_combo.currentText().strip()
             sync_config["model"] = sync_model
             if "models" in sync_config:
-                if sync_model:
-                    sync_config["models"] = [sync_model]
+                sync_models = self._sync_models_for_save(sync_config.get("models"), sync_model)
+                if sync_models:
+                    sync_config["models"] = sync_models
                 else:
                     sync_config.pop("models", None)
-            batch_config["model"] = self.batch_model_combo.currentText().strip()
+            batch_model = self.batch_model_combo.currentText().strip()
+            batch_config["model"] = batch_model
             sync_rag_config["embedding_model"] = self.sync_embedding_combo.currentText().strip()
             batch_rag_config["embedding_model"] = self.batch_embedding_combo.currentText().strip()
             thinking_val = self.batch_thinking_combo.currentData()
             thinking_level = thinking_val if isinstance(thinking_val, str) else ""
-            if thinking_level:
+            if self._should_save_batch_thinking_level(batch_config, batch_model, thinking_level):
                 batch_config["thinking_level"] = thinking_level
-            elif "thinking_level" in batch_config:
-                batch_config["thinking_level"] = ""
 
             self.state.save_translator_config(config)
             self._append_log("配置已成功保存至 translator_config.json。")
