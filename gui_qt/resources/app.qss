@@ -123,7 +123,8 @@ QPushButton:disabled {
 /* Primary Action Buttons */
 QPushButton#save_config_btn,
 QPushButton#doctor_btn,
-QPushButton#api_btn {
+QPushButton#api_btn,
+QPushButton#translate_btn {
     background-color: #2563eb;
     border: 1px solid #2563eb;
     color: #ffffff;
@@ -132,14 +133,16 @@ QPushButton#api_btn {
 
 QPushButton#save_config_btn:hover,
 QPushButton#doctor_btn:hover,
-QPushButton#api_btn:hover {
+QPushButton#api_btn:hover,
+QPushButton#translate_btn:hover {
     background-color: #1d4ed8;
     border-color: #1d4ed8;
 }
 
 QPushButton#save_config_btn:pressed,
 QPushButton#doctor_btn:pressed,
-QPushButton#api_btn:pressed {
+QPushButton#api_btn:pressed,
+QPushButton#translate_btn:pressed {
     background-color: #1e40af;
     border-color: #1e40af;
 }
@@ -206,6 +209,33 @@ QLabel#doctor_status_label[status="blocked"] {
 }
 
 QLabel#doctor_facts_label {
+    color: #334155;
+}
+
+QLabel#workflow_status_label {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#workflow_status_label[status="idle"],
+QLabel#workflow_status_label[status="running"] {
+    color: #2563eb;
+}
+
+QLabel#workflow_status_label[status="done"] {
+    color: #15803d;
+}
+
+QLabel#workflow_status_label[status="waiting"],
+QLabel#workflow_status_label[status="stale"] {
+    color: #b45309;
+}
+
+QLabel#workflow_status_label[status="failed"] {
+    color: #b91c1c;
+}
+
+QLabel#workflow_facts_label {
     color: #334155;
 }
 
