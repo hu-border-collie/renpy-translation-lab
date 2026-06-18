@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -415,8 +416,14 @@ class MainWindow(QMainWindow):
             )
             return
 
+        try:
+            manifest = self.state.load_resume_manifest(latest_manifest)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法继续最新任务", str(exc))
+            return
+
         self.log_view.clear()
-        self._workflow = TranslationWorkflow.resume_latest(str(latest_manifest))
+        self._workflow = TranslationWorkflow.resume_manifest(str(latest_manifest), manifest)
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
         self._append_log("=== 正在继续最新 Batch 翻译任务 ===\n")
@@ -558,7 +565,7 @@ class MainWindow(QMainWindow):
 
         if update.should_continue:
             self.statusBar().showMessage(update.heading, 3000)
-            self._run_workflow_current_step()
+            QTimer.singleShot(0, self._run_workflow_current_step)
             return
 
         self._active_command = ""

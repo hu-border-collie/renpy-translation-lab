@@ -67,6 +67,22 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
         self.assertTrue(any("JOB_STATE_RUNNING" in fact for fact in update.facts))
         self.assertIsNone(workflow.current_step())
 
+    def test_resume_unsubmitted_manifest_starts_from_submit(self):
+        workflow = TranslationWorkflow.resume_manifest(
+            "C:\\package\\manifest.json",
+            {"job_name": ""},
+        )
+
+        self.assertEqual(workflow.current_step().args, ["submit", "C:\\package\\manifest.json"])
+
+    def test_resume_submitted_manifest_starts_from_status(self):
+        workflow = TranslationWorkflow.resume_manifest(
+            "C:\\package\\manifest.json",
+            {"job_name": "batches/example"},
+        )
+
+        self.assertEqual(workflow.current_step().args, ["status", "C:\\package\\manifest.json"])
+
     def test_status_succeeded_continues_to_download_and_check(self):
         workflow = TranslationWorkflow.resume_latest("C:\\package\\manifest.json")
 
