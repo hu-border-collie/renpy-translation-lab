@@ -179,6 +179,40 @@ QTextEdit#log_view {
     padding: 12px;
 }
 
+QLabel#doctor_status_label {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#doctor_status_label[status="idle"],
+QLabel#doctor_status_label[status="running"] {
+    color: #2563eb;
+}
+
+QLabel#doctor_status_label[status="ready"] {
+    color: #15803d;
+}
+
+QLabel#doctor_status_label[status="warning"] {
+    color: #b45309;
+}
+
+QLabel#doctor_status_label[status="blocked"] {
+    color: #b91c1c;
+}
+
+QLabel#doctor_facts_label {
+    color: #334155;
+}
+
+QTextEdit#doctor_findings_view {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    color: #334155;
+    padding: 8px;
+}
+
 /* ScrollBar Styling */
 QScrollBar:vertical {
     background-color: #0f172a;

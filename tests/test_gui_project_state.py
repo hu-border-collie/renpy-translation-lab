@@ -41,6 +41,33 @@ class GuiProjectStateTests(unittest.TestCase):
             self.assertEqual(saved["batch_size"], 5)
             self.assertEqual(saved["legacy"], {"enabled": True})
 
+    def test_api_key_status_uses_file_keys_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            state.api_keys_path.write_text(
+                json.dumps({"api_keys": ["file-key"]}),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"GEMINI_API_KEY": "env-key"}):
+                self.assertEqual(state.get_api_key_status(), (1, "file"))
+
+    def test_api_key_status_falls_back_to_environment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "GEMINI_API_KEY": "env-key",
+                    "GEMINI_API_KEY_2": " ",
+                    "GEMINI_API_KEY_3": "env-key-3",
+                },
+            ):
+                self.assertEqual(state.get_api_key_status(), (2, "environment"))
+
     def test_api_keys_path_uses_legacy_data_file_when_root_file_absent(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
