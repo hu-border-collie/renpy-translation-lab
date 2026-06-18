@@ -32,6 +32,15 @@ from PySide6.QtWidgets import (
 )
 
 from .api_key_dialog import ApiKeyDialog, mask_api_key
+from .check_report import (
+    WritebackSummary,
+    idle_writeback_summary,
+    running_writeback_summary,
+    stale_writeback_summary,
+    summarize_apply_output,
+    summarize_check_output,
+    summarize_manifest_writeback,
+)
 from .cli_runner import CliRunner
 from .doctor_report import (
     DoctorSummary,
@@ -60,6 +69,8 @@ class MainWindow(QMainWindow):
         self._doctor_output_lines: list[str] = []
         self._workflow: TranslationWorkflow | None = None
         self._workflow_step_output_lines: list[str] = []
+        self._apply_output_lines: list[str] = []
+        self._writeback_manifest_path = ""
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -101,6 +112,7 @@ class MainWindow(QMainWindow):
             "尚未开始翻译任务",
             "运行项目检查后，可以开始基础 Batch 翻译流程。",
         )
+        self._refresh_writeback_from_latest_manifest()
 
         # Status
         self.statusBar().showMessage(
@@ -167,6 +179,41 @@ class MainWindow(QMainWindow):
         actions_layout.addLayout(secondary_layout)
 
         layout.addWidget(actions_box)
+
+        writeback_box = QGroupBox("检查结果与写回")
+        writeback_layout = QVBoxLayout(writeback_box)
+        writeback_layout.setSpacing(6)
+        writeback_layout.setContentsMargins(12, 16, 12, 12)
+
+        self.writeback_status_label = QLabel()
+        self.writeback_status_label.setObjectName("writeback_status_label")
+        writeback_layout.addWidget(self.writeback_status_label)
+
+        self.writeback_message_label = QLabel()
+        self.writeback_message_label.setWordWrap(True)
+        writeback_layout.addWidget(self.writeback_message_label)
+
+        self.writeback_facts_label = QLabel()
+        self.writeback_facts_label.setWordWrap(True)
+        self.writeback_facts_label.setObjectName("writeback_facts_label")
+        writeback_layout.addWidget(self.writeback_facts_label)
+
+        self.writeback_findings_view = QTextEdit()
+        self.writeback_findings_view.setReadOnly(True)
+        self.writeback_findings_view.setMaximumHeight(88)
+        self.writeback_findings_view.setObjectName("writeback_findings_view")
+        writeback_layout.addWidget(self.writeback_findings_view)
+
+        writeback_actions = QHBoxLayout()
+        self.apply_btn = QPushButton("写回翻译")
+        self.apply_btn.setObjectName("apply_btn")
+        self.apply_btn.clicked.connect(self._on_apply_writeback)
+        self.apply_btn.setEnabled(False)
+        writeback_actions.addWidget(self.apply_btn)
+        writeback_actions.addStretch()
+        writeback_layout.addLayout(writeback_actions)
+
+        layout.addWidget(writeback_box)
 
         status_row = QHBoxLayout()
         status_row.setSpacing(16)
@@ -382,6 +429,8 @@ class MainWindow(QMainWindow):
                 "项目已切换",
                 "翻译任务状态已清空；请先针对新项目重新检查。",
             )
+            self._writeback_manifest_path = ""
+            self._set_writeback_summary(stale_writeback_summary())
             self._append_log(f"项目目录已设置为：{directory}")
 
     def _refresh_api_status(self) -> None:
@@ -467,6 +516,8 @@ class MainWindow(QMainWindow):
 
         self.log_view.clear()
         self._focus_log_tab()
+        self._writeback_manifest_path = ""
+        self._set_writeback_summary(stale_writeback_summary())
         self._workflow = TranslationWorkflow.start_new()
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
@@ -510,6 +561,53 @@ class MainWindow(QMainWindow):
     def _on_kill(self):
         self.runner.kill()
 
+    def _on_apply_writeback(self):
+        if not self._writeback_manifest_path:
+            QMessageBox.information(self, "无法写回", "没有可写回的 manifest；请先完成 check。")
+            return
+
+        summary = self._current_writeback_summary()
+        if not summary.can_apply:
+            QMessageBox.information(
+                self,
+                "当前不能写回",
+                summary.message or "只有 safe 的 check 结果才允许写回。",
+            )
+            return
+
+        confirm_lines = [
+            "即将把翻译写回项目 .rpy 文件。",
+            "写回前请确认已在副本或备份上验证。",
+            "",
+            *summary.facts,
+        ]
+        if summary.findings:
+            confirm_lines.extend(["", "待处理问题：", *[f"- {item}" for item in summary.findings]])
+
+        reply = QMessageBox.question(
+            self,
+            "确认写回翻译",
+            "\n".join(confirm_lines),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.log_view.clear()
+        self._focus_log_tab()
+        self._active_command = "apply"
+        self._apply_output_lines = []
+        self._set_writeback_summary(running_writeback_summary())
+        self._append_log(
+            f"=== 正在写回：gemini_translate_batch.py apply {self._writeback_manifest_path} ===\n"
+        )
+        self._set_task_running(True)
+        self.runner.run(
+            self.state.get_batch_script_path(),
+            ["apply", self._writeback_manifest_path],
+        )
+
     # --- Runner callbacks ---
 
     def _on_cli_line_ready(self, text: str):
@@ -517,6 +615,8 @@ class MainWindow(QMainWindow):
             self._doctor_output_lines.append(text)
         elif self._active_command == "translation_workflow":
             self._workflow_step_output_lines.append(text)
+        elif self._active_command == "apply":
+            self._apply_output_lines.append(text)
         self._append_log(text)
 
     def _append_log(self, text: str):
@@ -532,6 +632,7 @@ class MainWindow(QMainWindow):
         self.translate_btn.setEnabled(not running)
         self.resume_btn.setEnabled(not running)
         self.save_config_btn.setEnabled(not running)
+        self.apply_btn.setEnabled(not running and self._current_writeback_summary().can_apply)
         self.kill_btn.setEnabled(running)
 
     def _set_workflow_summary(
@@ -576,6 +677,74 @@ class MainWindow(QMainWindow):
         self._append_log(f"\n=== {step.heading}：gemini_translate_batch.py {' '.join(step.args)} ===\n")
         self.runner.run(self.state.get_batch_script_path(), step.args)
 
+    def _current_writeback_summary(self) -> WritebackSummary:
+        return getattr(self, "_writeback_summary", idle_writeback_summary())
+
+    def _set_writeback_summary(self, summary: WritebackSummary) -> None:
+        self._writeback_summary = summary
+        self._writeback_manifest_path = summary.manifest_path
+        self.writeback_status_label.setText(summary.heading)
+        self.writeback_status_label.setProperty("status", summary.status)
+        self.writeback_status_label.style().unpolish(self.writeback_status_label)
+        self.writeback_status_label.style().polish(self.writeback_status_label)
+        self.writeback_message_label.setText(summary.message)
+        self.writeback_facts_label.setText("\n".join(summary.facts))
+        if summary.findings:
+            self.writeback_findings_view.setPlainText(
+                "\n".join(f"- {finding}" for finding in summary.findings)
+            )
+        elif summary.status in {"idle", "running"}:
+            self.writeback_findings_view.setPlainText("等待检查结果。")
+        elif summary.status == "stale":
+            self.writeback_findings_view.setPlainText("请针对当前任务重新运行 check。")
+        elif summary.status == "safe":
+            self.writeback_findings_view.setPlainText("未发现阻止写回的问题。")
+        elif summary.status == "applied":
+            self.writeback_findings_view.setPlainText("写回已完成。")
+        else:
+            self.writeback_findings_view.setPlainText("请查看诊断日志了解详情。")
+        if not self.kill_btn.isEnabled():
+            self.apply_btn.setEnabled(summary.can_apply)
+
+    def _refresh_writeback_from_latest_manifest(self) -> None:
+        latest_manifest = self.state.get_latest_manifest_path()
+        if latest_manifest is None:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+        try:
+            manifest = self.state.load_resume_manifest(latest_manifest)
+        except ValueError:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+
+        summary = summarize_manifest_writeback(manifest)
+        if summary is None:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+        self._set_writeback_summary(summary)
+
+    def _update_writeback_from_check(
+        self,
+        output: str,
+        exit_code: int,
+        manifest_path: str,
+    ) -> None:
+        already_applied = False
+        if manifest_path:
+            try:
+                manifest = self.state.load_manifest_file(manifest_path)
+                already_applied = bool(manifest.get("applied_at"))
+            except ValueError:
+                pass
+        self._set_writeback_summary(
+            summarize_check_output(
+                output,
+                exit_code,
+                manifest_path=manifest_path,
+                already_applied=already_applied,
+            )
+        )
+
     def _set_doctor_summary(self, summary: DoctorSummary):
         self.doctor_status_label.setText(summary.heading)
         self.doctor_status_label.setProperty("status", summary.status)
@@ -600,6 +769,8 @@ class MainWindow(QMainWindow):
             self._doctor_output_lines.append(message)
         elif self._active_command == "translation_workflow":
             self._workflow_step_output_lines.append(message)
+        elif self._active_command == "apply":
+            self._apply_output_lines.append(message)
         self._focus_log_tab()
         self.statusBar().showMessage("任务运行失败，请查看诊断日志。", 6000)
 
@@ -626,6 +797,21 @@ class MainWindow(QMainWindow):
             self._on_workflow_step_finished(exit_code)
             return
 
+        if self._active_command == "apply":
+            summary = summarize_apply_output(
+                "\n".join(self._apply_output_lines),
+                exit_code,
+                manifest_path=self._writeback_manifest_path,
+            )
+            self._set_writeback_summary(summary)
+            self._active_command = ""
+            self._set_task_running(False)
+            if exit_code == 0:
+                self.statusBar().showMessage("翻译写回完成。", 6000)
+            else:
+                self.statusBar().showMessage("翻译写回失败，请查看诊断日志。", 8000)
+            return
+
         self._set_task_running(False)
 
     def _on_workflow_step_finished(self, exit_code: int):
@@ -634,10 +820,11 @@ class MainWindow(QMainWindow):
             self._set_task_running(False)
             return
 
-        update = self._workflow.complete_current_step(
-            exit_code,
-            "\n".join(self._workflow_step_output_lines),
-        )
+        step_output = "\n".join(self._workflow_step_output_lines)
+        manifest_path = self._workflow.manifest_path
+        update = self._workflow.complete_current_step(exit_code, step_output)
+        if "Safety status:" in step_output:
+            self._update_writeback_from_check(step_output, exit_code, manifest_path)
         self._set_workflow_update(update)
         self._workflow_step_output_lines = []
 

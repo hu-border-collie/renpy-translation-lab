@@ -370,6 +370,71 @@ QLabel#workflow_facts_label {
     color: #334155;
 }
 
+QLabel#writeback_status_label {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#writeback_status_label[status="idle"],
+QLabel#writeback_status_label[status="running"] {
+    color: #2563eb;
+}
+
+QLabel#writeback_status_label[status="safe"] {
+    color: #15803d;
+}
+
+QLabel#writeback_status_label[status="applied"] {
+    color: #15803d;
+}
+
+QLabel#writeback_status_label[status="warn"],
+QLabel#writeback_status_label[status="stale"] {
+    color: #b45309;
+}
+
+QLabel#writeback_status_label[status="block"],
+QLabel#writeback_status_label[status="failed"],
+QLabel#writeback_status_label[status="unknown"] {
+    color: #b91c1c;
+}
+
+QLabel#writeback_facts_label {
+    color: #334155;
+}
+
+QTextEdit#writeback_findings_view {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    color: #334155;
+    padding: 8px;
+}
+
+QPushButton#apply_btn {
+    background-color: #15803d;
+    border: 1px solid #15803d;
+    color: #ffffff;
+    font-weight: 600;
+    min-width: 108px;
+}
+
+QPushButton#apply_btn:hover {
+    background-color: #166534;
+    border-color: #166534;
+}
+
+QPushButton#apply_btn:pressed {
+    background-color: #14532d;
+    border-color: #14532d;
+}
+
+QPushButton#apply_btn:disabled {
+    background-color: #f1f5f9;
+    border-color: #e2e8f0;
+    color: #cbd5e1;
+}
+
 QTextEdit#doctor_findings_view {
     background-color: #f8fafc;
     border: 1px solid #e2e8f0;
