@@ -4,8 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtGui import QFontDatabase
-
 MONO_FONT_SELECTORS = (
     "QListWidget#api_key_list",
     "QLineEdit#project_path_edit",
@@ -37,6 +35,10 @@ def _qss_family_name(family: str) -> str:
 
 def _load_font_family(font_path: Path) -> str:
     if not font_path.is_file():
+        return ""
+    try:
+        from PySide6.QtGui import QFontDatabase
+    except ImportError:
         return ""
     font_id = QFontDatabase.addApplicationFont(str(font_path))
     if font_id < 0:

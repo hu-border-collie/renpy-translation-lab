@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
 
@@ -41,6 +42,30 @@ STANDARD_REPORT_FILES = (
 )
 
 
+def is_windows_style_path(path: str) -> bool:
+    return bool(
+        re.match(r"^[A-Za-z]:", path)
+        or path.startswith("\\\\")
+        or "\\" in path
+    )
+
+
+def parent_directory(path: str) -> str:
+    if not path:
+        return ""
+    if is_windows_style_path(path):
+        parent = str(PureWindowsPath(path).parent)
+    else:
+        parent = str(PurePosixPath(path).parent)
+    return parent if parent and parent != "." else ""
+
+
+def join_directory_file(directory: str, filename: str) -> str:
+    if is_windows_style_path(directory):
+        return str(PureWindowsPath(directory) / filename)
+    return str(PurePosixPath(directory) / filename)
+
+
 def _default_path_exists(path: str) -> bool:
     try:
         return Path(path).exists()
@@ -61,10 +86,9 @@ def format_cli_command(python_exe: str, script_path: str, args: list[str]) -> st
 
 
 def resolve_package_dir(manifest_path: str, manifest: dict[str, object] | None = None) -> str:
-    if manifest_path:
-        parent = str(Path(manifest_path).parent)
-        if parent and parent != ".":
-            return parent
+    parent = parent_directory(manifest_path)
+    if parent:
+        return parent
     if manifest:
         package_dir = manifest.get("_package_dir")
         if isinstance(package_dir, str) and package_dir.strip():
@@ -128,7 +152,7 @@ def collect_existing_report_paths(
 
     if package_dir:
         for filename, label in STANDARD_REPORT_FILES:
-            add(label, str(Path(package_dir) / filename))
+            add(label, join_directory_file(package_dir, filename))
 
     report_path = manifest.get("last_check_report_path")
     if isinstance(report_path, str) and report_path.strip():
@@ -300,7 +324,7 @@ def build_diagnostics_context(
     package_dir = resolve_package_dir(manifest_path, manifest)
     facts = build_manifest_facts(manifest, manifest_path)
 
-    latest_pointer = str(Path(logs_dir) / "latest_manifest.txt")
+    latest_pointer = join_directory_file(logs_dir, "latest_manifest.txt")
     if exists(latest_pointer):
         facts.append(f"Latest 指针：{latest_pointer}")
 
