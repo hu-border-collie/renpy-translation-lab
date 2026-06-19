@@ -631,9 +631,9 @@ class MainWindow(QMainWindow):
         self._active_command = "bootstrap_rag"
         self._bootstrap_output_lines = []
         self._set_bootstrap_summary(running_bootstrap_summary("rag"))
-        self._append_log("=== 正在运行：gemini_translate_batch.py bootstrap-rag ===\n")
+        self._append_log("=== 正在运行：gemini_translate_batch.py bootstrap-rag --skip-prepare ===\n")
         self._set_task_running(True)
-        self.runner.run(self.state.get_batch_script_path(), ["bootstrap-rag"])
+        self.runner.run(self.state.get_batch_script_path(), ["bootstrap-rag", "--skip-prepare"])
 
     def _on_bootstrap_source_index(self) -> None:
         if not self.state.get_game_root():
@@ -653,10 +653,13 @@ class MainWindow(QMainWindow):
         self._bootstrap_output_lines = []
         self._set_bootstrap_summary(running_bootstrap_summary("source_index"))
         self._append_log(
-            "=== 正在运行：gemini_translate_batch.py bootstrap-source-index ===\n"
+            "=== 正在运行：gemini_translate_batch.py bootstrap-source-index --skip-prepare ===\n"
         )
         self._set_task_running(True)
-        self.runner.run(self.state.get_batch_script_path(), ["bootstrap-source-index"])
+        self.runner.run(
+            self.state.get_batch_script_path(),
+            ["bootstrap-source-index", "--skip-prepare"],
+        )
 
     def _on_start_translation(self):
         if not self.state.get_game_root():
