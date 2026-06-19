@@ -4,8 +4,7 @@ from pathlib import Path
 try:
     from gui_qt.app import MainWindow
 except ImportError as exc:
-    if getattr(exc, "name", None) != "PySide6":
-        raise
+    # Skip when PySide6 is missing or Qt system libraries are unavailable (e.g. headless CI).
     MainWindow = None  # type: ignore[assignment]
     IMPORT_ERROR = exc
 else:
