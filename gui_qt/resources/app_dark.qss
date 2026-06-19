@@ -22,9 +22,16 @@ QWidget {
 #subtitle_label,
 #config_hint_label {
     color: #94a3b8;
-    font-size: 12px;
+    font-size: 15px;
     font-weight: 400;
-    line-height: 1.4;
+    line-height: 1.45;
+}
+
+QLabel#summary_body_label {
+    color: #cbd5e1;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1.45;
 }
 
 /* Dialogs are top-level windows; set an explicit surface so native OS chrome
@@ -49,7 +56,7 @@ QDialog#api_key_dialog QDialogButtonBox QPushButton {
     border: 1px solid #334155;
     border-radius: 6px;
     color: #cbd5e1;
-    font-size: 12px;
+    font-size: 14px;
     padding: 10px 12px;
 }
 
@@ -158,7 +165,7 @@ QTabWidget#diagnostics_inner_tabs > QTabBar::tab:selected {
 
 QLabel#diagnostics_section_label {
     color: #94a3b8;
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 600;
 }
 
@@ -189,7 +196,7 @@ QFrame#diagnostics_facts_frame {
 QLabel#diagnostics_facts_label {
     color: #cbd5e1;
     font-family: "Consolas", "Courier New", monospace;
-    font-size: 12px;
+    font-size: 13px;
 }
 
 QLineEdit#diagnostics_command_edit,
@@ -483,6 +490,7 @@ QLabel#doctor_status_label[status="blocked"] {
 
 QLabel#doctor_facts_label {
     color: #cbd5e1;
+    font-size: 14px;
 }
 
 QLabel#workflow_status_label {
@@ -510,6 +518,7 @@ QLabel#workflow_status_label[status="failed"] {
 
 QLabel#workflow_facts_label {
     color: #cbd5e1;
+    font-size: 14px;
 }
 
 QFrame#workflow_separator {
@@ -520,7 +529,7 @@ QFrame#workflow_separator {
 
 QLabel#workflow_section_label {
     color: #60a5fa;
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 600;
     margin-top: 2px;
 }
@@ -556,6 +565,7 @@ QLabel#writeback_status_label[status="unknown"] {
 
 QLabel#writeback_facts_label {
     color: #cbd5e1;
+    font-size: 14px;
 }
 
 QLabel#bootstrap_status_label {
@@ -583,6 +593,7 @@ QLabel#bootstrap_status_label[status="failed"] {
 
 QLabel#bootstrap_facts_label {
     color: #cbd5e1;
+    font-size: 14px;
 }
 
 QTextEdit#bootstrap_findings_view {
@@ -590,6 +601,7 @@ QTextEdit#bootstrap_findings_view {
     border: 1px solid #334155;
     border-radius: 6px;
     color: #cbd5e1;
+    font-size: 14px;
     padding: 8px;
 }
 
@@ -598,6 +610,7 @@ QTextEdit#writeback_findings_view {
     border: 1px solid #334155;
     border-radius: 6px;
     color: #cbd5e1;
+    font-size: 14px;
     padding: 8px;
 }
 
@@ -630,6 +643,7 @@ QTextEdit#doctor_findings_view {
     border: 1px solid #334155;
     border-radius: 6px;
     color: #cbd5e1;
+    font-size: 14px;
     padding: 8px;
 }
 

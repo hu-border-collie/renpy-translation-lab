@@ -212,6 +212,7 @@ class MainWindow(QMainWindow):
         doctor_layout.addWidget(self.doctor_status_label)
         self.doctor_message_label = QLabel()
         self.doctor_message_label.setWordWrap(True)
+        self.doctor_message_label.setObjectName("summary_body_label")
         doctor_layout.addWidget(self.doctor_message_label)
         self.doctor_facts_label = QLabel()
         self.doctor_facts_label.setWordWrap(True)
@@ -235,6 +236,7 @@ class MainWindow(QMainWindow):
         workflow_layout.addWidget(self.workflow_status_label)
         self.workflow_message_label = QLabel()
         self.workflow_message_label.setWordWrap(True)
+        self.workflow_message_label.setObjectName("summary_body_label")
         workflow_layout.addWidget(self.workflow_message_label)
         self.workflow_facts_label = QLabel()
         self.workflow_facts_label.setWordWrap(True)
@@ -253,6 +255,7 @@ class MainWindow(QMainWindow):
         writeback_layout.addWidget(self.writeback_status_label)
         self.writeback_message_label = QLabel()
         self.writeback_message_label.setWordWrap(True)
+        self.writeback_message_label.setObjectName("summary_body_label")
         writeback_layout.addWidget(self.writeback_message_label)
         self.writeback_facts_label = QLabel()
         self.writeback_facts_label.setWordWrap(True)
@@ -376,6 +379,7 @@ class MainWindow(QMainWindow):
 
         self.bootstrap_message_label = QLabel()
         self.bootstrap_message_label.setWordWrap(True)
+        self.bootstrap_message_label.setObjectName("summary_body_label")
         context_layout.addWidget(self.bootstrap_message_label)
 
         self.bootstrap_facts_label = QLabel()
@@ -536,6 +540,7 @@ class MainWindow(QMainWindow):
         context_layout.addWidget(self.diagnostics_status_label)
         self.diagnostics_message_label = QLabel()
         self.diagnostics_message_label.setWordWrap(True)
+        self.diagnostics_message_label.setObjectName("summary_body_label")
         context_layout.addWidget(self.diagnostics_message_label)
 
         facts_frame = QFrame()
