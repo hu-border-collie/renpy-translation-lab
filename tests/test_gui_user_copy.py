@@ -17,11 +17,23 @@ class GuiUserCopyTests(unittest.TestCase):
         self.assertEqual(safety_level_label("warn"), "需处理")
         self.assertEqual(safety_level_label("block"), "禁止写回")
 
+    def test_safety_level_label_case_insensitive(self):
+        self.assertEqual(safety_level_label("Safe"), "可写回")
+        self.assertEqual(safety_level_label("WARN"), "需处理")
+        self.assertEqual(safety_level_label("Block"), "禁止写回")
+
     def test_doctor_mode_label_maps_known_values(self):
         self.assertEqual(doctor_mode_label("can_generate_template"), "可生成翻译模板")
+        self.assertEqual(doctor_mode_label("existing_tl_only"), "仅处理已有翻译文件")
+        self.assertEqual(doctor_mode_label("blocked_missing_template"), "缺少模板且无法生成")
 
     def test_job_state_label_maps_known_values(self):
         self.assertEqual(job_state_label("JOB_STATE_SUCCEEDED"), "已完成")
+        self.assertEqual(job_state_label("JOB_STATE_FAILED"), "失败")
+        self.assertEqual(job_state_label("JOB_STATE_CANCELLED"), "已取消")
+        self.assertEqual(job_state_label("JOB_STATE_EXPIRED"), "已过期")
+        self.assertEqual(job_state_label("JOB_STATE_PENDING"), "排队中")
+        self.assertEqual(job_state_label("JOB_STATE_RUNNING"), "处理中")
 
     def test_format_manifest_path_fact_uses_chinese_label(self):
         self.assertEqual(
