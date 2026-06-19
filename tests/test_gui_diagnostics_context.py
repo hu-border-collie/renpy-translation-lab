@@ -5,7 +5,6 @@ from gui_qt.diagnostics_context import (
     build_diagnostics_context,
     collect_existing_report_paths,
     format_cli_command,
-    format_manifest_json_preview,
     idle_diagnostics_context,
     join_directory_file,
     manifest_for_preview,
@@ -126,7 +125,7 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertTrue(any("Manifest" in fact for fact in context.facts))
         self.assertTrue(any(entry.label == "Batch 请求" for entry in context.paths))
         self.assertTrue(context.commands)
-        self.assertIn('"mode": "translation"', format_manifest_json_preview(manifest))
+        self.assertIn('"mode": "translation"', context.manifest_json_preview)
 
     def test_build_diagnostics_context_warns_when_latest_differs(self):
         manifest_path = r"C:\logs\batch_jobs\job1\manifest.json"
