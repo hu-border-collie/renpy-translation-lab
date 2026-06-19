@@ -25,12 +25,10 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QGroupBox,
     QLineEdit,
-    QComboBox,
     QCheckBox,
     QFrame,
     QFormLayout,
     QScrollArea,
-    QTabWidget,
 )
 
 from .api_key_dialog import ApiKeyDialog
@@ -71,6 +69,7 @@ from .theme_helpers import (
     write_gui_theme_to_config,
 )
 from .translation_workflow import TranslationWorkflow, WorkflowUpdate
+from .widget_helpers import NoWheelComboBox, NoWheelTabWidget
 
 
 class MainWindow(QMainWindow):
@@ -107,7 +106,7 @@ class MainWindow(QMainWindow):
         header.setObjectName("header_label")
         root_layout.addWidget(header)
 
-        self.tab_widget = QTabWidget()
+        self.tab_widget = NoWheelTabWidget()
         self.tab_widget.setObjectName("main_tabs")
         root_layout.addWidget(self.tab_widget, 1)
 
@@ -192,7 +191,7 @@ class MainWindow(QMainWindow):
         action_row.addWidget(self.kill_btn)
         layout.addLayout(action_row)
 
-        self.workbench_status_tabs = QTabWidget()
+        self.workbench_status_tabs = NoWheelTabWidget()
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
 
         doctor_tab = QWidget()
@@ -392,7 +391,7 @@ class MainWindow(QMainWindow):
         sync_layout.setSpacing(8)
         sync_layout.setContentsMargins(12, 16, 12, 12)
 
-        self.sync_model_combo = QComboBox()
+        self.sync_model_combo = NoWheelComboBox()
         self.sync_model_combo.addItems([
             "gemini-3.5-flash",
             "gemini-3.1-pro-preview",
@@ -404,7 +403,7 @@ class MainWindow(QMainWindow):
         ])
         sync_layout.addRow("翻译模型：", self.sync_model_combo)
 
-        self.sync_embedding_combo = QComboBox()
+        self.sync_embedding_combo = NoWheelComboBox()
         self.sync_embedding_combo.addItems([
             "gemini-embedding-2",
             "gemini-embedding-001",
@@ -418,7 +417,7 @@ class MainWindow(QMainWindow):
         batch_layout.setSpacing(8)
         batch_layout.setContentsMargins(12, 16, 12, 12)
 
-        self.batch_model_combo = QComboBox()
+        self.batch_model_combo = NoWheelComboBox()
         self.batch_model_combo.addItems([
             "gemini-3.5-flash",
             "gemini-3.1-pro-preview",
@@ -430,14 +429,14 @@ class MainWindow(QMainWindow):
         ])
         batch_layout.addRow("翻译模型：", self.batch_model_combo)
 
-        self.batch_embedding_combo = QComboBox()
+        self.batch_embedding_combo = NoWheelComboBox()
         self.batch_embedding_combo.addItems([
             "gemini-embedding-2",
             "gemini-embedding-001",
         ])
         batch_layout.addRow("RAG 向量模型：", self.batch_embedding_combo)
 
-        self.batch_thinking_combo = QComboBox()
+        self.batch_thinking_combo = NoWheelComboBox()
         self.batch_thinking_combo.addItem("（不启用）", "")
         self.batch_thinking_combo.addItem("最小 (minimal)", "minimal")
         self.batch_thinking_combo.addItem("低 (low)", "low")
@@ -452,7 +451,7 @@ class MainWindow(QMainWindow):
         appearance_layout = QFormLayout(appearance_box)
         appearance_layout.setSpacing(8)
         appearance_layout.setContentsMargins(12, 16, 12, 12)
-        self.theme_combo = QComboBox()
+        self.theme_combo = NoWheelComboBox()
         self.theme_combo.addItem("跟随系统", THEME_SYSTEM)
         self.theme_combo.addItem("浅色", "light")
         self.theme_combo.addItem("深色", "dark")
@@ -1107,7 +1106,7 @@ class MainWindow(QMainWindow):
             or "thinking_level" in batch_config
         )
 
-    def _set_combo_value(self, combo: QComboBox, value: Any):
+    def _set_combo_value(self, combo: NoWheelComboBox, value: Any):
         value = self._config_string(value)
         if not value:
             combo.setCurrentIndex(-1)
