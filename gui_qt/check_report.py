@@ -69,9 +69,9 @@ def parse_check_output(output: str) -> dict[str, object]:
 
 def _format_check_finding(finding: str) -> str:
     if finding.startswith("[warn] "):
-        return f"[需处理] {finding[7:]}"
+        return f"[{safety_level_label('warn')}] {finding[7:]}"
     if finding.startswith("[block] "):
-        return f"[禁止写回] {finding[8:]}"
+        return f"[{safety_level_label('block')}] {finding[8:]}"
     return finding
 
 

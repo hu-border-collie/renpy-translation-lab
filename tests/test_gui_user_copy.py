@@ -2,8 +2,10 @@ import unittest
 
 from gui_qt.user_copy import (
     doctor_mode_label,
+    format_bootstrap_fact,
     format_manifest_path_fact,
     job_state_label,
+    manifest_mode_label,
     safety_level_label,
     translate_doctor_warning,
 )
@@ -32,6 +34,13 @@ class GuiUserCopyTests(unittest.TestCase):
             "old/new line counts differ; string translation blocks may be malformed."
         )
         self.assertIn("界面字符串块", translated)
+
+    def test_manifest_mode_label_falls_back_for_empty_and_unknown(self):
+        self.assertEqual(manifest_mode_label(""), "未知")
+        self.assertEqual(manifest_mode_label("custom_mode"), "custom_mode")
+
+    def test_format_bootstrap_fact_passthrough_unknown_key(self):
+        self.assertEqual(format_bootstrap_fact("unknown_key", "42"), "unknown_key：42")
 
 
 if __name__ == "__main__":

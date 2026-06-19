@@ -88,7 +88,7 @@ def job_state_label(state: str) -> str:
 
 def manifest_mode_label(mode: str) -> str:
     text = str(mode or "").strip()
-    return MANIFEST_MODE_LABELS.get(text, text or text)
+    return MANIFEST_MODE_LABELS.get(text, text or "未知")
 
 
 def format_manifest_path_fact(path: str) -> str:

@@ -75,8 +75,8 @@ from .theme_helpers import (
     read_gui_theme_from_config,
     write_gui_theme_to_config,
 )
-from .translation_workflow import TranslationWorkflow
-from .user_copy import format_manifest_path_fact, WorkflowUpdate
+from .translation_workflow import TranslationWorkflow, WorkflowUpdate
+from .user_copy import format_manifest_path_fact
 from .widget_helpers import NoWheelComboBox, NoWheelTabWidget
 
 # Diagnostics splitter: idle favors task context; running tasks expand the log.
