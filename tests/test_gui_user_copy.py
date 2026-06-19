@@ -40,7 +40,7 @@ class GuiUserCopyTests(unittest.TestCase):
         self.assertEqual(manifest_mode_label("custom_mode"), "custom_mode")
 
     def test_format_bootstrap_fact_passthrough_unknown_key(self):
-        self.assertEqual(format_bootstrap_fact("unknown_key", "42"), "unknown_key：42")
+        self.assertEqual(format_bootstrap_fact("unknown_key", "42"), "unknown_key：42")  # noqa: RUF001
 
 
 if __name__ == "__main__":

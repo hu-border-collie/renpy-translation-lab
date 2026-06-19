@@ -185,7 +185,7 @@ def summarize_apply_output(
             status="failed",
             heading="写回失败",
             message="写回没有正常完成。请查看诊断日志与写回失败报告。",
-            facts=[fact for fact in (format_manifest_path_fact(manifest_path),) if manifest_path],
+            facts=[format_manifest_path_fact(manifest_path)] if manifest_path else [],
             findings=[],
             can_apply=False,
             manifest_path=manifest_path,

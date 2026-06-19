@@ -1,4 +1,5 @@
 """User-facing summaries for the GUI doctor command."""
+# ruff: noqa: RUF001
 from __future__ import annotations
 
 import re
@@ -147,8 +148,10 @@ def summarize_doctor_output(
         for warning in parsed.get("warnings", [])
         if isinstance(warning, str) and warning.strip()
     ]
-    counts = parsed.get("counts") if isinstance(parsed.get("counts"), dict) else {}
-    pending = parsed.get("pending") if isinstance(parsed.get("pending"), dict) else None
+    counts_value = parsed.get("counts")
+    counts = counts_value if isinstance(counts_value, dict) else {}
+    pending_value = parsed.get("pending")
+    pending = pending_value if isinstance(pending_value, dict) else None
     mode = parsed.get("mode") if isinstance(parsed.get("mode"), str) else ""
 
     facts: list[str] = []
