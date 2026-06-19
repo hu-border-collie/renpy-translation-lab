@@ -78,6 +78,11 @@ from .theme_helpers import (
 from .translation_workflow import TranslationWorkflow, WorkflowUpdate
 from .widget_helpers import NoWheelComboBox, NoWheelTabWidget
 
+# Diagnostics splitter: idle favors task context; running tasks expand the log.
+_DIAGNOSTICS_IDLE_CONTEXT_PX = 420
+_DIAGNOSTICS_IDLE_LOG_PX = 180
+_DIAGNOSTICS_RUNNING_CONTEXT_RATIO = 0.32
+
 
 class MainWindow(QMainWindow):
     def __init__(self, *, qt_app: QApplication | None = None, resources_dir: Path | None = None):
@@ -212,6 +217,7 @@ class MainWindow(QMainWindow):
         doctor_layout.addWidget(self.doctor_status_label)
         self.doctor_message_label = QLabel()
         self.doctor_message_label.setWordWrap(True)
+        self.doctor_message_label.setObjectName("summary_body_label")
         doctor_layout.addWidget(self.doctor_message_label)
         self.doctor_facts_label = QLabel()
         self.doctor_facts_label.setWordWrap(True)
@@ -235,6 +241,7 @@ class MainWindow(QMainWindow):
         workflow_layout.addWidget(self.workflow_status_label)
         self.workflow_message_label = QLabel()
         self.workflow_message_label.setWordWrap(True)
+        self.workflow_message_label.setObjectName("summary_body_label")
         workflow_layout.addWidget(self.workflow_message_label)
         self.workflow_facts_label = QLabel()
         self.workflow_facts_label.setWordWrap(True)
@@ -253,6 +260,7 @@ class MainWindow(QMainWindow):
         writeback_layout.addWidget(self.writeback_status_label)
         self.writeback_message_label = QLabel()
         self.writeback_message_label.setWordWrap(True)
+        self.writeback_message_label.setObjectName("summary_body_label")
         writeback_layout.addWidget(self.writeback_message_label)
         self.writeback_facts_label = QLabel()
         self.writeback_facts_label.setWordWrap(True)
@@ -376,6 +384,7 @@ class MainWindow(QMainWindow):
 
         self.bootstrap_message_label = QLabel()
         self.bootstrap_message_label.setWordWrap(True)
+        self.bootstrap_message_label.setObjectName("summary_body_label")
         context_layout.addWidget(self.bootstrap_message_label)
 
         self.bootstrap_facts_label = QLabel()
@@ -536,6 +545,7 @@ class MainWindow(QMainWindow):
         context_layout.addWidget(self.diagnostics_status_label)
         self.diagnostics_message_label = QLabel()
         self.diagnostics_message_label.setWordWrap(True)
+        self.diagnostics_message_label.setObjectName("summary_body_label")
         context_layout.addWidget(self.diagnostics_message_label)
 
         facts_frame = QFrame()
@@ -619,13 +629,13 @@ class MainWindow(QMainWindow):
         self.log_view.setReadOnly(True)
         self.log_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.log_view.setObjectName("log_view")
-        self.log_view.setMinimumHeight(160)
+        self.log_view.setMinimumHeight(120)
         log_panel_layout.addWidget(self.log_view, 1)
         splitter.addWidget(log_panel)
 
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
-        splitter.setSizes([280, 420])
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([_DIAGNOSTICS_IDLE_CONTEXT_PX, _DIAGNOSTICS_IDLE_LOG_PX])
 
         layout.addWidget(splitter, 1)
         self.tab_widget.addTab(tab, "诊断日志")
@@ -634,7 +644,8 @@ class MainWindow(QMainWindow):
         if self._diagnostics_tab is not None:
             self.tab_widget.setCurrentWidget(self._diagnostics_tab)
         total = max(sum(self.diagnostics_splitter.sizes()), 1)
-        self.diagnostics_splitter.setSizes([int(total * 0.32), int(total * 0.68)])
+        context_size = int(total * _DIAGNOSTICS_RUNNING_CONTEXT_RATIO)
+        self.diagnostics_splitter.setSizes([context_size, total - context_size])
 
     def _focus_workbench_status_tab(self, index: int) -> None:
         if 0 <= index < self.workbench_status_tabs.count():

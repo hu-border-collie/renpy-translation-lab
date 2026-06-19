@@ -17,6 +17,12 @@ MONO_FONT_SELECTORS = (
 UI_FONT_FILENAME = "HarmonyOS_Sans_SC_Regular.ttf"
 MONO_FONT_FILENAME = "LXGWWenKaiMonoGB-Regular.ttf"
 
+# Hint / body copy sizes (px). Keep in sync with app.qss and app_dark.qss.
+UI_FONT_SIZE_HINT_PX = 15
+UI_FONT_SIZE_BODY_PX = 14
+UI_FONT_SIZE_SECTION_PX = 14
+UI_FONT_SIZE_MONO_BODY_PX = 13
+
 
 @dataclass(frozen=True)
 class GuiFontFamilies:
