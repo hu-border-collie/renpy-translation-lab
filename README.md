@@ -28,6 +28,12 @@ python -m gui_qt
 
 三个 Tab：**工作台**（环境检查、翻译进度、写回）、**配置**（API、模型、Batch 上下文预建、主题）、**诊断日志**（任务上下文、可复制命令、原始输出）。写回仅在检查结果为 `safe` 时启用。安装步骤、界面说明与安全边界见 [GUI workbench](docs/gui_workbench.md)。
 
+实机截图（API Key 信息已脱敏）：
+
+| 工作台 | 配置 | 诊断日志 |
+| --- | --- | --- |
+| <img src="docs/assets/gui-workbench/workbench.png" alt="GUI 工作台" width="260"> | <img src="docs/assets/gui-workbench/config.png" alt="GUI 配置" width="260"> | <img src="docs/assets/gui-workbench/diagnostics.png" alt="GUI 诊断日志" width="260"> |
+
 ## 核心能力
 
 - 扫描 Ren'Py `game/tl/schinese` 下的 `.rpy` 文件，抽取待翻译条目并跳过 `old`。
