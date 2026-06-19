@@ -1,4 +1,6 @@
-# Relation and semantic analysis
+# 关系与语义分析
+
+文档地图：[docs/README.md](README.md)
 
 仓库提供一个独立的剧本分析入口：
 
