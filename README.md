@@ -151,7 +151,7 @@ python gemini_translate_batch.py apply
 选择项目 -> 配置 API / 模型 -> 环境检查 -> 可选预建上下文 -> 开始翻译 -> 检查结果 -> safe 时写回
 ```
 
-GUI 会编排基础 `doctor -> build -> submit -> status -> download -> check -> apply` 流程。若 `check` 返回 `warn` / `block`，不要在 GUI 中强行写回；先回到 CLI 查看失败报告，并使用 retry / repair / revision 等流程处理。
+GUI 按推荐顺序提供这些步骤：`doctor` 由环境检查按钮独立运行；「开始翻译」会协调 `build -> submit -> status -> download -> check`；只有 `safe` 后才通过写回按钮独立调用 `apply`。若 `check` 返回 `warn` / `block`，不要在 GUI 中强行写回；先回到 CLI 查看失败报告，并使用 retry / repair / revision 等流程处理。
 
 高级用户或需要手动指定 manifest 时，CLI 推荐顺序仍是：
 
