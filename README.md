@@ -26,7 +26,7 @@ pip install -r requirements-gui.txt
 python -m gui_qt
 ```
 
-三个 Tab：**工作台**（环境检查、翻译进度、写回）、**配置**（API、模型、Batch 上下文预建、主题）、**诊断日志**（任务上下文、可复制命令、原始输出）。写回仅在检查结果为 `safe` 时启用。安装步骤、界面说明与安全边界见 [GUI workbench](docs/gui_workbench.md)。
+三个 Tab：**工作台**（环境检查、翻译进度、写回）、**配置**（API、模型、Batch 上下文预建、主题）、**诊断日志**（任务上下文、可复制命令、原始输出）。写回仅在检查结果为 `safe` 时启用。安装步骤、界面说明与安全边界见 [GUI 工作台](docs/gui_workbench.md)。
 
 ## 核心能力
 
@@ -67,7 +67,7 @@ pip install -r requirements.txt
 - `glossary.example.json` -> `glossary.json`
 - `macro_setting.example.md` -> `macro_setting.md`（可选）
 
-至少需要提供 Gemini API key，并让 `translator_config.json`、`GAME_ROOT` 或 `SA_GAME_ROOT` 指向目标游戏的 `work` 目录。详细配置说明见 [Setup and local configuration](docs/setup.md)。
+至少需要提供 Gemini API key，并让 `translator_config.json`、`GAME_ROOT` 或 `SA_GAME_ROOT` 指向目标游戏的 `work` 目录。详细配置说明见 [安装与本地配置](docs/setup.md)。
 
 ### 3. 准备项目目录
 
@@ -127,18 +127,17 @@ python gemini_translate_batch.py apply
 
 ## 文档索引
 
-- [Setup and local configuration](docs/setup.md)
-  - 本地配置、项目目录、Ren'Py SDK / TL 模板和运行模式
-- [Batch workflows and safety checks](docs/batch_workflows.md)
-  - manifest / identity v2、`check/apply` 安全闸门、订正、关键词和 golden corpus 测试
-- [Context systems](docs/context_systems.md)
-  - RAG history store、Batch source-only index 和 Structured Story Memory
-- [Relation and semantic analysis](docs/relation_analysis.md)
-  - `extract_relations.py`、relation / semantic 模式
-- [GUI workbench](docs/gui_workbench.md)
-  - 可选图形界面的安装、主流程、诊断页与写回安全边界
-- [Project notes](docs/project_notes.md)
-  - 环境要求、当前边界、项目状态、安全说明和适用人群
+完整导航见 [文档地图](docs/README.md)。常用入口：
+
+- 配置与运行
+  - [安装与本地配置](docs/setup.md)：本地私有配置、项目目录、Ren'Py SDK / TL 模板和运行模式。
+  - [GUI 工作台](docs/gui_workbench.md)：可选图形界面的安装、主流程、诊断页与写回安全边界。
+- Batch 与安全
+  - [Batch 工作流与安全检查](docs/batch_workflows.md)：manifest / identity v2、`check/apply` 安全闸门、订正、关键词和 golden corpus 测试。
+  - [上下文系统](docs/context_systems.md)：RAG history store、Batch source-only index、Structured Story Memory 和 RAG store benchmark。
+- 分析与项目状态
+  - [关系与语义分析](docs/relation_analysis.md)：`extract_relations.py`、relation / semantic 模式和 Story Memory seed 导出。
+  - [项目说明](docs/project_notes.md)：环境要求、当前边界、项目状态、安全说明和适用人群。
 
 ## 当前状态
 

@@ -1,8 +1,10 @@
-# Context systems
+# 上下文系统
+
+文档地图：[docs/README.md](README.md)
 
 本文档说明 Batch / sync 可选上下文层：RAG history store、Batch source-only index 和 Structured Story Memory。
 
-## Which context layer to use
+## 如何选择上下文层
 
 - RAG history store：使用“已有原文 + 已有译文”保持术语、称呼和风格一致。
 - Batch source-only index：只使用全文原文，为新项目或译文很少的项目提供远距离剧情上下文。
@@ -10,7 +12,7 @@
 
 这些上下文层会进入不同 prompt 分区，避免把“以前的译法参考”和“相关剧情原文”混在一起。
 
-## Batch RAG prebuild
+## Batch RAG 预建
 
 如果项目里已经有一部分人工译文或旧译文，可以先运行：
 
@@ -57,13 +59,13 @@ JSONL 每行是一个对象，支持以下字段：
 
 同步 RAG 启用后，每个成功写回的小批次会更新本地 history store，后续同步批次会在请求前重新检索并注入相关历史。
 
-## RAG store safety
+## RAG store 写入安全
 
 本地 RAG store 写入会使用 `.rag_store.lock` 和临时文件 + 原子替换保护 `history.jsonl` / `metadata.json`。如果另一个进程正在写同一个 store，后启动的进程会明确失败并显示锁持有者信息；同机写入进程崩溃后留下的 stale lock 会在确认 PID 已退出时自动回收。
 
 如果确认没有进程正在写同一个 RAG store，可手动删除残留的 `.rag_store.lock` 或 `*.tmp.*` 文件来恢复写入；自动清理失败时会输出包含文件路径的 warning。加载 RAG store 时，损坏的 metadata 或坏 JSONL 行会输出 warning；可恢复的 history 记录会继续保留。
 
-## Batch source-only index
+## Batch 原文索引
 
 Source-only index 不需要已有中文翻译。它扫描 TL 文件中的注释原文或可翻译字符串，写入独立的 source store：
 
@@ -128,7 +130,7 @@ Batch 构建时是否检索 source index 由 `batch.source_index.enabled` 控制
 
 Prompt 中 source index 命中会进入独立的 `RELATED PROJECT CONTEXT` 分区，只包含 `Source excerpt`，不会混入 `RETRIEVED MEMORY`，也不会携带译文。`batch.source_index.enabled=false` 时不会读取 source store，也不会增加该 prompt 分区。
 
-## Structured Story Memory
+## 结构化剧情记忆
 
 Structured Story Memory 是 glossary / translation-memory RAG 之外的可选上下文层。它不会调用额外 LLM 自动抽取图谱，也不依赖 Neo4j；启用后只读取本地 JSON，并把命中的结构化信息插入到 prompt 的 `STORY MEMORY` 分区。
 
@@ -224,7 +226,7 @@ seed 中的关系统一标记为 `candidate`，只包含共场景、对话往来
 
 当前实现仍是 MVP：检索逻辑是轻量启发式，Neo4j 可视化导出，以及 sync 运行日志里的更完整 Story Memory diagnostics 还属于后续工作。
 
-## RAG Store Performance Benchmark
+## RAG store 性能基准
 
 为了在大项目规模下评估本地 RAG Store（`JsonRagStore`）的性能极限并防止退化，项目中包含了一个离线性能基准脚本 [benchmark_rag_store.py](../benchmark_rag_store.py)。
 

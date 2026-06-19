@@ -1,8 +1,10 @@
-# Setup and local configuration
+# 安装与本地配置
+
+文档地图：[docs/README.md](README.md)
 
 本文档承接根目录 `README.md` 中会拖慢阅读节奏的本地配置、项目目录和 Ren'Py SDK 细节。
 
-## Local configuration files
+## 本地配置文件
 
 把示例文件复制为本地配置：
 
@@ -24,7 +26,7 @@
 - 也可以把 `.env.example` 复制为 `.env`，填写后供本地 shell/启动器加载；`.env` 只用于本机私有配置，不应提交。
 - `.env` 不是必需文件；当前脚本不会自动加载 `.env`，默认复制并填写 `api_keys.json` / `translator_config.json` 即可使用。
 
-## Game directory
+## 游戏目录
 
 脚本默认假设 `game_root` 指向某个游戏的 `work` 目录，典型结构如下：
 
@@ -68,7 +70,7 @@ python gemini_translate_batch.py doctor
 
 `doctor` 只检查配置、SDK/launcher 和 TL 文件形态，不调用 Gemini，也不会写回 `.rpy`。
 
-## Run modes
+## 运行模式
 
 当前更推荐优先使用 Batch 模式；同步模式仍可用，并且现在与 Batch 一样统一基于 `google-genai` SDK。同步模式的 `model/chunk_size/max_source_chars/max_output_tokens` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。
 

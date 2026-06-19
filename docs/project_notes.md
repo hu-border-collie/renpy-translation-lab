@@ -1,15 +1,17 @@
-# Project notes
+# 项目说明
+
+文档地图：[docs/README.md](README.md)
 
 本文档记录仓库状态、边界、安全注意事项和适用人群。日常使用入口见根目录 `README.md`。
 
-## Environment requirements
+## 环境要求
 
 - Python 3.11+
 - `google-genai`，供同步脚本和 Batch 脚本使用
 - 有效的 Gemini API Key
 - Ren'Py 项目中的 `game/tl/schinese` 翻译目录
 
-## Current boundaries
+## 当前边界
 
 目前项目更偏“高级用户工具 / 核心引擎”，暂未重点覆盖：
 
@@ -20,7 +22,7 @@
 - 面向超大项目的完整 RAG 生产工作流，例如严格的波次式回灌编排、多阶段调度策略
 - 完整的结构化剧情图谱生产工作流，例如自动 seed 生成、Neo4j 可视化导出
 
-## Project status
+## 项目状态
 
 这是一个仍在持续探索和改进中的个人项目。核心 Batch 翻译链路已经在约 11 万英文词规模的真实 Ren'Py 项目上完整跑通，可以按“高级用户稳定版”的口径用于有备份的真实项目试跑。
 
@@ -36,7 +38,7 @@
 - 当前的 RAG 能力更适合“小包验证 + 逐步扩展”，还不应被表述为已经完成的大项目生产级方案。
 - Structured Story Memory 目前是可选 MVP，适合作为人工维护剧情上下文的 prompt 增强，不是完整自动图谱系统。
 
-## Safety notes
+## 安全说明
 
 执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。推荐先跑 `doctor`，再走 `build -> submit -> status -> download -> check -> apply`；只有 `check` 输出 `safe` 时才继续 `apply`。如果出现 `warn` / `block`，先查看失败报告并通过 retry / repair / revision 等流程处理。
 
@@ -53,7 +55,7 @@
 - history / rag store
 - 日志和缓存
 
-## Intended users
+## 适用人群
 
 这个仓库更适合下面这类使用者：
 
