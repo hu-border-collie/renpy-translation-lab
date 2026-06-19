@@ -1,33 +1,29 @@
-import os
-import tempfile
 import unittest
 from pathlib import Path
 
 from gui_qt.font_helpers import (
     GuiFontFamilies,
+    MONO_FONT_FILENAME,
+    UI_FONT_FILENAME,
     build_font_stylesheet,
-    resolve_workspace_fonts_dir,
+    bundled_fonts_dir,
+    load_gui_fonts,
 )
 
 
 class GuiFontHelpersTests(unittest.TestCase):
-    def test_resolve_workspace_fonts_dir_from_sibling(self):
-        tool_root = Path(r"C:\RenPy_Workspace\renpy-translation-lab")
-        resolved = resolve_workspace_fonts_dir(tool_root)
-        self.assertEqual(resolved, tool_root.parent / "_fonts")
+    def setUp(self) -> None:
+        self.resources_dir = Path(__file__).resolve().parent.parent / "gui_qt" / "resources"
 
-    def test_resolve_workspace_fonts_dir_from_env(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            previous = os.environ.get("RENPY_TRANSLATION_LAB_FONTS_DIR")
-            os.environ["RENPY_TRANSLATION_LAB_FONTS_DIR"] = tmp
-            try:
-                resolved = resolve_workspace_fonts_dir(Path(r"C:\RenPy_Workspace\renpy-translation-lab"))
-                self.assertEqual(resolved, Path(tmp))
-            finally:
-                if previous is None:
-                    os.environ.pop("RENPY_TRANSLATION_LAB_FONTS_DIR", None)
-                else:
-                    os.environ["RENPY_TRANSLATION_LAB_FONTS_DIR"] = previous
+    def test_bundled_fonts_dir_points_under_resources(self):
+        self.assertEqual(bundled_fonts_dir(self.resources_dir), self.resources_dir / "fonts")
+
+    def test_bundled_font_files_exist(self):
+        fonts_dir = bundled_fonts_dir(self.resources_dir)
+        self.assertTrue((fonts_dir / UI_FONT_FILENAME).is_file())
+        self.assertTrue((fonts_dir / MONO_FONT_FILENAME).is_file())
+        self.assertTrue((fonts_dir / "HarmonyOS_Sans_LICENSE.txt").is_file())
+        self.assertTrue((fonts_dir / "LXGW_WenKai_OFL.txt").is_file())
 
     def test_build_font_stylesheet_empty_when_no_families(self):
         self.assertEqual(build_font_stylesheet(GuiFontFamilies()), "")
@@ -42,6 +38,20 @@ class GuiFontHelpersTests(unittest.TestCase):
         self.assertIn("HarmonyOS Sans SC", stylesheet)
         self.assertIn("LXGW WenKai Mono GB", stylesheet)
         self.assertIn("QTextEdit#log_view", stylesheet)
+
+    def test_load_gui_fonts_reads_bundled_files(self):
+        try:
+            from PySide6.QtWidgets import QApplication
+        except ImportError:
+            self.skipTest("PySide6 is not installed")
+
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+
+        families = load_gui_fonts(self.resources_dir)
+        self.assertEqual(families.ui_family, "HarmonyOS Sans SC")
+        self.assertEqual(families.mono_family, "LXGW WenKai Mono GB")
 
 
 if __name__ == "__main__":

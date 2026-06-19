@@ -1,7 +1,6 @@
-"""Optional workspace font loading for the GUI."""
+"""Bundled GUI font loading."""
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,8 +16,8 @@ MONO_FONT_SELECTORS = (
     "QTextEdit#log_view",
 )
 
-UI_FONT_RELATIVE = Path("HarmonyOS_Sans") / "HarmonyOS_Sans_SC_Regular.ttf"
-MONO_FONT_RELATIVE = Path("LXGW_WenKai") / "LXGWWenKaiMonoGB-Regular.ttf"
+UI_FONT_FILENAME = "HarmonyOS_Sans_SC_Regular.ttf"
+MONO_FONT_FILENAME = "LXGWWenKaiMonoGB-Regular.ttf"
 
 
 @dataclass(frozen=True)
@@ -27,16 +26,8 @@ class GuiFontFamilies:
     mono_family: str = ""
 
 
-def resolve_workspace_fonts_dir(tool_root: Path) -> Path | None:
-    env_dir = os.environ.get("RENPY_TRANSLATION_LAB_FONTS_DIR", "").strip()
-    if env_dir:
-        candidate = Path(env_dir).expanduser()
-        if candidate.is_dir():
-            return candidate
-    sibling = tool_root.parent / "_fonts"
-    if sibling.is_dir():
-        return sibling
-    return None
+def bundled_fonts_dir(resources_dir: Path) -> Path:
+    return resources_dir / "fonts"
 
 
 def _qss_family_name(family: str) -> str:
@@ -54,13 +45,10 @@ def _load_font_family(font_path: Path) -> str:
     return families[0] if families else ""
 
 
-def load_gui_fonts(tool_root: Path) -> GuiFontFamilies:
-    fonts_dir = resolve_workspace_fonts_dir(tool_root)
-    if fonts_dir is None:
-        return GuiFontFamilies()
-
-    ui_family = _load_font_family(fonts_dir / UI_FONT_RELATIVE)
-    mono_family = _load_font_family(fonts_dir / MONO_FONT_RELATIVE)
+def load_gui_fonts(resources_dir: Path) -> GuiFontFamilies:
+    fonts_dir = bundled_fonts_dir(resources_dir)
+    ui_family = _load_font_family(fonts_dir / UI_FONT_FILENAME)
+    mono_family = _load_font_family(fonts_dir / MONO_FONT_FILENAME)
     return GuiFontFamilies(ui_family=ui_family, mono_family=mono_family)
 
 

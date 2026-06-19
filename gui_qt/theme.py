@@ -32,22 +32,15 @@ def load_theme_stylesheet(resources_dir: Path, effective_theme: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def apply_theme(
-    app: QApplication,
-    resources_dir: Path,
-    preference: str,
-    *,
-    tool_root: Path | None = None,
-) -> str:
+def apply_theme(app: QApplication, resources_dir: Path, preference: str) -> str:
     effective = resolve_effective_theme(
         preference,
         system_is_dark=system_prefers_dark(app),
     )
     stylesheet = load_theme_stylesheet(resources_dir, effective)
-    if tool_root is not None:
-        font_stylesheet = build_font_stylesheet(load_gui_fonts(tool_root))
-        if font_stylesheet:
-            stylesheet = f"{font_stylesheet}\n{stylesheet}"
+    font_stylesheet = build_font_stylesheet(load_gui_fonts(resources_dir))
+    if font_stylesheet:
+        stylesheet = f"{font_stylesheet}\n{stylesheet}"
     if stylesheet:
         app.setStyleSheet(stylesheet)
     else:

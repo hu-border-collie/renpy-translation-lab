@@ -1417,12 +1417,7 @@ class MainWindow(QMainWindow):
         if self._qt_app is None:
             return
         try:
-            apply_theme(
-                self._qt_app,
-                self._resources_dir,
-                self._theme_preference,
-                tool_root=self.state.get_tool_root(),
-            )
+            apply_theme(self._qt_app, self._resources_dir, self._theme_preference)
         except OSError as exc:
             self.statusBar().showMessage("主题样式加载失败，已保留当前样式。", 6000)
             self._append_log(f"加载主题样式失败：{exc}")
@@ -1585,12 +1580,7 @@ def run_app(argv: list[str] | None = None) -> int:
         print(f"警告：无法读取主题配置，将使用系统跟随：{exc}")
         theme_preference = DEFAULT_THEME_PREFERENCE
     try:
-        apply_theme(
-            app,
-            resources_dir,
-            theme_preference,
-            tool_root=bootstrap_state.get_tool_root(),
-        )
+        apply_theme(app, resources_dir, theme_preference)
     except OSError as exc:
         print(f"警告：无法加载 GUI 样式表：{exc}")
 
