@@ -100,6 +100,14 @@ QTabWidget#main_tabs::pane {
     top: -1px;
 }
 
+QWidget#config_tab,
+QScrollArea#config_scroll,
+QWidget#config_scroll_viewport,
+QWidget#config_scroll_content {
+    background-color: #ffffff;
+    border: none;
+}
+
 QTabWidget#main_tabs > QTabBar::tab {
     background-color: #f1f5f9;
     border: 1px solid #e2e8f0;
@@ -129,6 +137,10 @@ QTabWidget#workbench_status_tabs::pane {
     border-radius: 8px;
     background-color: #ffffff;
     top: -1px;
+}
+
+QTabWidget#workbench_status_tabs QWidget {
+    background-color: #ffffff;
 }
 
 QTabWidget#workbench_status_tabs > QTabBar::tab {

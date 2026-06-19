@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -196,6 +196,7 @@ class MainWindow(QMainWindow):
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
 
         doctor_tab = QWidget()
+        self._style_themed_surface(doctor_tab)
         doctor_layout = QVBoxLayout(doctor_tab)
         doctor_layout.setContentsMargins(12, 12, 12, 12)
         doctor_layout.setSpacing(6)
@@ -218,6 +219,7 @@ class MainWindow(QMainWindow):
         self.workbench_status_tabs.addTab(doctor_tab, "环境检查")
 
         workflow_tab = QWidget()
+        self._style_themed_surface(workflow_tab)
         workflow_layout = QVBoxLayout(workflow_tab)
         workflow_layout.setContentsMargins(12, 12, 12, 12)
         workflow_layout.setSpacing(6)
@@ -235,6 +237,7 @@ class MainWindow(QMainWindow):
         self.workbench_status_tabs.addTab(workflow_tab, "翻译进度")
 
         writeback_tab = QWidget()
+        self._style_themed_surface(writeback_tab)
         writeback_layout = QVBoxLayout(writeback_tab)
         writeback_layout.setContentsMargins(12, 12, 12, 12)
         writeback_layout.setSpacing(6)
@@ -269,17 +272,29 @@ class MainWindow(QMainWindow):
 
         self.tab_widget.addTab(tab, "工作台")
 
+    def _style_themed_surface(self, widget: QWidget) -> None:
+        widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
     def _build_config_tab(self) -> None:
         tab = QWidget()
+        tab.setObjectName("config_tab")
+        self._style_themed_surface(tab)
         self._config_tab = tab
         outer_layout = QVBoxLayout(tab)
         outer_layout.setContentsMargins(0, 0, 0, 0)
 
         scroll = QScrollArea()
+        scroll.setObjectName("config_scroll")
+        self._style_themed_surface(scroll)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        viewport = scroll.viewport()
+        viewport.setObjectName("config_scroll_viewport")
+        self._style_themed_surface(viewport)
 
         content = QWidget()
+        content.setObjectName("config_scroll_content")
+        self._style_themed_surface(content)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(14)
