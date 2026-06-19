@@ -21,3 +21,4 @@ class NoWheelTabWidget(QTabWidget):
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         event.ignore()
+        return
