@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
     QFormLayout,
+    QScrollArea,
     QTabWidget,
 )
 
@@ -104,14 +105,7 @@ class MainWindow(QMainWindow):
 
         header = QLabel("Ren'Py Translation Lab · 图形工作台")
         header.setObjectName("header_label")
-        subtitle = QLabel(
-            "工作台只保留项目检查与翻译主流程；预建库、模型与 API 配置在「配置」页。"
-            "详细日志请切换到「诊断日志」。"
-        )
-        subtitle.setObjectName("subtitle_label")
-        subtitle.setWordWrap(True)
         root_layout.addWidget(header)
-        root_layout.addWidget(subtitle)
 
         self.tab_widget = QTabWidget()
         self.tab_widget.setObjectName("main_tabs")
@@ -172,117 +166,93 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(project_frame)
 
-        actions_box = QGroupBox("操作")
-        actions_layout = QVBoxLayout(actions_box)
-        actions_layout.setSpacing(10)
-        actions_layout.setContentsMargins(12, 16, 12, 12)
-
-        primary_layout = QHBoxLayout()
-        primary_layout.setSpacing(10)
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
         self.doctor_btn = QPushButton("环境检查")
         self.doctor_btn.setObjectName("doctor_btn")
         self.doctor_btn.clicked.connect(self._on_run_doctor)
-        primary_layout.addWidget(self.doctor_btn)
+        action_row.addWidget(self.doctor_btn)
 
-        self.translate_btn = QPushButton("开始翻译任务")
+        self.translate_btn = QPushButton("开始翻译")
         self.translate_btn.setObjectName("translate_btn")
         self.translate_btn.clicked.connect(self._on_start_translation)
-        primary_layout.addWidget(self.translate_btn)
-        primary_layout.addStretch()
-        actions_layout.addLayout(primary_layout)
+        action_row.addWidget(self.translate_btn)
 
-        secondary_layout = QHBoxLayout()
-        secondary_layout.setSpacing(10)
-        self.resume_btn = QPushButton("继续最新任务")
+        self.resume_btn = QPushButton("继续任务")
         self.resume_btn.setObjectName("secondary_btn")
         self.resume_btn.clicked.connect(self._on_resume_translation)
-        secondary_layout.addWidget(self.resume_btn)
-        secondary_layout.addStretch()
+        action_row.addWidget(self.resume_btn)
 
-        self.kill_btn = QPushButton("停止当前任务")
+        action_row.addStretch()
+
+        self.kill_btn = QPushButton("停止")
         self.kill_btn.setObjectName("kill_btn")
         self.kill_btn.clicked.connect(self._on_kill)
         self.kill_btn.setEnabled(False)
-        secondary_layout.addWidget(self.kill_btn)
-        actions_layout.addLayout(secondary_layout)
+        action_row.addWidget(self.kill_btn)
+        layout.addLayout(action_row)
 
-        layout.addWidget(actions_box)
+        self.workbench_status_tabs = QTabWidget()
+        self.workbench_status_tabs.setObjectName("workbench_status_tabs")
 
-        status_row = QHBoxLayout()
-        status_row.setSpacing(16)
-
-        doctor_summary_box = QGroupBox("环境检查 (doctor)")
-        doctor_summary_layout = QVBoxLayout(doctor_summary_box)
-        doctor_summary_layout.setSpacing(6)
-        doctor_summary_layout.setContentsMargins(12, 16, 12, 12)
-
+        doctor_tab = QWidget()
+        doctor_layout = QVBoxLayout(doctor_tab)
+        doctor_layout.setContentsMargins(12, 12, 12, 12)
+        doctor_layout.setSpacing(6)
         self.doctor_status_label = QLabel()
         self.doctor_status_label.setObjectName("doctor_status_label")
-        doctor_summary_layout.addWidget(self.doctor_status_label)
-
+        doctor_layout.addWidget(self.doctor_status_label)
         self.doctor_message_label = QLabel()
         self.doctor_message_label.setWordWrap(True)
-        doctor_summary_layout.addWidget(self.doctor_message_label)
-
+        doctor_layout.addWidget(self.doctor_message_label)
         self.doctor_facts_label = QLabel()
         self.doctor_facts_label.setWordWrap(True)
         self.doctor_facts_label.setObjectName("doctor_facts_label")
-        doctor_summary_layout.addWidget(self.doctor_facts_label)
+        doctor_layout.addWidget(self.doctor_facts_label)
+        self.doctor_details_label = QLabel()
+        self.doctor_details_label.setWordWrap(True)
+        self.doctor_details_label.setObjectName("config_hint_label")
+        self.doctor_details_label.setVisible(False)
+        doctor_layout.addWidget(self.doctor_details_label)
+        doctor_layout.addStretch()
+        self.workbench_status_tabs.addTab(doctor_tab, "环境检查")
 
-        self.doctor_findings_view = QTextEdit()
-        self.doctor_findings_view.setReadOnly(True)
-        self.doctor_findings_view.setMaximumHeight(88)
-        self.doctor_findings_view.setObjectName("doctor_findings_view")
-        doctor_summary_layout.addWidget(self.doctor_findings_view)
-
-        status_row.addWidget(doctor_summary_box, 1)
-
-        workflow_box = QGroupBox("翻译任务")
-        workflow_layout = QVBoxLayout(workflow_box)
+        workflow_tab = QWidget()
+        workflow_layout = QVBoxLayout(workflow_tab)
+        workflow_layout.setContentsMargins(12, 12, 12, 12)
         workflow_layout.setSpacing(6)
-        workflow_layout.setContentsMargins(12, 16, 12, 12)
-
         self.workflow_status_label = QLabel()
         self.workflow_status_label.setObjectName("workflow_status_label")
         workflow_layout.addWidget(self.workflow_status_label)
-
         self.workflow_message_label = QLabel()
         self.workflow_message_label.setWordWrap(True)
         workflow_layout.addWidget(self.workflow_message_label)
-
         self.workflow_facts_label = QLabel()
         self.workflow_facts_label.setWordWrap(True)
         self.workflow_facts_label.setObjectName("workflow_facts_label")
         workflow_layout.addWidget(self.workflow_facts_label)
+        workflow_layout.addStretch()
+        self.workbench_status_tabs.addTab(workflow_tab, "翻译进度")
 
-        workflow_separator = QFrame()
-        workflow_separator.setFrameShape(QFrame.Shape.HLine)
-        workflow_separator.setObjectName("workflow_separator")
-        workflow_layout.addWidget(workflow_separator)
-
-        writeback_heading = QLabel("写回翻译")
-        writeback_heading.setObjectName("workflow_section_label")
-        workflow_layout.addWidget(writeback_heading)
-
+        writeback_tab = QWidget()
+        writeback_layout = QVBoxLayout(writeback_tab)
+        writeback_layout.setContentsMargins(12, 12, 12, 12)
+        writeback_layout.setSpacing(6)
         self.writeback_status_label = QLabel()
         self.writeback_status_label.setObjectName("writeback_status_label")
-        workflow_layout.addWidget(self.writeback_status_label)
-
+        writeback_layout.addWidget(self.writeback_status_label)
         self.writeback_message_label = QLabel()
         self.writeback_message_label.setWordWrap(True)
-        workflow_layout.addWidget(self.writeback_message_label)
-
+        writeback_layout.addWidget(self.writeback_message_label)
         self.writeback_facts_label = QLabel()
         self.writeback_facts_label.setWordWrap(True)
         self.writeback_facts_label.setObjectName("writeback_facts_label")
-        workflow_layout.addWidget(self.writeback_facts_label)
-
-        self.writeback_findings_view = QTextEdit()
-        self.writeback_findings_view.setReadOnly(True)
-        self.writeback_findings_view.setMaximumHeight(60)
-        self.writeback_findings_view.setObjectName("writeback_findings_view")
-        workflow_layout.addWidget(self.writeback_findings_view)
-
+        writeback_layout.addWidget(self.writeback_facts_label)
+        self.writeback_details_label = QLabel()
+        self.writeback_details_label.setWordWrap(True)
+        self.writeback_details_label.setObjectName("config_hint_label")
+        self.writeback_details_label.setVisible(False)
+        writeback_layout.addWidget(self.writeback_details_label)
         writeback_actions = QHBoxLayout()
         self.apply_btn = QPushButton("写回翻译")
         self.apply_btn.setObjectName("apply_btn")
@@ -290,38 +260,29 @@ class MainWindow(QMainWindow):
         self.apply_btn.setEnabled(False)
         writeback_actions.addWidget(self.apply_btn)
         writeback_actions.addStretch()
-        workflow_layout.addLayout(writeback_actions)
+        writeback_layout.addLayout(writeback_actions)
+        writeback_layout.addStretch()
+        self.workbench_status_tabs.addTab(writeback_tab, "写回")
 
-        status_row.addWidget(workflow_box, 1)
-        layout.addLayout(status_row, 1)
+        self.workbench_status_tabs.setCurrentIndex(1)
+        layout.addWidget(self.workbench_status_tabs, 1)
 
         self.tab_widget.addTab(tab, "工作台")
 
     def _build_config_tab(self) -> None:
         tab = QWidget()
         self._config_tab = tab
-        layout = QVBoxLayout(tab)
+        outer_layout = QVBoxLayout(tab)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(14)
-
-        appearance_box = QGroupBox("外观")
-        appearance_layout = QFormLayout(appearance_box)
-        appearance_layout.setSpacing(8)
-        appearance_layout.setContentsMargins(12, 16, 12, 12)
-
-        appearance_hint = QLabel("默认跟随系统深浅色；也可手动选择浅色或深色主题。")
-        appearance_hint.setWordWrap(True)
-        appearance_hint.setObjectName("config_hint_label")
-        appearance_layout.addRow(appearance_hint)
-
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItem("跟随系统", THEME_SYSTEM)
-        self.theme_combo.addItem("浅色", "light")
-        self.theme_combo.addItem("深色", "dark")
-        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        appearance_layout.addRow("主题：", self.theme_combo)
-
-        layout.addWidget(appearance_box)
 
         api_box = QGroupBox("API Key")
         api_layout = QVBoxLayout(api_box)
@@ -364,17 +325,13 @@ class MainWindow(QMainWindow):
         context_hint.setObjectName("config_hint_label")
         context_layout.addWidget(context_hint)
 
-        self.rag_enabled_cb = QCheckBox("启用 Batch RAG 记忆库（batch.rag.enabled）")
+        self.rag_enabled_cb = QCheckBox("启用 RAG 记忆库")
         context_layout.addWidget(self.rag_enabled_cb)
 
-        self.source_index_enabled_cb = QCheckBox(
-            "启用 Batch 原文索引（batch.source_index.enabled）"
-        )
+        self.source_index_enabled_cb = QCheckBox("启用原文索引")
         context_layout.addWidget(self.source_index_enabled_cb)
 
-        self.bootstrap_on_build_cb = QCheckBox(
-            "开始翻译 build 时自动暖 RAG 库（batch.rag.bootstrap_on_build）"
-        )
+        self.bootstrap_on_build_cb = QCheckBox("开始翻译时自动暖 RAG 库")
         context_layout.addWidget(self.bootstrap_on_build_cb)
 
         bootstrap_actions = QHBoxLayout()
@@ -404,11 +361,11 @@ class MainWindow(QMainWindow):
         self.bootstrap_facts_label.setObjectName("bootstrap_facts_label")
         context_layout.addWidget(self.bootstrap_facts_label)
 
-        self.bootstrap_findings_view = QTextEdit()
-        self.bootstrap_findings_view.setReadOnly(True)
-        self.bootstrap_findings_view.setMaximumHeight(56)
-        self.bootstrap_findings_view.setObjectName("bootstrap_findings_view")
-        context_layout.addWidget(self.bootstrap_findings_view)
+        self.bootstrap_details_label = QLabel()
+        self.bootstrap_details_label.setWordWrap(True)
+        self.bootstrap_details_label.setObjectName("config_hint_label")
+        self.bootstrap_details_label.setVisible(False)
+        context_layout.addWidget(self.bootstrap_details_label)
 
         layout.addWidget(context_box)
 
@@ -476,6 +433,18 @@ class MainWindow(QMainWindow):
         config_row.addWidget(batch_box, 1)
         layout.addLayout(config_row, 1)
 
+        appearance_box = QGroupBox("外观")
+        appearance_layout = QFormLayout(appearance_box)
+        appearance_layout.setSpacing(8)
+        appearance_layout.setContentsMargins(12, 16, 12, 12)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("跟随系统", THEME_SYSTEM)
+        self.theme_combo.addItem("浅色", "light")
+        self.theme_combo.addItem("深色", "dark")
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        appearance_layout.addRow("主题：", self.theme_combo)
+        layout.addWidget(appearance_box)
+
         save_layout = QHBoxLayout()
         save_layout.addStretch()
         self.save_config_btn = QPushButton("保存参数配置")
@@ -484,6 +453,8 @@ class MainWindow(QMainWindow):
         save_layout.addWidget(self.save_config_btn)
         layout.addLayout(save_layout)
 
+        scroll.setWidget(content)
+        outer_layout.addWidget(scroll)
         self.tab_widget.addTab(tab, "配置")
 
     def _build_log_tab(self) -> None:
@@ -492,10 +463,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(10)
 
-        log_hint = QLabel(
-            "此处显示 doctor 与翻译任务的原始终端输出。"
-            "开始翻译任务时会自动切换到此页；检查项目时留在工作台即可查看摘要。"
-        )
+        log_hint = QLabel("原始终端输出；翻译、预建库与写回任务运行时会自动切换到此页。")
         log_hint.setWordWrap(True)
         log_hint.setObjectName("config_hint_label")
         layout.addWidget(log_hint)
@@ -510,6 +478,18 @@ class MainWindow(QMainWindow):
 
     def _focus_log_tab(self) -> None:
         self.tab_widget.setCurrentWidget(self.log_view.parentWidget())
+
+    def _focus_workbench_status_tab(self, index: int) -> None:
+        if 0 <= index < self.workbench_status_tabs.count():
+            self.workbench_status_tabs.setCurrentIndex(index)
+
+    def _set_details_label(self, label: QLabel, findings: list[str]) -> None:
+        if findings:
+            label.setText("\n".join(f"- {item}" for item in findings))
+            label.setVisible(True)
+        else:
+            label.setText("")
+            label.setVisible(False)
 
     # --- UI actions ---
 
@@ -608,6 +588,7 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         self._active_command = "doctor"
         self._doctor_output_lines = []
+        self._focus_workbench_status_tab(0)
         self._set_doctor_summary(running_summary())
         self._append_log("=== 正在运行：gemini_translate_batch.py doctor ===\n")
         self._set_task_running(True)
@@ -679,6 +660,7 @@ class MainWindow(QMainWindow):
         self._workflow = TranslationWorkflow.start_new()
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
+        self._focus_workbench_status_tab(1)
         self._append_log("=== 正在运行：基础 Batch 翻译流程 ===\n")
         self._set_task_running(True)
         self._run_workflow_current_step()
@@ -712,6 +694,7 @@ class MainWindow(QMainWindow):
         self._workflow = TranslationWorkflow.resume_manifest(str(latest_manifest), manifest)
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
+        self._focus_workbench_status_tab(1)
         self._append_log("=== 正在继续最新 Batch 翻译任务 ===\n")
         self._set_task_running(True)
         self._run_workflow_current_step()
@@ -756,6 +739,7 @@ class MainWindow(QMainWindow):
         self._focus_log_tab()
         self._active_command = "apply"
         self._apply_output_lines = []
+        self._focus_workbench_status_tab(2)
         self._set_writeback_summary(running_writeback_summary())
         self._append_log(
             f"=== 正在写回：gemini_translate_batch.py apply {self._writeback_manifest_path} ===\n"
@@ -851,20 +835,7 @@ class MainWindow(QMainWindow):
         self.writeback_status_label.style().polish(self.writeback_status_label)
         self.writeback_message_label.setText(summary.message)
         self.writeback_facts_label.setText("\n".join(summary.facts))
-        if summary.findings:
-            self.writeback_findings_view.setPlainText(
-                "\n".join(f"- {finding}" for finding in summary.findings)
-            )
-        elif summary.status in {"idle", "running"}:
-            self.writeback_findings_view.setPlainText("翻译任务完成 check 后，这里会显示写回建议。")
-        elif summary.status == "stale":
-            self.writeback_findings_view.setPlainText("请针对当前任务重新完成翻译与 check。")
-        elif summary.status == "safe":
-            self.writeback_findings_view.setPlainText("未发现阻止写回的问题。")
-        elif summary.status == "applied":
-            self.writeback_findings_view.setPlainText("写回已完成。")
-        else:
-            self.writeback_findings_view.setPlainText("请查看诊断日志了解详情。")
+        self._set_details_label(self.writeback_details_label, summary.findings)
         if not self.kill_btn.isEnabled():
             self.apply_btn.setEnabled(summary.can_apply)
 
@@ -898,14 +869,15 @@ class MainWindow(QMainWindow):
                 already_applied = bool(manifest.get("applied_at"))
             except ValueError:
                 pass
-        self._set_writeback_summary(
-            summarize_check_output(
-                output,
-                exit_code,
-                manifest_path=manifest_path,
-                already_applied=already_applied,
-            )
+        summary = summarize_check_output(
+            output,
+            exit_code,
+            manifest_path=manifest_path,
+            already_applied=already_applied,
         )
+        self._set_writeback_summary(summary)
+        if summary.status not in {"idle", "running", "stale"}:
+            self._focus_workbench_status_tab(2)
 
     def _set_bootstrap_summary(self, summary: BootstrapSummary) -> None:
         self.bootstrap_status_label.setText(summary.heading)
@@ -914,18 +886,7 @@ class MainWindow(QMainWindow):
         self.bootstrap_status_label.style().polish(self.bootstrap_status_label)
         self.bootstrap_message_label.setText(summary.message)
         self.bootstrap_facts_label.setText("\n".join(summary.facts))
-        if summary.findings:
-            self.bootstrap_findings_view.setPlainText(
-                "\n".join(f"- {finding}" for finding in summary.findings)
-            )
-        elif summary.status in {"idle", "running"}:
-            self.bootstrap_findings_view.setPlainText("预建完成后，这里会显示扫描与写入摘要。")
-        elif summary.status == "stale":
-            self.bootstrap_findings_view.setPlainText("请针对当前项目重新运行预建库。")
-        elif summary.status == "ready":
-            self.bootstrap_findings_view.setPlainText("预建库已就绪，可以开始翻译任务。")
-        else:
-            self.bootstrap_findings_view.setPlainText("请查看诊断日志了解详情。")
+        self._set_details_label(self.bootstrap_details_label, summary.findings)
 
     def _set_doctor_summary(self, summary: DoctorSummary):
         self.doctor_status_label.setText(summary.heading)
@@ -934,16 +895,7 @@ class MainWindow(QMainWindow):
         self.doctor_status_label.style().polish(self.doctor_status_label)
         self.doctor_message_label.setText(summary.message)
         self.doctor_facts_label.setText("\n".join(summary.facts))
-        if summary.findings:
-            self.doctor_findings_view.setPlainText(
-                "\n".join(f"- {finding}" for finding in summary.findings)
-            )
-        elif summary.status in {"idle", "running"}:
-            self.doctor_findings_view.setPlainText("等待项目检查结果。")
-        elif summary.status == "stale":
-            self.doctor_findings_view.setPlainText("请重新运行项目检查。")
-        else:
-            self.doctor_findings_view.setPlainText("未发现需要处理的事项。")
+        self._set_details_label(self.doctor_details_label, summary.findings)
 
     def _on_runner_error(self, message: str):
         self._append_log(message)

@@ -124,6 +124,31 @@ QTabWidget#main_tabs > QTabBar::tab:hover:!selected {
     color: #334155;
 }
 
+QTabWidget#workbench_status_tabs::pane {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background-color: #ffffff;
+    top: -1px;
+}
+
+QTabWidget#workbench_status_tabs > QTabBar::tab {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 7px 16px;
+    margin-right: 3px;
+    color: #64748b;
+    font-weight: 500;
+}
+
+QTabWidget#workbench_status_tabs > QTabBar::tab:selected {
+    background-color: #ffffff;
+    color: #2563eb;
+    font-weight: 600;
+}
+
 /* Project Path Frame styling */
 #project_frame {
     background-color: #ffffff;
