@@ -7,6 +7,7 @@ from gui_qt.diagnostics_context import (
     format_cli_command,
     format_manifest_json_preview,
     idle_diagnostics_context,
+    join_directory_file,
     manifest_for_preview,
     quote_cli_arg,
     resolve_package_dir,
@@ -32,6 +33,10 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         package = resolve_package_dir(r"C:\logs\batch_jobs\job1\manifest.json")
         self.assertEqual(package, r"C:\logs\batch_jobs\job1")
 
+    def test_resolve_package_dir_from_posix_manifest_path(self):
+        package = resolve_package_dir("/tmp/jobs/job1/manifest.json")
+        self.assertEqual(package, "/tmp/jobs/job1")
+
     def test_manifest_for_preview_omits_large_sections(self):
         preview = manifest_for_preview(
             {
@@ -47,8 +52,8 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
     def test_collect_existing_report_paths_only_returns_existing_files(self):
         package_dir = r"C:\logs\batch_jobs\job1"
         paths = {
-            f"{package_dir}\\check_failures.jsonl": True,
-            f"{package_dir}\\results.jsonl": False,
+            join_directory_file(package_dir, "check_failures.jsonl"): True,
+            join_directory_file(package_dir, "results.jsonl"): False,
         }
 
         entries = collect_existing_report_paths(
@@ -106,8 +111,8 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         def path_exists(path: str) -> bool:
             return path in {
                 manifest_path,
-                f"{package_dir}\\requests.jsonl",
-                r"C:\logs\batch_jobs\latest_manifest.txt",
+                join_directory_file(package_dir, "requests.jsonl"),
+                join_directory_file(r"C:\logs\batch_jobs", "latest_manifest.txt"),
             }
 
         context = build_diagnostics_context(
