@@ -139,6 +139,32 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         )
         self.assertEqual(context.status, "warning")
 
+    def test_collect_existing_report_paths_deduplicates_equivalent_windows_paths(self):
+        package_dir = r"C:\logs\batch_jobs\job1"
+
+        entries = collect_existing_report_paths(
+            package_dir,
+            {"last_check_report_path": r"c:/logs/batch_jobs/job1/check_failures.jsonl"},
+            path_exists=lambda path: path.lower().endswith("check_failures.jsonl"),
+        )
+        duplicate_labels = [
+            entry.label
+            for entry in entries
+            if entry.label in {"检查失败明细", "最近检查报告"}
+        ]
+        self.assertEqual(len(duplicate_labels), 1)
+
+    def test_build_diagnostics_context_ready_when_latest_paths_equivalent(self):
+        manifest_path = r"C:\logs\batch_jobs\job1\manifest.json"
+        context = build_diagnostics_context(
+            latest_manifest_path=r"c:/logs/batch_jobs/job1/manifest.json",
+            manifest={"_manifest_path": manifest_path, "mode": "translation"},
+            batch_script_path="gemini_translate_batch.py",
+            logs_dir=r"C:\logs\batch_jobs",
+            path_exists=lambda _path: True,
+        )
+        self.assertEqual(context.status, "ready")
+
 
 if __name__ == "__main__":
     unittest.main()

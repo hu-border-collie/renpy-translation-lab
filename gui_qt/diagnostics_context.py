@@ -66,6 +66,14 @@ def join_directory_file(directory: str, filename: str) -> str:
     return str(PurePosixPath(directory) / filename)
 
 
+def _canonical_compare_path(path: str) -> str:
+    if not path:
+        return ""
+    if is_windows_style_path(path):
+        return str(PureWindowsPath(path)).replace("/", "\\").lower()
+    return os.path.normcase(os.path.abspath(path))
+
+
 def _default_path_exists(path: str) -> bool:
     try:
         return Path(path).exists()
@@ -144,7 +152,7 @@ def collect_existing_report_paths(
     def add(label: str, path: str) -> None:
         if not path:
             return
-        normalized = os.path.normcase(os.path.abspath(path))
+        normalized = _canonical_compare_path(path)
         if normalized in seen or not exists(path):
             return
         seen.add(normalized)
@@ -340,8 +348,8 @@ def build_diagnostics_context(
     status = "ready"
     message = "以下为 latest manifest 对应的内部路径与手动 CLI 命令。"
     if manifest_path and latest_manifest_path:
-        if os.path.normcase(os.path.abspath(manifest_path)) != os.path.normcase(
-            os.path.abspath(latest_manifest_path)
+        if _canonical_compare_path(manifest_path) != _canonical_compare_path(
+            latest_manifest_path
         ):
             status = "warning"
             message = "活动 manifest 与 latest 指针不一致；下方预览以当前加载的 manifest 为准。"
