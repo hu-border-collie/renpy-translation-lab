@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QLineEdit,
     QComboBox,
+    QCheckBox,
     QFrame,
     QFormLayout,
     QTabWidget,
@@ -33,6 +34,15 @@ from PySide6.QtWidgets import (
 
 from .api_key_dialog import ApiKeyDialog
 from .api_key_helpers import mask_api_key
+from .bootstrap_report import (
+    BootstrapSummary,
+    idle_bootstrap_summary,
+    read_batch_context_flags,
+    running_bootstrap_summary,
+    stale_bootstrap_summary,
+    summarize_rag_bootstrap_output,
+    summarize_source_index_bootstrap_output,
+)
 from .check_report import (
     WritebackSummary,
     idle_writeback_summary,
@@ -83,6 +93,7 @@ class MainWindow(QMainWindow):
         self._workflow: TranslationWorkflow | None = None
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
+        self._bootstrap_output_lines: list[str] = []
         self._writeback_manifest_path = ""
 
         central = QWidget()
@@ -129,6 +140,7 @@ class MainWindow(QMainWindow):
             "完成环境检查后，可以开始基础 Batch 翻译流程。",
         )
         self._refresh_writeback_from_latest_manifest()
+        self._set_bootstrap_summary(idle_bootstrap_summary())
 
         # Status
         self.statusBar().showMessage(
@@ -195,6 +207,55 @@ class MainWindow(QMainWindow):
         actions_layout.addLayout(secondary_layout)
 
         layout.addWidget(actions_box)
+
+        bootstrap_box = QGroupBox("预建上下文库")
+        bootstrap_layout = QVBoxLayout(bootstrap_box)
+        bootstrap_layout.setSpacing(8)
+        bootstrap_layout.setContentsMargins(12, 16, 12, 12)
+
+        bootstrap_hint = QLabel(
+            "翻译前可先预建本地向量库：RAG 库利用已有译文保持术语一致；"
+            "原文索引适合译文较少、需要剧情上下文的项目。"
+            "请先在配置页启用对应选项并保存，再运行预建。"
+        )
+        bootstrap_hint.setWordWrap(True)
+        bootstrap_hint.setObjectName("config_hint_label")
+        bootstrap_layout.addWidget(bootstrap_hint)
+
+        bootstrap_actions = QHBoxLayout()
+        bootstrap_actions.setSpacing(10)
+        self.bootstrap_rag_btn = QPushButton("预建 RAG 库")
+        self.bootstrap_rag_btn.setObjectName("secondary_btn")
+        self.bootstrap_rag_btn.clicked.connect(self._on_bootstrap_rag)
+        bootstrap_actions.addWidget(self.bootstrap_rag_btn)
+
+        self.bootstrap_source_index_btn = QPushButton("预建原文索引")
+        self.bootstrap_source_index_btn.setObjectName("secondary_btn")
+        self.bootstrap_source_index_btn.clicked.connect(self._on_bootstrap_source_index)
+        bootstrap_actions.addWidget(self.bootstrap_source_index_btn)
+        bootstrap_actions.addStretch()
+        bootstrap_layout.addLayout(bootstrap_actions)
+
+        self.bootstrap_status_label = QLabel()
+        self.bootstrap_status_label.setObjectName("bootstrap_status_label")
+        bootstrap_layout.addWidget(self.bootstrap_status_label)
+
+        self.bootstrap_message_label = QLabel()
+        self.bootstrap_message_label.setWordWrap(True)
+        bootstrap_layout.addWidget(self.bootstrap_message_label)
+
+        self.bootstrap_facts_label = QLabel()
+        self.bootstrap_facts_label.setWordWrap(True)
+        self.bootstrap_facts_label.setObjectName("bootstrap_facts_label")
+        bootstrap_layout.addWidget(self.bootstrap_facts_label)
+
+        self.bootstrap_findings_view = QTextEdit()
+        self.bootstrap_findings_view.setReadOnly(True)
+        self.bootstrap_findings_view.setMaximumHeight(72)
+        self.bootstrap_findings_view.setObjectName("bootstrap_findings_view")
+        bootstrap_layout.addWidget(self.bootstrap_findings_view)
+
+        layout.addWidget(bootstrap_box)
 
         status_row = QHBoxLayout()
         status_row.setSpacing(16)
@@ -339,6 +400,34 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(api_box)
 
+        context_box = QGroupBox("Batch 上下文")
+        context_layout = QVBoxLayout(context_box)
+        context_layout.setSpacing(8)
+        context_layout.setContentsMargins(12, 16, 12, 12)
+
+        context_hint = QLabel(
+            "RAG 记忆库使用已有译文；原文索引只使用 TL 模板中的原文。"
+            "预建命令不会修改 .rpy 文件，也不会创建 Batch package。"
+        )
+        context_hint.setWordWrap(True)
+        context_hint.setObjectName("config_hint_label")
+        context_layout.addWidget(context_hint)
+
+        self.rag_enabled_cb = QCheckBox("启用 Batch RAG 记忆库（batch.rag.enabled）")
+        context_layout.addWidget(self.rag_enabled_cb)
+
+        self.source_index_enabled_cb = QCheckBox(
+            "启用 Batch 原文索引（batch.source_index.enabled）"
+        )
+        context_layout.addWidget(self.source_index_enabled_cb)
+
+        self.bootstrap_on_build_cb = QCheckBox(
+            "开始翻译 build 时自动暖 RAG 库（batch.rag.bootstrap_on_build）"
+        )
+        context_layout.addWidget(self.bootstrap_on_build_cb)
+
+        layout.addWidget(context_box)
+
         config_row = QHBoxLayout()
         config_row.setSpacing(16)
 
@@ -468,6 +557,7 @@ class MainWindow(QMainWindow):
             )
             self._writeback_manifest_path = ""
             self._set_writeback_summary(stale_writeback_summary())
+            self._set_bootstrap_summary(stale_bootstrap_summary())
             self._append_log(f"项目目录已设置为：{directory}")
 
     def _refresh_api_status(self) -> None:
@@ -541,6 +631,51 @@ class MainWindow(QMainWindow):
         script = self.state.get_batch_script_path()
         # Run with no extra args — it will pick up translator_config.json
         self.runner.run(script, ["doctor"])
+
+    def _saved_batch_context_flags(self) -> dict[str, bool]:
+        return read_batch_context_flags(self.state.load_translator_config())
+
+    def _on_bootstrap_rag(self) -> None:
+        if not self.state.get_game_root():
+            QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
+            return
+        if not self._saved_batch_context_flags()["rag_enabled"]:
+            QMessageBox.information(
+                self,
+                "RAG 未启用",
+                "请先在配置页启用 Batch RAG 记忆库，并点击「保存参数配置」。",
+            )
+            return
+
+        self.log_view.clear()
+        self._active_command = "bootstrap_rag"
+        self._bootstrap_output_lines = []
+        self._set_bootstrap_summary(running_bootstrap_summary("rag"))
+        self._append_log("=== 正在运行：gemini_translate_batch.py bootstrap-rag ===\n")
+        self._set_task_running(True)
+        self.runner.run(self.state.get_batch_script_path(), ["bootstrap-rag"])
+
+    def _on_bootstrap_source_index(self) -> None:
+        if not self.state.get_game_root():
+            QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
+            return
+        if not self._saved_batch_context_flags()["source_index_enabled"]:
+            QMessageBox.information(
+                self,
+                "原文索引未启用",
+                "请先在配置页启用 Batch 原文索引，并点击「保存参数配置」。",
+            )
+            return
+
+        self.log_view.clear()
+        self._active_command = "bootstrap_source_index"
+        self._bootstrap_output_lines = []
+        self._set_bootstrap_summary(running_bootstrap_summary("source_index"))
+        self._append_log(
+            "=== 正在运行：gemini_translate_batch.py bootstrap-source-index ===\n"
+        )
+        self._set_task_running(True)
+        self.runner.run(self.state.get_batch_script_path(), ["bootstrap-source-index"])
 
     def _on_start_translation(self):
         if not self.state.get_game_root():
@@ -654,6 +789,8 @@ class MainWindow(QMainWindow):
             self._workflow_step_output_lines.append(text)
         elif self._active_command == "apply":
             self._apply_output_lines.append(text)
+        elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
+            self._bootstrap_output_lines.append(text)
         self._append_log(text)
 
     def _append_log(self, text: str):
@@ -670,6 +807,8 @@ class MainWindow(QMainWindow):
         self.resume_btn.setEnabled(not running)
         self.save_config_btn.setEnabled(not running)
         self.apply_btn.setEnabled(not running and self._current_writeback_summary().can_apply)
+        self.bootstrap_rag_btn.setEnabled(not running)
+        self.bootstrap_source_index_btn.setEnabled(not running)
         self.kill_btn.setEnabled(running)
 
     def _set_workflow_summary(
@@ -782,6 +921,26 @@ class MainWindow(QMainWindow):
             )
         )
 
+    def _set_bootstrap_summary(self, summary: BootstrapSummary) -> None:
+        self.bootstrap_status_label.setText(summary.heading)
+        self.bootstrap_status_label.setProperty("status", summary.status)
+        self.bootstrap_status_label.style().unpolish(self.bootstrap_status_label)
+        self.bootstrap_status_label.style().polish(self.bootstrap_status_label)
+        self.bootstrap_message_label.setText(summary.message)
+        self.bootstrap_facts_label.setText("\n".join(summary.facts))
+        if summary.findings:
+            self.bootstrap_findings_view.setPlainText(
+                "\n".join(f"- {finding}" for finding in summary.findings)
+            )
+        elif summary.status in {"idle", "running"}:
+            self.bootstrap_findings_view.setPlainText("预建完成后，这里会显示扫描与写入摘要。")
+        elif summary.status == "stale":
+            self.bootstrap_findings_view.setPlainText("请针对当前项目重新运行预建库。")
+        elif summary.status == "ready":
+            self.bootstrap_findings_view.setPlainText("预建库已就绪，可以开始翻译任务。")
+        else:
+            self.bootstrap_findings_view.setPlainText("请查看诊断日志了解详情。")
+
     def _set_doctor_summary(self, summary: DoctorSummary):
         self.doctor_status_label.setText(summary.heading)
         self.doctor_status_label.setProperty("status", summary.status)
@@ -808,6 +967,8 @@ class MainWindow(QMainWindow):
             self._workflow_step_output_lines.append(message)
         elif self._active_command == "apply":
             self._apply_output_lines.append(message)
+        elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
+            self._bootstrap_output_lines.append(message)
         self._focus_log_tab()
         self.statusBar().showMessage("任务运行失败，请查看诊断日志。", 6000)
 
@@ -847,6 +1008,38 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("翻译写回完成。", 6000)
             else:
                 self.statusBar().showMessage("翻译写回失败，请查看诊断日志。", 8000)
+            return
+
+        if self._active_command == "bootstrap_rag":
+            summary = summarize_rag_bootstrap_output(
+                "\n".join(self._bootstrap_output_lines),
+                exit_code,
+            )
+            self._set_bootstrap_summary(summary)
+            self._active_command = ""
+            self._set_task_running(False)
+            if exit_code == 0 and summary.status == "ready":
+                self.statusBar().showMessage("RAG 预建完成。", 6000)
+            elif exit_code == 0:
+                self.statusBar().showMessage("RAG 预建已结束，请查看摘要。", 6000)
+            else:
+                self.statusBar().showMessage("RAG 预建失败，请查看诊断日志。", 8000)
+            return
+
+        if self._active_command == "bootstrap_source_index":
+            summary = summarize_source_index_bootstrap_output(
+                "\n".join(self._bootstrap_output_lines),
+                exit_code,
+            )
+            self._set_bootstrap_summary(summary)
+            self._active_command = ""
+            self._set_task_running(False)
+            if exit_code == 0 and summary.status == "ready":
+                self.statusBar().showMessage("原文索引预建完成。", 6000)
+            elif exit_code == 0:
+                self.statusBar().showMessage("原文索引预建已结束，请查看摘要。", 6000)
+            else:
+                self.statusBar().showMessage("原文索引预建失败，请查看诊断日志。", 8000)
             return
 
         self._set_task_running(False)
@@ -1043,6 +1236,10 @@ class MainWindow(QMainWindow):
             batch_config = self._config_section(config, "batch")
             sync_rag_config = self._config_section(sync_config, "rag")
             batch_rag_config = self._config_section(batch_config, "rag")
+            context_flags = read_batch_context_flags(config)
+            self.rag_enabled_cb.setChecked(context_flags["rag_enabled"])
+            self.source_index_enabled_cb.setChecked(context_flags["source_index_enabled"])
+            self.bootstrap_on_build_cb.setChecked(context_flags["bootstrap_on_build"])
             self._batch_thinking_config_has_key = "thinking_level" in batch_config
 
             # Populate sync model
@@ -1111,6 +1308,11 @@ class MainWindow(QMainWindow):
             batch_config = self._ensure_config_section(config, "batch")
             sync_rag_config = self._ensure_config_section(sync_config, "rag")
             batch_rag_config = self._ensure_config_section(batch_config, "rag")
+            batch_source_index_config = self._ensure_config_section(batch_config, "source_index")
+
+            batch_rag_config["enabled"] = self.rag_enabled_cb.isChecked()
+            batch_rag_config["bootstrap_on_build"] = self.bootstrap_on_build_cb.isChecked()
+            batch_source_index_config["enabled"] = self.source_index_enabled_cb.isChecked()
 
             sync_model = self.sync_model_combo.currentText().strip()
             sync_config["model"] = sync_model
