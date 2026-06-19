@@ -6984,6 +6984,16 @@ def collect_doctor_report():
     else:
         mode = 'blocked_missing_template'
 
+    pending_task_count = 0
+    pending_file_count = 0
+    if has_tl_files:
+        try:
+            file_jobs = collect_pending_file_jobs()
+            pending_file_count = len(file_jobs)
+            pending_task_count = sum(job['task_count'] for job in file_jobs)
+        except Exception as exc:
+            print(f'Warning: Could not compute pending translation counts: {exc}')
+
     return {
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
@@ -7003,6 +7013,8 @@ def collect_doctor_report():
         'launcher_py': template_info.get('launcher_py', ''),
         'mode': mode,
         'counts': counts,
+        'pending_task_count': pending_task_count,
+        'pending_file_count': pending_file_count,
         'warnings': warnings,
     }
 
@@ -7036,6 +7048,12 @@ def print_doctor_report(report):
         f"new_lines={counts['new_lines']}, "
         f"commented_original_lines={counts['commented_original_lines']}"
     )
+    if report['tl_exists'] and counts['rpy_files'] > 0:
+        print(
+            '- Pending translation: '
+            f"task_count={report['pending_task_count']}, "
+            f"file_count={report['pending_file_count']}"
+        )
     if report['warnings']:
         print('Warnings:')
         for warning in report['warnings']:
