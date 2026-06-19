@@ -1,6 +1,11 @@
 import unittest
 
-from gui_qt.doctor_report import parse_doctor_output, stale_summary, summarize_doctor_output
+from gui_qt.doctor_report import (
+    format_tl_scan_facts,
+    parse_doctor_output,
+    stale_summary,
+    summarize_doctor_output,
+)
 
 
 DOCTOR_OUTPUT = """
@@ -14,6 +19,7 @@ Doctor report:
 - Template generation: unavailable (no command resolved)
 - Mode: existing_tl_only
 - TL scan: rpy_files=3, translate_blocks=2, string_sections=1, old_lines=10, new_lines=10, commented_original_lines=2
+- Pending translation: task_count=5, file_count=2
 """
 
 GENERATE_TEMPLATE_OUTPUT = """
@@ -39,6 +45,8 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(parsed["tl_exists"], True)
         self.assertEqual(parsed["counts"]["rpy_files"], 3)
         self.assertEqual(parsed["counts"]["old_lines"], 10)
+        self.assertEqual(parsed["pending"]["task_count"], 5)
+        self.assertEqual(parsed["pending"]["file_count"], 2)
 
     def test_successful_existing_tl_without_api_key_is_warning(self):
         summary = summarize_doctor_output(DOCTOR_OUTPUT, exit_code=0, api_key_count=0)
@@ -54,6 +62,11 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "ready")
         self.assertEqual(summary.heading, "项目检查通过")
         self.assertTrue(any("API Key：已配置 2 个" in fact for fact in summary.facts))
+        self.assertTrue(any("TL 文件：3 个" in fact for fact in summary.facts))
+        self.assertTrue(any("待翻译条目：约 5 条" in fact for fact in summary.facts))
+        self.assertTrue(any("剧情对话：2 条" in fact for fact in summary.facts))
+        self.assertTrue(any("UI 字符串：10 条 old/new" in fact for fact in summary.facts))
+        self.assertFalse(any("old/new 行数" in fact for fact in summary.facts))
         self.assertEqual(summary.findings, [])
 
     def test_can_generate_template_without_tl_files_is_warning(self):
@@ -66,7 +79,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "检查完成，但有需要处理的事项")
         self.assertTrue(any("翻译目录尚不存在" in finding for finding in summary.findings))
-        self.assertTrue(any("扫描到 0 个 .rpy 文件" in fact for fact in summary.facts))
+        self.assertTrue(any("TL 文件：0 个" in fact for fact in summary.facts))
 
     def test_can_generate_template_with_empty_tl_dir_is_warning(self):
         output = GENERATE_TEMPLATE_OUTPUT.replace("(exists: False)", "(exists: True)")
@@ -74,7 +87,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
 
         self.assertEqual(summary.status, "warning")
-        self.assertTrue(any("没有可处理的 .rpy 文件" in finding for finding in summary.findings))
+        self.assertTrue(any("没有 TL 文件" in finding for finding in summary.findings))
 
     def test_environment_api_key_source_is_reported(self):
         summary = summarize_doctor_output(
@@ -114,6 +127,23 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "stale")
         self.assertIn("重新运行", summary.heading)
+
+    def test_format_tl_scan_facts_separates_dialogue_and_strings(self):
+        facts = format_tl_scan_facts(
+            {
+                "rpy_files": 49,
+                "translate_blocks": 49901,
+                "commented_original_lines": 49863,
+                "old_lines": 637,
+                "new_lines": 637,
+            },
+            pending={"task_count": 48394, "file_count": 49},
+        )
+
+        self.assertIn("TL 文件：49 个", facts)
+        self.assertTrue(any("待翻译条目：约 48394 条" in fact for fact in facts))
+        self.assertTrue(any("剧情对话：49863 条" in fact for fact in facts))
+        self.assertTrue(any("UI 字符串：637 条 old/new" in fact for fact in facts))
 
 
 if __name__ == "__main__":

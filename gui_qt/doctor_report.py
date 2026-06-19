@@ -37,6 +37,48 @@ def _parse_counts(raw_counts: str) -> dict[str, int]:
     return counts
 
 
+def format_tl_scan_facts(
+    counts: dict[str, int],
+    pending: dict[str, int] | None = None,
+) -> list[str]:
+    """Turn doctor TL scan counters into user-facing facts."""
+    rpy_files = int(counts.get("rpy_files", 0))
+    translate_blocks = int(counts.get("translate_blocks", 0))
+    commented_lines = int(counts.get("commented_original_lines", 0))
+    old_lines = int(counts.get("old_lines", 0))
+    new_lines = int(counts.get("new_lines", 0))
+
+    if rpy_files == 0 and translate_blocks == 0:
+        return ["TL 文件：0 个"]
+
+    facts: list[str] = [f"TL 文件：{rpy_files} 个"]
+
+    if pending is not None:
+        task_count = int(pending.get("task_count", 0))
+        file_count = int(pending.get("file_count", 0))
+        if task_count > 0:
+            facts.append(
+                f"待翻译条目：约 {task_count} 条（分布在 {file_count} 个文件中，与 build 统计一致）"
+            )
+        else:
+            facts.append("待翻译条目：0 条（当前没有需要提交到 Batch 的英文待译行）")
+
+    if commented_lines > 0:
+        facts.append(
+            f"剧情对话：{commented_lines} 条注释原文格式（主流程会翻译这类内容，不是 old/new 行）"
+        )
+    elif translate_blocks > 0:
+        facts.append(f"翻译块：{translate_blocks} 个")
+
+    if old_lines > 0 or new_lines > 0:
+        if old_lines == new_lines:
+            facts.append(f"UI 字符串：{old_lines} 条 old/new（translate strings 块）")
+        else:
+            facts.append(f"UI 字符串：old/new 行数 {old_lines}/{new_lines}（可能格式异常）")
+
+    return facts
+
+
 def parse_doctor_output(output: str) -> dict[str, object]:
     parsed: dict[str, object] = {"warnings": []}
     in_warnings = False
@@ -84,6 +126,10 @@ def parse_doctor_output(output: str) -> dict[str, object]:
             parsed["counts"] = _parse_counts(line.split(":", 1)[1])
             continue
 
+        if line.startswith("- Pending translation:"):
+            parsed["pending"] = _parse_counts(line.split(":", 1)[1])
+            continue
+
     return parsed
 
 
@@ -100,6 +146,7 @@ def summarize_doctor_output(
         if isinstance(warning, str) and warning.strip()
     ]
     counts = parsed.get("counts") if isinstance(parsed.get("counts"), dict) else {}
+    pending = parsed.get("pending") if isinstance(parsed.get("pending"), dict) else None
     mode = parsed.get("mode") if isinstance(parsed.get("mode"), str) else ""
 
     facts: list[str] = []
@@ -113,10 +160,7 @@ def summarize_doctor_output(
     if mode:
         facts.append(f"检查模式：{mode}")
     if counts:
-        rpy_files = int(counts.get("rpy_files", 0))
-        old_lines = int(counts.get("old_lines", 0))
-        new_lines = int(counts.get("new_lines", 0))
-        facts.append(f"扫描到 {rpy_files} 个 .rpy 文件，old/new 行数 {old_lines}/{new_lines}")
+        facts.extend(format_tl_scan_facts(counts, pending=pending))
 
     findings = list(warnings)
     if mode == "can_generate_template":
@@ -127,7 +171,7 @@ def summarize_doctor_output(
             )
         elif counts and int(counts.get("rpy_files", 0)) == 0:
             findings.append(
-                "翻译目录中没有可处理的 .rpy 文件；请先生成或刷新翻译模板后重新检查。"
+                "翻译目录中没有 TL 文件；请先生成或刷新翻译模板后重新检查。"
             )
     if api_key_count is not None:
         if api_key_count > 0:
