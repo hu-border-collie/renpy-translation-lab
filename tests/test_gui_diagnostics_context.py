@@ -83,7 +83,7 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
             manifest={"job_name": "jobs/abc", "applied_at": "2026-01-01T00:00:00"},
         )
         labels = [command.label for command in commands]
-        self.assertNotIn("写回翻译（仅 safe）", labels)
+        self.assertNotIn("写回翻译（仅可写回）", labels)
 
     def test_build_diagnostics_context_idle_without_manifest(self):
         context = build_diagnostics_context(
@@ -122,7 +122,8 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
             path_exists=path_exists,
         )
         self.assertEqual(context.status, "ready")
-        self.assertTrue(any("Manifest" in fact for fact in context.facts))
+        self.assertTrue(any("任务清单：" in fact for fact in context.facts))
+        self.assertTrue(any("最近检查：可写回" in fact for fact in context.facts))
         self.assertTrue(any(entry.label == "Batch 请求" for entry in context.paths))
         self.assertTrue(context.commands)
         self.assertIn('"mode": "translation"', context.manifest_json_preview)

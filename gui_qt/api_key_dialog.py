@@ -41,7 +41,7 @@ class ApiKeyDialog(QDialog):
         layout.setSpacing(12)
 
         intro = QLabel(
-            "Key 仅保存在本地 api_keys.json，不会上传或代理。"
+            "密钥仅保存在本地配置文件中，不会上传或代理。"
             "可添加多个 Key；删除选中项后点击「保存」生效。"
         )
         intro.setWordWrap(True)

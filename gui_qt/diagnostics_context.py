@@ -8,6 +8,15 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
+from .user_copy import (
+    format_job_fact,
+    format_job_state_fact,
+    format_manifest_path_fact,
+    format_package_dir_fact,
+    format_safety_fact,
+    manifest_mode_label,
+)
+
 
 @dataclass(frozen=True)
 class DiagnosticsPathEntry:
@@ -117,7 +126,7 @@ def manifest_for_preview(manifest: dict[str, object]) -> dict[str, object]:
     chunk_count = len(chunks) if isinstance(chunks, list) else 0
     if file_count or chunk_count:
         preview["_preview_note"] = (
-            f"chunks/files omitted from preview ({chunk_count} chunks, {file_count} files)"
+            f"预览已省略条目明细（{chunk_count} 块 / {file_count} 个文件）"
         )
     return preview
 
@@ -230,7 +239,7 @@ def build_cli_commands(
     if not manifest.get("applied_at"):
         commands.append(
             DiagnosticsCommand(
-                label="写回翻译（仅 safe）",
+                label="写回翻译（仅可写回）",
                 command=format_cli_command(
                     python_exe,
                     batch_script_path,
@@ -245,27 +254,27 @@ def build_cli_commands(
 def build_manifest_facts(manifest: dict[str, object], manifest_path: str) -> list[str]:
     facts: list[str] = []
     if manifest_path:
-        facts.append(f"Manifest：{manifest_path}")
+        facts.append(format_manifest_path_fact(manifest_path))
 
     package_dir = resolve_package_dir(manifest_path, manifest)
     if package_dir:
-        facts.append(f"Package：{package_dir}")
+        facts.append(format_package_dir_fact(package_dir))
 
     job_name = manifest.get("job_name")
     if isinstance(job_name, str) and job_name.strip():
-        facts.append(f"Job：{job_name.strip()}")
+        facts.append(format_job_fact(job_name.strip()))
     else:
-        facts.append("Job：尚未提交")
+        facts.append("云端任务：尚未提交")
 
     job_state = manifest.get("job_state")
     if isinstance(job_state, str) and job_state.strip():
-        facts.append(f"Job 状态：{job_state.strip()}")
+        facts.append(format_job_state_fact(job_state.strip()))
 
     last_summary = manifest.get("last_check_summary")
     if isinstance(last_summary, dict):
         safety = last_summary.get("safety_level")
         if isinstance(safety, str) and safety.strip():
-            facts.append(f"最近检查：{safety.strip()}")
+            facts.append(format_safety_fact(safety.strip(), prefix="最近检查"))
 
     applied_at = manifest.get("applied_at")
     if isinstance(applied_at, str) and applied_at.strip():
@@ -277,7 +286,7 @@ def build_manifest_facts(manifest: dict[str, object], manifest_path: str) -> lis
 
     mode = manifest.get("mode")
     if isinstance(mode, str) and mode.strip():
-        facts.append(f"模式：{mode.strip()}")
+        facts.append(f"任务类型：{manifest_mode_label(mode.strip())}")
 
     return facts
 
@@ -286,7 +295,7 @@ def idle_diagnostics_context() -> DiagnosticsContext:
     return DiagnosticsContext(
         status="idle",
         heading="暂无任务上下文",
-        message="完成 build 或开始翻译后，这里会显示 manifest、package、job 和可复制命令。",
+        message="开始翻译后，这里会显示任务清单、翻译包、云端任务和可复制命令。",
         facts=[],
         paths=[],
         commands=[],
@@ -320,9 +329,9 @@ def build_diagnostics_context(
         if manifest_path and exists(manifest_path):
             return DiagnosticsContext(
                 status="warning",
-                heading="无法读取 manifest",
-                message="找到了 manifest 路径，但内容未能加载。请查看下方原始日志。",
-                facts=[f"Manifest：{manifest_path}"],
+                heading="无法读取任务清单",
+                message="找到了任务清单路径，但内容未能加载。请查看下方原始日志。",
+                facts=[format_manifest_path_fact(manifest_path)],
                 paths=[],
                 commands=[],
                 manifest_json_preview="",
@@ -334,7 +343,7 @@ def build_diagnostics_context(
 
     latest_pointer = join_directory_file(logs_dir, "latest_manifest.txt")
     if exists(latest_pointer):
-        facts.append(f"Latest 指针：{latest_pointer}")
+        facts.append(f"最近任务指针：{latest_pointer}")
 
     paths = collect_existing_report_paths(package_dir, manifest, path_exists=exists)
     commands = build_cli_commands(
@@ -346,13 +355,13 @@ def build_diagnostics_context(
     preview = format_manifest_json_preview(manifest)
 
     status = "ready"
-    message = "以下为 latest manifest 对应的内部路径与手动 CLI 命令。"
+    message = "以下为当前任务清单对应的路径与可手动运行的命令。"
     if manifest_path and latest_manifest_path:
         if _canonical_compare_path(manifest_path) != _canonical_compare_path(
             latest_manifest_path
         ):
             status = "warning"
-            message = "活动 manifest 与 latest 指针不一致；下方预览以当前加载的 manifest 为准。"
+            message = "当前任务与最近任务指针不一致；下方预览以当前加载的任务清单为准。"
 
     return DiagnosticsContext(
         status=status,
