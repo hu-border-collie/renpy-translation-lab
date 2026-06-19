@@ -32,6 +32,56 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          python -m pip install -r requirements-gui.txt
 
       - name: Run tests
         run: python -m unittest discover -s tests -p "test_*.py" -q
+
+  cli-without-gui:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+
+      - name: Install CLI dependencies only
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Verify PySide6 is not installed
+        run: |
+          python - <<'PY'
+          import importlib.util
+          if importlib.util.find_spec("PySide6") is not None:
+              raise SystemExit("PySide6 should not be installed in cli-without-gui job")
+          print("PySide6 not installed (expected)")
+          PY
+
+      - name: Run tests without GUI dependencies
+        run: python -m unittest discover -s tests -p "test_*.py" -q
+
+      - name: Smoke test batch CLI entry
+        run: python gemini_translate_batch.py --help
+
+      - name: Smoke test optional GUI entry without PySide6
+        shell: bash
+        run: |
+          set +e
+          output=$(python -m gui_qt 2>&1)
+          code=$?
+          set -e
+          if [ "$code" -ne 1 ]; then
+            echo "Expected exit code 1, got $code"
+            echo "$output"
+            exit 1
+          fi
+          echo "$output" | grep -q "PySide6"
