@@ -75,7 +75,8 @@ from .theme_helpers import (
     read_gui_theme_from_config,
     write_gui_theme_to_config,
 )
-from .translation_workflow import TranslationWorkflow, WorkflowUpdate
+from .translation_workflow import TranslationWorkflow
+from .user_copy import format_manifest_path_fact, WorkflowUpdate
 from .widget_helpers import NoWheelComboBox, NoWheelTabWidget
 
 # Diagnostics splitter: idle favors task context; running tasks expand the log.
@@ -142,7 +143,7 @@ class MainWindow(QMainWindow):
         self._set_workflow_summary(
             "idle",
             "尚未开始翻译任务",
-            "完成环境检查后，可以开始基础 Batch 翻译流程。",
+            "完成环境检查后，可以开始批量翻译流程。",
         )
         self._refresh_writeback_from_latest_manifest()
         self._set_bootstrap_summary(idle_bootstrap_summary())
@@ -320,8 +321,8 @@ class MainWindow(QMainWindow):
         api_layout.setContentsMargins(12, 16, 12, 12)
 
         api_hint = QLabel(
-            "翻译任务需要 Gemini API Key。Key 保存在本地 api_keys.json，"
-            "不会上传或代理。也可通过环境变量 GEMINI_API_KEY 配置。"
+            "翻译任务需要 Gemini API 密钥。密钥保存在本地配置文件中，"
+            "不会上传或代理。也可通过环境变量配置。"
         )
         api_hint.setWordWrap(True)
         api_hint.setObjectName("config_hint_label")
@@ -342,7 +343,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(api_box)
 
-        context_box = QGroupBox("Batch 上下文")
+        context_box = QGroupBox("批量上下文")
         context_layout = QVBoxLayout(context_box)
         context_layout.setSpacing(8)
         context_layout.setContentsMargins(12, 16, 12, 12)
@@ -403,7 +404,7 @@ class MainWindow(QMainWindow):
         config_row = QHBoxLayout()
         config_row.setSpacing(16)
 
-        sync_box = QGroupBox("同步翻译 (Sync API)")
+        sync_box = QGroupBox("同步翻译")
         sync_layout = QFormLayout(sync_box)
         sync_layout.setSpacing(8)
         sync_layout.setContentsMargins(12, 16, 12, 12)
@@ -429,7 +430,7 @@ class MainWindow(QMainWindow):
 
         config_row.addWidget(sync_box, 1)
 
-        batch_box = QGroupBox("批量离线 (Batch API)")
+        batch_box = QGroupBox("批量离线翻译")
         batch_layout = QFormLayout(batch_box)
         batch_layout.setSpacing(8)
         batch_layout.setContentsMargins(12, 16, 12, 12)
@@ -455,11 +456,11 @@ class MainWindow(QMainWindow):
 
         self.batch_thinking_combo = NoWheelComboBox()
         self.batch_thinking_combo.addItem("（不启用）", "")
-        self.batch_thinking_combo.addItem("最小 (minimal)", "minimal")
-        self.batch_thinking_combo.addItem("低 (low)", "low")
-        self.batch_thinking_combo.addItem("中 (medium)", "medium")
-        self.batch_thinking_combo.addItem("高 (high)", "high")
-        batch_layout.addRow("Batch 思考程度：", self.batch_thinking_combo)
+        self.batch_thinking_combo.addItem("最小", "minimal")
+        self.batch_thinking_combo.addItem("低", "low")
+        self.batch_thinking_combo.addItem("中", "medium")
+        self.batch_thinking_combo.addItem("高", "high")
+        batch_layout.addRow("思考程度：", self.batch_thinking_combo)
 
         config_row.addWidget(batch_box, 1)
         layout.addLayout(config_row, 1)
@@ -499,7 +500,7 @@ class MainWindow(QMainWindow):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
         diag_hint = QLabel(
-            "上方切换任务上下文、CLI 命令与 Manifest；下方始终显示原始输出。"
+            "上方可查看任务上下文、命令参考与任务清单；下方显示原始命令输出。"
             "任务运行时会自动切到此页并放大日志区域。"
         )
         diag_hint.setWordWrap(True)
@@ -585,7 +586,7 @@ class MainWindow(QMainWindow):
         commands_layout = QVBoxLayout(commands_content)
         commands_layout.setContentsMargins(12, 12, 12, 12)
         commands_layout.setSpacing(8)
-        commands_hint = QLabel("复制后在终端运行；命令使用当前 Python 解释器与真实脚本路径。")
+        commands_hint = QLabel("复制后在终端运行；命令使用当前解释器与脚本路径。")
         commands_hint.setWordWrap(True)
         commands_hint.setObjectName("config_hint_label")
         commands_layout.addWidget(commands_hint)
@@ -597,14 +598,14 @@ class MainWindow(QMainWindow):
         commands_layout.addStretch()
         commands_scroll.setWidget(commands_content)
         commands_outer.addWidget(commands_scroll)
-        self.diagnostics_inner_tabs.addTab(commands_tab, "CLI 命令")
+        self.diagnostics_inner_tabs.addTab(commands_tab, "命令参考")
 
         manifest_tab = QWidget()
         self._style_themed_surface(manifest_tab)
         manifest_layout = QVBoxLayout(manifest_tab)
         manifest_layout.setContentsMargins(12, 12, 12, 12)
         manifest_layout.setSpacing(8)
-        manifest_hint = QLabel("只读 JSON 预览；为控制体积已省略 chunks / files 大字段。")
+        manifest_hint = QLabel("只读预览；大段条目明细已省略。")
         manifest_hint.setWordWrap(True)
         manifest_hint.setObjectName("config_hint_label")
         manifest_layout.addWidget(manifest_hint)
@@ -613,7 +614,7 @@ class MainWindow(QMainWindow):
         self.diagnostics_manifest_preview.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self.diagnostics_manifest_preview.setObjectName("diagnostics_manifest_preview")
         manifest_layout.addWidget(self.diagnostics_manifest_preview, 1)
-        self.diagnostics_inner_tabs.addTab(manifest_tab, "Manifest")
+        self.diagnostics_inner_tabs.addTab(manifest_tab, "任务清单")
 
         splitter.addWidget(self.diagnostics_inner_tabs)
 
@@ -622,7 +623,7 @@ class MainWindow(QMainWindow):
         log_panel_layout = QVBoxLayout(log_panel)
         log_panel_layout.setContentsMargins(0, 4, 0, 0)
         log_panel_layout.setSpacing(6)
-        log_title = QLabel("原始 CLI 输出")
+        log_title = QLabel("原始命令输出")
         log_title.setObjectName("diagnostics_section_label")
         log_panel_layout.addWidget(log_title)
         self.log_view = QTextEdit()
@@ -769,7 +770,7 @@ class MainWindow(QMainWindow):
                 row_layout.addWidget(copy_btn)
                 self.diagnostics_commands_layout.addWidget(row_host)
         else:
-            placeholder = QLabel("开始翻译任务后，这里会出现可复制的手动 CLI 命令。")
+            placeholder = QLabel("开始翻译任务后，这里会出现可复制的手动命令。")
             placeholder.setWordWrap(True)
             placeholder.setObjectName("config_hint_label")
             self.diagnostics_commands_layout.addWidget(placeholder)
@@ -869,7 +870,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self, "请先选择项目",
                 "请先选择游戏的 work 目录。\n"
-                "项目检查（doctor）会读取 translator_config.json 中的 game_root。"
+                "环境检查会读取本地配置中的项目路径。"
             )
             return
 
@@ -896,7 +897,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "RAG 未启用",
-                "请先启用 Batch RAG 记忆库，并点击「保存参数配置」。",
+                "请先启用批量记忆库，并点击「保存参数配置」。",
             )
             return
 
@@ -917,7 +918,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "原文索引未启用",
-                "请先启用 Batch 原文索引，并点击「保存参数配置」。",
+                "请先启用批量原文索引，并点击「保存参数配置」。",
             )
             return
 
@@ -970,7 +971,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "没有可继续的任务",
-                "未找到 latest manifest；请先开始一个翻译任务。",
+                "未找到最近任务清单；请先开始一个翻译任务。",
             )
             return
 
@@ -996,7 +997,7 @@ class MainWindow(QMainWindow):
 
     def _on_apply_writeback(self):
         if not self._writeback_manifest_path:
-            QMessageBox.information(self, "无法写回", "没有可写回的 manifest；请先完成 check。")
+            QMessageBox.information(self, "无法写回", "没有可写回的任务；请先完成结果检查。")
             return
 
         summary = self._current_writeback_summary()
@@ -1004,7 +1005,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "当前不能写回",
-                summary.message or "只有 safe 的 check 结果才允许写回。",
+                summary.message or "只有检查结果为可写回时才允许写回。",
             )
             return
 
@@ -1109,7 +1110,7 @@ class MainWindow(QMainWindow):
 
         facts = []
         if self._workflow.manifest_path:
-            facts.append(f"Manifest：{self._workflow.manifest_path}")
+            facts.append(format_manifest_path_fact(self._workflow.manifest_path))
         self._workflow_step_output_lines = []
         self._set_workflow_summary("running", step.heading, step.message, facts)
         self._append_log(f"\n=== {step.heading}：gemini_translate_batch.py {' '.join(step.args)} ===\n")
@@ -1302,7 +1303,7 @@ class MainWindow(QMainWindow):
         if update.status == "failed":
             self.statusBar().showMessage("翻译任务失败，请查看诊断日志。", 8000)
         elif update.status == "waiting":
-            self.statusBar().showMessage("Batch 任务仍在处理，可稍后继续最新任务。", 8000)
+            self.statusBar().showMessage("批量任务仍在处理，可稍后继续最新任务。", 8000)
         else:
             self.statusBar().showMessage("翻译任务流程完成。", 6000)
 

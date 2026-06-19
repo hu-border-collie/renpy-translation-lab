@@ -7,6 +7,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+
+from .user_copy import (
+    format_job_state_fact,
+    format_manifest_path_fact,
+    format_safety_fact,
+    job_state_label,
+    safety_level_label,
+)
 from pathlib import PurePosixPath, PureWindowsPath
 
 
@@ -35,9 +43,9 @@ class WorkflowUpdate:
 
 
 STEP_TEXT = {
-    "build": ("正在准备翻译内容", "正在扫描待翻译文本并生成 Batch 请求包。"),
-    "submit": ("正在提交翻译任务", "正在上传请求文件并创建 Batch 任务。"),
-    "status": ("正在刷新任务状态", "正在向 Batch API 查询当前处理状态。"),
+    "build": ("正在准备翻译内容", "正在扫描待翻译文本并生成批量请求包。"),
+    "submit": ("正在提交翻译任务", "正在上传请求文件并创建云端批量任务。"),
+    "status": ("正在刷新任务状态", "正在查询云端任务处理状态。"),
     "download": ("正在获取翻译结果", "任务已完成，正在下载结果文件。"),
     "check": ("正在检查翻译结果", "正在校验结果是否可以进入写回前预览。"),
 }
@@ -164,40 +172,43 @@ class TranslationWorkflow:
             if "download" not in self._pending_steps:
                 self._pending_steps[:0] = ["download", "check"]
             return self._continue_or_finish(
-                extra_facts=[f"Batch 状态：{state}"],
+                extra_facts=[format_job_state_fact(state)],
             )
         if state in TERMINAL_FAILURE_STATES:
             self._pending_steps.clear()
             return WorkflowUpdate(
                 status="failed",
-                heading="Batch 任务没有成功完成",
-                message=f"当前状态为 {state}，请查看原始输出后重试或重新生成任务。",
-                facts=self._facts([f"Batch 状态：{state}"]),
+                heading="批量任务没有成功完成",
+                message=f"当前状态为 {job_state_label(state)}，请查看原始输出后重试或重新生成任务。",
+                facts=self._facts([format_job_state_fact(state)]),
             )
 
         self._pending_steps.clear()
         state_text = state or "未知"
         return WorkflowUpdate(
             status="waiting",
-            heading="Batch 任务仍在处理",
+            heading="批量任务仍在处理",
             message="稍后可以继续刷新最新任务状态；任务成功后再下载并检查结果。",
-            facts=self._facts([f"Batch 状态：{state_text}"]),
+            facts=self._facts([format_job_state_fact(state_text)]),
         )
 
     def _finish_check(self, output: str) -> WorkflowUpdate:
         safety = extract_safety_status(output)
         if safety == "safe":
             heading = "翻译结果检查通过"
-            message = "结果为 safe，可以进入后续写回前预览。"
+            message = "检查结果为可写回，可以进入写回前确认。"
         elif safety in {"warn", "block"}:
             heading = "翻译结果需要处理"
-            message = f"结果为 {safety}，普通流程不应写回；请先查看问题并重试或修复。"
+            message = (
+                f"检查结果为 {safety_level_label(safety)}，普通流程不应写回；"
+                "请先查看问题并重试或修复。"
+            )
         else:
             heading = "翻译结果检查完成"
             message = "未能识别安全状态，请查看原始输出。"
 
         self._pending_steps.clear()
-        facts = self._facts([f"安全状态：{safety or '未知'}"])
+        facts = self._facts([format_safety_fact(safety or "", prefix="检查结果")])
         return WorkflowUpdate(status="done", heading=heading, message=message, facts=facts)
 
     def _continue_or_finish(self, extra_facts: list[str] | None = None) -> WorkflowUpdate:
@@ -225,7 +236,7 @@ class TranslationWorkflow:
     def _facts(self, extra_facts: list[str] | None = None) -> list[str]:
         facts: list[str] = []
         if self.manifest_path:
-            facts.append(f"Manifest：{self.manifest_path}")
+            facts.append(format_manifest_path_fact(self.manifest_path))
         if extra_facts:
             facts.extend(extra_facts)
         return facts

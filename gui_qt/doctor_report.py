@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .user_copy import doctor_mode_label, translate_doctor_warning
+
 
 @dataclass(frozen=True)
 class DoctorSummary:
@@ -16,7 +18,7 @@ class DoctorSummary:
 
 MODE_MESSAGES = {
     "can_generate_template": "Ren'Py 模板生成环境可用；如翻译模板尚不存在，需要先生成或刷新模板。",
-    "existing_tl_only": "已有翻译文件可处理；模板生成环境不可用，后续依赖现有 TL 文件。",
+    "existing_tl_only": "已有翻译文件可处理；模板生成环境不可用，后续依赖现有翻译文件。",
     "blocked_missing_template": "缺少可处理的翻译文件，也无法自动生成模板。",
 }
 
@@ -49,9 +51,9 @@ def format_tl_scan_facts(
     new_lines = int(counts.get("new_lines", 0))
 
     if rpy_files == 0 and translate_blocks == 0:
-        return ["TL 文件：0 个"]
+        return ["翻译文件：0 个"]
 
-    facts: list[str] = [f"TL 文件：{rpy_files} 个"]
+    facts: list[str] = [f"翻译文件：{rpy_files} 个"]
 
     if pending is not None:
         task_count = int(pending.get("task_count", 0))
@@ -64,17 +66,17 @@ def format_tl_scan_facts(
             facts.append("待翻译条目：0 条（当前没有需要提交到 Batch 的英文待译行）")
 
     if commented_lines > 0:
-        facts.append(
-            f"剧情对话：{commented_lines} 条注释原文格式（主流程会翻译这类内容，不是 old/new 行）"
-        )
+        facts.append(f"剧情对话：{commented_lines} 条")
     elif translate_blocks > 0:
         facts.append(f"翻译块：{translate_blocks} 个")
 
     if old_lines > 0 or new_lines > 0:
         if old_lines == new_lines:
-            facts.append(f"UI 字符串：{old_lines} 条 old/new（translate strings 块）")
+            facts.append(f"界面字符串：{old_lines} 条")
         else:
-            facts.append(f"UI 字符串：old/new 行数 {old_lines}/{new_lines}（可能格式异常）")
+            facts.append(
+                f"界面字符串：原文 {old_lines} 条，译文 {new_lines} 条（可能格式异常）"
+            )
 
     return facts
 
@@ -141,7 +143,7 @@ def summarize_doctor_output(
 ) -> DoctorSummary:
     parsed = parse_doctor_output(output)
     warnings = [
-        warning
+        translate_doctor_warning(warning)
         for warning in parsed.get("warnings", [])
         if isinstance(warning, str) and warning.strip()
     ]
@@ -158,7 +160,7 @@ def summarize_doctor_output(
     if parsed.get("language"):
         facts.append(f"目标语言：{parsed['language']}")
     if mode:
-        facts.append(f"检查模式：{mode}")
+        facts.append(f"检查模式：{doctor_mode_label(mode)}")
     if counts:
         facts.extend(format_tl_scan_facts(counts, pending=pending))
 
@@ -166,27 +168,27 @@ def summarize_doctor_output(
     if mode == "can_generate_template":
         if parsed.get("tl_exists") is False:
             findings.append(
-                "翻译目录尚不存在；doctor 可以生成模板，但还没有可检查的 TL 文件。"
+                "翻译目录尚不存在；可以生成模板，但还没有可检查的翻译文件。"
                 "请先生成或刷新翻译模板后重新检查。"
             )
         elif counts and int(counts.get("rpy_files", 0)) == 0:
             findings.append(
-                "翻译目录中没有 TL 文件；请先生成或刷新翻译模板后重新检查。"
+                "翻译目录中没有翻译文件；请先生成或刷新翻译模板后重新检查。"
             )
     if api_key_count is not None:
         if api_key_count > 0:
             if api_key_source == "environment":
-                facts.append(f"API Key：已通过环境变量配置 {api_key_count} 个")
+                facts.append(f"API 密钥：已通过环境变量配置 {api_key_count} 个")
             else:
-                facts.append(f"API Key：已配置 {api_key_count} 个")
+                facts.append(f"API 密钥：已配置 {api_key_count} 个")
         else:
-            findings.append("尚未配置 API Key；doctor 不调用 Gemini，但后续翻译任务需要 API Key。")
+            findings.append("尚未配置 API 密钥；环境检查不调用模型，但翻译任务需要密钥。")
 
     if exit_code != 0:
         return DoctorSummary(
             status="blocked",
             heading="项目检查失败",
-            message="命令行检查没有正常完成，请查看下方诊断输出。",
+            message="环境检查没有正常完成，请查看诊断日志。",
             facts=facts,
             findings=findings,
         )
@@ -215,7 +217,7 @@ def running_summary() -> DoctorSummary:
     return DoctorSummary(
         status="running",
         heading="正在检查项目",
-        message="正在运行 doctor；完成后这里会显示可读摘要。",
+        message="正在运行环境检查；完成后这里会显示摘要。",
         facts=[],
         findings=[],
     )
@@ -225,7 +227,7 @@ def idle_summary() -> DoctorSummary:
     return DoctorSummary(
         status="idle",
         heading="尚未运行项目检查",
-        message="选择游戏 work 目录后运行 doctor。",
+        message="选择游戏 work 目录后点击「环境检查」。",
         facts=[],
         findings=[],
     )
@@ -235,7 +237,7 @@ def stale_summary() -> DoctorSummary:
     return DoctorSummary(
         status="stale",
         heading="项目已切换，请重新运行检查",
-        message="当前摘要已清空；请针对新的 work 目录重新运行 doctor。",
+        message="当前摘要已清空；请针对新的 work 目录重新运行环境检查。",
         facts=[],
         findings=[],
     )

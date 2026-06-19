@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .user_copy import format_manifest_path_fact, safety_level_label
+
 
 @dataclass(frozen=True)
 class WritebackSummary:
@@ -65,6 +67,14 @@ def parse_check_output(output: str) -> dict[str, object]:
     return parsed
 
 
+def _format_check_finding(finding: str) -> str:
+    if finding.startswith("[warn] "):
+        return f"[需处理] {finding[7:]}"
+    if finding.startswith("[block] "):
+        return f"[禁止写回] {finding[8:]}"
+    return finding
+
+
 def summarize_check_output(
     output: str,
     exit_code: int,
@@ -76,8 +86,8 @@ def summarize_check_output(
         return WritebackSummary(
             status="failed",
             heading="结果检查失败",
-            message="check 没有正常完成，请查看诊断日志。",
-            facts=[f"Manifest：{manifest_path}"] if manifest_path else [],
+            message="结果检查没有正常完成，请查看诊断日志。",
+            facts=[format_manifest_path_fact(manifest_path)] if manifest_path else [],
             findings=[],
             can_apply=False,
             manifest_path=manifest_path,
@@ -89,7 +99,7 @@ def summarize_check_output(
 
     facts: list[str] = []
     if manifest_path:
-        facts.append(f"Manifest：{manifest_path}")
+        facts.append(format_manifest_path_fact(manifest_path))
 
     pending_files = parsed.get("pending_files")
     pending_lines = parsed.get("pending_lines")
@@ -104,7 +114,7 @@ def summarize_check_output(
         facts.append(f"检查报告：{parsed['check_failure_report']}")
 
     findings = [
-        finding
+        _format_check_finding(finding)
         for finding in parsed.get("findings", [])
         if isinstance(finding, str) and finding.strip()
     ]
@@ -113,7 +123,7 @@ def summarize_check_output(
         return WritebackSummary(
             status="applied",
             heading="翻译已写回",
-            message="该任务已经执行过 apply，不会再次写回。",
+            message="该任务已经写回过，不会再次写回。",
             facts=facts,
             findings=findings,
             can_apply=False,
@@ -124,7 +134,7 @@ def summarize_check_output(
         return WritebackSummary(
             status="safe",
             heading="可以写回翻译",
-            message="检查结果为 safe。写回前请确认已备份项目，apply 会修改 .rpy 文件。",
+            message="检查结果为可写回。写回前请确认已备份项目，写回会修改游戏脚本。",
             facts=facts,
             findings=findings,
             can_apply=True,
@@ -135,7 +145,7 @@ def summarize_check_output(
         return WritebackSummary(
             status="warn",
             heading="需要先处理问题",
-            message="检查结果为 warn，不应写回。请查看问题后重试、repair 或重新检查。",
+            message="检查结果为需处理，暂不应写回。请查看问题后重试、修复或重新检查。",
             facts=facts,
             findings=findings,
             can_apply=False,
@@ -146,7 +156,7 @@ def summarize_check_output(
         return WritebackSummary(
             status="block",
             heading="当前不能写回",
-            message="检查结果为 block，不能写回。请修复源文件漂移或重新生成任务后再检查。",
+            message="检查结果为禁止写回。请修复源文件变化或重新生成任务后再检查。",
             facts=facts,
             findings=findings,
             can_apply=False,
@@ -156,7 +166,7 @@ def summarize_check_output(
     return WritebackSummary(
         status="unknown",
         heading="检查结果不明确",
-        message="未能识别安全状态，请查看诊断日志后重新运行 check。",
+        message="未能识别检查结果，请查看诊断日志后重新检查。",
         facts=facts,
         findings=findings,
         can_apply=False,
@@ -174,8 +184,8 @@ def summarize_apply_output(
         return WritebackSummary(
             status="failed",
             heading="写回失败",
-            message="apply 没有正常完成。请查看诊断日志与 apply_failure_report。",
-            facts=[fact for fact in (f"Manifest：{manifest_path}",) if manifest_path],
+            message="写回没有正常完成。请查看诊断日志与写回失败报告。",
+            facts=[fact for fact in (format_manifest_path_fact(manifest_path),) if manifest_path],
             findings=[],
             can_apply=False,
             manifest_path=manifest_path,
@@ -183,7 +193,7 @@ def summarize_apply_output(
 
     facts: list[str] = []
     if manifest_path:
-        facts.append(f"Manifest：{manifest_path}")
+        facts.append(format_manifest_path_fact(manifest_path))
 
     applied_files = _parse_int_field(output, "Applied files:")
     applied_lines = _parse_int_field(output, "Applied lines:")
@@ -197,7 +207,7 @@ def summarize_apply_output(
     return WritebackSummary(
         status="applied",
         heading="翻译写回完成",
-        message="apply 已完成。建议在游戏中抽查关键剧情文本。",
+        message="写回已完成。建议在游戏中抽查关键剧情文本。",
         facts=facts,
         findings=[],
         can_apply=False,
@@ -214,7 +224,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
         apply_summary = manifest.get("apply_summary")
         facts: list[str] = []
         if manifest_path:
-            facts.append(f"Manifest：{manifest_path}")
+            facts.append(format_manifest_path_fact(manifest_path))
         if isinstance(apply_summary, dict):
             applied_files = apply_summary.get("applied_files")
             applied_lines = apply_summary.get("applied_lines")
@@ -223,7 +233,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
         return WritebackSummary(
             status="applied",
             heading="翻译已写回",
-            message="该任务已经执行过 apply。",
+            message="该任务已经写回过。",
             facts=facts,
             findings=[],
             can_apply=False,
@@ -238,7 +248,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
     safety_text = safety if isinstance(safety, str) else ""
     facts: list[str] = []
     if manifest_path:
-        facts.append(f"Manifest：{manifest_path}")
+        facts.append(format_manifest_path_fact(manifest_path))
 
     pending_files = last_summary.get("pending_files")
     pending_lines = last_summary.get("pending_lines")
@@ -260,13 +270,15 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
             reasons = safety_reasons.get(level)
             if isinstance(reasons, dict):
                 for name, count in sorted(reasons.items()):
-                    findings.append(f"[{level}] {name}: {count}")
+                    findings.append(
+                        f"[{safety_level_label(level)}] {name}: {count}"
+                    )
 
     if safety_text == "safe":
         return WritebackSummary(
             status="safe",
             heading="可以写回翻译",
-            message="最近一次 check 为 safe。写回前请确认已备份项目。",
+            message="最近一次检查结果为可写回。写回前请确认已备份项目。",
             facts=facts,
             findings=findings,
             can_apply=True,
@@ -276,7 +288,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
         return WritebackSummary(
             status="warn",
             heading="需要先处理问题",
-            message="最近一次 check 为 warn，不应写回。",
+            message="最近一次检查结果为需处理，不应写回。",
             facts=facts,
             findings=findings,
             can_apply=False,
@@ -286,7 +298,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
         return WritebackSummary(
             status="block",
             heading="当前不能写回",
-            message="最近一次 check 为 block，不能写回。",
+            message="最近一次检查结果为禁止写回。",
             facts=facts,
             findings=findings,
             can_apply=False,
@@ -299,7 +311,7 @@ def idle_writeback_summary() -> WritebackSummary:
     return WritebackSummary(
         status="idle",
         heading="等待翻译完成",
-        message="翻译任务跑完 check 后，这里会显示是否可以写回。",
+        message="翻译完成并检查结果后，这里会显示是否可以写回。",
         facts=[],
         findings=[],
         can_apply=False,
@@ -321,7 +333,7 @@ def running_writeback_summary() -> WritebackSummary:
     return WritebackSummary(
         status="running",
         heading="正在写回翻译",
-        message="正在运行 apply；完成后这里会显示写回摘要。",
+        message="正在写回；完成后这里会显示写回摘要。",
         facts=[],
         findings=[],
         can_apply=False,

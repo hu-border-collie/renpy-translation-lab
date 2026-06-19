@@ -56,7 +56,7 @@ RAG bootstrap summary:
 """
         summary = summarize_rag_bootstrap_output(output, 0)
         self.assertEqual(summary.status, "ready")
-        self.assertIn("store_dir\uFF1Alogs/rag_store/demo", summary.facts)
+        self.assertIn("存储目录：logs/rag_store/demo", summary.facts)
 
     def test_summarize_rag_bootstrap_output_marks_empty_scan_as_warning(self):
         output = """

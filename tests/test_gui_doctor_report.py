@@ -54,18 +54,18 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "检查完成，但有需要处理的事项")
         self.assertIn("已有翻译文件", summary.message)
-        self.assertTrue(any("API Key" in finding for finding in summary.findings))
+        self.assertTrue(any("API" in finding for finding in summary.findings))
 
     def test_successful_clean_report_is_ready(self):
         summary = summarize_doctor_output(DOCTOR_OUTPUT, exit_code=0, api_key_count=2)
 
         self.assertEqual(summary.status, "ready")
         self.assertEqual(summary.heading, "项目检查通过")
-        self.assertTrue(any("API Key：已配置 2 个" in fact for fact in summary.facts))
-        self.assertTrue(any("TL 文件：3 个" in fact for fact in summary.facts))
+        self.assertTrue(any("API 密钥：已配置 2 个" in fact for fact in summary.facts))
+        self.assertTrue(any("翻译文件：3 个" in fact for fact in summary.facts))
         self.assertTrue(any("待翻译条目：约 5 条" in fact for fact in summary.facts))
         self.assertTrue(any("剧情对话：2 条" in fact for fact in summary.facts))
-        self.assertTrue(any("UI 字符串：10 条 old/new" in fact for fact in summary.facts))
+        self.assertTrue(any("界面字符串：10 条" in fact for fact in summary.facts))
         self.assertFalse(any("old/new 行数" in fact for fact in summary.facts))
         self.assertEqual(summary.findings, [])
 
@@ -79,7 +79,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "检查完成，但有需要处理的事项")
         self.assertTrue(any("翻译目录尚不存在" in finding for finding in summary.findings))
-        self.assertTrue(any("TL 文件：0 个" in fact for fact in summary.facts))
+        self.assertTrue(any("翻译文件：0 个" in fact for fact in summary.facts))
 
     def test_can_generate_template_with_empty_tl_dir_is_warning(self):
         output = GENERATE_TEMPLATE_OUTPUT.replace("(exists: False)", "(exists: True)")
@@ -87,7 +87,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
 
         self.assertEqual(summary.status, "warning")
-        self.assertTrue(any("没有 TL 文件" in finding for finding in summary.findings))
+        self.assertTrue(any("没有翻译文件" in finding for finding in summary.findings))
 
     def test_environment_api_key_source_is_reported(self):
         summary = summarize_doctor_output(
@@ -112,7 +112,7 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "blocked")
         self.assertEqual(summary.heading, "项目检查失败")
-        self.assertIn("命令行检查没有正常完成", summary.message)
+        self.assertIn("环境检查没有正常完成", summary.message)
 
     def test_doctor_warnings_are_preserved(self):
         output = DOCTOR_OUTPUT + "\nWarnings:\n- old/new line counts differ; string translation blocks may be malformed.\n"
@@ -120,7 +120,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
 
         self.assertEqual(summary.status, "warning")
-        self.assertTrue(any("old/new line counts differ" in finding for finding in summary.findings))
+        self.assertTrue(any("界面字符串块" in finding for finding in summary.findings))
 
     def test_stale_summary_marks_previous_result_invalid(self):
         summary = stale_summary()
@@ -140,10 +140,10 @@ class GuiDoctorReportTests(unittest.TestCase):
             pending={"task_count": 48394, "file_count": 49},
         )
 
-        self.assertIn("TL 文件：49 个", facts)
+        self.assertIn("翻译文件：49 个", facts)
         self.assertTrue(any("待翻译条目：约 48394 条" in fact for fact in facts))
         self.assertTrue(any("剧情对话：49863 条" in fact for fact in facts))
-        self.assertTrue(any("UI 字符串：637 条 old/new" in fact for fact in facts))
+        self.assertTrue(any("界面字符串：637 条" in fact for fact in facts))
 
 
 if __name__ == "__main__":

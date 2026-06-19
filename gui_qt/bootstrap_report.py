@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+
+from .user_copy import format_bootstrap_fact
 from typing import Any
 
 
@@ -81,7 +83,7 @@ def _format_fact_values(values: dict[str, str], keys: tuple[str, ...]) -> list[s
     facts: list[str] = []
     for key in keys:
         if key in values:
-            facts.append(f"{key}：{values[key]}")
+            facts.append(format_bootstrap_fact(key, values[key]))
     return facts
 
 
@@ -102,7 +104,7 @@ def running_bootstrap_summary(kind: str) -> BootstrapSummary:
             kind=kind,
             status="running",
             heading="正在预建原文索引",
-            message="正在扫描 TL 模板原文并生成 source embedding，请稍候。",
+            message="正在扫描翻译模板原文并生成向量索引，请稍候。",
             facts=[],
             findings=[],
         )
@@ -110,7 +112,7 @@ def running_bootstrap_summary(kind: str) -> BootstrapSummary:
         kind=kind or "rag",
         status="running",
         heading="正在预建 RAG 库",
-        message="正在扫描已有译文并生成 RAG history store，请稍候。",
+        message="正在扫描已有译文并更新记忆库，请稍候。",
         facts=[],
         findings=[],
     )
@@ -186,7 +188,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
             kind="rag",
             status="warning",
             heading="RAG 预建完成（无新记录）",
-            message="未扫描到可写入的译文记录。若项目尚无 TL 译文，可先翻译一部分或导入 seed JSONL。",
+            message="未扫描到可写入的译文记录。若项目尚无译文，可先翻译一部分。",
             facts=facts,
             findings=findings,
         )
@@ -196,7 +198,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
             kind="rag",
             status="ready",
             heading="RAG 预建完成",
-            message="本地 RAG history store 已刷新，可以开始翻译任务。",
+            message="记忆库已刷新，可以开始翻译任务。",
             facts=facts,
             findings=findings,
         )
@@ -237,7 +239,7 @@ def summarize_source_index_bootstrap_output(output: str, exit_code: int) -> Boot
             kind="source_index",
             status="failed",
             heading="原文索引预建失败",
-            message="预建 source-only index 未成功完成，请查看诊断日志。",
+            message="预建原文索引未成功完成，请查看诊断日志。",
             facts=facts,
             findings=findings,
         )
@@ -260,7 +262,7 @@ def summarize_source_index_bootstrap_output(output: str, exit_code: int) -> Boot
             kind="source_index",
             status="warning",
             heading="原文索引预建完成（无新记录）",
-            message="未扫描到可索引的原文片段。请确认 TL 模板已生成且项目路径正确。",
+            message="未扫描到可索引的原文片段。请确认翻译模板已生成且项目路径正确。",
             facts=facts,
             findings=findings,
         )
@@ -270,7 +272,7 @@ def summarize_source_index_bootstrap_output(output: str, exit_code: int) -> Boot
             kind="source_index",
             status="ready",
             heading="原文索引预建完成",
-            message="source-only index 已刷新，后续 Batch build 可检索相关剧情原文。",
+            message="原文索引已刷新，后续翻译时可检索相关剧情原文。",
             facts=facts,
             findings=findings,
         )
@@ -279,7 +281,7 @@ def summarize_source_index_bootstrap_output(output: str, exit_code: int) -> Boot
         kind="source_index",
         status="ready",
         heading="原文索引预建完成",
-        message="索引库已是最新状态，无需新增 embedding。",
+        message="索引库已是最新状态，无需新增向量。",
         facts=facts,
         findings=findings,
     )

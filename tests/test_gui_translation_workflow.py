@@ -64,7 +64,7 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
         update = workflow.complete_current_step(0, "State: JOB_STATE_RUNNING\n")
 
         self.assertEqual(update.status, "waiting")
-        self.assertTrue(any("JOB_STATE_RUNNING" in fact for fact in update.facts))
+        self.assertTrue(any("任务状态：处理中" in fact for fact in update.facts))
         self.assertIsNone(workflow.current_step())
 
     def test_resume_unsubmitted_manifest_starts_from_submit(self):
@@ -96,7 +96,7 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
 
         check_update = workflow.complete_current_step(0, "Safety status: safe\n")
         self.assertEqual(check_update.status, "done")
-        self.assertIn("safe", check_update.facts[-1])
+        self.assertIn("可写回", check_update.facts[-1])
         self.assertIsNone(workflow.current_step())
 
     def test_check_warn_is_done_but_not_writeback_ready(self):
