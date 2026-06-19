@@ -37,6 +37,15 @@ python -m gui_qt
 
 如果未安装 PySide6，`python -m gui_qt` 会打印安装提示并退出；这不会影响 CLI。
 
+### Fonts
+
+GUI 自带字体，位于 `gui_qt/resources/fonts/`：
+
+- 界面正文：`HarmonyOS Sans SC`（见 `HarmonyOS_Sans_LICENSE.txt`）
+- 等宽区域（项目路径、诊断日志、CLI 命令、Manifest、API Key 列表）：`LXGW WenKai Mono GB`（见 `LXGW_WenKai_OFL.txt`）
+
+启动时自动加载；若字体文件缺失或加载失败，会回退到系统 `Segoe UI` 与 `Consolas`。
+
 ## Main workflow
 
 GUI 的普通主流程是：
