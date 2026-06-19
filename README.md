@@ -15,23 +15,29 @@
 - `translator_runtime.py`：同步脚本和 Batch 脚本共用的配置、SDK、校验、响应解析和文件处理 runtime。
 - `extract_relations.py`：独立的关系 / 语义分析入口。
 
-如果你想找的是 GUI、一键打包、面向普通用户的整套发行流程，这个仓库不是那个方向。
+如果你想找的是一键打包、面向普通用户的整套发行流程，这个仓库还不是那个方向。
 
-**实验性可选 GUI**（第一版正在开发中）：
+**实验性可选 GUI**：
 
-有一个使用 PySide6 的可选桌面 GUI（放在 `gui_qt/`），它作为现有 CLI 的外壳层工作：
+仓库包含一个使用 PySide6 的可选桌面 GUI（放在 `gui_qt/`）。它作为现有 CLI 的外壳层工作，依赖单独安装，不进入主 `requirements.txt`：
 
 ```powershell
 pip install -r requirements-gui.txt
 python -m gui_qt
 ```
 
-目前第一版基础功能包括：
-- 选择 game/work 目录（会更新 `translator_config.json`）
-- 运行 `doctor` 并实时显示输出
-- 基本 API key 替换（默认隐藏 key，并保留已有多 key 配置）
+当前第一版 GUI 已覆盖：
 
-GUI 通过 `QProcess` 调用 `gemini_translate_batch.py` 的子命令，不会修改核心翻译逻辑。详见 issue #42。早期 PR 使用 `Refs #42`。
+- 选择 game/work 目录（会更新 `translator_config.json`）
+- 添加 / 删除 / 隐藏显示 API Key，并兼容现有 `api_keys.json`
+- 配置真实模型名称、embedding model、Batch thinking level 和外观主题
+- 运行 `doctor` 并显示普通语言摘要与诊断日志
+- 一键编排基础 Batch 翻译流程：`build -> submit -> status -> download -> check`
+- 从 latest manifest 继续长任务
+- 展示 check 的 `safe / warn / block` 结果摘要
+- 仅在 `safe` 时启用写回，并通过现有 CLI 执行 `apply`
+
+GUI 通过 `QProcess` 调用 `gemini_translate_batch.py` 的子命令，不会修改核心翻译逻辑，也不暴露 `apply --force` 作为普通入口。它仍是实验性工作台，不是打包完成的零配置产品。详见 [GUI workbench](docs/gui_workbench.md) 和 issue #42。
 
 ## 核心能力
 
@@ -140,6 +146,8 @@ python gemini_translate_batch.py apply
   - RAG history store、Batch source-only index 和 Structured Story Memory
 - [Relation and semantic analysis](docs/relation_analysis.md)
   - `extract_relations.py`、relation / semantic 模式
+- [GUI workbench](docs/gui_workbench.md)
+  - 可选 PySide6 GUI 的安装、当前能力、安全写回边界和剩余验收项
 - [Project notes](docs/project_notes.md)
   - 环境要求、当前边界、项目状态、安全说明和适用人群
 
