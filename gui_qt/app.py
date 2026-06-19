@@ -78,6 +78,11 @@ from .theme_helpers import (
 from .translation_workflow import TranslationWorkflow, WorkflowUpdate
 from .widget_helpers import NoWheelComboBox, NoWheelTabWidget
 
+# Diagnostics splitter: idle favors task context; running tasks expand the log.
+_DIAGNOSTICS_IDLE_CONTEXT_PX = 420
+_DIAGNOSTICS_IDLE_LOG_PX = 180
+_DIAGNOSTICS_RUNNING_CONTEXT_RATIO = 0.32
+
 
 class MainWindow(QMainWindow):
     def __init__(self, *, qt_app: QApplication | None = None, resources_dir: Path | None = None):
@@ -624,13 +629,13 @@ class MainWindow(QMainWindow):
         self.log_view.setReadOnly(True)
         self.log_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.log_view.setObjectName("log_view")
-        self.log_view.setMinimumHeight(160)
+        self.log_view.setMinimumHeight(120)
         log_panel_layout.addWidget(self.log_view, 1)
         splitter.addWidget(log_panel)
 
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
-        splitter.setSizes([280, 420])
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([_DIAGNOSTICS_IDLE_CONTEXT_PX, _DIAGNOSTICS_IDLE_LOG_PX])
 
         layout.addWidget(splitter, 1)
         self.tab_widget.addTab(tab, "诊断日志")
@@ -639,7 +644,8 @@ class MainWindow(QMainWindow):
         if self._diagnostics_tab is not None:
             self.tab_widget.setCurrentWidget(self._diagnostics_tab)
         total = max(sum(self.diagnostics_splitter.sizes()), 1)
-        self.diagnostics_splitter.setSizes([int(total * 0.32), int(total * 0.68)])
+        context_size = int(total * _DIAGNOSTICS_RUNNING_CONTEXT_RATIO)
+        self.diagnostics_splitter.setSizes([context_size, total - context_size])
 
     def _focus_workbench_status_tab(self, index: int) -> None:
         if 0 <= index < self.workbench_status_tabs.count():
