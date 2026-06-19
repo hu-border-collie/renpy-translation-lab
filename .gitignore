@@ -40,6 +40,10 @@ rag_store/
 history_store/
 *.jsonl.bak
 
+# Agent / IDE tooling
+terminals/
+agent-tools/
+
 # OS / editor
 .DS_Store
 Thumbs.db

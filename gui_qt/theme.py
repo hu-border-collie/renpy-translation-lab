@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
+from .font_helpers import build_font_stylesheet, load_gui_fonts
 from .theme_helpers import (
     resolve_effective_theme,
     theme_stylesheet_filename,
@@ -37,6 +38,9 @@ def apply_theme(app: QApplication, resources_dir: Path, preference: str) -> str:
         system_is_dark=system_prefers_dark(app),
     )
     stylesheet = load_theme_stylesheet(resources_dir, effective)
+    font_stylesheet = build_font_stylesheet(load_gui_fonts(resources_dir))
+    if font_stylesheet:
+        stylesheet = f"{font_stylesheet}\n{stylesheet}"
     if stylesheet:
         app.setStyleSheet(stylesheet)
     else:
