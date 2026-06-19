@@ -105,8 +105,8 @@ class MainWindow(QMainWindow):
         header = QLabel("Ren'Py Translation Lab · 图形工作台")
         header.setObjectName("header_label")
         subtitle = QLabel(
-            "先环境检查，再开始翻译；翻译完成后的写回状态显示在右侧任务卡片内。"
-            "详细日志请切换到「诊断日志」页。"
+            "工作台只保留项目检查与翻译主流程；预建库、模型与 API 配置在「配置」页。"
+            "详细日志请切换到「诊断日志」。"
         )
         subtitle.setObjectName("subtitle_label")
         subtitle.setWordWrap(True)
@@ -208,55 +208,6 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(actions_box)
 
-        bootstrap_box = QGroupBox("预建上下文库")
-        bootstrap_layout = QVBoxLayout(bootstrap_box)
-        bootstrap_layout.setSpacing(8)
-        bootstrap_layout.setContentsMargins(12, 16, 12, 12)
-
-        bootstrap_hint = QLabel(
-            "翻译前可先预建本地向量库：RAG 库利用已有译文保持术语一致；"
-            "原文索引适合译文较少、需要剧情上下文的项目。"
-            "请先在配置页启用对应选项并保存，再运行预建。"
-        )
-        bootstrap_hint.setWordWrap(True)
-        bootstrap_hint.setObjectName("config_hint_label")
-        bootstrap_layout.addWidget(bootstrap_hint)
-
-        bootstrap_actions = QHBoxLayout()
-        bootstrap_actions.setSpacing(10)
-        self.bootstrap_rag_btn = QPushButton("预建 RAG 库")
-        self.bootstrap_rag_btn.setObjectName("secondary_btn")
-        self.bootstrap_rag_btn.clicked.connect(self._on_bootstrap_rag)
-        bootstrap_actions.addWidget(self.bootstrap_rag_btn)
-
-        self.bootstrap_source_index_btn = QPushButton("预建原文索引")
-        self.bootstrap_source_index_btn.setObjectName("secondary_btn")
-        self.bootstrap_source_index_btn.clicked.connect(self._on_bootstrap_source_index)
-        bootstrap_actions.addWidget(self.bootstrap_source_index_btn)
-        bootstrap_actions.addStretch()
-        bootstrap_layout.addLayout(bootstrap_actions)
-
-        self.bootstrap_status_label = QLabel()
-        self.bootstrap_status_label.setObjectName("bootstrap_status_label")
-        bootstrap_layout.addWidget(self.bootstrap_status_label)
-
-        self.bootstrap_message_label = QLabel()
-        self.bootstrap_message_label.setWordWrap(True)
-        bootstrap_layout.addWidget(self.bootstrap_message_label)
-
-        self.bootstrap_facts_label = QLabel()
-        self.bootstrap_facts_label.setWordWrap(True)
-        self.bootstrap_facts_label.setObjectName("bootstrap_facts_label")
-        bootstrap_layout.addWidget(self.bootstrap_facts_label)
-
-        self.bootstrap_findings_view = QTextEdit()
-        self.bootstrap_findings_view.setReadOnly(True)
-        self.bootstrap_findings_view.setMaximumHeight(72)
-        self.bootstrap_findings_view.setObjectName("bootstrap_findings_view")
-        bootstrap_layout.addWidget(self.bootstrap_findings_view)
-
-        layout.addWidget(bootstrap_box)
-
         status_row = QHBoxLayout()
         status_row.setSpacing(16)
 
@@ -280,7 +231,7 @@ class MainWindow(QMainWindow):
 
         self.doctor_findings_view = QTextEdit()
         self.doctor_findings_view.setReadOnly(True)
-        self.doctor_findings_view.setMaximumHeight(110)
+        self.doctor_findings_view.setMaximumHeight(88)
         self.doctor_findings_view.setObjectName("doctor_findings_view")
         doctor_summary_layout.addWidget(self.doctor_findings_view)
 
@@ -328,7 +279,7 @@ class MainWindow(QMainWindow):
 
         self.writeback_findings_view = QTextEdit()
         self.writeback_findings_view.setReadOnly(True)
-        self.writeback_findings_view.setMaximumHeight(72)
+        self.writeback_findings_view.setMaximumHeight(60)
         self.writeback_findings_view.setObjectName("writeback_findings_view")
         workflow_layout.addWidget(self.writeback_findings_view)
 
@@ -406,8 +357,8 @@ class MainWindow(QMainWindow):
         context_layout.setContentsMargins(12, 16, 12, 12)
 
         context_hint = QLabel(
-            "RAG 记忆库使用已有译文；原文索引只使用 TL 模板中的原文。"
-            "预建命令不会修改 .rpy 文件，也不会创建 Batch package。"
+            "启用后先保存配置，再运行下方预建按钮。"
+            "RAG 使用已有译文；原文索引只使用 TL 模板原文；均不修改 .rpy 文件。"
         )
         context_hint.setWordWrap(True)
         context_hint.setObjectName("config_hint_label")
@@ -425,6 +376,39 @@ class MainWindow(QMainWindow):
             "开始翻译 build 时自动暖 RAG 库（batch.rag.bootstrap_on_build）"
         )
         context_layout.addWidget(self.bootstrap_on_build_cb)
+
+        bootstrap_actions = QHBoxLayout()
+        bootstrap_actions.setSpacing(10)
+        self.bootstrap_rag_btn = QPushButton("预建 RAG 库")
+        self.bootstrap_rag_btn.setObjectName("secondary_btn")
+        self.bootstrap_rag_btn.clicked.connect(self._on_bootstrap_rag)
+        bootstrap_actions.addWidget(self.bootstrap_rag_btn)
+
+        self.bootstrap_source_index_btn = QPushButton("预建原文索引")
+        self.bootstrap_source_index_btn.setObjectName("secondary_btn")
+        self.bootstrap_source_index_btn.clicked.connect(self._on_bootstrap_source_index)
+        bootstrap_actions.addWidget(self.bootstrap_source_index_btn)
+        bootstrap_actions.addStretch()
+        context_layout.addLayout(bootstrap_actions)
+
+        self.bootstrap_status_label = QLabel()
+        self.bootstrap_status_label.setObjectName("bootstrap_status_label")
+        context_layout.addWidget(self.bootstrap_status_label)
+
+        self.bootstrap_message_label = QLabel()
+        self.bootstrap_message_label.setWordWrap(True)
+        context_layout.addWidget(self.bootstrap_message_label)
+
+        self.bootstrap_facts_label = QLabel()
+        self.bootstrap_facts_label.setWordWrap(True)
+        self.bootstrap_facts_label.setObjectName("bootstrap_facts_label")
+        context_layout.addWidget(self.bootstrap_facts_label)
+
+        self.bootstrap_findings_view = QTextEdit()
+        self.bootstrap_findings_view.setReadOnly(True)
+        self.bootstrap_findings_view.setMaximumHeight(56)
+        self.bootstrap_findings_view.setObjectName("bootstrap_findings_view")
+        context_layout.addWidget(self.bootstrap_findings_view)
 
         layout.addWidget(context_box)
 
@@ -643,11 +627,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "RAG 未启用",
-                "请先在配置页启用 Batch RAG 记忆库，并点击「保存参数配置」。",
+                "请先启用 Batch RAG 记忆库，并点击「保存参数配置」。",
             )
             return
 
         self.log_view.clear()
+        self._focus_log_tab()
         self._active_command = "bootstrap_rag"
         self._bootstrap_output_lines = []
         self._set_bootstrap_summary(running_bootstrap_summary("rag"))
@@ -663,11 +648,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "原文索引未启用",
-                "请先在配置页启用 Batch 原文索引，并点击「保存参数配置」。",
+                "请先启用 Batch 原文索引，并点击「保存参数配置」。",
             )
             return
 
         self.log_view.clear()
+        self._focus_log_tab()
         self._active_command = "bootstrap_source_index"
         self._bootstrap_output_lines = []
         self._set_bootstrap_summary(running_bootstrap_summary("source_index"))
