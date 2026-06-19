@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QFormLayout,
     QScrollArea,
+    QLayout,
 )
 
 from .api_key_dialog import ApiKeyDialog
@@ -50,6 +52,10 @@ from .check_report import (
     summarize_apply_output,
     summarize_check_output,
     summarize_manifest_writeback,
+)
+from .diagnostics_context import (
+    DiagnosticsContext,
+    build_diagnostics_context,
 )
 from .cli_runner import CliRunner
 from .doctor_report import (
@@ -134,6 +140,7 @@ class MainWindow(QMainWindow):
         )
         self._refresh_writeback_from_latest_manifest()
         self._set_bootstrap_summary(idle_bootstrap_summary())
+        self._refresh_diagnostics_context()
 
         # Status
         self.statusBar().showMessage(
@@ -473,20 +480,101 @@ class MainWindow(QMainWindow):
 
     def _build_log_tab(self) -> None:
         tab = QWidget()
+        tab.setObjectName("diagnostics_tab")
+        self._diagnostics_tab = tab
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(10)
 
-        log_hint = QLabel("原始终端输出；翻译、预建库与写回任务运行时会自动切换到此页。")
-        log_hint.setWordWrap(True)
-        log_hint.setObjectName("config_hint_label")
-        layout.addWidget(log_hint)
+        diag_hint = QLabel(
+            "上半部分展示任务上下文、报告路径、可复制 CLI 命令和 manifest 预览；"
+            "下方为原始终端输出。翻译、预建库与写回运行时会自动切换到此页。"
+        )
+        diag_hint.setWordWrap(True)
+        diag_hint.setObjectName("config_hint_label")
+        layout.addWidget(diag_hint)
+
+        diag_scroll = QScrollArea()
+        diag_scroll.setObjectName("diagnostics_scroll")
+        self._style_themed_surface(diag_scroll)
+        diag_scroll.setWidgetResizable(True)
+        diag_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        diag_viewport = diag_scroll.viewport()
+        diag_viewport.setObjectName("diagnostics_scroll_viewport")
+        self._style_themed_surface(diag_viewport)
+
+        diag_content = QWidget()
+        diag_content.setObjectName("diagnostics_scroll_content")
+        self._style_themed_surface(diag_content)
+        diag_layout = QVBoxLayout(diag_content)
+        diag_layout.setContentsMargins(0, 0, 0, 0)
+        diag_layout.setSpacing(12)
+
+        context_box = QGroupBox("任务上下文")
+        context_layout = QVBoxLayout(context_box)
+        context_layout.setSpacing(6)
+        context_layout.setContentsMargins(12, 16, 12, 12)
+        self.diagnostics_status_label = QLabel()
+        self.diagnostics_status_label.setObjectName("diagnostics_status_label")
+        context_layout.addWidget(self.diagnostics_status_label)
+        self.diagnostics_message_label = QLabel()
+        self.diagnostics_message_label.setWordWrap(True)
+        context_layout.addWidget(self.diagnostics_message_label)
+        self.diagnostics_facts_label = QLabel()
+        self.diagnostics_facts_label.setWordWrap(True)
+        self.diagnostics_facts_label.setObjectName("diagnostics_facts_label")
+        context_layout.addWidget(self.diagnostics_facts_label)
+        diag_layout.addWidget(context_box)
+
+        reports_box = QGroupBox("报告与数据文件")
+        reports_layout = QVBoxLayout(reports_box)
+        reports_layout.setSpacing(6)
+        reports_layout.setContentsMargins(12, 16, 12, 12)
+        self.diagnostics_paths_label = QLabel()
+        self.diagnostics_paths_label.setWordWrap(True)
+        self.diagnostics_paths_label.setObjectName("diagnostics_paths_label")
+        reports_layout.addWidget(self.diagnostics_paths_label)
+        diag_layout.addWidget(reports_box)
+
+        commands_box = QGroupBox("手动 CLI 命令")
+        commands_layout = QVBoxLayout(commands_box)
+        commands_layout.setSpacing(8)
+        commands_layout.setContentsMargins(12, 16, 12, 12)
+        self.diagnostics_commands_host = QWidget()
+        self.diagnostics_commands_layout = QVBoxLayout(self.diagnostics_commands_host)
+        self.diagnostics_commands_layout.setContentsMargins(0, 0, 0, 0)
+        self.diagnostics_commands_layout.setSpacing(8)
+        commands_layout.addWidget(self.diagnostics_commands_host)
+        diag_layout.addWidget(commands_box)
+
+        manifest_box = QGroupBox("Manifest 预览")
+        manifest_layout = QVBoxLayout(manifest_box)
+        manifest_layout.setContentsMargins(12, 16, 12, 12)
+        self.diagnostics_manifest_preview = QTextEdit()
+        self.diagnostics_manifest_preview.setReadOnly(True)
+        self.diagnostics_manifest_preview.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        self.diagnostics_manifest_preview.setObjectName("diagnostics_manifest_preview")
+        self.diagnostics_manifest_preview.setMaximumHeight(220)
+        manifest_layout.addWidget(self.diagnostics_manifest_preview)
+        diag_layout.addWidget(manifest_box)
+
+        diag_scroll.setWidget(diag_content)
+        layout.addWidget(diag_scroll, 2)
+
+        log_header = QHBoxLayout()
+        log_header.addWidget(QLabel("原始 CLI 输出"))
+        log_header.addStretch()
+        self.refresh_diagnostics_btn = QPushButton("刷新上下文")
+        self.refresh_diagnostics_btn.setObjectName("secondary_btn")
+        self.refresh_diagnostics_btn.clicked.connect(self._refresh_diagnostics_context)
+        log_header.addWidget(self.refresh_diagnostics_btn)
+        layout.addLayout(log_header)
 
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.log_view.setObjectName("log_view")
-        layout.addWidget(self.log_view, 1)
+        layout.addWidget(self.log_view, 3)
 
         self.tab_widget.addTab(tab, "诊断日志")
 
@@ -504,6 +592,94 @@ class MainWindow(QMainWindow):
         else:
             label.setText("")
             label.setVisible(False)
+
+    def _clear_layout(self, layout: QLayout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+            child_layout = item.layout()
+            if child_layout is not None:
+                self._clear_layout(child_layout)
+                child_layout.deleteLater()
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(text)
+        self.statusBar().showMessage("命令已复制到剪贴板。", 3000)
+
+    def _resolve_diagnostics_manifest_path(self) -> str | None:
+        if self._workflow is not None and self._workflow.manifest_path:
+            return self._workflow.manifest_path
+        if self._writeback_manifest_path:
+            return self._writeback_manifest_path
+        latest_manifest = self.state.get_latest_manifest_path()
+        return str(latest_manifest) if latest_manifest is not None else None
+
+    def _load_diagnostics_manifest(self, manifest_path: str | None) -> dict[str, object] | None:
+        if not manifest_path:
+            return None
+        try:
+            return self.state.load_manifest_file(manifest_path)
+        except ValueError:
+            return None
+
+    def _refresh_diagnostics_context(self) -> None:
+        latest_manifest = self.state.get_latest_manifest_path()
+        manifest_path = self._resolve_diagnostics_manifest_path()
+        manifest = self._load_diagnostics_manifest(manifest_path)
+        context = build_diagnostics_context(
+            latest_manifest_path=str(latest_manifest) if latest_manifest is not None else None,
+            manifest=manifest,
+            batch_script_path=str(self.state.get_batch_script_path()),
+            logs_dir=str(self.state.get_logs_dir()),
+            python_exe=sys.executable,
+        )
+        self._set_diagnostics_context(context)
+
+    def _set_diagnostics_context(self, context: DiagnosticsContext) -> None:
+        self.diagnostics_status_label.setText(context.heading)
+        self.diagnostics_status_label.setProperty("status", context.status)
+        self.diagnostics_status_label.style().unpolish(self.diagnostics_status_label)
+        self.diagnostics_status_label.style().polish(self.diagnostics_status_label)
+        self.diagnostics_message_label.setText(context.message)
+        self.diagnostics_facts_label.setText("\n".join(context.facts))
+
+        if context.paths:
+            self.diagnostics_paths_label.setText(
+                "\n".join(f"{entry.label}：{entry.path}" for entry in context.paths)
+            )
+        else:
+            self.diagnostics_paths_label.setText("暂无已生成的报告或数据文件。")
+
+        self._clear_layout(self.diagnostics_commands_layout)
+        if context.commands:
+            for command in context.commands:
+                row_host = QWidget()
+                row_layout = QHBoxLayout(row_host)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(8)
+                row_layout.addWidget(QLabel(f"{command.label}："))
+                command_edit = QLineEdit(command.command)
+                command_edit.setReadOnly(True)
+                command_edit.setObjectName("diagnostics_command_edit")
+                row_layout.addWidget(command_edit, 1)
+                copy_btn = QPushButton("复制")
+                copy_btn.setObjectName("secondary_btn")
+                copy_btn.clicked.connect(
+                    lambda _checked=False, text=command.command: self._copy_to_clipboard(text)
+                )
+                row_layout.addWidget(copy_btn)
+                self.diagnostics_commands_layout.addWidget(row_host)
+        else:
+            placeholder = QLabel("开始翻译任务后，这里会出现可复制的手动 CLI 命令。")
+            placeholder.setWordWrap(True)
+            placeholder.setObjectName("config_hint_label")
+            self.diagnostics_commands_layout.addWidget(placeholder)
+
+        self.diagnostics_manifest_preview.setPlainText(context.manifest_json_preview)
 
     # --- UI actions ---
 
@@ -536,6 +712,7 @@ class MainWindow(QMainWindow):
             self._writeback_manifest_path = ""
             self._set_writeback_summary(stale_writeback_summary())
             self._set_bootstrap_summary(stale_bootstrap_summary())
+            self._refresh_diagnostics_context()
             self._append_log(f"项目目录已设置为：{directory}")
 
     def _refresh_api_status(self) -> None:
@@ -559,6 +736,8 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index: int) -> None:
         if self.tab_widget.widget(index) is self._config_tab:
             self._refresh_api_status()
+        if self.tab_widget.widget(index) is getattr(self, "_diagnostics_tab", None):
+            self._refresh_diagnostics_context()
 
     def _on_manage_api_keys(self):
         env_count, env_source = self.state.get_api_key_status()
@@ -709,6 +888,7 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         self._focus_log_tab()
         self._workflow = TranslationWorkflow.resume_manifest(str(latest_manifest), manifest)
+        self._refresh_diagnostics_context()
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
         self._focus_workbench_status_tab(1)
@@ -893,6 +1073,7 @@ class MainWindow(QMainWindow):
             already_applied=already_applied,
         )
         self._set_writeback_summary(summary)
+        self._refresh_diagnostics_context()
         if summary.status not in {"idle", "running", "stale"}:
             self._focus_workbench_status_tab(2)
 
@@ -957,6 +1138,7 @@ class MainWindow(QMainWindow):
                 manifest_path=self._writeback_manifest_path,
             )
             self._set_writeback_summary(summary)
+            self._refresh_diagnostics_context()
             self._active_command = ""
             self._set_task_running(False)
             if exit_code == 0:
@@ -1012,6 +1194,7 @@ class MainWindow(QMainWindow):
             self._update_writeback_from_check(step_output, exit_code, manifest_path)
         self._set_workflow_update(update)
         self._workflow_step_output_lines = []
+        self._refresh_diagnostics_context()
 
         if update.should_continue:
             self.statusBar().showMessage(update.heading, 3000)

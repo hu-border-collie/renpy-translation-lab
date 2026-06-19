@@ -108,6 +108,59 @@ QWidget#config_scroll_content {
     border: none;
 }
 
+QWidget#diagnostics_tab,
+QScrollArea#diagnostics_scroll,
+QWidget#diagnostics_scroll_viewport,
+QWidget#diagnostics_scroll_content {
+    background-color: #ffffff;
+    border: none;
+}
+
+QLabel#diagnostics_status_label {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#diagnostics_status_label[status="idle"],
+QLabel#diagnostics_status_label[status="running"] {
+    color: #2563eb;
+}
+
+QLabel#diagnostics_status_label[status="ready"] {
+    color: #15803d;
+}
+
+QLabel#diagnostics_status_label[status="warning"] {
+    color: #b45309;
+}
+
+QLabel#diagnostics_facts_label,
+QLabel#diagnostics_paths_label {
+    color: #334155;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12px;
+}
+
+QLineEdit#diagnostics_command_edit {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    color: #0f172a;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12px;
+    padding: 6px 10px;
+}
+
+QTextEdit#diagnostics_manifest_preview {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    color: #0f172a;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12px;
+    padding: 10px;
+}
+
 QTabWidget#main_tabs > QTabBar::tab {
     background-color: #f1f5f9;
     border: 1px solid #e2e8f0;

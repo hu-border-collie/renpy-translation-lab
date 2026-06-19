@@ -1,0 +1,333 @@
+"""Diagnostics context for the advanced diagnostics tab."""
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+
+@dataclass(frozen=True)
+class DiagnosticsPathEntry:
+    label: str
+    path: str
+
+
+@dataclass(frozen=True)
+class DiagnosticsCommand:
+    label: str
+    command: str
+
+
+@dataclass(frozen=True)
+class DiagnosticsContext:
+    status: str
+    heading: str
+    message: str
+    facts: list[str]
+    paths: list[DiagnosticsPathEntry]
+    commands: list[DiagnosticsCommand]
+    manifest_json_preview: str
+
+
+STANDARD_REPORT_FILES = (
+    ("check_failures.jsonl", "检查失败明细"),
+    ("failures.jsonl", "翻译失败明细"),
+    ("apply_failure_report.json", "写回失败报告"),
+    ("requests.jsonl", "Batch 请求"),
+    ("results.jsonl", "Batch 结果"),
+    ("last_status_snapshot.json", "最近状态快照"),
+)
+
+
+def _default_path_exists(path: str) -> bool:
+    try:
+        return Path(path).exists()
+    except OSError:
+        return False
+
+
+def quote_cli_arg(value: str) -> str:
+    if value == "" or any(char in value for char in ' \t"&'):
+        return f'"{value}"'
+    return value
+
+
+def format_cli_command(python_exe: str, script_path: str, args: list[str]) -> str:
+    parts = [quote_cli_arg(python_exe), quote_cli_arg(script_path)]
+    parts.extend(quote_cli_arg(arg) for arg in args)
+    return " ".join(parts)
+
+
+def resolve_package_dir(manifest_path: str, manifest: dict[str, object] | None = None) -> str:
+    if manifest_path:
+        parent = str(Path(manifest_path).parent)
+        if parent and parent != ".":
+            return parent
+    if manifest:
+        package_dir = manifest.get("_package_dir")
+        if isinstance(package_dir, str) and package_dir.strip():
+            return package_dir
+    return ""
+
+
+def manifest_for_preview(manifest: dict[str, object]) -> dict[str, object]:
+    preview: dict[str, object] = {}
+    for key, value in manifest.items():
+        if key in {"chunks", "files"}:
+            continue
+        preview[key] = value
+
+    files = manifest.get("files")
+    chunks = manifest.get("chunks")
+    file_count = len(files) if isinstance(files, dict) else 0
+    chunk_count = len(chunks) if isinstance(chunks, list) else 0
+    if file_count or chunk_count:
+        preview["_preview_note"] = (
+            f"chunks/files omitted from preview ({chunk_count} chunks, {file_count} files)"
+        )
+    return preview
+
+
+def format_manifest_json_preview(
+    manifest: dict[str, object],
+    *,
+    max_chars: int = 48_000,
+) -> str:
+    if not manifest:
+        return ""
+    preview = manifest_for_preview(manifest)
+    try:
+        text = json.dumps(preview, ensure_ascii=False, indent=2)
+    except TypeError:
+        text = str(preview)
+    if len(text) > max_chars:
+        return text[: max_chars - 3] + "..."
+    return text
+
+
+def collect_existing_report_paths(
+    package_dir: str,
+    manifest: dict[str, object],
+    *,
+    path_exists: Callable[[str], bool] | None = None,
+) -> list[DiagnosticsPathEntry]:
+    exists = path_exists or _default_path_exists
+    entries: list[DiagnosticsPathEntry] = []
+    seen: set[str] = set()
+
+    def add(label: str, path: str) -> None:
+        if not path:
+            return
+        normalized = os.path.normcase(os.path.abspath(path))
+        if normalized in seen or not exists(path):
+            return
+        seen.add(normalized)
+        entries.append(DiagnosticsPathEntry(label=label, path=path))
+
+    if package_dir:
+        for filename, label in STANDARD_REPORT_FILES:
+            add(label, str(Path(package_dir) / filename))
+
+    report_path = manifest.get("last_check_report_path")
+    if isinstance(report_path, str) and report_path.strip():
+        add("最近检查报告", report_path.strip())
+
+    return entries
+
+
+def build_cli_commands(
+    *,
+    python_exe: str,
+    batch_script_path: str,
+    manifest_path: str,
+    manifest: dict[str, object],
+) -> list[DiagnosticsCommand]:
+    if not manifest_path:
+        return []
+
+    commands: list[DiagnosticsCommand] = [
+        DiagnosticsCommand(
+            label="项目检查",
+            command=format_cli_command(python_exe, batch_script_path, ["doctor"]),
+        ),
+    ]
+
+    if not manifest.get("job_name"):
+        commands.append(
+            DiagnosticsCommand(
+                label="提交 Batch 任务",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["submit", manifest_path],
+                ),
+            )
+        )
+
+    commands.extend(
+        [
+            DiagnosticsCommand(
+                label="查询任务状态",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["status", manifest_path],
+                ),
+            ),
+            DiagnosticsCommand(
+                label="下载翻译结果",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["download", manifest_path],
+                ),
+            ),
+            DiagnosticsCommand(
+                label="检查翻译结果",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["check", manifest_path],
+                ),
+            ),
+        ]
+    )
+
+    if not manifest.get("applied_at"):
+        commands.append(
+            DiagnosticsCommand(
+                label="写回翻译（仅 safe）",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["apply", manifest_path],
+                ),
+            )
+        )
+
+    return commands
+
+
+def build_manifest_facts(manifest: dict[str, object], manifest_path: str) -> list[str]:
+    facts: list[str] = []
+    if manifest_path:
+        facts.append(f"Manifest：{manifest_path}")
+
+    package_dir = resolve_package_dir(manifest_path, manifest)
+    if package_dir:
+        facts.append(f"Package：{package_dir}")
+
+    job_name = manifest.get("job_name")
+    if isinstance(job_name, str) and job_name.strip():
+        facts.append(f"Job：{job_name.strip()}")
+    else:
+        facts.append("Job：尚未提交")
+
+    job_state = manifest.get("job_state")
+    if isinstance(job_state, str) and job_state.strip():
+        facts.append(f"Job 状态：{job_state.strip()}")
+
+    last_summary = manifest.get("last_check_summary")
+    if isinstance(last_summary, dict):
+        safety = last_summary.get("safety_level")
+        if isinstance(safety, str) and safety.strip():
+            facts.append(f"最近检查：{safety.strip()}")
+
+    applied_at = manifest.get("applied_at")
+    if isinstance(applied_at, str) and applied_at.strip():
+        facts.append(f"已写回：{applied_at.strip()}")
+
+    display_name = manifest.get("display_name")
+    if isinstance(display_name, str) and display_name.strip():
+        facts.append(f"显示名称：{display_name.strip()}")
+
+    mode = manifest.get("mode")
+    if isinstance(mode, str) and mode.strip():
+        facts.append(f"模式：{mode.strip()}")
+
+    return facts
+
+
+def idle_diagnostics_context() -> DiagnosticsContext:
+    return DiagnosticsContext(
+        status="idle",
+        heading="暂无任务上下文",
+        message="完成 build 或开始翻译后，这里会显示 manifest、package、job 和可复制命令。",
+        facts=[],
+        paths=[],
+        commands=[],
+        manifest_json_preview="",
+    )
+
+
+def build_diagnostics_context(
+    *,
+    latest_manifest_path: str | None,
+    manifest: dict[str, object] | None,
+    batch_script_path: str,
+    logs_dir: str,
+    python_exe: str = "python",
+    path_exists: Callable[[str], bool] | None = None,
+) -> DiagnosticsContext:
+    exists = path_exists or _default_path_exists
+
+    if not latest_manifest_path and not manifest:
+        return idle_diagnostics_context()
+
+    manifest_path = ""
+    if manifest:
+        stored_path = manifest.get("_manifest_path")
+        if isinstance(stored_path, str) and stored_path.strip():
+            manifest_path = stored_path.strip()
+    if not manifest_path and latest_manifest_path:
+        manifest_path = latest_manifest_path
+
+    if not manifest:
+        if manifest_path and exists(manifest_path):
+            return DiagnosticsContext(
+                status="warning",
+                heading="无法读取 manifest",
+                message="找到了 manifest 路径，但内容未能加载。请查看下方原始日志。",
+                facts=[f"Manifest：{manifest_path}"],
+                paths=[],
+                commands=[],
+                manifest_json_preview="",
+            )
+        return idle_diagnostics_context()
+
+    package_dir = resolve_package_dir(manifest_path, manifest)
+    facts = build_manifest_facts(manifest, manifest_path)
+
+    latest_pointer = str(Path(logs_dir) / "latest_manifest.txt")
+    if exists(latest_pointer):
+        facts.append(f"Latest 指针：{latest_pointer}")
+
+    paths = collect_existing_report_paths(package_dir, manifest, path_exists=exists)
+    commands = build_cli_commands(
+        python_exe=python_exe,
+        batch_script_path=batch_script_path,
+        manifest_path=manifest_path,
+        manifest=manifest,
+    )
+    preview = format_manifest_json_preview(manifest)
+
+    status = "ready"
+    message = "以下为 latest manifest 对应的内部路径与手动 CLI 命令。"
+    if manifest_path and latest_manifest_path:
+        if os.path.normcase(os.path.abspath(manifest_path)) != os.path.normcase(
+            os.path.abspath(latest_manifest_path)
+        ):
+            status = "warning"
+            message = "活动 manifest 与 latest 指针不一致；下方预览以当前加载的 manifest 为准。"
+
+    return DiagnosticsContext(
+        status=status,
+        heading="当前任务上下文",
+        message=message,
+        facts=facts,
+        paths=paths,
+        commands=commands,
+        manifest_json_preview=preview,
+    )
