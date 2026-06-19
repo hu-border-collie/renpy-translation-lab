@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QFormLayout,
     QScrollArea,
+    QSplitter,
     QLayout,
 )
 
@@ -486,100 +487,154 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(10)
 
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
         diag_hint = QLabel(
-            "上半部分展示任务上下文、报告路径、可复制 CLI 命令和 manifest 预览；"
-            "下方为原始终端输出。翻译、预建库与写回运行时会自动切换到此页。"
+            "上方切换任务上下文、CLI 命令与 Manifest；下方始终显示原始输出。"
+            "任务运行时会自动切到此页并放大日志区域。"
         )
         diag_hint.setWordWrap(True)
         diag_hint.setObjectName("config_hint_label")
-        layout.addWidget(diag_hint)
+        toolbar.addWidget(diag_hint, 1)
 
-        diag_scroll = QScrollArea()
-        diag_scroll.setObjectName("diagnostics_scroll")
-        self._style_themed_surface(diag_scroll)
-        diag_scroll.setWidgetResizable(True)
-        diag_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        diag_viewport = diag_scroll.viewport()
-        diag_viewport.setObjectName("diagnostics_scroll_viewport")
-        self._style_themed_surface(diag_viewport)
+        self.refresh_diagnostics_btn = QPushButton("刷新上下文")
+        self.refresh_diagnostics_btn.setObjectName("secondary_btn")
+        self.refresh_diagnostics_btn.clicked.connect(self._refresh_diagnostics_context)
+        toolbar.addWidget(self.refresh_diagnostics_btn)
 
-        diag_content = QWidget()
-        diag_content.setObjectName("diagnostics_scroll_content")
-        self._style_themed_surface(diag_content)
-        diag_layout = QVBoxLayout(diag_content)
-        diag_layout.setContentsMargins(0, 0, 0, 0)
-        diag_layout.setSpacing(12)
+        self.clear_log_btn = QPushButton("清空日志")
+        self.clear_log_btn.setObjectName("secondary_btn")
+        self.clear_log_btn.clicked.connect(self._on_clear_log)
+        toolbar.addWidget(self.clear_log_btn)
+        layout.addLayout(toolbar)
 
-        context_box = QGroupBox("任务上下文")
-        context_layout = QVBoxLayout(context_box)
-        context_layout.setSpacing(6)
-        context_layout.setContentsMargins(12, 16, 12, 12)
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.setObjectName("diagnostics_splitter")
+        splitter.setChildrenCollapsible(False)
+        self.diagnostics_splitter = splitter
+
+        self.diagnostics_inner_tabs = NoWheelTabWidget()
+        self.diagnostics_inner_tabs.setObjectName("diagnostics_inner_tabs")
+
+        context_tab = QWidget()
+        self._style_themed_surface(context_tab)
+        context_outer = QVBoxLayout(context_tab)
+        context_outer.setContentsMargins(0, 0, 0, 0)
+        context_scroll = QScrollArea()
+        context_scroll.setObjectName("diagnostics_context_scroll")
+        self._style_themed_surface(context_scroll)
+        context_scroll.setWidgetResizable(True)
+        context_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        context_content = QWidget()
+        self._style_themed_surface(context_content)
+        context_layout = QVBoxLayout(context_content)
+        context_layout.setContentsMargins(12, 12, 12, 12)
+        context_layout.setSpacing(10)
+
         self.diagnostics_status_label = QLabel()
         self.diagnostics_status_label.setObjectName("diagnostics_status_label")
         context_layout.addWidget(self.diagnostics_status_label)
         self.diagnostics_message_label = QLabel()
         self.diagnostics_message_label.setWordWrap(True)
         context_layout.addWidget(self.diagnostics_message_label)
+
+        facts_frame = QFrame()
+        facts_frame.setObjectName("diagnostics_facts_frame")
+        facts_layout = QVBoxLayout(facts_frame)
+        facts_layout.setContentsMargins(10, 10, 10, 10)
         self.diagnostics_facts_label = QLabel()
         self.diagnostics_facts_label.setWordWrap(True)
         self.diagnostics_facts_label.setObjectName("diagnostics_facts_label")
-        context_layout.addWidget(self.diagnostics_facts_label)
-        diag_layout.addWidget(context_box)
+        facts_layout.addWidget(self.diagnostics_facts_label)
+        context_layout.addWidget(facts_frame)
 
-        reports_box = QGroupBox("报告与数据文件")
-        reports_layout = QVBoxLayout(reports_box)
-        reports_layout.setSpacing(6)
-        reports_layout.setContentsMargins(12, 16, 12, 12)
-        self.diagnostics_paths_label = QLabel()
-        self.diagnostics_paths_label.setWordWrap(True)
-        self.diagnostics_paths_label.setObjectName("diagnostics_paths_label")
-        reports_layout.addWidget(self.diagnostics_paths_label)
-        diag_layout.addWidget(reports_box)
+        paths_header = QLabel("报告与数据文件")
+        paths_header.setObjectName("diagnostics_section_label")
+        context_layout.addWidget(paths_header)
+        self.diagnostics_paths_host = QWidget()
+        self.diagnostics_paths_layout = QVBoxLayout(self.diagnostics_paths_host)
+        self.diagnostics_paths_layout.setContentsMargins(0, 0, 0, 0)
+        self.diagnostics_paths_layout.setSpacing(6)
+        context_layout.addWidget(self.diagnostics_paths_host)
+        context_layout.addStretch()
+        context_scroll.setWidget(context_content)
+        context_outer.addWidget(context_scroll)
+        self.diagnostics_inner_tabs.addTab(context_tab, "任务上下文")
 
-        commands_box = QGroupBox("手动 CLI 命令")
-        commands_layout = QVBoxLayout(commands_box)
+        commands_tab = QWidget()
+        self._style_themed_surface(commands_tab)
+        commands_outer = QVBoxLayout(commands_tab)
+        commands_outer.setContentsMargins(0, 0, 0, 0)
+        commands_scroll = QScrollArea()
+        commands_scroll.setObjectName("diagnostics_commands_scroll")
+        self._style_themed_surface(commands_scroll)
+        commands_scroll.setWidgetResizable(True)
+        commands_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        commands_content = QWidget()
+        self._style_themed_surface(commands_content)
+        commands_layout = QVBoxLayout(commands_content)
+        commands_layout.setContentsMargins(12, 12, 12, 12)
         commands_layout.setSpacing(8)
-        commands_layout.setContentsMargins(12, 16, 12, 12)
+        commands_hint = QLabel("复制后在终端运行；命令使用当前 Python 解释器与真实脚本路径。")
+        commands_hint.setWordWrap(True)
+        commands_hint.setObjectName("config_hint_label")
+        commands_layout.addWidget(commands_hint)
         self.diagnostics_commands_host = QWidget()
         self.diagnostics_commands_layout = QVBoxLayout(self.diagnostics_commands_host)
         self.diagnostics_commands_layout.setContentsMargins(0, 0, 0, 0)
         self.diagnostics_commands_layout.setSpacing(8)
         commands_layout.addWidget(self.diagnostics_commands_host)
-        diag_layout.addWidget(commands_box)
+        commands_layout.addStretch()
+        commands_scroll.setWidget(commands_content)
+        commands_outer.addWidget(commands_scroll)
+        self.diagnostics_inner_tabs.addTab(commands_tab, "CLI 命令")
 
-        manifest_box = QGroupBox("Manifest 预览")
-        manifest_layout = QVBoxLayout(manifest_box)
-        manifest_layout.setContentsMargins(12, 16, 12, 12)
+        manifest_tab = QWidget()
+        self._style_themed_surface(manifest_tab)
+        manifest_layout = QVBoxLayout(manifest_tab)
+        manifest_layout.setContentsMargins(12, 12, 12, 12)
+        manifest_layout.setSpacing(8)
+        manifest_hint = QLabel("只读 JSON 预览；为控制体积已省略 chunks / files 大字段。")
+        manifest_hint.setWordWrap(True)
+        manifest_hint.setObjectName("config_hint_label")
+        manifest_layout.addWidget(manifest_hint)
         self.diagnostics_manifest_preview = QTextEdit()
         self.diagnostics_manifest_preview.setReadOnly(True)
         self.diagnostics_manifest_preview.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self.diagnostics_manifest_preview.setObjectName("diagnostics_manifest_preview")
-        self.diagnostics_manifest_preview.setMaximumHeight(220)
-        manifest_layout.addWidget(self.diagnostics_manifest_preview)
-        diag_layout.addWidget(manifest_box)
+        manifest_layout.addWidget(self.diagnostics_manifest_preview, 1)
+        self.diagnostics_inner_tabs.addTab(manifest_tab, "Manifest")
 
-        diag_scroll.setWidget(diag_content)
-        layout.addWidget(diag_scroll, 2)
+        splitter.addWidget(self.diagnostics_inner_tabs)
 
-        log_header = QHBoxLayout()
-        log_header.addWidget(QLabel("原始 CLI 输出"))
-        log_header.addStretch()
-        self.refresh_diagnostics_btn = QPushButton("刷新上下文")
-        self.refresh_diagnostics_btn.setObjectName("secondary_btn")
-        self.refresh_diagnostics_btn.clicked.connect(self._refresh_diagnostics_context)
-        log_header.addWidget(self.refresh_diagnostics_btn)
-        layout.addLayout(log_header)
-
+        log_panel = QWidget()
+        log_panel.setObjectName("diagnostics_log_panel")
+        log_panel_layout = QVBoxLayout(log_panel)
+        log_panel_layout.setContentsMargins(0, 4, 0, 0)
+        log_panel_layout.setSpacing(6)
+        log_title = QLabel("原始 CLI 输出")
+        log_title.setObjectName("diagnostics_section_label")
+        log_panel_layout.addWidget(log_title)
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.log_view.setObjectName("log_view")
-        layout.addWidget(self.log_view, 3)
+        self.log_view.setMinimumHeight(160)
+        log_panel_layout.addWidget(self.log_view, 1)
+        splitter.addWidget(log_panel)
 
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([280, 420])
+
+        layout.addWidget(splitter, 1)
         self.tab_widget.addTab(tab, "诊断日志")
 
     def _focus_log_tab(self) -> None:
-        self.tab_widget.setCurrentWidget(self.log_view.parentWidget())
+        if self._diagnostics_tab is not None:
+            self.tab_widget.setCurrentWidget(self._diagnostics_tab)
+        total = max(sum(self.diagnostics_splitter.sizes()), 1)
+        self.diagnostics_splitter.setSizes([int(total * 0.32), int(total * 0.68)])
 
     def _focus_workbench_status_tab(self, index: int) -> None:
         if 0 <= index < self.workbench_status_tabs.count():
@@ -604,11 +659,19 @@ class MainWindow(QMainWindow):
                 self._clear_layout(child_layout)
                 child_layout.deleteLater()
 
-    def _copy_to_clipboard(self, text: str) -> None:
+    def _copy_to_clipboard(self, text: str, *, kind: str = "command") -> None:
         clipboard = QGuiApplication.clipboard()
         if clipboard is not None:
             clipboard.setText(text)
-        self.statusBar().showMessage("命令已复制到剪贴板。", 3000)
+        if kind == "path":
+            message = "路径已复制到剪贴板。"
+        else:
+            message = "命令已复制到剪贴板。"
+        self.statusBar().showMessage(message, 3000)
+
+    def _on_clear_log(self) -> None:
+        self.log_view.clear()
+        self.statusBar().showMessage("诊断日志已清空。", 3000)
 
     def _resolve_diagnostics_manifest_path(self) -> str | None:
         if self._workflow is not None and self._workflow.manifest_path:
@@ -647,12 +710,33 @@ class MainWindow(QMainWindow):
         self.diagnostics_message_label.setText(context.message)
         self.diagnostics_facts_label.setText("\n".join(context.facts))
 
+        self._clear_layout(self.diagnostics_paths_layout)
         if context.paths:
-            self.diagnostics_paths_label.setText(
-                "\n".join(f"{entry.label}：{entry.path}" for entry in context.paths)
-            )
+            for entry in context.paths:
+                row_host = QWidget()
+                row_layout = QHBoxLayout(row_host)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(8)
+                row_layout.addWidget(QLabel(f"{entry.label}："))
+                path_edit = QLineEdit(entry.path)
+                path_edit.setReadOnly(True)
+                path_edit.setObjectName("diagnostics_path_edit")
+                row_layout.addWidget(path_edit, 1)
+                copy_btn = QPushButton("复制")
+                copy_btn.setObjectName("secondary_btn")
+                copy_btn.clicked.connect(
+                    lambda _checked=False, text=entry.path: self._copy_to_clipboard(
+                        text,
+                        kind="path",
+                    )
+                )
+                row_layout.addWidget(copy_btn)
+                self.diagnostics_paths_layout.addWidget(row_host)
         else:
-            self.diagnostics_paths_label.setText("暂无已生成的报告或数据文件。")
+            placeholder = QLabel("暂无已生成的报告或数据文件。")
+            placeholder.setWordWrap(True)
+            placeholder.setObjectName("config_hint_label")
+            self.diagnostics_paths_layout.addWidget(placeholder)
 
         self._clear_layout(self.diagnostics_commands_layout)
         if context.commands:

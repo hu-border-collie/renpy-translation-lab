@@ -109,11 +109,57 @@ QWidget#config_scroll_content {
 }
 
 QWidget#diagnostics_tab,
-QScrollArea#diagnostics_scroll,
-QWidget#diagnostics_scroll_viewport,
-QWidget#diagnostics_scroll_content {
+QScrollArea#diagnostics_context_scroll,
+QScrollArea#diagnostics_commands_scroll,
+QWidget#diagnostics_log_panel {
     background-color: #1e293b;
     border: none;
+}
+
+QSplitter#diagnostics_splitter::handle {
+    background-color: #334155;
+    height: 4px;
+    margin: 4px 0;
+    border-radius: 2px;
+}
+
+QSplitter#diagnostics_splitter::handle:hover {
+    background-color: #64748b;
+}
+
+QTabWidget#diagnostics_inner_tabs::pane {
+    border: 1px solid #334155;
+    border-radius: 8px;
+    background-color: #1e293b;
+    top: -1px;
+}
+
+QTabWidget#diagnostics_inner_tabs QWidget {
+    background-color: #1e293b;
+}
+
+QTabWidget#diagnostics_inner_tabs > QTabBar::tab {
+    background-color: #0f172a;
+    border: 1px solid #334155;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 7px 16px;
+    margin-right: 3px;
+    color: #94a3b8;
+    font-weight: 500;
+}
+
+QTabWidget#diagnostics_inner_tabs > QTabBar::tab:selected {
+    background-color: #1e293b;
+    color: #60a5fa;
+    font-weight: 600;
+}
+
+QLabel#diagnostics_section_label {
+    color: #94a3b8;
+    font-size: 12px;
+    font-weight: 600;
 }
 
 QLabel#diagnostics_status_label {
@@ -134,14 +180,20 @@ QLabel#diagnostics_status_label[status="warning"] {
     color: #fbbf24;
 }
 
-QLabel#diagnostics_facts_label,
-QLabel#diagnostics_paths_label {
+QFrame#diagnostics_facts_frame {
+    background-color: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+}
+
+QLabel#diagnostics_facts_label {
     color: #cbd5e1;
     font-family: "Consolas", "Courier New", monospace;
     font-size: 12px;
 }
 
-QLineEdit#diagnostics_command_edit {
+QLineEdit#diagnostics_command_edit,
+QLineEdit#diagnostics_path_edit {
     background-color: #0f172a;
     border: 1px solid #334155;
     border-radius: 6px;

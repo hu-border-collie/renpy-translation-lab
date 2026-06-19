@@ -83,16 +83,15 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 ### 诊断日志
 
-诊断日志页面向开发者和高级用户，分上下两部分：
+诊断日志页面向开发者和高级用户，采用**可拖拽分割条**固定上下布局：
 
-- **上半（结构化）**
-  - **任务上下文**：latest / 活动 manifest 路径、package 目录、job name、job 状态、最近 check 安全级别、是否已 apply。
-  - **报告与数据文件**：仅列出磁盘上已存在的路径，例如 `requests.jsonl`、`results.jsonl`、`check_failures.jsonl`、`failures.jsonl`、`apply_failure_report.json`、`last_status_snapshot.json` 以及 manifest 中的 `last_check_report_path`。
-  - **手动 CLI 命令**：按当前 manifest 状态生成 `doctor`、`submit`、`status`、`download`、`check`、`apply` 等可复制命令（使用当前 Python 解释器与真实脚本路径）。
-  - **Manifest 预览**：只读 JSON；为控制体积会省略 `chunks` / `files` 大字段。
-- **下半（原始输出）**：与早期版本相同，显示 `QProcess` 捕获的 stdout/stderr。翻译、预建库、写回运行时会自动切到此 Tab。
+- **上方内层 Tab**（`任务上下文` / `CLI 命令` / `Manifest`）
+  - **任务上下文**：manifest、package、job 状态、最近 check、是否已 apply；报告路径逐行展示并支持复制。
+  - **CLI 命令**：按当前 manifest 生成 `doctor`、`submit`、`status`、`download`、`check`、`apply` 等可复制命令。
+  - **Manifest**：只读 JSON 预览（省略 `chunks` / `files` 大字段）。
+- **下方（原始输出）**：始终可见，显示 `QProcess` 捕获的 stdout/stderr；任务运行时会自动切到此页并放大日志区域。
 
-点击「刷新上下文」或切换到诊断 Tab 时会重新读取 latest manifest；翻译流程进行中会优先展示活动 workflow 的 manifest。
+工具栏提供「刷新上下文」与「清空日志」。切换到诊断 Tab 时会重新读取 latest manifest；翻译流程进行中会优先展示活动 workflow 的 manifest。
 
 ## Configuration compatibility
 
