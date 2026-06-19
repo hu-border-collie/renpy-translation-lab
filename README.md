@@ -2,7 +2,7 @@
 
 一个面向 Ren'Py 视觉小说的翻译工作台，聚焦 Gemini Batch 作业流、上下文增强、轻量 RAG 记忆层和写回前安全校验。
 
-当前核心 Batch 流程已经在约 11 万英文词规模的真实 Ren'Py 项目上完整跑通：从预建上下文、生成 Batch 包、提交和下载结果，到 `check` 安全校验、retry 合并和 `apply` 写回。CLI 仍是事实来源和高级用户主路径；仓库另提供可选 PySide6 GUI 降低普通流程门槛，但还不是零配置安装包产品。
+当前核心 Batch 流程已经在约 11 万英文词规模的真实 Ren'Py 项目上完整跑通：从预建上下文、生成 Batch 包、提交和下载结果，到 `check` 安全校验、retry 合并和 `apply` 写回。CLI 仍是事实来源和高级用户主路径；仓库另提供可选图形工作台降低普通流程门槛，但还不是零配置安装包产品。
 
 ## 这是什么
 
@@ -17,33 +17,16 @@
 
 如果你想找的是一键打包、面向普通用户的整套发行流程，这个仓库还不是那个方向。
 
-**实验性可选 GUI**：
+**可选图形工作台（实验性）**：
 
-仓库包含一个使用 PySide6 的可选桌面 GUI（`gui_qt/`）。它作为现有 CLI 和 JSON 配置之上的外壳层，依赖单独安装，不进入主 `requirements.txt`；未安装 PySide6 时 CLI 不受影响：
+除 CLI 外，仓库提供可选桌面界面，把选项目、配 API、检查环境、跑翻译和看写回状态收成普通步骤。图形依赖单独安装，不进入主 `requirements.txt`；**不装图形界面时，命令行可照常使用**。
 
 ```powershell
 pip install -r requirements-gui.txt
 python -m gui_qt
 ```
 
-界面分为 **工作台**、**配置**、**诊断日志** 三个顶层 Tab。普通主流程：
-
-```text
-选择项目 -> 配置 API / 模型 -> 环境检查 -> 开始翻译 -> 查看写回状态 -> 写回翻译
-```
-
-当前 GUI 已覆盖：
-
-- 选择 game/work 目录（写入 `translator_config.json`）
-- 管理 API Key（兼容 `api_keys.json`；环境变量 Key 只读提示）
-- 配置真实模型名称、embedding model、Batch thinking level
-- 开关 Batch 上下文（RAG / 原文索引），并提供 **预建 RAG 库**、**预建原文索引** 图形入口
-- 浅色 / 深色 / 跟随系统主题
-- **工作台**内层 Tab：环境检查、翻译进度、写回（`safe / warn / block` 摘要；仅 `safe` 可写回）
-- 一键编排基础 Batch 流程：`build -> submit -> status -> download -> check`；可从 latest manifest 继续长任务
-- **诊断日志**：上半展示 manifest / package / job、已存在报告路径、可复制 CLI 命令与 manifest JSON 预览；下半保留原始终端输出
-
-GUI 通过 `QProcess` 以参数列表调用 `gemini_translate_batch.py`，不重写翻译核心，也不向普通用户暴露 `apply --force`。详见 [GUI workbench](docs/gui_workbench.md) 和 issue #42。
+三个 Tab：**工作台**（环境检查、翻译进度、写回）、**配置**（API、模型、Batch 上下文预建、主题）、**诊断日志**（任务上下文、可复制命令、原始输出）。写回仅在检查结果为 `safe` 时启用。安装步骤、界面说明与安全边界见 [GUI workbench](docs/gui_workbench.md)。
 
 ## 核心能力
 
@@ -153,7 +136,7 @@ python gemini_translate_batch.py apply
 - [Relation and semantic analysis](docs/relation_analysis.md)
   - `extract_relations.py`、relation / semantic 模式
 - [GUI workbench](docs/gui_workbench.md)
-  - 可选 PySide6 GUI 的安装、三 Tab 布局、预建库、高级诊断页、安全写回边界和剩余验收项
+  - 可选图形界面的安装、主流程、诊断页与写回安全边界
 - [Project notes](docs/project_notes.md)
   - 环境要求、当前边界、项目状态、安全说明和适用人群
 
