@@ -6991,8 +6991,8 @@ def collect_doctor_report():
             file_jobs = collect_pending_file_jobs()
             pending_file_count = len(file_jobs)
             pending_task_count = sum(job['task_count'] for job in file_jobs)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f'Warning: Could not compute pending translation counts: {exc}')
 
     return {
         'base_dir': legacy.BASE_DIR,
