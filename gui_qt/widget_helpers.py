@@ -6,13 +6,14 @@ from PySide6.QtWidgets import QComboBox, QTabWidget
 
 
 class NoWheelComboBox(QComboBox):
-    """Ignore mouse-wheel changes unless the combo already has keyboard focus."""
+    """Ignore mouse-wheel selection changes unless the dropdown list is open."""
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        if not self.hasFocus():
-            event.ignore()
+        popup = self.view()
+        if popup is not None and popup.isVisible():
+            super().wheelEvent(event)
             return
-        super().wheelEvent(event)
+        event.ignore()
 
 
 class NoWheelTabWidget(QTabWidget):
