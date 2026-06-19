@@ -143,7 +143,17 @@ python gemini_translate_batch.py apply
 
 核心 Batch 翻译链路已经可以用于真实项目试跑，推荐口径是“高级用户稳定版”：适合熟悉 Ren'Py 目录结构、能维护本地配置、能阅读检查报告的使用者。
 
-它仍不是已经打磨完成的零配置产品，也不应直接在唯一原项目上整批写回。执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。推荐使用顺序仍是：
+它仍不是已经打磨完成的零配置产品，也不应直接在唯一原项目上整批写回。执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。
+
+如果使用图形工作台，推荐先走 GUI 能完整覆盖的基础主路径：
+
+```text
+选择项目 -> 配置 API / 模型 -> 环境检查 -> 可选预建上下文 -> 开始翻译 -> 检查结果 -> safe 时写回
+```
+
+GUI 按推荐顺序提供这些步骤：`doctor` 由环境检查按钮独立运行；「开始翻译」会协调 `build -> submit -> status -> download -> check`；只有 `safe` 后才通过写回按钮独立调用 `apply`。若 `check` 返回 `warn` / `block`，不要在 GUI 中强行写回；先回到 CLI 查看失败报告，并使用 retry / repair / revision 等流程处理。
+
+高级用户或需要手动指定 manifest 时，CLI 推荐顺序仍是：
 
 ```bash
 python gemini_translate_batch.py doctor
