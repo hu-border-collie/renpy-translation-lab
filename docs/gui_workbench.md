@@ -37,6 +37,15 @@ python -m gui_qt
 
 如果未安装 PySide6，`python -m gui_qt` 会打印安装提示并退出；这不会影响 CLI。
 
+### Fonts (optional)
+
+若仓库同级目录存在 `RenPy_Workspace/_fonts`，GUI 启动时会自动加载：
+
+- 界面正文：`HarmonyOS Sans SC`
+- 等宽区域（项目路径、诊断日志、CLI 命令、Manifest、API Key 列表）：`LXGW WenKai Mono GB`
+
+也可通过环境变量 `RENPY_TRANSLATION_LAB_FONTS_DIR` 指向其他字体目录。目录缺失或字体文件不存在时，会回退到系统 `Segoe UI` 与 `Consolas`。
+
 ## Main workflow
 
 GUI 的普通主流程是：
