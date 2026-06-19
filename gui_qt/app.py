@@ -51,18 +51,30 @@ from .doctor_report import (
     summarize_doctor_output,
 )
 from .project_state import ProjectState
+from .theme import apply_theme
+from .theme_helpers import (
+    DEFAULT_THEME_PREFERENCE,
+    THEME_SYSTEM,
+    normalize_theme_preference,
+    read_gui_theme_from_config,
+    write_gui_theme_to_config,
+)
 from .translation_workflow import TranslationWorkflow, WorkflowUpdate
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, *, qt_app: QApplication | None = None, resources_dir: Path | None = None):
         super().__init__()
         self.setWindowTitle("Ren'Py Translation Lab - 图形工作台（实验版）")
         self.resize(1100, 720)
 
         self.state = ProjectState()
+        self._qt_app = qt_app
+        self._resources_dir = resources_dir or Path(__file__).resolve().parent / "resources"
+        self._theme_preference = DEFAULT_THEME_PREFERENCE
         self.runner = CliRunner()
         self._loading_config_to_ui = False
+        self._loading_theme_to_ui = False
         self._updating_batch_thinking_combo = False
         self._batch_thinking_config_has_key = False
         self._batch_thinking_user_changed = False
@@ -279,6 +291,25 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(14)
+
+        appearance_box = QGroupBox("外观")
+        appearance_layout = QFormLayout(appearance_box)
+        appearance_layout.setSpacing(8)
+        appearance_layout.setContentsMargins(12, 16, 12, 12)
+
+        appearance_hint = QLabel("默认跟随系统深浅色；也可手动选择浅色或深色主题。")
+        appearance_hint.setWordWrap(True)
+        appearance_hint.setObjectName("config_hint_label")
+        appearance_layout.addRow(appearance_hint)
+
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("跟随系统", THEME_SYSTEM)
+        self.theme_combo.addItem("浅色", "light")
+        self.theme_combo.addItem("深色", "dark")
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        appearance_layout.addRow("主题：", self.theme_combo)
+
+        layout.addWidget(appearance_box)
 
         api_box = QGroupBox("API Key")
         api_layout = QVBoxLayout(api_box)
@@ -956,10 +987,58 @@ class MainWindow(QMainWindow):
         finally:
             self._updating_batch_thinking_combo = False
 
+    def _load_theme_to_ui(self, config: dict[str, Any]) -> None:
+        theme = read_gui_theme_from_config(config)
+        self._theme_preference = theme
+        self._loading_theme_to_ui = True
+        try:
+            idx = self.theme_combo.findData(theme)
+            if idx >= 0:
+                self.theme_combo.setCurrentIndex(idx)
+        finally:
+            self._loading_theme_to_ui = False
+
+    def _apply_theme(self) -> None:
+        if self._qt_app is None:
+            return
+        try:
+            apply_theme(self._qt_app, self._resources_dir, self._theme_preference)
+        except OSError as exc:
+            self.statusBar().showMessage("主题样式加载失败，已保留当前样式。", 6000)
+            self._append_log(f"加载主题样式失败：{exc}")
+
+    def _set_theme_preference(self, preference: str, *, persist: bool) -> None:
+        self._theme_preference = normalize_theme_preference(preference)
+        self._apply_theme()
+        if not persist:
+            return
+        try:
+            config = self.state.load_translator_config()
+            write_gui_theme_to_config(config, self._theme_preference)
+            self.state.save_translator_config(config)
+            self._append_log(f"外观主题已保存：{self._theme_preference}。")
+        except Exception as exc:
+            QMessageBox.warning(self, "保存主题失败", str(exc))
+            self._append_log(f"保存主题失败：{exc}")
+
+    def _on_theme_changed(self, _index: int) -> None:
+        if self._loading_config_to_ui or self._loading_theme_to_ui:
+            return
+        preference = self.theme_combo.currentData()
+        if not isinstance(preference, str):
+            return
+        self._set_theme_preference(preference, persist=True)
+
+    def _on_system_color_scheme_changed(self, _scheme: object) -> None:
+        if self._theme_preference != THEME_SYSTEM:
+            return
+        self._apply_theme()
+
     def _load_config_to_ui(self):
         self._loading_config_to_ui = True
         try:
             config = self.state.load_translator_config()
+            self._load_theme_to_ui(config)
             sync_config = self._config_section(config, "sync")
             batch_config = self._config_section(config, "batch")
             sync_rag_config = self._config_section(sync_config, "rag")
@@ -1068,13 +1147,21 @@ def run_app(argv: list[str] | None = None) -> int:
         argv = sys.argv
 
     app = QApplication(argv)
-    qss_path = Path(__file__).resolve().parent / "resources" / "app.qss"
-    if qss_path.exists():
-        try:
-            app.setStyleSheet(qss_path.read_text(encoding="utf-8"))
-        except OSError as exc:
-            print(f"警告：无法加载 GUI 样式表：{exc}")
-    win = MainWindow()
+    resources_dir = Path(__file__).resolve().parent / "resources"
+    bootstrap_state = ProjectState()
+    try:
+        bootstrap_config = bootstrap_state.load_translator_config()
+        theme_preference = read_gui_theme_from_config(bootstrap_config)
+    except Exception as exc:
+        print(f"警告：无法读取主题配置，将使用系统跟随：{exc}")
+        theme_preference = DEFAULT_THEME_PREFERENCE
+    try:
+        apply_theme(app, resources_dir, theme_preference)
+    except OSError as exc:
+        print(f"警告：无法加载 GUI 样式表：{exc}")
+
+    win = MainWindow(qt_app=app, resources_dir=resources_dir)
+    app.styleHints().colorSchemeChanged.connect(win._on_system_color_scheme_changed)
     win.show()
     return app.exec()
 
