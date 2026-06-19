@@ -100,6 +100,14 @@ QTabWidget#main_tabs::pane {
     top: -1px;
 }
 
+QWidget#config_tab,
+QScrollArea#config_scroll,
+QWidget#config_scroll_viewport,
+QWidget#config_scroll_content {
+    background-color: #1e293b;
+    border: none;
+}
+
 QTabWidget#main_tabs > QTabBar::tab {
     background-color: #0f172a;
     border: 1px solid #334155;
@@ -122,6 +130,35 @@ QTabWidget#main_tabs > QTabBar::tab:selected {
 QTabWidget#main_tabs > QTabBar::tab:hover:!selected {
     background-color: #334155;
     color: #e2e8f0;
+}
+
+QTabWidget#workbench_status_tabs::pane {
+    border: 1px solid #334155;
+    border-radius: 8px;
+    background-color: #1e293b;
+    top: -1px;
+}
+
+QTabWidget#workbench_status_tabs QWidget {
+    background-color: #1e293b;
+}
+
+QTabWidget#workbench_status_tabs > QTabBar::tab {
+    background-color: #0f172a;
+    border: 1px solid #334155;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 7px 16px;
+    margin-right: 3px;
+    color: #94a3b8;
+    font-weight: 500;
+}
+
+QTabWidget#workbench_status_tabs > QTabBar::tab:selected {
+    background-color: #1e293b;
+    color: #60a5fa;
+    font-weight: 600;
 }
 
 /* Project Path Frame styling */
@@ -414,6 +451,41 @@ QLabel#writeback_status_label[status="unknown"] {
 
 QLabel#writeback_facts_label {
     color: #cbd5e1;
+}
+
+QLabel#bootstrap_status_label {
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#bootstrap_status_label[status="idle"],
+QLabel#bootstrap_status_label[status="running"] {
+    color: #60a5fa;
+}
+
+QLabel#bootstrap_status_label[status="ready"] {
+    color: #4ade80;
+}
+
+QLabel#bootstrap_status_label[status="warning"],
+QLabel#bootstrap_status_label[status="stale"] {
+    color: #fbbf24;
+}
+
+QLabel#bootstrap_status_label[status="failed"] {
+    color: #f87171;
+}
+
+QLabel#bootstrap_facts_label {
+    color: #cbd5e1;
+}
+
+QTextEdit#bootstrap_findings_view {
+    background-color: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #cbd5e1;
+    padding: 8px;
 }
 
 QTextEdit#writeback_findings_view {

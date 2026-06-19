@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 try:
     from gui_qt.app import MainWindow
@@ -97,6 +98,67 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         )
 
         self.assertIsNone(thinking_level)
+
+    def _prepare_bootstrap_window(self, config):
+        class FakeRunner:
+            def __init__(self):
+                self.calls = []
+
+            def run(self, script, args):
+                self.calls.append((script, args))
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/Game/work")
+
+            def get_batch_script_path(self):
+                return Path("C:/tool/gemini_translate_batch.py")
+
+            def load_translator_config(self):
+                return config
+
+        self.window.state = FakeState()
+        self.window.runner = FakeRunner()
+        self.window.log_view = type("FakeLogView", (), {"clear": lambda _self: None})()
+        self.window._focus_log_tab = lambda: None
+        self.window._set_bootstrap_summary = lambda _summary: None
+        self.window._append_log = lambda _text: None
+        self.window._set_task_running = lambda _running: None
+        return self.window.runner
+
+    def test_bootstrap_rag_uses_skip_prepare(self):
+        runner = self._prepare_bootstrap_window(
+            {"batch": {"rag": {"enabled": True}}}
+        )
+
+        self.window._on_bootstrap_rag()
+
+        self.assertEqual(
+            runner.calls,
+            [
+                (
+                    Path("C:/tool/gemini_translate_batch.py"),
+                    ["bootstrap-rag", "--skip-prepare"],
+                )
+            ],
+        )
+
+    def test_bootstrap_source_index_uses_skip_prepare(self):
+        runner = self._prepare_bootstrap_window(
+            {"batch": {"source_index": {"enabled": True}}}
+        )
+
+        self.window._on_bootstrap_source_index()
+
+        self.assertEqual(
+            runner.calls,
+            [
+                (
+                    Path("C:/tool/gemini_translate_batch.py"),
+                    ["bootstrap-source-index", "--skip-prepare"],
+                )
+            ],
+        )
 
 
 if __name__ == "__main__":
