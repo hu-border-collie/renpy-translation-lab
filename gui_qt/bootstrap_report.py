@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .summary_helpers import extend_facts_with_notices
 from .user_copy import format_bootstrap_fact
 from typing import Any
 
@@ -165,7 +166,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
             status="failed",
             heading="RAG 预建失败",
             message="预建 RAG 库未成功完成，请查看诊断日志。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
         )
 
@@ -175,7 +176,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
             status="failed",
             heading="RAG 预建失败",
             message="预建过程中出现错误，请查看诊断日志。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
         )
 
@@ -189,7 +190,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
             status="warning",
             heading="RAG 预建完成（无新记录）",
             message="未扫描到可写入的译文记录。若项目尚无译文，可先翻译一部分。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
         )
 
@@ -199,7 +200,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
             status="ready",
             heading="RAG 预建完成",
             message="记忆库已刷新，可以开始翻译任务。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
         )
 
@@ -208,7 +209,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
         status="ready",
         heading="RAG 预建完成",
         message="预建流程已完成；如需更新记忆库，可在译文变更后再次运行。",
-        facts=facts,
+        facts=extend_facts_with_notices(facts, findings),
         findings=findings,
     )
 
@@ -240,7 +241,7 @@ def summarize_source_index_bootstrap_output(output: str, exit_code: int) -> Boot
             status="failed",
             heading="原文索引预建失败",
             message="预建原文索引未成功完成，请查看诊断日志。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
         )
 
@@ -250,7 +251,7 @@ def summarize_source_index_bootstrap_output(output: str, exit_code: int) -> Boot
             status="failed",
             heading="原文索引预建失败",
             message="预建过程中出现错误，请查看诊断日志。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
         )
 
@@ -263,7 +264,7 @@ def summarize_source_index_bootstrap_output(output: str, exit_code: int) -> Boot
             status="warning",
             heading="原文索引预建完成（无新记录）",
             message="未扫描到可索引的原文片段。请确认翻译模板已生成且项目路径正确。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
         )
 
@@ -273,7 +274,7 @@ def summarize_source_index_bootstrap_output(output: str, exit_code: int) -> Boot
             status="ready",
             heading="原文索引预建完成",
             message="原文索引已刷新，后续翻译时可检索相关剧情原文。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
         )
 
@@ -282,6 +283,6 @@ def summarize_source_index_bootstrap_output(output: str, exit_code: int) -> Boot
         status="ready",
         heading="原文索引预建完成",
         message="索引库已是最新状态，无需新增向量。",
-        facts=facts,
+        facts=extend_facts_with_notices(facts, findings),
         findings=findings,
     )

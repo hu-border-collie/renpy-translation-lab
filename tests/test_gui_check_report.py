@@ -85,6 +85,10 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warn")
         self.assertFalse(summary.can_apply)
         self.assertTrue(summary.findings)
+        self.assertTrue(
+            any(fact.startswith("注意：") and "source_mismatch" in fact for fact in summary.facts)
+        )
+        self.assertFalse(any(fact.startswith("- ") for fact in summary.facts))
 
     def test_summarize_warn_check_points_to_remediation_commands(self):
         summary = summarize_check_output(

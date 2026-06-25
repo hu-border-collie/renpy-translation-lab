@@ -966,12 +966,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("已打开补救命令参考。", 3000)
 
     def _set_details_label(self, label: QLabel, findings: list[str]) -> None:
-        if findings:
-            label.setText("\n".join(f"- {item}" for item in findings))
-            label.setVisible(True)
-        else:
-            label.setText("")
-            label.setVisible(False)
+        del findings
+        label.setText("")
+        label.setVisible(False)
 
     def _clear_layout(self, layout: QLayout) -> None:
         while layout.count():
@@ -1382,8 +1379,6 @@ class MainWindow(QMainWindow):
             "",
             *summary.facts,
         ]
-        if summary.findings:
-            confirm_lines.extend(["", "待处理问题：", *[f"- {item}" for item in summary.findings]])
 
         reply = QMessageBox.question(
             self,

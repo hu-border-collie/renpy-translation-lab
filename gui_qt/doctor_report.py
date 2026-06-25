@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .summary_helpers import append_unique_fact
 from .user_copy import (
     doctor_mode_label,
     format_doctor_recommendation_fact,
@@ -222,47 +223,63 @@ def summarize_doctor_output(
     layout_status = parsed.get("layout_status") if isinstance(parsed.get("layout_status"), str) else ""
 
     facts: list[str] = []
-    if parsed.get("is_work_root") is False and parsed.get("base_dir"):
-        facts.append(f"项目目录：{parsed['base_dir']}")
-    elif parsed.get("base_dir"):
-        facts.append(f"work 目录：{parsed['base_dir']}")
+    base_dir = parsed.get("base_dir") if isinstance(parsed.get("base_dir"), str) else ""
+    work_dir = parsed.get("work_dir") if isinstance(parsed.get("work_dir"), str) else ""
+    is_work_root = parsed.get("is_work_root")
 
-    if parsed.get("is_work_root") is False:
+    if is_work_root is False and base_dir:
+        append_unique_fact(facts, f"项目目录：{base_dir}")
+    elif base_dir:
+        append_unique_fact(facts, f"work 目录：{base_dir}")
+
+    if is_work_root is False:
         if parsed.get("work_exists") is False:
-            facts.append("work 目录：不存在")
+            append_unique_fact(facts, "work 目录：不存在")
         elif parsed.get("work_empty") is True:
-            facts.append("work 目录：存在（为空）")
+            append_unique_fact(facts, "work 目录：存在（为空）")
         elif parsed.get("work_exists") is True:
-            facts.append("work 目录：存在")
+            append_unique_fact(facts, "work 目录：存在")
+
+    if (
+        is_work_root is True
+        and work_dir
+        and base_dir
+        and work_dir != base_dir
+    ):
+        append_unique_fact(facts, f"work 路径：{work_dir}")
 
     if parsed.get("original_game_exists") is True:
-        facts.append("original/game：存在")
+        append_unique_fact(facts, "original/game：存在")
     elif parsed.get("original_game_exists") is False:
-        facts.append("original/game：不存在")
+        append_unique_fact(facts, "original/game：不存在")
     if parsed.get("tl_dir"):
         exists_text = "存在" if parsed.get("tl_exists") is True else "不存在"
-        facts.append(f"翻译目录：{exists_text}")
+        append_unique_fact(facts, f"翻译目录：{exists_text}")
     if parsed.get("language"):
-        facts.append(f"目标语言：{parsed['language']}")
+        append_unique_fact(facts, f"目标语言：{parsed['language']}")
     if mode:
-        facts.append(f"检查模式：{doctor_mode_label(mode)}")
+        append_unique_fact(facts, f"检查模式：{doctor_mode_label(mode)}")
     if counts:
-        facts.extend(format_tl_scan_facts(counts, pending=pending))
+        for fact in format_tl_scan_facts(counts, pending=pending):
+            append_unique_fact(facts, fact)
 
     findings = list(warnings)
     if api_key_count is not None:
         if api_key_count > 0:
             if api_key_source == "environment":
-                facts.append(f"API 密钥：已通过环境变量配置 {api_key_count} 个")
+                append_unique_fact(
+                    facts,
+                    f"API 密钥：已通过环境变量配置 {api_key_count} 个",
+                )
             else:
-                facts.append(f"API 密钥：已配置 {api_key_count} 个")
+                append_unique_fact(facts, f"API 密钥：已配置 {api_key_count} 个")
         else:
-            facts.append("建议：在配置页填写 API 密钥后再开始翻译")
+            append_unique_fact(facts, "建议：在配置页填写 API 密钥后再开始翻译")
 
-    if recommendation_facts:
-        facts.extend(recommendation_facts)
+    for fact in recommendation_facts:
+        append_unique_fact(facts, fact)
     for warning in warnings:
-        facts.append(format_doctor_warning_fact(warning))
+        append_unique_fact(facts, format_doctor_warning_fact(warning))
 
     if exit_code != 0:
         return DoctorSummary(

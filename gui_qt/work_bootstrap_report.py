@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 
 from .doctor_report import DoctorSummary
+from .summary_helpers import append_unique_fact, extend_facts_with_notices
 
 
 WORK_BOOTSTRAP_HEADER = "Work bootstrap summary:"
@@ -63,11 +64,11 @@ def summarize_work_bootstrap_output(output: str, exit_code: int) -> WorkBootstra
 
     facts: list[str] = []
     if work_dir:
-        facts.append(f"work 目录：{work_dir}")
+        append_unique_fact(facts, f"work 目录：{work_dir}")
     if files_copied and files_copied != "0":
-        facts.append(f"复制文件数：{files_copied}")
+        append_unique_fact(facts, f"复制文件数：{files_copied}")
     if game_root_updated:
-        facts.append("已自动将 game_root 更新为 work 目录")
+        append_unique_fact(facts, "已自动将 game_root 更新为 work 目录")
 
     findings: list[str] = []
     if message and status == "skipped":
@@ -78,31 +79,35 @@ def summarize_work_bootstrap_output(output: str, exit_code: int) -> WorkBootstra
             status="failed",
             heading="准备工作目录失败",
             message="命令未正常完成，请查看诊断日志。",
-            facts=facts,
+            facts=extend_facts_with_notices(
+                facts,
+                findings or ["请确认存在 original/game，且 work 目录不存在或为空。"],
+            ),
             findings=findings or ["请确认存在 original/game，且 work 目录不存在或为空。"],
             work_dir=work_dir,
             game_root_updated=False,
         )
 
     if status == "created":
-        facts.append("建议：点击「环境检查」确认项目状态")
+        append_unique_fact(facts, "建议：点击「环境检查」确认项目状态")
         return WorkBootstrapSummary(
             status="ready",
             heading="工作目录已准备完成",
             message="已从 original/game 复制到 work/game。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             work_dir=work_dir,
             game_root_updated=game_root_updated,
         )
 
     if status == "skipped":
+        skip_notices = findings or [message or "如需重新初始化，请先手动清空或移除 work 目录。"]
         return WorkBootstrapSummary(
             status="warning",
             heading="未准备工作目录",
             message="work 目录已存在且非空，未做任何修改。",
-            facts=facts,
-            findings=findings or [message or "如需重新初始化，请先手动清空或移除 work 目录。"],
+            facts=extend_facts_with_notices(facts, skip_notices),
+            findings=skip_notices,
             work_dir=work_dir,
             game_root_updated=False,
         )
@@ -112,7 +117,7 @@ def summarize_work_bootstrap_output(output: str, exit_code: int) -> WorkBootstra
             status="failed",
             heading="准备工作目录失败",
             message=message or "未找到 original/game，或复制过程中出错。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             work_dir=work_dir,
             game_root_updated=False,
@@ -122,7 +127,7 @@ def summarize_work_bootstrap_output(output: str, exit_code: int) -> WorkBootstra
         status="warning",
         heading="准备工作目录已结束",
         message=message or "请查看诊断日志了解详情。",
-        facts=facts,
+        facts=extend_facts_with_notices(facts, findings),
         findings=findings,
         work_dir=work_dir,
         game_root_updated=game_root_updated,
@@ -135,5 +140,5 @@ def work_bootstrap_to_doctor_summary(summary: WorkBootstrapSummary) -> DoctorSum
         heading=summary.heading,
         message=summary.message,
         facts=summary.facts,
-        findings=summary.findings,
+        findings=[],
     )

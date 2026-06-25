@@ -37,6 +37,8 @@ class GuiWorkBootstrapReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "warning")
         self.assertIn("非空", summary.message)
+        self.assertTrue(any(fact.startswith("注意：") for fact in summary.facts))
+        self.assertFalse(any(fact.startswith("- ") for fact in summary.facts))
 
     def test_work_bootstrap_to_doctor_summary_preserves_heading(self):
         summary = summarize_work_bootstrap_output(BOOTSTRAP_OUTPUT, exit_code=0)
