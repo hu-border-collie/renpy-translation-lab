@@ -126,6 +126,7 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warn")
         self.assertIn("补救命令", summary.message)
         self.assertIn("retry", summary.message)
+        self.assertIn("safe", summary.message)
 
     def test_summarize_manifest_writeback_from_last_check(self):
         summary = summarize_manifest_writeback(
