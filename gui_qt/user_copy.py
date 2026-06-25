@@ -45,6 +45,10 @@ BOOTSTRAP_FIELD_LABELS = {
 
 DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS: tuple[tuple[str, str], ...] = (
     (
+        "game_root should use work directory; switch to",
+        "建议：将项目路径切换到",
+    ),
+    (
         "work directory is missing or empty and original/game exists;",
         "work 目录不存在或为空，且检测到 original/game；",
     ),
@@ -137,8 +141,11 @@ def format_safety_fact(level: str, *, prefix: str = "检查结果") -> str:
 def format_doctor_recommendation_fact(recommendation: str) -> str:
     """Render doctor recommendations in the same `标签：值` style as other facts."""
     text = recommendation.strip()
-    for source, _translated in DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS:
+    for source, translated in DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS:
         if text.startswith(source):
+            suffix = text[len(source):]
+            if source == "game_root should use work directory; switch to":
+                return f"{translated}{suffix}"
             if source == "work directory is missing or empty and original/game exists;":
                 return "建议：点击「准备工作目录」"
             if source == "Missing translation files; run: python gemini_translate_batch.py build":

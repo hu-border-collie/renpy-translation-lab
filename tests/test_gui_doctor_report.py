@@ -34,7 +34,47 @@ Doctor report:
 - Template generation: available (renpy-sdk)
 - Template command: C:\\RenPy\\renpy.exe C:\\Games\\Example\\work\\game translate schinese
 - Mode: can_generate_template
+- Is work root: True
+- Layout status: attention
 - TL scan: rpy_files=0, translate_blocks=0, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=0
+"""
+
+READY_OUTPUT = """
+Doctor report:
+- Base dir: C:\\Games\\Example\\work
+- TL dir: C:\\Games\\Example\\work\\game\\tl\\schinese (exists: True)
+- Language: schinese
+- Template generation: unavailable (no command resolved)
+- Mode: existing_tl_only
+- Is work root: True
+- Layout status: ready
+- TL scan: rpy_files=3, translate_blocks=2, string_sections=1, old_lines=10, new_lines=10, commented_original_lines=2
+"""
+
+FAILED_OUTPUT = """
+Doctor report:
+- Base dir: C:\\Games\\Example
+- TL dir: C:\\Games\\Example\\game\\tl\\schinese (exists: False)
+- Language: schinese
+- Template generation: unavailable (no command resolved)
+- Mode: blocked_missing_template
+- Is work root: False
+- Layout status: failed
+- TL scan: rpy_files=0, translate_blocks=0, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=0
+"""
+
+SWITCH_TO_WORK_OUTPUT = """
+Doctor report:
+- Base dir: C:\\Games\\Example
+- TL dir: C:\\Games\\Example\\game\\tl\\schinese (exists: False)
+- Language: schinese
+- Template generation: available (sdk)
+- Mode: can_generate_template
+- Is work root: False
+- Layout status: switch_to_work
+- TL scan: rpy_files=0, translate_blocks=0, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=0
+Recommendations:
+- game_root should use work directory; switch to C:\\Games\\Example\\work
 """
 
 
@@ -103,12 +143,25 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertTrue(any("环境变量" in fact for fact in summary.facts))
 
     def test_blocked_missing_template_is_blocked(self):
-        output = DOCTOR_OUTPUT.replace("existing_tl_only", "blocked_missing_template")
-
-        summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
+        summary = summarize_doctor_output(FAILED_OUTPUT, exit_code=0, api_key_count=1)
 
         self.assertEqual(summary.status, "blocked")
-        self.assertEqual(summary.heading, "需要先准备翻译模板")
+        self.assertEqual(summary.heading, "项目检查失败")
+        self.assertIn("original/game", summary.message)
+
+    def test_ready_layout_status_is_green(self):
+        summary = summarize_doctor_output(READY_OUTPUT, exit_code=0, api_key_count=2)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertIn("就绪", summary.message)
+
+    def test_switch_to_work_layout_status_is_warning(self):
+        summary = summarize_doctor_output(SWITCH_TO_WORK_OUTPUT, exit_code=0, api_key_count=1)
+
+        self.assertEqual(summary.status, "warning")
+        self.assertEqual(summary.heading, "建议使用 work 目录")
+        self.assertTrue(any("切换到" in fact for fact in summary.facts))
 
     def test_nonzero_exit_is_blocked(self):
         summary = summarize_doctor_output("startup failed", exit_code=1, api_key_count=1)

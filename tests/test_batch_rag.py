@@ -640,6 +640,41 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertEqual(args.command, 'bootstrap-work')
         self.assertFalse(args.no_update_game_root)
 
+    def test_assess_doctor_layout_status_failed_without_work_or_original(self):
+        report = {
+            'base_dir': 'C:/Games/Example',
+            'work_dir': 'C:/Games/Example/work',
+            'counts': {'rpy_files': 0},
+            'original_game_dir': '',
+            'can_generate_template': False,
+        }
+        with (
+            mock.patch.object(batch_mod.legacy, 'is_work_dir_empty', return_value=True),
+            mock.patch('os.path.isdir', return_value=False),
+        ):
+            self.assertEqual(batch_mod.assess_doctor_layout_status(report), 'failed')
+
+    def test_assess_doctor_layout_status_switch_when_original_exists(self):
+        report = {
+            'base_dir': 'C:/Games/Example',
+            'work_dir': 'C:/Games/Example/work',
+            'counts': {'rpy_files': 0},
+            'original_game_dir': 'C:/Games/Example/original/game',
+            'can_generate_template': True,
+        }
+        with mock.patch.object(batch_mod.legacy, 'is_work_dir_empty', return_value=True):
+            self.assertEqual(batch_mod.assess_doctor_layout_status(report), 'switch_to_work')
+
+    def test_assess_doctor_layout_status_ready_on_work_with_tl(self):
+        report = {
+            'base_dir': 'C:/Games/Example/work',
+            'work_dir': 'C:/Games/Example/work',
+            'counts': {'rpy_files': 2},
+            'original_game_dir': '',
+            'can_generate_template': True,
+        }
+        self.assertEqual(batch_mod.assess_doctor_layout_status(report), 'ready')
+
     def test_doctor_report_recommends_bootstrap_work_when_work_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

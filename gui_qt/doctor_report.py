@@ -27,6 +27,19 @@ MODE_MESSAGES = {
     "blocked_missing_template": "缺少可处理的翻译文件，也无法自动生成模板。",
 }
 
+LAYOUT_STATUS_HEADINGS = {
+    "failed": ("blocked", "项目检查失败"),
+    "switch_to_work": ("warning", "建议使用 work 目录"),
+    "ready": ("ready", "项目检查通过"),
+    "attention": ("warning", "检查完成，但有需要处理的事项"),
+}
+
+LAYOUT_STATUS_MESSAGES = {
+    "failed": "当前目录下没有 work 目录、没有可翻译内容，也未找到 original/game。",
+    "switch_to_work": "当前路径不是 work 目录，但项目内已有可继续处理的内容。",
+    "ready": "work 目录已就绪，可以开始翻译流程。",
+}
+
 
 def _parse_bool(value: str) -> bool | None:
     normalized = value.strip().lower()
@@ -142,6 +155,14 @@ def parse_doctor_output(output: str) -> dict[str, object]:
             parsed["mode"] = line.split(":", 1)[1].strip()
             continue
 
+        if line.startswith("- Is work root:"):
+            parsed["is_work_root"] = _parse_bool(line.split(":", 1)[1].strip())
+            continue
+
+        if line.startswith("- Layout status:"):
+            parsed["layout_status"] = line.split(":", 1)[1].strip()
+            continue
+
         if line.startswith("- TL scan:"):
             parsed["counts"] = _parse_counts(line.split(":", 1)[1])
             continue
@@ -175,9 +196,12 @@ def summarize_doctor_output(
     pending_value = parsed.get("pending")
     pending = pending_value if isinstance(pending_value, dict) else None
     mode = parsed.get("mode") if isinstance(parsed.get("mode"), str) else ""
+    layout_status = parsed.get("layout_status") if isinstance(parsed.get("layout_status"), str) else ""
 
     facts: list[str] = []
-    if parsed.get("base_dir"):
+    if parsed.get("is_work_root") is False and parsed.get("base_dir"):
+        facts.append(f"项目目录：{parsed['base_dir']}")
+    elif parsed.get("base_dir"):
         facts.append(f"work 目录：{parsed['base_dir']}")
     if parsed.get("tl_dir"):
         exists_text = "存在" if parsed.get("tl_exists") is True else "不存在"
@@ -210,21 +234,32 @@ def summarize_doctor_output(
             findings=findings,
         )
 
-    needs_attention = bool(findings) or bool(recommendation_facts) or (
-        mode == "can_generate_template"
-        and (not counts or int(counts.get("rpy_files", 0)) == 0)
-    ) or (api_key_count is not None and api_key_count == 0)
-    if mode == "blocked_missing_template":
+    if layout_status in LAYOUT_STATUS_HEADINGS:
+        status, heading = LAYOUT_STATUS_HEADINGS[layout_status]
+        message = LAYOUT_STATUS_MESSAGES.get(layout_status, MODE_MESSAGES.get(mode, "项目检查已完成。"))
+        if layout_status == "attention":
+            message = MODE_MESSAGES.get(mode, message)
+        if layout_status == "ready" and api_key_count == 0:
+            status = "warning"
+            heading = LAYOUT_STATUS_HEADINGS["attention"][1]
+        elif layout_status == "ready" and findings:
+            status = "warning"
+            heading = LAYOUT_STATUS_HEADINGS["attention"][1]
+    elif mode == "blocked_missing_template":
         status = "blocked"
-        heading = "需要先准备翻译模板"
-    elif needs_attention:
-        status = "warning"
-        heading = "检查完成，但有需要处理的事项"
+        heading = "项目检查失败"
+        message = MODE_MESSAGES.get(mode, "项目检查失败。")
     else:
-        status = "ready"
-        heading = "项目检查通过"
-
-    message = MODE_MESSAGES.get(mode, "项目检查已完成。")
+        needs_attention = bool(findings) or bool(recommendation_facts) or (
+            api_key_count is not None and api_key_count == 0
+        )
+        if needs_attention:
+            status = "warning"
+            heading = "检查完成，但有需要处理的事项"
+        else:
+            status = "ready"
+            heading = "项目检查通过"
+        message = MODE_MESSAGES.get(mode, "项目检查已完成。")
     return DoctorSummary(
         status=status,
         heading=heading,
