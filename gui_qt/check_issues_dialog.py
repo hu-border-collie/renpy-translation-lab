@@ -17,6 +17,8 @@ from .check_failures_report import CheckIssuesReport, format_category_overview
 
 
 class CheckIssuesDialog(QDialog):
+    """Modal dialog that presents a structured check=warn issue report."""
+
     def __init__(self, parent: QWidget | None, *, report: CheckIssuesReport):
         super().__init__(parent)
         self.setObjectName("check_issues_dialog")

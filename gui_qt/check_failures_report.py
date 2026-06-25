@@ -157,15 +157,18 @@ class CheckIssuesReport:
 
 
 def reason_code_label(reason_code: str) -> str:
+    """Return a Chinese label for a check failure reason code."""
     text = str(reason_code or "").strip()
     return REASON_CODE_LABELS.get(text, text or "未知原因")
 
 
 def category_label(category: str) -> str:
+    """Return a Chinese label for a remediation category."""
     return CATEGORY_LABELS.get(category, CATEGORY_LABELS["unknown"])
 
 
 def classify_reason_category(reason_code: str) -> str:
+    """Map a reason code to retry/repair/manual/rebuild_check guidance."""
     text = str(reason_code or "").strip()
     if not text:
         return "unknown"
@@ -173,6 +176,7 @@ def classify_reason_category(reason_code: str) -> str:
 
 
 def infer_reason_code_from_entry(entry: dict[str, object]) -> str:
+    """Infer a stable reason code from a raw failure entry."""
     reason_code = entry.get("reason_code")
     if isinstance(reason_code, str) and reason_code.strip():
         return reason_code.strip()
@@ -208,6 +212,7 @@ def infer_reason_code_from_entry(entry: dict[str, object]) -> str:
 
 
 def infer_status_for_reason(reason_code: str) -> str:
+    """Infer warn/block status from a reason code."""
     if reason_code in BLOCK_REASON_CODES:
         return "block"
     if reason_code in WARN_REASON_CODES:
@@ -216,6 +221,7 @@ def infer_status_for_reason(reason_code: str) -> str:
 
 
 def safe_preview(text: str, *, max_len: int = 120) -> str:
+    """Return a single-line, length-limited preview for GUI display."""
     normalized = str(text or "").replace("\r", "").replace("\n", "\\n").strip()
     if len(normalized) <= max_len:
         return normalized
@@ -223,6 +229,7 @@ def safe_preview(text: str, *, max_len: int = 120) -> str:
 
 
 def parse_check_failures_jsonl(text: str) -> list[dict[str, object]]:
+    """Parse check_failures.jsonl text into failure entry dicts."""
     entries: list[dict[str, object]] = []
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
@@ -239,6 +246,7 @@ def parse_check_failures_jsonl(text: str) -> list[dict[str, object]]:
 
 
 def normalize_failure_entry(entry: dict[str, object]) -> CheckFailureItem:
+    """Normalize a raw failure entry into a GUI-friendly item."""
     reason_code = infer_reason_code_from_entry(entry)
     status = entry.get("status")
     status_text = status.strip().lower() if isinstance(status, str) and status.strip() else ""
@@ -283,6 +291,7 @@ def normalize_failure_entry(entry: dict[str, object]) -> CheckFailureItem:
 
 
 def group_failure_items(items: list[CheckFailureItem]) -> list[ReasonGroupSummary]:
+    """Group failure items by reason code and status, sorted by count."""
     counter: Counter[tuple[str, str]] = Counter()
     status_by_reason: dict[str, str] = {}
     for item in items:
@@ -325,6 +334,7 @@ def resolve_check_report_path(
     *,
     manifest_path: str = "",
 ) -> str:
+    """Resolve the check_failures.jsonl path from manifest metadata."""
     report_path = manifest.get("last_check_report_path")
     if isinstance(report_path, str) and report_path.strip():
         return report_path.strip()
@@ -390,7 +400,10 @@ def _format_item_line(item: CheckFailureItem) -> str:
     location = " / ".join(location_parts) if location_parts else "位置未知"
 
     lines = [
-        f"- [{safety_level_label(item.status)}] {reason_code_label(item.reason_code)}",
+        (
+            f"- [{safety_level_label(item.status)}] "
+            f"{reason_code_label(item.reason_code)} ({item.reason_code})"
+        ),
         f"  {location}",
     ]
     if item.error:
@@ -409,8 +422,8 @@ def _build_detail_lines(
     lines: list[str] = ["【按原因汇总】"]
     for group in groups:
         lines.append(
-            f"- [{group.category_label}] {group.reason_label}（{group.count}）"
-            f" — {group.suggestion}"
+            f"- [{group.category_label}] {group.reason_label}"
+            f"（{group.reason_code}，{group.count}） — {group.suggestion}"
         )
 
     if items:
@@ -431,6 +444,7 @@ def build_check_issues_report(
     read_file: Callable[[str], str] | None = None,
     max_items: int = 100,
 ) -> CheckIssuesReport:
+    """Build a structured GUI report from manifest metadata and failure details."""
     exists = path_exists or _default_path_exists
     reader = read_file or _default_read_file
 
@@ -498,7 +512,8 @@ def build_check_issues_report(
             detail_lines=detail_lines or [f"解析错误：{parse_error}"],
         )
 
-    if not report_path:
+    has_report_content = bool(items) or bool(summary_groups)
+    if not report_path and not has_report_content:
         return CheckIssuesReport(
             status="missing_report",
             heading="未找到检查报告",
@@ -574,6 +589,7 @@ def build_check_issues_report(
 
 
 def format_category_overview(category_counts: dict[str, int]) -> list[str]:
+    """Format remediation category counts for dialog overview text."""
     lines: list[str] = []
     for category in CATEGORY_ORDER:
         count = category_counts.get(category, 0)

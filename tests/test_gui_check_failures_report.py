@@ -91,11 +91,25 @@ class GuiCheckFailuresReportTests(unittest.TestCase):
         )
 
     def test_group_failure_items_sorts_by_count(self):
-        items = [normalize_failure_entry(entry) for entry in parse_check_failures_jsonl(SAMPLE_JSONL)]
+        duplicate_warn = json.dumps(
+            {
+                "reason_code": "response_missing_item_id",
+                "status": "warn",
+                "file_rel_path": "game/tl/schinese/other.rpy",
+                "line": 99,
+                "id": "item-4",
+                "error": "Response missing item id",
+            },
+            ensure_ascii=False,
+        )
+        items = [
+            normalize_failure_entry(entry)
+            for entry in parse_check_failures_jsonl(f"{SAMPLE_JSONL}\n{duplicate_warn}")
+        ]
         groups = group_failure_items(items)
 
         self.assertEqual(len(groups), 3)
-        self.assertEqual(groups[0].count, 1)
+        self.assertEqual(groups[0].count, 2)
         self.assertEqual(groups[0].reason_code, "response_missing_item_id")
         self.assertIn("retry", groups[0].category_label)
 
@@ -116,6 +130,22 @@ class GuiCheckFailuresReportTests(unittest.TestCase):
         self.assertEqual(
             resolve_check_report_path(manifest, manifest_path=r"C:\pkg\manifest.json"),
             r"C:\pkg\check_failures.jsonl",
+        )
+
+    def test_build_check_issues_report_accepts_injected_text_without_report_path(self):
+        manifest = {
+            "last_check_summary": {"safety_level": "warn"},
+        }
+
+        report = build_check_issues_report(
+            manifest,
+            report_text=SAMPLE_JSONL,
+        )
+
+        self.assertEqual(report.status, "ok")
+        self.assertEqual(len(report.items), 3)
+        self.assertTrue(
+            any("source_text_mismatch" in line for line in report.detail_lines)
         )
 
     def test_build_check_issues_report_from_jsonl_text(self):
@@ -147,6 +177,9 @@ class GuiCheckFailuresReportTests(unittest.TestCase):
         self.assertEqual(report.category_counts[REASON_CATEGORY_MANUAL], 2)
         self.assertTrue(any("按原因汇总" in line for line in report.detail_lines))
         self.assertTrue(any("script.rpy" in line for line in report.detail_lines))
+        self.assertTrue(
+            any("response_missing_item_id" in line for line in report.detail_lines)
+        )
 
     def test_build_check_issues_report_missing_file_uses_summary_fallback(self):
         manifest = {
