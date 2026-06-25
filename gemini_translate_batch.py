@@ -4982,6 +4982,7 @@ def check_results(target=None):
     manifest['last_check_at'] = datetime.now().isoformat(timespec='seconds')
     manifest['last_check_summary'] = summary
     manifest['last_check_report_path'] = check_report_path
+    manifest.pop('last_apply_failure_report_path', None)
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     print(f"Manifest: {manifest['_manifest_path']}")
     print_check_summary(summary)
@@ -5085,6 +5086,7 @@ def apply_results(target=None, force=False):
         rag_apply_summary = sync_rag_store_for_jobs(rag_jobs, quality_state='batch_applied')
 
     manifest['applied_at'] = datetime.now().isoformat(timespec='seconds')
+    manifest.pop('last_apply_failure_report_path', None)
     manifest['apply_summary'] = {
         'applied_files': applied_files,
         'applied_lines': applied_lines,

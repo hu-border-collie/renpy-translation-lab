@@ -1513,10 +1513,15 @@ class BatchRepairRegressionTests(unittest.TestCase):
             final_script = target_file.read_text(encoding='utf-8')
             saved_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
 
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                batch_mod.check_results(str(manifest_path))
+            rechecked_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+
         self.assertEqual(final_script, changed_line)
         update_progress.assert_not_called()
         append_failures.assert_called_once()
         self.assertIn('last_apply_failure_report_path', saved_manifest)
+        self.assertNotIn('last_apply_failure_report_path', rechecked_manifest)
 
     def test_apply_results_rejects_already_applied_manifest_without_force(self):
         with tempfile.TemporaryDirectory() as tmp:

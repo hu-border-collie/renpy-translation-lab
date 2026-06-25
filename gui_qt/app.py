@@ -45,6 +45,11 @@ from .bootstrap_report import (
     summarize_rag_bootstrap_output,
     summarize_source_index_bootstrap_output,
 )
+from .apply_failure_dialog import ApplyFailureDialog
+from .apply_failure_report import (
+    apply_failure_report_available,
+    build_apply_failure_report,
+)
 from .check_failures_report import build_check_issues_report
 from .check_issues_dialog import CheckIssuesDialog
 from .check_report import (
@@ -302,6 +307,12 @@ class MainWindow(QMainWindow):
         self.retry_btn.setEnabled(False)
         self.retry_btn.setVisible(False)
         writeback_actions.addWidget(self.retry_btn)
+        self.apply_failure_btn = QPushButton("查看写回失败报告")
+        self.apply_failure_btn.setObjectName("secondary_btn")
+        self.apply_failure_btn.clicked.connect(self._open_apply_failure_report)
+        self.apply_failure_btn.setEnabled(False)
+        self.apply_failure_btn.setVisible(False)
+        writeback_actions.addWidget(self.apply_failure_btn)
         self.remediation_btn = QPushButton("补救命令")
         self.remediation_btn.setObjectName("secondary_btn")
         self.remediation_btn.clicked.connect(self._open_remediation_commands)
@@ -728,6 +739,37 @@ class MainWindow(QMainWindow):
         )
         return "build" if eligibility.eligible else "hidden"
 
+    def _apply_failure_report_ready(
+        self,
+        summary: WritebackSummary,
+        *,
+        manifest: dict[str, object] | None,
+    ) -> bool:
+        if summary.status == "failed" and summary.manifest_path:
+            return True
+        if manifest is None or not summary.manifest_path:
+            return False
+        return apply_failure_report_available(
+            manifest,
+            manifest_path=summary.manifest_path,
+        )
+
+    def _open_apply_failure_report(self) -> None:
+        manifest_path = self._writeback_manifest_path
+        if not manifest_path:
+            QMessageBox.warning(self, "无法查看写回失败报告", "当前没有可用的任务清单。")
+            return
+        try:
+            manifest = self.state.load_manifest_file(manifest_path)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法查看写回失败报告", str(exc))
+            return
+
+        report = build_apply_failure_report(manifest, manifest_path=manifest_path)
+        dialog = ApplyFailureDialog(self, report=report)
+        dialog.exec()
+        self.statusBar().showMessage("已查看写回失败报告。", 3000)
+
     def _update_writeback_action_buttons(
         self,
         summary: WritebackSummary,
@@ -735,10 +777,18 @@ class MainWindow(QMainWindow):
         running: bool,
     ) -> None:
         issues_ready = self._writeback_issues_ready(summary)
-        manifest = self._load_writeback_manifest() if issues_ready else None
+        manifest = self._load_writeback_manifest() if summary.manifest_path else None
 
         if hasattr(self, "check_issues_btn"):
             self.check_issues_btn.setEnabled(not running and issues_ready)
+
+        apply_failure_ready = self._apply_failure_report_ready(
+            summary,
+            manifest=manifest,
+        )
+        if hasattr(self, "apply_failure_btn"):
+            self.apply_failure_btn.setVisible(apply_failure_ready)
+            self.apply_failure_btn.setEnabled(not running and apply_failure_ready)
 
         if hasattr(self, "retry_btn"):
             mode = (

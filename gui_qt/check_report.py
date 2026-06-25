@@ -184,7 +184,7 @@ def summarize_apply_output(
         return WritebackSummary(
             status="failed",
             heading="写回失败",
-            message="写回没有正常完成。请查看诊断日志与写回失败报告。",
+            message="写回没有正常完成。可点击「查看写回失败报告」了解原因，或查看诊断日志。",
             facts=[format_manifest_path_fact(manifest_path)] if manifest_path else [],
             findings=[],
             can_apply=False,
@@ -234,6 +234,20 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
             status="applied",
             heading="翻译已写回",
             message="该任务已经写回过。",
+            facts=facts,
+            findings=[],
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+
+    apply_failure_path = manifest.get("last_apply_failure_report_path")
+    if isinstance(apply_failure_path, str) and apply_failure_path.strip():
+        facts = [format_manifest_path_fact(manifest_path)] if manifest_path else []
+        facts.append(f"写回失败报告：{apply_failure_path.strip()}")
+        return WritebackSummary(
+            status="failed",
+            heading="写回失败",
+            message="最近一次写回未成功。可点击「查看写回失败报告」了解原因，处理后再重新 check。",
             facts=facts,
             findings=[],
             can_apply=False,
