@@ -86,6 +86,17 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertFalse(summary.can_apply)
         self.assertTrue(summary.findings)
 
+    def test_summarize_warn_check_points_to_remediation_commands(self):
+        summary = summarize_check_output(
+            CHECK_OUTPUT_WARN,
+            exit_code=0,
+            manifest_path="C:\\pkg\\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "warn")
+        self.assertIn("retry / repair / revision", summary.message)
+        self.assertIn("safe", summary.message)
+
     def test_summarize_apply_output_marks_completed(self):
         summary = summarize_apply_output(
             APPLY_OUTPUT,

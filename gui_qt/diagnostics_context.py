@@ -195,48 +195,100 @@ def build_cli_commands(
         ),
     ]
 
-    if not manifest.get("job_name"):
+    mode = manifest.get("mode")
+    mode_text = mode.strip() if isinstance(mode, str) else ""
+    if mode_text == "revision":
+        commands.extend(
+            build_cloud_job_commands(
+                python_exe=python_exe,
+                batch_script_path=batch_script_path,
+                manifest_path=manifest_path,
+                manifest=manifest,
+                submit_label="提交订正任务",
+                status_label="查询订正状态",
+                download_label="下载订正结果",
+            )
+        )
         commands.append(
             DiagnosticsCommand(
-                label="提交 Batch 任务",
+                label="预览订正结果",
                 command=format_cli_command(
                     python_exe,
                     batch_script_path,
-                    ["submit", manifest_path],
+                    ["preview-revisions", manifest_path],
                 ),
             )
         )
+        if not manifest.get("applied_at"):
+            commands.append(
+                DiagnosticsCommand(
+                    label="应用订正（预览确认后）",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        ["apply-revisions", manifest_path],
+                    ),
+                )
+            )
+        return commands
+
+    retry_parent = manifest.get("retry_of_manifest")
+    if isinstance(retry_parent, str) and retry_parent.strip():
+        parent_manifest_path = retry_parent.strip()
+        commands.extend(
+            build_cloud_job_commands(
+                python_exe=python_exe,
+                batch_script_path=batch_script_path,
+                manifest_path=manifest_path,
+                manifest=manifest,
+                submit_label="提交 retry 任务",
+                status_label="查询 retry 状态",
+                download_label="下载 retry 结果",
+            )
+        )
+        commands.extend(
+            [
+                DiagnosticsCommand(
+                    label="合并 retry 结果",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        ["merge-retry", parent_manifest_path, manifest_path],
+                    ),
+                ),
+                DiagnosticsCommand(
+                    label="重新检查父任务",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        ["check", parent_manifest_path],
+                    ),
+                ),
+            ]
+        )
+        return commands
 
     commands.extend(
-        [
-            DiagnosticsCommand(
-                label="查询任务状态",
-                command=format_cli_command(
-                    python_exe,
-                    batch_script_path,
-                    ["status", manifest_path],
-                ),
+        build_cloud_job_commands(
+            python_exe=python_exe,
+            batch_script_path=batch_script_path,
+            manifest_path=manifest_path,
+            manifest=manifest,
+        )
+    )
+    commands.append(
+        DiagnosticsCommand(
+            label="检查翻译结果",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["check", manifest_path],
             ),
-            DiagnosticsCommand(
-                label="下载翻译结果",
-                command=format_cli_command(
-                    python_exe,
-                    batch_script_path,
-                    ["download", manifest_path],
-                ),
-            ),
-            DiagnosticsCommand(
-                label="检查翻译结果",
-                command=format_cli_command(
-                    python_exe,
-                    batch_script_path,
-                    ["check", manifest_path],
-                ),
-            ),
-        ]
+        )
     )
 
-    if not manifest.get("applied_at"):
+    safety_level = manifest_check_safety_level(manifest)
+    if not manifest.get("applied_at") and safety_level not in {"warn", "block"}:
         commands.append(
             DiagnosticsCommand(
                 label="写回翻译（仅可写回）",
@@ -248,7 +300,214 @@ def build_cli_commands(
             )
         )
 
+    if safety_level == "warn":
+        commands.extend(
+            build_warn_remediation_commands(
+                python_exe=python_exe,
+                batch_script_path=batch_script_path,
+                manifest_path=manifest_path,
+                manifest=manifest,
+            )
+        )
+
     return commands
+
+
+def build_cloud_job_commands(
+    *,
+    python_exe: str,
+    batch_script_path: str,
+    manifest_path: str,
+    manifest: dict[str, object],
+    submit_label: str = "提交 Batch 任务",
+    status_label: str = "查询任务状态",
+    download_label: str = "下载翻译结果",
+) -> list[DiagnosticsCommand]:
+    commands: list[DiagnosticsCommand] = []
+    if not manifest.get("job_name"):
+        commands.append(
+            DiagnosticsCommand(
+                label=submit_label,
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["submit", manifest_path],
+                ),
+            )
+        )
+
+    commands.extend(
+        [
+            DiagnosticsCommand(
+                label=status_label,
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["status", manifest_path],
+                ),
+            ),
+            DiagnosticsCommand(
+                label=download_label,
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["download", manifest_path],
+                ),
+            ),
+        ]
+    )
+    return commands
+
+
+def manifest_check_safety_level(manifest: dict[str, object]) -> str:
+    summary = manifest.get("last_check_summary")
+    if not isinstance(summary, dict):
+        return ""
+    safety = summary.get("safety_level")
+    return safety.strip().lower() if isinstance(safety, str) else ""
+
+
+def check_report_path_for_repair(manifest_path: str, manifest: dict[str, object]) -> str:
+    report_path = manifest.get("last_check_report_path")
+    if isinstance(report_path, str) and report_path.strip():
+        return report_path.strip()
+    package_dir = resolve_package_dir(manifest_path, manifest)
+    if package_dir:
+        return join_directory_file(package_dir, "check_failures.jsonl")
+    return "<check_failures.jsonl>"
+
+
+def retry_manifest_path_for_reference(manifest: dict[str, object]) -> str:
+    retry_path = manifest.get("last_retry_manifest_path")
+    if isinstance(retry_path, str) and retry_path.strip():
+        return retry_path.strip()
+    return "<retry-manifest.json>"
+
+
+def revision_manifest_path_for_reference(manifest: dict[str, object]) -> str:
+    revision_path = manifest.get("last_revision_manifest_path")
+    if isinstance(revision_path, str) and revision_path.strip():
+        return revision_path.strip()
+    return "<revision-manifest.json>"
+
+
+def build_warn_remediation_commands(
+    *,
+    python_exe: str,
+    batch_script_path: str,
+    manifest_path: str,
+    manifest: dict[str, object],
+) -> list[DiagnosticsCommand]:
+    report_path = check_report_path_for_repair(manifest_path, manifest)
+    retry_manifest_path = retry_manifest_path_for_reference(manifest)
+    revision_manifest_path = revision_manifest_path_for_reference(manifest)
+
+    return [
+        DiagnosticsCommand(
+            label="生成 retry 包",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["build-retry", manifest_path],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="提交 retry 任务",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["submit", retry_manifest_path],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="查询 retry 状态",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["status", retry_manifest_path],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="下载 retry 结果",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["download", retry_manifest_path],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="合并 retry 结果",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["merge-retry", manifest_path, retry_manifest_path],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="同步修复失败项",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["repair", report_path, "--limit", "20"],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="生成订正包",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["build-revisions"],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="提交订正任务",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["submit", revision_manifest_path],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="查询订正状态",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["status", revision_manifest_path],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="下载订正结果",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["download", revision_manifest_path],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="预览订正结果",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["preview-revisions", revision_manifest_path],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="应用订正（预览确认后）",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["apply-revisions", revision_manifest_path],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="重新检查翻译结果",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["check", manifest_path],
+            ),
+        ),
+    ]
 
 
 def build_manifest_facts(manifest: dict[str, object], manifest_path: str) -> list[str]:
