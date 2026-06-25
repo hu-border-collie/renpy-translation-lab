@@ -70,7 +70,7 @@ def summarize_work_bootstrap_output(output: str, exit_code: int) -> WorkBootstra
         facts.append("已自动将 game_root 更新为 work 目录")
 
     findings: list[str] = []
-    if message and status != "created":
+    if message and status == "skipped":
         findings.append(message)
 
     if exit_code != 0:
@@ -85,10 +85,11 @@ def summarize_work_bootstrap_output(output: str, exit_code: int) -> WorkBootstra
         )
 
     if status == "created":
+        facts.append("建议：点击「环境检查」确认项目状态")
         return WorkBootstrapSummary(
             status="ready",
             heading="工作目录已准备完成",
-            message="已从 original/game 复制到 work/game。建议接着运行环境检查。",
+            message="已从 original/game 复制到 work/game。",
             facts=facts,
             findings=findings,
             work_dir=work_dir,

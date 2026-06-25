@@ -6,7 +6,7 @@ from gui_qt.doctor_report import (
     stale_summary,
     summarize_doctor_output,
 )
-from gui_qt.user_copy import translate_doctor_recommendation
+from gui_qt.user_copy import format_doctor_recommendation_fact
 
 
 DOCTOR_OUTPUT = """
@@ -55,7 +55,8 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "检查完成，但有需要处理的事项")
         self.assertIn("已有翻译文件", summary.message)
-        self.assertTrue(any("API" in finding for finding in summary.findings))
+        self.assertTrue(any("API 密钥" in fact or fact.startswith("建议：") for fact in summary.facts))
+        self.assertEqual(summary.findings, [])
 
     def test_successful_clean_report_is_ready(self):
         summary = summarize_doctor_output(DOCTOR_OUTPUT, exit_code=0, api_key_count=2)
@@ -79,9 +80,8 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "检查完成，但有需要处理的事项")
-        self.assertTrue(
-            any("开始翻译" in finding or "翻译模板" in finding for finding in summary.findings)
-        )
+        self.assertEqual(summary.findings, [])
+        self.assertTrue(any("翻译模板尚未生成" in summary.message for _ in [0]))
         self.assertTrue(any("翻译文件：0 个" in fact for fact in summary.facts))
 
     def test_can_generate_template_with_empty_tl_dir_is_warning(self):
@@ -90,9 +90,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
 
         self.assertEqual(summary.status, "warning")
-        self.assertTrue(
-            any("开始翻译" in finding or "翻译模板" in finding for finding in summary.findings)
-        )
+        self.assertEqual(summary.findings, [])
 
     def test_environment_api_key_source_is_reported(self):
         summary = summarize_doctor_output(
@@ -127,7 +125,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warning")
         self.assertTrue(any("界面字符串块" in finding for finding in summary.findings))
 
-    def test_doctor_recommendations_are_parsed_and_translated(self):
+    def test_doctor_recommendations_are_rendered_as_facts(self):
         output = DOCTOR_OUTPUT + (
             "\nRecommendations:\n"
             "- work directory is missing or empty and original/game exists; "
@@ -139,17 +137,18 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(len(parsed["recommendations"]), 1)
 
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
-        self.assertTrue(any("准备工作目录" in finding for finding in summary.findings))
+        self.assertEqual(summary.findings, [])
+        self.assertTrue(any(fact.startswith("建议：") for fact in summary.facts))
+        self.assertTrue(any("准备工作目录" in fact for fact in summary.facts))
 
-    def test_translate_doctor_recommendation_maps_bootstrap_hint(self):
-        translated = translate_doctor_recommendation(
+    def test_format_doctor_recommendation_fact_uses_fact_style(self):
+        fact = format_doctor_recommendation_fact(
             "work directory is missing or empty and original/game exists; "
             "run: python gemini_translate_batch.py bootstrap-work "
             "(copies original/game into work/game without generating TL)."
         )
 
-        self.assertIn("准备工作目录", translated)
-        self.assertIn("bootstrap-work", translated)
+        self.assertEqual(fact, "建议：点击「准备工作目录」")
 
     def test_stale_summary_marks_previous_result_invalid(self):
         summary = stale_summary()

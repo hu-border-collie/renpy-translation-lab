@@ -134,32 +134,26 @@ def format_safety_fact(level: str, *, prefix: str = "检查结果") -> str:
     return f"{prefix}：{safety_level_label(level)}"
 
 
-def translate_doctor_recommendation(recommendation: str) -> str:
+def format_doctor_recommendation_fact(recommendation: str) -> str:
+    """Render doctor recommendations in the same `标签：值` style as other facts."""
     text = recommendation.strip()
-    for source, translated in DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS:
+    for source, _translated in DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS:
         if text.startswith(source):
-            suffix = text[len(source):]
             if source == "work directory is missing or empty and original/game exists;":
-                return (
-                    f"{translated}请点击「准备工作目录」，或运行 bootstrap-work "
-                    f"（仅复制 original/game 到 work/game，不生成翻译模板）。"
-                )
+                return "建议：点击「准备工作目录」"
             if source == "Missing translation files; run: python gemini_translate_batch.py build":
-                return (
-                    f"{translated}（会自动执行 prepare：解包 RPA、生成翻译模板）。"
-                )
+                return "建议：点击「开始翻译」生成翻译模板"
             if source == "Install Ren'Py SDK or set prepare.renpy_sdk_dir, then run:":
-                return f"{translated} build 或点击「开始翻译」。"
+                return "建议：配置 Ren'Py SDK 后点击「开始翻译」"
+            if source == "prepare is disabled; enable prepare.enabled in translator_config.json, then run build.":
+                return "建议：在配置中启用 prepare 后点击「开始翻译」"
             if source == "Found " and "pending lines" in text:
                 count = text.removeprefix("Found ").split(" pending", 1)[0].strip()
-                return f"检测到约 {count} 条待翻译行；配置好 API 密钥后可开始翻译。"
-            return f"{translated}{suffix}"
+                return f"建议：点击「开始翻译」提交约 {count} 条待译行"
+            break
     if "bootstrap-work" in text and "copies original/game" in text:
-        return (
-            "请点击「准备工作目录」，或运行 bootstrap-work "
-            "（仅复制 original/game 到 work/game，不生成翻译模板）。"
-        )
-    return text
+        return "建议：点击「准备工作目录」"
+    return f"建议：{text}"
 
 
 def translate_doctor_warning(warning: str) -> str:

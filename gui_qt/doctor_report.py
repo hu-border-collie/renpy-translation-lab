@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from .user_copy import (
     doctor_mode_label,
-    translate_doctor_recommendation,
+    format_doctor_recommendation_fact,
     translate_doctor_warning,
 )
 
@@ -22,13 +22,9 @@ class DoctorSummary:
 
 
 MODE_MESSAGES = {
-    "can_generate_template": (
-        "Ren'Py 模板生成环境可用；如尚无翻译模板，可先「准备工作目录」，再「开始翻译」。"
-    ),
+    "can_generate_template": "Ren'Py 模板生成环境可用；翻译模板尚未生成。",
     "existing_tl_only": "已有翻译文件可处理；模板生成环境不可用，后续依赖现有翻译文件。",
-    "blocked_missing_template": (
-        "缺少可处理的翻译文件，也无法自动生成模板；如有 original/game，可先准备工作目录。"
-    ),
+    "blocked_missing_template": "缺少可处理的翻译文件，也无法自动生成模板。",
 }
 
 
@@ -169,8 +165,8 @@ def summarize_doctor_output(
         for warning in parsed.get("warnings", [])
         if isinstance(warning, str) and warning.strip()
     ]
-    recommendations = [
-        translate_doctor_recommendation(recommendation)
+    recommendation_facts = [
+        format_doctor_recommendation_fact(recommendation)
         for recommendation in parsed.get("recommendations", [])
         if isinstance(recommendation, str) and recommendation.strip()
     ]
@@ -192,12 +188,10 @@ def summarize_doctor_output(
         facts.append(f"检查模式：{doctor_mode_label(mode)}")
     if counts:
         facts.extend(format_tl_scan_facts(counts, pending=pending))
+    if recommendation_facts:
+        facts.extend(recommendation_facts)
 
-    findings = list(warnings) + list(recommendations)
-    if mode == "can_generate_template" and (not counts or int(counts.get("rpy_files", 0)) == 0):
-        recommendation_text = " ".join(recommendations)
-        if "准备工作目录" not in recommendation_text and "开始翻译" not in recommendation_text:
-            findings.append("翻译模板尚未生成；完成准备后点击「开始翻译」，再重新运行环境检查。")
+    findings = list(warnings)
     if api_key_count is not None:
         if api_key_count > 0:
             if api_key_source == "environment":
@@ -205,7 +199,7 @@ def summarize_doctor_output(
             else:
                 facts.append(f"API 密钥：已配置 {api_key_count} 个")
         else:
-            findings.append("尚未配置 API 密钥；环境检查不调用模型，但翻译任务需要密钥。")
+            facts.append("建议：在配置页填写 API 密钥后再开始翻译")
 
     if exit_code != 0:
         return DoctorSummary(
@@ -216,10 +210,14 @@ def summarize_doctor_output(
             findings=findings,
         )
 
+    needs_attention = bool(findings) or bool(recommendation_facts) or (
+        mode == "can_generate_template"
+        and (not counts or int(counts.get("rpy_files", 0)) == 0)
+    ) or (api_key_count is not None and api_key_count == 0)
     if mode == "blocked_missing_template":
         status = "blocked"
         heading = "需要先准备翻译模板"
-    elif findings:
+    elif needs_attention:
         status = "warning"
         heading = "检查完成，但有需要处理的事项"
     else:
