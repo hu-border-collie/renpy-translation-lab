@@ -389,7 +389,9 @@ class GuiProjectStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = self.make_state(root)
-            long_path = str((root / "Game Work").resolve())
+            game_dir = root / "Game Work"
+            game_dir.mkdir(parents=True, exist_ok=True)
+            long_path = str(game_dir.resolve())
             buffer = ctypes.create_unicode_buffer(260)
             if ctypes.windll.kernel32.GetShortPathNameW(long_path, buffer, len(buffer)) == 0:
                 self.skipTest("Could not resolve Windows short path for temp directory")

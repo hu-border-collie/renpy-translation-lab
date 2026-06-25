@@ -733,7 +733,11 @@ def load_translator_settings():
         if os.path.normcase(resolved_root) != os.path.normcase(original_root):
             ENV_GAME_ROOT = resolved_root
             if isinstance(game_root, str) and game_root.strip() and os.path.exists(TRANSLATOR_CONFIG):
-                persist_game_root(resolved_root)
+                try:
+                    persist_game_root(resolved_root)
+                except Exception as exc:
+                    print(f"Warning: Failed to persist corrected game_root: {exc}")
+                    _apply_game_root(resolved_root)
             else:
                 _apply_game_root(resolved_root)
         else:
@@ -959,6 +963,18 @@ def _canonical_abs_path(path):
 canonical_abs_path = _canonical_abs_path
 
 
+def _path_contains_path(container, contained):
+    container_norm = _canonical_abs_path(container)
+    contained_norm = _canonical_abs_path(contained)
+    if not container_norm or not contained_norm:
+        return False
+    try:
+        common = os.path.commonpath([container_norm, contained_norm])
+    except ValueError:
+        return False
+    return os.path.normcase(common) == os.path.normcase(container_norm)
+
+
 def resolve_project_root(base_dir=None):
     base = _canonical_abs_path(base_dir or BASE_DIR)
     if os.path.basename(base).lower() == "work":
@@ -1082,6 +1098,16 @@ def bootstrap_work_from_original(*, save_game_root=False, refresh_runtime_paths=
         }
 
     target_game_dir = os.path.join(work_dir, WORK_GAME_SUBDIR)
+    if _path_contains_path(source_game_dir, target_game_dir):
+        return {
+            "status": "failed",
+            "project_root": project_root,
+            "work_dir": work_dir,
+            "source_game_dir": source_game_dir,
+            "files_copied": 0,
+            "message": "source_game_dir must not contain work/game.",
+            "game_root_updated": False,
+        }
     try:
         os.makedirs(work_dir, exist_ok=True)
         files_copied = _copy_game_directory(source_game_dir, target_game_dir)
@@ -1100,8 +1126,12 @@ def bootstrap_work_from_original(*, save_game_root=False, refresh_runtime_paths=
     game_root_updated = False
     if os.path.normcase(base) != os.path.normcase(work_dir):
         if save_game_root:
-            persist_game_root(work_dir)
-            game_root_updated = True
+            try:
+                persist_game_root(work_dir)
+                game_root_updated = True
+            except Exception as exc:
+                _apply_game_root(work_dir)
+                message = f"{message} Failed to update game_root: {exc}"
         elif refresh_runtime_paths:
             _apply_game_root(work_dir)
 

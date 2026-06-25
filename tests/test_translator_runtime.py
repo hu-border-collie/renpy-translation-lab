@@ -1852,6 +1852,45 @@ class BootstrapWorkTests(unittest.TestCase):
             self.assertEqual(result['status'], 'skipped')
             self.assertEqual(result['files_copied'], 0)
 
+    def test_bootstrap_work_rejects_source_containing_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            project.mkdir(parents=True)
+
+            with mock.patch.object(runtime, 'SOURCE_GAME_DIR', str(project)):
+                result = runtime.bootstrap_work_from_original(base_dir=str(project))
+
+            self.assertEqual(result['status'], 'failed')
+            self.assertEqual(result['files_copied'], 0)
+            self.assertIn('must not contain work/game', result['message'])
+
+    def test_bootstrap_work_applies_runtime_when_persist_game_root_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original_game = project / 'original' / 'game'
+            original_game.mkdir(parents=True)
+            (original_game / 'script.rpy').write_text('label start:\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(runtime, 'persist_game_root', side_effect=OSError('denied')),
+                mock.patch.object(runtime, 'TL_SUBDIR', 'game/tl/schinese'),
+            ):
+                result = runtime.bootstrap_work_from_original(
+                    base_dir=str(project),
+                    save_game_root=True,
+                    refresh_runtime_paths=True,
+                )
+
+            self.assertEqual(result['status'], 'created')
+            self.assertFalse(result['game_root_updated'])
+            self.assertIn('Failed to update game_root', result['message'])
+            self.assertEqual(
+                runtime.BASE_DIR,
+                runtime.canonical_abs_path(project / 'work'),
+            )
+
     def test_bootstrap_work_persists_game_root_when_pointing_at_project_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
