@@ -160,7 +160,6 @@ QTabWidget#diagnostics_inner_tabs > QTabBar::tab {
 QTabWidget#diagnostics_inner_tabs > QTabBar::tab:selected {
     background-color: #ffffff;
     color: #2563eb;
-    font-weight: 600;
 }
 
 QLabel#diagnostics_section_label {
@@ -270,7 +269,6 @@ QTabWidget#workbench_status_tabs > QTabBar::tab {
 QTabWidget#workbench_status_tabs > QTabBar::tab:selected {
     background-color: #ffffff;
     color: #2563eb;
-    font-weight: 600;
 }
 
 /* Project Path Frame styling */
