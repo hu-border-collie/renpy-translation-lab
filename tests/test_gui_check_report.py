@@ -94,6 +94,7 @@ class GuiCheckReportTests(unittest.TestCase):
         )
 
         self.assertEqual(summary.status, "warn")
+        self.assertIn("查看问题清单", summary.message)
         self.assertIn("补救命令", summary.message)
         self.assertIn("retry", summary.message)
         self.assertIn("safe", summary.message)
@@ -125,6 +126,7 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertIsNotNone(summary)
         self.assertEqual(summary.status, "warn")
         self.assertFalse(summary.can_apply)
+        self.assertIn("查看问题清单", summary.message)
         self.assertIn("补救命令", summary.message)
         self.assertIn("retry", summary.message)
         self.assertIn("safe", summary.message)
