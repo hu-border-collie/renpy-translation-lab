@@ -216,12 +216,12 @@ class MainWindow(QMainWindow):
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
         self.doctor_btn = QPushButton("环境检查")
-        self.doctor_btn.setObjectName("doctor_btn")
+        self.doctor_btn.setObjectName("workflow_btn")
         self.doctor_btn.clicked.connect(self._on_run_doctor)
         action_row.addWidget(self.doctor_btn)
 
         self.bootstrap_work_btn = QPushButton("准备工作目录")
-        self.bootstrap_work_btn.setObjectName("secondary_btn")
+        self.bootstrap_work_btn.setObjectName("setup_btn")
         self.bootstrap_work_btn.clicked.connect(self._on_bootstrap_work)
         action_row.addWidget(self.bootstrap_work_btn)
 
@@ -231,7 +231,7 @@ class MainWindow(QMainWindow):
         action_row.addWidget(self.translate_btn)
 
         self.resume_btn = QPushButton("继续任务")
-        self.resume_btn.setObjectName("secondary_btn")
+        self.resume_btn.setObjectName("workflow_btn")
         self.resume_btn.clicked.connect(self._on_resume_translation)
         action_row.addWidget(self.resume_btn)
 

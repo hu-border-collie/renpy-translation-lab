@@ -374,7 +374,6 @@ QPushButton:disabled {
 
 /* Primary Action Buttons */
 QPushButton#save_config_btn,
-QPushButton#doctor_btn,
 QPushButton#api_btn,
 QPushButton#translate_btn {
     background-color: #2563eb;
@@ -385,7 +384,6 @@ QPushButton#translate_btn {
 }
 
 QPushButton#save_config_btn:hover,
-QPushButton#doctor_btn:hover,
 QPushButton#api_btn:hover,
 QPushButton#translate_btn:hover {
     background-color: #1d4ed8;
@@ -393,11 +391,62 @@ QPushButton#translate_btn:hover {
 }
 
 QPushButton#save_config_btn:pressed,
-QPushButton#doctor_btn:pressed,
 QPushButton#api_btn:pressed,
 QPushButton#translate_btn:pressed {
     background-color: #1e40af;
     border-color: #1e40af;
+}
+
+/* Workbench workflow buttons (check / resume) */
+QPushButton#workflow_btn {
+    background-color: #eff6ff;
+    border: 1px solid #93c5fd;
+    color: #1d4ed8;
+    font-weight: 600;
+    min-width: 108px;
+}
+
+QPushButton#workflow_btn:hover {
+    background-color: #dbeafe;
+    border-color: #60a5fa;
+    color: #1e3a8a;
+}
+
+QPushButton#workflow_btn:pressed {
+    background-color: #bfdbfe;
+    border-color: #3b82f6;
+    color: #1e3a8a;
+}
+
+QPushButton#workflow_btn:disabled {
+    background-color: #f8fafc;
+    border-color: #e2e8f0;
+    color: #94a3b8;
+}
+
+/* Workbench setup helper */
+QPushButton#setup_btn {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    color: #475569;
+    font-weight: 500;
+    min-width: 108px;
+}
+
+QPushButton#setup_btn:hover {
+    background-color: #f8fafc;
+    border-color: #94a3b8;
+    color: #0f172a;
+}
+
+QPushButton#setup_btn:pressed {
+    background-color: #f1f5f9;
+}
+
+QPushButton#setup_btn:disabled {
+    background-color: #f1f5f9;
+    border-color: #e2e8f0;
+    color: #cbd5e1;
 }
 
 /* Secondary Action Buttons */
