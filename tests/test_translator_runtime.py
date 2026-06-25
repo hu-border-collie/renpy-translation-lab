@@ -1781,6 +1781,31 @@ class BootstrapWorkTests(unittest.TestCase):
                 runtime.canonical_abs_path(work),
             )
 
+    def test_load_translator_settings_applies_runtime_when_persist_game_root_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            work = project / 'work'
+            work.mkdir(parents=True)
+            config_path = root / 'translator_config.json'
+            config_path.write_text(
+                json.dumps({'game_root': str(project)}),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                mock.patch.object(runtime, 'persist_game_root', side_effect=OSError('denied')),
+            ):
+                runtime.load_translator_settings()
+
+            self.assertEqual(runtime.BASE_DIR, runtime.canonical_abs_path(work))
+            saved = json.loads(config_path.read_text(encoding='utf-8'))
+            self.assertEqual(
+                runtime.canonical_abs_path(saved['game_root']),
+                runtime.canonical_abs_path(project),
+            )
+
     def test_resolve_original_game_dir_from_project_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
