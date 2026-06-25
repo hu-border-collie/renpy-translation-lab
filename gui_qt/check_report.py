@@ -145,7 +145,7 @@ def summarize_check_output(
         return WritebackSummary(
             status="warn",
             heading="需要先处理问题",
-            message="检查结果为需处理，暂不应写回。可点击「补救命令」查看 retry 参考命令，处理后重新检查；只有 safe 才能写回。",
+            message="检查结果为需处理, 暂不应写回。可点击「补救命令」查看 retry 参考命令, 处理后重新检查; 只有 safe 才能写回。",
             facts=facts,
             findings=findings,
             can_apply=False,
@@ -288,7 +288,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
         return WritebackSummary(
             status="warn",
             heading="需要先处理问题",
-            message="最近一次检查结果为需处理，不应写回。可点击「补救命令」查看 retry 参考命令，处理后重新检查；只有 safe 才能写回。",
+            message="最近一次检查结果为需处理, 不应写回。可点击「补救命令」查看 retry 参考命令, 处理后重新检查; 只有 safe 才能写回。",
             facts=facts,
             findings=findings,
             can_apply=False,
