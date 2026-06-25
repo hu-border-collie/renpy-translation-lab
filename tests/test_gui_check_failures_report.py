@@ -236,6 +236,25 @@ class GuiCheckFailuresReportTests(unittest.TestCase):
         self.assertEqual(report.status, "missing_report")
         self.assertEqual(report.detail_lines, ["未找到 check_failures.jsonl。"])
 
+    def test_build_check_issues_report_summary_without_path_stays_missing_report(self):
+        report = build_check_issues_report(
+            {
+                "last_check_summary": {
+                    "safety_level": "warn",
+                    "safety_reasons": {
+                        "warn": {"partial_result_items": 2},
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(report.status, "missing_report")
+        self.assertEqual(report.report_path, "")
+        self.assertEqual(len(report.reason_groups), 1)
+        self.assertEqual(report.reason_groups[0].reason_code, "partial_result_items")
+        self.assertIn("最近检查结果", report.message)
+        self.assertTrue(any("按原因汇总" in line for line in report.detail_lines))
+
     def test_build_check_issues_report_truncates_display_items(self):
         lines = []
         for index in range(5):

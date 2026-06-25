@@ -515,15 +515,20 @@ def build_check_issues_report(
             detail_lines=detail_lines or [f"解析错误：{parse_error}"],
         )
 
-    has_report_content = bool(items) or bool(summary_groups)
-    if not report_path and report_text is None and not has_report_content:
+    if not report_path and report_text is None:
+        message = (
+            "任务清单中没有记录检查报告路径，也无法从翻译包目录推断。"
+            "请重新运行 check，或到诊断页查看任务上下文。"
+        )
+        if summary_groups:
+            message = (
+                "未找到检查报告文件路径；以下摘要来自任务清单中的最近检查结果。"
+                "请重新运行 check 生成完整报告。"
+            )
         return CheckIssuesReport(
             status="missing_report",
             heading="未找到检查报告",
-            message=(
-                "任务清单中没有记录检查报告路径，也无法从翻译包目录推断。"
-                "请重新运行 check，或到诊断页查看任务上下文。"
-            ),
+            message=message,
             report_path="",
             safety_level=safety_level,
             category_counts=category_counts,
