@@ -419,15 +419,18 @@ def _build_detail_lines(
     *,
     omitted_item_count: int,
 ) -> list[str]:
-    lines: list[str] = ["【按原因汇总】"]
-    for group in groups:
-        lines.append(
-            f"- [{group.category_label}] {group.reason_label}"
-            f"（{group.reason_code}，{group.count}） — {group.suggestion}"
-        )
+    lines: list[str] = []
+    if groups:
+        lines.append("【按原因汇总】")
+        for group in groups:
+            lines.append(
+                f"- [{group.category_label}] {group.reason_label}"
+                f"（{group.reason_code}，{group.count}） — {group.suggestion}"
+            )
 
     if items:
-        lines.append("")
+        if lines:
+            lines.append("")
         lines.append("【条目明细】")
         lines.extend(_format_item_line(item) for item in items)
         if omitted_item_count > 0:
@@ -513,7 +516,7 @@ def build_check_issues_report(
         )
 
     has_report_content = bool(items) or bool(summary_groups)
-    if not report_path and not has_report_content:
+    if not report_path and report_text is None and not has_report_content:
         return CheckIssuesReport(
             status="missing_report",
             heading="未找到检查报告",

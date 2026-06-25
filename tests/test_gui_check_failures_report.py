@@ -217,6 +217,24 @@ class GuiCheckFailuresReportTests(unittest.TestCase):
 
         self.assertEqual(report.status, "unreadable")
         self.assertTrue(any("解析错误" in fact for fact in report.facts))
+        self.assertTrue(any("解析错误" in line for line in report.detail_lines))
+
+    def test_build_check_issues_report_empty_injected_text_returns_empty_status(self):
+        report = build_check_issues_report(
+            {"last_check_summary": {"safety_level": "warn"}},
+            report_text="",
+        )
+
+        self.assertEqual(report.status, "empty")
+        self.assertEqual(report.detail_lines, ["报告文件中没有失败条目。"])
+
+    def test_build_check_issues_report_missing_path_uses_fallback_detail_text(self):
+        report = build_check_issues_report(
+            {"last_check_summary": {"safety_level": "warn"}},
+        )
+
+        self.assertEqual(report.status, "missing_report")
+        self.assertEqual(report.detail_lines, ["未找到 check_failures.jsonl。"])
 
     def test_build_check_issues_report_truncates_display_items(self):
         lines = []
