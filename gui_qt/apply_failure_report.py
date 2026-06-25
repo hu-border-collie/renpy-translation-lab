@@ -247,7 +247,8 @@ def build_apply_failure_report(
         facts.append(f"写回失败报告：{report_path}")
 
     payload: dict[str, object] | None = None
-    parse_error = ""
+    report_parse_error = ""
+    failures_parse_error = ""
 
     if report_text is not None:
         try:
@@ -256,7 +257,7 @@ def build_apply_failure_report(
                 raise ValueError("报告根节点不是 JSON 对象。")
             payload = parse_apply_failure_report_payload(loaded)
         except (json.JSONDecodeError, ValueError) as exc:
-            parse_error = str(exc)
+            report_parse_error = str(exc)
     elif report_path and exists(report_path):
         try:
             loaded = json.loads(reader(report_path))
@@ -264,7 +265,7 @@ def build_apply_failure_report(
                 raise ValueError("报告根节点不是 JSON 对象。")
             payload = parse_apply_failure_report_payload(loaded)
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
-            parse_error = str(exc)
+            report_parse_error = str(exc)
 
     reason_code = "unclassified_failure"
     error_message = ""
@@ -308,14 +309,12 @@ def build_apply_failure_report(
         try:
             failure_items = parse_check_failures_jsonl(failures_text)
         except ValueError as exc:
-            if not parse_error:
-                parse_error = str(exc)
+            failures_parse_error = str(exc)
     elif failures_path and exists(failures_path):
         try:
             failure_items = parse_check_failures_jsonl(reader(failures_path))
         except (OSError, UnicodeError, ValueError) as exc:
-            if not parse_error:
-                parse_error = str(exc)
+            failures_parse_error = str(exc)
 
     normalized_items = [
         normalize_failure_entry(item) for item in failure_items if isinstance(item, dict)
@@ -336,7 +335,13 @@ def build_apply_failure_report(
         _format_failure_item_lines(display_items, omitted_count=omitted_count)
     )
 
-    if parse_error:
+    if failures_parse_error:
+        facts.append(f"失败明细解析错误：{failures_parse_error}")
+        detail_lines.append(
+            f"【失败明细】无法解析 failures.jsonl：{failures_parse_error}"
+        )
+
+    if report_parse_error:
         return ApplyFailureReportView(
             status="unreadable",
             heading="写回失败报告无法解析",
@@ -344,8 +349,8 @@ def build_apply_failure_report(
             report_path=report_path,
             failures_path=failures_path,
             reason_code=reason_code,
-            facts=facts + [f"解析错误：{parse_error}"],
-            detail_lines=detail_lines or [f"解析错误：{parse_error}"],
+            facts=facts + [f"解析错误：{report_parse_error}"],
+            detail_lines=detail_lines or [f"解析错误：{report_parse_error}"],
             failure_item_count=len(normalized_items),
         )
 

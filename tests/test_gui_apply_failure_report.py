@@ -89,6 +89,26 @@ class GuiApplyFailureReportTests(unittest.TestCase):
         self.assertTrue(any("script.rpy" in line for line in report.detail_lines))
         self.assertTrue(any("最近检查" in fact for fact in report.facts))
 
+    def test_build_apply_failure_report_keeps_valid_report_when_failures_unreadable(self):
+        manifest = {
+            "_manifest_path": r"C:\pkg\manifest.json",
+            "last_apply_failure_report_path": r"C:\pkg\apply_failure_report.json",
+        }
+
+        report = build_apply_failure_report(
+            manifest,
+            manifest_path=r"C:\pkg\manifest.json",
+            report_text=json.dumps(SAMPLE_REPORT, ensure_ascii=False),
+            failures_text="not valid jsonl",
+        )
+
+        self.assertEqual(report.status, "ok")
+        self.assertEqual(report.reason_code, "stale_check_fingerprint")
+        self.assertTrue(any("失败明细解析错误" in fact for fact in report.facts))
+        self.assertTrue(
+            any("无法解析 failures.jsonl" in line for line in report.detail_lines)
+        )
+
     def test_build_apply_failure_report_missing_file(self):
         manifest = {
             "last_apply_failure_report_path": r"C:\pkg\apply_failure_report.json",

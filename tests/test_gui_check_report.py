@@ -153,6 +153,17 @@ class GuiCheckReportTests(unittest.TestCase):
             {
                 "_manifest_path": r"C:\pkg\manifest.json",
                 "last_apply_failure_report_path": r"C:\pkg\apply_failure_report.json",
+            }
+        )
+
+        self.assertEqual(summary.status, "failed")
+        self.assertFalse(summary.can_apply)
+        self.assertIn("查看写回失败报告", summary.message)
+
+    def test_summarize_manifest_writeback_after_apply_failure_and_recheck(self):
+        summary = summarize_manifest_writeback(
+            {
+                "_manifest_path": r"C:\pkg\manifest.json",
                 "last_check_summary": {
                     "safety_level": "safe",
                     "pending_files": 2,
@@ -161,9 +172,8 @@ class GuiCheckReportTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(summary.status, "failed")
-        self.assertFalse(summary.can_apply)
-        self.assertIn("查看写回失败报告", summary.message)
+        self.assertEqual(summary.status, "safe")
+        self.assertTrue(summary.can_apply)
 
     def test_summarize_manifest_writeback_after_apply(self):
         summary = summarize_manifest_writeback(
