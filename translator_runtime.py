@@ -727,7 +727,16 @@ def load_translator_settings():
         ENV_GAME_ROOT = os.environ.get("GAME_ROOT") or os.environ.get("SA_GAME_ROOT")
 
     if ENV_GAME_ROOT:
-        BASE_DIR = os.path.abspath(ENV_GAME_ROOT)
+        original_root = os.path.abspath(ENV_GAME_ROOT)
+        resolved_root = resolve_effective_game_root(original_root)
+        if os.path.normcase(resolved_root) != os.path.normcase(original_root):
+            ENV_GAME_ROOT = resolved_root
+            if isinstance(game_root, str) and game_root.strip() and os.path.exists(TRANSLATOR_CONFIG):
+                persist_game_root(resolved_root)
+            else:
+                _apply_game_root(resolved_root)
+        else:
+            BASE_DIR = original_root
     else:
         BASE_DIR = os.path.abspath(os.path.join(ROOT_DIR, ".."))
 
@@ -944,6 +953,18 @@ def resolve_project_root(base_dir=None):
 
 def resolve_work_dir(base_dir=None):
     return os.path.abspath(os.path.join(resolve_project_root(base_dir), "work"))
+
+
+def resolve_effective_game_root(game_root):
+    """Prefer nested work/ when game_root points at the project root."""
+    normalized = os.path.abspath(game_root)
+    if os.path.basename(normalized).lower() == "work":
+        return normalized
+
+    nested_work = os.path.join(normalized, "work")
+    if os.path.isdir(nested_work):
+        return os.path.abspath(nested_work)
+    return normalized
 
 
 def resolve_original_game_dir(base_dir=None):

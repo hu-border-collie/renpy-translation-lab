@@ -79,7 +79,9 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "检查完成，但有需要处理的事项")
-        self.assertTrue(any("翻译目录尚不存在" in finding for finding in summary.findings))
+        self.assertTrue(
+            any("开始翻译" in finding or "翻译模板" in finding for finding in summary.findings)
+        )
         self.assertTrue(any("翻译文件：0 个" in fact for fact in summary.facts))
 
     def test_can_generate_template_with_empty_tl_dir_is_warning(self):
@@ -88,7 +90,9 @@ class GuiDoctorReportTests(unittest.TestCase):
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
 
         self.assertEqual(summary.status, "warning")
-        self.assertTrue(any("没有翻译文件" in finding for finding in summary.findings))
+        self.assertTrue(
+            any("开始翻译" in finding or "翻译模板" in finding for finding in summary.findings)
+        )
 
     def test_environment_api_key_source_is_reported(self):
         summary = summarize_doctor_output(

@@ -23,7 +23,7 @@ class DoctorSummary:
 
 MODE_MESSAGES = {
     "can_generate_template": (
-        "Ren'Py 模板生成环境可用；如翻译模板尚不存在，可先准备工作目录，再运行开始翻译（build）。"
+        "Ren'Py 模板生成环境可用；如尚无翻译模板，可先「准备工作目录」，再「开始翻译」。"
     ),
     "existing_tl_only": "已有翻译文件可处理；模板生成环境不可用，后续依赖现有翻译文件。",
     "blocked_missing_template": (
@@ -182,7 +182,7 @@ def summarize_doctor_output(
 
     facts: list[str] = []
     if parsed.get("base_dir"):
-        facts.append(f"项目目录：{parsed['base_dir']}")
+        facts.append(f"work 目录：{parsed['base_dir']}")
     if parsed.get("tl_dir"):
         exists_text = "存在" if parsed.get("tl_exists") is True else "不存在"
         facts.append(f"翻译目录：{exists_text}")
@@ -194,15 +194,10 @@ def summarize_doctor_output(
         facts.extend(format_tl_scan_facts(counts, pending=pending))
 
     findings = list(warnings) + list(recommendations)
-    if mode == "can_generate_template":
-        if parsed.get("tl_exists") is False:
-            findings.append(
-                "翻译目录尚不存在；可先点击「准备工作目录」，再运行「开始翻译」生成模板，然后重新检查。"
-            )
-        elif counts and int(counts.get("rpy_files", 0)) == 0:
-            findings.append(
-                "翻译目录中没有翻译文件；可先准备工作目录，再通过「开始翻译」生成模板后重新检查。"
-            )
+    if mode == "can_generate_template" and (not counts or int(counts.get("rpy_files", 0)) == 0):
+        recommendation_text = " ".join(recommendations)
+        if "准备工作目录" not in recommendation_text and "开始翻译" not in recommendation_text:
+            findings.append("翻译模板尚未生成；完成准备后点击「开始翻译」，再重新运行环境检查。")
     if api_key_count is not None:
         if api_key_count > 0:
             if api_key_source == "environment":
@@ -255,7 +250,7 @@ def idle_summary() -> DoctorSummary:
     return DoctorSummary(
         status="idle",
         heading="尚未运行项目检查",
-        message="选择游戏 work 目录后点击「环境检查」。",
+        message="选择 work 目录（或项目根目录）后点击「环境检查」。",
         facts=[],
         findings=[],
     )

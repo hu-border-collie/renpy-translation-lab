@@ -6908,41 +6908,18 @@ def collect_tl_doctor_counts():
     return counts
 
 
-def _detect_nested_work_dir(base_dir, tl_subdir):
-    if os.path.basename(os.path.abspath(base_dir)).lower() == 'work':
-        return ''
-    work_dir = os.path.join(base_dir, 'work')
-    nested_tl = os.path.abspath(os.path.join(work_dir, tl_subdir))
-    current_tl = os.path.abspath(os.path.join(base_dir, tl_subdir))
-    if os.path.isdir(nested_tl) and nested_tl != current_tl:
-        return os.path.abspath(work_dir)
-    if os.path.isdir(work_dir) and not legacy.is_work_dir_empty(work_dir):
-        return os.path.abspath(work_dir)
-    return ''
-
-
 def collect_doctor_recommendations(report):
     recommendations = []
-    base_dir = report.get('base_dir', '')
-    tl_subdir = report.get('tl_subdir', '')
-    nested_work = _detect_nested_work_dir(base_dir, tl_subdir) if base_dir else ''
-    if nested_work and os.path.normcase(nested_work) != os.path.normcase(os.path.abspath(base_dir)):
-        recommendations.append(
-            f'game_root points above work directory; set game_root to {nested_work} in translator_config.json.'
-        )
 
+    mode = report.get('mode', '')
+    has_tl = report.get('counts', {}).get('rpy_files', 0) > 0
     if report.get('work_bootstrap_allowed') and report.get('original_game_dir'):
         recommendations.append(
             'work directory is missing or empty and original/game exists; '
             'run: python gemini_translate_batch.py bootstrap-work '
             '(copies original/game into work/game without generating TL).'
         )
-    elif not report.get('work_bootstrap_allowed') and report.get('original_game_dir'):
-        pass
-
-    mode = report.get('mode', '')
-    has_tl = report.get('counts', {}).get('rpy_files', 0) > 0
-    if not has_tl and report.get('prepare_enabled') and report.get('can_generate_template'):
+    elif not has_tl and report.get('prepare_enabled') and report.get('can_generate_template'):
         recommendations.append(
             'Missing translation files; run: python gemini_translate_batch.py build '
             '(build runs prepare automatically: unpack RPA if needed, generate tl template).'

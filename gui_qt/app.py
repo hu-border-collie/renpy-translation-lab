@@ -190,7 +190,7 @@ class MainWindow(QMainWindow):
         proj_layout.setContentsMargins(12, 10, 12, 10)
         proj_layout.setSpacing(10)
 
-        proj_layout.addWidget(QLabel("当前游戏 work 目录："))
+        proj_layout.addWidget(QLabel("当前 work 目录："))
 
         self.project_path_edit = QLineEdit("尚未选择项目")
         self.project_path_edit.setReadOnly(True)
@@ -1067,12 +1067,17 @@ class MainWindow(QMainWindow):
         start_dir = str(self.state.get_game_root() or Path.home())
         directory = QFileDialog.getExistingDirectory(
             self,
-            "选择游戏的 work 目录（通常包含 game/tl/schinese）",
+            "选择游戏目录（项目根目录或 work 目录；存在 work/ 时会自动切换）",
             start_dir,
         )
         if directory:
             try:
-                self.state.set_game_root(directory)
+                effective_root, adjusted = self.state.set_game_root(directory)
+                if adjusted:
+                    self.statusBar().showMessage(
+                        f"已自动切换到 work 目录：{effective_root}",
+                        8000,
+                    )
             except ValueError as exc:
                 QMessageBox.warning(self, "无法更新配置", str(exc))
                 self._append_log(f"更新 translator_config.json 失败：{exc}")

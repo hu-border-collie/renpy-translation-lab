@@ -45,16 +45,12 @@ BOOTSTRAP_FIELD_LABELS = {
 
 DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS: tuple[tuple[str, str], ...] = (
     (
-        "game_root points above work directory; set game_root to",
-        "项目路径指到了 work 的上级；请将 game_root 改为",
-    ),
-    (
         "work directory is missing or empty and original/game exists;",
         "work 目录不存在或为空，且检测到 original/game；",
     ),
     (
         "Missing translation files; run: python gemini_translate_batch.py build",
-        "缺少翻译文件；请运行 build 或点击「开始翻译」",
+        "缺少翻译模板；请点击「开始翻译」",
     ),
     (
         "Install Ren'Py SDK or set prepare.renpy_sdk_dir, then run:",
@@ -150,7 +146,7 @@ def translate_doctor_recommendation(recommendation: str) -> str:
                 )
             if source == "Missing translation files; run: python gemini_translate_batch.py build":
                 return (
-                    f"{translated}（build 会自动执行 prepare：解包 RPA、生成翻译模板）。"
+                    f"{translated}（会自动执行 prepare：解包 RPA、生成翻译模板）。"
                 )
             if source == "Install Ren'Py SDK or set prepare.renpy_sdk_dir, then run:":
                 return f"{translated} build 或点击「开始翻译」。"

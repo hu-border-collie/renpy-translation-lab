@@ -1717,6 +1717,41 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
 
 
 class BootstrapWorkTests(unittest.TestCase):
+    def test_resolve_effective_game_root_prefers_nested_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            work = project / 'work'
+            work.mkdir(parents=True)
+
+            self.assertEqual(
+                runtime.resolve_effective_game_root(str(project)),
+                str(work.resolve()),
+            )
+            self.assertEqual(
+                runtime.resolve_effective_game_root(str(work)),
+                str(work.resolve()),
+            )
+
+    def test_load_translator_settings_redirects_project_root_to_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            work = project / 'work'
+            work.mkdir(parents=True)
+            config_path = root / 'translator_config.json'
+            config_path.write_text(
+                json.dumps({'game_root': str(project)}),
+                encoding='utf-8',
+            )
+
+            with mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)):
+                runtime.load_translator_settings()
+
+            self.assertEqual(runtime.BASE_DIR, str(work.resolve()))
+            saved = json.loads(config_path.read_text(encoding='utf-8'))
+            self.assertEqual(Path(saved['game_root']), work)
+
     def test_resolve_original_game_dir_from_project_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

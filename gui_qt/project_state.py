@@ -16,6 +16,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+import translator_runtime as runtime
+
 
 class ProjectState:
     """Holds the current project context for the GUI shell."""
@@ -154,14 +156,22 @@ class ProjectState:
     def get_game_root(self) -> Path | None:
         return self._game_root
 
-    def set_game_root(self, path: str | Path) -> None:
+    def normalize_game_root(self, path: str | Path) -> tuple[Path, bool]:
+        """Resolve project-root selections to nested work/ when that directory exists."""
+        original = self._path_without_resolve(path)
+        effective = self._path_without_resolve(runtime.resolve_effective_game_root(str(original)))
+        adjusted = self._normalized_path_text(original) != self._normalized_path_text(effective)
+        return effective, adjusted
+
+    def set_game_root(self, path: str | Path) -> tuple[Path, bool]:
         """Update current game root and persist it to translator_config.json."""
-        p = self._path_without_resolve(path)
+        p, adjusted = self.normalize_game_root(path)
         if not p.exists():
             # Still allow setting even if not exist yet (user may create later)
             pass
         self._save_game_root_to_config(p)
         self._game_root = p
+        return p, adjusted
 
     def _load_game_root_from_config(self) -> None:
         if not self.config_path.exists():
@@ -170,7 +180,10 @@ class ProjectState:
             data = json.loads(self.config_path.read_text(encoding="utf-8-sig") or "{}")
             game_root = data.get("game_root")
             if isinstance(game_root, str) and game_root.strip():
-                self._game_root = self._path_without_resolve(game_root)
+                effective, adjusted = self.normalize_game_root(game_root)
+                self._game_root = effective
+                if adjusted:
+                    self._save_game_root_to_config(effective)
         except Exception:
             # Non-fatal for GUI
             pass
