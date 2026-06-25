@@ -278,6 +278,11 @@ class MainWindow(QMainWindow):
         self.apply_btn.clicked.connect(self._on_apply_writeback)
         self.apply_btn.setEnabled(False)
         writeback_actions.addWidget(self.apply_btn)
+        self.remediation_btn = QPushButton("补救命令")
+        self.remediation_btn.setObjectName("secondary_btn")
+        self.remediation_btn.clicked.connect(self._open_remediation_commands)
+        self.remediation_btn.setEnabled(False)
+        writeback_actions.addWidget(self.remediation_btn)
         writeback_actions.addStretch()
         writeback_layout.addLayout(writeback_actions)
         writeback_layout.addStretch()
@@ -651,6 +656,14 @@ class MainWindow(QMainWindow):
     def _focus_workbench_status_tab(self, index: int) -> None:
         if 0 <= index < self.workbench_status_tabs.count():
             self.workbench_status_tabs.setCurrentIndex(index)
+
+    def _open_remediation_commands(self) -> None:
+        self._refresh_diagnostics_context()
+        if self._diagnostics_tab is not None:
+            self.tab_widget.setCurrentWidget(self._diagnostics_tab)
+        if hasattr(self, "diagnostics_inner_tabs"):
+            self.diagnostics_inner_tabs.setCurrentIndex(1)
+        self.statusBar().showMessage("已打开补救命令参考。", 3000)
 
     def _set_details_label(self, label: QLabel, findings: list[str]) -> None:
         if findings:
@@ -1069,7 +1082,13 @@ class MainWindow(QMainWindow):
         self.translate_btn.setEnabled(not running)
         self.resume_btn.setEnabled(not running)
         self.save_config_btn.setEnabled(not running)
-        self.apply_btn.setEnabled(not running and self._current_writeback_summary().can_apply)
+        writeback_summary = self._current_writeback_summary()
+        self.apply_btn.setEnabled(not running and writeback_summary.can_apply)
+        if hasattr(self, "remediation_btn"):
+            remediation_ready = writeback_summary.status == "warn" and bool(
+                writeback_summary.manifest_path
+            )
+            self.remediation_btn.setEnabled(not running and remediation_ready)
         self.bootstrap_rag_btn.setEnabled(not running)
         self.bootstrap_source_index_btn.setEnabled(not running)
         self.kill_btn.setEnabled(running)
@@ -1129,6 +1148,11 @@ class MainWindow(QMainWindow):
         self.writeback_message_label.setText(summary.message)
         self.writeback_facts_label.setText("\n".join(summary.facts))
         self._set_details_label(self.writeback_details_label, summary.findings)
+        remediation_ready = summary.status == "warn" and bool(summary.manifest_path)
+        if hasattr(self, "remediation_btn"):
+            self.remediation_btn.setEnabled(
+                remediation_ready and not self.kill_btn.isEnabled()
+            )
         if not self.kill_btn.isEnabled():
             self.apply_btn.setEnabled(summary.can_apply)
 
