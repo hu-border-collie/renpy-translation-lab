@@ -366,8 +366,8 @@ def _resolve_path(base_dir, value):
     if not text:
         return ""
     if os.path.isabs(text):
-        return os.path.abspath(text)
-    return os.path.abspath(os.path.join(base_dir, text))
+        return _canonical_abs_path(text)
+    return _canonical_abs_path(os.path.join(base_dir, text))
 
 
 def _resolve_preferred_path_from_bases(value, base_dirs):
@@ -728,7 +728,7 @@ def load_translator_settings():
         ENV_GAME_ROOT = os.environ.get("GAME_ROOT") or os.environ.get("SA_GAME_ROOT")
 
     if ENV_GAME_ROOT:
-        original_root = os.path.abspath(ENV_GAME_ROOT)
+        original_root = _canonical_abs_path(ENV_GAME_ROOT)
         resolved_root = resolve_effective_game_root(original_root)
         if os.path.normcase(resolved_root) != os.path.normcase(original_root):
             ENV_GAME_ROOT = resolved_root
@@ -739,7 +739,7 @@ def load_translator_settings():
         else:
             BASE_DIR = original_root
     else:
-        BASE_DIR = os.path.abspath(os.path.join(ROOT_DIR, ".."))
+        BASE_DIR = _canonical_abs_path(os.path.join(ROOT_DIR, ".."))
 
     glossary_file = config.get("glossary_file")
     if glossary_file is None:
@@ -754,8 +754,8 @@ def load_translator_settings():
     if isinstance(tl_subdir, str) and tl_subdir.strip():
         TL_SUBDIR = _normalize_rel_path(tl_subdir)
 
-    TL_DIR = os.path.abspath(os.path.join(BASE_DIR, TL_SUBDIR))
-    WORK_GAME_DIR = os.path.abspath(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
+    TL_DIR = _canonical_abs_path(os.path.join(BASE_DIR, TL_SUBDIR))
+    WORK_GAME_DIR = _canonical_abs_path(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
 
     prepare = config.get("prepare")
     if not isinstance(prepare, dict):
@@ -956,6 +956,9 @@ def _canonical_abs_path(path):
         return abs_path
 
 
+canonical_abs_path = _canonical_abs_path
+
+
 def resolve_project_root(base_dir=None):
     base = _canonical_abs_path(base_dir or BASE_DIR)
     if os.path.basename(base).lower() == "work":
@@ -1048,7 +1051,7 @@ def persist_game_root(work_dir):
 
 
 def bootstrap_work_from_original(*, save_game_root=False, refresh_runtime_paths=False, base_dir=None):
-    base = os.path.abspath(base_dir or BASE_DIR)
+    base = _canonical_abs_path(base_dir or BASE_DIR)
     project_root = resolve_project_root(base)
     work_dir = resolve_work_dir(base)
     allowed, _, skip_reason = work_dir_bootstrap_allowed(base)
@@ -1128,7 +1131,7 @@ def _guess_source_game_dir():
     for candidate in candidates:
         if not candidate:
             continue
-        normalized = os.path.abspath(candidate)
+        normalized = _canonical_abs_path(candidate)
         if normalized in seen:
             continue
         seen.add(normalized)

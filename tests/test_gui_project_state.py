@@ -6,9 +6,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 from gui_qt.project_state import ProjectState
+import translator_runtime as runtime
 
 
 class GuiProjectStateTests(unittest.TestCase):
+    def assert_same_path(self, left, right) -> None:
+        self.assertEqual(
+            runtime.canonical_abs_path(left),
+            runtime.canonical_abs_path(right),
+        )
+
     def make_state(self, root: Path) -> ProjectState:
         state = ProjectState.__new__(ProjectState)
         state.tool_root = root
@@ -344,9 +351,9 @@ class GuiProjectStateTests(unittest.TestCase):
 
             effective, adjusted = state.set_game_root(project)
             self.assertTrue(adjusted)
-            self.assertEqual(effective, work)
+            self.assert_same_path(effective, work)
             saved = json.loads(state.config_path.read_text(encoding="utf-8"))
-            self.assertEqual(Path(saved["game_root"]), work)
+            self.assert_same_path(saved["game_root"], work)
 
     def test_set_game_root_preserves_translator_config_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -368,22 +375,31 @@ class GuiProjectStateTests(unittest.TestCase):
             state.set_game_root(game_root)
 
             saved = json.loads(state.config_path.read_text(encoding="utf-8"))
-            self.assertEqual(Path(saved["game_root"]), game_root)
+            self.assert_same_path(saved["game_root"], game_root)
             self.assertEqual(saved["batch"], {"model": "gemini-test"})
             self.assertEqual(saved["include_files"], ["script.rpy"])
-            self.assertEqual(state.get_game_root(), game_root)
+            self.assert_same_path(state.get_game_root(), game_root)
 
-    def test_set_game_root_keeps_short_path_spelling(self):
+    def test_set_game_root_canonicalizes_windows_short_path(self):
+        if os.name != "nt":
+            self.skipTest("Windows-only short-path normalization")
+
+        import ctypes
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = self.make_state(root)
-            game_root = Path("C:/Users/RUNNER~1/AppData/Local/Temp/Game Work")
+            long_path = str((root / "Game Work").resolve())
+            buffer = ctypes.create_unicode_buffer(260)
+            if ctypes.windll.kernel32.GetShortPathNameW(long_path, buffer, len(buffer)) == 0:
+                self.skipTest("Could not resolve Windows short path for temp directory")
 
-            state.set_game_root(game_root)
+            state.set_game_root(Path(buffer.value))
 
             saved = json.loads(state.config_path.read_text(encoding="utf-8"))
-            self.assertIn("RUNNER~1", saved["game_root"])
-            self.assertIn("RUNNER~1", str(state.get_game_root()))
+            self.assert_same_path(saved["game_root"], long_path)
+            self.assert_same_path(state.get_game_root(), long_path)
+            self.assertNotIn("RUNNER~1", saved["game_root"].upper())
 
     def test_set_game_root_rejects_invalid_json_without_overwriting(self):
         with tempfile.TemporaryDirectory() as tmp:

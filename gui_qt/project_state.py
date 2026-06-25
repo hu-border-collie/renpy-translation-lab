@@ -87,7 +87,7 @@ class ProjectState:
         return manifest
 
     def _normalized_path_text(self, path: str | Path) -> str:
-        return os.path.normcase(os.path.abspath(str(path)))
+        return os.path.normcase(runtime.canonical_abs_path(str(path)))
 
     def _resolve_api_keys_path(self) -> Path:
         root_api_keys = self.tool_root / "api_keys.json"
@@ -160,7 +160,7 @@ class ProjectState:
     def normalize_game_root(self, path: str | Path) -> tuple[Path, bool]:
         """Resolve project-root selections to nested work/ when that directory exists."""
         original = self._path_without_resolve(path)
-        effective = self._path_without_resolve(runtime.resolve_effective_game_root(str(original)))
+        effective = Path(runtime.canonical_abs_path(runtime.resolve_effective_game_root(str(original))))
         adjusted = self._normalized_path_text(original) != self._normalized_path_text(effective)
         return effective, adjusted
 
@@ -205,7 +205,7 @@ class ProjectState:
     def _save_game_root_to_config(self, game_root: Path) -> None:
         """Update only the game_root key, preserve everything else."""
         data = self._read_json_object(self.config_path, "translator_config.json")
-        data["game_root"] = str(game_root)
+        data["game_root"] = runtime.canonical_abs_path(str(game_root))
         self._write_json_object(self.config_path, data)
 
     # --- Config helpers (api_keys + translator_config) ---

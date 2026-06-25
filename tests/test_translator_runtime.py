@@ -732,10 +732,12 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             archive = source_game / 'scripts.rpa'
             archive.write_bytes(b'RPA-3.0 placeholder')
 
+            base_dir = runtime.canonical_abs_path(base)
+            work_game_dir = runtime.canonical_abs_path(base / 'game')
             with (
-                mock.patch.object(runtime, 'BASE_DIR', str(base)),
-                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
-                mock.patch.object(runtime, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(runtime, 'BASE_DIR', base_dir),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', work_game_dir),
+                mock.patch.object(runtime, 'TL_DIR', runtime.canonical_abs_path(base / 'game' / 'tl' / 'schinese')),
                 mock.patch.object(runtime, 'SOURCE_GAME_DIR', ''),
                 mock.patch.object(runtime, 'PREP_ENABLED', True),
                 mock.patch.object(runtime, 'PREP_UNPACK_RPA', True),
@@ -746,7 +748,10 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 runtime.run_prepare_steps()
 
             self.assertTrue((base / 'game' / 'tl' / 'schinese' / 'script.rpy').is_file())
-            extract_mock.assert_called_once_with(str(archive), str(base / 'game'))
+            extract_mock.assert_called_once_with(
+                runtime.canonical_abs_path(archive),
+                work_game_dir,
+            )
 
     def test_prepare_missing_tl_without_launcher_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1769,9 +1774,12 @@ class BootstrapWorkTests(unittest.TestCase):
             with mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)):
                 runtime.load_translator_settings()
 
-            self.assertEqual(runtime.BASE_DIR, str(work.resolve()))
+            self.assertEqual(runtime.BASE_DIR, runtime.canonical_abs_path(work))
             saved = json.loads(config_path.read_text(encoding='utf-8'))
-            self.assertEqual(Path(saved['game_root']), work)
+            self.assertEqual(
+                runtime.canonical_abs_path(saved['game_root']),
+                runtime.canonical_abs_path(work),
+            )
 
     def test_resolve_original_game_dir_from_project_root(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1870,8 +1878,14 @@ class BootstrapWorkTests(unittest.TestCase):
             self.assertEqual(result['status'], 'created')
             self.assertTrue(result['game_root_updated'])
             saved = json.loads(config_path.read_text(encoding='utf-8'))
-            self.assertEqual(Path(saved['game_root']), project / 'work')
-            self.assertEqual(runtime.BASE_DIR, str((project / 'work').resolve()))
+            self.assertEqual(
+                runtime.canonical_abs_path(saved['game_root']),
+                runtime.canonical_abs_path(project / 'work'),
+            )
+            self.assertEqual(
+                runtime.BASE_DIR,
+                runtime.canonical_abs_path(project / 'work'),
+            )
 
 
 if __name__ == '__main__':
