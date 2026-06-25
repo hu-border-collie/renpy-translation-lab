@@ -692,46 +692,77 @@ class MainWindow(QMainWindow):
         except ValueError:
             return None
 
-    def _remediation_ready(self, summary: WritebackSummary) -> bool:
+    def _remediation_ready(
+        self,
+        summary: WritebackSummary,
+        *,
+        manifest: dict[str, object] | None = None,
+    ) -> bool:
         if not self._writeback_issues_ready(summary):
             return False
-        manifest = self._load_writeback_manifest()
-        if manifest is None:
+        loaded = manifest if manifest is not None else self._load_writeback_manifest()
+        if loaded is None:
             return False
         return retry_followup_allowed(
-            manifest,
+            loaded,
             parent_manifest_path=summary.manifest_path,
             confirmed_parent_paths=self._retry_followup_confirmed,
         )
 
-    def _retry_button_mode(self, summary: WritebackSummary) -> str:
+    def _retry_button_mode(
+        self,
+        summary: WritebackSummary,
+        *,
+        manifest: dict[str, object] | None = None,
+    ) -> str:
         if not self._writeback_issues_ready(summary):
             return "hidden"
-        manifest = self._load_writeback_manifest()
-        if manifest is None:
+        loaded = manifest if manifest is not None else self._load_writeback_manifest()
+        if loaded is None:
             return "hidden"
-        if existing_retry_manifest_path(manifest):
+        if existing_retry_manifest_path(loaded):
             return "view"
         eligibility = assess_retry_eligibility(
-            manifest,
+            loaded,
             manifest_path=summary.manifest_path,
         )
         return "build" if eligibility.eligible else "hidden"
 
-    def _update_retry_button(self, summary: WritebackSummary) -> None:
-        if not hasattr(self, "retry_btn"):
-            return
-        mode = self._retry_button_mode(summary)
-        running = self.kill_btn.isEnabled()
-        if mode == "hidden":
-            self.retry_btn.setVisible(False)
-            self.retry_btn.setEnabled(False)
-            return
-        self.retry_btn.setVisible(True)
-        self.retry_btn.setText(
-            "查看 retry 包" if mode == "view" else "生成 retry 包"
-        )
-        self.retry_btn.setEnabled(not running)
+    def _update_writeback_action_buttons(
+        self,
+        summary: WritebackSummary,
+        *,
+        running: bool,
+    ) -> None:
+        issues_ready = self._writeback_issues_ready(summary)
+        manifest = self._load_writeback_manifest() if issues_ready else None
+
+        if hasattr(self, "check_issues_btn"):
+            self.check_issues_btn.setEnabled(not running and issues_ready)
+
+        if hasattr(self, "retry_btn"):
+            mode = (
+                self._retry_button_mode(summary, manifest=manifest)
+                if issues_ready
+                else "hidden"
+            )
+            if mode == "hidden":
+                self.retry_btn.setVisible(False)
+                self.retry_btn.setEnabled(False)
+            else:
+                self.retry_btn.setVisible(True)
+                self.retry_btn.setText(
+                    "查看 retry 包" if mode == "view" else "生成 retry 包"
+                )
+                self.retry_btn.setEnabled(not running)
+
+        if hasattr(self, "remediation_btn"):
+            remediation_ready = (
+                self._remediation_ready(summary, manifest=manifest)
+                if issues_ready
+                else False
+            )
+            self.remediation_btn.setEnabled(not running and remediation_ready)
 
     def _show_retry_preview(
         self,
@@ -758,11 +789,10 @@ class MainWindow(QMainWindow):
         if parent_path:
             self._retry_followup_confirmed.add(parent_path)
         summary = self._current_writeback_summary()
-        self._update_retry_button(summary)
-        if hasattr(self, "remediation_btn"):
-            self.remediation_btn.setEnabled(
-                self._remediation_ready(summary) and not self.kill_btn.isEnabled()
-            )
+        self._update_writeback_action_buttons(
+            summary,
+            running=self.kill_btn.isEnabled(),
+        )
         if open_remediation_on_confirm:
             self._open_remediation_commands()
         else:
@@ -1266,14 +1296,7 @@ class MainWindow(QMainWindow):
         self.save_config_btn.setEnabled(not running)
         writeback_summary = self._current_writeback_summary()
         self.apply_btn.setEnabled(not running and writeback_summary.can_apply)
-        issues_ready = self._writeback_issues_ready(writeback_summary)
-        if hasattr(self, "check_issues_btn"):
-            self.check_issues_btn.setEnabled(not running and issues_ready)
-        self._update_retry_button(writeback_summary)
-        if hasattr(self, "remediation_btn"):
-            self.remediation_btn.setEnabled(
-                not running and self._remediation_ready(writeback_summary)
-            )
+        self._update_writeback_action_buttons(writeback_summary, running=running)
         self.bootstrap_rag_btn.setEnabled(not running)
         self.bootstrap_source_index_btn.setEnabled(not running)
         self.kill_btn.setEnabled(running)
@@ -1333,16 +1356,10 @@ class MainWindow(QMainWindow):
         self.writeback_message_label.setText(summary.message)
         self.writeback_facts_label.setText("\n".join(summary.facts))
         self._set_details_label(self.writeback_details_label, summary.findings)
-        issues_ready = self._writeback_issues_ready(summary)
-        if hasattr(self, "check_issues_btn"):
-            self.check_issues_btn.setEnabled(
-                issues_ready and not self.kill_btn.isEnabled()
-            )
-        self._update_retry_button(summary)
-        if hasattr(self, "remediation_btn"):
-            self.remediation_btn.setEnabled(
-                self._remediation_ready(summary) and not self.kill_btn.isEnabled()
-            )
+        self._update_writeback_action_buttons(
+            summary,
+            running=self.kill_btn.isEnabled(),
+        )
         if not self.kill_btn.isEnabled():
             self.apply_btn.setEnabled(summary.can_apply)
 
@@ -1467,8 +1484,6 @@ class MainWindow(QMainWindow):
             self._active_command = ""
             self._set_task_running(False)
             self._refresh_diagnostics_context()
-            summary = self._current_writeback_summary()
-            self._update_retry_button(summary)
             if result.status == "ok":
                 parent_manifest = self._load_writeback_manifest()
                 retry_path = ""
