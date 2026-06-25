@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import zlib
 from datetime import datetime
+from pathlib import Path
 
 from rag_memory import JsonRagStore, hash_text, truncate_text
 import prompt_context
@@ -944,37 +945,48 @@ def _list_rpa_files(game_dir):
     return archives
 
 
+def _canonical_abs_path(path):
+    """Return a stable absolute path (long path on Windows, not 8.3 short names)."""
+    if not path:
+        return ""
+    abs_path = os.path.abspath(path)
+    try:
+        return str(Path(abs_path).resolve(strict=False))
+    except OSError:
+        return abs_path
+
+
 def resolve_project_root(base_dir=None):
-    base = os.path.abspath(base_dir or BASE_DIR)
+    base = _canonical_abs_path(base_dir or BASE_DIR)
     if os.path.basename(base).lower() == "work":
         return os.path.dirname(base)
     return base
 
 
 def resolve_work_dir(base_dir=None):
-    return os.path.abspath(os.path.join(resolve_project_root(base_dir), "work"))
+    return _canonical_abs_path(os.path.join(resolve_project_root(base_dir), "work"))
 
 
 def resolve_effective_game_root(game_root):
     """Prefer nested work/ when game_root points at the project root."""
-    normalized = os.path.abspath(game_root)
+    normalized = _canonical_abs_path(game_root)
     if os.path.basename(normalized).lower() == "work":
         return normalized
 
     nested_work = os.path.join(normalized, "work")
     if os.path.isdir(nested_work):
-        return os.path.abspath(nested_work)
+        return _canonical_abs_path(nested_work)
     return normalized
 
 
 def resolve_original_game_dir(base_dir=None):
     if SOURCE_GAME_DIR and os.path.isdir(SOURCE_GAME_DIR):
-        return os.path.abspath(SOURCE_GAME_DIR)
+        return _canonical_abs_path(SOURCE_GAME_DIR)
 
     root = resolve_project_root(base_dir)
     candidate = os.path.join(root, "original", "game")
     if os.path.isdir(candidate):
-        return os.path.abspath(candidate)
+        return _canonical_abs_path(candidate)
     return ""
 
 
@@ -1009,15 +1021,15 @@ def _copy_game_directory(source_game_dir, target_game_dir):
 def _apply_game_root(work_dir):
     global BASE_DIR, TL_DIR, WORK_GAME_DIR, ENV_GAME_ROOT
 
-    normalized = os.path.abspath(work_dir)
+    normalized = _canonical_abs_path(work_dir)
     ENV_GAME_ROOT = normalized
     BASE_DIR = normalized
-    TL_DIR = os.path.abspath(os.path.join(BASE_DIR, TL_SUBDIR))
-    WORK_GAME_DIR = os.path.abspath(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
+    TL_DIR = _canonical_abs_path(os.path.join(BASE_DIR, TL_SUBDIR))
+    WORK_GAME_DIR = _canonical_abs_path(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
 
 
 def persist_game_root(work_dir):
-    normalized = os.path.abspath(work_dir)
+    normalized = _canonical_abs_path(work_dir)
     config = {}
     if os.path.exists(TRANSLATOR_CONFIG):
         try:

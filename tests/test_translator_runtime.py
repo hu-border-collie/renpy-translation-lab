@@ -1717,6 +1717,27 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
 
 
 class BootstrapWorkTests(unittest.TestCase):
+    def test_canonical_abs_path_expands_windows_short_paths(self):
+        if os.name != 'nt':
+            self.skipTest('Windows-only short-path normalization')
+
+        import ctypes
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / 'Game_Example'
+            work = project / 'work'
+            work.mkdir(parents=True)
+            long_path = str(work.resolve())
+
+            get_short = ctypes.windll.kernel32.GetShortPathNameW
+            buffer = ctypes.create_unicode_buffer(260)
+            if get_short(long_path, buffer, len(buffer)) == 0:
+                self.skipTest('Could not resolve Windows short path for temp directory')
+
+            short_path = buffer.value
+            self.assertNotEqual(os.path.normcase(short_path), os.path.normcase(long_path))
+            self.assertEqual(runtime._canonical_abs_path(short_path), long_path)
+
     def test_resolve_effective_game_root_prefers_nested_work(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
