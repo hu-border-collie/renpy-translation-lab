@@ -102,15 +102,33 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         )
 
         by_label = {command.label: command.command for command in commands}
-        self.assertIn("生成 retry 包", by_label)
+        self.assertNotIn("生成 retry 包", by_label)
+        self.assertIn("提交 retry 任务", by_label)
         self.assertIn("合并 retry 结果", by_label)
         self.assertIn("重新检查翻译结果", by_label)
         self.assertNotIn("写回翻译（仅可写回）", by_label)
         self.assertNotIn("同步修复失败项", by_label)
         self.assertNotIn("生成订正包", by_label)
         self.assertNotIn("预览订正结果", by_label)
-        self.assertIn("build-retry", by_label["生成 retry 包"])
+        self.assertIn(retry_path, by_label["提交 retry 任务"])
         self.assertIn(retry_path, by_label["合并 retry 结果"])
+
+    def test_warn_without_existing_retry_includes_build_retry(self):
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=r"C:\logs\batch_jobs\job1\manifest.json",
+            manifest={
+                "mode": "translation",
+                "job_name": "batches/parent",
+                "last_check_summary": {"safety_level": "warn"},
+            },
+        )
+
+        by_label = {command.label: command.command for command in commands}
+        self.assertIn("生成 retry 包", by_label)
+        self.assertIn("build-retry", by_label["生成 retry 包"])
+        self.assertIn("RETRY_MANIFEST_PATH", by_label["提交 retry 任务"])
 
     def test_warn_retry_placeholder_is_shell_safe(self):
         commands = build_cli_commands(

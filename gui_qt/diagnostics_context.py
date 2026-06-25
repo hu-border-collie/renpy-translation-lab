@@ -367,11 +367,11 @@ def manifest_check_safety_level(manifest: dict[str, object]) -> str:
     return safety.strip().lower() if isinstance(safety, str) else ""
 
 
-def retry_manifest_path_for_reference(manifest: dict[str, object]) -> str:
+def existing_retry_manifest_path(manifest: dict[str, object]) -> str:
     retry_path = manifest.get("last_retry_manifest_path")
     if isinstance(retry_path, str) and retry_path.strip():
         return retry_path.strip()
-    return "RETRY_MANIFEST_PATH"
+    return ""
 
 
 def build_warn_remediation_commands(
@@ -381,17 +381,24 @@ def build_warn_remediation_commands(
     manifest_path: str,
     manifest: dict[str, object],
 ) -> list[DiagnosticsCommand]:
-    retry_manifest_path = retry_manifest_path_for_reference(manifest)
+    existing_retry_path = existing_retry_manifest_path(manifest)
+    retry_manifest_path = existing_retry_path or "RETRY_MANIFEST_PATH"
 
-    return [
-        DiagnosticsCommand(
-            label="生成 retry 包",
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                ["build-retry", manifest_path],
-            ),
-        ),
+    commands: list[DiagnosticsCommand] = []
+    if not existing_retry_path:
+        commands.append(
+            DiagnosticsCommand(
+                label="生成 retry 包",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["build-retry", manifest_path],
+                ),
+            )
+        )
+
+    commands.extend(
+        [
         DiagnosticsCommand(
             label="提交 retry 任务",
             command=format_cli_command(
@@ -432,7 +439,9 @@ def build_warn_remediation_commands(
                 ["check", manifest_path],
             ),
         ),
-    ]
+        ]
+    )
+    return commands
 
 
 def build_manifest_facts(manifest: dict[str, object], manifest_path: str) -> list[str]:
