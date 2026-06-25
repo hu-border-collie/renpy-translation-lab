@@ -59,6 +59,15 @@ from .check_report import (
 from .diagnostics_context import (
     DiagnosticsContext,
     build_diagnostics_context,
+    existing_retry_manifest_path,
+)
+from .retry_preview_dialog import RetryPreviewDialog
+from .retry_report import (
+    assess_retry_eligibility,
+    build_retry_cli_args,
+    parse_build_retry_output,
+    retry_followup_allowed,
+    summarize_retry_manifest,
 )
 from .cli_runner import CliRunner
 from .doctor_report import (
@@ -109,6 +118,8 @@ class MainWindow(QMainWindow):
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
+        self._build_retry_output_lines: list[str] = []
+        self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
 
         central = QWidget()
@@ -285,6 +296,12 @@ class MainWindow(QMainWindow):
         self.check_issues_btn.clicked.connect(self._open_check_issues)
         self.check_issues_btn.setEnabled(False)
         writeback_actions.addWidget(self.check_issues_btn)
+        self.retry_btn = QPushButton("生成 retry 包")
+        self.retry_btn.setObjectName("secondary_btn")
+        self.retry_btn.clicked.connect(self._on_retry_action)
+        self.retry_btn.setEnabled(False)
+        self.retry_btn.setVisible(False)
+        writeback_actions.addWidget(self.retry_btn)
         self.remediation_btn = QPushButton("补救命令")
         self.remediation_btn.setObjectName("secondary_btn")
         self.remediation_btn.clicked.connect(self._open_remediation_commands)
@@ -666,6 +683,173 @@ class MainWindow(QMainWindow):
 
     def _writeback_issues_ready(self, summary: WritebackSummary) -> bool:
         return summary.status == "warn" and bool(summary.manifest_path)
+
+    def _load_writeback_manifest(self) -> dict[str, object] | None:
+        if not self._writeback_manifest_path:
+            return None
+        try:
+            return self.state.load_manifest_file(self._writeback_manifest_path)
+        except ValueError:
+            return None
+
+    def _remediation_ready(
+        self,
+        summary: WritebackSummary,
+        *,
+        manifest: dict[str, object] | None = None,
+    ) -> bool:
+        if not self._writeback_issues_ready(summary):
+            return False
+        loaded = manifest if manifest is not None else self._load_writeback_manifest()
+        if loaded is None:
+            return False
+        return retry_followup_allowed(
+            loaded,
+            parent_manifest_path=summary.manifest_path,
+            confirmed_parent_paths=self._retry_followup_confirmed,
+        )
+
+    def _retry_button_mode(
+        self,
+        summary: WritebackSummary,
+        *,
+        manifest: dict[str, object] | None = None,
+    ) -> str:
+        if not self._writeback_issues_ready(summary):
+            return "hidden"
+        loaded = manifest if manifest is not None else self._load_writeback_manifest()
+        if loaded is None:
+            return "hidden"
+        if existing_retry_manifest_path(loaded):
+            return "view"
+        eligibility = assess_retry_eligibility(
+            loaded,
+            manifest_path=summary.manifest_path,
+        )
+        return "build" if eligibility.eligible else "hidden"
+
+    def _update_writeback_action_buttons(
+        self,
+        summary: WritebackSummary,
+        *,
+        running: bool,
+    ) -> None:
+        issues_ready = self._writeback_issues_ready(summary)
+        manifest = self._load_writeback_manifest() if issues_ready else None
+
+        if hasattr(self, "check_issues_btn"):
+            self.check_issues_btn.setEnabled(not running and issues_ready)
+
+        if hasattr(self, "retry_btn"):
+            mode = (
+                self._retry_button_mode(summary, manifest=manifest)
+                if issues_ready
+                else "hidden"
+            )
+            if mode == "hidden":
+                self.retry_btn.setVisible(False)
+                self.retry_btn.setEnabled(False)
+            else:
+                self.retry_btn.setVisible(True)
+                self.retry_btn.setText(
+                    "查看 retry 包" if mode == "view" else "生成 retry 包"
+                )
+                self.retry_btn.setEnabled(not running)
+
+        if hasattr(self, "remediation_btn"):
+            remediation_ready = (
+                self._remediation_ready(summary, manifest=manifest)
+                if issues_ready
+                else False
+            )
+            self.remediation_btn.setEnabled(not running and remediation_ready)
+
+    def _show_retry_preview(
+        self,
+        retry_manifest_path: str,
+        *,
+        open_remediation_on_confirm: bool = False,
+    ) -> None:
+        try:
+            retry_manifest = self.state.load_manifest_file(retry_manifest_path)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法预览 retry 包", str(exc))
+            return
+
+        report = summarize_retry_manifest(
+            retry_manifest,
+            manifest_path=retry_manifest_path,
+        )
+        dialog = RetryPreviewDialog(self, report=report)
+        dialog.exec()
+        if not dialog.confirmed:
+            return
+
+        parent_path = report.parent_manifest_path or self._writeback_manifest_path
+        if parent_path:
+            self._retry_followup_confirmed.add(parent_path)
+        summary = self._current_writeback_summary()
+        self._update_writeback_action_buttons(
+            summary,
+            running=self.kill_btn.isEnabled(),
+        )
+        if open_remediation_on_confirm:
+            self._open_remediation_commands()
+        else:
+            self.statusBar().showMessage("已确认 retry 包范围。", 3000)
+
+    def _on_retry_action(self) -> None:
+        summary = self._current_writeback_summary()
+        mode = self._retry_button_mode(summary)
+        if mode == "view":
+            manifest = self._load_writeback_manifest()
+            if manifest is None:
+                return
+            retry_path = existing_retry_manifest_path(manifest)
+            if retry_path:
+                self._show_retry_preview(retry_path)
+            return
+
+        if mode != "build" or not self._writeback_manifest_path:
+            return
+
+        manifest = self._load_writeback_manifest()
+        if manifest is None:
+            QMessageBox.warning(self, "无法生成 retry 包", "无法读取当前任务清单。")
+            return
+
+        eligibility = assess_retry_eligibility(
+            manifest,
+            manifest_path=self._writeback_manifest_path,
+        )
+        reply = QMessageBox.question(
+            self,
+            "确认生成 retry 包",
+            "\n".join(
+                [
+                    eligibility.message,
+                    "",
+                    "将运行 build-retry 生成本地 retry 包。",
+                    "GUI 不会自动提交云端任务；生成后会先预览范围。",
+                ]
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._active_command = "build_retry"
+        self._build_retry_output_lines = []
+        self._set_task_running(True)
+        self._append_log(
+            "\n=== 正在生成 retry 包："
+            f"gemini_translate_batch.py {' '.join(build_retry_cli_args(self._writeback_manifest_path))} ===\n"
+        )
+        self.runner.run(
+            self.state.get_batch_script_path(),
+            build_retry_cli_args(self._writeback_manifest_path),
+        )
 
     def _open_check_issues(self) -> None:
         manifest_path = self._writeback_manifest_path
@@ -1091,6 +1275,8 @@ class MainWindow(QMainWindow):
             self._workflow_step_output_lines.append(text)
         elif self._active_command == "apply":
             self._apply_output_lines.append(text)
+        elif self._active_command == "build_retry":
+            self._build_retry_output_lines.append(text)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
             self._bootstrap_output_lines.append(text)
         self._append_log(text)
@@ -1110,11 +1296,7 @@ class MainWindow(QMainWindow):
         self.save_config_btn.setEnabled(not running)
         writeback_summary = self._current_writeback_summary()
         self.apply_btn.setEnabled(not running and writeback_summary.can_apply)
-        issues_ready = self._writeback_issues_ready(writeback_summary)
-        if hasattr(self, "check_issues_btn"):
-            self.check_issues_btn.setEnabled(not running and issues_ready)
-        if hasattr(self, "remediation_btn"):
-            self.remediation_btn.setEnabled(not running and issues_ready)
+        self._update_writeback_action_buttons(writeback_summary, running=running)
         self.bootstrap_rag_btn.setEnabled(not running)
         self.bootstrap_source_index_btn.setEnabled(not running)
         self.kill_btn.setEnabled(running)
@@ -1174,15 +1356,10 @@ class MainWindow(QMainWindow):
         self.writeback_message_label.setText(summary.message)
         self.writeback_facts_label.setText("\n".join(summary.facts))
         self._set_details_label(self.writeback_details_label, summary.findings)
-        issues_ready = self._writeback_issues_ready(summary)
-        if hasattr(self, "check_issues_btn"):
-            self.check_issues_btn.setEnabled(
-                issues_ready and not self.kill_btn.isEnabled()
-            )
-        if hasattr(self, "remediation_btn"):
-            self.remediation_btn.setEnabled(
-                issues_ready and not self.kill_btn.isEnabled()
-            )
+        self._update_writeback_action_buttons(
+            summary,
+            running=self.kill_btn.isEnabled(),
+        )
         if not self.kill_btn.isEnabled():
             self.apply_btn.setEnabled(summary.can_apply)
 
@@ -1253,6 +1430,8 @@ class MainWindow(QMainWindow):
             self._workflow_step_output_lines.append(message)
         elif self._active_command == "apply":
             self._apply_output_lines.append(message)
+        elif self._active_command == "build_retry":
+            self._build_retry_output_lines.append(message)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
             self._bootstrap_output_lines.append(message)
         self._focus_log_tab()
@@ -1295,6 +1474,32 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("翻译写回完成。", 6000)
             else:
                 self.statusBar().showMessage("翻译写回失败，请查看诊断日志。", 8000)
+            return
+
+        if self._active_command == "build_retry":
+            result = parse_build_retry_output(
+                "\n".join(self._build_retry_output_lines),
+                exit_code,
+            )
+            self._active_command = ""
+            self._set_task_running(False)
+            self._refresh_diagnostics_context()
+            if result.status == "ok":
+                parent_manifest = self._load_writeback_manifest()
+                retry_path = ""
+                if parent_manifest is not None:
+                    retry_path = existing_retry_manifest_path(parent_manifest)
+                if not retry_path:
+                    retry_path = result.retry_manifest_path
+                if retry_path:
+                    self._show_retry_preview(
+                        retry_path,
+                        open_remediation_on_confirm=True,
+                    )
+                self.statusBar().showMessage("retry 包已生成，请先确认预览范围。", 6000)
+            else:
+                QMessageBox.warning(self, result.heading, result.message)
+                self.statusBar().showMessage(result.heading, 6000)
             return
 
         if self._active_command == "bootstrap_rag":
