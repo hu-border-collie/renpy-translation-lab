@@ -94,6 +94,7 @@ class GuiCheckReportTests(unittest.TestCase):
         )
 
         self.assertEqual(summary.status, "warn")
+        self.assertIn("补救命令", summary.message)
         self.assertIn("retry", summary.message)
         self.assertIn("safe", summary.message)
 
@@ -107,6 +108,24 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "applied")
         self.assertFalse(summary.can_apply)
         self.assertIn("已写回 2 个文件", "\n".join(summary.facts))
+
+    def test_summarize_manifest_warn_points_to_remediation_commands(self):
+        summary = summarize_manifest_writeback(
+            {
+                "_manifest_path": "C:\\pkg\\manifest.json",
+                "last_check_summary": {
+                    "safety_level": "warn",
+                    "pending_files": 1,
+                    "pending_lines": 4,
+                    "failure_items": 2,
+                },
+            }
+        )
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.status, "warn")
+        self.assertIn("补救命令", summary.message)
+        self.assertIn("retry", summary.message)
 
     def test_summarize_manifest_writeback_from_last_check(self):
         summary = summarize_manifest_writeback(
