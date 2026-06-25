@@ -1775,7 +1775,7 @@ class BootstrapWorkTests(unittest.TestCase):
                 str((project / 'work').resolve()),
             )
 
-    def test_resolve_effective_game_root_from_original_dir_with_sibling_work(self):
+    def test_resolve_effective_game_root_keeps_original_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             project = root / 'Game_Example'
@@ -1786,7 +1786,7 @@ class BootstrapWorkTests(unittest.TestCase):
 
             self.assertEqual(
                 runtime.resolve_effective_game_root(str(original)),
-                str(work.resolve()),
+                str(original.resolve()),
             )
 
     def test_resolve_original_game_dir_when_game_root_is_original(self):

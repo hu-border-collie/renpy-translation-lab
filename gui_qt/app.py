@@ -1093,7 +1093,7 @@ class MainWindow(QMainWindow):
         start_dir = str(self.state.get_game_root() or Path.home())
         directory = QFileDialog.getExistingDirectory(
             self,
-            "选择游戏目录（项目根目录或 work 目录；存在 work/ 时会自动切换）",
+            "选择游戏目录（项目根目录或 work 目录；项目根目录下存在 work/ 时会自动切换）",
             start_dir,
         )
         if directory:

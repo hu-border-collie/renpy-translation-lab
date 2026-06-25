@@ -987,20 +987,14 @@ def resolve_work_dir(base_dir=None):
 
 
 def resolve_effective_game_root(game_root):
-    """Prefer work/ when game_root points at the project root or original/."""
+    """Prefer nested work/ when game_root points at the project root."""
     normalized = _canonical_abs_path(game_root)
-    basename = os.path.basename(normalized).lower()
-    if basename == "work":
+    if os.path.basename(normalized).lower() == "work":
         return normalized
 
     nested_work = os.path.join(normalized, "work")
     if os.path.isdir(nested_work):
         return _canonical_abs_path(nested_work)
-
-    if basename == "original":
-        sibling_work = os.path.join(os.path.dirname(normalized), "work")
-        if os.path.isdir(sibling_work):
-            return _canonical_abs_path(sibling_work)
     return normalized
 
 
