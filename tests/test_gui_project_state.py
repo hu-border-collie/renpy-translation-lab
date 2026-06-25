@@ -332,7 +332,9 @@ class GuiProjectStateTests(unittest.TestCase):
             root = Path(tmp)
             project = root / "Game Example"
             work = project / "work"
+            original_game = project / "original" / "game"
             work.mkdir(parents=True)
+            original_game.mkdir(parents=True)
             state = self.make_state(root)
             state.config_path.write_text("{}", encoding="utf-8")
             state.set_game_root(project)
@@ -345,7 +347,9 @@ class GuiProjectStateTests(unittest.TestCase):
             root = Path(tmp)
             project = root / "Game Example"
             work = project / "work"
+            original_game = project / "original" / "game"
             work.mkdir(parents=True)
+            original_game.mkdir(parents=True)
             state = self.make_state(root)
             state.config_path.write_text("{}", encoding="utf-8")
 
@@ -396,12 +400,15 @@ class GuiProjectStateTests(unittest.TestCase):
             if ctypes.windll.kernel32.GetShortPathNameW(long_path, buffer, len(buffer)) == 0:
                 self.skipTest("Could not resolve Windows short path for temp directory")
 
-            state.set_game_root(Path(buffer.value))
+            short_path = buffer.value
+            if os.path.normcase(short_path) == os.path.normcase(long_path):
+                self.skipTest("Short-path generation disabled on this system")
+
+            state.set_game_root(Path(short_path))
 
             saved = json.loads(state.config_path.read_text(encoding="utf-8"))
-            self.assert_same_path(saved["game_root"], long_path)
+            self.assertEqual(saved["game_root"], runtime.canonical_abs_path(long_path))
             self.assert_same_path(state.get_game_root(), long_path)
-            self.assertNotIn("RUNNER~1", saved["game_root"].upper())
 
     def test_set_game_root_rejects_invalid_json_without_overwriting(self):
         with tempfile.TemporaryDirectory() as tmp:

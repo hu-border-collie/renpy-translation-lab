@@ -134,6 +134,19 @@ def summarize_work_bootstrap_output(output: str, exit_code: int) -> WorkBootstra
     )
 
 
+def with_game_root_persist_warning(summary: WorkBootstrapSummary) -> WorkBootstrapSummary:
+    notice = "未能更新 translator_config.json 中的 game_root，请手动切换到 work 目录。"
+    return WorkBootstrapSummary(
+        status="warning",
+        heading="工作目录已复制，但路径未保存",
+        message="文件已复制到 work/game，但未能将 game_root 写入配置文件。",
+        facts=extend_facts_with_notices(summary.facts, [notice]),
+        findings=[notice],
+        work_dir=summary.work_dir,
+        game_root_updated=False,
+    )
+
+
 def work_bootstrap_to_doctor_summary(summary: WorkBootstrapSummary) -> DoctorSummary:
     return DoctorSummary(
         status=summary.status if summary.status != "ready" else "ready",

@@ -85,6 +85,7 @@ from .doctor_report import (
 from .work_bootstrap_report import (
     running_work_bootstrap_summary,
     summarize_work_bootstrap_output,
+    with_game_root_persist_warning,
     work_bootstrap_to_doctor_summary,
 )
 from .project_state import ProjectState
@@ -1691,6 +1692,7 @@ class MainWindow(QMainWindow):
                 except ValueError as exc:
                     self._append_log(f"更新 translator_config.json 失败：{exc}")
                     game_root_update_failed = True
+                    summary = with_game_root_persist_warning(summary)
             self._set_doctor_summary(work_bootstrap_to_doctor_summary(summary))
             self._active_command = ""
             self._set_task_running(False)

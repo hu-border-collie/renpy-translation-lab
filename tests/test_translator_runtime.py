@@ -1748,7 +1748,9 @@ class BootstrapWorkTests(unittest.TestCase):
             root = Path(tmp)
             project = root / 'Game_Example'
             work = project / 'work'
+            original_game = project / 'original' / 'game'
             work.mkdir(parents=True)
+            original_game.mkdir(parents=True)
 
             self.assertEqual(
                 runtime.resolve_effective_game_root(str(project)),
@@ -1757,6 +1759,19 @@ class BootstrapWorkTests(unittest.TestCase):
             self.assertEqual(
                 runtime.resolve_effective_game_root(str(work)),
                 str(work.resolve()),
+            )
+
+    def test_resolve_effective_game_root_ignores_unrelated_work_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'SomeRepo'
+            work = project / 'work'
+            project.mkdir()
+            work.mkdir()
+
+            self.assertEqual(
+                runtime.resolve_effective_game_root(str(project)),
+                str(project.resolve()),
             )
 
     def test_resolve_project_root_from_original_dir(self):
@@ -1807,7 +1822,9 @@ class BootstrapWorkTests(unittest.TestCase):
             root = Path(tmp)
             project = root / 'Game_Example'
             work = project / 'work'
+            original_game = project / 'original' / 'game'
             work.mkdir(parents=True)
+            original_game.mkdir(parents=True)
             config_path = root / 'translator_config.json'
             config_path.write_text(
                 json.dumps({'game_root': str(project)}),
@@ -1829,7 +1846,9 @@ class BootstrapWorkTests(unittest.TestCase):
             root = Path(tmp)
             project = root / 'Game_Example'
             work = project / 'work'
+            original_game = project / 'original' / 'game'
             work.mkdir(parents=True)
+            original_game.mkdir(parents=True)
             config_path = root / 'translator_config.json'
             config_path.write_text(
                 json.dumps({'game_root': str(project)}),

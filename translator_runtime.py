@@ -987,13 +987,14 @@ def resolve_work_dir(base_dir=None):
 
 
 def resolve_effective_game_root(game_root):
-    """Prefer nested work/ when game_root points at the project root."""
+    """Prefer nested work/ when game_root points at a project-root layout."""
     normalized = _canonical_abs_path(game_root)
     if os.path.basename(normalized).lower() == "work":
         return normalized
 
     nested_work = os.path.join(normalized, "work")
-    if os.path.isdir(nested_work):
+    original_game = os.path.join(normalized, "original", "game")
+    if os.path.isdir(nested_work) and os.path.isdir(original_game):
         return _canonical_abs_path(nested_work)
     return normalized
 
@@ -1108,10 +1109,17 @@ def bootstrap_work_from_original(*, save_game_root=False, refresh_runtime_paths=
             "message": "source_game_dir must not contain work/game.",
             "game_root_updated": False,
         }
+    staging_dir = os.path.join(work_dir, ".bootstrap_staging")
     try:
         os.makedirs(work_dir, exist_ok=True)
-        files_copied = _copy_game_directory(source_game_dir, target_game_dir)
+        if os.path.exists(staging_dir):
+            shutil.rmtree(staging_dir)
+        files_copied = _copy_game_directory(source_game_dir, staging_dir)
+        if os.path.exists(target_game_dir):
+            shutil.rmtree(target_game_dir)
+        os.replace(staging_dir, target_game_dir)
     except Exception as exc:
+        shutil.rmtree(staging_dir, ignore_errors=True)
         return {
             "status": "failed",
             "project_root": project_root,
@@ -1617,6 +1625,10 @@ def run_prepare_steps():
             save_game_root=True,
             refresh_runtime_paths=True,
         )
+        if bootstrap_result["status"] == "failed":
+            raise SystemExit(
+                f"[Prepare] Work bootstrap failed: {bootstrap_result['message']}"
+            )
         if bootstrap_result["status"] == "created":
             print(f"[Prepare] Work bootstrap: {bootstrap_result['message']}")
             if bootstrap_result["game_root_updated"]:
