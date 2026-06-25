@@ -45,6 +45,8 @@ from .bootstrap_report import (
     summarize_rag_bootstrap_output,
     summarize_source_index_bootstrap_output,
 )
+from .check_failures_report import build_check_issues_report
+from .check_issues_dialog import CheckIssuesDialog
 from .check_report import (
     WritebackSummary,
     idle_writeback_summary,
@@ -278,6 +280,11 @@ class MainWindow(QMainWindow):
         self.apply_btn.clicked.connect(self._on_apply_writeback)
         self.apply_btn.setEnabled(False)
         writeback_actions.addWidget(self.apply_btn)
+        self.check_issues_btn = QPushButton("查看问题清单")
+        self.check_issues_btn.setObjectName("secondary_btn")
+        self.check_issues_btn.clicked.connect(self._open_check_issues)
+        self.check_issues_btn.setEnabled(False)
+        writeback_actions.addWidget(self.check_issues_btn)
         self.remediation_btn = QPushButton("补救命令")
         self.remediation_btn.setObjectName("secondary_btn")
         self.remediation_btn.clicked.connect(self._open_remediation_commands)
@@ -656,6 +663,25 @@ class MainWindow(QMainWindow):
     def _focus_workbench_status_tab(self, index: int) -> None:
         if 0 <= index < self.workbench_status_tabs.count():
             self.workbench_status_tabs.setCurrentIndex(index)
+
+    def _writeback_issues_ready(self, summary: WritebackSummary) -> bool:
+        return summary.status == "warn" and bool(summary.manifest_path)
+
+    def _open_check_issues(self) -> None:
+        manifest_path = self._writeback_manifest_path
+        if not manifest_path:
+            QMessageBox.warning(self, "无法查看问题清单", "当前没有可用的任务清单。")
+            return
+        try:
+            manifest = self.state.load_manifest_file(manifest_path)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法查看问题清单", str(exc))
+            return
+
+        report = build_check_issues_report(manifest, manifest_path=manifest_path)
+        dialog = CheckIssuesDialog(self, report=report)
+        dialog.exec()
+        self.statusBar().showMessage("已查看检查问题清单。", 3000)
 
     def _open_remediation_commands(self) -> None:
         self._refresh_diagnostics_context()
@@ -1084,11 +1110,11 @@ class MainWindow(QMainWindow):
         self.save_config_btn.setEnabled(not running)
         writeback_summary = self._current_writeback_summary()
         self.apply_btn.setEnabled(not running and writeback_summary.can_apply)
+        issues_ready = self._writeback_issues_ready(writeback_summary)
+        if hasattr(self, "check_issues_btn"):
+            self.check_issues_btn.setEnabled(not running and issues_ready)
         if hasattr(self, "remediation_btn"):
-            remediation_ready = writeback_summary.status == "warn" and bool(
-                writeback_summary.manifest_path
-            )
-            self.remediation_btn.setEnabled(not running and remediation_ready)
+            self.remediation_btn.setEnabled(not running and issues_ready)
         self.bootstrap_rag_btn.setEnabled(not running)
         self.bootstrap_source_index_btn.setEnabled(not running)
         self.kill_btn.setEnabled(running)
@@ -1148,10 +1174,14 @@ class MainWindow(QMainWindow):
         self.writeback_message_label.setText(summary.message)
         self.writeback_facts_label.setText("\n".join(summary.facts))
         self._set_details_label(self.writeback_details_label, summary.findings)
-        remediation_ready = summary.status == "warn" and bool(summary.manifest_path)
+        issues_ready = self._writeback_issues_ready(summary)
+        if hasattr(self, "check_issues_btn"):
+            self.check_issues_btn.setEnabled(
+                issues_ready and not self.kill_btn.isEnabled()
+            )
         if hasattr(self, "remediation_btn"):
             self.remediation_btn.setEnabled(
-                remediation_ready and not self.kill_btn.isEnabled()
+                issues_ready and not self.kill_btn.isEnabled()
             )
         if not self.kill_btn.isEnabled():
             self.apply_btn.setEnabled(summary.can_apply)
