@@ -219,7 +219,7 @@ def build_cli_commands(
                 ),
             )
         )
-        if not manifest.get("applied_at"):
+        if not manifest.get("revision_applied_at"):
             commands.append(
                 DiagnosticsCommand(
                     label="应用订正（预览确认后）",
@@ -367,28 +367,11 @@ def manifest_check_safety_level(manifest: dict[str, object]) -> str:
     return safety.strip().lower() if isinstance(safety, str) else ""
 
 
-def check_report_path_for_repair(manifest_path: str, manifest: dict[str, object]) -> str:
-    report_path = manifest.get("last_check_report_path")
-    if isinstance(report_path, str) and report_path.strip():
-        return report_path.strip()
-    package_dir = resolve_package_dir(manifest_path, manifest)
-    if package_dir:
-        return join_directory_file(package_dir, "check_failures.jsonl")
-    return "<check_failures.jsonl>"
-
-
 def retry_manifest_path_for_reference(manifest: dict[str, object]) -> str:
     retry_path = manifest.get("last_retry_manifest_path")
     if isinstance(retry_path, str) and retry_path.strip():
         return retry_path.strip()
-    return "<retry-manifest.json>"
-
-
-def revision_manifest_path_for_reference(manifest: dict[str, object]) -> str:
-    revision_path = manifest.get("last_revision_manifest_path")
-    if isinstance(revision_path, str) and revision_path.strip():
-        return revision_path.strip()
-    return "<revision-manifest.json>"
+    return "RETRY_MANIFEST_PATH"
 
 
 def build_warn_remediation_commands(
@@ -398,9 +381,7 @@ def build_warn_remediation_commands(
     manifest_path: str,
     manifest: dict[str, object],
 ) -> list[DiagnosticsCommand]:
-    report_path = check_report_path_for_repair(manifest_path, manifest)
     retry_manifest_path = retry_manifest_path_for_reference(manifest)
-    revision_manifest_path = revision_manifest_path_for_reference(manifest)
 
     return [
         DiagnosticsCommand(
@@ -441,62 +422,6 @@ def build_warn_remediation_commands(
                 python_exe,
                 batch_script_path,
                 ["merge-retry", manifest_path, retry_manifest_path],
-            ),
-        ),
-        DiagnosticsCommand(
-            label="同步修复失败项",
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                ["repair", report_path, "--limit", "20"],
-            ),
-        ),
-        DiagnosticsCommand(
-            label="生成订正包",
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                ["build-revisions"],
-            ),
-        ),
-        DiagnosticsCommand(
-            label="提交订正任务",
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                ["submit", revision_manifest_path],
-            ),
-        ),
-        DiagnosticsCommand(
-            label="查询订正状态",
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                ["status", revision_manifest_path],
-            ),
-        ),
-        DiagnosticsCommand(
-            label="下载订正结果",
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                ["download", revision_manifest_path],
-            ),
-        ),
-        DiagnosticsCommand(
-            label="预览订正结果",
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                ["preview-revisions", revision_manifest_path],
-            ),
-        ),
-        DiagnosticsCommand(
-            label="应用订正（预览确认后）",
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                ["apply-revisions", revision_manifest_path],
             ),
         ),
         DiagnosticsCommand(

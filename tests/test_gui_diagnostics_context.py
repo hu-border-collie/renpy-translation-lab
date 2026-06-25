@@ -104,14 +104,29 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         by_label = {command.label: command.command for command in commands}
         self.assertIn("生成 retry 包", by_label)
         self.assertIn("合并 retry 结果", by_label)
-        self.assertIn("同步修复失败项", by_label)
-        self.assertIn("生成订正包", by_label)
-        self.assertIn("预览订正结果", by_label)
         self.assertIn("重新检查翻译结果", by_label)
+        self.assertNotIn("写回翻译（仅可写回）", by_label)
+        self.assertNotIn("同步修复失败项", by_label)
+        self.assertNotIn("生成订正包", by_label)
+        self.assertNotIn("预览订正结果", by_label)
         self.assertIn("build-retry", by_label["生成 retry 包"])
         self.assertIn(retry_path, by_label["合并 retry 结果"])
-        self.assertIn("repair", by_label["同步修复失败项"])
-        self.assertIn("--limit 20", by_label["同步修复失败项"])
+
+    def test_warn_retry_placeholder_is_shell_safe(self):
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=r"C:\logs\batch_jobs\job1\manifest.json",
+            manifest={
+                "mode": "translation",
+                "job_name": "batches/parent",
+                "last_check_summary": {"safety_level": "warn"},
+            },
+        )
+
+        command_text = "\n".join(command.command for command in commands)
+        self.assertIn("RETRY_MANIFEST_PATH", command_text)
+        self.assertNotIn("<retry-manifest.json>", command_text)
 
     def test_retry_manifest_commands_merge_back_to_parent(self):
         retry_path = r"C:\logs\batch_jobs\job1\retry_parts\retry1\manifest.json"
@@ -150,6 +165,22 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertNotIn("写回翻译（仅可写回）", by_label)
         self.assertIn("preview-revisions", by_label["预览订正结果"])
         self.assertIn("apply-revisions", by_label["应用订正（预览确认后）"])
+
+    def test_applied_revision_manifest_omits_revision_apply_command(self):
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=r"C:\logs\batch_jobs\rev1\manifest.json",
+            manifest={
+                "mode": "revision",
+                "job_name": "batches/rev",
+                "revision_applied_at": "2026-06-25T20:00:00",
+            },
+        )
+
+        labels = [command.label for command in commands]
+        self.assertIn("预览订正结果", labels)
+        self.assertNotIn("应用订正（预览确认后）", labels)
 
     def test_build_diagnostics_context_idle_without_manifest(self):
         context = build_diagnostics_context(

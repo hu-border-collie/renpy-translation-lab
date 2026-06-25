@@ -94,7 +94,7 @@ class GuiCheckReportTests(unittest.TestCase):
         )
 
         self.assertEqual(summary.status, "warn")
-        self.assertIn("retry / repair / revision", summary.message)
+        self.assertIn("retry", summary.message)
         self.assertIn("safe", summary.message)
 
     def test_summarize_apply_output_marks_completed(self):
