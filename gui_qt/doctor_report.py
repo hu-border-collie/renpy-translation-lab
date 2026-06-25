@@ -236,9 +236,15 @@ def summarize_doctor_output(
         if parsed.get("work_exists") is False:
             append_unique_fact(facts, "work 目录：不存在")
         elif parsed.get("work_empty") is True:
-            append_unique_fact(facts, "work 目录：存在（为空）")
+            if work_dir:
+                append_unique_fact(facts, f"work 目录：{work_dir}（为空）")
+            else:
+                append_unique_fact(facts, "work 目录：存在（为空）")
         elif parsed.get("work_exists") is True:
-            append_unique_fact(facts, "work 目录：存在")
+            if work_dir:
+                append_unique_fact(facts, f"work 目录：{work_dir}")
+            else:
+                append_unique_fact(facts, "work 目录：存在")
 
     if (
         is_work_root is True

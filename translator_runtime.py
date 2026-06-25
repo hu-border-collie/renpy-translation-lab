@@ -977,7 +977,7 @@ def _path_contains_path(container, contained):
 
 def resolve_project_root(base_dir=None):
     base = _canonical_abs_path(base_dir or BASE_DIR)
-    if os.path.basename(base).lower() == "work":
+    if os.path.basename(base).lower() in {"work", "original"}:
         return os.path.dirname(base)
     return base
 
@@ -987,14 +987,20 @@ def resolve_work_dir(base_dir=None):
 
 
 def resolve_effective_game_root(game_root):
-    """Prefer nested work/ when game_root points at the project root."""
+    """Prefer work/ when game_root points at the project root or original/."""
     normalized = _canonical_abs_path(game_root)
-    if os.path.basename(normalized).lower() == "work":
+    basename = os.path.basename(normalized).lower()
+    if basename == "work":
         return normalized
 
     nested_work = os.path.join(normalized, "work")
     if os.path.isdir(nested_work):
         return _canonical_abs_path(nested_work)
+
+    if basename == "original":
+        sibling_work = os.path.join(os.path.dirname(normalized), "work")
+        if os.path.isdir(sibling_work):
+            return _canonical_abs_path(sibling_work)
     return normalized
 
 

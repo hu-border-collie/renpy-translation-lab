@@ -191,6 +191,17 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertTrue(any("切换到" in fact for fact in summary.facts))
         self.assertTrue(any("original/game：存在" in fact for fact in summary.facts))
 
+    def test_switch_to_work_shows_resolved_work_path(self):
+        output = SWITCH_TO_WORK_OUTPUT.replace(
+            "Work dir: C:\\Games\\Example\\work (exists: False, empty: True)",
+            "Work dir: C:\\Games\\Example\\work (exists: True, empty: False)",
+        )
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
+
+        self.assertTrue(any("work 目录：C:\\Games\\Example\\work" in fact for fact in summary.facts))
+        self.assertFalse(any("work 目录：不存在" in fact for fact in summary.facts))
+
     def test_nonzero_exit_is_blocked(self):
         summary = summarize_doctor_output("startup failed", exit_code=1, api_key_count=1)
 

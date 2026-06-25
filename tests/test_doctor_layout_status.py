@@ -150,6 +150,23 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         self.assertEqual(len(recommendations), 1)
         self.assertIn("switch to C:/Games/Example/work", recommendations[0])
 
+    def test_switch_to_work_with_existing_work_does_not_recommend_bootstrap(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/original",
+            work_dir="C:/Games/Example/work",
+            original_game_dir="C:/Games/Example/original/game",
+            can_generate_template=True,
+            work_bootstrap_allowed=False,
+            layout_status="switch_to_work",
+        )
+        report["work_exists"] = True
+        report["work_empty"] = False
+        recommendations = batch_mod.collect_doctor_recommendations(report)
+        joined = " ".join(recommendations)
+
+        self.assertIn("switch to C:/Games/Example/work", joined)
+        self.assertNotIn("bootstrap-work", joined)
+
     def test_work_root_without_tl_recommends_build_when_template_available(self):
         report = _layout_report(
             base_dir="C:/Games/Example/work",

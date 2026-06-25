@@ -6954,7 +6954,8 @@ def collect_doctor_recommendations(report):
             recommendations.append(
                 f'game_root should use work directory; switch to {work_dir}'
             )
-        if report.get('work_bootstrap_allowed') and report.get('original_game_dir'):
+        work_missing_or_empty = not report.get('work_exists') or report.get('work_empty')
+        if work_missing_or_empty and report.get('work_bootstrap_allowed') and report.get('original_game_dir'):
             recommendations.append(
                 'work directory is missing or empty and original/game exists; '
                 'run: python gemini_translate_batch.py bootstrap-work '

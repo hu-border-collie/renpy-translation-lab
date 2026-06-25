@@ -1759,6 +1759,49 @@ class BootstrapWorkTests(unittest.TestCase):
                 str(work.resolve()),
             )
 
+    def test_resolve_project_root_from_original_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original = project / 'original'
+            original.mkdir(parents=True)
+
+            self.assertEqual(
+                runtime.resolve_project_root(str(original)),
+                str(project.resolve()),
+            )
+            self.assertEqual(
+                runtime.resolve_work_dir(str(original)),
+                str((project / 'work').resolve()),
+            )
+
+    def test_resolve_effective_game_root_from_original_dir_with_sibling_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original = project / 'original'
+            work = project / 'work'
+            original.mkdir(parents=True)
+            work.mkdir(parents=True)
+
+            self.assertEqual(
+                runtime.resolve_effective_game_root(str(original)),
+                str(work.resolve()),
+            )
+
+    def test_resolve_original_game_dir_when_game_root_is_original(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original_game = project / 'original' / 'game'
+            original_game.mkdir(parents=True)
+            (original_game / 'script.rpy').write_text('label start:\n', encoding='utf-8')
+
+            self.assertEqual(
+                runtime.resolve_original_game_dir(str(project / 'original')),
+                str(original_game.resolve()),
+            )
+
     def test_load_translator_settings_redirects_project_root_to_work(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

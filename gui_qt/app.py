@@ -1177,7 +1177,7 @@ class MainWindow(QMainWindow):
 
     def _format_game_root_redirect_notice(self, original: Path, effective: Path) -> str:
         return (
-            f"提示：检测到 work/ 子目录，已从 {original} 自动切换到 {effective}。"
+            f"提示：检测到 work 目录，已从 {original} 自动切换到 {effective}。"
         )
 
     def _show_game_root_redirect_notice(self, original: Path, effective: Path) -> None:
