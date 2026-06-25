@@ -222,6 +222,21 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertTrue(any(fact.startswith("建议：") for fact in summary.facts))
         self.assertTrue(any("准备工作目录" in fact for fact in summary.facts))
 
+    def test_api_key_facts_appear_before_doctor_recommendations(self):
+        output = DOCTOR_OUTPUT + (
+            "\nRecommendations:\n"
+            "- game_root should use work directory; switch to C:\\Games\\Example\\work\n"
+        )
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=2)
+        api_index = next(
+            i for i, fact in enumerate(summary.facts) if fact.startswith("API 密钥：")
+        )
+        recommendation_index = next(
+            i for i, fact in enumerate(summary.facts) if fact.startswith("建议：将项目路径")
+        )
+        self.assertLess(api_index, recommendation_index)
+
     def test_format_doctor_recommendation_fact_uses_fact_style(self):
         fact = format_doctor_recommendation_fact(
             "work directory is missing or empty and original/game exists; "

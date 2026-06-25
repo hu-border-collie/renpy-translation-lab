@@ -247,8 +247,6 @@ def summarize_doctor_output(
         facts.append(f"检查模式：{doctor_mode_label(mode)}")
     if counts:
         facts.extend(format_tl_scan_facts(counts, pending=pending))
-    if recommendation_facts:
-        facts.extend(recommendation_facts)
 
     findings = list(warnings)
     if api_key_count is not None:
@@ -259,6 +257,9 @@ def summarize_doctor_output(
                 facts.append(f"API 密钥：已配置 {api_key_count} 个")
         else:
             facts.append("建议：在配置页填写 API 密钥后再开始翻译")
+
+    if recommendation_facts:
+        facts.extend(recommendation_facts)
 
     if exit_code != 0:
         return DoctorSummary(
