@@ -82,6 +82,11 @@ from .doctor_report import (
     stale_summary,
     summarize_doctor_output,
 )
+from .work_bootstrap_report import (
+    running_work_bootstrap_summary,
+    summarize_work_bootstrap_output,
+    work_bootstrap_to_doctor_summary,
+)
 from .project_state import ProjectState
 from .theme import apply_theme
 from .theme_helpers import (
@@ -123,6 +128,7 @@ class MainWindow(QMainWindow):
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
+        self._work_bootstrap_output_lines: list[str] = []
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
@@ -203,6 +209,11 @@ class MainWindow(QMainWindow):
         self.doctor_btn.setObjectName("doctor_btn")
         self.doctor_btn.clicked.connect(self._on_run_doctor)
         action_row.addWidget(self.doctor_btn)
+
+        self.bootstrap_work_btn = QPushButton("准备工作目录")
+        self.bootstrap_work_btn.setObjectName("secondary_btn")
+        self.bootstrap_work_btn.clicked.connect(self._on_bootstrap_work)
+        action_row.addWidget(self.bootstrap_work_btn)
 
         self.translate_btn = QPushButton("开始翻译")
         self.translate_btn.setObjectName("translate_btn")
@@ -1159,6 +1170,26 @@ class MainWindow(QMainWindow):
         # Run with no extra args — it will pick up translator_config.json
         self.runner.run(script, ["doctor"])
 
+    def _on_bootstrap_work(self):
+        if not self.state.get_game_root():
+            QMessageBox.information(
+                self,
+                "请先选择项目",
+                "请先选择游戏目录（项目根目录或 work 目录均可）。\n"
+                "准备工作目录会在存在 original/game 时，把内容复制到 work/game。",
+            )
+            return
+
+        self.log_view.clear()
+        self._active_command = "bootstrap_work"
+        self._work_bootstrap_output_lines = []
+        self._focus_workbench_status_tab(0)
+        doctor_summary = work_bootstrap_to_doctor_summary(running_work_bootstrap_summary())
+        self._set_doctor_summary(doctor_summary)
+        self._append_log("=== 正在运行：gemini_translate_batch.py bootstrap-work ===\n")
+        self._set_task_running(True)
+        self.runner.run(self.state.get_batch_script_path(), ["bootstrap-work"])
+
     def _saved_batch_context_flags(self) -> dict[str, bool]:
         return read_batch_context_flags(self.state.load_translator_config())
 
@@ -1329,6 +1360,8 @@ class MainWindow(QMainWindow):
             self._build_retry_output_lines.append(text)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
             self._bootstrap_output_lines.append(text)
+        elif self._active_command == "bootstrap_work":
+            self._work_bootstrap_output_lines.append(text)
         self._append_log(text)
 
     def _append_log(self, text: str):
@@ -1340,6 +1373,7 @@ class MainWindow(QMainWindow):
     def _set_task_running(self, running: bool):
         self.select_btn.setEnabled(not running)
         self.doctor_btn.setEnabled(not running)
+        self.bootstrap_work_btn.setEnabled(not running)
         self.api_btn.setEnabled(not running)
         self.translate_btn.setEnabled(not running)
         self.resume_btn.setEnabled(not running)
@@ -1484,6 +1518,8 @@ class MainWindow(QMainWindow):
             self._build_retry_output_lines.append(message)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
             self._bootstrap_output_lines.append(message)
+        elif self._active_command == "bootstrap_work":
+            self._work_bootstrap_output_lines.append(message)
         self._focus_log_tab()
         self.statusBar().showMessage("任务运行失败，请查看诊断日志。", 6000)
 
@@ -1582,6 +1618,28 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("原文索引预建已结束，请查看摘要。", 6000)
             else:
                 self.statusBar().showMessage("原文索引预建失败，请查看诊断日志。", 8000)
+            return
+
+        if self._active_command == "bootstrap_work":
+            summary = summarize_work_bootstrap_output(
+                "\n".join(self._work_bootstrap_output_lines),
+                exit_code,
+            )
+            if summary.status == "ready" and summary.work_dir:
+                try:
+                    self.state.set_game_root(summary.work_dir)
+                    self._refresh_project_label()
+                except ValueError as exc:
+                    self._append_log(f"更新 translator_config.json 失败：{exc}")
+            self._set_doctor_summary(work_bootstrap_to_doctor_summary(summary))
+            self._active_command = ""
+            self._set_task_running(False)
+            if exit_code == 0 and summary.status == "ready":
+                self.statusBar().showMessage("工作目录已准备完成。", 6000)
+            elif exit_code == 0:
+                self.statusBar().showMessage("准备工作目录已结束，请查看摘要。", 6000)
+            else:
+                self.statusBar().showMessage("准备工作目录失败，请查看诊断日志。", 8000)
             return
 
         self._set_task_running(False)

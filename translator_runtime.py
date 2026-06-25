@@ -935,14 +935,160 @@ def _list_rpa_files(game_dir):
     return archives
 
 
+def resolve_project_root(base_dir=None):
+    base = os.path.abspath(base_dir or BASE_DIR)
+    if os.path.basename(base).lower() == "work":
+        return os.path.dirname(base)
+    return base
+
+
+def resolve_work_dir(base_dir=None):
+    return os.path.abspath(os.path.join(resolve_project_root(base_dir), "work"))
+
+
+def resolve_original_game_dir(base_dir=None):
+    if SOURCE_GAME_DIR and os.path.isdir(SOURCE_GAME_DIR):
+        return os.path.abspath(SOURCE_GAME_DIR)
+
+    root = resolve_project_root(base_dir)
+    candidate = os.path.join(root, "original", "game")
+    if os.path.isdir(candidate):
+        return os.path.abspath(candidate)
+    return ""
+
+
+def is_work_dir_empty(work_dir):
+    if not os.path.isdir(work_dir):
+        return True
+    try:
+        return len(os.listdir(work_dir)) == 0
+    except OSError:
+        return False
+
+
+def work_dir_bootstrap_allowed(base_dir=None):
+    work_dir = resolve_work_dir(base_dir)
+    if is_work_dir_empty(work_dir):
+        return True, work_dir, ""
+    return False, work_dir, "work directory already exists and is not empty"
+
+
+def _copy_game_directory(source_game_dir, target_game_dir):
+    files_copied = 0
+    for root, _, files in os.walk(source_game_dir):
+        rel = os.path.relpath(root, source_game_dir)
+        dest_dir = target_game_dir if rel == "." else os.path.join(target_game_dir, rel)
+        os.makedirs(dest_dir, exist_ok=True)
+        for file_name in files:
+            shutil.copy2(os.path.join(root, file_name), os.path.join(dest_dir, file_name))
+            files_copied += 1
+    return files_copied
+
+
+def _apply_game_root(work_dir):
+    global BASE_DIR, TL_DIR, WORK_GAME_DIR, ENV_GAME_ROOT
+
+    normalized = os.path.abspath(work_dir)
+    ENV_GAME_ROOT = normalized
+    BASE_DIR = normalized
+    TL_DIR = os.path.abspath(os.path.join(BASE_DIR, TL_SUBDIR))
+    WORK_GAME_DIR = os.path.abspath(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
+
+
+def persist_game_root(work_dir):
+    normalized = os.path.abspath(work_dir)
+    config = {}
+    if os.path.exists(TRANSLATOR_CONFIG):
+        try:
+            with open(TRANSLATOR_CONFIG, "r", encoding="utf-8-sig") as handle:
+                config = json.load(handle) or {}
+        except Exception:
+            config = {}
+
+    config["game_root"] = normalized
+    with open(TRANSLATOR_CONFIG, "w", encoding="utf-8") as handle:
+        json.dump(config, handle, indent=2, ensure_ascii=False)
+        handle.write("\n")
+
+    _apply_game_root(normalized)
+    return normalized
+
+
+def bootstrap_work_from_original(*, save_game_root=False, refresh_runtime_paths=False, base_dir=None):
+    base = os.path.abspath(base_dir or BASE_DIR)
+    project_root = resolve_project_root(base)
+    work_dir = resolve_work_dir(base)
+    allowed, _, skip_reason = work_dir_bootstrap_allowed(base)
+    source_game_dir = resolve_original_game_dir(base)
+
+    if not allowed:
+        return {
+            "status": "skipped",
+            "project_root": project_root,
+            "work_dir": work_dir,
+            "source_game_dir": source_game_dir,
+            "files_copied": 0,
+            "message": skip_reason,
+            "game_root_updated": False,
+        }
+
+    if not source_game_dir:
+        return {
+            "status": "failed",
+            "project_root": project_root,
+            "work_dir": work_dir,
+            "source_game_dir": "",
+            "files_copied": 0,
+            "message": (
+                "original/game was not found; set prepare.source_game_dir or create work manually."
+            ),
+            "game_root_updated": False,
+        }
+
+    target_game_dir = os.path.join(work_dir, WORK_GAME_SUBDIR)
+    try:
+        os.makedirs(work_dir, exist_ok=True)
+        files_copied = _copy_game_directory(source_game_dir, target_game_dir)
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "project_root": project_root,
+            "work_dir": work_dir,
+            "source_game_dir": source_game_dir,
+            "files_copied": 0,
+            "message": str(exc),
+            "game_root_updated": False,
+        }
+
+    message = f"Copied {files_copied} files from original/game into work/game."
+    game_root_updated = False
+    if os.path.normcase(base) != os.path.normcase(work_dir):
+        if save_game_root:
+            persist_game_root(work_dir)
+            game_root_updated = True
+        elif refresh_runtime_paths:
+            _apply_game_root(work_dir)
+
+    return {
+        "status": "created",
+        "project_root": project_root,
+        "work_dir": work_dir,
+        "source_game_dir": source_game_dir,
+        "files_copied": files_copied,
+        "message": message,
+        "game_root_updated": game_root_updated,
+    }
+
+
 def _guess_source_game_dir():
     candidates = []
     if SOURCE_GAME_DIR:
         candidates.append(SOURCE_GAME_DIR)
     candidates.append(WORK_GAME_DIR)
 
-    if os.path.basename(BASE_DIR).lower() == "work":
-        candidates.append(os.path.abspath(os.path.join(BASE_DIR, "..", "original", "game")))
+    original_game = resolve_original_game_dir()
+    if original_game:
+        candidates.append(original_game)
 
     seen = set()
     ordered = []
@@ -1398,6 +1544,17 @@ def run_prepare_steps():
     if not PREP_ENABLED:
         print("[Prepare] Disabled by translator_config.")
         return
+
+    allowed, _, _ = work_dir_bootstrap_allowed()
+    if allowed and resolve_original_game_dir():
+        bootstrap_result = bootstrap_work_from_original(
+            save_game_root=True,
+            refresh_runtime_paths=True,
+        )
+        if bootstrap_result["status"] == "created":
+            print(f"[Prepare] Work bootstrap: {bootstrap_result['message']}")
+            if bootstrap_result["game_root_updated"]:
+                print(f"[Prepare] Updated game_root to: {bootstrap_result['work_dir']}")
 
     source_game_dir = _guess_source_game_dir()
     os.makedirs(WORK_GAME_DIR, exist_ok=True)

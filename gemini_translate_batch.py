@@ -6908,6 +6908,62 @@ def collect_tl_doctor_counts():
     return counts
 
 
+def _detect_nested_work_dir(base_dir, tl_subdir):
+    if os.path.basename(os.path.abspath(base_dir)).lower() == 'work':
+        return ''
+    work_dir = os.path.join(base_dir, 'work')
+    nested_tl = os.path.abspath(os.path.join(work_dir, tl_subdir))
+    current_tl = os.path.abspath(os.path.join(base_dir, tl_subdir))
+    if os.path.isdir(nested_tl) and nested_tl != current_tl:
+        return os.path.abspath(work_dir)
+    if os.path.isdir(work_dir) and not legacy.is_work_dir_empty(work_dir):
+        return os.path.abspath(work_dir)
+    return ''
+
+
+def collect_doctor_recommendations(report):
+    recommendations = []
+    base_dir = report.get('base_dir', '')
+    tl_subdir = report.get('tl_subdir', '')
+    nested_work = _detect_nested_work_dir(base_dir, tl_subdir) if base_dir else ''
+    if nested_work and os.path.normcase(nested_work) != os.path.normcase(os.path.abspath(base_dir)):
+        recommendations.append(
+            f'game_root points above work directory; set game_root to {nested_work} in translator_config.json.'
+        )
+
+    if report.get('work_bootstrap_allowed') and report.get('original_game_dir'):
+        recommendations.append(
+            'work directory is missing or empty and original/game exists; '
+            'run: python gemini_translate_batch.py bootstrap-work '
+            '(copies original/game into work/game without generating TL).'
+        )
+    elif not report.get('work_bootstrap_allowed') and report.get('original_game_dir'):
+        pass
+
+    mode = report.get('mode', '')
+    has_tl = report.get('counts', {}).get('rpy_files', 0) > 0
+    if not has_tl and report.get('prepare_enabled') and report.get('can_generate_template'):
+        recommendations.append(
+            'Missing translation files; run: python gemini_translate_batch.py build '
+            '(build runs prepare automatically: unpack RPA if needed, generate tl template).'
+        )
+    elif not has_tl and report.get('prepare_enabled') and mode == 'blocked_missing_template':
+        recommendations.append(
+            'Install Ren\'Py SDK or set prepare.renpy_sdk_dir, then run: '
+            'python gemini_translate_batch.py build.'
+        )
+    elif not has_tl and not report.get('prepare_enabled'):
+        recommendations.append(
+            'prepare is disabled; enable prepare.enabled in translator_config.json, then run build.'
+        )
+    elif has_tl and report.get('pending_task_count', 0) > 0:
+        recommendations.append(
+            f"Found {report['pending_task_count']} pending lines; run build when API keys are configured."
+        )
+
+    return recommendations
+
+
 def collect_doctor_report():
     source_game_dir = legacy._guess_source_game_dir()
     template_info = legacy.get_prepare_template_command_info(source_game_dir)
@@ -6915,6 +6971,8 @@ def collect_doctor_report():
     tl_exists = os.path.isdir(legacy.TL_DIR)
     has_tl_files = counts['rpy_files'] > 0
     can_generate_template = bool(template_info.get('available'))
+    original_game_dir = legacy.resolve_original_game_dir()
+    work_bootstrap_allowed, work_dir, _ = legacy.work_dir_bootstrap_allowed()
 
     warnings = []
 
@@ -6996,12 +7054,15 @@ def collect_doctor_report():
         except Exception as exc:
             print(f'Warning: Could not compute pending translation counts: {exc}')
 
-    return {
+    report = {
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
         'tl_subdir': legacy.TL_SUBDIR,
         'language': legacy.PREP_LANGUAGE,
         'source_game_dir': source_game_dir,
+        'original_game_dir': original_game_dir,
+        'work_dir': work_dir,
+        'work_bootstrap_allowed': work_bootstrap_allowed,
         'prepare_enabled': legacy.PREP_ENABLED,
         'generate_template': legacy.PREP_GENERATE_TEMPLATE,
         'refresh_existing_template': legacy.PREP_REFRESH_EXISTING_TEMPLATE,
@@ -7019,6 +7080,8 @@ def collect_doctor_report():
         'pending_file_count': pending_file_count,
         'warnings': warnings,
     }
+    report['recommendations'] = collect_doctor_recommendations(report)
+    return report
 
 
 def print_doctor_report(report):
@@ -7060,6 +7123,32 @@ def print_doctor_report(report):
         print('Warnings:')
         for warning in report['warnings']:
             print(f'- {warning}')
+    if report.get('recommendations'):
+        print('Recommendations:')
+        for recommendation in report['recommendations']:
+            print(f'- {recommendation}')
+
+
+def print_work_bootstrap_summary(result):
+    print('Work bootstrap summary:')
+    print(f"- status: {result.get('status', '')}")
+    print(f"- project_root: {result.get('project_root', '')}")
+    print(f"- work_dir: {result.get('work_dir', '')}")
+    print(f"- source_game_dir: {result.get('source_game_dir', '')}")
+    print(f"- files_copied: {result.get('files_copied', 0)}")
+    print(f"- game_root_updated: {result.get('game_root_updated', False)}")
+    print(f"- message: {result.get('message', '')}")
+
+
+def run_bootstrap_work(*, save_game_root=True, refresh_runtime_paths=True):
+    result = legacy.bootstrap_work_from_original(
+        save_game_root=save_game_root,
+        refresh_runtime_paths=refresh_runtime_paths,
+    )
+    print_work_bootstrap_summary(result)
+    if result.get('status') == 'failed':
+        raise SystemExit(f"[Bootstrap] {result.get('message', 'work bootstrap failed')}")
+    return result
 
 
 def print_banner():
@@ -7093,6 +7182,16 @@ def build_arg_parser():
     subparsers = parser.add_subparsers(dest='command')
 
     subparsers.add_parser('doctor', help='Inspect prepare, SDK, and TL template compatibility without writing files.')
+
+    bootstrap_work_parser = subparsers.add_parser(
+        'bootstrap-work',
+        help='Create work/ from original/game when work is missing or empty (no TL generation).',
+    )
+    bootstrap_work_parser.add_argument(
+        '--no-update-game-root',
+        action='store_true',
+        help='Do not update translator_config.json game_root to work/ after bootstrap.',
+    )
 
     build_parser = subparsers.add_parser('build', help='Build local batch package and JSONL only.')
     build_parser.add_argument('--display-name', default='', help='Override Batch display name.')
@@ -7434,6 +7533,18 @@ def main(argv=None):
         load_batch_settings()
         print_banner()
         print_doctor_report(collect_doctor_report())
+        return
+
+    if command == 'bootstrap-work':
+        legacy.load_translator_settings()
+        legacy.load_glossary()
+        load_batch_settings()
+        print_banner()
+        update_game_root = not args.no_update_game_root
+        run_bootstrap_work(
+            save_game_root=update_game_root,
+            refresh_runtime_paths=update_game_root,
+        )
         return
 
     initialize_batch_logging()

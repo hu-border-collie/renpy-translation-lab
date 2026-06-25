@@ -634,6 +634,39 @@ class BatchRagRegressionTests(unittest.TestCase):
 
         self.assertEqual(args.command, 'doctor')
 
+    def test_build_arg_parser_accepts_bootstrap_work_command(self):
+        args = batch_mod.build_arg_parser().parse_args(['bootstrap-work'])
+
+        self.assertEqual(args.command, 'bootstrap-work')
+        self.assertFalse(args.no_update_game_root)
+
+    def test_doctor_report_recommends_bootstrap_work_when_work_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original_game = project / 'original' / 'game'
+            original_game.mkdir(parents=True)
+            (original_game / 'script.rpy').write_text('label start:\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(project)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(project / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(project / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(batch_mod.legacy, 'TL_SUBDIR', 'game/tl/schinese'),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LANGUAGE', 'schinese'),
+                mock.patch.object(batch_mod.legacy, 'PREP_ENABLED', True),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_TEMPLATE_COMMAND', None),
+                mock.patch.object(batch_mod.legacy, 'resolve_original_game_dir', return_value=str(original_game)),
+                mock.patch.object(batch_mod.legacy, 'work_dir_bootstrap_allowed', return_value=(True, str(project / 'work'), '')),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        joined = ' '.join(report.get('recommendations', []))
+        self.assertIn('bootstrap-work', joined)
+
     def test_doctor_report_classifies_existing_tl_without_sdk(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

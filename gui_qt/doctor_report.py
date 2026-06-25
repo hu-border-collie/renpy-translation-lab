@@ -5,7 +5,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .user_copy import doctor_mode_label, translate_doctor_warning
+from .user_copy import (
+    doctor_mode_label,
+    translate_doctor_recommendation,
+    translate_doctor_warning,
+)
 
 
 @dataclass(frozen=True)
@@ -18,9 +22,13 @@ class DoctorSummary:
 
 
 MODE_MESSAGES = {
-    "can_generate_template": "Ren'Py 模板生成环境可用；如翻译模板尚不存在，需要先生成或刷新模板。",
+    "can_generate_template": (
+        "Ren'Py 模板生成环境可用；如翻译模板尚不存在，可先准备工作目录，再运行开始翻译（build）。"
+    ),
     "existing_tl_only": "已有翻译文件可处理；模板生成环境不可用，后续依赖现有翻译文件。",
-    "blocked_missing_template": "缺少可处理的翻译文件，也无法自动生成模板。",
+    "blocked_missing_template": (
+        "缺少可处理的翻译文件，也无法自动生成模板；如有 original/game，可先准备工作目录。"
+    ),
 }
 
 
@@ -83,8 +91,9 @@ def format_tl_scan_facts(
 
 
 def parse_doctor_output(output: str) -> dict[str, object]:
-    parsed: dict[str, object] = {"warnings": []}
+    parsed: dict[str, object] = {"warnings": [], "recommendations": []}
     in_warnings = False
+    in_recommendations = False
 
     for raw_line in output.splitlines():
         line = raw_line.strip()
@@ -93,6 +102,12 @@ def parse_doctor_output(output: str) -> dict[str, object]:
 
         if line == "Warnings:":
             in_warnings = True
+            in_recommendations = False
+            continue
+
+        if line == "Recommendations:":
+            in_recommendations = True
+            in_warnings = False
             continue
 
         if in_warnings:
@@ -100,6 +115,12 @@ def parse_doctor_output(output: str) -> dict[str, object]:
                 parsed.setdefault("warnings", []).append(line[2:].strip())
                 continue
             in_warnings = False
+
+        if in_recommendations:
+            if line.startswith("- "):
+                parsed.setdefault("recommendations", []).append(line[2:].strip())
+                continue
+            in_recommendations = False
 
         if line.startswith("- Base dir:"):
             parsed["base_dir"] = line.split(":", 1)[1].strip()
@@ -148,6 +169,11 @@ def summarize_doctor_output(
         for warning in parsed.get("warnings", [])
         if isinstance(warning, str) and warning.strip()
     ]
+    recommendations = [
+        translate_doctor_recommendation(recommendation)
+        for recommendation in parsed.get("recommendations", [])
+        if isinstance(recommendation, str) and recommendation.strip()
+    ]
     counts_value = parsed.get("counts")
     counts = counts_value if isinstance(counts_value, dict) else {}
     pending_value = parsed.get("pending")
@@ -167,16 +193,15 @@ def summarize_doctor_output(
     if counts:
         facts.extend(format_tl_scan_facts(counts, pending=pending))
 
-    findings = list(warnings)
+    findings = list(warnings) + list(recommendations)
     if mode == "can_generate_template":
         if parsed.get("tl_exists") is False:
             findings.append(
-                "翻译目录尚不存在；可以生成模板，但还没有可检查的翻译文件。"
-                "请先生成或刷新翻译模板后重新检查。"
+                "翻译目录尚不存在；可先点击「准备工作目录」，再运行「开始翻译」生成模板，然后重新检查。"
             )
         elif counts and int(counts.get("rpy_files", 0)) == 0:
             findings.append(
-                "翻译目录中没有翻译文件；请先生成或刷新翻译模板后重新检查。"
+                "翻译目录中没有翻译文件；可先准备工作目录，再通过「开始翻译」生成模板后重新检查。"
             )
     if api_key_count is not None:
         if api_key_count > 0:

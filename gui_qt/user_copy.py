@@ -43,6 +43,33 @@ BOOTSTRAP_FIELD_LABELS = {
     "external_seed_records": "外部种子记录数",
 }
 
+DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS: tuple[tuple[str, str], ...] = (
+    (
+        "game_root points above work directory; set game_root to",
+        "项目路径指到了 work 的上级；请将 game_root 改为",
+    ),
+    (
+        "work directory is missing or empty and original/game exists;",
+        "work 目录不存在或为空，且检测到 original/game；",
+    ),
+    (
+        "Missing translation files; run: python gemini_translate_batch.py build",
+        "缺少翻译文件；请运行 build 或点击「开始翻译」",
+    ),
+    (
+        "Install Ren'Py SDK or set prepare.renpy_sdk_dir, then run:",
+        "请安装 Ren'Py SDK 或配置 prepare.renpy_sdk_dir，然后运行",
+    ),
+    (
+        "prepare is disabled; enable prepare.enabled in translator_config.json, then run build.",
+        "prepare 已禁用；请在 translator_config.json 中启用 prepare.enabled，然后运行 build。",
+    ),
+    (
+        "Found ",
+        "检测到 ",
+    ),
+)
+
 DOCTOR_WARNING_TRANSLATIONS: tuple[tuple[str, str], ...] = (
     (
         "old/new line counts differ; string translation blocks may be malformed.",
@@ -109,6 +136,34 @@ def format_job_state_fact(state: str) -> str:
 
 def format_safety_fact(level: str, *, prefix: str = "检查结果") -> str:
     return f"{prefix}：{safety_level_label(level)}"
+
+
+def translate_doctor_recommendation(recommendation: str) -> str:
+    text = recommendation.strip()
+    for source, translated in DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS:
+        if text.startswith(source):
+            suffix = text[len(source):]
+            if source == "work directory is missing or empty and original/game exists;":
+                return (
+                    f"{translated}请点击「准备工作目录」，或运行 bootstrap-work "
+                    f"（仅复制 original/game 到 work/game，不生成翻译模板）。"
+                )
+            if source == "Missing translation files; run: python gemini_translate_batch.py build":
+                return (
+                    f"{translated}（build 会自动执行 prepare：解包 RPA、生成翻译模板）。"
+                )
+            if source == "Install Ren'Py SDK or set prepare.renpy_sdk_dir, then run:":
+                return f"{translated} build 或点击「开始翻译」。"
+            if source == "Found " and "pending lines" in text:
+                count = text.removeprefix("Found ").split(" pending", 1)[0].strip()
+                return f"检测到约 {count} 条待翻译行；配置好 API 密钥后可开始翻译。"
+            return f"{translated}{suffix}"
+    if "bootstrap-work" in text and "copies original/game" in text:
+        return (
+            "请点击「准备工作目录」，或运行 bootstrap-work "
+            "（仅复制 original/game 到 work/game，不生成翻译模板）。"
+        )
+    return text
 
 
 def translate_doctor_warning(warning: str) -> str:

@@ -6,6 +6,7 @@ from gui_qt.doctor_report import (
     stale_summary,
     summarize_doctor_output,
 )
+from gui_qt.user_copy import translate_doctor_recommendation
 
 
 DOCTOR_OUTPUT = """
@@ -121,6 +122,30 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "warning")
         self.assertTrue(any("界面字符串块" in finding for finding in summary.findings))
+
+    def test_doctor_recommendations_are_parsed_and_translated(self):
+        output = DOCTOR_OUTPUT + (
+            "\nRecommendations:\n"
+            "- work directory is missing or empty and original/game exists; "
+            "run: python gemini_translate_batch.py bootstrap-work "
+            "(copies original/game into work/game without generating TL).\n"
+        )
+
+        parsed = parse_doctor_output(output)
+        self.assertEqual(len(parsed["recommendations"]), 1)
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
+        self.assertTrue(any("准备工作目录" in finding for finding in summary.findings))
+
+    def test_translate_doctor_recommendation_maps_bootstrap_hint(self):
+        translated = translate_doctor_recommendation(
+            "work directory is missing or empty and original/game exists; "
+            "run: python gemini_translate_batch.py bootstrap-work "
+            "(copies original/game into work/game without generating TL)."
+        )
+
+        self.assertIn("准备工作目录", translated)
+        self.assertIn("bootstrap-work", translated)
 
     def test_stale_summary_marks_previous_result_invalid(self):
         summary = stale_summary()
