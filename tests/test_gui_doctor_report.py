@@ -139,7 +139,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "检查完成，但有需要处理的事项")
         self.assertEqual(summary.findings, [])
-        self.assertTrue(any("翻译模板尚未生成" in summary.message for _ in [0]))
+        self.assertIn("翻译模板尚未生成", summary.message)
         self.assertTrue(any("翻译文件：0 个" in fact for fact in summary.facts))
 
     def test_can_generate_template_with_empty_tl_dir_is_warning(self):

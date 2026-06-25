@@ -16,6 +16,7 @@ class GuiProjectStateTests(unittest.TestCase):
         state.api_keys_path = root / "api_keys.json"
         state.config_path = root / "translator_config.json"
         state._game_root = None
+        state._game_root_redirect_from = None
         return state
 
     def test_save_api_keys_preserves_existing_unknown_fields(self):
@@ -325,12 +326,8 @@ class GuiProjectStateTests(unittest.TestCase):
             project = root / "Game Example"
             work = project / "work"
             work.mkdir(parents=True)
-            config_path = root / "translator_config.json"
-            config_path.write_text("{}", encoding="utf-8")
-
-            state = ProjectState()
-            state.config_path = config_path
-            state.tool_root = root
+            state = self.make_state(root)
+            state.config_path.write_text("{}", encoding="utf-8")
             state.set_game_root(project)
 
             self.assertEqual(state.take_game_root_redirect_from(), project)
@@ -342,17 +339,13 @@ class GuiProjectStateTests(unittest.TestCase):
             project = root / "Game Example"
             work = project / "work"
             work.mkdir(parents=True)
-            config_path = root / "translator_config.json"
-            config_path.write_text("{}", encoding="utf-8")
-
-            state = ProjectState()
-            state.config_path = config_path
-            state.tool_root = root
+            state = self.make_state(root)
+            state.config_path.write_text("{}", encoding="utf-8")
 
             effective, adjusted = state.set_game_root(project)
             self.assertTrue(adjusted)
             self.assertEqual(effective, work)
-            saved = json.loads(config_path.read_text(encoding="utf-8"))
+            saved = json.loads(state.config_path.read_text(encoding="utf-8"))
             self.assertEqual(Path(saved["game_root"]), work)
 
     def test_set_game_root_preserves_translator_config_fields(self):

@@ -50,23 +50,19 @@ DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS: tuple[tuple[str, str], ...] = (
     ),
     (
         "work directory is missing or empty and original/game exists;",
-        "work 目录不存在或为空，且检测到 original/game；",
+        "建议：点击「准备工作目录」",
     ),
     (
         "Missing translation files; run: python gemini_translate_batch.py build",
-        "缺少翻译模板；请点击「开始翻译」",
+        "建议：点击「开始翻译」生成翻译模板",
     ),
     (
         "Install Ren'Py SDK or set prepare.renpy_sdk_dir, then run:",
-        "请安装 Ren'Py SDK 或配置 prepare.renpy_sdk_dir，然后运行",
+        "建议：配置 Ren'Py SDK 后点击「开始翻译」",
     ),
     (
         "prepare is disabled; enable prepare.enabled in translator_config.json, then run build.",
-        "prepare 已禁用；请在 translator_config.json 中启用 prepare.enabled，然后运行 build。",
-    ),
-    (
-        "Found ",
-        "检测到 ",
+        "建议：在配置中启用 prepare 后点击「开始翻译」",
     ),
 )
 
@@ -141,23 +137,14 @@ def format_safety_fact(level: str, *, prefix: str = "检查结果") -> str:
 def format_doctor_recommendation_fact(recommendation: str) -> str:
     """Render doctor recommendations in the same `标签：值` style as other facts."""
     text = recommendation.strip()
-    for source, translated in DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS:
-        if text.startswith(source):
-            suffix = text[len(source):]
-            if source == "game_root should use work directory; switch to":
-                return f"{translated}{suffix}"
-            if source == "work directory is missing or empty and original/game exists;":
-                return "建议：点击「准备工作目录」"
-            if source == "Missing translation files; run: python gemini_translate_batch.py build":
-                return "建议：点击「开始翻译」生成翻译模板"
-            if source == "Install Ren'Py SDK or set prepare.renpy_sdk_dir, then run:":
-                return "建议：配置 Ren'Py SDK 后点击「开始翻译」"
-            if source == "prepare is disabled; enable prepare.enabled in translator_config.json, then run build.":
-                return "建议：在配置中启用 prepare 后点击「开始翻译」"
-            if source == "Found " and "pending lines" in text:
-                count = text.removeprefix("Found ").split(" pending", 1)[0].strip()
-                return f"建议：点击「开始翻译」提交约 {count} 条待译行"
-            break
+    if text.startswith("Found ") and "pending lines" in text:
+        count = text.removeprefix("Found ").split(" pending", 1)[0].strip()
+        return f"建议：点击「开始翻译」提交约 {count} 条待译行"
+    for prefix, rendered in DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS:
+        if text.startswith(prefix):
+            if prefix == "game_root should use work directory; switch to":
+                return f"{rendered}{text[len(prefix):]}"
+            return rendered
     if "bootstrap-work" in text and "copies original/game" in text:
         return "建议：点击「准备工作目录」"
     return f"建议：{text}"

@@ -1669,16 +1669,23 @@ class MainWindow(QMainWindow):
                 "\n".join(self._work_bootstrap_output_lines),
                 exit_code,
             )
+            game_root_update_failed = False
             if summary.status == "ready" and summary.work_dir:
                 try:
                     self.state.set_game_root(summary.work_dir)
                     self._refresh_project_label()
                 except ValueError as exc:
                     self._append_log(f"更新 translator_config.json 失败：{exc}")
+                    game_root_update_failed = True
             self._set_doctor_summary(work_bootstrap_to_doctor_summary(summary))
             self._active_command = ""
             self._set_task_running(False)
-            if exit_code == 0 and summary.status == "ready":
+            if game_root_update_failed:
+                self.statusBar().showMessage(
+                    "工作目录已复制，但更新 game_root 失败，请查看诊断日志。",
+                    8000,
+                )
+            elif exit_code == 0 and summary.status == "ready":
                 self.statusBar().showMessage("工作目录已准备完成。", 6000)
             elif exit_code == 0:
                 self.statusBar().showMessage("准备工作目录已结束，请查看摘要。", 6000)
