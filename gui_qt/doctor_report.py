@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from .user_copy import (
     doctor_mode_label,
     format_doctor_recommendation_fact,
+    format_doctor_warning_fact,
     translate_doctor_warning,
 )
 
@@ -260,6 +261,8 @@ def summarize_doctor_output(
 
     if recommendation_facts:
         facts.extend(recommendation_facts)
+    for warning in warnings:
+        facts.append(format_doctor_warning_fact(warning))
 
     if exit_code != 0:
         return DoctorSummary(

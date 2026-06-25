@@ -1567,7 +1567,7 @@ class MainWindow(QMainWindow):
         self.doctor_status_label.style().polish(self.doctor_status_label)
         self.doctor_message_label.setText(summary.message)
         self.doctor_facts_label.setText("\n".join(summary.facts))
-        self._set_details_label(self.doctor_details_label, summary.findings)
+        self._set_details_label(self.doctor_details_label, [])
 
     def _on_runner_error(self, message: str):
         self._append_log(message)

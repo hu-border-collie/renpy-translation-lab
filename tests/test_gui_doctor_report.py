@@ -205,6 +205,10 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "warning")
         self.assertTrue(any("界面字符串块" in finding for finding in summary.findings))
+        self.assertTrue(
+            any(fact.startswith("注意：") and "界面字符串块" in fact for fact in summary.facts)
+        )
+        self.assertFalse(any(fact.startswith("- ") for fact in summary.facts))
 
     def test_doctor_recommendations_are_rendered_as_facts(self):
         output = DOCTOR_OUTPUT + (

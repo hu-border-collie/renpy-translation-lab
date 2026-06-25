@@ -134,6 +134,11 @@ def format_safety_fact(level: str, *, prefix: str = "检查结果") -> str:
     return f"{prefix}：{safety_level_label(level)}"
 
 
+def format_doctor_warning_fact(warning: str) -> str:
+    """Render doctor warnings in the same `标签：值` style as other facts."""
+    return f"注意：{translate_doctor_warning(warning)}"
+
+
 def format_doctor_recommendation_fact(recommendation: str) -> str:
     """Render doctor recommendations in the same `标签：值` style as other facts."""
     text = recommendation.strip()
