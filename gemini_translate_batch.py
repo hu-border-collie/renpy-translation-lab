@@ -6908,24 +6908,38 @@ def collect_tl_doctor_counts():
     return counts
 
 
-def assess_doctor_layout_status(report):
+def collect_doctor_layout_context(report):
     base_dir = os.path.abspath(report.get('base_dir', ''))
-    is_work_root = os.path.basename(base_dir).lower() == 'work'
-    work_dir = report.get('work_dir', '')
+    work_dir = report.get('work_dir', '') or legacy.resolve_work_dir(base_dir)
     work_exists = os.path.isdir(work_dir)
     work_empty = (not work_exists) or legacy.is_work_dir_empty(work_dir)
-    has_tl = int(report.get('counts', {}).get('rpy_files', 0)) > 0
-    has_original = bool(report.get('original_game_dir'))
-    nested_work_ready = work_exists and not work_empty
+    work_game_dir = os.path.join(work_dir, legacy.WORK_GAME_SUBDIR) if work_dir else ''
+    return {
+        'is_work_root': os.path.basename(base_dir).lower() == 'work',
+        'work_dir': work_dir,
+        'work_exists': work_exists,
+        'work_empty': work_empty,
+        'work_game_exists': os.path.isdir(work_game_dir),
+        'has_tl': int(report.get('counts', {}).get('rpy_files', 0)) > 0,
+        'has_original': bool(report.get('original_game_dir')),
+    }
+
+
+def assess_doctor_layout_status(report, context=None):
+    ctx = context or collect_doctor_layout_context(report)
+    is_work_root = ctx['is_work_root']
+    has_tl = ctx['has_tl']
+    has_original = ctx['has_original']
+    work_exists = ctx['work_exists']
 
     if not is_work_root:
-        if nested_work_ready or has_original or has_tl:
+        if work_exists or has_original or has_tl:
             return 'switch_to_work'
         return 'failed'
 
     if has_tl:
         return 'ready'
-    if has_original or report.get('can_generate_template'):
+    if has_original or report.get('can_generate_template') or ctx.get('work_game_exists'):
         return 'attention'
     return 'failed'
 
@@ -6940,6 +6954,13 @@ def collect_doctor_recommendations(report):
             recommendations.append(
                 f'game_root should use work directory; switch to {work_dir}'
             )
+        if report.get('work_bootstrap_allowed') and report.get('original_game_dir'):
+            recommendations.append(
+                'work directory is missing or empty and original/game exists; '
+                'run: python gemini_translate_batch.py bootstrap-work '
+                '(copies original/game into work/game without generating TL).'
+            )
+        return recommendations
 
     mode = report.get('mode', '')
     has_tl = report.get('counts', {}).get('rpy_files', 0) > 0
@@ -7087,8 +7108,9 @@ def collect_doctor_report():
         'pending_file_count': pending_file_count,
         'warnings': warnings,
     }
-    report['is_work_root'] = os.path.basename(os.path.abspath(legacy.BASE_DIR)).lower() == 'work'
-    report['layout_status'] = assess_doctor_layout_status(report)
+    layout_context = collect_doctor_layout_context(report)
+    report.update(layout_context)
+    report['layout_status'] = assess_doctor_layout_status(report, layout_context)
     report['recommendations'] = collect_doctor_recommendations(report)
     return report
 
@@ -7114,6 +7136,13 @@ def print_doctor_report(report):
         print(f"- Template generation: unavailable ({report['template_reason'] or 'no command resolved'})")
     print(f"- Mode: {report['mode']}")
     print(f"- Is work root: {report.get('is_work_root', False)}")
+    print(
+        f"- Work dir: {report.get('work_dir', '')} "
+        f"(exists: {report.get('work_exists', False)}, empty: {report.get('work_empty', True)})"
+    )
+    print(
+        f"- Original game dir: {report.get('original_game_dir') or '(not found)'}"
+    )
     print(f"- Layout status: {report.get('layout_status', '')}")
     print(
         '- TL scan: '

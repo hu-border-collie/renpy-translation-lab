@@ -35,7 +35,8 @@ LAYOUT_STATUS_HEADINGS = {
 }
 
 LAYOUT_STATUS_MESSAGES = {
-    "failed": "当前目录下没有 work 目录、没有可翻译内容，也未找到 original/game。",
+    "failed": "当前项目目录下没有 work 目录、没有可翻译内容，也未找到 original/game。",
+    "failed_on_work": "work 目录为空，没有可翻译内容，且无法自动生成翻译模板。",
     "switch_to_work": "当前路径不是 work 目录，但项目内已有可继续处理的内容。",
     "ready": "work 目录已就绪，可以开始翻译流程。",
 }
@@ -159,6 +160,27 @@ def parse_doctor_output(output: str) -> dict[str, object]:
             parsed["is_work_root"] = _parse_bool(line.split(":", 1)[1].strip())
             continue
 
+        if line.startswith("- Work dir:"):
+            match = re.match(
+                r"- Work dir:\s*(.*?)\s*\(exists:\s*(True|False),\s*empty:\s*(True|False)\)",
+                line,
+            )
+            if match:
+                parsed["work_dir"] = match.group(1).strip()
+                parsed["work_exists"] = _parse_bool(match.group(2))
+                parsed["work_empty"] = _parse_bool(match.group(3))
+            continue
+
+        if line.startswith("- Original game dir:"):
+            value = line.split(":", 1)[1].strip()
+            if value == "(not found)":
+                parsed["original_game_dir"] = ""
+                parsed["original_game_exists"] = False
+            else:
+                parsed["original_game_dir"] = value
+                parsed["original_game_exists"] = True
+            continue
+
         if line.startswith("- Layout status:"):
             parsed["layout_status"] = line.split(":", 1)[1].strip()
             continue
@@ -203,6 +225,19 @@ def summarize_doctor_output(
         facts.append(f"项目目录：{parsed['base_dir']}")
     elif parsed.get("base_dir"):
         facts.append(f"work 目录：{parsed['base_dir']}")
+
+    if parsed.get("is_work_root") is False:
+        if parsed.get("work_exists") is False:
+            facts.append("work 目录：不存在")
+        elif parsed.get("work_empty") is True:
+            facts.append("work 目录：存在（为空）")
+        elif parsed.get("work_exists") is True:
+            facts.append("work 目录：存在")
+
+    if parsed.get("original_game_exists") is True:
+        facts.append("original/game：存在")
+    elif parsed.get("original_game_exists") is False:
+        facts.append("original/game：不存在")
     if parsed.get("tl_dir"):
         exists_text = "存在" if parsed.get("tl_exists") is True else "不存在"
         facts.append(f"翻译目录：{exists_text}")
@@ -236,7 +271,13 @@ def summarize_doctor_output(
 
     if layout_status in LAYOUT_STATUS_HEADINGS:
         status, heading = LAYOUT_STATUS_HEADINGS[layout_status]
-        message = LAYOUT_STATUS_MESSAGES.get(layout_status, MODE_MESSAGES.get(mode, "项目检查已完成。"))
+        if layout_status == "failed" and parsed.get("is_work_root") is True:
+            message = LAYOUT_STATUS_MESSAGES["failed_on_work"]
+        else:
+            message = LAYOUT_STATUS_MESSAGES.get(
+                layout_status,
+                MODE_MESSAGES.get(mode, "项目检查已完成。"),
+            )
         if layout_status == "attention":
             message = MODE_MESSAGES.get(mode, message)
         if layout_status == "ready" and api_key_count == 0:

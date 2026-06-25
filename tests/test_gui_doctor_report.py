@@ -59,6 +59,22 @@ Doctor report:
 - Template generation: unavailable (no command resolved)
 - Mode: blocked_missing_template
 - Is work root: False
+- Work dir: C:\\Games\\Example\\work (exists: False, empty: True)
+- Original game dir: (not found)
+- Layout status: failed
+- TL scan: rpy_files=0, translate_blocks=0, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=0
+"""
+
+FAILED_ON_WORK_OUTPUT = """
+Doctor report:
+- Base dir: C:\\Games\\Example\\work
+- TL dir: C:\\Games\\Example\\work\\game\\tl\\schinese (exists: False)
+- Language: schinese
+- Template generation: unavailable (no command resolved)
+- Mode: blocked_missing_template
+- Is work root: True
+- Work dir: C:\\Games\\Example\\work (exists: True, empty: True)
+- Original game dir: (not found)
 - Layout status: failed
 - TL scan: rpy_files=0, translate_blocks=0, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=0
 """
@@ -71,6 +87,8 @@ Doctor report:
 - Template generation: available (sdk)
 - Mode: can_generate_template
 - Is work root: False
+- Work dir: C:\\Games\\Example\\work (exists: False, empty: True)
+- Original game dir: C:\\Games\\Example\\original\\game
 - Layout status: switch_to_work
 - TL scan: rpy_files=0, translate_blocks=0, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=0
 Recommendations:
@@ -148,6 +166,15 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "blocked")
         self.assertEqual(summary.heading, "项目检查失败")
         self.assertIn("original/game", summary.message)
+        self.assertTrue(any("work 目录：不存在" in fact for fact in summary.facts))
+        self.assertTrue(any("original/game：不存在" in fact for fact in summary.facts))
+
+    def test_failed_on_work_root_uses_work_specific_message(self):
+        summary = summarize_doctor_output(FAILED_ON_WORK_OUTPUT, exit_code=0, api_key_count=1)
+
+        self.assertEqual(summary.status, "blocked")
+        self.assertIn("work 目录为空", summary.message)
+        self.assertNotIn("当前项目目录下没有 work 目录", summary.message)
 
     def test_ready_layout_status_is_green(self):
         summary = summarize_doctor_output(READY_OUTPUT, exit_code=0, api_key_count=2)
@@ -162,6 +189,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "建议使用 work 目录")
         self.assertTrue(any("切换到" in fact for fact in summary.facts))
+        self.assertTrue(any("original/game：存在" in fact for fact in summary.facts))
 
     def test_nonzero_exit_is_blocked(self):
         summary = summarize_doctor_output("startup failed", exit_code=1, api_key_count=1)
