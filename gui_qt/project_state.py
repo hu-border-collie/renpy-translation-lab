@@ -37,6 +37,7 @@ class ProjectState:
         self.config_path: Path = self.tool_root / "translator_config.json"
 
         self._game_root: Path | None = None
+        self._game_root_redirect_from: Path | None = None
         self._load_game_root_from_config()
 
     # --- Path helpers ---
@@ -165,13 +166,24 @@ class ProjectState:
 
     def set_game_root(self, path: str | Path) -> tuple[Path, bool]:
         """Update current game root and persist it to translator_config.json."""
+        original = self._path_without_resolve(path)
         p, adjusted = self.normalize_game_root(path)
         if not p.exists():
             # Still allow setting even if not exist yet (user may create later)
             pass
         self._save_game_root_to_config(p)
         self._game_root = p
+        if adjusted:
+            self._game_root_redirect_from = original
+        else:
+            self._game_root_redirect_from = None
         return p, adjusted
+
+    def take_game_root_redirect_from(self) -> Path | None:
+        """Return and clear the last auto-redirect source path, if any."""
+        source = self._game_root_redirect_from
+        self._game_root_redirect_from = None
+        return source
 
     def _load_game_root_from_config(self) -> None:
         if not self.config_path.exists():
@@ -180,9 +192,11 @@ class ProjectState:
             data = json.loads(self.config_path.read_text(encoding="utf-8-sig") or "{}")
             game_root = data.get("game_root")
             if isinstance(game_root, str) and game_root.strip():
+                original = self._path_without_resolve(game_root)
                 effective, adjusted = self.normalize_game_root(game_root)
                 self._game_root = effective
                 if adjusted:
+                    self._game_root_redirect_from = original
                     self._save_game_root_to_config(effective)
         except Exception:
             # Non-fatal for GUI

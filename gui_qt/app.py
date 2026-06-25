@@ -161,6 +161,7 @@ class MainWindow(QMainWindow):
         self.runner.error.connect(self._on_runner_error)
 
         self._refresh_project_label()
+        self._show_pending_game_root_redirect_notice()
         self._refresh_api_status()
         self._load_config_to_ui()
         self._set_doctor_summary(idle_summary())
@@ -186,8 +187,10 @@ class MainWindow(QMainWindow):
 
         project_frame = QFrame()
         project_frame.setObjectName("project_frame")
-        proj_layout = QHBoxLayout(project_frame)
-        proj_layout.setContentsMargins(12, 10, 12, 10)
+        proj_outer = QVBoxLayout(project_frame)
+        proj_outer.setContentsMargins(12, 10, 12, 10)
+        proj_outer.setSpacing(6)
+        proj_layout = QHBoxLayout()
         proj_layout.setSpacing(10)
 
         proj_layout.addWidget(QLabel("当前 work 目录："))
@@ -200,6 +203,13 @@ class MainWindow(QMainWindow):
         self.select_btn = QPushButton("选择游戏目录...")
         self.select_btn.clicked.connect(self._on_select_project)
         proj_layout.addWidget(self.select_btn)
+        proj_outer.addLayout(proj_layout)
+
+        self.project_redirect_label = QLabel()
+        self.project_redirect_label.setWordWrap(True)
+        self.project_redirect_label.setObjectName("config_hint_label")
+        self.project_redirect_label.setVisible(False)
+        proj_outer.addWidget(self.project_redirect_label)
 
         layout.addWidget(project_frame)
 
@@ -1074,10 +1084,12 @@ class MainWindow(QMainWindow):
             try:
                 effective_root, adjusted = self.state.set_game_root(directory)
                 if adjusted:
-                    self.statusBar().showMessage(
-                        f"已自动切换到 work 目录：{effective_root}",
-                        8000,
+                    self._show_game_root_redirect_notice(
+                        Path(directory),
+                        effective_root,
                     )
+                else:
+                    self._clear_game_root_redirect_notice()
             except ValueError as exc:
                 QMessageBox.warning(self, "无法更新配置", str(exc))
                 self._append_log(f"更新 translator_config.json 失败：{exc}")
@@ -1147,12 +1159,39 @@ class MainWindow(QMainWindow):
         self._refresh_api_status()
         self._append_log(f"API Key 已保存（当前数量：{len(new_keys)}）。")
 
+    def _format_game_root_redirect_notice(self, original: Path, effective: Path) -> str:
+        return (
+            f"提示：检测到 work/ 子目录，已从 {original} 自动切换到 {effective}。"
+        )
+
+    def _show_game_root_redirect_notice(self, original: Path, effective: Path) -> None:
+        notice = self._format_game_root_redirect_notice(original, effective)
+        self.project_redirect_label.setText(notice)
+        self.project_redirect_label.setVisible(True)
+        self.statusBar().showMessage(
+            f"已自动切换到 work 目录：{effective}",
+            8000,
+        )
+
+    def _clear_game_root_redirect_notice(self) -> None:
+        self.project_redirect_label.setText("")
+        self.project_redirect_label.setVisible(False)
+
+    def _show_pending_game_root_redirect_notice(self) -> None:
+        original = self.state.take_game_root_redirect_from()
+        effective = self.state.get_game_root()
+        if original is None or effective is None:
+            self._clear_game_root_redirect_notice()
+            return
+        self._show_game_root_redirect_notice(original, effective)
+
     def _refresh_project_label(self):
         root = self.state.get_game_root()
         if root:
             self.project_path_edit.setText(str(root))
         else:
             self.project_path_edit.setText("（尚未选择项目）")
+            self._clear_game_root_redirect_notice()
 
     def _on_run_doctor(self):
         if not self.state.get_game_root():

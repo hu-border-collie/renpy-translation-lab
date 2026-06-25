@@ -319,6 +319,23 @@ class GuiProjectStateTests(unittest.TestCase):
             self.assertEqual(saved["api_keys"], ["old-key"])
             self.assertFalse(state.api_keys_path.with_suffix(".tmp").exists())
 
+    def test_take_game_root_redirect_from_clears_pending_notice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "Game Example"
+            work = project / "work"
+            work.mkdir(parents=True)
+            config_path = root / "translator_config.json"
+            config_path.write_text("{}", encoding="utf-8")
+
+            state = ProjectState()
+            state.config_path = config_path
+            state.tool_root = root
+            state.set_game_root(project)
+
+            self.assertEqual(state.take_game_root_redirect_from(), project)
+            self.assertIsNone(state.take_game_root_redirect_from())
+
     def test_set_game_root_auto_redirects_to_nested_work(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
