@@ -416,6 +416,15 @@ QPushButton#translate_btn:pressed {
     border-color: #1d4ed8;
 }
 
+QPushButton#save_config_btn:disabled,
+QPushButton#api_btn:disabled,
+QPushButton#translate_btn:disabled {
+    background-color: #1e293b;
+    border-color: #334155;
+    color: #64748b;
+    font-weight: 600;
+}
+
 /* Secondary Action Buttons */
 QPushButton#secondary_btn {
     background-color: #1e293b;

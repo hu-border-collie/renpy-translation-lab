@@ -72,18 +72,23 @@ class ProjectState:
         manifest["_manifest_path"] = str(Path(manifest_path))
         return manifest
 
-    def load_resume_manifest(self, manifest_path: str | Path) -> dict[str, Any]:
-        manifest = self.load_manifest_file(manifest_path)
-        mode = manifest.get("mode", "translation")
-        if mode != "translation":
-            raise ValueError("最新任务不是基础翻译任务，不能在这里继续。")
+    def load_resume_manifest(
+        self,
+        manifest_path: str | Path,
+        *,
+        work_mode=None,
+    ) -> dict[str, Any]:
+        from .work_modes import WorkMode, normalize_work_mode
+        from .workflow_factory import validate_resume_manifest
 
+        manifest = self.load_manifest_file(manifest_path)
         game_root = self.get_game_root()
-        base_dir = manifest.get("base_dir")
-        if not isinstance(base_dir, str) or not base_dir.strip():
-            raise ValueError("最新任务缺少项目目录信息，不能安全继续。")
-        if game_root is not None and self._normalized_path_text(base_dir) != self._normalized_path_text(game_root):
-            raise ValueError("最新任务属于其他项目，请先选择对应 work 目录。")
+        validate_resume_manifest(
+            normalize_work_mode(work_mode or WorkMode.BATCH_TRANSLATION),
+            manifest,
+            game_root=str(game_root) if game_root is not None else None,
+            normalized_path_text=self._normalized_path_text,
+        )
         return manifest
 
     def _normalized_path_text(self, path: str | Path) -> str:

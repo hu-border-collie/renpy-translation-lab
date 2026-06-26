@@ -120,7 +120,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.runner = FakeRunner()
         self.window.log_view = type("FakeLogView", (), {"clear": lambda _self: None})()
         self.window._focus_log_tab = lambda: None
-        self.window._set_bootstrap_summary = lambda _summary: None
+        self.window._focus_workbench_status_tab = lambda _index: None
+        self.window._set_workflow_from_bootstrap_summary = lambda _summary: None
         self.window._append_log = lambda _text: None
         self.window._set_task_running = lambda _running: None
         return self.window.runner
@@ -130,7 +131,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             {"batch": {"rag": {"enabled": True}}}
         )
 
-        self.window._on_bootstrap_rag()
+        self.window._start_bootstrap_task("rag")
 
         self.assertEqual(
             runner.calls,
@@ -147,7 +148,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             {"batch": {"source_index": {"enabled": True}}}
         )
 
-        self.window._on_bootstrap_source_index()
+        self.window._start_bootstrap_task("source_index")
 
         self.assertEqual(
             runner.calls,
@@ -158,6 +159,43 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_saved_batch_context_flags_reads_persisted_config(self):
+        class FakeState:
+            def load_translator_config(self):
+                return {
+                    "batch": {
+                        "rag": {"enabled": True},
+                        "source_index": {"enabled": False},
+                    }
+                }
+
+        self.window.state = FakeState()
+
+        flags = self.window._saved_batch_context_flags()
+
+        self.assertTrue(flags["rag_enabled"])
+        self.assertFalse(flags["source_index_enabled"])
+
+    def test_bootstrap_task_ready_uses_saved_config(self):
+        from gui_qt.work_modes import WorkMode, work_mode_spec
+
+        class FakeState:
+            def load_translator_config(self):
+                return {
+                    "batch": {
+                        "rag": {"enabled": True},
+                        "source_index": {"enabled": False},
+                    }
+                }
+
+        self.window.state = FakeState()
+
+        rag_spec = work_mode_spec(WorkMode.BOOTSTRAP_RAG)
+        source_spec = work_mode_spec(WorkMode.BOOTSTRAP_SOURCE_INDEX)
+
+        self.assertTrue(self.window._bootstrap_task_ready(rag_spec))
+        self.assertFalse(self.window._bootstrap_task_ready(source_spec))
 
 
 if __name__ == "__main__":

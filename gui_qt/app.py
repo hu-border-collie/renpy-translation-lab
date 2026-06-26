@@ -38,7 +38,6 @@ from .api_key_dialog import ApiKeyDialog
 from .api_key_helpers import mask_api_key
 from .bootstrap_report import (
     BootstrapSummary,
-    idle_bootstrap_summary,
     read_batch_context_flags,
     running_bootstrap_summary,
     stale_bootstrap_summary,
@@ -55,6 +54,7 @@ from .check_issues_dialog import CheckIssuesDialog
 from .check_report import (
     WritebackSummary,
     idle_writeback_summary,
+    idle_writeback_summary_for_work_mode,
     running_writeback_summary,
     stale_writeback_summary,
     summarize_apply_output,
@@ -97,8 +97,21 @@ from .theme_helpers import (
     read_gui_theme_from_config,
     write_gui_theme_to_config,
 )
-from .translation_workflow import TranslationWorkflow, WorkflowUpdate
+from .translation_workflow import WorkflowUpdate
 from .user_copy import format_manifest_path_fact
+from .work_modes import (
+    TASK_CATEGORY_ORDER,
+    TaskCategory,
+    WorkMode,
+    default_work_mode_for_category,
+    normalize_task_category,
+    normalize_work_mode,
+    task_category_for_work_mode,
+    task_category_spec,
+    work_mode_spec,
+    work_modes_for_category,
+)
+from .workflow_factory import create_workflow, resume_workflow
 from .widget_helpers import NoWheelComboBox, NoWheelTabWidget
 
 # Diagnostics splitter: idle favors task context; running tasks expand the log.
@@ -125,7 +138,8 @@ class MainWindow(QMainWindow):
         self._batch_thinking_user_changed = False
         self._active_command = ""
         self._doctor_output_lines: list[str] = []
-        self._workflow: TranslationWorkflow | None = None
+        self._workflow = None
+        self._work_mode = WorkMode.BATCH_TRANSLATION
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
@@ -166,13 +180,7 @@ class MainWindow(QMainWindow):
         self._refresh_api_status()
         self._load_config_to_ui()
         self._set_doctor_summary(idle_summary())
-        self._set_workflow_summary(
-            "idle",
-            "尚未开始翻译任务",
-            "完成环境检查后，可以开始批量翻译流程。",
-        )
-        self._refresh_writeback_from_latest_manifest()
-        self._set_bootstrap_summary(idle_bootstrap_summary())
+        self._apply_work_mode_ui(refresh_manifest_writeback=True)
         self._refresh_diagnostics_context()
 
         # Status
@@ -214,6 +222,33 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(project_frame)
 
+        mode_frame = QFrame()
+        mode_frame.setObjectName("mode_frame")
+        mode_outer = QHBoxLayout(mode_frame)
+        mode_outer.setContentsMargins(12, 8, 12, 8)
+        mode_outer.setSpacing(10)
+        mode_outer.addWidget(QLabel("任务类型："))
+        self.task_category_combo = NoWheelComboBox()
+        self.task_category_combo.setObjectName("task_category_combo")
+        for category in TASK_CATEGORY_ORDER:
+            self.task_category_combo.addItem(
+                task_category_spec(category).label,
+                category.value,
+            )
+        self.task_category_combo.currentIndexChanged.connect(self._on_task_category_changed)
+        mode_outer.addWidget(self.task_category_combo)
+
+        mode_outer.addWidget(QLabel("子任务："))
+        self.work_task_combo = NoWheelComboBox()
+        self.work_task_combo.setObjectName("work_task_combo")
+        self.work_task_combo.currentIndexChanged.connect(self._on_work_task_changed)
+        mode_outer.addWidget(self.work_task_combo, 1)
+        self.work_mode_hint_label = QLabel()
+        self.work_mode_hint_label.setWordWrap(True)
+        self.work_mode_hint_label.setObjectName("config_hint_label")
+        mode_outer.addWidget(self.work_mode_hint_label, 2)
+        layout.addWidget(mode_frame)
+
         action_frame = QFrame()
         action_frame.setObjectName("action_frame")
         action_outer = QHBoxLayout(action_frame)
@@ -242,9 +277,9 @@ class MainWindow(QMainWindow):
 
         translate_group = QHBoxLayout()
         translate_group.setSpacing(8)
-        translate_label = QLabel("翻译任务")
-        translate_label.setObjectName("action_group_label")
-        translate_group.addWidget(translate_label)
+        self.translate_group_label = QLabel("翻译任务")
+        self.translate_group_label.setObjectName("action_group_label")
+        translate_group.addWidget(self.translate_group_label)
         self.translate_btn = QPushButton("开始翻译")
         self.translate_btn.setObjectName("translate_btn")
         self.translate_btn.clicked.connect(self._on_start_translation)
@@ -430,7 +465,7 @@ class MainWindow(QMainWindow):
         context_layout.setContentsMargins(12, 16, 12, 12)
 
         context_hint = QLabel(
-            "启用后先保存配置，再运行下方预建按钮。"
+            "启用后先保存配置，再到工作台「分析与准备」下运行预建子任务。"
             "RAG 使用已有译文；原文索引只使用 TL 模板原文；均不修改 .rpy 文件。"
         )
         context_hint.setWordWrap(True)
@@ -445,40 +480,6 @@ class MainWindow(QMainWindow):
 
         self.bootstrap_on_build_cb = QCheckBox("开始翻译时自动暖 RAG 库")
         context_layout.addWidget(self.bootstrap_on_build_cb)
-
-        bootstrap_actions = QHBoxLayout()
-        bootstrap_actions.setSpacing(10)
-        self.bootstrap_rag_btn = QPushButton("预建 RAG 库")
-        self.bootstrap_rag_btn.setObjectName("secondary_btn")
-        self.bootstrap_rag_btn.clicked.connect(self._on_bootstrap_rag)
-        bootstrap_actions.addWidget(self.bootstrap_rag_btn)
-
-        self.bootstrap_source_index_btn = QPushButton("预建原文索引")
-        self.bootstrap_source_index_btn.setObjectName("secondary_btn")
-        self.bootstrap_source_index_btn.clicked.connect(self._on_bootstrap_source_index)
-        bootstrap_actions.addWidget(self.bootstrap_source_index_btn)
-        bootstrap_actions.addStretch()
-        context_layout.addLayout(bootstrap_actions)
-
-        self.bootstrap_status_label = QLabel()
-        self.bootstrap_status_label.setObjectName("bootstrap_status_label")
-        context_layout.addWidget(self.bootstrap_status_label)
-
-        self.bootstrap_message_label = QLabel()
-        self.bootstrap_message_label.setWordWrap(True)
-        self.bootstrap_message_label.setObjectName("summary_body_label")
-        context_layout.addWidget(self.bootstrap_message_label)
-
-        self.bootstrap_facts_label = QLabel()
-        self.bootstrap_facts_label.setWordWrap(True)
-        self.bootstrap_facts_label.setObjectName("bootstrap_facts_label")
-        context_layout.addWidget(self.bootstrap_facts_label)
-
-        self.bootstrap_details_label = QLabel()
-        self.bootstrap_details_label.setWordWrap(True)
-        self.bootstrap_details_label.setObjectName("config_hint_label")
-        self.bootstrap_details_label.setVisible(False)
-        context_layout.addWidget(self.bootstrap_details_label)
 
         layout.addWidget(context_box)
 
@@ -1088,6 +1089,139 @@ class MainWindow(QMainWindow):
 
         self.diagnostics_manifest_preview.setPlainText(context.manifest_json_preview)
 
+    def _current_work_mode(self) -> WorkMode:
+        return normalize_work_mode(self._work_mode)
+
+    def _current_task_category(self) -> TaskCategory:
+        return task_category_for_work_mode(self._current_work_mode())
+
+    def _set_combo_value_by_data(self, combo: NoWheelComboBox, data: str) -> None:
+        for index in range(combo.count()):
+            if combo.itemData(index) == data:
+                blocked = combo.blockSignals(True)
+                combo.setCurrentIndex(index)
+                combo.blockSignals(blocked)
+                return
+
+    def _rebuild_work_task_combo(
+        self,
+        category: TaskCategory,
+        *,
+        selected_mode: WorkMode | None = None,
+    ) -> None:
+        blocked = self.work_task_combo.blockSignals(True)
+        self.work_task_combo.clear()
+        modes = work_modes_for_category(category)
+        selected = selected_mode if selected_mode in modes else default_work_mode_for_category(category)
+        for mode in modes:
+            self.work_task_combo.addItem(work_mode_spec(mode).label, mode.value)
+        self._set_combo_value_by_data(self.work_task_combo, selected.value)
+        self.work_task_combo.blockSignals(blocked)
+
+    def _sync_task_selectors_from_work_mode(self) -> None:
+        spec = work_mode_spec(self._current_work_mode())
+        blocked_category = self.task_category_combo.blockSignals(True)
+        self._set_combo_value_by_data(self.task_category_combo, spec.category.value)
+        self.task_category_combo.blockSignals(blocked_category)
+        self._rebuild_work_task_combo(spec.category, selected_mode=spec.mode)
+
+    def _on_task_category_changed(self) -> None:
+        if self.kill_btn.isEnabled():
+            self._sync_task_selectors_from_work_mode()
+            return
+        category = normalize_task_category(self.task_category_combo.currentData())
+        if category == self._current_task_category():
+            return
+        self._set_work_mode(
+            default_work_mode_for_category(category),
+            refresh_manifest_writeback=True,
+        )
+
+    def _on_work_task_changed(self) -> None:
+        if self.kill_btn.isEnabled():
+            self._sync_task_selectors_from_work_mode()
+            return
+        mode = normalize_work_mode(self.work_task_combo.currentData())
+        if mode == self._work_mode:
+            return
+        self._set_work_mode(mode, refresh_manifest_writeback=True)
+
+    def _set_work_mode(self, mode: WorkMode, *, refresh_manifest_writeback: bool) -> None:
+        self._work_mode = mode
+        self._workflow = None
+        self._workflow_step_output_lines = []
+        self._writeback_manifest_path = ""
+        self._apply_work_mode_ui(refresh_manifest_writeback=refresh_manifest_writeback)
+
+    def _apply_work_mode_ui(self, *, refresh_manifest_writeback: bool = False) -> None:
+        spec = work_mode_spec(self._current_work_mode())
+        self._sync_task_selectors_from_work_mode()
+        self.translate_group_label.setText(spec.task_group_label)
+        self.translate_btn.setText(spec.start_button_label)
+        if spec.resume_button_label:
+            self.resume_btn.setText(spec.resume_button_label)
+        self.resume_btn.setVisible(spec.supports_resume)
+        self.workbench_status_tabs.setTabText(1, spec.progress_tab_label)
+        self.workbench_status_tabs.setTabText(2, spec.writeback_tab_label)
+        if spec.implemented:
+            if spec.is_bootstrap and not self._bootstrap_task_ready(spec):
+                hint = self._bootstrap_disabled_message(spec.bootstrap_kind)
+            else:
+                hint = spec.idle_workflow_message
+        else:
+            hint = spec.not_implemented_message
+        self.work_mode_hint_label.setText(hint)
+        self._refresh_workflow_idle_summary()
+        if refresh_manifest_writeback:
+            self._refresh_writeback_from_latest_manifest()
+        running = self.kill_btn.isEnabled()
+        bootstrap_ready = self._bootstrap_task_ready(spec)
+        self.translate_btn.setEnabled(spec.implemented and bootstrap_ready and not running)
+        self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
+
+    def _refresh_workflow_idle_summary(self) -> None:
+        if self.kill_btn.isEnabled():
+            return
+        spec = work_mode_spec(self._current_work_mode())
+        self._set_workflow_summary(
+            "idle",
+            spec.idle_workflow_heading,
+            spec.idle_workflow_message,
+        )
+
+    def _set_workflow_from_bootstrap_summary(self, summary: BootstrapSummary) -> None:
+        self._set_workflow_summary(
+            summary.status,
+            summary.heading,
+            summary.message,
+            summary.facts,
+        )
+
+    def _refresh_writeback_from_latest_manifest(self) -> None:
+        spec = work_mode_spec(self._current_work_mode())
+        if not spec.supports_translation_writeback:
+            self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+            return
+
+        latest_manifest = self.state.get_latest_manifest_path()
+        if latest_manifest is None:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+        try:
+            manifest = self.state.load_resume_manifest(
+                latest_manifest,
+                work_mode=spec.mode,
+            )
+        except ValueError:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+
+        summary = summarize_manifest_writeback(manifest)
+        if summary is None:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+        self._set_writeback_summary(summary)
+
     # --- UI actions ---
 
     def _on_select_project(self):
@@ -1118,14 +1252,21 @@ class MainWindow(QMainWindow):
             self._workflow = None
             self._workflow_step_output_lines = []
             self._set_doctor_summary(stale_summary())
-            self._set_workflow_summary(
-                "stale",
-                "项目已切换",
-                "翻译任务状态已清空；请先针对新项目重新检查。",
-            )
+            spec = work_mode_spec(self._current_work_mode())
+            if spec.is_bootstrap:
+                self._set_workflow_from_bootstrap_summary(stale_bootstrap_summary())
+            else:
+                self._set_workflow_summary(
+                    "stale",
+                    "项目已切换",
+                    "任务状态已清空；请先针对新项目重新检查。",
+                )
             self._writeback_manifest_path = ""
-            self._set_writeback_summary(stale_writeback_summary())
-            self._set_bootstrap_summary(stale_bootstrap_summary())
+            if spec.supports_translation_writeback:
+                self._set_writeback_summary(stale_writeback_summary())
+            else:
+                self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+            self._apply_work_mode_ui(refresh_manifest_writeback=False)
             self._refresh_diagnostics_context()
             self._append_log(f"项目目录已设置为：{directory}")
 
@@ -1254,54 +1395,71 @@ class MainWindow(QMainWindow):
     def _saved_batch_context_flags(self) -> dict[str, bool]:
         return read_batch_context_flags(self.state.load_translator_config())
 
-    def _on_bootstrap_rag(self) -> None:
+    def _bootstrap_task_ready(self, spec) -> bool:
+        if not spec.is_bootstrap:
+            return True
+        flags = self._saved_batch_context_flags()
+        if spec.bootstrap_kind == "rag":
+            return flags["rag_enabled"]
+        if spec.bootstrap_kind == "source_index":
+            return flags["source_index_enabled"]
+        return True
+
+    def _bootstrap_disabled_message(self, kind: str) -> str:
+        if kind == "rag":
+            return "请先在配置页勾选「启用 RAG 记忆库」，并点击「保存参数配置」。"
+        return "请先在配置页勾选「启用原文索引」，并点击「保存参数配置」。"
+
+    def _start_bootstrap_task(self, kind: str) -> bool:
         if not self.state.get_game_root():
             QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
-            return
-        if not self._saved_batch_context_flags()["rag_enabled"]:
-            QMessageBox.information(
-                self,
-                "RAG 未启用",
-                "请先启用批量记忆库，并点击「保存参数配置」。",
-            )
-            return
+            return False
+
+        flags = self._saved_batch_context_flags()
+        if kind == "rag":
+            if not flags["rag_enabled"]:
+                QMessageBox.information(
+                    self,
+                    "RAG 未启用",
+                    self._bootstrap_disabled_message("rag"),
+                )
+                return False
+            command = "bootstrap_rag"
+            args = ["bootstrap-rag", "--skip-prepare"]
+            log_heading = "gemini_translate_batch.py bootstrap-rag --skip-prepare"
+            running_summary = running_bootstrap_summary("rag")
+        else:
+            if not flags["source_index_enabled"]:
+                QMessageBox.information(
+                    self,
+                    "原文索引未启用",
+                    self._bootstrap_disabled_message("source_index"),
+                )
+                return False
+            command = "bootstrap_source_index"
+            args = ["bootstrap-source-index", "--skip-prepare"]
+            log_heading = "gemini_translate_batch.py bootstrap-source-index --skip-prepare"
+            running_summary = running_bootstrap_summary("source_index")
 
         self.log_view.clear()
         self._focus_log_tab()
-        self._active_command = "bootstrap_rag"
+        self._active_command = command
         self._bootstrap_output_lines = []
-        self._set_bootstrap_summary(running_bootstrap_summary("rag"))
-        self._append_log("=== 正在运行：gemini_translate_batch.py bootstrap-rag --skip-prepare ===\n")
+        self._focus_workbench_status_tab(1)
+        self._set_workflow_from_bootstrap_summary(running_summary)
+        self._append_log(f"=== 正在运行：{log_heading} ===\n")
         self._set_task_running(True)
-        self.runner.run(self.state.get_batch_script_path(), ["bootstrap-rag", "--skip-prepare"])
-
-    def _on_bootstrap_source_index(self) -> None:
-        if not self.state.get_game_root():
-            QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
-            return
-        if not self._saved_batch_context_flags()["source_index_enabled"]:
-            QMessageBox.information(
-                self,
-                "原文索引未启用",
-                "请先启用批量原文索引，并点击「保存参数配置」。",
-            )
-            return
-
-        self.log_view.clear()
-        self._focus_log_tab()
-        self._active_command = "bootstrap_source_index"
-        self._bootstrap_output_lines = []
-        self._set_bootstrap_summary(running_bootstrap_summary("source_index"))
-        self._append_log(
-            "=== 正在运行：gemini_translate_batch.py bootstrap-source-index --skip-prepare ===\n"
-        )
-        self._set_task_running(True)
-        self.runner.run(
-            self.state.get_batch_script_path(),
-            ["bootstrap-source-index", "--skip-prepare"],
-        )
+        self.runner.run(self.state.get_batch_script_path(), args)
+        return True
 
     def _on_start_translation(self):
+        spec = work_mode_spec(self._current_work_mode())
+        if not spec.implemented:
+            QMessageBox.information(self, "功能开发中", spec.not_implemented_message)
+            return
+        if spec.is_bootstrap:
+            self._start_bootstrap_task(spec.bootstrap_kind)
+            return
         if not self.state.get_game_root():
             QMessageBox.information(
                 self,
@@ -1310,19 +1468,28 @@ class MainWindow(QMainWindow):
             )
             return
 
+        workflow = create_workflow(spec.mode)
+        if workflow is None:
+            QMessageBox.information(self, "无法开始任务", spec.not_implemented_message)
+            return
+
         self.log_view.clear()
         self._focus_log_tab()
         self._writeback_manifest_path = ""
         self._set_writeback_summary(stale_writeback_summary())
-        self._workflow = TranslationWorkflow.start_new()
+        self._workflow = workflow
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
         self._focus_workbench_status_tab(1)
-        self._append_log("=== 正在运行：基础 Batch 翻译流程 ===\n")
+        self._append_log(f"=== 正在运行：{spec.label} ===\n")
         self._set_task_running(True)
         self._run_workflow_current_step()
 
     def _on_resume_translation(self):
+        spec = work_mode_spec(self._current_work_mode())
+        if not spec.implemented or not spec.supports_resume:
+            QMessageBox.information(self, "功能开发中", spec.not_implemented_message)
+            return
         if not self.state.get_game_root():
             QMessageBox.information(
                 self,
@@ -1336,24 +1503,32 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "没有可继续的任务",
-                "未找到最近任务清单；请先开始一个翻译任务。",
+                f"未找到最近任务清单；请先开始一个{spec.label}任务。",
             )
             return
 
         try:
-            manifest = self.state.load_resume_manifest(latest_manifest)
+            manifest = self.state.load_resume_manifest(
+                latest_manifest,
+                work_mode=spec.mode,
+            )
         except ValueError as exc:
             QMessageBox.warning(self, "无法继续最新任务", str(exc))
             return
 
+        workflow = resume_workflow(spec.mode, str(latest_manifest), manifest)
+        if workflow is None:
+            QMessageBox.information(self, "无法继续任务", spec.not_implemented_message)
+            return
+
         self.log_view.clear()
         self._focus_log_tab()
-        self._workflow = TranslationWorkflow.resume_manifest(str(latest_manifest), manifest)
+        self._workflow = workflow
         self._refresh_diagnostics_context()
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
         self._focus_workbench_status_tab(1)
-        self._append_log("=== 正在继续最新 Batch 翻译任务 ===\n")
+        self._append_log(f"=== 正在继续最新 {spec.label} 任务 ===\n")
         self._set_task_running(True)
         self._run_workflow_current_step()
 
@@ -1361,6 +1536,13 @@ class MainWindow(QMainWindow):
         self.runner.kill()
 
     def _on_apply_writeback(self):
+        if not work_mode_spec(self._current_work_mode()).supports_translation_writeback:
+            QMessageBox.information(
+                self,
+                "当前模式不支持",
+                "普通「写回翻译」仅适用于 Batch 翻译模式。",
+            )
+            return
         if not self._writeback_manifest_path:
             QMessageBox.information(self, "无法写回", "没有可写回的任务；请先完成结果检查。")
             return
@@ -1430,18 +1612,20 @@ class MainWindow(QMainWindow):
         scrollbar.setValue(scrollbar.maximum())
 
     def _set_task_running(self, running: bool):
+        spec = work_mode_spec(self._current_work_mode())
         self.select_btn.setEnabled(not running)
+        self.task_category_combo.setEnabled(not running)
+        self.work_task_combo.setEnabled(not running)
         self.doctor_btn.setEnabled(not running)
         self.bootstrap_work_btn.setEnabled(not running)
         self.api_btn.setEnabled(not running)
-        self.translate_btn.setEnabled(not running)
-        self.resume_btn.setEnabled(not running)
+        bootstrap_ready = self._bootstrap_task_ready(spec)
+        self.translate_btn.setEnabled(spec.implemented and bootstrap_ready and not running)
+        self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
         self.save_config_btn.setEnabled(not running)
         writeback_summary = self._current_writeback_summary()
         self.apply_btn.setEnabled(not running and writeback_summary.can_apply)
         self._update_writeback_action_buttons(writeback_summary, running=running)
-        self.bootstrap_rag_btn.setEnabled(not running)
-        self.bootstrap_source_index_btn.setEnabled(not running)
         self.kill_btn.setEnabled(running)
 
     def _set_workflow_summary(
@@ -1506,23 +1690,6 @@ class MainWindow(QMainWindow):
         if not self.kill_btn.isEnabled():
             self.apply_btn.setEnabled(summary.can_apply)
 
-    def _refresh_writeback_from_latest_manifest(self) -> None:
-        latest_manifest = self.state.get_latest_manifest_path()
-        if latest_manifest is None:
-            self._set_writeback_summary(idle_writeback_summary())
-            return
-        try:
-            manifest = self.state.load_resume_manifest(latest_manifest)
-        except ValueError:
-            self._set_writeback_summary(idle_writeback_summary())
-            return
-
-        summary = summarize_manifest_writeback(manifest)
-        if summary is None:
-            self._set_writeback_summary(idle_writeback_summary())
-            return
-        self._set_writeback_summary(summary)
-
     def _update_writeback_from_check(
         self,
         output: str,
@@ -1546,15 +1713,6 @@ class MainWindow(QMainWindow):
         self._refresh_diagnostics_context()
         if summary.status not in {"idle", "running", "stale"}:
             self._focus_workbench_status_tab(2)
-
-    def _set_bootstrap_summary(self, summary: BootstrapSummary) -> None:
-        self.bootstrap_status_label.setText(summary.heading)
-        self.bootstrap_status_label.setProperty("status", summary.status)
-        self.bootstrap_status_label.style().unpolish(self.bootstrap_status_label)
-        self.bootstrap_status_label.style().polish(self.bootstrap_status_label)
-        self.bootstrap_message_label.setText(summary.message)
-        self.bootstrap_facts_label.setText("\n".join(summary.facts))
-        self._set_details_label(self.bootstrap_details_label, summary.findings)
 
     def _set_doctor_summary(self, summary: DoctorSummary):
         self.doctor_status_label.setText(summary.heading)
@@ -1652,7 +1810,7 @@ class MainWindow(QMainWindow):
                 "\n".join(self._bootstrap_output_lines),
                 exit_code,
             )
-            self._set_bootstrap_summary(summary)
+            self._set_workflow_from_bootstrap_summary(summary)
             self._active_command = ""
             self._set_task_running(False)
             if exit_code == 0 and summary.status == "ready":
@@ -1668,7 +1826,7 @@ class MainWindow(QMainWindow):
                 "\n".join(self._bootstrap_output_lines),
                 exit_code,
             )
-            self._set_bootstrap_summary(summary)
+            self._set_workflow_from_bootstrap_summary(summary)
             self._active_command = ""
             self._set_task_running(False)
             if exit_code == 0 and summary.status == "ready":
@@ -2005,6 +2163,8 @@ class MainWindow(QMainWindow):
                 batch_config["thinking_level"] = thinking_level
 
             self.state.save_translator_config(config)
+            if work_mode_spec(self._current_work_mode()).is_bootstrap:
+                self._apply_work_mode_ui(refresh_manifest_writeback=False)
             self._append_log("配置已成功保存至 translator_config.json。")
             self.statusBar().showMessage("配置已成功保存", 3000)
         except Exception as exc:

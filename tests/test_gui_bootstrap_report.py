@@ -15,6 +15,8 @@ class GuiBootstrapReportTests(unittest.TestCase):
         self.assertTrue(coerce_bool("ON", False))
         self.assertFalse(coerce_bool("off", True))
         self.assertTrue(coerce_bool(True, False))
+        self.assertTrue(coerce_bool(1, False))
+        self.assertFalse(coerce_bool(0, True))
 
     def test_read_batch_context_flags_defaults(self):
         flags = read_batch_context_flags({})
