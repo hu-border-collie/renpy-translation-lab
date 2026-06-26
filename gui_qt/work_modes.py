@@ -15,9 +15,11 @@ class WorkMode(str, Enum):
     BATCH_TRANSLATION = "batch_translation"
     SYNC_TRANSLATION = "sync_translation"
     KEYWORD_EXTRACTION = "keyword_extraction"
+    SYNC_KEYWORD_EXTRACTION = "sync_keyword_extraction"
     BOOTSTRAP_RAG = "bootstrap_rag"
     BOOTSTRAP_SOURCE_INDEX = "bootstrap_source_index"
     REVISION = "revision"
+    SYNC_REVISION = "sync_revision"
 
 
 @dataclass(frozen=True)
@@ -64,12 +66,16 @@ TASK_CATEGORY_SPECS: dict[TaskCategory, TaskCategorySpec] = {
             WorkMode.BOOTSTRAP_RAG,
             WorkMode.BOOTSTRAP_SOURCE_INDEX,
             WorkMode.KEYWORD_EXTRACTION,
+            WorkMode.SYNC_KEYWORD_EXTRACTION,
         ),
     ),
     TaskCategory.MAINTENANCE: TaskCategorySpec(
         category=TaskCategory.MAINTENANCE,
         label="维护",
-        work_modes=(WorkMode.REVISION,),
+        work_modes=(
+            WorkMode.REVISION,
+            WorkMode.SYNC_REVISION,
+        ),
     ),
 }
 
@@ -123,21 +129,45 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
     WorkMode.KEYWORD_EXTRACTION: WorkModeSpec(
         mode=WorkMode.KEYWORD_EXTRACTION,
         category=TaskCategory.ANALYSIS_PREP,
-        label="关键词提取",
+        label="Batch 关键词",
         start_button_label="提取关键词",
         resume_button_label="继续提取",
         task_group_label="分析任务",
         progress_tab_label="提取进度",
         writeback_tab_label="结果说明",
-        idle_workflow_heading="尚未开始关键词提取",
-        idle_workflow_message="只生成术语与剧情候选报告，不会修改游戏 .rpy 文件。",
+        idle_workflow_heading="尚未开始 Batch 关键词提取",
+        idle_workflow_message=(
+            "将扫描 TL 文本并走 build-keywords -> submit -> status -> download -> export-keywords；"
+            "只生成术语与剧情候选报告，不会修改游戏 .rpy 文件。"
+        ),
         supports_resume=True,
         supports_translation_writeback=False,
-        implemented=False,
+        implemented=True,
         is_bootstrap=False,
         bootstrap_kind="",
         manifest_mode="keyword_extraction",
-        not_implemented_message="关键词提取模式的图形界面仍在开发中，请暂时使用 build-keywords 或 sync-keywords。",
+        not_implemented_message="",
+    ),
+    WorkMode.SYNC_KEYWORD_EXTRACTION: WorkModeSpec(
+        mode=WorkMode.SYNC_KEYWORD_EXTRACTION,
+        category=TaskCategory.ANALYSIS_PREP,
+        label="同步关键词",
+        start_button_label="提取关键词",
+        resume_button_label="继续提取",
+        task_group_label="同步分析任务",
+        progress_tab_label="提取进度",
+        writeback_tab_label="结果说明",
+        idle_workflow_heading="尚未开始同步关键词提取",
+        idle_workflow_message=(
+            "适合小范围即时生成术语与剧情候选报告；不会修改游戏 .rpy 文件。"
+        ),
+        supports_resume=False,
+        supports_translation_writeback=False,
+        implemented=True,
+        is_bootstrap=False,
+        bootstrap_kind="",
+        manifest_mode=None,
+        not_implemented_message="",
     ),
     WorkMode.BOOTSTRAP_RAG: WorkModeSpec(
         mode=WorkMode.BOOTSTRAP_RAG,
@@ -187,14 +217,38 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         progress_tab_label="订正进度",
         writeback_tab_label="订正写回",
         idle_workflow_heading="尚未开始订正流程",
-        idle_workflow_message="订正会生成修订建议；写回与普通翻译分离，需单独确认。",
+        idle_workflow_message=(
+            "将走 build-revisions -> submit -> status -> download -> preview-revisions；"
+            "写回与普通翻译分离，需单独确认。"
+        ),
         supports_resume=True,
         supports_translation_writeback=False,
-        implemented=False,
+        implemented=True,
         is_bootstrap=False,
         bootstrap_kind="",
         manifest_mode="revision",
-        not_implemented_message="订正模式的图形界面仍在开发中，请暂时使用 build-revisions 或 sync-revisions。",
+        not_implemented_message="",
+    ),
+    WorkMode.SYNC_REVISION: WorkModeSpec(
+        mode=WorkMode.SYNC_REVISION,
+        category=TaskCategory.MAINTENANCE,
+        label="同步订正",
+        start_button_label="生成订正预览",
+        resume_button_label="继续订正",
+        task_group_label="同步订正任务",
+        progress_tab_label="订正进度",
+        writeback_tab_label="写回说明",
+        idle_workflow_heading="尚未开始同步订正",
+        idle_workflow_message=(
+            "适合小范围即时订正预览；默认只生成预览报告，不会自动写回，请先备份项目。"
+        ),
+        supports_resume=False,
+        supports_translation_writeback=False,
+        implemented=True,
+        is_bootstrap=False,
+        bootstrap_kind="",
+        manifest_mode=None,
+        not_implemented_message="",
     ),
 }
 

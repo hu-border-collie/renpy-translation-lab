@@ -232,6 +232,30 @@ def build_cli_commands(
             )
         return commands
 
+    if mode_text == "keyword_extraction":
+        commands.extend(
+            build_cloud_job_commands(
+                python_exe=python_exe,
+                batch_script_path=batch_script_path,
+                manifest_path=manifest_path,
+                manifest=manifest,
+                submit_label="提交关键词任务",
+                status_label="查询关键词状态",
+                download_label="下载关键词结果",
+            )
+        )
+        commands.append(
+            DiagnosticsCommand(
+                label="导出关键词报告",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["export-keywords", manifest_path],
+                ),
+            )
+        )
+        return commands
+
     retry_parent = manifest.get("retry_of_manifest")
     if isinstance(retry_parent, str) and retry_parent.strip():
         parent_manifest_path = retry_parent.strip()

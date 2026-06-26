@@ -347,6 +347,11 @@ def idle_writeback_summary_for_work_mode(mode) -> WritebackSummary:
             message = "关键词模式只生成候选报告，不会启用普通「写回翻译」按钮。"
         elif spec.mode == WorkMode.REVISION:
             message = "订正写回将使用 preview-revisions / apply-revisions 独立流程，不经过普通 check/apply。"
+        elif spec.mode == WorkMode.SYNC_REVISION:
+            message = (
+                "同步订正默认只生成预览报告；写回需单独调用 apply-revisions，"
+                "不经过普通 check/apply。"
+            )
         elif spec.is_bootstrap:
             message = "预建库只更新本地上下文存储，不会启用普通「写回翻译」按钮。"
         else:
@@ -373,12 +378,19 @@ def stale_writeback_summary() -> WritebackSummary:
     )
 
 
-def running_writeback_summary() -> WritebackSummary:
+def running_writeback_summary(
+    *,
+    manifest_path: str = "",
+    heading: str = "正在写回翻译",
+    message: str = "正在写回；完成后这里会显示写回摘要。",
+) -> WritebackSummary:
+    facts = [format_manifest_path_fact(manifest_path)] if manifest_path else []
     return WritebackSummary(
         status="running",
-        heading="正在写回翻译",
-        message="正在写回；完成后这里会显示写回摘要。",
-        facts=[],
+        heading=heading,
+        message=message,
+        facts=facts,
         findings=[],
         can_apply=False,
+        manifest_path=manifest_path,
     )

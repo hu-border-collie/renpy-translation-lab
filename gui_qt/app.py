@@ -67,6 +67,11 @@ from .diagnostics_context import (
     existing_retry_manifest_path,
     sync_diagnostics_context,
 )
+from .revision_report import summarize_revision_apply_output
+from .revision_writeback_report import (
+    summarize_revision_writeback_from_manifest,
+    summarize_revision_writeback_from_preview_output,
+)
 from .retry_preview_dialog import RetryPreviewDialog
 from .retry_report import (
     assess_retry_eligibility,
@@ -143,6 +148,7 @@ class MainWindow(QMainWindow):
         self._work_mode = WorkMode.BATCH_TRANSLATION
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
+        self._apply_revision_output_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
         self._work_bootstrap_output_lines: list[str] = []
         self._build_retry_output_lines: list[str] = []
@@ -373,6 +379,12 @@ class MainWindow(QMainWindow):
         self.apply_btn.clicked.connect(self._on_apply_writeback)
         self.apply_btn.setEnabled(False)
         writeback_actions.addWidget(self.apply_btn)
+        self.apply_revision_btn = QPushButton("应用订正")
+        self.apply_revision_btn.setObjectName("apply_revision_btn")
+        self.apply_revision_btn.clicked.connect(self._on_apply_revision)
+        self.apply_revision_btn.setEnabled(False)
+        self.apply_revision_btn.setVisible(False)
+        writeback_actions.addWidget(self.apply_revision_btn)
         self.check_issues_btn = QPushButton("查看问题清单")
         self.check_issues_btn.setObjectName("secondary_btn")
         self.check_issues_btn.clicked.connect(self._open_check_issues)
@@ -736,6 +748,8 @@ class MainWindow(QMainWindow):
             self.workbench_status_tabs.setCurrentIndex(index)
 
     def _writeback_issues_ready(self, summary: WritebackSummary) -> bool:
+        if self._uses_revision_writeback():
+            return False
         return summary.status == "warn" and bool(summary.manifest_path)
 
     def _load_writeback_manifest(self) -> dict[str, object] | None:
@@ -856,6 +870,11 @@ class MainWindow(QMainWindow):
                 else False
             )
             self.remediation_btn.setEnabled(not running and remediation_ready)
+
+        if hasattr(self, "apply_btn"):
+            self.apply_btn.setVisible(not self._uses_revision_writeback())
+        if hasattr(self, "apply_revision_btn"):
+            self.apply_revision_btn.setVisible(self._uses_revision_writeback())
 
     def _show_retry_preview(
         self,
@@ -1107,6 +1126,23 @@ class MainWindow(QMainWindow):
     def _current_work_mode(self) -> WorkMode:
         return normalize_work_mode(self._work_mode)
 
+    def _sync_work_modes_requiring_api_key(self) -> frozenset[WorkMode]:
+        return frozenset(
+            {
+                WorkMode.SYNC_TRANSLATION,
+                WorkMode.SYNC_KEYWORD_EXTRACTION,
+                WorkMode.SYNC_REVISION,
+            }
+        )
+
+    def _revision_writeback_modes(self) -> frozenset[WorkMode]:
+        return frozenset({WorkMode.REVISION, WorkMode.SYNC_REVISION})
+
+    def _uses_revision_writeback(self, mode: WorkMode | None = None) -> bool:
+        return work_mode_spec(mode or self._current_work_mode()).mode in (
+            self._revision_writeback_modes()
+        )
+
     def _current_task_category(self) -> TaskCategory:
         return task_category_for_work_mode(self._current_work_mode())
 
@@ -1214,6 +1250,25 @@ class MainWindow(QMainWindow):
 
     def _refresh_writeback_from_latest_manifest(self) -> None:
         spec = work_mode_spec(self._current_work_mode())
+        if spec.mode == WorkMode.REVISION:
+            latest_manifest = self.state.get_latest_manifest_path()
+            if latest_manifest is None:
+                self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+                return
+            try:
+                manifest = self.state.load_resume_manifest(
+                    latest_manifest,
+                    work_mode=spec.mode,
+                )
+            except ValueError:
+                self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+                return
+            summary = summarize_revision_writeback_from_manifest(manifest)
+            if summary is None:
+                self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+                return
+            self._set_writeback_summary(summary)
+            return
         if not spec.supports_translation_writeback:
             self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
             return
@@ -1483,13 +1538,13 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if spec.mode == WorkMode.SYNC_TRANSLATION:
+        if spec.mode in self._sync_work_modes_requiring_api_key():
             api_key_count, _ = self.state.get_api_key_status()
             if api_key_count == 0:
                 QMessageBox.information(
                     self,
                     "请先配置 API Key",
-                    "同步翻译需要 Gemini API 密钥；请在配置页管理 API Key 或设置环境变量。",
+                    "同步模式需要 Gemini API 密钥；请在配置页管理 API Key 或设置环境变量。",
                 )
                 return
 
@@ -1601,20 +1656,118 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        manifest_path = self._writeback_manifest_path
         self.log_view.clear()
         self._focus_log_tab()
         self._active_command = "apply"
         self._apply_output_lines = []
         self._focus_workbench_status_tab(2)
-        self._set_writeback_summary(running_writeback_summary())
+        self._set_writeback_summary(running_writeback_summary(manifest_path=manifest_path))
         self._append_log(
-            f"=== 正在写回：gemini_translate_batch.py apply {self._writeback_manifest_path} ===\n"
+            f"=== 正在写回：gemini_translate_batch.py apply {manifest_path} ===\n"
         )
         self._set_task_running(True)
         self.runner.run(
             self.state.get_batch_script_path(),
-            ["apply", self._writeback_manifest_path],
+            ["apply", manifest_path],
         )
+
+    def _on_apply_revision(self) -> None:
+        spec = work_mode_spec(self._current_work_mode())
+        if not self._uses_revision_writeback(spec.mode):
+            QMessageBox.information(
+                self,
+                "当前模式不支持",
+                "「应用订正」仅适用于订正相关模式。",
+            )
+            return
+
+        summary = self._current_writeback_summary()
+        if not summary.can_apply:
+            QMessageBox.information(
+                self,
+                "当前不能写回订正",
+                summary.message or "请先完成订正预览并确认有可写回项。",
+            )
+            return
+
+        confirm_lines = [
+            "即将把订正写回项目 .rpy 文件。",
+            "订正会修改现有译文行；写回前请确认已在副本或备份上验证。",
+            "",
+            *summary.facts,
+        ]
+        reply = QMessageBox.question(
+            self,
+            "确认应用订正",
+            "\n".join(confirm_lines),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        manifest_path = summary.manifest_path or self._writeback_manifest_path
+        if not manifest_path:
+            QMessageBox.information(self, "无法写回订正", "没有可写回的订正任务清单。")
+            return
+
+        self.log_view.clear()
+        self._focus_log_tab()
+        self._active_command = "apply_revision"
+        self._apply_revision_output_lines = []
+        self._focus_workbench_status_tab(2)
+        self._set_writeback_summary(
+            running_writeback_summary(
+                manifest_path=manifest_path,
+                heading="正在应用订正",
+                message="正在写回订正；完成后这里会显示写回摘要。",
+            )
+        )
+        self._set_task_running(True)
+
+        command_label = f"gemini_translate_batch.py apply-revisions {manifest_path}"
+        args = ["apply-revisions", manifest_path]
+
+        self._append_log(f"=== 正在写回订正：{command_label} ===\n")
+        self.runner.run(self.state.get_batch_script_path(), args)
+
+    def _update_revision_writeback_from_preview(
+        self,
+        output: str,
+        exit_code: int,
+        manifest_path: str,
+    ) -> None:
+        resolved_manifest_path = manifest_path or self._manifest_path_from_sync_revision_output(
+            output
+        )
+        already_applied = False
+        if resolved_manifest_path:
+            try:
+                loaded = self.state.load_manifest_file(resolved_manifest_path)
+                already_applied = bool(loaded.get("revision_applied_at"))
+            except ValueError:
+                pass
+        summary = summarize_revision_writeback_from_preview_output(
+            output,
+            exit_code,
+            manifest_path=resolved_manifest_path,
+            already_applied=already_applied,
+        )
+        self._set_writeback_summary(summary)
+        self._refresh_diagnostics_context()
+        if summary.status not in {"idle", "running", "stale"}:
+            self._focus_workbench_status_tab(2)
+
+    @staticmethod
+    def _manifest_path_from_sync_revision_output(output: str) -> str:
+        import re
+        from pathlib import Path
+
+        match = re.search(r"^Sync revision run:\s*(.+?)\s*$", output, re.MULTILINE)
+        if not match:
+            return ""
+        return str(Path(match.group(1).strip()) / "manifest.json")
 
     # --- Runner callbacks ---
 
@@ -1625,6 +1778,8 @@ class MainWindow(QMainWindow):
             self._workflow_step_output_lines.append(text)
         elif self._active_command == "apply":
             self._apply_output_lines.append(text)
+        elif self._active_command == "apply_revision":
+            self._apply_revision_output_lines.append(text)
         elif self._active_command == "build_retry":
             self._build_retry_output_lines.append(text)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
@@ -1652,7 +1807,17 @@ class MainWindow(QMainWindow):
         self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
         self.save_config_btn.setEnabled(not running)
         writeback_summary = self._current_writeback_summary()
-        self.apply_btn.setEnabled(not running and writeback_summary.can_apply)
+        self.apply_btn.setEnabled(
+            not running
+            and writeback_summary.can_apply
+            and not self._uses_revision_writeback()
+        )
+        if hasattr(self, "apply_revision_btn"):
+            self.apply_revision_btn.setEnabled(
+                not running
+                and self._uses_revision_writeback()
+                and writeback_summary.can_apply
+            )
         self._update_writeback_action_buttons(writeback_summary, running=running)
         self.kill_btn.setEnabled(running)
 
@@ -1722,7 +1887,13 @@ class MainWindow(QMainWindow):
             running=self.kill_btn.isEnabled(),
         )
         if not self.kill_btn.isEnabled():
-            self.apply_btn.setEnabled(summary.can_apply)
+            self.apply_btn.setEnabled(
+                summary.can_apply and not self._uses_revision_writeback()
+            )
+            if hasattr(self, "apply_revision_btn"):
+                self.apply_revision_btn.setEnabled(
+                    self._uses_revision_writeback() and summary.can_apply
+                )
 
     def _update_writeback_from_check(
         self,
@@ -1811,6 +1982,22 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("翻译写回完成。", 6000)
             else:
                 self.statusBar().showMessage("翻译写回失败，请查看诊断日志。", 8000)
+            return
+
+        if self._active_command == "apply_revision":
+            summary = summarize_revision_apply_output(
+                "\n".join(self._apply_revision_output_lines),
+                exit_code,
+                manifest_path=self._writeback_manifest_path,
+            )
+            self._set_writeback_summary(summary)
+            self._refresh_diagnostics_context()
+            self._active_command = ""
+            self._set_task_running(False)
+            if exit_code == 0:
+                self.statusBar().showMessage("订正写回完成。", 6000)
+            else:
+                self.statusBar().showMessage("订正写回失败，请查看诊断日志。", 8000)
             return
 
         if self._active_command == "build_retry":
@@ -1914,6 +2101,14 @@ class MainWindow(QMainWindow):
         update = self._workflow.complete_current_step(exit_code, step_output)
         if "Safety status:" in step_output:
             self._update_writeback_from_check(step_output, exit_code, manifest_path)
+        if self._uses_revision_writeback() and (
+            "Preview JSONL:" in step_output or "Preview Markdown:" in step_output
+        ):
+            self._update_revision_writeback_from_preview(
+                step_output,
+                exit_code,
+                manifest_path,
+            )
         self._set_workflow_update(update)
         self._workflow_step_output_lines = []
         self._refresh_diagnostics_context()
@@ -1927,7 +2122,10 @@ class MainWindow(QMainWindow):
         self._workflow = None
         self._set_task_running(False)
         finish_spec = work_mode_spec(self._current_work_mode())
-        if not finish_spec.supports_translation_writeback:
+        if (
+            not finish_spec.supports_translation_writeback
+            and finish_spec.mode not in self._revision_writeback_modes()
+        ):
             self._set_writeback_summary(
                 idle_writeback_summary_for_work_mode(finish_spec.mode)
             )
