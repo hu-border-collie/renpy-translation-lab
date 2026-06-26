@@ -347,6 +347,11 @@ def idle_writeback_summary_for_work_mode(mode) -> WritebackSummary:
             message = "关键词模式只生成候选报告，不会启用普通「写回翻译」按钮。"
         elif spec.mode == WorkMode.REVISION:
             message = "订正写回将使用 preview-revisions / apply-revisions 独立流程，不经过普通 check/apply。"
+        elif spec.mode == WorkMode.SYNC_REVISION:
+            message = (
+                "同步订正默认只生成预览报告；写回需单独调用 apply-revisions，"
+                "不经过普通 check/apply。"
+            )
         elif spec.is_bootstrap:
             message = "预建库只更新本地上下文存储，不会启用普通「写回翻译」按钮。"
         else:

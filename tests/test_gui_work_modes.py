@@ -24,8 +24,12 @@ class GuiWorkModesTests(unittest.TestCase):
     def test_analysis_prep_category_contains_keywords_and_bootstrap(self):
         modes = work_modes_for_category(TaskCategory.ANALYSIS_PREP)
         self.assertIn(WorkMode.KEYWORD_EXTRACTION, modes)
+        self.assertIn(WorkMode.SYNC_KEYWORD_EXTRACTION, modes)
         self.assertIn(WorkMode.BOOTSTRAP_RAG, modes)
         self.assertIn(WorkMode.BOOTSTRAP_SOURCE_INDEX, modes)
+        keyword_index = modes.index(WorkMode.KEYWORD_EXTRACTION)
+        sync_keyword_index = modes.index(WorkMode.SYNC_KEYWORD_EXTRACTION)
+        self.assertLess(keyword_index, sync_keyword_index)
 
     def test_batch_translation_is_implemented(self):
         spec = work_mode_spec(WorkMode.BATCH_TRANSLATION)
@@ -42,13 +46,24 @@ class GuiWorkModesTests(unittest.TestCase):
     def test_sync_translation_is_implemented(self):
         self.assertTrue(work_mode_spec(WorkMode.SYNC_TRANSLATION).implemented)
 
-    def test_follow_up_workflow_modes_are_not_implemented_yet(self):
-        for mode in (
-            WorkMode.KEYWORD_EXTRACTION,
-            WorkMode.REVISION,
-        ):
+    def test_keyword_modes_are_implemented(self):
+        self.assertTrue(work_mode_spec(WorkMode.KEYWORD_EXTRACTION).implemented)
+        self.assertTrue(work_mode_spec(WorkMode.SYNC_KEYWORD_EXTRACTION).implemented)
+
+    def test_maintenance_category_contains_revision_modes(self):
+        modes = work_modes_for_category(TaskCategory.MAINTENANCE)
+        self.assertEqual(modes, (WorkMode.REVISION, WorkMode.SYNC_REVISION))
+
+    def test_revision_modes_are_implemented(self):
+        for mode in (WorkMode.REVISION, WorkMode.SYNC_REVISION):
             with self.subTest(mode=mode):
-                self.assertFalse(work_mode_spec(mode).implemented)
+                spec = work_mode_spec(mode)
+                self.assertTrue(spec.implemented)
+                self.assertFalse(spec.supports_translation_writeback)
+
+    def test_revision_supports_resume_but_sync_revision_does_not(self):
+        self.assertTrue(work_mode_spec(WorkMode.REVISION).supports_resume)
+        self.assertFalse(work_mode_spec(WorkMode.SYNC_REVISION).supports_resume)
 
     def test_default_work_mode_for_category(self):
         self.assertEqual(
