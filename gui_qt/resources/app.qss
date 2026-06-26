@@ -288,6 +288,25 @@ QTabWidget#workbench_status_tabs > QTabBar::tab:selected {
     font-size: 12px;
 }
 
+#action_frame {
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+}
+
+QLabel#action_group_label {
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 600;
+    padding-right: 2px;
+}
+
+QFrame#action_separator {
+    color: #e2e8f0;
+    margin-top: 2px;
+    margin-bottom: 2px;
+}
+
 /* GroupBox styling */
 QGroupBox {
     background-color: #ffffff;
@@ -374,7 +393,6 @@ QPushButton:disabled {
 
 /* Primary Action Buttons */
 QPushButton#save_config_btn,
-QPushButton#doctor_btn,
 QPushButton#api_btn,
 QPushButton#translate_btn {
     background-color: #2563eb;
@@ -385,7 +403,6 @@ QPushButton#translate_btn {
 }
 
 QPushButton#save_config_btn:hover,
-QPushButton#doctor_btn:hover,
 QPushButton#api_btn:hover,
 QPushButton#translate_btn:hover {
     background-color: #1d4ed8;
@@ -393,7 +410,6 @@ QPushButton#translate_btn:hover {
 }
 
 QPushButton#save_config_btn:pressed,
-QPushButton#doctor_btn:pressed,
 QPushButton#api_btn:pressed,
 QPushButton#translate_btn:pressed {
     background-color: #1e40af;

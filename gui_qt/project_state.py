@@ -16,6 +16,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+import translator_runtime as runtime
+
 
 class ProjectState:
     """Holds the current project context for the GUI shell."""
@@ -35,6 +37,7 @@ class ProjectState:
         self.config_path: Path = self.tool_root / "translator_config.json"
 
         self._game_root: Path | None = None
+        self._game_root_redirect_from: Path | None = None
         self._load_game_root_from_config()
 
     # --- Path helpers ---
@@ -84,7 +87,7 @@ class ProjectState:
         return manifest
 
     def _normalized_path_text(self, path: str | Path) -> str:
-        return os.path.normcase(os.path.abspath(str(path)))
+        return os.path.normcase(runtime.canonical_abs_path(str(path)))
 
     def _resolve_api_keys_path(self) -> Path:
         root_api_keys = self.tool_root / "api_keys.json"
@@ -154,14 +157,33 @@ class ProjectState:
     def get_game_root(self) -> Path | None:
         return self._game_root
 
-    def set_game_root(self, path: str | Path) -> None:
+    def normalize_game_root(self, path: str | Path) -> tuple[Path, bool]:
+        """Resolve project-root selections to nested work/ when that directory exists."""
+        original = self._path_without_resolve(path)
+        effective = Path(runtime.canonical_abs_path(runtime.resolve_effective_game_root(str(original))))
+        adjusted = self._normalized_path_text(original) != self._normalized_path_text(effective)
+        return effective, adjusted
+
+    def set_game_root(self, path: str | Path) -> tuple[Path, bool]:
         """Update current game root and persist it to translator_config.json."""
-        p = self._path_without_resolve(path)
+        original = self._path_without_resolve(path)
+        p, adjusted = self.normalize_game_root(path)
         if not p.exists():
             # Still allow setting even if not exist yet (user may create later)
             pass
         self._save_game_root_to_config(p)
         self._game_root = p
+        if adjusted:
+            self._game_root_redirect_from = original
+        else:
+            self._game_root_redirect_from = None
+        return p, adjusted
+
+    def take_game_root_redirect_from(self) -> Path | None:
+        """Return and clear the last auto-redirect source path, if any."""
+        source = self._game_root_redirect_from
+        self._game_root_redirect_from = None
+        return source
 
     def _load_game_root_from_config(self) -> None:
         if not self.config_path.exists():
@@ -170,7 +192,12 @@ class ProjectState:
             data = json.loads(self.config_path.read_text(encoding="utf-8-sig") or "{}")
             game_root = data.get("game_root")
             if isinstance(game_root, str) and game_root.strip():
-                self._game_root = self._path_without_resolve(game_root)
+                original = self._path_without_resolve(game_root)
+                effective, adjusted = self.normalize_game_root(game_root)
+                self._game_root = effective
+                if adjusted:
+                    self._game_root_redirect_from = original
+                    self._save_game_root_to_config(effective)
         except Exception:
             # Non-fatal for GUI
             pass
@@ -178,7 +205,7 @@ class ProjectState:
     def _save_game_root_to_config(self, game_root: Path) -> None:
         """Update only the game_root key, preserve everything else."""
         data = self._read_json_object(self.config_path, "translator_config.json")
-        data["game_root"] = str(game_root)
+        data["game_root"] = runtime.canonical_abs_path(str(game_root))
         self._write_json_object(self.config_path, data)
 
     # --- Config helpers (api_keys + translator_config) ---

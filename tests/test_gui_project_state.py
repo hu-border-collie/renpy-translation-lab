@@ -6,9 +6,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 from gui_qt.project_state import ProjectState
+import translator_runtime as runtime
 
 
 class GuiProjectStateTests(unittest.TestCase):
+    def assert_same_path(self, left, right) -> None:
+        self.assertEqual(
+            runtime.canonical_abs_path(left),
+            runtime.canonical_abs_path(right),
+        )
+
     def make_state(self, root: Path) -> ProjectState:
         state = ProjectState.__new__(ProjectState)
         state.tool_root = root
@@ -16,6 +23,7 @@ class GuiProjectStateTests(unittest.TestCase):
         state.api_keys_path = root / "api_keys.json"
         state.config_path = root / "translator_config.json"
         state._game_root = None
+        state._game_root_redirect_from = None
         return state
 
     def test_save_api_keys_preserves_existing_unknown_fields(self):
@@ -319,6 +327,38 @@ class GuiProjectStateTests(unittest.TestCase):
             self.assertEqual(saved["api_keys"], ["old-key"])
             self.assertFalse(state.api_keys_path.with_suffix(".tmp").exists())
 
+    def test_take_game_root_redirect_from_clears_pending_notice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "Game Example"
+            work = project / "work"
+            original_game = project / "original" / "game"
+            work.mkdir(parents=True)
+            original_game.mkdir(parents=True)
+            state = self.make_state(root)
+            state.config_path.write_text("{}", encoding="utf-8")
+            state.set_game_root(project)
+
+            self.assertEqual(state.take_game_root_redirect_from(), project)
+            self.assertIsNone(state.take_game_root_redirect_from())
+
+    def test_set_game_root_auto_redirects_to_nested_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "Game Example"
+            work = project / "work"
+            original_game = project / "original" / "game"
+            work.mkdir(parents=True)
+            original_game.mkdir(parents=True)
+            state = self.make_state(root)
+            state.config_path.write_text("{}", encoding="utf-8")
+
+            effective, adjusted = state.set_game_root(project)
+            self.assertTrue(adjusted)
+            self.assert_same_path(effective, work)
+            saved = json.loads(state.config_path.read_text(encoding="utf-8"))
+            self.assert_same_path(saved["game_root"], work)
+
     def test_set_game_root_preserves_translator_config_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -339,22 +379,36 @@ class GuiProjectStateTests(unittest.TestCase):
             state.set_game_root(game_root)
 
             saved = json.loads(state.config_path.read_text(encoding="utf-8"))
-            self.assertEqual(Path(saved["game_root"]), game_root)
+            self.assert_same_path(saved["game_root"], game_root)
             self.assertEqual(saved["batch"], {"model": "gemini-test"})
             self.assertEqual(saved["include_files"], ["script.rpy"])
-            self.assertEqual(state.get_game_root(), game_root)
+            self.assert_same_path(state.get_game_root(), game_root)
 
-    def test_set_game_root_keeps_short_path_spelling(self):
+    def test_set_game_root_canonicalizes_windows_short_path(self):
+        if os.name != "nt":
+            self.skipTest("Windows-only short-path normalization")
+
+        import ctypes
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = self.make_state(root)
-            game_root = Path("C:/Users/RUNNER~1/AppData/Local/Temp/Game Work")
+            game_dir = root / "Game Work"
+            game_dir.mkdir(parents=True, exist_ok=True)
+            long_path = str(game_dir.resolve())
+            buffer = ctypes.create_unicode_buffer(260)
+            if ctypes.windll.kernel32.GetShortPathNameW(long_path, buffer, len(buffer)) == 0:
+                self.skipTest("Could not resolve Windows short path for temp directory")
 
-            state.set_game_root(game_root)
+            short_path = buffer.value
+            if os.path.normcase(short_path) == os.path.normcase(long_path):
+                self.skipTest("Short-path generation disabled on this system")
+
+            state.set_game_root(Path(short_path))
 
             saved = json.loads(state.config_path.read_text(encoding="utf-8"))
-            self.assertIn("RUNNER~1", saved["game_root"])
-            self.assertIn("RUNNER~1", str(state.get_game_root()))
+            self.assertEqual(saved["game_root"], runtime.canonical_abs_path(long_path))
+            self.assert_same_path(state.get_game_root(), long_path)
 
     def test_set_game_root_rejects_invalid_json_without_overwriting(self):
         with tempfile.TemporaryDirectory() as tmp:

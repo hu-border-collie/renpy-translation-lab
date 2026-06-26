@@ -62,13 +62,21 @@ Game_Example/
 }
 ```
 
+如果还没有 `work/` 工作目录，但项目根下已有 `original/game`，可以先初始化 work 副本：
+
+```bash
+python gemini_translate_batch.py bootstrap-work
+```
+
+该命令仅在 `work/` 不存在或为空时执行，会把 `original/game` 全量复制到 `work/game/`。它不会生成 TL 模板，也不会调用 Gemini。若 `game_root` 当时指向项目根目录，命令结束后会尝试把 `translator_config.json` 里的 `game_root` 更新为 `work/`；使用 `--no-update-game-root` 可跳过这一步。
+
 如果已有第三方汉化或非标准 TL 文件，建议先跑诊断：
 
 ```bash
 python gemini_translate_batch.py doctor
 ```
 
-`doctor` 只检查配置、SDK/launcher 和 TL 文件形态，不调用 Gemini，也不会写回 `.rpy`。
+`doctor` 只检查配置、SDK/launcher 和 TL 文件形态，不调用 Gemini，也不会写回 `.rpy`。当检测到缺少 `work/` 或 TL 模板时，它还会在 `Recommendations` 段提示先运行 `bootstrap-work` 或 `build`。
 
 ## 运行模式
 

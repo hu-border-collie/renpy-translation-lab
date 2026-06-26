@@ -6,6 +6,7 @@ from gui_qt.doctor_report import (
     stale_summary,
     summarize_doctor_output,
 )
+from gui_qt.user_copy import format_doctor_recommendation_fact
 
 
 DOCTOR_OUTPUT = """
@@ -33,7 +34,65 @@ Doctor report:
 - Template generation: available (renpy-sdk)
 - Template command: C:\\RenPy\\renpy.exe C:\\Games\\Example\\work\\game translate schinese
 - Mode: can_generate_template
+- Is work root: True
+- Layout status: attention
 - TL scan: rpy_files=0, translate_blocks=0, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=0
+"""
+
+READY_OUTPUT = """
+Doctor report:
+- Base dir: C:\\Games\\Example\\work
+- TL dir: C:\\Games\\Example\\work\\game\\tl\\schinese (exists: True)
+- Language: schinese
+- Template generation: unavailable (no command resolved)
+- Mode: existing_tl_only
+- Is work root: True
+- Layout status: ready
+- TL scan: rpy_files=3, translate_blocks=2, string_sections=1, old_lines=10, new_lines=10, commented_original_lines=2
+"""
+
+FAILED_OUTPUT = """
+Doctor report:
+- Base dir: C:\\Games\\Example
+- TL dir: C:\\Games\\Example\\game\\tl\\schinese (exists: False)
+- Language: schinese
+- Template generation: unavailable (no command resolved)
+- Mode: blocked_missing_template
+- Is work root: False
+- Work dir: C:\\Games\\Example\\work (exists: False, empty: True)
+- Original game dir: (not found)
+- Layout status: failed
+- TL scan: rpy_files=0, translate_blocks=0, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=0
+"""
+
+FAILED_ON_WORK_OUTPUT = """
+Doctor report:
+- Base dir: C:\\Games\\Example\\work
+- TL dir: C:\\Games\\Example\\work\\game\\tl\\schinese (exists: False)
+- Language: schinese
+- Template generation: unavailable (no command resolved)
+- Mode: blocked_missing_template
+- Is work root: True
+- Work dir: C:\\Games\\Example\\work (exists: True, empty: True)
+- Original game dir: (not found)
+- Layout status: failed
+- TL scan: rpy_files=0, translate_blocks=0, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=0
+"""
+
+SWITCH_TO_WORK_OUTPUT = """
+Doctor report:
+- Base dir: C:\\Games\\Example
+- TL dir: C:\\Games\\Example\\game\\tl\\schinese (exists: False)
+- Language: schinese
+- Template generation: available (sdk)
+- Mode: can_generate_template
+- Is work root: False
+- Work dir: C:\\Games\\Example\\work (exists: False, empty: True)
+- Original game dir: C:\\Games\\Example\\original\\game
+- Layout status: switch_to_work
+- TL scan: rpy_files=0, translate_blocks=0, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=0
+Recommendations:
+- game_root should use work directory; switch to C:\\Games\\Example\\work
 """
 
 
@@ -54,7 +113,8 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "检查完成，但有需要处理的事项")
         self.assertIn("已有翻译文件", summary.message)
-        self.assertTrue(any("API" in finding for finding in summary.findings))
+        self.assertTrue(any("API 密钥" in fact or fact.startswith("建议：") for fact in summary.facts))
+        self.assertEqual(summary.findings, [])
 
     def test_successful_clean_report_is_ready(self):
         summary = summarize_doctor_output(DOCTOR_OUTPUT, exit_code=0, api_key_count=2)
@@ -78,7 +138,8 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "检查完成，但有需要处理的事项")
-        self.assertTrue(any("翻译目录尚不存在" in finding for finding in summary.findings))
+        self.assertEqual(summary.findings, [])
+        self.assertIn("翻译模板尚未生成", summary.message)
         self.assertTrue(any("翻译文件：0 个" in fact for fact in summary.facts))
 
     def test_can_generate_template_with_empty_tl_dir_is_warning(self):
@@ -87,7 +148,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
 
         self.assertEqual(summary.status, "warning")
-        self.assertTrue(any("没有翻译文件" in finding for finding in summary.findings))
+        self.assertEqual(summary.findings, [])
 
     def test_environment_api_key_source_is_reported(self):
         summary = summarize_doctor_output(
@@ -100,12 +161,46 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertTrue(any("环境变量" in fact for fact in summary.facts))
 
     def test_blocked_missing_template_is_blocked(self):
-        output = DOCTOR_OUTPUT.replace("existing_tl_only", "blocked_missing_template")
+        summary = summarize_doctor_output(FAILED_OUTPUT, exit_code=0, api_key_count=1)
+
+        self.assertEqual(summary.status, "blocked")
+        self.assertEqual(summary.heading, "项目检查失败")
+        self.assertIn("original/game", summary.message)
+        self.assertTrue(any("work 目录：不存在" in fact for fact in summary.facts))
+        self.assertTrue(any("original/game：不存在" in fact for fact in summary.facts))
+
+    def test_failed_on_work_root_uses_work_specific_message(self):
+        summary = summarize_doctor_output(FAILED_ON_WORK_OUTPUT, exit_code=0, api_key_count=1)
+
+        self.assertEqual(summary.status, "blocked")
+        self.assertIn("work 目录为空", summary.message)
+        self.assertNotIn("当前项目目录下没有 work 目录", summary.message)
+
+    def test_ready_layout_status_is_green(self):
+        summary = summarize_doctor_output(READY_OUTPUT, exit_code=0, api_key_count=2)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertIn("就绪", summary.message)
+
+    def test_switch_to_work_layout_status_is_warning(self):
+        summary = summarize_doctor_output(SWITCH_TO_WORK_OUTPUT, exit_code=0, api_key_count=1)
+
+        self.assertEqual(summary.status, "warning")
+        self.assertEqual(summary.heading, "建议使用 work 目录")
+        self.assertTrue(any("切换到" in fact for fact in summary.facts))
+        self.assertTrue(any("original/game：存在" in fact for fact in summary.facts))
+
+    def test_switch_to_work_shows_resolved_work_path(self):
+        output = SWITCH_TO_WORK_OUTPUT.replace(
+            "Work dir: C:\\Games\\Example\\work (exists: False, empty: True)",
+            "Work dir: C:\\Games\\Example\\work (exists: True, empty: False)",
+        )
 
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
 
-        self.assertEqual(summary.status, "blocked")
-        self.assertEqual(summary.heading, "需要先准备翻译模板")
+        self.assertTrue(any("work 目录：C:\\Games\\Example\\work" in fact for fact in summary.facts))
+        self.assertFalse(any("work 目录：不存在" in fact for fact in summary.facts))
 
     def test_nonzero_exit_is_blocked(self):
         summary = summarize_doctor_output("startup failed", exit_code=1, api_key_count=1)
@@ -121,6 +216,50 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "warning")
         self.assertTrue(any("界面字符串块" in finding for finding in summary.findings))
+        self.assertTrue(
+            any(fact.startswith("注意：") and "界面字符串块" in fact for fact in summary.facts)
+        )
+        self.assertFalse(any(fact.startswith("- ") for fact in summary.facts))
+
+    def test_doctor_recommendations_are_rendered_as_facts(self):
+        output = DOCTOR_OUTPUT + (
+            "\nRecommendations:\n"
+            "- work directory is missing or empty and original/game exists; "
+            "run: python gemini_translate_batch.py bootstrap-work "
+            "(copies original/game into work/game without generating TL).\n"
+        )
+
+        parsed = parse_doctor_output(output)
+        self.assertEqual(len(parsed["recommendations"]), 1)
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
+        self.assertEqual(summary.findings, [])
+        self.assertTrue(any(fact.startswith("建议：") for fact in summary.facts))
+        self.assertTrue(any("准备工作目录" in fact for fact in summary.facts))
+
+    def test_api_key_facts_appear_before_doctor_recommendations(self):
+        output = DOCTOR_OUTPUT + (
+            "\nRecommendations:\n"
+            "- game_root should use work directory; switch to C:\\Games\\Example\\work\n"
+        )
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=2)
+        api_index = next(
+            i for i, fact in enumerate(summary.facts) if fact.startswith("API 密钥：")
+        )
+        recommendation_index = next(
+            i for i, fact in enumerate(summary.facts) if fact.startswith("建议：将项目路径")
+        )
+        self.assertLess(api_index, recommendation_index)
+
+    def test_format_doctor_recommendation_fact_uses_fact_style(self):
+        fact = format_doctor_recommendation_fact(
+            "work directory is missing or empty and original/game exists; "
+            "run: python gemini_translate_batch.py bootstrap-work "
+            "(copies original/game into work/game without generating TL)."
+        )
+
+        self.assertEqual(fact, "建议：点击「准备工作目录」")
 
     def test_stale_summary_marks_previous_result_invalid(self):
         summary = stale_summary()

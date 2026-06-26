@@ -43,6 +43,29 @@ BOOTSTRAP_FIELD_LABELS = {
     "external_seed_records": "外部种子记录数",
 }
 
+DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS: tuple[tuple[str, str], ...] = (
+    (
+        "game_root should use work directory; switch to",
+        "建议：将项目路径切换到",
+    ),
+    (
+        "work directory is missing or empty and original/game exists;",
+        "建议：点击「准备工作目录」",
+    ),
+    (
+        "Missing translation files; run: python gemini_translate_batch.py build",
+        "建议：点击「开始翻译」生成翻译模板",
+    ),
+    (
+        "Install Ren'Py SDK or set prepare.renpy_sdk_dir, then run:",
+        "建议：配置 Ren'Py SDK 后点击「开始翻译」",
+    ),
+    (
+        "prepare is disabled; enable prepare.enabled in translator_config.json, then run build.",
+        "建议：在配置中启用 prepare 后点击「开始翻译」",
+    ),
+)
+
 DOCTOR_WARNING_TRANSLATIONS: tuple[tuple[str, str], ...] = (
     (
         "old/new line counts differ; string translation blocks may be malformed.",
@@ -109,6 +132,35 @@ def format_job_state_fact(state: str) -> str:
 
 def format_safety_fact(level: str, *, prefix: str = "检查结果") -> str:
     return f"{prefix}：{safety_level_label(level)}"
+
+
+def format_notice_fact(text: str) -> str:
+    """Render advisory lines in the same `标签：值` style as other facts."""
+    normalized = text.strip()
+    if normalized.startswith("注意："):
+        return normalized
+    return f"注意：{normalized}"
+
+
+def format_doctor_warning_fact(warning: str) -> str:
+    """Render doctor warnings in the same `标签：值` style as other facts."""
+    return format_notice_fact(translate_doctor_warning(warning))
+
+
+def format_doctor_recommendation_fact(recommendation: str) -> str:
+    """Render doctor recommendations in the same `标签：值` style as other facts."""
+    text = recommendation.strip()
+    if text.startswith("Found ") and "pending lines" in text:
+        count = text.removeprefix("Found ").split(" pending", 1)[0].strip()
+        return f"建议：点击「开始翻译」提交约 {count} 条待译行"
+    for prefix, rendered in DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS:
+        if text.startswith(prefix):
+            if prefix == "game_root should use work directory; switch to":
+                return f"{rendered}{text[len(prefix):]}"
+            return rendered
+    if "bootstrap-work" in text and "copies original/game" in text:
+        return "建议：点击「准备工作目录」"
+    return f"建议：{text}"
 
 
 def translate_doctor_warning(warning: str) -> str:

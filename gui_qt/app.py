@@ -82,6 +82,12 @@ from .doctor_report import (
     stale_summary,
     summarize_doctor_output,
 )
+from .work_bootstrap_report import (
+    running_work_bootstrap_summary,
+    summarize_work_bootstrap_output,
+    with_game_root_persist_warning,
+    work_bootstrap_to_doctor_summary,
+)
 from .project_state import ProjectState
 from .theme import apply_theme
 from .theme_helpers import (
@@ -123,6 +129,7 @@ class MainWindow(QMainWindow):
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
+        self._work_bootstrap_output_lines: list[str] = []
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
@@ -155,6 +162,7 @@ class MainWindow(QMainWindow):
         self.runner.error.connect(self._on_runner_error)
 
         self._refresh_project_label()
+        self._show_pending_game_root_redirect_notice()
         self._refresh_api_status()
         self._load_config_to_ui()
         self._set_doctor_summary(idle_summary())
@@ -180,11 +188,13 @@ class MainWindow(QMainWindow):
 
         project_frame = QFrame()
         project_frame.setObjectName("project_frame")
-        proj_layout = QHBoxLayout(project_frame)
-        proj_layout.setContentsMargins(12, 10, 12, 10)
+        proj_outer = QVBoxLayout(project_frame)
+        proj_outer.setContentsMargins(12, 10, 12, 10)
+        proj_outer.setSpacing(6)
+        proj_layout = QHBoxLayout()
         proj_layout.setSpacing(10)
 
-        proj_layout.addWidget(QLabel("当前游戏 work 目录："))
+        proj_layout.addWidget(QLabel("当前 work 目录："))
 
         self.project_path_edit = QLineEdit("尚未选择项目")
         self.project_path_edit.setReadOnly(True)
@@ -194,34 +204,65 @@ class MainWindow(QMainWindow):
         self.select_btn = QPushButton("选择游戏目录...")
         self.select_btn.clicked.connect(self._on_select_project)
         proj_layout.addWidget(self.select_btn)
+        proj_outer.addLayout(proj_layout)
+
+        self.project_redirect_label = QLabel()
+        self.project_redirect_label.setWordWrap(True)
+        self.project_redirect_label.setObjectName("config_hint_label")
+        self.project_redirect_label.setVisible(False)
+        proj_outer.addWidget(self.project_redirect_label)
 
         layout.addWidget(project_frame)
 
-        action_row = QHBoxLayout()
-        action_row.setSpacing(10)
-        self.doctor_btn = QPushButton("环境检查")
-        self.doctor_btn.setObjectName("doctor_btn")
-        self.doctor_btn.clicked.connect(self._on_run_doctor)
-        action_row.addWidget(self.doctor_btn)
+        action_frame = QFrame()
+        action_frame.setObjectName("action_frame")
+        action_outer = QHBoxLayout(action_frame)
+        action_outer.setContentsMargins(12, 10, 12, 10)
+        action_outer.setSpacing(12)
 
+        prep_group = QHBoxLayout()
+        prep_group.setSpacing(8)
+        prep_label = QLabel("项目准备")
+        prep_label.setObjectName("action_group_label")
+        prep_group.addWidget(prep_label)
+        self.doctor_btn = QPushButton("环境检查")
+        self.doctor_btn.setObjectName("secondary_btn")
+        self.doctor_btn.clicked.connect(self._on_run_doctor)
+        prep_group.addWidget(self.doctor_btn)
+        self.bootstrap_work_btn = QPushButton("准备工作目录")
+        self.bootstrap_work_btn.setObjectName("secondary_btn")
+        self.bootstrap_work_btn.clicked.connect(self._on_bootstrap_work)
+        prep_group.addWidget(self.bootstrap_work_btn)
+        action_outer.addLayout(prep_group)
+
+        action_separator = QFrame()
+        action_separator.setFrameShape(QFrame.Shape.VLine)
+        action_separator.setObjectName("action_separator")
+        action_outer.addWidget(action_separator)
+
+        translate_group = QHBoxLayout()
+        translate_group.setSpacing(8)
+        translate_label = QLabel("翻译任务")
+        translate_label.setObjectName("action_group_label")
+        translate_group.addWidget(translate_label)
         self.translate_btn = QPushButton("开始翻译")
         self.translate_btn.setObjectName("translate_btn")
         self.translate_btn.clicked.connect(self._on_start_translation)
-        action_row.addWidget(self.translate_btn)
-
-        self.resume_btn = QPushButton("继续任务")
+        translate_group.addWidget(self.translate_btn)
+        self.resume_btn = QPushButton("继续翻译")
         self.resume_btn.setObjectName("secondary_btn")
         self.resume_btn.clicked.connect(self._on_resume_translation)
-        action_row.addWidget(self.resume_btn)
+        translate_group.addWidget(self.resume_btn)
+        action_outer.addLayout(translate_group)
 
-        action_row.addStretch()
+        action_outer.addStretch()
 
         self.kill_btn = QPushButton("停止")
         self.kill_btn.setObjectName("kill_btn")
         self.kill_btn.clicked.connect(self._on_kill)
         self.kill_btn.setEnabled(False)
-        action_row.addWidget(self.kill_btn)
-        layout.addLayout(action_row)
+        action_outer.addWidget(self.kill_btn)
+        layout.addWidget(action_frame)
 
         self.workbench_status_tabs = NoWheelTabWidget()
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
@@ -926,12 +967,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("已打开补救命令参考。", 3000)
 
     def _set_details_label(self, label: QLabel, findings: list[str]) -> None:
-        if findings:
-            label.setText("\n".join(f"- {item}" for item in findings))
-            label.setVisible(True)
-        else:
-            label.setText("")
-            label.setVisible(False)
+        del findings
+        label.setText("")
+        label.setVisible(False)
 
     def _clear_layout(self, layout: QLayout) -> None:
         while layout.count():
@@ -1056,12 +1094,19 @@ class MainWindow(QMainWindow):
         start_dir = str(self.state.get_game_root() or Path.home())
         directory = QFileDialog.getExistingDirectory(
             self,
-            "选择游戏的 work 目录（通常包含 game/tl/schinese）",
+            "选择游戏目录（项目根目录或 work 目录；项目根目录下存在 work/ 时会自动切换）",
             start_dir,
         )
         if directory:
             try:
-                self.state.set_game_root(directory)
+                effective_root, adjusted = self.state.set_game_root(directory)
+                if adjusted:
+                    self._show_game_root_redirect_notice(
+                        Path(directory),
+                        effective_root,
+                    )
+                else:
+                    self._clear_game_root_redirect_notice()
             except ValueError as exc:
                 QMessageBox.warning(self, "无法更新配置", str(exc))
                 self._append_log(f"更新 translator_config.json 失败：{exc}")
@@ -1131,12 +1176,39 @@ class MainWindow(QMainWindow):
         self._refresh_api_status()
         self._append_log(f"API Key 已保存（当前数量：{len(new_keys)}）。")
 
+    def _format_game_root_redirect_notice(self, original: Path, effective: Path) -> str:
+        return (
+            f"提示：检测到 work 目录，已从 {original} 自动切换到 {effective}。"
+        )
+
+    def _show_game_root_redirect_notice(self, original: Path, effective: Path) -> None:
+        notice = self._format_game_root_redirect_notice(original, effective)
+        self.project_redirect_label.setText(notice)
+        self.project_redirect_label.setVisible(True)
+        self.statusBar().showMessage(
+            f"已自动切换到 work 目录：{effective}",
+            8000,
+        )
+
+    def _clear_game_root_redirect_notice(self) -> None:
+        self.project_redirect_label.setText("")
+        self.project_redirect_label.setVisible(False)
+
+    def _show_pending_game_root_redirect_notice(self) -> None:
+        original = self.state.take_game_root_redirect_from()
+        effective = self.state.get_game_root()
+        if original is None or effective is None:
+            self._clear_game_root_redirect_notice()
+            return
+        self._show_game_root_redirect_notice(original, effective)
+
     def _refresh_project_label(self):
         root = self.state.get_game_root()
         if root:
             self.project_path_edit.setText(str(root))
         else:
             self.project_path_edit.setText("（尚未选择项目）")
+            self._clear_game_root_redirect_notice()
 
     def _on_run_doctor(self):
         if not self.state.get_game_root():
@@ -1158,6 +1230,26 @@ class MainWindow(QMainWindow):
         script = self.state.get_batch_script_path()
         # Run with no extra args — it will pick up translator_config.json
         self.runner.run(script, ["doctor"])
+
+    def _on_bootstrap_work(self):
+        if not self.state.get_game_root():
+            QMessageBox.information(
+                self,
+                "请先选择项目",
+                "请先选择游戏目录（项目根目录或 work 目录均可）。\n"
+                "准备工作目录会在存在 original/game 时，把内容复制到 work/game。",
+            )
+            return
+
+        self.log_view.clear()
+        self._active_command = "bootstrap_work"
+        self._work_bootstrap_output_lines = []
+        self._focus_workbench_status_tab(0)
+        doctor_summary = work_bootstrap_to_doctor_summary(running_work_bootstrap_summary())
+        self._set_doctor_summary(doctor_summary)
+        self._append_log("=== 正在运行：gemini_translate_batch.py bootstrap-work ===\n")
+        self._set_task_running(True)
+        self.runner.run(self.state.get_batch_script_path(), ["bootstrap-work"])
 
     def _saved_batch_context_flags(self) -> dict[str, bool]:
         return read_batch_context_flags(self.state.load_translator_config())
@@ -1288,8 +1380,6 @@ class MainWindow(QMainWindow):
             "",
             *summary.facts,
         ]
-        if summary.findings:
-            confirm_lines.extend(["", "待处理问题：", *[f"- {item}" for item in summary.findings]])
 
         reply = QMessageBox.question(
             self,
@@ -1329,6 +1419,8 @@ class MainWindow(QMainWindow):
             self._build_retry_output_lines.append(text)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
             self._bootstrap_output_lines.append(text)
+        elif self._active_command == "bootstrap_work":
+            self._work_bootstrap_output_lines.append(text)
         self._append_log(text)
 
     def _append_log(self, text: str):
@@ -1340,6 +1432,7 @@ class MainWindow(QMainWindow):
     def _set_task_running(self, running: bool):
         self.select_btn.setEnabled(not running)
         self.doctor_btn.setEnabled(not running)
+        self.bootstrap_work_btn.setEnabled(not running)
         self.api_btn.setEnabled(not running)
         self.translate_btn.setEnabled(not running)
         self.resume_btn.setEnabled(not running)
@@ -1470,7 +1563,7 @@ class MainWindow(QMainWindow):
         self.doctor_status_label.style().polish(self.doctor_status_label)
         self.doctor_message_label.setText(summary.message)
         self.doctor_facts_label.setText("\n".join(summary.facts))
-        self._set_details_label(self.doctor_details_label, summary.findings)
+        self._set_details_label(self.doctor_details_label, [])
 
     def _on_runner_error(self, message: str):
         self._append_log(message)
@@ -1484,6 +1577,8 @@ class MainWindow(QMainWindow):
             self._build_retry_output_lines.append(message)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
             self._bootstrap_output_lines.append(message)
+        elif self._active_command == "bootstrap_work":
+            self._work_bootstrap_output_lines.append(message)
         self._focus_log_tab()
         self.statusBar().showMessage("任务运行失败，请查看诊断日志。", 6000)
 
@@ -1582,6 +1677,36 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("原文索引预建已结束，请查看摘要。", 6000)
             else:
                 self.statusBar().showMessage("原文索引预建失败，请查看诊断日志。", 8000)
+            return
+
+        if self._active_command == "bootstrap_work":
+            summary = summarize_work_bootstrap_output(
+                "\n".join(self._work_bootstrap_output_lines),
+                exit_code,
+            )
+            game_root_update_failed = False
+            if summary.status == "ready" and summary.work_dir:
+                try:
+                    self.state.set_game_root(summary.work_dir)
+                    self._refresh_project_label()
+                except ValueError as exc:
+                    self._append_log(f"更新 translator_config.json 失败：{exc}")
+                    game_root_update_failed = True
+                    summary = with_game_root_persist_warning(summary)
+            self._set_doctor_summary(work_bootstrap_to_doctor_summary(summary))
+            self._active_command = ""
+            self._set_task_running(False)
+            if game_root_update_failed:
+                self.statusBar().showMessage(
+                    "工作目录已复制，但更新 game_root 失败，请查看诊断日志。",
+                    8000,
+                )
+            elif exit_code == 0 and summary.status == "ready":
+                self.statusBar().showMessage("工作目录已准备完成。", 6000)
+            elif exit_code == 0:
+                self.statusBar().showMessage("准备工作目录已结束，请查看摘要。", 6000)
+            else:
+                self.statusBar().showMessage("准备工作目录失败，请查看诊断日志。", 8000)
             return
 
         self._set_task_running(False)

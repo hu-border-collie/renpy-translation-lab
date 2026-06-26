@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import zlib
 from datetime import datetime
+from pathlib import Path
 
 from rag_memory import JsonRagStore, hash_text, truncate_text
 import prompt_context
@@ -365,8 +366,8 @@ def _resolve_path(base_dir, value):
     if not text:
         return ""
     if os.path.isabs(text):
-        return os.path.abspath(text)
-    return os.path.abspath(os.path.join(base_dir, text))
+        return _canonical_abs_path(text)
+    return _canonical_abs_path(os.path.join(base_dir, text))
 
 
 def _resolve_preferred_path_from_bases(value, base_dirs):
@@ -727,9 +728,22 @@ def load_translator_settings():
         ENV_GAME_ROOT = os.environ.get("GAME_ROOT") or os.environ.get("SA_GAME_ROOT")
 
     if ENV_GAME_ROOT:
-        BASE_DIR = os.path.abspath(ENV_GAME_ROOT)
+        original_root = _canonical_abs_path(ENV_GAME_ROOT)
+        resolved_root = resolve_effective_game_root(original_root)
+        if os.path.normcase(resolved_root) != os.path.normcase(original_root):
+            ENV_GAME_ROOT = resolved_root
+            if isinstance(game_root, str) and game_root.strip() and os.path.exists(TRANSLATOR_CONFIG):
+                try:
+                    persist_game_root(resolved_root)
+                except Exception as exc:
+                    print(f"Warning: Failed to persist corrected game_root: {exc}")
+                    _apply_game_root(resolved_root)
+            else:
+                _apply_game_root(resolved_root)
+        else:
+            BASE_DIR = original_root
     else:
-        BASE_DIR = os.path.abspath(os.path.join(ROOT_DIR, ".."))
+        BASE_DIR = _canonical_abs_path(os.path.join(ROOT_DIR, ".."))
 
     glossary_file = config.get("glossary_file")
     if glossary_file is None:
@@ -744,8 +758,8 @@ def load_translator_settings():
     if isinstance(tl_subdir, str) and tl_subdir.strip():
         TL_SUBDIR = _normalize_rel_path(tl_subdir)
 
-    TL_DIR = os.path.abspath(os.path.join(BASE_DIR, TL_SUBDIR))
-    WORK_GAME_DIR = os.path.abspath(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
+    TL_DIR = _canonical_abs_path(os.path.join(BASE_DIR, TL_SUBDIR))
+    WORK_GAME_DIR = _canonical_abs_path(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
 
     prepare = config.get("prepare")
     if not isinstance(prepare, dict):
@@ -935,21 +949,227 @@ def _list_rpa_files(game_dir):
     return archives
 
 
+def _canonical_abs_path(path):
+    """Return a stable absolute path (long path on Windows, not 8.3 short names)."""
+    if not path:
+        return ""
+    abs_path = os.path.abspath(path)
+    try:
+        return str(Path(abs_path).resolve(strict=False))
+    except OSError:
+        return abs_path
+
+
+canonical_abs_path = _canonical_abs_path
+
+
+def _path_contains_path(container, contained):
+    container_norm = _canonical_abs_path(container)
+    contained_norm = _canonical_abs_path(contained)
+    if not container_norm or not contained_norm:
+        return False
+    try:
+        common = os.path.commonpath([container_norm, contained_norm])
+    except ValueError:
+        return False
+    return os.path.normcase(common) == os.path.normcase(container_norm)
+
+
+def resolve_project_root(base_dir=None):
+    base = _canonical_abs_path(base_dir or BASE_DIR)
+    if os.path.basename(base).lower() in {"work", "original"}:
+        return os.path.dirname(base)
+    return base
+
+
+def resolve_work_dir(base_dir=None):
+    return _canonical_abs_path(os.path.join(resolve_project_root(base_dir), "work"))
+
+
+def resolve_effective_game_root(game_root):
+    """Prefer nested work/ when game_root points at a project-root layout."""
+    normalized = _canonical_abs_path(game_root)
+    if os.path.basename(normalized).lower() == "work":
+        return normalized
+
+    nested_work = os.path.join(normalized, "work")
+    original_game = os.path.join(normalized, "original", "game")
+    if os.path.isdir(nested_work) and os.path.isdir(original_game):
+        return _canonical_abs_path(nested_work)
+    return normalized
+
+
+def resolve_original_game_dir(base_dir=None):
+    if SOURCE_GAME_DIR and os.path.isdir(SOURCE_GAME_DIR):
+        return _canonical_abs_path(SOURCE_GAME_DIR)
+
+    root = resolve_project_root(base_dir)
+    candidate = os.path.join(root, "original", "game")
+    if os.path.isdir(candidate):
+        return _canonical_abs_path(candidate)
+    return ""
+
+
+def is_work_dir_empty(work_dir):
+    if not os.path.isdir(work_dir):
+        return True
+    try:
+        return len(os.listdir(work_dir)) == 0
+    except OSError:
+        return False
+
+
+def work_dir_bootstrap_allowed(base_dir=None):
+    work_dir = resolve_work_dir(base_dir)
+    if is_work_dir_empty(work_dir):
+        return True, work_dir, ""
+    return False, work_dir, "work directory already exists and is not empty"
+
+
+def _copy_game_directory(source_game_dir, target_game_dir):
+    files_copied = 0
+    for root, _, files in os.walk(source_game_dir):
+        rel = os.path.relpath(root, source_game_dir)
+        dest_dir = target_game_dir if rel == "." else os.path.join(target_game_dir, rel)
+        os.makedirs(dest_dir, exist_ok=True)
+        for file_name in files:
+            shutil.copy2(os.path.join(root, file_name), os.path.join(dest_dir, file_name))
+            files_copied += 1
+    return files_copied
+
+
+def _apply_game_root(work_dir):
+    global BASE_DIR, TL_DIR, WORK_GAME_DIR, ENV_GAME_ROOT
+
+    normalized = _canonical_abs_path(work_dir)
+    ENV_GAME_ROOT = normalized
+    BASE_DIR = normalized
+    TL_DIR = _canonical_abs_path(os.path.join(BASE_DIR, TL_SUBDIR))
+    WORK_GAME_DIR = _canonical_abs_path(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
+
+
+def persist_game_root(work_dir):
+    normalized = _canonical_abs_path(work_dir)
+    config = {}
+    if os.path.exists(TRANSLATOR_CONFIG):
+        try:
+            with open(TRANSLATOR_CONFIG, "r", encoding="utf-8-sig") as handle:
+                config = json.load(handle) or {}
+        except Exception:
+            config = {}
+
+    config["game_root"] = normalized
+    with open(TRANSLATOR_CONFIG, "w", encoding="utf-8") as handle:
+        json.dump(config, handle, indent=2, ensure_ascii=False)
+        handle.write("\n")
+
+    _apply_game_root(normalized)
+    return normalized
+
+
+def bootstrap_work_from_original(*, save_game_root=False, refresh_runtime_paths=False, base_dir=None):
+    base = _canonical_abs_path(base_dir or BASE_DIR)
+    project_root = resolve_project_root(base)
+    work_dir = resolve_work_dir(base)
+    allowed, _, skip_reason = work_dir_bootstrap_allowed(base)
+    source_game_dir = resolve_original_game_dir(base)
+
+    if not allowed:
+        return {
+            "status": "skipped",
+            "project_root": project_root,
+            "work_dir": work_dir,
+            "source_game_dir": source_game_dir,
+            "files_copied": 0,
+            "message": skip_reason,
+            "game_root_updated": False,
+        }
+
+    if not source_game_dir:
+        return {
+            "status": "failed",
+            "project_root": project_root,
+            "work_dir": work_dir,
+            "source_game_dir": "",
+            "files_copied": 0,
+            "message": (
+                "original/game was not found; set prepare.source_game_dir or create work manually."
+            ),
+            "game_root_updated": False,
+        }
+
+    target_game_dir = os.path.join(work_dir, WORK_GAME_SUBDIR)
+    if _path_contains_path(source_game_dir, target_game_dir):
+        return {
+            "status": "failed",
+            "project_root": project_root,
+            "work_dir": work_dir,
+            "source_game_dir": source_game_dir,
+            "files_copied": 0,
+            "message": "source_game_dir must not contain work/game.",
+            "game_root_updated": False,
+        }
+    staging_dir = os.path.join(work_dir, ".bootstrap_staging")
+    try:
+        os.makedirs(work_dir, exist_ok=True)
+        if os.path.exists(staging_dir):
+            shutil.rmtree(staging_dir)
+        files_copied = _copy_game_directory(source_game_dir, staging_dir)
+        if os.path.exists(target_game_dir):
+            shutil.rmtree(target_game_dir)
+        os.replace(staging_dir, target_game_dir)
+    except Exception as exc:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        return {
+            "status": "failed",
+            "project_root": project_root,
+            "work_dir": work_dir,
+            "source_game_dir": source_game_dir,
+            "files_copied": 0,
+            "message": str(exc),
+            "game_root_updated": False,
+        }
+
+    message = f"Copied {files_copied} files from original/game into work/game."
+    game_root_updated = False
+    if os.path.normcase(base) != os.path.normcase(work_dir):
+        if save_game_root:
+            try:
+                persist_game_root(work_dir)
+                game_root_updated = True
+            except Exception as exc:
+                _apply_game_root(work_dir)
+                message = f"{message} Failed to update game_root: {exc}"
+        elif refresh_runtime_paths:
+            _apply_game_root(work_dir)
+
+    return {
+        "status": "created",
+        "project_root": project_root,
+        "work_dir": work_dir,
+        "source_game_dir": source_game_dir,
+        "files_copied": files_copied,
+        "message": message,
+        "game_root_updated": game_root_updated,
+    }
+
+
 def _guess_source_game_dir():
     candidates = []
     if SOURCE_GAME_DIR:
         candidates.append(SOURCE_GAME_DIR)
     candidates.append(WORK_GAME_DIR)
 
-    if os.path.basename(BASE_DIR).lower() == "work":
-        candidates.append(os.path.abspath(os.path.join(BASE_DIR, "..", "original", "game")))
+    original_game = resolve_original_game_dir()
+    if original_game:
+        candidates.append(original_game)
 
     seen = set()
     ordered = []
     for candidate in candidates:
         if not candidate:
             continue
-        normalized = os.path.abspath(candidate)
+        normalized = _canonical_abs_path(candidate)
         if normalized in seen:
             continue
         seen.add(normalized)
@@ -1398,6 +1618,21 @@ def run_prepare_steps():
     if not PREP_ENABLED:
         print("[Prepare] Disabled by translator_config.")
         return
+
+    allowed, _, _ = work_dir_bootstrap_allowed()
+    if allowed and resolve_original_game_dir():
+        bootstrap_result = bootstrap_work_from_original(
+            save_game_root=True,
+            refresh_runtime_paths=True,
+        )
+        if bootstrap_result["status"] == "failed":
+            raise SystemExit(
+                f"[Prepare] Work bootstrap failed: {bootstrap_result['message']}"
+            )
+        if bootstrap_result["status"] == "created":
+            print(f"[Prepare] Work bootstrap: {bootstrap_result['message']}")
+            if bootstrap_result["game_root_updated"]:
+                print(f"[Prepare] Updated game_root to: {bootstrap_result['work_dir']}")
 
     source_game_dir = _guess_source_game_dir()
     os.makedirs(WORK_GAME_DIR, exist_ok=True)

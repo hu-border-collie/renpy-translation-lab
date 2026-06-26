@@ -634,6 +634,74 @@ class BatchRagRegressionTests(unittest.TestCase):
 
         self.assertEqual(args.command, 'doctor')
 
+    def test_build_arg_parser_accepts_bootstrap_work_command(self):
+        args = batch_mod.build_arg_parser().parse_args(['bootstrap-work'])
+
+        self.assertEqual(args.command, 'bootstrap-work')
+        self.assertFalse(args.no_update_game_root)
+
+    def test_assess_doctor_layout_status_failed_without_work_or_original(self):
+        report = {
+            'base_dir': 'C:/Games/Example',
+            'work_dir': 'C:/Games/Example/work',
+            'counts': {'rpy_files': 0},
+            'original_game_dir': '',
+            'can_generate_template': False,
+        }
+        with (
+            mock.patch.object(batch_mod.legacy, 'is_work_dir_empty', return_value=True),
+            mock.patch('os.path.isdir', return_value=False),
+        ):
+            self.assertEqual(batch_mod.assess_doctor_layout_status(report), 'failed')
+
+    def test_assess_doctor_layout_status_switch_when_original_exists(self):
+        report = {
+            'base_dir': 'C:/Games/Example',
+            'work_dir': 'C:/Games/Example/work',
+            'counts': {'rpy_files': 0},
+            'original_game_dir': 'C:/Games/Example/original/game',
+            'can_generate_template': True,
+        }
+        with mock.patch.object(batch_mod.legacy, 'is_work_dir_empty', return_value=True):
+            self.assertEqual(batch_mod.assess_doctor_layout_status(report), 'switch_to_work')
+
+    def test_assess_doctor_layout_status_ready_on_work_with_tl(self):
+        report = {
+            'base_dir': 'C:/Games/Example/work',
+            'work_dir': 'C:/Games/Example/work',
+            'counts': {'rpy_files': 2},
+            'original_game_dir': '',
+            'can_generate_template': True,
+        }
+        self.assertEqual(batch_mod.assess_doctor_layout_status(report), 'ready')
+
+    def test_doctor_report_recommends_bootstrap_work_when_work_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original_game = project / 'original' / 'game'
+            original_game.mkdir(parents=True)
+            (original_game / 'script.rpy').write_text('label start:\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(project)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(project / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(project / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(batch_mod.legacy, 'TL_SUBDIR', 'game/tl/schinese'),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LANGUAGE', 'schinese'),
+                mock.patch.object(batch_mod.legacy, 'PREP_ENABLED', True),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_TEMPLATE_COMMAND', None),
+                mock.patch.object(batch_mod.legacy, 'resolve_original_game_dir', return_value=str(original_game)),
+                mock.patch.object(batch_mod.legacy, 'work_dir_bootstrap_allowed', return_value=(True, str(project / 'work'), '')),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        joined = ' '.join(report.get('recommendations', []))
+        self.assertIn('bootstrap-work', joined)
+
     def test_doctor_report_classifies_existing_tl_without_sdk(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

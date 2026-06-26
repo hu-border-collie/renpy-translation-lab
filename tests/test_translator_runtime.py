@@ -732,10 +732,12 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             archive = source_game / 'scripts.rpa'
             archive.write_bytes(b'RPA-3.0 placeholder')
 
+            base_dir = runtime.canonical_abs_path(base)
+            work_game_dir = runtime.canonical_abs_path(base / 'game')
             with (
-                mock.patch.object(runtime, 'BASE_DIR', str(base)),
-                mock.patch.object(runtime, 'WORK_GAME_DIR', str(base / 'game')),
-                mock.patch.object(runtime, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(runtime, 'BASE_DIR', base_dir),
+                mock.patch.object(runtime, 'WORK_GAME_DIR', work_game_dir),
+                mock.patch.object(runtime, 'TL_DIR', runtime.canonical_abs_path(base / 'game' / 'tl' / 'schinese')),
                 mock.patch.object(runtime, 'SOURCE_GAME_DIR', ''),
                 mock.patch.object(runtime, 'PREP_ENABLED', True),
                 mock.patch.object(runtime, 'PREP_UNPACK_RPA', True),
@@ -746,7 +748,10 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 runtime.run_prepare_steps()
 
             self.assertTrue((base / 'game' / 'tl' / 'schinese' / 'script.rpy').is_file())
-            extract_mock.assert_called_once_with(str(archive), str(base / 'game'))
+            extract_mock.assert_called_once_with(
+                runtime.canonical_abs_path(archive),
+                work_game_dir,
+            )
 
     def test_prepare_missing_tl_without_launcher_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1714,6 +1719,300 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 runtime.TL_DIR = old_values['tl_dir']
                 runtime._SYNC_RAG_STORE = old_values['store']
 
+
+
+class BootstrapWorkTests(unittest.TestCase):
+    def test_canonical_abs_path_expands_windows_short_paths(self):
+        if os.name != 'nt':
+            self.skipTest('Windows-only short-path normalization')
+
+        import ctypes
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / 'Game_Example'
+            work = project / 'work'
+            work.mkdir(parents=True)
+            long_path = str(work.resolve())
+
+            get_short = ctypes.windll.kernel32.GetShortPathNameW
+            buffer = ctypes.create_unicode_buffer(260)
+            if get_short(long_path, buffer, len(buffer)) == 0:
+                self.skipTest('Could not resolve Windows short path for temp directory')
+
+            short_path = buffer.value
+            if os.path.normcase(short_path) == os.path.normcase(long_path):
+                self.skipTest('Short-path generation disabled on this system')
+            self.assertEqual(runtime._canonical_abs_path(short_path), long_path)
+
+    def test_resolve_effective_game_root_prefers_nested_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            work = project / 'work'
+            original_game = project / 'original' / 'game'
+            work.mkdir(parents=True)
+            original_game.mkdir(parents=True)
+
+            self.assertEqual(
+                runtime.resolve_effective_game_root(str(project)),
+                str(work.resolve()),
+            )
+            self.assertEqual(
+                runtime.resolve_effective_game_root(str(work)),
+                str(work.resolve()),
+            )
+
+    def test_resolve_effective_game_root_ignores_unrelated_work_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'SomeRepo'
+            work = project / 'work'
+            project.mkdir()
+            work.mkdir()
+
+            self.assertEqual(
+                runtime.resolve_effective_game_root(str(project)),
+                str(project.resolve()),
+            )
+
+    def test_resolve_project_root_from_original_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original = project / 'original'
+            original.mkdir(parents=True)
+
+            self.assertEqual(
+                runtime.resolve_project_root(str(original)),
+                str(project.resolve()),
+            )
+            self.assertEqual(
+                runtime.resolve_work_dir(str(original)),
+                str((project / 'work').resolve()),
+            )
+
+    def test_resolve_effective_game_root_keeps_original_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original = project / 'original'
+            work = project / 'work'
+            original.mkdir(parents=True)
+            work.mkdir(parents=True)
+
+            self.assertEqual(
+                runtime.resolve_effective_game_root(str(original)),
+                str(original.resolve()),
+            )
+
+    def test_resolve_original_game_dir_when_game_root_is_original(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original_game = project / 'original' / 'game'
+            original_game.mkdir(parents=True)
+            (original_game / 'script.rpy').write_text('label start:\n', encoding='utf-8')
+
+            self.assertEqual(
+                runtime.resolve_original_game_dir(str(project / 'original')),
+                str(original_game.resolve()),
+            )
+
+    def test_load_translator_settings_redirects_project_root_to_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            work = project / 'work'
+            original_game = project / 'original' / 'game'
+            work.mkdir(parents=True)
+            original_game.mkdir(parents=True)
+            config_path = root / 'translator_config.json'
+            config_path.write_text(
+                json.dumps({'game_root': str(project)}),
+                encoding='utf-8',
+            )
+
+            with mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)):
+                runtime.load_translator_settings()
+
+            self.assertEqual(runtime.BASE_DIR, runtime.canonical_abs_path(work))
+            saved = json.loads(config_path.read_text(encoding='utf-8'))
+            self.assertEqual(
+                runtime.canonical_abs_path(saved['game_root']),
+                runtime.canonical_abs_path(work),
+            )
+
+    def test_load_translator_settings_applies_runtime_when_persist_game_root_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            work = project / 'work'
+            original_game = project / 'original' / 'game'
+            work.mkdir(parents=True)
+            original_game.mkdir(parents=True)
+            config_path = root / 'translator_config.json'
+            config_path.write_text(
+                json.dumps({'game_root': str(project)}),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                mock.patch.object(runtime, 'persist_game_root', side_effect=OSError('denied')),
+            ):
+                runtime.load_translator_settings()
+
+            self.assertEqual(runtime.BASE_DIR, runtime.canonical_abs_path(work))
+            saved = json.loads(config_path.read_text(encoding='utf-8'))
+            self.assertEqual(
+                runtime.canonical_abs_path(saved['game_root']),
+                runtime.canonical_abs_path(project),
+            )
+
+    def test_resolve_original_game_dir_from_project_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original_game = project / 'original' / 'game'
+            original_game.mkdir(parents=True)
+            (original_game / 'script.rpy').write_text('label start:\n', encoding='utf-8')
+
+            self.assertEqual(
+                runtime.resolve_original_game_dir(str(project)),
+                str(original_game.resolve()),
+            )
+
+    def test_work_dir_bootstrap_allowed_when_missing_or_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            project.mkdir()
+            allowed, work_dir, reason = runtime.work_dir_bootstrap_allowed(str(project))
+            self.assertTrue(allowed)
+            self.assertEqual(work_dir, str((project / 'work').resolve()))
+            self.assertEqual(reason, '')
+
+            (project / 'work').mkdir()
+            allowed, _, reason = runtime.work_dir_bootstrap_allowed(str(project))
+            self.assertTrue(allowed)
+            self.assertEqual(reason, '')
+
+    def test_work_dir_bootstrap_not_allowed_when_work_has_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            work = project / 'work'
+            work.mkdir(parents=True)
+            (work / 'marker.txt').write_text('keep', encoding='utf-8')
+
+            allowed, _, reason = runtime.work_dir_bootstrap_allowed(str(project))
+            self.assertFalse(allowed)
+            self.assertIn('not empty', reason)
+
+    def test_bootstrap_work_from_original_creates_work_game_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original_game = project / 'original' / 'game'
+            original_game.mkdir(parents=True)
+            (original_game / 'script.rpy').write_text('label start:\n', encoding='utf-8')
+            (original_game / 'images').mkdir()
+            (original_game / 'images' / 'logo.png').write_bytes(b'png')
+
+            result = runtime.bootstrap_work_from_original(base_dir=str(project))
+            self.assertEqual(result['status'], 'created')
+            self.assertTrue((project / 'work' / 'game' / 'script.rpy').is_file())
+            self.assertTrue((project / 'work' / 'game' / 'images' / 'logo.png').is_file())
+            self.assertEqual(result['files_copied'], 2)
+
+    def test_bootstrap_work_from_original_skips_non_empty_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original_game = project / 'original' / 'game'
+            original_game.mkdir(parents=True)
+            (original_game / 'script.rpy').write_text('label start:\n', encoding='utf-8')
+            work_game = project / 'work' / 'game'
+            work_game.mkdir(parents=True)
+            (work_game / 'existing.rpy').write_text('keep', encoding='utf-8')
+
+            result = runtime.bootstrap_work_from_original(base_dir=str(project))
+            self.assertEqual(result['status'], 'skipped')
+            self.assertEqual(result['files_copied'], 0)
+
+    def test_bootstrap_work_rejects_source_containing_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            project.mkdir(parents=True)
+
+            with mock.patch.object(runtime, 'SOURCE_GAME_DIR', str(project)):
+                result = runtime.bootstrap_work_from_original(base_dir=str(project))
+
+            self.assertEqual(result['status'], 'failed')
+            self.assertEqual(result['files_copied'], 0)
+            self.assertIn('must not contain work/game', result['message'])
+
+    def test_bootstrap_work_applies_runtime_when_persist_game_root_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original_game = project / 'original' / 'game'
+            original_game.mkdir(parents=True)
+            (original_game / 'script.rpy').write_text('label start:\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(runtime, 'persist_game_root', side_effect=OSError('denied')),
+                mock.patch.object(runtime, 'TL_SUBDIR', 'game/tl/schinese'),
+            ):
+                result = runtime.bootstrap_work_from_original(
+                    base_dir=str(project),
+                    save_game_root=True,
+                    refresh_runtime_paths=True,
+                )
+
+            self.assertEqual(result['status'], 'created')
+            self.assertFalse(result['game_root_updated'])
+            self.assertIn('Failed to update game_root', result['message'])
+            self.assertEqual(
+                runtime.BASE_DIR,
+                runtime.canonical_abs_path(project / 'work'),
+            )
+
+    def test_bootstrap_work_persists_game_root_when_pointing_at_project_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original_game = project / 'original' / 'game'
+            original_game.mkdir(parents=True)
+            (original_game / 'script.rpy').write_text('label start:\n', encoding='utf-8')
+            config_path = root / 'translator_config.json'
+            config_path.write_text(
+                json.dumps({'game_root': str(project)}),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                mock.patch.object(runtime, 'TL_SUBDIR', 'game/tl/schinese'),
+            ):
+                result = runtime.bootstrap_work_from_original(
+                    base_dir=str(project),
+                    save_game_root=True,
+                    refresh_runtime_paths=True,
+                )
+
+            self.assertEqual(result['status'], 'created')
+            self.assertTrue(result['game_root_updated'])
+            saved = json.loads(config_path.read_text(encoding='utf-8'))
+            self.assertEqual(
+                runtime.canonical_abs_path(saved['game_root']),
+                runtime.canonical_abs_path(project / 'work'),
+            )
+            self.assertEqual(
+                runtime.BASE_DIR,
+                runtime.canonical_abs_path(project / 'work'),
+            )
 
 
 if __name__ == '__main__':

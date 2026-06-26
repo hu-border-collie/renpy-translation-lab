@@ -5,7 +5,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .user_copy import doctor_mode_label, translate_doctor_warning
+from .summary_helpers import append_unique_fact
+from .user_copy import (
+    doctor_mode_label,
+    format_doctor_recommendation_fact,
+    format_doctor_warning_fact,
+    translate_doctor_warning,
+)
 
 
 @dataclass(frozen=True)
@@ -18,9 +24,23 @@ class DoctorSummary:
 
 
 MODE_MESSAGES = {
-    "can_generate_template": "Ren'Py 模板生成环境可用；如翻译模板尚不存在，需要先生成或刷新模板。",
+    "can_generate_template": "Ren'Py 模板生成环境可用；翻译模板尚未生成。",
     "existing_tl_only": "已有翻译文件可处理；模板生成环境不可用，后续依赖现有翻译文件。",
     "blocked_missing_template": "缺少可处理的翻译文件，也无法自动生成模板。",
+}
+
+LAYOUT_STATUS_HEADINGS = {
+    "failed": ("blocked", "项目检查失败"),
+    "switch_to_work": ("warning", "建议使用 work 目录"),
+    "ready": ("ready", "项目检查通过"),
+    "attention": ("warning", "检查完成，但有需要处理的事项"),
+}
+
+LAYOUT_STATUS_MESSAGES = {
+    "failed": "当前项目目录下没有 work 目录、没有可翻译内容，也未找到 original/game。",
+    "failed_on_work": "work 目录为空，没有可翻译内容，且无法自动生成翻译模板。",
+    "switch_to_work": "当前路径不是 work 目录，但项目内已有可继续处理的内容。",
+    "ready": "work 目录已就绪，可以开始翻译流程。",
 }
 
 
@@ -83,8 +103,9 @@ def format_tl_scan_facts(
 
 
 def parse_doctor_output(output: str) -> dict[str, object]:
-    parsed: dict[str, object] = {"warnings": []}
+    parsed: dict[str, object] = {"warnings": [], "recommendations": []}
     in_warnings = False
+    in_recommendations = False
 
     for raw_line in output.splitlines():
         line = raw_line.strip()
@@ -93,6 +114,12 @@ def parse_doctor_output(output: str) -> dict[str, object]:
 
         if line == "Warnings:":
             in_warnings = True
+            in_recommendations = False
+            continue
+
+        if line == "Recommendations:":
+            in_recommendations = True
+            in_warnings = False
             continue
 
         if in_warnings:
@@ -100,6 +127,12 @@ def parse_doctor_output(output: str) -> dict[str, object]:
                 parsed.setdefault("warnings", []).append(line[2:].strip())
                 continue
             in_warnings = False
+
+        if in_recommendations:
+            if line.startswith("- "):
+                parsed.setdefault("recommendations", []).append(line[2:].strip())
+                continue
+            in_recommendations = False
 
         if line.startswith("- Base dir:"):
             parsed["base_dir"] = line.split(":", 1)[1].strip()
@@ -125,6 +158,35 @@ def parse_doctor_output(output: str) -> dict[str, object]:
             parsed["mode"] = line.split(":", 1)[1].strip()
             continue
 
+        if line.startswith("- Is work root:"):
+            parsed["is_work_root"] = _parse_bool(line.split(":", 1)[1].strip())
+            continue
+
+        if line.startswith("- Work dir:"):
+            match = re.match(
+                r"- Work dir:\s*(.*?)\s*\(exists:\s*(True|False),\s*empty:\s*(True|False)\)",
+                line,
+            )
+            if match:
+                parsed["work_dir"] = match.group(1).strip()
+                parsed["work_exists"] = _parse_bool(match.group(2))
+                parsed["work_empty"] = _parse_bool(match.group(3))
+            continue
+
+        if line.startswith("- Original game dir:"):
+            value = line.split(":", 1)[1].strip()
+            if value == "(not found)":
+                parsed["original_game_dir"] = ""
+                parsed["original_game_exists"] = False
+            else:
+                parsed["original_game_dir"] = value
+                parsed["original_game_exists"] = True
+            continue
+
+        if line.startswith("- Layout status:"):
+            parsed["layout_status"] = line.split(":", 1)[1].strip()
+            continue
+
         if line.startswith("- TL scan:"):
             parsed["counts"] = _parse_counts(line.split(":", 1)[1])
             continue
@@ -148,44 +210,82 @@ def summarize_doctor_output(
         for warning in parsed.get("warnings", [])
         if isinstance(warning, str) and warning.strip()
     ]
+    recommendation_facts = [
+        format_doctor_recommendation_fact(recommendation)
+        for recommendation in parsed.get("recommendations", [])
+        if isinstance(recommendation, str) and recommendation.strip()
+    ]
     counts_value = parsed.get("counts")
     counts = counts_value if isinstance(counts_value, dict) else {}
     pending_value = parsed.get("pending")
     pending = pending_value if isinstance(pending_value, dict) else None
     mode = parsed.get("mode") if isinstance(parsed.get("mode"), str) else ""
+    layout_status = parsed.get("layout_status") if isinstance(parsed.get("layout_status"), str) else ""
 
     facts: list[str] = []
-    if parsed.get("base_dir"):
-        facts.append(f"项目目录：{parsed['base_dir']}")
+    base_dir = parsed.get("base_dir") if isinstance(parsed.get("base_dir"), str) else ""
+    work_dir = parsed.get("work_dir") if isinstance(parsed.get("work_dir"), str) else ""
+    is_work_root = parsed.get("is_work_root")
+
+    if is_work_root is False and base_dir:
+        append_unique_fact(facts, f"项目目录：{base_dir}")
+    elif base_dir:
+        append_unique_fact(facts, f"work 目录：{base_dir}")
+
+    if is_work_root is False:
+        if parsed.get("work_exists") is False:
+            append_unique_fact(facts, "work 目录：不存在")
+        elif parsed.get("work_empty") is True:
+            if work_dir:
+                append_unique_fact(facts, f"work 目录：{work_dir}（为空）")
+            else:
+                append_unique_fact(facts, "work 目录：存在（为空）")
+        elif parsed.get("work_exists") is True:
+            if work_dir:
+                append_unique_fact(facts, f"work 目录：{work_dir}")
+            else:
+                append_unique_fact(facts, "work 目录：存在")
+
+    if (
+        is_work_root is True
+        and work_dir
+        and base_dir
+        and work_dir != base_dir
+    ):
+        append_unique_fact(facts, f"work 路径：{work_dir}")
+
+    if parsed.get("original_game_exists") is True:
+        append_unique_fact(facts, "original/game：存在")
+    elif parsed.get("original_game_exists") is False:
+        append_unique_fact(facts, "original/game：不存在")
     if parsed.get("tl_dir"):
         exists_text = "存在" if parsed.get("tl_exists") is True else "不存在"
-        facts.append(f"翻译目录：{exists_text}")
+        append_unique_fact(facts, f"翻译目录：{exists_text}")
     if parsed.get("language"):
-        facts.append(f"目标语言：{parsed['language']}")
+        append_unique_fact(facts, f"目标语言：{parsed['language']}")
     if mode:
-        facts.append(f"检查模式：{doctor_mode_label(mode)}")
+        append_unique_fact(facts, f"检查模式：{doctor_mode_label(mode)}")
     if counts:
-        facts.extend(format_tl_scan_facts(counts, pending=pending))
+        for fact in format_tl_scan_facts(counts, pending=pending):
+            append_unique_fact(facts, fact)
 
     findings = list(warnings)
-    if mode == "can_generate_template":
-        if parsed.get("tl_exists") is False:
-            findings.append(
-                "翻译目录尚不存在；可以生成模板，但还没有可检查的翻译文件。"
-                "请先生成或刷新翻译模板后重新检查。"
-            )
-        elif counts and int(counts.get("rpy_files", 0)) == 0:
-            findings.append(
-                "翻译目录中没有翻译文件；请先生成或刷新翻译模板后重新检查。"
-            )
     if api_key_count is not None:
         if api_key_count > 0:
             if api_key_source == "environment":
-                facts.append(f"API 密钥：已通过环境变量配置 {api_key_count} 个")
+                append_unique_fact(
+                    facts,
+                    f"API 密钥：已通过环境变量配置 {api_key_count} 个",
+                )
             else:
-                facts.append(f"API 密钥：已配置 {api_key_count} 个")
+                append_unique_fact(facts, f"API 密钥：已配置 {api_key_count} 个")
         else:
-            findings.append("尚未配置 API 密钥；环境检查不调用模型，但翻译任务需要密钥。")
+            append_unique_fact(facts, "建议：在配置页填写 API 密钥后再开始翻译")
+
+    for fact in recommendation_facts:
+        append_unique_fact(facts, fact)
+    for warning in warnings:
+        append_unique_fact(facts, format_doctor_warning_fact(warning))
 
     if exit_code != 0:
         return DoctorSummary(
@@ -196,17 +296,38 @@ def summarize_doctor_output(
             findings=findings,
         )
 
-    if mode == "blocked_missing_template":
+    if layout_status in LAYOUT_STATUS_HEADINGS:
+        status, heading = LAYOUT_STATUS_HEADINGS[layout_status]
+        if layout_status == "failed" and parsed.get("is_work_root") is True:
+            message = LAYOUT_STATUS_MESSAGES["failed_on_work"]
+        else:
+            message = LAYOUT_STATUS_MESSAGES.get(
+                layout_status,
+                MODE_MESSAGES.get(mode, "项目检查已完成。"),
+            )
+        if layout_status == "attention":
+            message = MODE_MESSAGES.get(mode, message)
+        if layout_status == "ready" and api_key_count == 0:
+            status = "warning"
+            heading = LAYOUT_STATUS_HEADINGS["attention"][1]
+        elif layout_status == "ready" and findings:
+            status = "warning"
+            heading = LAYOUT_STATUS_HEADINGS["attention"][1]
+    elif mode == "blocked_missing_template":
         status = "blocked"
-        heading = "需要先准备翻译模板"
-    elif findings:
-        status = "warning"
-        heading = "检查完成，但有需要处理的事项"
+        heading = "项目检查失败"
+        message = MODE_MESSAGES.get(mode, "项目检查失败。")
     else:
-        status = "ready"
-        heading = "项目检查通过"
-
-    message = MODE_MESSAGES.get(mode, "项目检查已完成。")
+        needs_attention = bool(findings) or bool(recommendation_facts) or (
+            api_key_count is not None and api_key_count == 0
+        )
+        if needs_attention:
+            status = "warning"
+            heading = "检查完成，但有需要处理的事项"
+        else:
+            status = "ready"
+            heading = "项目检查通过"
+        message = MODE_MESSAGES.get(mode, "项目检查已完成。")
     return DoctorSummary(
         status=status,
         heading=heading,
@@ -230,7 +351,7 @@ def idle_summary() -> DoctorSummary:
     return DoctorSummary(
         status="idle",
         heading="尚未运行项目检查",
-        message="选择游戏 work 目录后点击「环境检查」。",
+        message="选择 work 目录（或项目根目录）后点击「环境检查」。",
         facts=[],
         findings=[],
     )

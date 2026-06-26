@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .summary_helpers import extend_facts_with_notices
 from .user_copy import format_manifest_path_fact, safety_level_label
 
 
@@ -124,7 +125,7 @@ def summarize_check_output(
             status="applied",
             heading="翻译已写回",
             message="该任务已经写回过，不会再次写回。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=False,
             manifest_path=manifest_path,
@@ -135,7 +136,7 @@ def summarize_check_output(
             status="safe",
             heading="可以写回翻译",
             message="检查结果为可写回。写回前请确认已备份项目，写回会修改游戏脚本。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=True,
             manifest_path=manifest_path,
@@ -146,7 +147,7 @@ def summarize_check_output(
             status="warn",
             heading="需要先处理问题",
             message="检查结果为需处理, 暂不应写回。可先「查看问题清单」, 适合时「生成 retry 包」并预览范围, 或到「补救命令」查看后续步骤; 处理后重新检查, 只有 safe 才能写回。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=False,
             manifest_path=manifest_path,
@@ -157,7 +158,7 @@ def summarize_check_output(
             status="block",
             heading="当前不能写回",
             message="检查结果为禁止写回。请修复源文件变化或重新生成任务后再检查。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=False,
             manifest_path=manifest_path,
@@ -167,7 +168,7 @@ def summarize_check_output(
         status="unknown",
         heading="检查结果不明确",
         message="未能识别检查结果，请查看诊断日志后重新检查。",
-        facts=facts,
+        facts=extend_facts_with_notices(facts, findings),
         findings=findings,
         can_apply=False,
         manifest_path=manifest_path,
@@ -293,7 +294,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
             status="safe",
             heading="可以写回翻译",
             message="最近一次检查结果为可写回。写回前请确认已备份项目。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=True,
             manifest_path=manifest_path,
@@ -303,7 +304,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
             status="warn",
             heading="需要先处理问题",
             message="最近一次检查结果为需处理, 不应写回。可先「查看问题清单」, 适合时「生成 retry 包」并预览范围, 或到「补救命令」查看后续步骤; 处理后重新检查, 只有 safe 才能写回。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=False,
             manifest_path=manifest_path,
@@ -313,7 +314,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
             status="block",
             heading="当前不能写回",
             message="最近一次检查结果为禁止写回。",
-            facts=facts,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=False,
             manifest_path=manifest_path,
