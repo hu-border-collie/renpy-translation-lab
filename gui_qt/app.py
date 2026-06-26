@@ -924,12 +924,12 @@ class MainWindow(QMainWindow):
         retry_manifest_path: str,
         *,
         open_remediation_on_confirm: bool = False,
-    ) -> None:
+    ) -> bool:
         try:
             retry_manifest = self.state.load_manifest_file(retry_manifest_path)
         except ValueError as exc:
             QMessageBox.warning(self, "无法预览补译包", str(exc))
-            return
+            return False
 
         report = summarize_retry_manifest(
             retry_manifest,
@@ -938,7 +938,7 @@ class MainWindow(QMainWindow):
         dialog = RetryPreviewDialog(self, report=report)
         dialog.exec()
         if not dialog.confirmed:
-            return
+            return False
 
         parent_path = report.parent_manifest_path or self._writeback_manifest_path
         if parent_path:
@@ -952,6 +952,7 @@ class MainWindow(QMainWindow):
             self._open_remediation_commands()
         else:
             self.statusBar().showMessage("已确认补译包范围。", 3000)
+        return True
 
     def _on_retry_action(self) -> None:
         summary = self._current_writeback_summary()
@@ -2053,12 +2054,14 @@ class MainWindow(QMainWindow):
                     retry_path = existing_retry_manifest_path(parent_manifest)
                 if not retry_path:
                     retry_path = result.retry_manifest_path
+                confirmed = False
                 if retry_path:
-                    self._show_retry_preview(
+                    confirmed = self._show_retry_preview(
                         retry_path,
                         open_remediation_on_confirm=True,
                     )
-                self.statusBar().showMessage("补译包已生成，请先确认预览范围。", 6000)
+                if not confirmed:
+                    self.statusBar().showMessage("补译包已生成，请先确认预览范围。", 6000)
             else:
                 QMessageBox.warning(self, result.heading, result.message)
                 self.statusBar().showMessage(result.heading, 6000)
