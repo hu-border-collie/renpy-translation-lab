@@ -203,7 +203,7 @@ class GuiProjectStateTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ValueError, "不是Batch 翻译任务"):
+            with self.assertRaisesRegex(ValueError, "不是批量翻译任务"):
                 state.load_resume_manifest(manifest)
 
     def test_load_resume_manifest_accepts_revision_for_revision_mode(self):

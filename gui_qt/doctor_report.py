@@ -84,7 +84,7 @@ def format_tl_scan_facts(
                 f"待翻译条目：约 {task_count} 条（分布在 {file_count} 个文件中，与 build 统计一致）"
             )
         else:
-            facts.append("待翻译条目：0 条（当前没有需要提交到 Batch 的英文待译行）")
+            facts.append("待翻译条目：0 条（当前没有需要批量翻译的待译行）")
 
     if commented_lines > 0:
         facts.append(f"剧情对话：{commented_lines} 条")

@@ -101,9 +101,9 @@ class GuiCheckReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "warn")
         self.assertIn("查看问题清单", summary.message)
-        self.assertIn("补救命令", summary.message)
-        self.assertIn("retry", summary.message)
-        self.assertIn("safe", summary.message)
+        self.assertEqual(summary.message.count("补译"), 1)
+        self.assertIn("重新检查", summary.message)
+        self.assertIn("可写回", summary.message)
 
     def test_summarize_apply_output_marks_completed(self):
         summary = summarize_apply_output(
@@ -133,9 +133,9 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warn")
         self.assertFalse(summary.can_apply)
         self.assertIn("查看问题清单", summary.message)
-        self.assertIn("补救命令", summary.message)
-        self.assertIn("retry", summary.message)
-        self.assertIn("safe", summary.message)
+        self.assertEqual(summary.message.count("补译"), 1)
+        self.assertIn("重新检查", summary.message)
+        self.assertIn("可写回", summary.message)
 
     def test_summarize_manifest_writeback_from_last_check(self):
         summary = summarize_manifest_writeback(

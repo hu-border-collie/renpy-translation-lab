@@ -98,7 +98,7 @@ def idle_bootstrap_summary() -> BootstrapSummary:
         kind="",
         status="idle",
         heading="尚未预建上下文库",
-        message="如果项目已有部分译文，可先预建 RAG 库；如果译文很少，可预建原文索引。",
+        message="如果项目已有部分译文，可先预建记忆库；如果译文很少，可预建原文索引。",
         facts=[],
         findings=[],
     )
@@ -117,7 +117,7 @@ def running_bootstrap_summary(kind: str) -> BootstrapSummary:
     return BootstrapSummary(
         kind=kind or "rag",
         status="running",
-        heading="正在预建 RAG 库",
+        heading="正在预建记忆库",
         message="正在扫描已有译文并更新记忆库，请稍候。",
         facts=[],
         findings=[],
@@ -140,8 +140,8 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
         return BootstrapSummary(
             kind="rag",
             status="warning",
-            heading="RAG 未启用",
-            message="请先在配置页启用 Batch RAG 并保存参数配置，再运行预建 RAG 库。",
+            heading="记忆库未启用",
+            message="请先在配置页启用记忆库并保存配置，再运行预建记忆库。",
             facts=[],
             findings=[],
         )
@@ -169,8 +169,8 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
         return BootstrapSummary(
             kind="rag",
             status="failed",
-            heading="RAG 预建失败",
-            message="预建 RAG 库未成功完成，请查看诊断日志。",
+            heading="预建记忆库失败",
+            message="预建记忆库未成功完成，请查看诊断日志。",
             facts=extend_facts_with_notices(facts, findings),
             findings=findings,
         )
@@ -179,7 +179,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
         return BootstrapSummary(
             kind="rag",
             status="failed",
-            heading="RAG 预建失败",
+            heading="预建记忆库失败",
             message="预建过程中出现错误，请查看诊断日志。",
             facts=extend_facts_with_notices(facts, findings),
             findings=findings,
@@ -193,7 +193,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
         return BootstrapSummary(
             kind="rag",
             status="warning",
-            heading="RAG 预建完成（无新记录）",
+            heading="预建记忆库完成（无新记录）",
             message="未扫描到可写入的译文记录。若项目尚无译文，可先翻译一部分。",
             facts=extend_facts_with_notices(facts, findings),
             findings=findings,
@@ -203,7 +203,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
         return BootstrapSummary(
             kind="rag",
             status="ready",
-            heading="RAG 预建完成",
+            heading="预建记忆库完成",
             message="记忆库已刷新，可以开始翻译任务。",
             facts=extend_facts_with_notices(facts, findings),
             findings=findings,
@@ -212,7 +212,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
     return BootstrapSummary(
         kind="rag",
         status="ready",
-        heading="RAG 预建完成",
+        heading="预建记忆库完成",
         message="预建流程已完成；如需更新记忆库，可在译文变更后再次运行。",
         facts=extend_facts_with_notices(facts, findings),
         findings=findings,

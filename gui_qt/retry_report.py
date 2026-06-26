@@ -57,8 +57,8 @@ def assess_retry_eligibility(
     if manifest_check_safety_level(manifest) != "warn":
         return RetryEligibility(
             eligible=False,
-            heading="暂不适合 retry",
-            message="只有最近一次 check 为需处理时，才可能生成 retry 包。",
+            heading="暂不适合补译",
+            message="只有最近一次检查为「需处理」时，才可能生成补译包。",
         )
 
     report = build_check_issues_report(manifest, manifest_path=manifest_path)
@@ -68,24 +68,24 @@ def assess_retry_eligibility(
     if retry_count > 0:
         return RetryEligibility(
             eligible=True,
-            heading="可生成 retry 包",
+            heading="可生成补译包",
             message=(
-                f"检测到 {retry_count} 个适合 retry 的问题项。"
-                "生成后请先预览范围，确认后再到补救命令里手动提交任务。"
+                f"检测到 {retry_count} 个适合补译的问题项。"
+                "生成后请先预览范围，确认后再到「补救命令」按步骤继续。"
             ),
         )
 
     if repair_count > 0:
         return RetryEligibility(
             eligible=False,
-            heading="不建议直接 retry",
-            message="当前问题更适合 repair 或人工处理，不建议直接生成 retry 包。",
+            heading="不建议直接补译",
+            message="当前问题更适合修复流程或人工处理，不建议直接生成补译包。",
         )
 
     return RetryEligibility(
         eligible=False,
-        heading="不适合 retry",
-        message="当前问题属于源文件漂移、重定位失败或需重新 build/check 的类型，不应默认走 retry。",
+        heading="不适合补译",
+        message="当前问题需要重新生成任务或人工处理，不应默认走补译。",
     )
 
 
@@ -94,15 +94,15 @@ def parse_build_retry_output(output: str, exit_code: int) -> BuildRetryResult:
     if exit_code != 0:
         return BuildRetryResult(
             status="failed",
-            heading="生成 retry 包失败",
-            message="build-retry 没有正常完成，请查看诊断日志。",
+            heading="生成补译包失败",
+            message="补译包生成未完成，请查看诊断日志。",
         )
 
     if "No retry chunks needed." in output:
         return BuildRetryResult(
             status="empty",
-            heading="无需 retry",
-            message="当前没有需要重新翻译的 chunk，请回到问题清单确认原因。",
+            heading="无需补译",
+            message="当前没有需要重新翻译的内容，请回到问题清单确认原因。",
         )
 
     manifest_match = _MANIFEST_LINE_RE.search(output)
@@ -113,14 +113,14 @@ def parse_build_retry_output(output: str, exit_code: int) -> BuildRetryResult:
     if not retry_manifest_path:
         return BuildRetryResult(
             status="unknown",
-            heading="retry 包状态不明确",
-            message="命令已结束，但未能从输出中识别 retry manifest 路径，请查看诊断日志。",
+            heading="补译包状态不明确",
+            message="命令已结束，但未能识别补译任务记录，请查看诊断日志。",
         )
 
     return BuildRetryResult(
         status="ok",
-        heading="retry 包已生成",
-        message="请预览 retry 范围并确认后，再到补救命令里手动执行后续步骤。",
+        heading="补译包已生成",
+        message="请预览影响范围并确认后，再到「补救命令」按步骤继续。",
         retry_manifest_path=retry_manifest_path,
         package_dir=package_dir,
     )
@@ -134,7 +134,7 @@ def _sorted_file_paths(files: object) -> list[str]:
 
 def _format_reason_count_lines(reason_counts: object) -> list[str]:
     if not isinstance(reason_counts, dict) or not reason_counts:
-        return ["- 未记录 retry 原因统计"]
+        return ["- 未记录补译原因统计"]
 
     lines: list[str] = []
     for reason_code, count in sorted(reason_counts.items()):
@@ -143,7 +143,7 @@ def _format_reason_count_lines(reason_counts: object) -> list[str]:
         if not isinstance(count, int) or count <= 0:
             continue
         lines.append(f"- {reason_code_label(reason_code)} ({reason_code})：{count}")
-    return lines or ["- 未记录 retry 原因统计"]
+    return lines or ["- 未记录补译原因统计"]
 
 
 def summarize_retry_manifest(
@@ -184,14 +184,14 @@ def summarize_retry_manifest(
     if manifest_path:
         facts.append(format_manifest_path_fact(manifest_path))
     if parent_text:
-        facts.append(f"父任务清单：{parent_text}")
+        facts.append(f"父任务记录：{parent_text}")
     if package_dir:
-        facts.append(f"retry 包目录：{package_dir}")
-    facts.append(f"影响范围：{file_count} 个文件，{chunk_count} 个 chunk，{item_count} 个条目")
+        facts.append(f"补译包目录：{package_dir}")
+    facts.append(f"影响范围：{file_count} 个文件，{item_count} 条待重译")
 
     reason_lines = _format_reason_count_lines(manifest.get("retry_reason_counts"))
     file_paths = _sorted_file_paths(manifest.get("files"))
-    detail_lines = ["【retry 原因统计】", *reason_lines]
+    detail_lines = ["【补译原因统计】", *reason_lines]
     if file_paths:
         detail_lines.append("")
         detail_lines.append("【涉及文件】")
@@ -199,10 +199,10 @@ def summarize_retry_manifest(
 
     return RetryPreviewReport(
         status="ok",
-        heading="retry 包预览",
+        heading="补译包预览",
         message=(
             "请确认影响范围后再继续。"
-            "GUI 不会自动提交 retry 任务；确认后可到「补救命令」手动执行 submit / download / merge-retry。"
+            "界面不会自动提交补译任务；确认后可到「补救命令」按步骤提交、下载并合并结果。"
         ),
         facts=facts,
         detail_lines=detail_lines,

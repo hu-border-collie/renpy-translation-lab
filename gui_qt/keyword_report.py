@@ -11,7 +11,7 @@ def summarize_keyword_export_output(output: str, exit_code: int) -> WorkflowUpda
         return WorkflowUpdate(
             status="failed",
             heading="关键词导出中断",
-            message="export-keywords 没有正常完成，请查看下方原始输出。",
+            message="关键词导出未完成，请查看诊断日志。",
             facts=_collect_export_facts(output),
         )
 
@@ -25,7 +25,7 @@ def summarize_keyword_export_output(output: str, exit_code: int) -> WorkflowUpda
         return WorkflowUpdate(
             status="failed",
             heading="关键词导出结果异常",
-            message="export-keywords 已结束，但输出中没有候选统计；请查看原始输出。",
+            message="关键词导出已结束，但未能识别候选统计；请查看诊断日志。",
             facts=facts,
         )
 
@@ -33,7 +33,7 @@ def summarize_keyword_export_output(output: str, exit_code: int) -> WorkflowUpda
     raw = int(candidate_match.group(2))
     message = (
         f"已导出 {deduped} 个去重候选（原始 {raw} 个）。"
-        "报告不会修改游戏 .rpy 文件，可在诊断页复制路径查看。"
+        "报告不修改游戏脚本，完整路径可在诊断页复制。"
     )
     return WorkflowUpdate(
         status="done",
@@ -56,7 +56,7 @@ def summarize_sync_keyword_output(output: str, exit_code: int) -> WorkflowUpdate
         return WorkflowUpdate(
             status="done",
             heading="没有可提取的关键词源行",
-            message="当前项目没有可用于关键词提取的 TL 文本行。",
+            message="当前项目没有可用于关键词提取的翻译文本。",
             facts=_collect_sync_facts(output),
         )
 
@@ -65,7 +65,7 @@ def summarize_sync_keyword_output(output: str, exit_code: int) -> WorkflowUpdate
         return WorkflowUpdate(
             status="failed",
             heading="同步关键词提取结果异常",
-            message="sync-keywords 已结束，但输出中没有候选统计；请查看原始输出。",
+            message="同步关键词提取已结束，但未能识别候选统计；请查看诊断日志。",
             facts=facts,
         )
 
@@ -78,7 +78,7 @@ def summarize_sync_keyword_output(output: str, exit_code: int) -> WorkflowUpdate
     raw = int(candidate_match.group(2)) if candidate_match else 0
     message = (
         f"同步关键词提取已完成，导出 {deduped} 个去重候选（原始 {raw} 个）。"
-        "报告不会修改游戏 .rpy 文件，可在诊断页复制路径查看。"
+        "报告不修改游戏脚本，完整路径可在诊断页复制。"
     )
     return WorkflowUpdate(
         status="done",
@@ -92,7 +92,7 @@ def _sync_failure_message(output: str) -> str:
     if "TL dir does not exist" in output:
         return "翻译目录不存在；请先运行环境检查或准备工作目录。"
     if "No keyword chunks available for the requested range." in output:
-        return "当前范围没有可处理的关键词 chunk，请调整 limit/offset 后重试。"
+        return "当前范围没有可提取的内容，请调整范围后重试。"
     return "同步关键词提取没有正常完成，请查看下方原始输出。"
 
 

@@ -4,10 +4,13 @@ from gui_qt.work_modes import (
     TASK_CATEGORY_ORDER,
     TaskCategory,
     WorkMode,
+    WORK_MODE_SPECS,
+    bootstrap_disabled_message,
     default_work_mode_for_category,
     normalize_work_mode,
     task_category_for_work_mode,
     work_mode_from_manifest_mode,
+    work_mode_hint_texts,
     work_mode_spec,
     work_modes_for_category,
 )
@@ -93,6 +96,22 @@ class GuiWorkModesTests(unittest.TestCase):
             WorkMode.KEYWORD_EXTRACTION,
         )
         self.assertIsNone(work_mode_from_manifest_mode("unknown"))
+
+    def test_work_mode_hint_texts_include_idle_and_bootstrap_messages(self):
+        texts = work_mode_hint_texts()
+        for spec in WORK_MODE_SPECS.values():
+            if spec.idle_workflow_message.strip():
+                self.assertIn(spec.idle_workflow_message.strip(), texts)
+        self.assertEqual(
+            bootstrap_disabled_message("rag"),
+            "请先在配置页勾选「启用记忆库」，并点击「保存参数配置」。",
+        )
+        self.assertEqual(
+            bootstrap_disabled_message("source_index"),
+            "请先在配置页勾选「启用原文索引」，并点击「保存参数配置」。",
+        )
+        self.assertIn(bootstrap_disabled_message("rag"), texts)
+        self.assertIn(bootstrap_disabled_message("source_index"), texts)
 
 
 if __name__ == "__main__":

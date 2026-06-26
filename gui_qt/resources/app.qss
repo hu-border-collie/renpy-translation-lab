@@ -20,7 +20,8 @@ QWidget {
 }
 
 #subtitle_label,
-#config_hint_label {
+#config_hint_label,
+#work_mode_hint_label {
     color: #64748b;
     font-size: 15px;
     font-weight: 400;

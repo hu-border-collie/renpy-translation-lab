@@ -91,7 +91,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
     WorkMode.BATCH_TRANSLATION: WorkModeSpec(
         mode=WorkMode.BATCH_TRANSLATION,
         category=TaskCategory.TRANSLATION,
-        label="Batch 翻译",
+        label="批量翻译",
         start_button_label="开始翻译",
         resume_button_label="继续翻译",
         task_group_label="翻译任务",
@@ -117,7 +117,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         progress_tab_label="翻译进度",
         writeback_tab_label="写回说明",
         idle_workflow_heading="尚未开始同步翻译",
-        idle_workflow_message="适合小范围即时翻译、局部修复和 smoke test；写回行为遵循同步脚本现有规则，请先备份项目。",
+        idle_workflow_message="适合小范围试译或局部修改；可能直接改项目文件，请先备份。",
         supports_resume=False,
         supports_translation_writeback=False,
         implemented=True,
@@ -129,16 +129,16 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
     WorkMode.KEYWORD_EXTRACTION: WorkModeSpec(
         mode=WorkMode.KEYWORD_EXTRACTION,
         category=TaskCategory.ANALYSIS_PREP,
-        label="Batch 关键词",
+        label="批量关键词",
         start_button_label="提取关键词",
         resume_button_label="继续提取",
         task_group_label="分析任务",
         progress_tab_label="提取进度",
         writeback_tab_label="结果说明",
-        idle_workflow_heading="尚未开始 Batch 关键词提取",
+        idle_workflow_heading="尚未开始批量关键词提取",
         idle_workflow_message=(
-            "将扫描 TL 文本并走 build-keywords -> submit -> status -> download -> export-keywords；"
-            "只生成术语与剧情候选报告，不会修改游戏 .rpy 文件。"
+            "会扫描翻译文本，批量提取术语与剧情概要；"
+            "只生成报告，不修改游戏脚本。"
         ),
         supports_resume=True,
         supports_translation_writeback=False,
@@ -158,9 +158,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         progress_tab_label="提取进度",
         writeback_tab_label="结果说明",
         idle_workflow_heading="尚未开始同步关键词提取",
-        idle_workflow_message=(
-            "适合小范围即时生成术语与剧情候选报告；不会修改游戏 .rpy 文件。"
-        ),
+        idle_workflow_message="适合小范围即时生成术语与剧情报告；不修改游戏脚本。",
         supports_resume=False,
         supports_translation_writeback=False,
         implemented=True,
@@ -172,14 +170,14 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
     WorkMode.BOOTSTRAP_RAG: WorkModeSpec(
         mode=WorkMode.BOOTSTRAP_RAG,
         category=TaskCategory.ANALYSIS_PREP,
-        label="预建 RAG 库",
-        start_button_label="预建 RAG 库",
+        label="预建记忆库",
+        start_button_label="预建记忆库",
         resume_button_label="",
         task_group_label="预建任务",
         progress_tab_label="预建进度",
         writeback_tab_label="说明",
-        idle_workflow_heading="尚未预建 RAG 库",
-        idle_workflow_message="扫描已有译文并写入 Batch 记忆库；需先在配置页启用 RAG 并保存。",
+        idle_workflow_heading="尚未预建记忆库",
+        idle_workflow_message="扫描已有译文并写入本地记忆库；需先在配置页启用并保存配置。",
         supports_resume=False,
         supports_translation_writeback=False,
         implemented=True,
@@ -198,7 +196,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         progress_tab_label="预建进度",
         writeback_tab_label="说明",
         idle_workflow_heading="尚未预建原文索引",
-        idle_workflow_message="只索引 TL 模板原文，不修改 .rpy；需先在配置页启用原文索引并保存。",
+        idle_workflow_message="只索引翻译模板里的原文，不修改游戏脚本；需先在配置页启用并保存配置。",
         supports_resume=False,
         supports_translation_writeback=False,
         implemented=True,
@@ -215,12 +213,9 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         resume_button_label="继续订正",
         task_group_label="订正任务",
         progress_tab_label="订正进度",
-        writeback_tab_label="订正写回",
+        writeback_tab_label="写回订正",
         idle_workflow_heading="尚未开始订正流程",
-        idle_workflow_message=(
-            "将走 build-revisions -> submit -> status -> download -> preview-revisions；"
-            "写回与普通翻译分离，需单独确认。"
-        ),
+        idle_workflow_message="会批量生成订正预览；确认后再单独写回，与普通翻译写回分开。",
         supports_resume=True,
         supports_translation_writeback=False,
         implemented=True,
@@ -237,11 +232,9 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         resume_button_label="继续订正",
         task_group_label="同步订正任务",
         progress_tab_label="订正进度",
-        writeback_tab_label="写回说明",
+        writeback_tab_label="写回订正",
         idle_workflow_heading="尚未开始同步订正",
-        idle_workflow_message=(
-            "适合小范围即时订正预览；默认只生成预览报告，不会自动写回，请先备份项目。"
-        ),
+        idle_workflow_message="适合小范围订正预览；默认只出报告，不会自动写回，请先备份。",
         supports_resume=False,
         supports_translation_writeback=False,
         implemented=True,
@@ -309,3 +302,27 @@ def work_mode_from_manifest_mode(manifest_mode: object) -> WorkMode | None:
         if spec.manifest_mode == text:
             return spec.mode
     return None
+
+
+def bootstrap_disabled_message(kind: str) -> str:
+    if kind == "rag":
+        return "请先在配置页勾选「启用记忆库」，并点击「保存参数配置」。"
+    return "请先在配置页勾选「启用原文索引」，并点击「保存参数配置」。"
+
+
+_BOOTSTRAP_DISABLED_HINTS = (
+    bootstrap_disabled_message("rag"),
+    bootstrap_disabled_message("source_index"),
+)
+
+
+def work_mode_hint_texts() -> tuple[str, ...]:
+    """All strings that may appear in the work-mode selector hint label."""
+    texts: list[str] = []
+    for spec in WORK_MODE_SPECS.values():
+        if spec.idle_workflow_message.strip():
+            texts.append(spec.idle_workflow_message.strip())
+        if spec.not_implemented_message.strip():
+            texts.append(spec.not_implemented_message.strip())
+    texts.extend(_BOOTSTRAP_DISABLED_HINTS)
+    return tuple(texts)

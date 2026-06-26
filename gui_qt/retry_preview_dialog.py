@@ -23,7 +23,7 @@ class RetryPreviewDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("retry_preview_dialog")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setWindowTitle("retry 包预览")
+        self.setWindowTitle("补译包预览")
         self.setModal(True)
         self.resize(720, 560)
         self._report = report
@@ -59,12 +59,12 @@ class RetryPreviewDialog(QDialog):
 
         actions = QHBoxLayout()
         if report.retry_manifest_path:
-            copy_manifest_btn = QPushButton("复制 retry 清单路径")
+            copy_manifest_btn = QPushButton("复制任务记录路径")
             copy_manifest_btn.setObjectName("secondary_btn")
             copy_manifest_btn.clicked.connect(self._copy_retry_manifest_path)
             actions.addWidget(copy_manifest_btn)
         if report.package_dir:
-            copy_package_btn = QPushButton("复制 retry 包路径")
+            copy_package_btn = QPushButton("复制补译包路径")
             copy_package_btn.setObjectName("secondary_btn")
             copy_package_btn.clicked.connect(self._copy_package_dir)
             actions.addWidget(copy_package_btn)

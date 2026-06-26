@@ -128,7 +128,7 @@ def summarize_revision_preview_output(output: str, exit_code: int) -> WorkflowUp
     return WorkflowUpdate(
         status="done",
         heading="订正预览完成",
-        message="预览已完成；可在「订正写回」页确认后应用订正。写回前请备份项目。",
+        message="预览已完成；可在「写回订正」页确认后写回。写回前请备份项目。",
         facts=facts,
     )
 
@@ -157,7 +157,7 @@ def summarize_sync_revision_output(output: str, exit_code: int) -> WorkflowUpdat
         return WorkflowUpdate(
             status="failed",
             heading="同步订正结果异常",
-            message="sync-revisions 已结束，但输出中没有可识别摘要；请查看原始输出。",
+            message="同步订正已结束，但未能识别结果摘要；请查看诊断日志。",
             facts=facts,
         )
 
@@ -180,7 +180,7 @@ def summarize_sync_revision_output(output: str, exit_code: int) -> WorkflowUpdat
     return WorkflowUpdate(
         status="done",
         heading="同步订正预览完成",
-        message="同步订正预览已完成；可在「写回说明」页查看摘要，确认后通过 apply-revisions 写回。",
+        message="同步订正预览已完成；可在「写回订正」页查看摘要，确认后写回订正。",
         facts=facts,
     )
 
@@ -195,7 +195,7 @@ def summarize_revision_apply_output(
         return WritebackSummary(
             status="failed",
             heading="订正写回失败",
-            message="apply-revisions 没有正常完成，请查看诊断日志。",
+            message="订正写回未完成，请查看诊断日志。",
             facts=[format_manifest_path_fact(manifest_path)] if manifest_path else [],
             findings=[],
             can_apply=False,
@@ -237,7 +237,7 @@ def _sync_failure_message(output: str) -> str:
     if "TL dir does not exist" in output:
         return "翻译目录不存在；请先运行环境检查或准备工作目录。"
     if "No revision chunks available for the requested range." in output:
-        return "当前范围没有可处理的订正 chunk，请调整 limit/offset 后重试。"
+        return "当前范围没有可订正的内容，请调整范围后重试。"
     return "同步订正没有正常完成，请查看下方原始输出。"
 
 

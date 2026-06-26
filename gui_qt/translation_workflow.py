@@ -44,7 +44,7 @@ class WorkflowUpdate:
 
 
 STEP_TEXT = {
-    "build": ("正在准备翻译内容", "正在扫描待翻译文本并生成批量请求包。"),
+    "build": ("正在准备翻译内容", "正在扫描待翻译文本并准备待提交内容。"),
     "submit": ("正在提交翻译任务", "正在上传请求文件并创建云端批量任务。"),
     "status": ("正在刷新任务状态", "正在查询云端任务处理状态。"),
     "download": ("正在获取翻译结果", "任务已完成，正在下载结果文件。"),
@@ -153,14 +153,14 @@ class TranslationWorkflow:
                 return WorkflowUpdate(
                     status="done",
                     heading="没有待翻译内容",
-                    message="当前项目没有需要提交到 Batch 的待翻译行。",
+                    message="当前项目没有需要翻译的待译文本。",
                     facts=[],
                 )
             self._pending_steps.clear()
             return WorkflowUpdate(
                 status="failed",
-                heading="无法定位 Batch 请求包",
-                message="build 已结束，但输出中没有请求包路径；请查看原始输出。",
+                heading="无法完成翻译任务准备",
+                message="翻译任务准备未完成，请查看诊断日志。",
                 facts=[],
             )
 

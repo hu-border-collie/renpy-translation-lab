@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
@@ -109,11 +109,13 @@ from .work_modes import (
     TASK_CATEGORY_ORDER,
     TaskCategory,
     WorkMode,
+    bootstrap_disabled_message,
     default_work_mode_for_category,
     normalize_task_category,
     normalize_work_mode,
     task_category_for_work_mode,
     task_category_spec,
+    work_mode_hint_texts,
     work_mode_spec,
     work_modes_for_category,
 )
@@ -189,11 +191,42 @@ class MainWindow(QMainWindow):
         self._set_doctor_summary(idle_summary())
         self._apply_work_mode_ui(refresh_manifest_writeback=True)
         self._refresh_diagnostics_context()
+        QTimer.singleShot(0, self._sync_work_mode_hint_height)
 
         # Status
         self.statusBar().showMessage(
             "图形界面是可选组件；核心命令行不受影响。"
         )
+
+    def eventFilter(self, watched: Any, event: QEvent) -> bool:
+        if watched is self.work_mode_hint_label and event.type() == QEvent.Type.Resize:
+            self._sync_work_mode_hint_height()
+        return super().eventFilter(watched, event)
+
+    def _sync_work_mode_hint_height(self) -> None:
+        label = self.work_mode_hint_label
+        width = label.width()
+        if width <= 0:
+            frame = getattr(self, "_mode_frame", None)
+            if frame is not None:
+                margins = frame.layout().contentsMargins()
+                width = frame.width() - margins.left() - margins.right()
+        if width <= 0:
+            width = 320
+
+        metrics = label.fontMetrics()
+        max_height = metrics.lineSpacing() * 2
+        for text in work_mode_hint_texts():
+            rect = metrics.boundingRect(
+                0,
+                0,
+                width,
+                0,
+                Qt.TextFlag.TextWordWrap.value,
+                text,
+            )
+            max_height = max(max_height, rect.height())
+        label.setMinimumHeight(max_height + 4)
 
     def _build_workbench_tab(self) -> None:
         tab = QWidget()
@@ -209,7 +242,7 @@ class MainWindow(QMainWindow):
         proj_layout = QHBoxLayout()
         proj_layout.setSpacing(10)
 
-        proj_layout.addWidget(QLabel("当前 work 目录："))
+        proj_layout.addWidget(QLabel("当前工作目录："))
 
         self.project_path_edit = QLineEdit("尚未选择项目")
         self.project_path_edit.setReadOnly(True)
@@ -231,10 +264,14 @@ class MainWindow(QMainWindow):
 
         mode_frame = QFrame()
         mode_frame.setObjectName("mode_frame")
-        mode_outer = QHBoxLayout(mode_frame)
+        self._mode_frame = mode_frame
+        mode_outer = QVBoxLayout(mode_frame)
         mode_outer.setContentsMargins(12, 8, 12, 8)
-        mode_outer.setSpacing(10)
-        mode_outer.addWidget(QLabel("任务类型："))
+        mode_outer.setSpacing(6)
+
+        selectors_row = QHBoxLayout()
+        selectors_row.setSpacing(10)
+        selectors_row.addWidget(QLabel("任务类型："))
         self.task_category_combo = NoWheelComboBox()
         self.task_category_combo.setObjectName("task_category_combo")
         for category in TASK_CATEGORY_ORDER:
@@ -243,17 +280,23 @@ class MainWindow(QMainWindow):
                 category.value,
             )
         self.task_category_combo.currentIndexChanged.connect(self._on_task_category_changed)
-        mode_outer.addWidget(self.task_category_combo)
+        selectors_row.addWidget(self.task_category_combo)
 
-        mode_outer.addWidget(QLabel("子任务："))
+        selectors_row.addWidget(QLabel("子任务："))
         self.work_task_combo = NoWheelComboBox()
         self.work_task_combo.setObjectName("work_task_combo")
         self.work_task_combo.currentIndexChanged.connect(self._on_work_task_changed)
-        mode_outer.addWidget(self.work_task_combo, 1)
+        selectors_row.addWidget(self.work_task_combo, 1)
+        mode_outer.addLayout(selectors_row)
+
         self.work_mode_hint_label = QLabel()
         self.work_mode_hint_label.setWordWrap(True)
-        self.work_mode_hint_label.setObjectName("config_hint_label")
-        mode_outer.addWidget(self.work_mode_hint_label, 2)
+        self.work_mode_hint_label.setObjectName("work_mode_hint_label")
+        self.work_mode_hint_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        self.work_mode_hint_label.installEventFilter(self)
+        mode_outer.addWidget(self.work_mode_hint_label)
         layout.addWidget(mode_frame)
 
         action_frame = QFrame()
@@ -379,7 +422,7 @@ class MainWindow(QMainWindow):
         self.apply_btn.clicked.connect(self._on_apply_writeback)
         self.apply_btn.setEnabled(False)
         writeback_actions.addWidget(self.apply_btn)
-        self.apply_revision_btn = QPushButton("应用订正")
+        self.apply_revision_btn = QPushButton("写回订正")
         self.apply_revision_btn.setObjectName("apply_revision_btn")
         self.apply_revision_btn.clicked.connect(self._on_apply_revision)
         self.apply_revision_btn.setEnabled(False)
@@ -390,7 +433,7 @@ class MainWindow(QMainWindow):
         self.check_issues_btn.clicked.connect(self._open_check_issues)
         self.check_issues_btn.setEnabled(False)
         writeback_actions.addWidget(self.check_issues_btn)
-        self.retry_btn = QPushButton("生成 retry 包")
+        self.retry_btn = QPushButton("生成补译包")
         self.retry_btn.setObjectName("secondary_btn")
         self.retry_btn.clicked.connect(self._on_retry_action)
         self.retry_btn.setEnabled(False)
@@ -479,7 +522,7 @@ class MainWindow(QMainWindow):
 
         context_hint = QLabel(
             "启用后先保存配置，再到工作台「分析与准备」下运行预建子任务。"
-            "RAG 使用已有译文；原文索引只使用 TL 模板原文；均不修改 .rpy 文件。"
+            "记忆库使用已有译文；原文索引只使用翻译模板里的原文；均不修改游戏脚本。"
         )
         context_hint.setWordWrap(True)
         context_hint.setObjectName("config_hint_label")
@@ -595,7 +638,7 @@ class MainWindow(QMainWindow):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
         diag_hint = QLabel(
-            "上方可查看任务上下文、命令参考与任务清单；下方显示原始命令输出。"
+            "上方可查看任务上下文、命令参考与任务记录；下方显示原始命令输出。"
             "任务运行时会自动切到此页并放大日志区域。"
         )
         diag_hint.setWordWrap(True)
@@ -709,7 +752,7 @@ class MainWindow(QMainWindow):
         self.diagnostics_manifest_preview.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self.diagnostics_manifest_preview.setObjectName("diagnostics_manifest_preview")
         manifest_layout.addWidget(self.diagnostics_manifest_preview, 1)
-        self.diagnostics_inner_tabs.addTab(manifest_tab, "任务清单")
+        self.diagnostics_inner_tabs.addTab(manifest_tab, "任务记录")
 
         splitter.addWidget(self.diagnostics_inner_tabs)
 
@@ -814,7 +857,7 @@ class MainWindow(QMainWindow):
     def _open_apply_failure_report(self) -> None:
         manifest_path = self._writeback_manifest_path
         if not manifest_path:
-            QMessageBox.warning(self, "无法查看写回失败报告", "当前没有可用的任务清单。")
+            QMessageBox.warning(self, "无法查看写回失败报告", "当前没有可用的任务记录。")
             return
         try:
             manifest = self.state.load_manifest_file(manifest_path)
@@ -859,7 +902,7 @@ class MainWindow(QMainWindow):
             else:
                 self.retry_btn.setVisible(True)
                 self.retry_btn.setText(
-                    "查看 retry 包" if mode == "view" else "生成 retry 包"
+                    "查看补译包" if mode == "view" else "生成补译包"
                 )
                 self.retry_btn.setEnabled(not running)
 
@@ -881,12 +924,12 @@ class MainWindow(QMainWindow):
         retry_manifest_path: str,
         *,
         open_remediation_on_confirm: bool = False,
-    ) -> None:
+    ) -> str:
         try:
             retry_manifest = self.state.load_manifest_file(retry_manifest_path)
         except ValueError as exc:
-            QMessageBox.warning(self, "无法预览 retry 包", str(exc))
-            return
+            QMessageBox.warning(self, "无法预览补译包", str(exc))
+            return "error"
 
         report = summarize_retry_manifest(
             retry_manifest,
@@ -895,7 +938,7 @@ class MainWindow(QMainWindow):
         dialog = RetryPreviewDialog(self, report=report)
         dialog.exec()
         if not dialog.confirmed:
-            return
+            return "cancelled"
 
         parent_path = report.parent_manifest_path or self._writeback_manifest_path
         if parent_path:
@@ -908,7 +951,8 @@ class MainWindow(QMainWindow):
         if open_remediation_on_confirm:
             self._open_remediation_commands()
         else:
-            self.statusBar().showMessage("已确认 retry 包范围。", 3000)
+            self.statusBar().showMessage("已确认补译包范围。", 3000)
+        return "confirmed"
 
     def _on_retry_action(self) -> None:
         summary = self._current_writeback_summary()
@@ -927,7 +971,7 @@ class MainWindow(QMainWindow):
 
         manifest = self._load_writeback_manifest()
         if manifest is None:
-            QMessageBox.warning(self, "无法生成 retry 包", "无法读取当前任务清单。")
+            QMessageBox.warning(self, "无法生成补译包", "无法读取当前任务记录。")
             return
 
         eligibility = assess_retry_eligibility(
@@ -936,13 +980,13 @@ class MainWindow(QMainWindow):
         )
         reply = QMessageBox.question(
             self,
-            "确认生成 retry 包",
+            "确认生成补译包",
             "\n".join(
                 [
                     eligibility.message,
                     "",
-                    "将运行 build-retry 生成本地 retry 包。",
-                    "GUI 不会自动提交云端任务；生成后会先预览范围。",
+                    "将生成本地补译包。",
+                    "界面不会自动提交云端任务；生成后会先让您预览范围。",
                 ]
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -955,7 +999,7 @@ class MainWindow(QMainWindow):
         self._build_retry_output_lines = []
         self._set_task_running(True)
         self._append_log(
-            "\n=== 正在生成 retry 包："
+            "\n=== 正在生成补译包："
             f"gemini_translate_batch.py {' '.join(build_retry_cli_args(self._writeback_manifest_path))} ===\n"
         )
         self.runner.run(
@@ -966,7 +1010,7 @@ class MainWindow(QMainWindow):
     def _open_check_issues(self) -> None:
         manifest_path = self._writeback_manifest_path
         if not manifest_path:
-            QMessageBox.warning(self, "无法查看问题清单", "当前没有可用的任务清单。")
+            QMessageBox.warning(self, "无法查看问题清单", "当前没有可用的任务记录。")
             return
         try:
             manifest = self.state.load_manifest_file(manifest_path)
@@ -1216,7 +1260,7 @@ class MainWindow(QMainWindow):
         self.workbench_status_tabs.setTabText(2, spec.writeback_tab_label)
         if spec.implemented:
             if spec.is_bootstrap and not self._bootstrap_task_ready(spec):
-                hint = self._bootstrap_disabled_message(spec.bootstrap_kind)
+                hint = bootstrap_disabled_message(spec.bootstrap_kind)
             else:
                 hint = spec.idle_workflow_message
         else:
@@ -1475,11 +1519,6 @@ class MainWindow(QMainWindow):
             return flags["source_index_enabled"]
         return True
 
-    def _bootstrap_disabled_message(self, kind: str) -> str:
-        if kind == "rag":
-            return "请先在配置页勾选「启用 RAG 记忆库」，并点击「保存参数配置」。"
-        return "请先在配置页勾选「启用原文索引」，并点击「保存参数配置」。"
-
     def _start_bootstrap_task(self, kind: str) -> bool:
         if not self.state.get_game_root():
             QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
@@ -1490,8 +1529,8 @@ class MainWindow(QMainWindow):
             if not flags["rag_enabled"]:
                 QMessageBox.information(
                     self,
-                    "RAG 未启用",
-                    self._bootstrap_disabled_message("rag"),
+                    "记忆库未启用",
+                    bootstrap_disabled_message("rag"),
                 )
                 return False
             command = "bootstrap_rag"
@@ -1503,7 +1542,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(
                     self,
                     "原文索引未启用",
-                    self._bootstrap_disabled_message("source_index"),
+                    bootstrap_disabled_message("source_index"),
                 )
                 return False
             command = "bootstrap_source_index"
@@ -1586,7 +1625,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "没有可继续的任务",
-                f"未找到最近任务清单；请先开始一个{spec.label}任务。",
+                f"未找到最近任务记录；请先开始一个{spec.label}任务。",
             )
             return
 
@@ -1623,7 +1662,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "当前模式不支持",
-                "普通「写回翻译」仅适用于 Batch 翻译模式。",
+                "「写回翻译」仅适用于批量翻译。",
             )
             return
         if not self._writeback_manifest_path:
@@ -1640,7 +1679,7 @@ class MainWindow(QMainWindow):
             return
 
         confirm_lines = [
-            "即将把翻译写回项目 .rpy 文件。",
+            "即将把翻译写回游戏脚本。",
             "写回前请确认已在副本或备份上验证。",
             "",
             *summary.facts,
@@ -1678,7 +1717,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "当前模式不支持",
-                "「应用订正」仅适用于订正相关模式。",
+                "「写回订正」仅适用于订正相关模式。",
             )
             return
 
@@ -1692,14 +1731,14 @@ class MainWindow(QMainWindow):
             return
 
         confirm_lines = [
-            "即将把订正写回项目 .rpy 文件。",
+            "即将把订正写回游戏脚本。",
             "订正会修改现有译文行；写回前请确认已在副本或备份上验证。",
             "",
             *summary.facts,
         ]
         reply = QMessageBox.question(
             self,
-            "确认应用订正",
+            "确认写回订正",
             "\n".join(confirm_lines),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -1709,7 +1748,7 @@ class MainWindow(QMainWindow):
 
         manifest_path = summary.manifest_path or self._writeback_manifest_path
         if not manifest_path:
-            QMessageBox.information(self, "无法写回订正", "没有可写回的订正任务清单。")
+            QMessageBox.information(self, "无法写回订正", "没有可写回的订正任务记录。")
             return
 
         self.log_view.clear()
@@ -1720,7 +1759,7 @@ class MainWindow(QMainWindow):
         self._set_writeback_summary(
             running_writeback_summary(
                 manifest_path=manifest_path,
-                heading="正在应用订正",
+                heading="正在写回订正",
                 message="正在写回订正；完成后这里会显示写回摘要。",
             )
         )
@@ -2015,12 +2054,14 @@ class MainWindow(QMainWindow):
                     retry_path = existing_retry_manifest_path(parent_manifest)
                 if not retry_path:
                     retry_path = result.retry_manifest_path
+                preview_result = "cancelled"
                 if retry_path:
-                    self._show_retry_preview(
+                    preview_result = self._show_retry_preview(
                         retry_path,
                         open_remediation_on_confirm=True,
                     )
-                self.statusBar().showMessage("retry 包已生成，请先确认预览范围。", 6000)
+                if preview_result == "cancelled":
+                    self.statusBar().showMessage("补译包已生成，请先确认预览范围。", 6000)
             else:
                 QMessageBox.warning(self, result.heading, result.message)
                 self.statusBar().showMessage(result.heading, 6000)
@@ -2035,11 +2076,11 @@ class MainWindow(QMainWindow):
             self._active_command = ""
             self._set_task_running(False)
             if exit_code == 0 and summary.status == "ready":
-                self.statusBar().showMessage("RAG 预建完成。", 6000)
+                self.statusBar().showMessage("预建记忆库完成。", 6000)
             elif exit_code == 0:
-                self.statusBar().showMessage("RAG 预建已结束，请查看摘要。", 6000)
+                self.statusBar().showMessage("预建记忆库已结束，请查看摘要。", 6000)
             else:
-                self.statusBar().showMessage("RAG 预建失败，请查看诊断日志。", 8000)
+                self.statusBar().showMessage("预建记忆库失败，请查看诊断日志。", 8000)
             return
 
         if self._active_command == "bootstrap_source_index":

@@ -146,7 +146,11 @@ def summarize_check_output(
         return WritebackSummary(
             status="warn",
             heading="需要先处理问题",
-            message="检查结果为需处理, 暂不应写回。可先「查看问题清单」, 适合时「生成 retry 包」并预览范围, 或到「补救命令」查看后续步骤; 处理后重新检查, 只有 safe 才能写回。",
+            message=(
+                "检查结果为需处理，暂不能写回。"
+                "可先查看问题清单，必要时生成「补译包」并预览；"
+                "处理完重新检查后，显示「可写回」才能写入项目。"
+            ),
             facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=False,
@@ -248,7 +252,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
         return WritebackSummary(
             status="failed",
             heading="写回失败",
-            message="最近一次写回未成功。可点击「查看写回失败报告」了解原因，处理后再重新 check。",
+            message="最近一次写回未成功。可点击「查看写回失败报告」了解原因，处理后再重新检查。",
             facts=facts,
             findings=[],
             can_apply=False,
@@ -303,7 +307,11 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
         return WritebackSummary(
             status="warn",
             heading="需要先处理问题",
-            message="最近一次检查结果为需处理, 不应写回。可先「查看问题清单」, 适合时「生成 retry 包」并预览范围, 或到「补救命令」查看后续步骤; 处理后重新检查, 只有 safe 才能写回。",
+            message=(
+                "最近一次检查结果为需处理，暂不能写回。"
+                "可先查看问题清单，必要时生成「补译包」并预览；"
+                "处理完重新检查后，显示「可写回」才能写入项目。"
+            ),
             facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=False,
@@ -340,18 +348,15 @@ def idle_writeback_summary_for_work_mode(mode) -> WritebackSummary:
     if not spec.supports_translation_writeback:
         if spec.mode == WorkMode.SYNC_TRANSLATION:
             message = (
-                "同步翻译可能直接写回项目文件，行为由 gemini_translate.py 决定；"
-                "请在副本或备份上验证，详情见诊断页。"
+                "同步翻译可能直接改项目文件；"
+                "请先在副本或备份上试跑，详情见诊断页。"
             )
         elif spec.mode == WorkMode.KEYWORD_EXTRACTION:
-            message = "关键词模式只生成候选报告，不会启用普通「写回翻译」按钮。"
+            message = "关键词模式只生成报告，不会修改游戏脚本。"
         elif spec.mode == WorkMode.REVISION:
-            message = "订正写回将使用 preview-revisions / apply-revisions 独立流程，不经过普通 check/apply。"
+            message = "订正写回与普通翻译分开；请先生成订正预览，再在「写回订正」页确认。"
         elif spec.mode == WorkMode.SYNC_REVISION:
-            message = (
-                "同步订正默认只生成预览报告；写回需单独调用 apply-revisions，"
-                "不经过普通 check/apply。"
-            )
+            message = "同步订正默认只出预览报告；请先生成订正预览，再在「写回订正」页写回订正。"
         elif spec.is_bootstrap:
             message = "预建库只更新本地上下文存储，不会启用普通「写回翻译」按钮。"
         else:

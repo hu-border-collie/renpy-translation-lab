@@ -58,7 +58,7 @@ class GuiApplyFailureReportTests(unittest.TestCase):
             "检查结果已过期",
         )
         self.assertIn(
-            "重新 check",
+            "重新检查",
             APPLY_REASON_SUGGESTIONS["stale_check_fingerprint"],
         )
 
