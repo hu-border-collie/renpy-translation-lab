@@ -67,6 +67,7 @@ from .diagnostics_context import (
     existing_retry_manifest_path,
     sync_diagnostics_context,
 )
+from .keyword_report import summarize_keyword_result_from_manifest
 from .revision_report import summarize_revision_apply_output
 from .revision_writeback_report import (
     summarize_revision_writeback_from_manifest,
@@ -104,7 +105,7 @@ from .theme_helpers import (
     write_gui_theme_to_config,
 )
 from .translation_workflow import WorkflowUpdate
-from .user_copy import format_manifest_path_fact
+from .user_copy import format_job_fact, format_job_state_fact, format_manifest_path_fact
 from .work_modes import (
     TASK_CATEGORY_ORDER,
     TaskCategory,
@@ -121,6 +122,7 @@ from .work_modes import (
 )
 from .workflow_factory import create_workflow, resume_workflow
 from .widget_helpers import NoWheelComboBox, NoWheelTabWidget
+from .wizard_timeline import WizardTimeline
 
 # Diagnostics splitter: idle favors task context; running tasks expand the log.
 _DIAGNOSTICS_IDLE_CONTEXT_PX = 420
@@ -131,8 +133,9 @@ _DIAGNOSTICS_RUNNING_CONTEXT_RATIO = 0.32
 class MainWindow(QMainWindow):
     def __init__(self, *, qt_app: QApplication | None = None, resources_dir: Path | None = None):
         super().__init__()
-        self.setWindowTitle("Ren'Py Translation Lab - 图形工作台（实验版）")
-        self.resize(1100, 720)
+        self.setWindowTitle("Ren'Py Translation Lab - 图形工作台")
+        self.setMinimumSize(960, 640)
+        self.resize(960, 760)
 
         self.state = ProjectState()
         self._qt_app = qt_app
@@ -227,6 +230,54 @@ class MainWindow(QMainWindow):
             )
             max_height = max(max_height, rect.height())
         label.setMinimumHeight(max_height + 4)
+
+    def resizeEvent(self, event: QEvent) -> None:
+        super().resizeEvent(event)
+        self._sync_layout_sizes()
+
+    def _sync_layout_sizes(self) -> None:
+        if not hasattr(self, "doctor_message_label") or not hasattr(self, "workbench_status_tabs"):
+            return
+
+        width = self.workbench_status_tabs.width()
+        if width <= 0:
+            width = 400
+        label_width = max(100, width - 24)
+        changed = False
+
+        def sync_label(label: QLabel) -> None:
+            nonlocal changed
+            if not label or not label.text() or not label.isVisible():
+                target_height = 0
+            else:
+                metrics = label.fontMetrics()
+                rect = metrics.boundingRect(
+                    0,
+                    0,
+                    label_width,
+                    9999,
+                    Qt.TextFlag.TextWordWrap.value,
+                    label.text(),
+                )
+                target_height = rect.height() + 4
+            if label and label.minimumHeight() != target_height:
+                label.setMinimumHeight(target_height)
+                changed = True
+
+        sync_label(self.doctor_message_label)
+        sync_label(self.doctor_facts_label)
+        sync_label(self.doctor_details_label)
+        sync_label(self.workflow_message_label)
+        sync_label(self.workflow_facts_label)
+        sync_label(self.writeback_message_label)
+        sync_label(self.writeback_facts_label)
+        sync_label(self.writeback_details_label)
+
+        if changed:
+            current = self.workbench_status_tabs.currentWidget()
+            if current is not None and current.layout() is not None:
+                current.layout().invalidate()
+            self.workbench_status_tabs.updateGeometry()
 
     def _build_workbench_tab(self) -> None:
         tab = QWidget()
@@ -349,6 +400,11 @@ class MainWindow(QMainWindow):
         action_outer.addWidget(self.kill_btn)
         layout.addWidget(action_frame)
 
+        self.timeline = WizardTimeline()
+        self.timeline.setObjectName("workbench_timeline")
+        self.timeline.setVisible(False)
+        layout.addWidget(self.timeline)
+
         self.workbench_status_tabs = NoWheelTabWidget()
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
 
@@ -403,19 +459,32 @@ class MainWindow(QMainWindow):
         self.writeback_status_label = QLabel()
         self.writeback_status_label.setObjectName("writeback_status_label")
         writeback_layout.addWidget(self.writeback_status_label)
+        writeback_scroll = QScrollArea()
+        writeback_scroll.setWidgetResizable(True)
+        writeback_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        writeback_content = QWidget()
+        writeback_content_layout = QVBoxLayout(writeback_content)
+        writeback_content_layout.setContentsMargins(0, 0, 0, 0)
+        writeback_content_layout.setSpacing(6)
         self.writeback_message_label = QLabel()
         self.writeback_message_label.setWordWrap(True)
+        self.writeback_message_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.writeback_message_label.setObjectName("summary_body_label")
-        writeback_layout.addWidget(self.writeback_message_label)
+        writeback_content_layout.addWidget(self.writeback_message_label)
         self.writeback_facts_label = QLabel()
         self.writeback_facts_label.setWordWrap(True)
+        self.writeback_facts_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.writeback_facts_label.setObjectName("writeback_facts_label")
-        writeback_layout.addWidget(self.writeback_facts_label)
+        writeback_content_layout.addWidget(self.writeback_facts_label)
         self.writeback_details_label = QLabel()
         self.writeback_details_label.setWordWrap(True)
+        self.writeback_details_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.writeback_details_label.setObjectName("config_hint_label")
         self.writeback_details_label.setVisible(False)
-        writeback_layout.addWidget(self.writeback_details_label)
+        writeback_content_layout.addWidget(self.writeback_details_label)
+        writeback_content_layout.addStretch()
+        writeback_scroll.setWidget(writeback_content)
+        writeback_layout.addWidget(writeback_scroll, 1)
         writeback_actions = QHBoxLayout()
         self.apply_btn = QPushButton("写回翻译")
         self.apply_btn.setObjectName("apply_btn")
@@ -783,8 +852,25 @@ class MainWindow(QMainWindow):
         if self._diagnostics_tab is not None:
             self.tab_widget.setCurrentWidget(self._diagnostics_tab)
         total = max(sum(self.diagnostics_splitter.sizes()), 1)
-        context_size = int(total * _DIAGNOSTICS_RUNNING_CONTEXT_RATIO)
-        self.diagnostics_splitter.setSizes([context_size, total - context_size])
+        target_context_size = int(total * _DIAGNOSTICS_RUNNING_CONTEXT_RATIO)
+        start_context_size = self.diagnostics_splitter.sizes()[0]
+
+        if hasattr(self, "_splitter_anim") and self._splitter_anim.state() == self._splitter_anim.State.Running:
+            self._splitter_anim.stop()
+
+        from PySide6.QtCore import QVariantAnimation, QEasingCurve
+        anim = QVariantAnimation(self)
+        anim.setDuration(300)
+        anim.setStartValue(start_context_size)
+        anim.setEndValue(target_context_size)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+
+        def update_sizes(val):
+            self.diagnostics_splitter.setSizes([int(val), total - int(val)])
+
+        anim.valueChanged.connect(update_sizes)
+        anim.start()
+        self._splitter_anim = anim
 
     def _focus_workbench_status_tab(self, index: int) -> None:
         if 0 <= index < self.workbench_status_tabs.count():
@@ -876,10 +962,30 @@ class MainWindow(QMainWindow):
         *,
         running: bool,
     ) -> None:
+        spec = work_mode_spec(self._current_work_mode())
+        uses_revision_writeback = self._uses_revision_writeback(spec.mode)
+        has_writeback_actions = spec.supports_translation_writeback or uses_revision_writeback
+        action_buttons = (
+            "apply_btn",
+            "apply_revision_btn",
+            "check_issues_btn",
+            "retry_btn",
+            "apply_failure_btn",
+            "remediation_btn",
+        )
+        if not has_writeback_actions:
+            for button_name in action_buttons:
+                if hasattr(self, button_name):
+                    button = getattr(self, button_name)
+                    button.setVisible(False)
+                    button.setEnabled(False)
+            return
+
         issues_ready = self._writeback_issues_ready(summary)
         manifest = self._load_writeback_manifest() if summary.manifest_path else None
 
         if hasattr(self, "check_issues_btn"):
+            self.check_issues_btn.setVisible(True)
             self.check_issues_btn.setEnabled(not running and issues_ready)
 
         apply_failure_ready = self._apply_failure_report_ready(
@@ -912,12 +1018,13 @@ class MainWindow(QMainWindow):
                 if issues_ready
                 else False
             )
+            self.remediation_btn.setVisible(True)
             self.remediation_btn.setEnabled(not running and remediation_ready)
 
         if hasattr(self, "apply_btn"):
-            self.apply_btn.setVisible(not self._uses_revision_writeback())
+            self.apply_btn.setVisible(spec.supports_translation_writeback)
         if hasattr(self, "apply_revision_btn"):
-            self.apply_revision_btn.setVisible(self._uses_revision_writeback())
+            self.apply_revision_btn.setVisible(uses_revision_writeback)
 
     def _show_retry_preview(
         self,
@@ -1064,11 +1171,17 @@ class MainWindow(QMainWindow):
     def _resolve_diagnostics_manifest_path(self) -> str | None:
         if self._workflow is not None and self._workflow.manifest_path:
             return self._workflow.manifest_path
-        if work_mode_spec(self._current_work_mode()).manifest_mode is None:
+        spec = work_mode_spec(self._current_work_mode())
+        if spec.manifest_mode is None:
             return None
         if self._writeback_manifest_path:
             return self._writeback_manifest_path
-        latest_manifest = self.state.get_latest_manifest_path()
+        game_root = self.state.get_game_root()
+        latest_manifest = (
+            self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+            if game_root is not None
+            else None
+        )
         return str(latest_manifest) if latest_manifest is not None else None
 
     def _load_diagnostics_manifest(self, manifest_path: str | None) -> dict[str, object] | None:
@@ -1090,10 +1203,18 @@ class MainWindow(QMainWindow):
             return
 
         uses_batch_manifest = spec.manifest_mode is not None
+        game_root = self.state.get_game_root()
         latest_manifest = (
-            self.state.get_latest_manifest_path() if uses_batch_manifest else None
+            self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+            if (uses_batch_manifest and game_root is not None)
+            else None
         )
-        manifest_path = self._resolve_diagnostics_manifest_path()
+        if self._workflow is not None and self._workflow.manifest_path:
+            manifest_path = self._workflow.manifest_path
+        elif self._writeback_manifest_path:
+            manifest_path = self._writeback_manifest_path
+        else:
+            manifest_path = str(latest_manifest) if latest_manifest is not None else None
         manifest = self._load_diagnostics_manifest(manifest_path)
         context = build_diagnostics_context(
             latest_manifest_path=str(latest_manifest) if latest_manifest is not None else None,
@@ -1248,13 +1369,31 @@ class MainWindow(QMainWindow):
         self._writeback_manifest_path = ""
         self._apply_work_mode_ui(refresh_manifest_writeback=refresh_manifest_writeback)
 
+    def _update_resume_btn_text(self) -> None:
+        if not hasattr(self, "resume_btn") or not hasattr(self, "workflow_status_label"):
+            return
+        spec = work_mode_spec(self._current_work_mode())
+        is_waiting = False
+        if self._workflow is not None:
+            step = self._workflow.current_step()
+            is_waiting = step is not None and step.key == "status"
+
+        status = self.workflow_status_label.property("status")
+        if status == "waiting" or is_waiting:
+            self.resume_btn.setText("查询云端状态")
+        else:
+            self.resume_btn.setText(spec.resume_button_label or "继续任务")
+
     def _apply_work_mode_ui(self, *, refresh_manifest_writeback: bool = False) -> None:
         spec = work_mode_spec(self._current_work_mode())
+        self._update_timeline_steps(spec.mode)
+        self.timeline.setVisible(False)
         self._sync_task_selectors_from_work_mode()
         self.translate_group_label.setText(spec.task_group_label)
         self.translate_btn.setText(spec.start_button_label)
         if spec.resume_button_label:
             self.resume_btn.setText(spec.resume_button_label)
+        self._update_resume_btn_text()
         self.resume_btn.setVisible(spec.supports_resume)
         self.workbench_status_tabs.setTabText(1, spec.progress_tab_label)
         self.workbench_status_tabs.setTabText(2, spec.writeback_tab_label)
@@ -1266,13 +1405,54 @@ class MainWindow(QMainWindow):
         else:
             hint = spec.not_implemented_message
         self.work_mode_hint_label.setText(hint)
-        self._refresh_workflow_idle_summary()
+        self._refresh_workflow_from_latest_manifest()
         if refresh_manifest_writeback:
             self._refresh_writeback_from_latest_manifest()
         running = self.kill_btn.isEnabled()
         bootstrap_ready = self._bootstrap_task_ready(spec)
         self.translate_btn.setEnabled(spec.implemented and bootstrap_ready and not running)
         self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
+
+    def _update_timeline_steps(self, mode: WorkMode) -> None:
+        from .work_modes import WorkMode
+        if mode == WorkMode.BATCH_TRANSLATION:
+            steps = [
+                ("build", "准备"),
+                ("submit", "提交"),
+                ("status", "云端执行"),
+                ("download", "下载结果"),
+                ("check", "安全校验"),
+            ]
+        elif mode == WorkMode.KEYWORD_EXTRACTION:
+            steps = [
+                ("build-keywords", "准备"),
+                ("submit", "提交"),
+                ("status", "云端执行"),
+                ("download", "下载结果"),
+                ("export-keywords", "导出报告"),
+            ]
+        elif mode == WorkMode.REVISION:
+            steps = [
+                ("build-revisions", "准备"),
+                ("submit", "提交"),
+                ("status", "云端执行"),
+                ("download", "下载结果"),
+                ("preview-revisions", "校验预览"),
+            ]
+        elif mode in {
+            WorkMode.SYNC_TRANSLATION,
+            WorkMode.SYNC_KEYWORD_EXTRACTION,
+            WorkMode.SYNC_REVISION,
+            WorkMode.BOOTSTRAP_RAG,
+            WorkMode.BOOTSTRAP_SOURCE_INDEX,
+        }:
+            steps = [
+                ("run", "同步运行"),
+            ]
+        else:
+            steps = []
+        self.timeline.set_steps(steps)
+        self.timeline.set_current_step(None, "idle")
 
     def _refresh_workflow_idle_summary(self) -> None:
         if self.kill_btn.isEnabled():
@@ -1282,6 +1462,89 @@ class MainWindow(QMainWindow):
             "idle",
             spec.idle_workflow_heading,
             spec.idle_workflow_message,
+        )
+
+    def _refresh_workflow_from_latest_manifest(self) -> None:
+        if self.kill_btn.isEnabled():
+            return
+        spec = work_mode_spec(self._current_work_mode())
+        if not spec.implemented or not spec.supports_resume:
+            self._refresh_workflow_idle_summary()
+            return
+
+        game_root = self.state.get_game_root()
+        if game_root is None:
+            self._refresh_workflow_idle_summary()
+            return
+
+        latest_manifest = self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+        if latest_manifest is None:
+            self._refresh_workflow_idle_summary()
+            return
+
+        try:
+            manifest = self.state.load_resume_manifest(
+                latest_manifest,
+                work_mode=spec.mode,
+            )
+        except ValueError:
+            self._refresh_workflow_idle_summary()
+            return
+
+        job_state = manifest.get("job_state")
+        job_name = manifest.get("job_name")
+        job_error = manifest.get("job_error")
+
+        facts = []
+        facts.append(format_manifest_path_fact(str(latest_manifest)))
+        if job_name:
+            facts.append(format_job_fact(job_name))
+        if job_state:
+            facts.append(format_job_state_fact(job_state))
+
+        summary_info = manifest.get("summary", {})
+        if isinstance(summary_info, dict):
+            file_count = summary_info.get("file_count")
+            chunk_count = summary_info.get("chunk_count")
+            item_count = summary_info.get("item_count")
+            if file_count is not None:
+                facts.append(f"扫描文件：{file_count} 个")
+            if chunk_count is not None:
+                facts.append(f"分块数量：{chunk_count} 个")
+            if item_count is not None:
+                if spec.mode == WorkMode.KEYWORD_EXTRACTION:
+                    facts.append(f"待处理行：{item_count} 行")
+                elif spec.mode == WorkMode.REVISION:
+                    facts.append(f"待修订项：{item_count} 项")
+                else:
+                    facts.append(f"待翻译项：{item_count} 项")
+
+        is_waiting = job_state in ("JOB_STATE_PENDING", "JOB_STATE_RUNNING")
+
+        if is_waiting:
+            status = "waiting"
+            heading = f"最新{spec.label}任务进行中"
+            message = "云端批量任务处理中。可以点击下方「查询云端状态」按钮进行刷新。"
+        elif job_state == "JOB_STATE_FAILED":
+            status = "failed"
+            heading = f"最新{spec.label}任务已失败"
+            message = f"云端任务执行失败：{job_error or '未知错误'}。可以重新开始或继续任务以重试。"
+        else:
+            workflow = resume_workflow(spec.mode, str(latest_manifest), manifest)
+            if workflow and workflow.current_step() is None:
+                status = "done"
+                heading = f"最新{spec.label}任务已完成"
+                message = "该任务流程的所有步骤已全部执行完毕。"
+            else:
+                status = "ready"
+                heading = f"可继续最新{spec.label}任务"
+                message = f"检测到未完成的最新任务，点击「{spec.resume_button_label or '继续任务'}」继续执行。"
+
+        self._set_workflow_summary(
+            status=status,
+            heading=heading,
+            message=message,
+            facts=facts,
         )
 
     def _set_workflow_from_bootstrap_summary(self, summary: BootstrapSummary) -> None:
@@ -1294,8 +1557,13 @@ class MainWindow(QMainWindow):
 
     def _refresh_writeback_from_latest_manifest(self) -> None:
         spec = work_mode_spec(self._current_work_mode())
+        game_root = self.state.get_game_root()
         if spec.mode == WorkMode.REVISION:
-            latest_manifest = self.state.get_latest_manifest_path()
+            latest_manifest = (
+                self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+                if game_root is not None
+                else None
+            )
             if latest_manifest is None:
                 self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
                 return
@@ -1313,11 +1581,39 @@ class MainWindow(QMainWindow):
                 return
             self._set_writeback_summary(summary)
             return
+        if spec.mode == WorkMode.KEYWORD_EXTRACTION:
+            latest_manifest = (
+                self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+                if game_root is not None
+                else None
+            )
+            if latest_manifest is None:
+                self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+                return
+            try:
+                manifest = self.state.load_resume_manifest(
+                    latest_manifest,
+                    work_mode=spec.mode,
+                )
+            except ValueError:
+                self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+                return
+            summary = summarize_keyword_result_from_manifest(manifest)
+            if summary is None:
+                self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+                return
+            self._set_writeback_summary(summary)
+            return
+
         if not spec.supports_translation_writeback:
             self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
             return
 
-        latest_manifest = self.state.get_latest_manifest_path()
+        latest_manifest = (
+            self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+            if game_root is not None
+            else None
+        )
         if latest_manifest is None:
             self._set_writeback_summary(idle_writeback_summary())
             return
@@ -1407,6 +1703,7 @@ class MainWindow(QMainWindow):
             self._refresh_api_status()
         if self.tab_widget.widget(index) is getattr(self, "_diagnostics_tab", None):
             self._refresh_diagnostics_context()
+
 
     def _on_manage_api_keys(self):
         env_count, env_source = self.state.get_api_key_status()
@@ -1620,7 +1917,8 @@ class MainWindow(QMainWindow):
             )
             return
 
-        latest_manifest = self.state.get_latest_manifest_path()
+        game_root = self.state.get_game_root()
+        latest_manifest = self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
         if latest_manifest is None:
             QMessageBox.information(
                 self,
@@ -1642,6 +1940,30 @@ class MainWindow(QMainWindow):
         if workflow is None:
             QMessageBox.information(self, "无法继续任务", spec.not_implemented_message)
             return
+        if workflow.current_step() is None:
+            facts = [format_manifest_path_fact(str(latest_manifest))]
+            job_name = manifest.get("job_name")
+            job_state = manifest.get("job_state")
+            if job_name:
+                facts.append(format_job_fact(job_name))
+            if job_state:
+                facts.append(format_job_state_fact(job_state))
+            self._set_workflow_summary(
+                "done",
+                f"最新{spec.label}任务已完成",
+                "该任务流程的所有步骤已全部执行完毕。",
+                facts,
+            )
+            self._refresh_diagnostics_context()
+            self._refresh_writeback_from_latest_manifest()
+            writeback_summary = self._current_writeback_summary()
+            if writeback_summary.status not in {"idle", "running", "stale"}:
+                self._focus_workbench_status_tab(2)
+            self.statusBar().showMessage(f"最新{spec.label}任务已完成。", 6000)
+            return
+
+        only_query = (self.resume_btn.text() == "查询云端状态")
+        workflow.only_query = only_query
 
         self.log_view.clear()
         self._focus_log_tab()
@@ -1873,8 +2195,16 @@ class MainWindow(QMainWindow):
         self.workflow_status_label.style().polish(self.workflow_status_label)
         self.workflow_message_label.setText(message)
         self.workflow_facts_label.setText("\n".join(facts or []))
+        self._update_resume_btn_text()
+        self._sync_layout_sizes()
 
     def _set_workflow_update(self, update: WorkflowUpdate):
+        if self._workflow is not None:
+            current_step = self._workflow.current_step()
+            step_key = current_step.key if current_step else self.timeline.current_step_key
+            self.timeline.set_current_step(step_key, update.status)
+        else:
+            self.timeline.set_current_step(self.timeline.current_step_key, update.status)
         self._set_workflow_summary(
             update.status,
             update.heading,
@@ -1883,6 +2213,11 @@ class MainWindow(QMainWindow):
         )
 
     def _run_workflow_current_step(self):
+        if self._workflow is not None:
+            step = self._workflow.current_step()
+            if step is not None:
+                self.timeline.setVisible(True)
+                self.timeline.set_current_step(step.key, "running")
         if self._workflow is None:
             self._set_task_running(False)
             return
@@ -1933,6 +2268,7 @@ class MainWindow(QMainWindow):
                 self.apply_revision_btn.setEnabled(
                     self._uses_revision_writeback() and summary.can_apply
                 )
+        self._sync_layout_sizes()
 
     def _update_writeback_from_check(
         self,
@@ -1966,6 +2302,7 @@ class MainWindow(QMainWindow):
         self.doctor_message_label.setText(summary.message)
         self.doctor_facts_label.setText("\n".join(summary.facts))
         self._set_details_label(self.doctor_details_label, [])
+        self._sync_layout_sizes()
 
     def _on_runner_error(self, message: str):
         self._append_log(message)
@@ -2131,6 +2468,41 @@ class MainWindow(QMainWindow):
 
         self._set_task_running(False)
 
+    def _copy_keyword_reports_to_game_parent(self, manifest_path: str) -> None:
+        if not manifest_path:
+            return
+        game_root = self.state.get_game_root()
+        if not game_root:
+            return
+
+        target_dir = game_root.parent / "extracted_keywords"
+        manifest_dir = Path(manifest_path).parent
+
+        files_to_copy = [
+            "keyword_candidates.jsonl",
+            "keyword_candidates.md",
+            "keyword_chunk_summaries.jsonl",
+            "keyword_chunk_summaries.md",
+        ]
+
+        copied_files = []
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            import shutil
+            for filename in files_to_copy:
+                src = manifest_dir / filename
+                if src.exists():
+                    dest = target_dir / filename
+                    shutil.copy2(src, dest)
+                    copied_files.append(filename)
+            if copied_files:
+                self._append_log(
+                    f"\n[系统] 已将关键词提取报告复制一份至：{target_dir}\n"
+                    f"复制的文件：{', '.join(copied_files)}\n"
+                )
+        except Exception as e:
+            self._append_log(f"\n[系统警告] 复制关键词提取报告到游戏上级目录失败：{e}\n")
+
     def _on_workflow_step_finished(self, exit_code: int):
         if self._workflow is None:
             self._active_command = ""
@@ -2139,7 +2511,15 @@ class MainWindow(QMainWindow):
 
         step_output = "\n".join(self._workflow_step_output_lines)
         manifest_path = self._workflow.manifest_path
+
+        current_step = self._workflow.current_step()
+        step_key = current_step.key if current_step else ""
+
         update = self._workflow.complete_current_step(exit_code, step_output)
+
+        if step_key == "export-keywords" and exit_code == 0:
+            self._copy_keyword_reports_to_game_parent(manifest_path)
+
         if "Safety status:" in step_output:
             self._update_writeback_from_check(step_output, exit_code, manifest_path)
         if self._uses_revision_writeback() and (

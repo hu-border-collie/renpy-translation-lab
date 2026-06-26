@@ -95,6 +95,8 @@ class TranslationWorkflow:
 
     @classmethod
     def resume_manifest(cls, manifest_path: str, manifest: dict[str, object]) -> "TranslationWorkflow":
+        if manifest.get("last_check"):
+            return cls([], manifest_path=manifest_path)
         if not manifest.get("job_name"):
             return cls(["submit", "status"], manifest_path=manifest_path)
         return cls.resume_latest(manifest_path)
@@ -139,6 +141,14 @@ class TranslationWorkflow:
         if key == "status":
             status_update = self._finish_status(output)
             if status_update is not None:
+                if getattr(self, "only_query", False) and status_update.status == "running":
+                    return WorkflowUpdate(
+                        status="ready",
+                        heading="云端任务已完成",
+                        message="查询结果：云端批量任务已成功完成！请点击「继续翻译」下载并校验结果。",
+                        facts=status_update.facts,
+                        should_continue=False,
+                    )
                 return status_update
         if key == "check":
             return self._finish_check(output)

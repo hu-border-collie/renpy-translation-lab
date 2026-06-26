@@ -112,6 +112,18 @@ class GuiKeywordWorkflowTests(unittest.TestCase):
         self.assertFalse(update.should_continue)
         self.assertIsNone(workflow.current_step())
 
+    def test_resume_completed_manifest_returns_empty_steps(self):
+        workflow = KeywordBatchWorkflow.resume_manifest(
+            "C:\\package\\manifest.json",
+            {
+                "job_name": "batches/example",
+                "keyword_export": {
+                    "jsonl_path": "C:\\package\\keyword_candidates.jsonl"
+                }
+            }
+        )
+        self.assertIsNone(workflow.current_step())
+
 
 if __name__ == "__main__":
     unittest.main()

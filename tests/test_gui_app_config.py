@@ -197,6 +197,368 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(self.window._bootstrap_task_ready(rag_spec))
         self.assertFalse(self.window._bootstrap_task_ready(source_spec))
 
+    def test_refresh_workflow_from_latest_manifest_no_manifest_shows_idle(self):
+        from gui_qt.work_modes import WorkMode
+
+        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
+        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/project")
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return None
+        self.window.state = FakeState()
+
+        summary_calls = []
+        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+
+        self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        self.assertEqual(summary_calls[0][0], "idle")
+
+    def test_refresh_workflow_from_latest_manifest_load_error_shows_idle(self):
+        from gui_qt.work_modes import WorkMode
+
+        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
+        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/project")
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return Path("C:/dummy/manifest.json")
+            def load_resume_manifest(self, path, work_mode):
+                raise ValueError("Dummy load error")
+        self.window.state = FakeState()
+
+        summary_calls = []
+        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+
+        self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        self.assertEqual(summary_calls[0][0], "idle")
+
+    def test_refresh_workflow_from_latest_manifest_running_job_state(self):
+        from gui_qt.work_modes import WorkMode
+
+        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
+        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/project")
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return Path("C:/dummy/manifest.json")
+            def load_resume_manifest(self, path, work_mode):
+                return {
+                    "job_name": "jobs/12345",
+                    "job_state": "JOB_STATE_RUNNING",
+                    "summary": {
+                        "file_count": 3,
+                        "chunk_count": 10,
+                        "item_count": 100,
+                    }
+                }
+        self.window.state = FakeState()
+
+        summary_calls = []
+        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+
+        self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        status, heading, message, facts = summary_calls[0]
+        self.assertEqual(status, "waiting")
+        self.assertIn("任务进行中", heading)
+        self.assertIn("云端任务：jobs/12345", facts)
+        self.assertIn("任务状态：处理中", facts)
+        self.assertIn("扫描文件：3 个", facts)
+
+    def test_refresh_workflow_from_latest_manifest_failed_job_state(self):
+        from gui_qt.work_modes import WorkMode
+
+        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
+        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/project")
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return Path("C:/dummy/manifest.json")
+            def load_resume_manifest(self, path, work_mode):
+                return {
+                    "job_state": "JOB_STATE_FAILED",
+                    "job_error": "Quota exceeded",
+                }
+        self.window.state = FakeState()
+
+        summary_calls = []
+        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+
+        self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        status, heading, message, facts = summary_calls[0]
+        self.assertEqual(status, "failed")
+        self.assertIn("任务已失败", heading)
+        self.assertIn("Quota exceeded", message)
+
+    def test_refresh_workflow_from_latest_manifest_resumable_job_state(self):
+        from gui_qt.work_modes import WorkMode
+        from unittest.mock import patch, MagicMock
+
+        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
+        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/project")
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return Path("C:/dummy/manifest.json")
+            def load_resume_manifest(self, path, work_mode):
+                return {
+                    "job_state": "JOB_STATE_SUCCEEDED",
+                }
+        self.window.state = FakeState()
+
+        summary_calls = []
+        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+
+        mock_workflow = MagicMock()
+        mock_workflow.current_step.return_value = MagicMock(key="download")
+
+        with patch("gui_qt.app.resume_workflow", return_value=mock_workflow):
+            self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        status, heading, message, facts = summary_calls[0]
+        self.assertEqual(status, "ready")
+        self.assertIn("可继续最新", heading)
+
+    def test_refresh_workflow_from_latest_manifest_completed_job_state(self):
+        from gui_qt.work_modes import WorkMode
+        from unittest.mock import patch, MagicMock
+
+        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
+        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/project")
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return Path("C:/dummy/manifest.json")
+            def load_resume_manifest(self, path, work_mode):
+                return {
+                    "job_state": "done",
+                }
+        self.window.state = FakeState()
+
+        summary_calls = []
+        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+
+        mock_workflow = MagicMock()
+        mock_workflow.current_step.return_value = None
+
+        with patch("gui_qt.app.resume_workflow", return_value=mock_workflow):
+            self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        status, heading, message, facts = summary_calls[0]
+        self.assertEqual(status, "done")
+        self.assertIn("任务已完成", heading)
+
+    def test_resume_completed_keyword_manifest_shows_result_summary(self):
+        from gui_qt.work_modes import WorkMode
+        from unittest.mock import MagicMock, patch
+
+        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/project")
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return Path("C:/dummy/manifest.json")
+            def load_resume_manifest(self, path, work_mode):
+                return {
+                    "mode": "keyword_extraction",
+                    "base_dir": "C:/dummy/project",
+                    "job_name": "batches/keywords",
+                    "job_state": "JOB_STATE_SUCCEEDED",
+                    "keyword_export": {
+                        "markdown_path": "C:/dummy/keyword_candidates.md",
+                    },
+                }
+        self.window.state = FakeState()
+
+        summary_calls = []
+        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+        self.window._refresh_diagnostics_context = MagicMock()
+        self.window._refresh_writeback_from_latest_manifest = MagicMock()
+        self.window._current_writeback_summary = lambda: type("Summary", (), {"status": "safe"})()
+        focus_calls = []
+        self.window._focus_workbench_status_tab = lambda index: focus_calls.append(index)
+
+        class FakeStatusBar:
+            def __init__(self):
+                self.messages = []
+            def showMessage(self, text, timeout):
+                self.messages.append((text, timeout))
+        status_bar = FakeStatusBar()
+        self.window.statusBar = lambda: status_bar
+
+        mock_workflow = MagicMock()
+        mock_workflow.current_step.return_value = None
+
+        with patch("gui_qt.app.resume_workflow", return_value=mock_workflow):
+            self.window._on_resume_translation()
+
+        self.assertEqual(len(summary_calls), 1)
+        status, heading, message, facts = summary_calls[0]
+        self.assertEqual(status, "done")
+        self.assertIn("任务已完成", heading)
+        self.assertTrue(any("任务记录" in fact for fact in facts))
+        self.window._refresh_diagnostics_context.assert_called_once()
+        self.window._refresh_writeback_from_latest_manifest.assert_called_once()
+        self.assertEqual(focus_calls, [2])
+        self.assertIn("任务已完成", status_bar.messages[-1][0])
+
+    def test_update_resume_btn_text_uses_current_status_without_disk_lookup(self):
+        from gui_qt.work_modes import WorkMode
+        from unittest.mock import MagicMock
+
+        self.window._workflow = None
+        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+        self.window.resume_btn = MagicMock()
+        self.window.workflow_status_label = MagicMock()
+        self.window.workflow_status_label.property.return_value = "waiting"
+
+        self.window._update_resume_btn_text()
+
+        self.window.resume_btn.setText.assert_called_once_with("查询云端状态")
+
+    def test_refresh_writeback_from_latest_keyword_manifest_shows_report_summary(self):
+        from gui_qt.work_modes import WorkMode
+
+        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/project")
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return Path("C:/dummy/manifest.json")
+            def load_resume_manifest(self, path, work_mode):
+                return {
+                    "_manifest_path": str(path),
+                    "mode": "keyword_extraction",
+                    "base_dir": "C:/dummy/project",
+                    "keyword_export": {
+                        "markdown_path": "C:/dummy/keyword_candidates.md",
+                        "jsonl_path": "C:/dummy/keyword_candidates.jsonl",
+                        "summary": {
+                            "candidate_count_deduped": 3,
+                            "candidate_count_raw": 5,
+                            "chunk_summary_count": 2,
+                        },
+                    },
+                }
+        self.window.state = FakeState()
+
+        summaries = []
+        self.window._set_writeback_summary = lambda summary: summaries.append(summary)
+
+        self.window._refresh_writeback_from_latest_manifest()
+
+        self.assertEqual(len(summaries), 1)
+        summary = summaries[0]
+        self.assertEqual(summary.status, "safe")
+        self.assertFalse(summary.can_apply)
+        self.assertIn("关键词报告已生成", summary.heading)
+        self.assertTrue(any("候选 Markdown" in fact for fact in summary.facts))
+
+    def test_keyword_result_hides_writeback_action_buttons(self):
+        from gui_qt.check_report import WritebackSummary
+        from gui_qt.work_modes import WorkMode
+
+        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+
+        class FakeButton:
+            def __init__(self):
+                self.visible = True
+                self.enabled = True
+            def setVisible(self, visible):
+                self.visible = visible
+            def setEnabled(self, enabled):
+                self.enabled = enabled
+
+        button_names = [
+            "apply_btn",
+            "apply_revision_btn",
+            "check_issues_btn",
+            "retry_btn",
+            "apply_failure_btn",
+            "remediation_btn",
+        ]
+        for name in button_names:
+            setattr(self.window, name, FakeButton())
+
+        self.window._update_writeback_action_buttons(
+            WritebackSummary(
+                status="safe",
+                heading="关键词报告已生成",
+                message="done",
+                facts=[],
+                findings=[],
+                can_apply=False,
+                manifest_path="C:/dummy/manifest.json",
+            ),
+            running=False,
+        )
+
+        for name in button_names:
+            button = getattr(self.window, name)
+            self.assertFalse(button.visible, name)
+            self.assertFalse(button.enabled, name)
+
+    def test_copy_keyword_reports_to_game_parent_copies_successfully(self):
+        import shutil
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            game_root = tmp_path / "Game" / "work"
+            game_root.mkdir(parents=True, exist_ok=True)
+
+            manifest_dir = tmp_path / "logs" / "batch_jobs" / "job_keywords"
+            manifest_dir.mkdir(parents=True, exist_ok=True)
+
+            manifest_path = manifest_dir / "manifest.json"
+            manifest_path.write_text("{}", encoding="utf-8")
+
+            # Create dummy report files
+            (manifest_dir / "keyword_candidates.md").write_text("candidates", encoding="utf-8")
+            (manifest_dir / "keyword_chunk_summaries.md").write_text("summaries", encoding="utf-8")
+
+            class FakeState:
+                def get_game_root(self):
+                    return game_root
+            self.window.state = FakeState()
+
+            logged_messages = []
+            self.window._append_log = lambda msg: logged_messages.append(msg)
+
+            self.window._copy_keyword_reports_to_game_parent(str(manifest_path))
+
+            target_dir = tmp_path / "Game" / "extracted_keywords"
+            self.assertTrue(target_dir.exists())
+            self.assertTrue((target_dir / "keyword_candidates.md").exists())
+            self.assertTrue((target_dir / "keyword_chunk_summaries.md").exists())
+            self.assertEqual((target_dir / "keyword_candidates.md").read_text(encoding="utf-8"), "candidates")
+
+            self.assertTrue(any("已将关键词提取报告复制一份至" in msg for msg in logged_messages))
+
 
 if __name__ == "__main__":
     unittest.main()

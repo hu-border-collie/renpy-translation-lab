@@ -49,6 +49,8 @@ class KeywordBatchWorkflow:
 
     @classmethod
     def resume_manifest(cls, manifest_path: str, manifest: dict[str, object]) -> "KeywordBatchWorkflow":
+        if manifest.get("keyword_export"):
+            return cls([], manifest_path=manifest_path)
         if not manifest.get("job_name"):
             return cls(["submit", "status"], manifest_path=manifest_path)
         return cls.resume_latest(manifest_path)
@@ -93,6 +95,14 @@ class KeywordBatchWorkflow:
         if key == "status":
             status_update = self._finish_status(output)
             if status_update is not None:
+                if getattr(self, "only_query", False) and status_update.status == "running":
+                    return WorkflowUpdate(
+                        status="ready",
+                        heading="云端任务已完成",
+                        message="查询结果：云端批量任务已成功完成！请点击「继续提取」下载并导出报告。",
+                        facts=status_update.facts,
+                        should_continue=False,
+                    )
                 return status_update
         if key == "export-keywords":
             return self._finish_export(output)
