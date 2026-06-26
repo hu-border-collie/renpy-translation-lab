@@ -1740,7 +1740,8 @@ class BootstrapWorkTests(unittest.TestCase):
                 self.skipTest('Could not resolve Windows short path for temp directory')
 
             short_path = buffer.value
-            self.assertNotEqual(os.path.normcase(short_path), os.path.normcase(long_path))
+            if os.path.normcase(short_path) == os.path.normcase(long_path):
+                self.skipTest('Short-path generation disabled on this system')
             self.assertEqual(runtime._canonical_abs_path(short_path), long_path)
 
     def test_resolve_effective_game_root_prefers_nested_work(self):
