@@ -40,10 +40,10 @@ REASON_CATEGORY_MANUAL = "manual"
 REASON_CATEGORY_REBUILD = "rebuild_check"
 
 CATEGORY_LABELS = {
-    REASON_CATEGORY_RETRY: "可尝试 retry",
-    REASON_CATEGORY_REPAIR: "可能可 repair",
+    REASON_CATEGORY_RETRY: "可尝试补译",
+    REASON_CATEGORY_REPAIR: "可尝试修复",
     REASON_CATEGORY_MANUAL: "需要人工处理",
-    REASON_CATEGORY_REBUILD: "需要重新 build/check",
+    REASON_CATEGORY_REBUILD: "需要重新生成任务",
     "unknown": "待确认",
 }
 
@@ -101,19 +101,19 @@ REASON_CATEGORY_BY_CODE = {
 
 CATEGORY_SUGGESTIONS = {
     REASON_CATEGORY_RETRY: (
-        "可生成 retry 包重新翻译失败 chunk，合并结果后重新 check；"
-        "只有 safe 才能写回。"
+        "可生成补译包重译失败部分，合并后重新检查；"
+        "显示「可写回」后才能写入项目。"
     ),
     REASON_CATEGORY_REPAIR: (
-        "部分条目可尝试 repair 流程；若 repair 不适用，请改走 retry 或人工修正。"
+        "部分条目可尝试修复流程；若不适合，请改走补译或人工修正。"
     ),
     REASON_CATEGORY_MANUAL: (
-        "请检查源文件是否被修改、路径是否有效，或重定位是否失败；"
-        "修复源文件后重新 build/check。"
+        "请检查源文件是否被修改、路径是否有效；"
+        "修复后重新生成任务并检查。"
     ),
     REASON_CATEGORY_REBUILD: (
-        "结果包或清单可能已损坏或与当前任务不一致；"
-        "建议重新 download、必要时重新 build，再 check。"
+        "结果包或任务记录可能已损坏或不一致；"
+        "建议重新下载结果，必要时重新生成任务后再检查。"
     ),
     "unknown": "请查看错误摘要与诊断日志，确认下一步操作。",
 }
@@ -517,12 +517,12 @@ def build_check_issues_report(
 
     if not report_path and report_text is None:
         message = (
-            "任务清单中没有记录检查报告路径，也无法从翻译包目录推断。"
+            "任务记录中没有检查报告路径，也无法从翻译包目录推断。"
             "请重新运行 check，或到诊断页查看任务上下文。"
         )
         if summary_groups:
             message = (
-                "未找到检查报告文件路径；以下摘要来自任务清单中的最近检查结果。"
+                "未找到检查报告文件路径；以下摘要来自任务记录中的最近检查结果。"
                 "请重新运行 check 生成完整报告。"
             )
         return CheckIssuesReport(
@@ -546,7 +546,7 @@ def build_check_issues_report(
         )
         if summary_groups:
             fallback_message = (
-                "详细报告文件暂不可用，以下摘要来自任务清单中的最近检查结果。"
+                "详细报告文件暂不可用，以下摘要来自任务记录中的最近检查结果。"
             )
         return CheckIssuesReport(
             status="missing_report",
@@ -583,7 +583,7 @@ def build_check_issues_report(
         heading="检查问题清单",
         message=(
             f"共发现 {failure_count} 个问题项。"
-            "写回仍被禁用，请按建议处理后再重新 check 到 safe。"
+            "写回仍被禁用，请按建议处理后再重新检查，直到显示「可写回」。"
         ),
         report_path=report_path,
         safety_level=safety_level,

@@ -153,13 +153,13 @@ class TranslationWorkflow:
                 return WorkflowUpdate(
                     status="done",
                     heading="没有待翻译内容",
-                    message="当前项目没有需要提交到 Batch 的待翻译行。",
+                    message="当前项目没有需要翻译的待译文本。",
                     facts=[],
                 )
             self._pending_steps.clear()
             return WorkflowUpdate(
                 status="failed",
-                heading="无法定位 Batch 请求包",
+                heading="找不到翻译任务包",
                 message="build 已结束，但输出中没有请求包路径；请查看原始输出。",
                 facts=[],
             )

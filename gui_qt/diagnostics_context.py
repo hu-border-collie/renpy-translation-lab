@@ -45,8 +45,8 @@ STANDARD_REPORT_FILES = (
     ("check_failures.jsonl", "检查失败明细"),
     ("failures.jsonl", "翻译失败明细"),
     ("apply_failure_report.json", "写回失败报告"),
-    ("requests.jsonl", "Batch 请求"),
-    ("results.jsonl", "Batch 结果"),
+    ("requests.jsonl", "批量请求"),
+    ("results.jsonl", "批量结果"),
     ("last_status_snapshot.json", "最近状态快照"),
 )
 
@@ -222,7 +222,7 @@ def build_cli_commands(
         if not manifest.get("revision_applied_at"):
             commands.append(
                 DiagnosticsCommand(
-                    label="应用订正（预览确认后）",
+                    label="写回订正（预览确认后）",
                     command=format_cli_command(
                         python_exe,
                         batch_script_path,
@@ -265,15 +265,15 @@ def build_cli_commands(
                 batch_script_path=batch_script_path,
                 manifest_path=manifest_path,
                 manifest=manifest,
-                submit_label="提交 retry 任务",
-                status_label="查询 retry 状态",
-                download_label="下载 retry 结果",
+                submit_label="提交补译任务",
+                status_label="查询补译状态",
+                download_label="下载补译结果",
             )
         )
         commands.extend(
             [
                 DiagnosticsCommand(
-                    label="合并 retry 结果",
+                    label="合并补译结果",
                     command=format_cli_command(
                         python_exe,
                         batch_script_path,
@@ -343,7 +343,7 @@ def build_cloud_job_commands(
     batch_script_path: str,
     manifest_path: str,
     manifest: dict[str, object],
-    submit_label: str = "提交 Batch 任务",
+    submit_label: str = "提交批量任务",
     status_label: str = "查询任务状态",
     download_label: str = "下载翻译结果",
 ) -> list[DiagnosticsCommand]:
@@ -412,7 +412,7 @@ def build_warn_remediation_commands(
     if not existing_retry_path:
         commands.append(
             DiagnosticsCommand(
-                label="生成 retry 包",
+                label="生成补译包",
                 command=format_cli_command(
                     python_exe,
                     batch_script_path,
@@ -424,7 +424,7 @@ def build_warn_remediation_commands(
     commands.extend(
         [
         DiagnosticsCommand(
-            label="提交 retry 任务",
+            label="提交补译任务",
             command=format_cli_command(
                 python_exe,
                 batch_script_path,
@@ -432,7 +432,7 @@ def build_warn_remediation_commands(
             ),
         ),
         DiagnosticsCommand(
-            label="查询 retry 状态",
+            label="查询补译状态",
             command=format_cli_command(
                 python_exe,
                 batch_script_path,
@@ -440,7 +440,7 @@ def build_warn_remediation_commands(
             ),
         ),
         DiagnosticsCommand(
-            label="下载 retry 结果",
+            label="下载补译结果",
             command=format_cli_command(
                 python_exe,
                 batch_script_path,
@@ -448,7 +448,7 @@ def build_warn_remediation_commands(
             ),
         ),
         DiagnosticsCommand(
-            label="合并 retry 结果",
+            label="合并补译结果",
             command=format_cli_command(
                 python_exe,
                 batch_script_path,
@@ -512,7 +512,7 @@ def idle_diagnostics_context() -> DiagnosticsContext:
     return DiagnosticsContext(
         status="idle",
         heading="暂无任务上下文",
-        message="开始翻译后，这里会显示任务清单、翻译包、云端任务和可复制命令。",
+        message="开始任务后，这里会显示任务记录、翻译包、云端任务和可复制命令。",
         facts=[],
         paths=[],
         commands=[],
@@ -529,7 +529,7 @@ def sync_diagnostics_context(
     return DiagnosticsContext(
         status="ready",
         heading="同步翻译上下文",
-        message="同步模式不生成 Batch 任务清单；以下为可手动运行的同步命令。",
+        message="同步模式不生成批量任务记录；以下为可手动运行的同步命令。",
         facts=[],
         paths=[],
         commands=[DiagnosticsCommand(label="同步翻译", command=command)],
@@ -563,8 +563,8 @@ def build_diagnostics_context(
         if manifest_path and exists(manifest_path):
             return DiagnosticsContext(
                 status="warning",
-                heading="无法读取任务清单",
-                message="找到了任务清单路径，但内容未能加载。请查看下方原始日志。",
+                heading="无法读取任务记录",
+                message="找到了任务记录路径，但内容未能加载。请查看下方原始日志。",
                 facts=[format_manifest_path_fact(manifest_path)],
                 paths=[],
                 commands=[],
@@ -589,13 +589,13 @@ def build_diagnostics_context(
     preview = format_manifest_json_preview(manifest)
 
     status = "ready"
-    message = "以下为当前任务清单对应的路径与可手动运行的命令。"
+    message = "以下为当前任务记录对应的路径与可手动运行的命令。"
     if manifest_path and latest_manifest_path:
         if _canonical_compare_path(manifest_path) != _canonical_compare_path(
             latest_manifest_path
         ):
             status = "warning"
-            message = "当前任务与最近任务指针不一致；下方预览以当前加载的任务清单为准。"
+            message = "当前任务与最近任务记录不一致；下方预览以当前加载的记录为准。"
 
     return DiagnosticsContext(
         status=status,

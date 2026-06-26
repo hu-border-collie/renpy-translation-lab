@@ -58,7 +58,7 @@ def summarize_sync_translation_output(output: str, exit_code: int) -> WorkflowUp
             facts=facts,
         )
 
-    message = "同步翻译已完成；译文已按脚本现有规则写回项目文件，建议在游戏中抽查。"
+    message = "同步翻译已完成；译文已写入项目文件，建议在游戏中抽查。"
     if files_done:
         message = f"已处理 {files_done} 个文件。{message}"
     if lines_to_translate > 0 and translated_count < lines_to_translate:

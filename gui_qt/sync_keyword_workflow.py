@@ -21,7 +21,7 @@ class SyncKeywordWorkflow:
             key="sync-keywords",
             args=["sync-keywords"],
             heading="正在同步提取关键词",
-            message="正在扫描 TL 文本并调用同步 API 生成术语与剧情候选报告。",
+            message="正在扫描翻译文本并生成术语与剧情报告。",
             script_basename="gemini_translate_batch.py",
         )
 

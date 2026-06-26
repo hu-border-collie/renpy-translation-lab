@@ -27,12 +27,12 @@ APPLY_REASON_CODE_LABELS = {
 }
 
 APPLY_REASON_SUGGESTIONS = {
-    "missing_check": "请先对当前任务运行 check，确认 safe 后再尝试写回。",
-    "stale_check_contract": "检查规则已更新；请重新运行 check 生成新的检查摘要。",
-    "stale_check_fingerprint": "manifest、结果包或源文件在 check 之后有变化；请重新 check，不要重复 apply。",
-    "unsafe_check_status": "最近一次 check 不是 safe；请先处理问题并重新 check。",
-    "unsafe_apply_recheck": "写回前自动复检未通过；请查看失败条目，修复后重新 check。",
-    "unsafe_apply_revalidation": "源文件与检查结果不一致（可能已漂移）；请修复源文件后重新 build/check。",
+    "missing_check": "请先重新检查当前任务，确认「可写回」后再尝试写回。",
+    "stale_check_contract": "检查规则已更新；请重新检查并生成新的检查摘要。",
+    "stale_check_fingerprint": "任务记录、结果包或源文件在检查后已有变化；请重新检查，不要重复写回。",
+    "unsafe_check_status": "最近一次检查不是「可写回」；请先处理问题并重新检查。",
+    "unsafe_apply_recheck": "写回前自动复检未通过；请查看失败条目，修复后重新检查。",
+    "unsafe_apply_revalidation": "源文件与检查结果不一致；请修复源文件后重新生成任务并检查。",
     "unclassified_failure": "请查看错误摘要与诊断日志，确认下一步操作。",
 }
 
@@ -358,7 +358,7 @@ def build_apply_failure_report(
         return ApplyFailureReportView(
             status="missing_report",
             heading="未找到写回失败报告",
-            message="任务清单中没有记录写回失败报告路径。请查看诊断日志中的 apply 输出。",
+            message="任务记录中没有写回失败报告路径。请查看诊断日志。",
             report_path="",
             failures_path="",
             reason_code=reason_code,

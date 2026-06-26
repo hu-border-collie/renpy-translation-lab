@@ -38,7 +38,7 @@ class GuiUserCopyTests(unittest.TestCase):
     def test_format_manifest_path_fact_uses_chinese_label(self):
         self.assertEqual(
             format_manifest_path_fact(r"C:\jobs\manifest.json"),
-            r"任务清单：C:\jobs\manifest.json",
+            r"任务记录：C:\jobs\manifest.json",
         )
 
     def test_translate_doctor_warning_maps_known_message(self):

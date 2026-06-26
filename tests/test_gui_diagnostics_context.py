@@ -63,7 +63,7 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         )
         labels = [entry.label for entry in entries]
         self.assertIn("检查失败明细", labels)
-        self.assertNotIn("Batch 结果", labels)
+        self.assertNotIn("批量结果", labels)
 
     def test_build_cli_commands_includes_submit_when_job_missing(self):
         commands = build_cli_commands(
@@ -73,7 +73,7 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
             manifest={"job_name": ""},
         )
         labels = [command.label for command in commands]
-        self.assertIn("提交 Batch 任务", labels)
+        self.assertIn("提交批量任务", labels)
         self.assertIn("查询任务状态", labels)
 
     def test_build_cli_commands_omits_apply_after_applied(self):
@@ -103,16 +103,16 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         )
 
         by_label = {command.label: command.command for command in commands}
-        self.assertNotIn("生成 retry 包", by_label)
-        self.assertIn("提交 retry 任务", by_label)
-        self.assertIn("合并 retry 结果", by_label)
+        self.assertNotIn("生成补译包", by_label)
+        self.assertIn("提交补译任务", by_label)
+        self.assertIn("合并补译结果", by_label)
         self.assertIn("重新检查翻译结果", by_label)
         self.assertNotIn("写回翻译（仅可写回）", by_label)
         self.assertNotIn("同步修复失败项", by_label)
         self.assertNotIn("生成订正包", by_label)
         self.assertNotIn("预览订正结果", by_label)
-        self.assertIn(retry_path, by_label["提交 retry 任务"])
-        self.assertIn(retry_path, by_label["合并 retry 结果"])
+        self.assertIn(retry_path, by_label["提交补译任务"])
+        self.assertIn(retry_path, by_label["合并补译结果"])
 
     def test_warn_without_existing_retry_includes_build_retry(self):
         commands = build_cli_commands(
@@ -127,9 +127,9 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         )
 
         by_label = {command.label: command.command for command in commands}
-        self.assertIn("生成 retry 包", by_label)
-        self.assertIn("build-retry", by_label["生成 retry 包"])
-        self.assertIn("RETRY_MANIFEST_PATH", by_label["提交 retry 任务"])
+        self.assertIn("生成补译包", by_label)
+        self.assertIn("build-retry", by_label["生成补译包"])
+        self.assertIn("RETRY_MANIFEST_PATH", by_label["提交补译任务"])
 
     def test_warn_retry_placeholder_is_shell_safe(self):
         commands = build_cli_commands(
@@ -162,11 +162,11 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         )
 
         by_label = {command.label: command.command for command in commands}
-        self.assertIn("合并 retry 结果", by_label)
+        self.assertIn("合并补译结果", by_label)
         self.assertIn("重新检查父任务", by_label)
         self.assertNotIn("写回翻译（仅可写回）", by_label)
-        self.assertIn(parent_path, by_label["合并 retry 结果"])
-        self.assertIn(retry_path, by_label["合并 retry 结果"])
+        self.assertIn(parent_path, by_label["合并补译结果"])
+        self.assertIn(retry_path, by_label["合并补译结果"])
 
     def test_revision_manifest_commands_use_revision_apply_flow(self):
         manifest_path = r"C:\logs\batch_jobs\rev1\manifest.json"
@@ -179,11 +179,11 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
 
         by_label = {command.label: command.command for command in commands}
         self.assertIn("预览订正结果", by_label)
-        self.assertIn("应用订正（预览确认后）", by_label)
+        self.assertIn("写回订正（预览确认后）", by_label)
         self.assertNotIn("检查翻译结果", by_label)
         self.assertNotIn("写回翻译（仅可写回）", by_label)
         self.assertIn("preview-revisions", by_label["预览订正结果"])
-        self.assertIn("apply-revisions", by_label["应用订正（预览确认后）"])
+        self.assertIn("apply-revisions", by_label["写回订正（预览确认后）"])
 
     def test_applied_revision_manifest_omits_revision_apply_command(self):
         commands = build_cli_commands(
@@ -199,7 +199,7 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
 
         labels = [command.label for command in commands]
         self.assertIn("预览订正结果", labels)
-        self.assertNotIn("应用订正（预览确认后）", labels)
+        self.assertNotIn("写回订正（预览确认后）", labels)
 
     def test_keyword_manifest_commands_use_export_keywords_flow(self):
         manifest_path = r"C:\logs\batch_jobs\kw1\manifest.json"
@@ -248,7 +248,7 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
             path_exists=lambda _path: True,
         )
         self.assertEqual(context.status, "warning")
-        self.assertIn("无法读取任务清单", context.heading)
+        self.assertIn("无法读取任务记录", context.heading)
 
     def test_sync_diagnostics_context_shows_sync_command(self):
         context = sync_diagnostics_context(
@@ -289,9 +289,9 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
             path_exists=path_exists,
         )
         self.assertEqual(context.status, "ready")
-        self.assertTrue(any("任务清单：" in fact for fact in context.facts))
+        self.assertTrue(any("任务记录：" in fact for fact in context.facts))
         self.assertTrue(any("最近检查：可写回" in fact for fact in context.facts))
-        self.assertTrue(any(entry.label == "Batch 请求" for entry in context.paths))
+        self.assertTrue(any(entry.label == "批量请求" for entry in context.paths))
         self.assertTrue(context.commands)
         self.assertIn('"mode": "translation"', context.manifest_json_preview)
 

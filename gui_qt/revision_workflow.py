@@ -26,7 +26,7 @@ def _extract_line_value(output: str, prefix: str) -> str:
 
 
 STEP_TEXT = {
-    "build-revisions": ("正在准备订正内容", "正在扫描已有译文并生成订正 Batch 请求包。"),
+    "build-revisions": ("正在准备订正内容", "正在扫描已有译文并生成批量订正任务。"),
     "submit": ("正在提交订正任务", "正在上传请求文件并创建云端批量任务。"),
     "status": ("正在刷新订正任务状态", "正在查询云端任务处理状态。"),
     "download": ("正在获取订正结果", "任务已完成，正在下载结果文件。"),
@@ -117,7 +117,7 @@ class RevisionBatchWorkflow:
             return WorkflowUpdate(
                 status="failed",
                 heading="无法定位订正请求包",
-                message="build-revisions 已结束，但输出中没有请求包路径；请查看原始输出。",
+                message="订正任务准备未完成，请查看诊断日志。",
                 facts=[],
             )
 

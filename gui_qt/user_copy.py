@@ -115,7 +115,7 @@ def manifest_mode_label(mode: str) -> str:
 
 
 def format_manifest_path_fact(path: str) -> str:
-    return f"任务清单：{path}"
+    return f"任务记录：{path}"
 
 
 def format_package_dir_fact(path: str) -> str:
@@ -169,7 +169,7 @@ def translate_doctor_warning(warning: str) -> str:
         if text == source:
             return translated
     if text.startswith("Found ") and "legacy manifest" in text:
-        return "检测到旧版任务清单，将使用兼容模式继续处理。"
+        return "检测到旧版任务记录，将使用兼容模式继续处理。"
     if text.startswith("Custom template command cannot be rendered:"):
         return "自定义模板命令无法解析，请检查配置。"
     if text.startswith("RAG store contains legacy ID format keys."):

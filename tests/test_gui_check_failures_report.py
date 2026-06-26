@@ -111,7 +111,7 @@ class GuiCheckFailuresReportTests(unittest.TestCase):
         self.assertEqual(len(groups), 3)
         self.assertEqual(groups[0].count, 2)
         self.assertEqual(groups[0].reason_code, "response_missing_item_id")
-        self.assertIn("retry", groups[0].category_label)
+        self.assertIn("补译", groups[0].category_label)
 
     def test_resolve_check_report_path_prefers_manifest_field(self):
         manifest = {

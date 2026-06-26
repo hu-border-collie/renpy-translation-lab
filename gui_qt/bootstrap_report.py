@@ -141,7 +141,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
             kind="rag",
             status="warning",
             heading="RAG 未启用",
-            message="请先在配置页启用 Batch RAG 并保存参数配置，再运行预建 RAG 库。",
+            message="请先在配置页启用记忆库并保存配置，再运行预建记忆库。",
             facts=[],
             findings=[],
         )

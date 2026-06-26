@@ -52,7 +52,7 @@ class GuiWorkflowFactoryTests(unittest.TestCase):
         self.assertEqual(workflow.current_step().args, ["sync-revisions"])
 
     def test_validate_resume_manifest_rejects_mode_mismatch(self):
-        with self.assertRaisesRegex(ValueError, "不是Batch 翻译任务"):
+        with self.assertRaisesRegex(ValueError, "不是批量翻译任务"):
             validate_resume_manifest(
                 WorkMode.BATCH_TRANSLATION,
                 {"mode": "revision", "base_dir": "C:\\work"},
