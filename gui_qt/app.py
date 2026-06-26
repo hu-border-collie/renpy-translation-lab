@@ -1501,7 +1501,10 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         self._focus_log_tab()
         self._writeback_manifest_path = ""
-        self._set_writeback_summary(stale_writeback_summary())
+        if spec.supports_translation_writeback:
+            self._set_writeback_summary(stale_writeback_summary())
+        else:
+            self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
         self._workflow = workflow
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
@@ -1923,6 +1926,11 @@ class MainWindow(QMainWindow):
         self._active_command = ""
         self._workflow = None
         self._set_task_running(False)
+        finish_spec = work_mode_spec(self._current_work_mode())
+        if not finish_spec.supports_translation_writeback:
+            self._set_writeback_summary(
+                idle_writeback_summary_for_work_mode(finish_spec.mode)
+            )
         if update.status == "failed":
             self.statusBar().showMessage("翻译任务失败，请查看诊断日志。", 8000)
         elif update.status == "waiting":

@@ -207,6 +207,14 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertFalse(summary.can_apply)
         self.assertIn("预建", summary.message)
 
+    def test_idle_writeback_summary_for_sync_mode_explains_direct_writeback(self):
+        summary = idle_writeback_summary_for_work_mode(WorkMode.SYNC_TRANSLATION)
+
+        self.assertEqual(summary.status, "idle")
+        self.assertFalse(summary.can_apply)
+        self.assertIn("同步翻译", summary.message)
+        self.assertNotIn("重新检查", summary.message)
+
 
 if __name__ == "__main__":
     unittest.main()
