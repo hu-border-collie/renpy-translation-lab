@@ -333,6 +333,35 @@ def idle_writeback_summary() -> WritebackSummary:
     )
 
 
+def idle_writeback_summary_for_work_mode(mode) -> WritebackSummary:
+    from .work_modes import WorkMode, work_mode_spec
+
+    spec = work_mode_spec(mode)
+    if not spec.supports_translation_writeback:
+        if spec.mode == WorkMode.SYNC_TRANSLATION:
+            message = (
+                "同步翻译可能直接写回项目文件，行为由 gemini_translate.py 决定；"
+                "请在副本或备份上验证，详情见诊断页。"
+            )
+        elif spec.mode == WorkMode.KEYWORD_EXTRACTION:
+            message = "关键词模式只生成候选报告，不会启用普通「写回翻译」按钮。"
+        elif spec.mode == WorkMode.REVISION:
+            message = "订正写回将使用 preview-revisions / apply-revisions 独立流程，不经过普通 check/apply。"
+        elif spec.is_bootstrap:
+            message = "预建库只更新本地上下文存储，不会启用普通「写回翻译」按钮。"
+        else:
+            message = "当前子任务不使用普通翻译写回。"
+        return WritebackSummary(
+            status="idle",
+            heading="此模式不写回翻译",
+            message=message,
+            facts=[],
+            findings=[],
+            can_apply=False,
+        )
+    return idle_writeback_summary()
+
+
 def stale_writeback_summary() -> WritebackSummary:
     return WritebackSummary(
         status="stale",

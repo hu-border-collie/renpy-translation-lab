@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from gui_qt.project_state import ProjectState
+from gui_qt.work_modes import WorkMode
 import translator_runtime as runtime
 
 
@@ -202,8 +203,23 @@ class GuiProjectStateTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ValueError, "不是基础翻译任务"):
+            with self.assertRaisesRegex(ValueError, "不是Batch 翻译任务"):
                 state.load_resume_manifest(manifest)
+
+    def test_load_resume_manifest_accepts_revision_for_revision_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            state._game_root = root / "Game Work"
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps({"mode": "revision", "base_dir": str(state._game_root)}),
+                encoding="utf-8",
+            )
+
+            loaded = state.load_resume_manifest(manifest, work_mode=WorkMode.REVISION)
+
+            self.assertEqual(loaded["mode"], "revision")
 
     def test_load_resume_manifest_rejects_other_project(self):
         with tempfile.TemporaryDirectory() as tmp:

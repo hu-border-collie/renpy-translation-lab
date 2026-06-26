@@ -1,11 +1,13 @@
 import unittest
 
 from gui_qt.check_report import (
+    idle_writeback_summary_for_work_mode,
     parse_check_output,
     summarize_apply_output,
     summarize_check_output,
     summarize_manifest_writeback,
 )
+from gui_qt.work_modes import WorkMode
 
 
 CHECK_OUTPUT_SAFE = """
@@ -190,6 +192,20 @@ class GuiCheckReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "applied")
         self.assertFalse(summary.can_apply)
+
+    def test_idle_writeback_summary_for_keyword_mode_disables_apply(self):
+        summary = idle_writeback_summary_for_work_mode(WorkMode.KEYWORD_EXTRACTION)
+
+        self.assertEqual(summary.status, "idle")
+        self.assertFalse(summary.can_apply)
+        self.assertIn("关键词", summary.message)
+
+    def test_idle_writeback_summary_for_bootstrap_mode_disables_apply(self):
+        summary = idle_writeback_summary_for_work_mode(WorkMode.BOOTSTRAP_RAG)
+
+        self.assertEqual(summary.status, "idle")
+        self.assertFalse(summary.can_apply)
+        self.assertIn("预建", summary.message)
 
 
 if __name__ == "__main__":

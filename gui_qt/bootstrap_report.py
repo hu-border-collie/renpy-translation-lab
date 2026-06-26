@@ -26,6 +26,11 @@ SOURCE_INDEX_SUMMARY_HEADER = "Source Index bootstrap final summary:"
 def coerce_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
     if isinstance(value, str):
         normalized = value.strip().lower()
         if normalized in {"true", "1", "yes", "on"}:
