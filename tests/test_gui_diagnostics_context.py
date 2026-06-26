@@ -211,6 +211,28 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertEqual(context.status, idle_diagnostics_context().status)
         self.assertEqual(context.commands, [])
 
+    def test_build_diagnostics_context_idle_when_latest_path_suppressed(self):
+        context = build_diagnostics_context(
+            latest_manifest_path=None,
+            manifest=None,
+            batch_script_path="gemini_translate_batch.py",
+            logs_dir=r"C:\logs\batch_jobs",
+            path_exists=lambda _path: True,
+        )
+        self.assertEqual(context.status, "idle")
+        self.assertEqual(context.heading, idle_diagnostics_context().heading)
+
+    def test_build_diagnostics_context_warns_when_latest_path_without_manifest(self):
+        context = build_diagnostics_context(
+            latest_manifest_path=r"C:\logs\batch_jobs\job1\manifest.json",
+            manifest=None,
+            batch_script_path="gemini_translate_batch.py",
+            logs_dir=r"C:\logs\batch_jobs",
+            path_exists=lambda _path: True,
+        )
+        self.assertEqual(context.status, "warning")
+        self.assertIn("无法读取任务清单", context.heading)
+
     def test_sync_diagnostics_context_shows_sync_command(self):
         context = sync_diagnostics_context(
             sync_script_path=r"C:\tools\gemini_translate.py",

@@ -1026,7 +1026,10 @@ class MainWindow(QMainWindow):
             self._set_diagnostics_context(context)
             return
 
-        latest_manifest = self.state.get_latest_manifest_path()
+        uses_batch_manifest = spec.manifest_mode is not None
+        latest_manifest = (
+            self.state.get_latest_manifest_path() if uses_batch_manifest else None
+        )
         manifest_path = self._resolve_diagnostics_manifest_path()
         manifest = self._load_diagnostics_manifest(manifest_path)
         context = build_diagnostics_context(
