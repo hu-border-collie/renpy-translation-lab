@@ -39,9 +39,11 @@ class GuiWorkModesTests(unittest.TestCase):
                 self.assertTrue(spec.implemented)
                 self.assertTrue(spec.is_bootstrap)
 
+    def test_sync_translation_is_implemented(self):
+        self.assertTrue(work_mode_spec(WorkMode.SYNC_TRANSLATION).implemented)
+
     def test_follow_up_workflow_modes_are_not_implemented_yet(self):
         for mode in (
-            WorkMode.SYNC_TRANSLATION,
             WorkMode.KEYWORD_EXTRACTION,
             WorkMode.REVISION,
         ):

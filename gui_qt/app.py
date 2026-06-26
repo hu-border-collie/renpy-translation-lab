@@ -1468,6 +1468,16 @@ class MainWindow(QMainWindow):
             )
             return
 
+        if spec.mode == WorkMode.SYNC_TRANSLATION:
+            api_key_count, _ = self.state.get_api_key_status()
+            if api_key_count == 0:
+                QMessageBox.information(
+                    self,
+                    "请先配置 API Key",
+                    "同步翻译需要 Gemini API 密钥；请在配置页管理 API Key 或设置环境变量。",
+                )
+                return
+
         workflow = create_workflow(spec.mode)
         if workflow is None:
             QMessageBox.information(self, "无法开始任务", spec.not_implemented_message)
@@ -1667,8 +1677,14 @@ class MainWindow(QMainWindow):
             facts.append(format_manifest_path_fact(self._workflow.manifest_path))
         self._workflow_step_output_lines = []
         self._set_workflow_summary("running", step.heading, step.message, facts)
-        self._append_log(f"\n=== {step.heading}：gemini_translate_batch.py {' '.join(step.args)} ===\n")
-        self.runner.run(self.state.get_batch_script_path(), step.args)
+        if step.script_basename == "gemini_translate.py":
+            script_path = self.state.get_sync_script_path()
+        else:
+            script_path = self.state.get_batch_script_path()
+        args_text = " ".join(step.args)
+        command_label = f"{step.script_basename} {args_text}".strip()
+        self._append_log(f"\n=== {step.heading}：{command_label} ===\n")
+        self.runner.run(script_path, step.args)
 
     def _current_writeback_summary(self) -> WritebackSummary:
         return getattr(self, "_writeback_summary", idle_writeback_summary())
@@ -1896,6 +1912,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("翻译任务失败，请查看诊断日志。", 8000)
         elif update.status == "waiting":
             self.statusBar().showMessage("批量任务仍在处理，可稍后继续最新任务。", 8000)
+        elif update.status == "done":
+            self.statusBar().showMessage(update.heading, 6000)
         else:
             self.statusBar().showMessage("翻译任务流程完成。", 6000)
 
