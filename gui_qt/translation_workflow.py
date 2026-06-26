@@ -159,8 +159,8 @@ class TranslationWorkflow:
             self._pending_steps.clear()
             return WorkflowUpdate(
                 status="failed",
-                heading="找不到翻译任务包",
-                message="build 已结束，但输出中没有请求包路径；请查看原始输出。",
+                heading="无法完成翻译任务准备",
+                message="翻译任务准备未完成，请查看诊断日志。",
                 facts=[],
             )
 

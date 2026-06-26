@@ -109,6 +109,7 @@ from .work_modes import (
     TASK_CATEGORY_ORDER,
     TaskCategory,
     WorkMode,
+    bootstrap_disabled_message,
     default_work_mode_for_category,
     normalize_task_category,
     normalize_work_mode,
@@ -210,7 +211,8 @@ class MainWindow(QMainWindow):
             if frame is not None:
                 margins = frame.layout().contentsMargins()
                 width = frame.width() - margins.left() - margins.right()
-        width = max(width, 320)
+        if width <= 0:
+            width = 320
 
         metrics = label.fontMetrics()
         max_height = metrics.lineSpacing() * 2
@@ -1257,7 +1259,7 @@ class MainWindow(QMainWindow):
         self.workbench_status_tabs.setTabText(2, spec.writeback_tab_label)
         if spec.implemented:
             if spec.is_bootstrap and not self._bootstrap_task_ready(spec):
-                hint = self._bootstrap_disabled_message(spec.bootstrap_kind)
+                hint = bootstrap_disabled_message(spec.bootstrap_kind)
             else:
                 hint = spec.idle_workflow_message
         else:
@@ -1516,11 +1518,6 @@ class MainWindow(QMainWindow):
             return flags["source_index_enabled"]
         return True
 
-    def _bootstrap_disabled_message(self, kind: str) -> str:
-        if kind == "rag":
-            return "请先在配置页勾选「启用记忆库」，并点击「保存参数配置」。"
-        return "请先在配置页勾选「启用原文索引」，并点击「保存参数配置」。"
-
     def _start_bootstrap_task(self, kind: str) -> bool:
         if not self.state.get_game_root():
             QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
@@ -1531,8 +1528,8 @@ class MainWindow(QMainWindow):
             if not flags["rag_enabled"]:
                 QMessageBox.information(
                     self,
-                    "RAG 未启用",
-                    self._bootstrap_disabled_message("rag"),
+                    "记忆库未启用",
+                    bootstrap_disabled_message("rag"),
                 )
                 return False
             command = "bootstrap_rag"
@@ -1544,7 +1541,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(
                     self,
                     "原文索引未启用",
-                    self._bootstrap_disabled_message("source_index"),
+                    bootstrap_disabled_message("source_index"),
                 )
                 return False
             command = "bootstrap_source_index"
@@ -2076,11 +2073,11 @@ class MainWindow(QMainWindow):
             self._active_command = ""
             self._set_task_running(False)
             if exit_code == 0 and summary.status == "ready":
-                self.statusBar().showMessage("RAG 预建完成。", 6000)
+                self.statusBar().showMessage("预建记忆库完成。", 6000)
             elif exit_code == 0:
-                self.statusBar().showMessage("RAG 预建已结束，请查看摘要。", 6000)
+                self.statusBar().showMessage("预建记忆库已结束，请查看摘要。", 6000)
             else:
-                self.statusBar().showMessage("RAG 预建失败，请查看诊断日志。", 8000)
+                self.statusBar().showMessage("预建记忆库失败，请查看诊断日志。", 8000)
             return
 
         if self._active_command == "bootstrap_source_index":

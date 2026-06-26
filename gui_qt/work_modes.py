@@ -213,7 +213,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         resume_button_label="继续订正",
         task_group_label="订正任务",
         progress_tab_label="订正进度",
-        writeback_tab_label="订正写回",
+        writeback_tab_label="写回订正",
         idle_workflow_heading="尚未开始订正流程",
         idle_workflow_message="会批量生成订正预览；确认后再单独写回，与普通翻译写回分开。",
         supports_resume=True,
@@ -232,7 +232,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         resume_button_label="继续订正",
         task_group_label="同步订正任务",
         progress_tab_label="订正进度",
-        writeback_tab_label="写回说明",
+        writeback_tab_label="写回订正",
         idle_workflow_heading="尚未开始同步订正",
         idle_workflow_message="适合小范围订正预览；默认只出报告，不会自动写回，请先备份。",
         supports_resume=False,
@@ -304,9 +304,15 @@ def work_mode_from_manifest_mode(manifest_mode: object) -> WorkMode | None:
     return None
 
 
+def bootstrap_disabled_message(kind: str) -> str:
+    if kind == "rag":
+        return "请先在配置页勾选「启用记忆库」，并点击「保存参数配置」。"
+    return "请先在配置页勾选「启用原文索引」，并点击「保存参数配置」。"
+
+
 _BOOTSTRAP_DISABLED_HINTS = (
-    "请先在配置页勾选「启用记忆库」，并点击「保存参数配置」。",
-    "请先在配置页勾选「启用原文索引」，并点击「保存参数配置」。",
+    bootstrap_disabled_message("rag"),
+    bootstrap_disabled_message("source_index"),
 )
 
 

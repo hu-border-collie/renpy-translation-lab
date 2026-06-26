@@ -101,8 +101,8 @@ class GuiCheckReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "warn")
         self.assertIn("查看问题清单", summary.message)
-        self.assertIn("补译", summary.message)
-        self.assertIn("补译", summary.message)
+        self.assertEqual(summary.message.count("补译"), 1)
+        self.assertIn("重新检查", summary.message)
         self.assertIn("可写回", summary.message)
 
     def test_summarize_apply_output_marks_completed(self):

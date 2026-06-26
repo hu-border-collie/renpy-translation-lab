@@ -518,12 +518,12 @@ def build_check_issues_report(
     if not report_path and report_text is None:
         message = (
             "任务记录中没有检查报告路径，也无法从翻译包目录推断。"
-            "请重新运行 check，或到诊断页查看任务上下文。"
+            "请重新检查，或到诊断页查看任务上下文。"
         )
         if summary_groups:
             message = (
                 "未找到检查报告文件路径；以下摘要来自任务记录中的最近检查结果。"
-                "请重新运行 check 生成完整报告。"
+                "请重新检查以生成完整报告。"
             )
         return CheckIssuesReport(
             status="missing_report",
@@ -542,7 +542,7 @@ def build_check_issues_report(
     if report_text is None and not exists(report_path):
         fallback_message = (
             "检查报告路径已记录，但文件当前不存在。"
-            "可能已被移动或清理；请重新 check 生成新报告。"
+            "可能已被移动或清理；请重新检查以生成新报告。"
         )
         if summary_groups:
             fallback_message = (

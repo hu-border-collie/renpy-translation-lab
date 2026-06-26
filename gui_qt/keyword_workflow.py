@@ -26,7 +26,7 @@ def _extract_line_value(output: str, prefix: str) -> str:
 
 
 STEP_TEXT = {
-    "build-keywords": ("正在准备关键词提取", "正在扫描翻译文本并生成批量任务。"),
+    "build-keywords": ("正在准备关键词提取", "正在扫描翻译文本并准备待提交内容。"),
     "submit": ("正在提交关键词提取任务", "正在上传请求文件并创建云端批量任务。"),
     "status": ("正在刷新关键词任务状态", "正在查询云端任务处理状态。"),
     "download": ("正在获取关键词提取结果", "任务已完成，正在下载结果文件。"),
@@ -113,7 +113,7 @@ class KeywordBatchWorkflow:
             self._pending_steps.clear()
             return WorkflowUpdate(
                 status="failed",
-                heading="无法定位关键词请求包",
+                heading="无法完成关键词任务准备",
                 message="关键词任务准备未完成，请查看诊断日志。",
                 facts=[],
             )
