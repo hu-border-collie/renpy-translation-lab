@@ -114,11 +114,11 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         idle_workflow_message="适合小范围即时翻译、局部修复和 smoke test；写回行为遵循同步脚本现有规则，请先备份项目。",
         supports_resume=False,
         supports_translation_writeback=False,
-        implemented=False,
+        implemented=True,
         is_bootstrap=False,
         bootstrap_kind="",
         manifest_mode=None,
-        not_implemented_message="同步翻译模式的图形界面仍在开发中，请暂时使用 gemini_translate.py。",
+        not_implemented_message="",
     ),
     WorkMode.KEYWORD_EXTRACTION: WorkModeSpec(
         mode=WorkMode.KEYWORD_EXTRACTION,

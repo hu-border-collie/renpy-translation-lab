@@ -65,6 +65,7 @@ from .diagnostics_context import (
     DiagnosticsContext,
     build_diagnostics_context,
     existing_retry_manifest_path,
+    sync_diagnostics_context,
 )
 from .retry_preview_dialog import RetryPreviewDialog
 from .retry_report import (
@@ -1000,6 +1001,8 @@ class MainWindow(QMainWindow):
     def _resolve_diagnostics_manifest_path(self) -> str | None:
         if self._workflow is not None and self._workflow.manifest_path:
             return self._workflow.manifest_path
+        if work_mode_spec(self._current_work_mode()).manifest_mode is None:
+            return None
         if self._writeback_manifest_path:
             return self._writeback_manifest_path
         latest_manifest = self.state.get_latest_manifest_path()
@@ -1014,7 +1017,19 @@ class MainWindow(QMainWindow):
             return None
 
     def _refresh_diagnostics_context(self) -> None:
-        latest_manifest = self.state.get_latest_manifest_path()
+        spec = work_mode_spec(self._current_work_mode())
+        if spec.mode == WorkMode.SYNC_TRANSLATION:
+            context = sync_diagnostics_context(
+                sync_script_path=str(self.state.get_sync_script_path()),
+                python_exe=sys.executable,
+            )
+            self._set_diagnostics_context(context)
+            return
+
+        uses_batch_manifest = spec.manifest_mode is not None
+        latest_manifest = (
+            self.state.get_latest_manifest_path() if uses_batch_manifest else None
+        )
         manifest_path = self._resolve_diagnostics_manifest_path()
         manifest = self._load_diagnostics_manifest(manifest_path)
         context = build_diagnostics_context(
@@ -1468,6 +1483,16 @@ class MainWindow(QMainWindow):
             )
             return
 
+        if spec.mode == WorkMode.SYNC_TRANSLATION:
+            api_key_count, _ = self.state.get_api_key_status()
+            if api_key_count == 0:
+                QMessageBox.information(
+                    self,
+                    "请先配置 API Key",
+                    "同步翻译需要 Gemini API 密钥；请在配置页管理 API Key 或设置环境变量。",
+                )
+                return
+
         workflow = create_workflow(spec.mode)
         if workflow is None:
             QMessageBox.information(self, "无法开始任务", spec.not_implemented_message)
@@ -1476,7 +1501,10 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         self._focus_log_tab()
         self._writeback_manifest_path = ""
-        self._set_writeback_summary(stale_writeback_summary())
+        if spec.supports_translation_writeback:
+            self._set_writeback_summary(stale_writeback_summary())
+        else:
+            self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
         self._workflow = workflow
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
@@ -1667,8 +1695,14 @@ class MainWindow(QMainWindow):
             facts.append(format_manifest_path_fact(self._workflow.manifest_path))
         self._workflow_step_output_lines = []
         self._set_workflow_summary("running", step.heading, step.message, facts)
-        self._append_log(f"\n=== {step.heading}：gemini_translate_batch.py {' '.join(step.args)} ===\n")
-        self.runner.run(self.state.get_batch_script_path(), step.args)
+        if step.script_basename == "gemini_translate.py":
+            script_path = self.state.get_sync_script_path()
+        else:
+            script_path = self.state.get_batch_script_path()
+        args_text = " ".join(step.args)
+        command_label = f"{step.script_basename} {args_text}".strip()
+        self._append_log(f"\n=== {step.heading}：{command_label} ===\n")
+        self.runner.run(script_path, step.args)
 
     def _current_writeback_summary(self) -> WritebackSummary:
         return getattr(self, "_writeback_summary", idle_writeback_summary())
@@ -1892,10 +1926,17 @@ class MainWindow(QMainWindow):
         self._active_command = ""
         self._workflow = None
         self._set_task_running(False)
+        finish_spec = work_mode_spec(self._current_work_mode())
+        if not finish_spec.supports_translation_writeback:
+            self._set_writeback_summary(
+                idle_writeback_summary_for_work_mode(finish_spec.mode)
+            )
         if update.status == "failed":
             self.statusBar().showMessage("翻译任务失败，请查看诊断日志。", 8000)
         elif update.status == "waiting":
             self.statusBar().showMessage("批量任务仍在处理，可稍后继续最新任务。", 8000)
+        elif update.status == "done":
+            self.statusBar().showMessage(update.heading, 6000)
         else:
             self.statusBar().showMessage("翻译任务流程完成。", 6000)
 

@@ -496,6 +496,23 @@ def idle_diagnostics_context() -> DiagnosticsContext:
     )
 
 
+def sync_diagnostics_context(
+    *,
+    sync_script_path: str,
+    python_exe: str = "python",
+) -> DiagnosticsContext:
+    command = format_cli_command(python_exe, sync_script_path, [])
+    return DiagnosticsContext(
+        status="ready",
+        heading="同步翻译上下文",
+        message="同步模式不生成 Batch 任务清单；以下为可手动运行的同步命令。",
+        facts=[],
+        paths=[],
+        commands=[DiagnosticsCommand(label="同步翻译", command=command)],
+        manifest_json_preview="",
+    )
+
+
 def build_diagnostics_context(
     *,
     latest_manifest_path: str | None,

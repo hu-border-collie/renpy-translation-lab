@@ -1,5 +1,6 @@
 import unittest
 
+from gui_qt.sync_translation_workflow import SyncTranslationWorkflow
 from gui_qt.translation_workflow import TranslationWorkflow
 from gui_qt.work_modes import WorkMode
 from gui_qt.workflow_factory import (
@@ -16,8 +17,14 @@ class GuiWorkflowFactoryTests(unittest.TestCase):
         self.assertIsInstance(workflow, TranslationWorkflow)
         self.assertEqual(workflow.current_step().args, ["build"])
 
+    def test_create_workflow_returns_sync_translation_workflow(self):
+        workflow = create_workflow(WorkMode.SYNC_TRANSLATION)
+
+        self.assertIsInstance(workflow, SyncTranslationWorkflow)
+        self.assertEqual(workflow.current_step().script_basename, "gemini_translate.py")
+
     def test_create_workflow_returns_none_for_unimplemented_modes(self):
-        self.assertIsNone(create_workflow(WorkMode.SYNC_TRANSLATION))
+        self.assertIsNone(create_workflow(WorkMode.KEYWORD_EXTRACTION))
 
     def test_validate_resume_manifest_rejects_mode_mismatch(self):
         with self.assertRaisesRegex(ValueError, "不是Batch 翻译任务"):

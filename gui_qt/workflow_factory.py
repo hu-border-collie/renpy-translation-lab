@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from .sync_translation_workflow import SyncTranslationWorkflow
 from .translation_workflow import TranslationWorkflow, WorkflowStep, WorkflowUpdate
 from .work_modes import WorkMode, manifest_mode_for_work_mode, work_mode_spec
 
@@ -21,6 +22,8 @@ def create_workflow(mode: WorkMode | str) -> GuiWorkflow | None:
         return None
     if spec.mode == WorkMode.BATCH_TRANSLATION:
         return TranslationWorkflow.start_new()
+    if spec.mode == WorkMode.SYNC_TRANSLATION:
+        return SyncTranslationWorkflow.start_new()
     return None
 
 

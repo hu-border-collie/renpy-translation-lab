@@ -31,6 +31,7 @@ class WorkflowStep:
     args: list[str]
     heading: str
     message: str
+    script_basename: str = "gemini_translate_batch.py"
 
 
 @dataclass(frozen=True)

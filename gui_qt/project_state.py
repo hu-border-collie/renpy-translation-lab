@@ -29,9 +29,7 @@ class ProjectState:
         self.tool_root: Path = gui_qt_dir.parent
 
         self.batch_script: Path = self.tool_root / "gemini_translate_batch.py"
-        if not self.batch_script.exists():
-            # Fallback for some layouts
-            self.batch_script = self.tool_root / "gemini_translate_batch.py"
+        self.sync_script: Path = self.tool_root / "gemini_translate.py"
 
         self.api_keys_path: Path = self._resolve_api_keys_path()
         self.config_path: Path = self.tool_root / "translator_config.json"
@@ -47,6 +45,9 @@ class ProjectState:
 
     def get_batch_script_path(self) -> Path:
         return self.batch_script
+
+    def get_sync_script_path(self) -> Path:
+        return self.sync_script
 
     def get_cli_root_dir(self) -> Path:
         if (self.tool_root / "api_keys.json").exists():
