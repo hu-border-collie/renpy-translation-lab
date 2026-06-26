@@ -15,7 +15,7 @@
 ### 配置与运行
 
 - [安装与本地配置](setup.md)：本地私有配置、游戏 `work` 目录、Ren'Py SDK / TL 模板和运行模式。
-- [GUI 工作台](gui_workbench.md)：可选 PySide6 图形界面的安装、主流程、诊断页和写回安全边界。
+- [GUI 工作台](gui_workbench.md)：可选 PySide6 图形界面的安装、任务模式（批量翻译 / 同步翻译 / 关键词 / 订正）、诊断页和写回安全边界。
 
 ### Batch 与安全
 

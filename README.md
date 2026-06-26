@@ -26,7 +26,7 @@ pip install -r requirements-gui.txt
 python -m gui_qt
 ```
 
-三个 Tab：**工作台**（环境检查、翻译进度、写回）、**配置**（API、模型、Batch 上下文预建、主题）、**诊断日志**（任务上下文、可复制命令、原始输出）。写回仅在检查结果为 `safe` 时启用。安装步骤、界面说明与安全边界见 [GUI 工作台](docs/gui_workbench.md)。
+三个 Tab：**工作台**（环境检查、翻译进度、写回）、**配置**（API、模型、批量上下文预建、主题）、**诊断日志**（任务上下文、命令参考、任务记录、原始输出）。写回仅在检查显示**可写回**（CLI 的 `safe`）时启用。安装步骤、界面说明与安全边界见 [GUI 工作台](docs/gui_workbench.md)。
 
 ## 核心能力
 
@@ -131,7 +131,7 @@ python gemini_translate_batch.py apply
 
 - 配置与运行
   - [安装与本地配置](docs/setup.md)：本地私有配置、项目目录、Ren'Py SDK / TL 模板和运行模式。
-  - [GUI 工作台](docs/gui_workbench.md)：可选图形界面的安装、主流程、诊断页与写回安全边界。
+  - [GUI 工作台](docs/gui_workbench.md)：可选图形界面的安装、任务模式、诊断页与写回安全边界。
 - Batch 与安全
   - [Batch 工作流与安全检查](docs/batch_workflows.md)：manifest / identity v2、`check/apply` 安全闸门、订正、关键词和 golden corpus 测试。
   - [上下文系统](docs/context_systems.md)：RAG history store、Batch source-only index、Structured Story Memory 和 RAG store benchmark。
@@ -145,15 +145,15 @@ python gemini_translate_batch.py apply
 
 它仍不是已经打磨完成的零配置产品，也不应直接在唯一原项目上整批写回。执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。
 
-2026-06-19 已在一部约 3,300 待译行的真实 Ren'Py 项目上完成一次 GUI 主路径烟测：预处理、原文索引预建、GUI 启动 Batch、排队后继续、下载、`check`、`safe` 写回和游戏启动验证均跑通；首轮 `check` 出现 `warn` 时 GUI 正确禁用写回，问题经 CLI / 人工修正后重新检查为 `safe`，最终写回 6 个文件、约 3,300 处译文行。该烟测不等于完整游戏 QA，仍未覆盖语言切换入口、全流程试玩、文本溢出和润色质量。
+2026-06-19 已在一部约 3,300 待译行的真实 Ren'Py 项目上完成一次 GUI 主路径烟测：预处理、原文索引预建、GUI 启动批量翻译、排队后继续、下载、检查、可写回状态下写回和游戏启动验证均跑通；首轮检查为「需处理」时 GUI 正确禁用写回，问题经 CLI / 人工修正后重新检查为「可写回」，最终写回 6 个文件、约 3,300 处译文行。该烟测不等于完整游戏 QA，仍未覆盖语言切换入口、全流程试玩、文本溢出和润色质量。
 
 如果使用图形工作台，推荐先走 GUI 能完整覆盖的基础主路径：
 
 ```text
-选择项目 -> 配置 API / 模型 -> 环境检查 -> 可选预建上下文 -> 开始翻译 -> 检查结果 -> safe 时写回
+选择项目 -> 配置 API / 模型 -> 环境检查 -> 可选预建上下文 -> 开始翻译 -> 检查结果 -> 可写回时写回
 ```
 
-GUI 按推荐顺序提供这些步骤：`doctor` 由环境检查按钮独立运行；「开始翻译」会协调 `build -> submit -> status -> download -> check`；只有 `safe` 后才通过写回按钮独立调用 `apply`。若 `check` 返回 `warn` / `block`，不要在 GUI 中强行写回；先回到 CLI 查看失败报告，并使用 retry / repair / revision 等流程处理。
+GUI 按推荐顺序提供这些步骤：`doctor` 由环境检查按钮独立运行；「开始翻译」会协调 `build -> submit -> status -> download -> check`；只有检查为「可写回」（`safe`）后才通过写回按钮独立调用 `apply`。若检查为「需处理」或「禁止写回」，不要在 GUI 中强行写回；可先查看问题清单、生成补译包，或回到 CLI 使用 repair / revision 等流程处理。
 
 高级用户或需要手动指定 manifest 时，CLI 推荐顺序仍是：
 
