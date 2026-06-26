@@ -10,6 +10,7 @@ from gui_qt.diagnostics_context import (
     manifest_for_preview,
     quote_cli_arg,
     resolve_package_dir,
+    sync_diagnostics_context,
 )
 
 
@@ -209,6 +210,18 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         )
         self.assertEqual(context.status, idle_diagnostics_context().status)
         self.assertEqual(context.commands, [])
+
+    def test_sync_diagnostics_context_shows_sync_command(self):
+        context = sync_diagnostics_context(
+            sync_script_path=r"C:\tools\gemini_translate.py",
+            python_exe=r"C:\Python\python.exe",
+        )
+
+        self.assertEqual(context.status, "ready")
+        self.assertIn("同步翻译上下文", context.heading)
+        self.assertEqual(len(context.commands), 1)
+        self.assertIn("gemini_translate.py", context.commands[0].command)
+        self.assertEqual(context.manifest_json_preview, "")
 
     def test_build_diagnostics_context_ready_with_manifest(self):
         manifest_path = r"C:\logs\batch_jobs\job1\manifest.json"

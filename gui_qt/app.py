@@ -65,6 +65,7 @@ from .diagnostics_context import (
     DiagnosticsContext,
     build_diagnostics_context,
     existing_retry_manifest_path,
+    sync_diagnostics_context,
 )
 from .retry_preview_dialog import RetryPreviewDialog
 from .retry_report import (
@@ -1000,6 +1001,8 @@ class MainWindow(QMainWindow):
     def _resolve_diagnostics_manifest_path(self) -> str | None:
         if self._workflow is not None and self._workflow.manifest_path:
             return self._workflow.manifest_path
+        if work_mode_spec(self._current_work_mode()).manifest_mode is None:
+            return None
         if self._writeback_manifest_path:
             return self._writeback_manifest_path
         latest_manifest = self.state.get_latest_manifest_path()
@@ -1014,6 +1017,15 @@ class MainWindow(QMainWindow):
             return None
 
     def _refresh_diagnostics_context(self) -> None:
+        spec = work_mode_spec(self._current_work_mode())
+        if spec.mode == WorkMode.SYNC_TRANSLATION:
+            context = sync_diagnostics_context(
+                sync_script_path=str(self.state.get_sync_script_path()),
+                python_exe=sys.executable,
+            )
+            self._set_diagnostics_context(context)
+            return
+
         latest_manifest = self.state.get_latest_manifest_path()
         manifest_path = self._resolve_diagnostics_manifest_path()
         manifest = self._load_diagnostics_manifest(manifest_path)
