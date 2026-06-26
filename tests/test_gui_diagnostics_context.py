@@ -201,6 +201,23 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("预览订正结果", labels)
         self.assertNotIn("应用订正（预览确认后）", labels)
 
+    def test_keyword_manifest_commands_use_export_keywords_flow(self):
+        manifest_path = r"C:\logs\batch_jobs\kw1\manifest.json"
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=manifest_path,
+            manifest={"mode": "keyword_extraction", "job_name": "batches/kw"},
+        )
+
+        by_label = {command.label: command.command for command in commands}
+        self.assertIn("查询关键词状态", by_label)
+        self.assertIn("导出关键词报告", by_label)
+        self.assertNotIn("检查翻译结果", by_label)
+        self.assertNotIn("写回翻译（仅可写回）", by_label)
+        self.assertIn("export-keywords", by_label["导出关键词报告"])
+        self.assertIn(manifest_path, by_label["导出关键词报告"])
+
     def test_build_diagnostics_context_idle_without_manifest(self):
         context = build_diagnostics_context(
             latest_manifest_path=None,
