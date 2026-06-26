@@ -61,9 +61,9 @@ TASK_CATEGORY_SPECS: dict[TaskCategory, TaskCategorySpec] = {
         category=TaskCategory.ANALYSIS_PREP,
         label="分析与准备",
         work_modes=(
-            WorkMode.KEYWORD_EXTRACTION,
             WorkMode.BOOTSTRAP_RAG,
             WorkMode.BOOTSTRAP_SOURCE_INDEX,
+            WorkMode.KEYWORD_EXTRACTION,
         ),
     ),
     TaskCategory.MAINTENANCE: TaskCategorySpec(
@@ -237,6 +237,9 @@ def work_modes_for_category(category: TaskCategory | str) -> tuple[WorkMode, ...
 
 def default_work_mode_for_category(category: TaskCategory | str) -> WorkMode:
     modes = work_modes_for_category(category)
+    for mode in modes:
+        if work_mode_spec(mode).implemented:
+            return mode
     return modes[0] if modes else WorkMode.BATCH_TRANSLATION
 
 

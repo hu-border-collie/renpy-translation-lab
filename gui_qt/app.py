@@ -1173,7 +1173,7 @@ class MainWindow(QMainWindow):
         self.work_mode_hint_label.setText(hint)
         self._refresh_workflow_idle_summary()
         if refresh_manifest_writeback:
-            self._refresh_writeback_for_work_mode()
+            self._refresh_writeback_from_latest_manifest()
         running = self.kill_btn.isEnabled()
         bootstrap_ready = self._bootstrap_task_ready(spec)
         self.translate_btn.setEnabled(spec.implemented and bootstrap_ready and not running)
@@ -1196,13 +1196,6 @@ class MainWindow(QMainWindow):
             summary.message,
             summary.facts,
         )
-
-    def _refresh_writeback_for_work_mode(self) -> None:
-        spec = work_mode_spec(self._current_work_mode())
-        if not spec.supports_translation_writeback:
-            self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
-            return
-        self._refresh_writeback_from_latest_manifest()
 
     def _refresh_writeback_from_latest_manifest(self) -> None:
         spec = work_mode_spec(self._current_work_mode())

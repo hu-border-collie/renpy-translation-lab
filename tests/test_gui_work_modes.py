@@ -55,7 +55,7 @@ class GuiWorkModesTests(unittest.TestCase):
         )
         self.assertEqual(
             default_work_mode_for_category(TaskCategory.ANALYSIS_PREP),
-            WorkMode.KEYWORD_EXTRACTION,
+            WorkMode.BOOTSTRAP_RAG,
         )
 
     def test_task_category_for_work_mode(self):
