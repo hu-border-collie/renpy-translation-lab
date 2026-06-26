@@ -28,16 +28,31 @@ class GuiWorkBootstrapReportTests(unittest.TestCase):
         self.assertTrue(any("复制文件数：42" in fact for fact in summary.facts))
 
     def test_summarize_skipped_bootstrap_output(self):
-        output = BOOTSTRAP_OUTPUT.replace("status: created", "status: skipped").replace(
-            "Copied 42 files",
-            "work directory already exists and is not empty",
-        )
+        output = """
+Work bootstrap summary:
+- status: skipped
+- project_root: C:\\Games\\Example
+- work_dir: C:\\Games\\Example\\work
+- source_game_dir: C:\\Games\\Example\\original\\game
+- files_copied: 0
+- game_root_updated: False
+- message: work directory already exists and is not empty
+"""
 
         summary = summarize_work_bootstrap_output(output, exit_code=0)
 
         self.assertEqual(summary.status, "warning")
+        self.assertEqual(summary.heading, "工作目录已存在")
         self.assertIn("非空", summary.message)
-        self.assertTrue(any(fact.startswith("注意：") for fact in summary.facts))
+        self.assertNotIn("work 目录", summary.message)
+        self.assertTrue(any(fact.startswith("工作目录：") for fact in summary.facts))
+        self.assertTrue(
+            any(
+                fact.startswith("注意：") and "重新初始化" in fact
+                for fact in summary.facts
+            )
+        )
+        self.assertFalse(any("work directory already exists" in fact for fact in summary.facts))
         self.assertFalse(any(fact.startswith("- ") for fact in summary.facts))
 
     def test_work_bootstrap_to_doctor_summary_preserves_heading(self):
