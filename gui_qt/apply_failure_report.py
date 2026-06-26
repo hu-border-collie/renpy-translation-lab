@@ -371,7 +371,7 @@ def build_apply_failure_report(
         return ApplyFailureReportView(
             status="missing_report",
             heading="写回失败报告不可用",
-            message="写回失败报告路径已记录，但文件当前不存在。请重新尝试 apply 或查看诊断日志。",
+            message="写回失败报告路径已记录，但文件当前不存在。请重新尝试写回或查看诊断日志。",
             report_path=report_path,
             failures_path=failures_path,
             reason_code=reason_code,
@@ -396,7 +396,7 @@ def build_apply_failure_report(
     return ApplyFailureReportView(
         status="ok",
         heading="写回失败诊断",
-        message="写回未完成。请按建议处理问题后重新 check，不要重复 apply。",
+        message="写回未完成。请按建议处理问题后重新检查，不要重复写回。",
         report_path=report_path,
         failures_path=failures_path,
         reason_code=reason_code,

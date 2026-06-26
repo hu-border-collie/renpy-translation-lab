@@ -252,7 +252,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
         return WritebackSummary(
             status="failed",
             heading="写回失败",
-            message="最近一次写回未成功。可点击「查看写回失败报告」了解原因，处理后再重新 check。",
+            message="最近一次写回未成功。可点击「查看写回失败报告」了解原因，处理后再重新检查。",
             facts=facts,
             findings=[],
             can_apply=False,

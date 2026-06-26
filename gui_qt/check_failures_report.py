@@ -566,7 +566,7 @@ def build_check_issues_report(
         return CheckIssuesReport(
             status="empty",
             heading="检查报告为空",
-            message="检查报告存在，但没有记录失败条目。请查看诊断日志确认 check 输出。",
+            message="检查报告存在，但没有记录失败条目。请查看诊断日志确认检查结果。",
             report_path=report_path,
             safety_level=safety_level,
             category_counts={},
