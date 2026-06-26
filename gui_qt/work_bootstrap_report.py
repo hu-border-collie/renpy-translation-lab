@@ -10,25 +10,6 @@ from .summary_helpers import append_unique_fact, extend_facts_with_notices
 
 WORK_BOOTSTRAP_HEADER = "Work bootstrap summary:"
 
-_WORK_BOOTSTRAP_MESSAGE_TRANSLATIONS = {
-    "work directory already exists and is not empty": (
-        "如需重新初始化，请先手动清空或移除工作目录。"
-    ),
-}
-
-
-def _translate_work_bootstrap_message(message: str) -> str:
-    text = message.strip()
-    if not text:
-        return ""
-    if text in _WORK_BOOTSTRAP_MESSAGE_TRANSLATIONS:
-        return _WORK_BOOTSTRAP_MESSAGE_TRANSLATIONS[text]
-    if "work directory already exists and is not empty" in text:
-        return _WORK_BOOTSTRAP_MESSAGE_TRANSLATIONS[
-            "work directory already exists and is not empty"
-        ]
-    return text
-
 
 @dataclass(frozen=True)
 class WorkBootstrapSummary:
@@ -83,17 +64,15 @@ def summarize_work_bootstrap_output(output: str, exit_code: int) -> WorkBootstra
 
     facts: list[str] = []
     if work_dir:
-        append_unique_fact(facts, f"工作目录：{work_dir}")
+        append_unique_fact(facts, f"work 目录：{work_dir}")
     if files_copied and files_copied != "0":
         append_unique_fact(facts, f"复制文件数：{files_copied}")
     if game_root_updated:
-        append_unique_fact(facts, "已自动将项目路径更新为工作目录")
+        append_unique_fact(facts, "已自动将 game_root 更新为 work 目录")
 
     findings: list[str] = []
     if message and status == "skipped":
-        translated = _translate_work_bootstrap_message(message)
-        if translated and translated != message:
-            findings.append(translated)
+        findings.append(message)
 
     if exit_code != 0:
         return WorkBootstrapSummary(
@@ -102,9 +81,9 @@ def summarize_work_bootstrap_output(output: str, exit_code: int) -> WorkBootstra
             message="命令未正常完成，请查看诊断日志。",
             facts=extend_facts_with_notices(
                 facts,
-                findings or ["请确认存在 original/game，且工作目录不存在或为空。"],
+                findings or ["请确认存在 original/game，且 work 目录不存在或为空。"],
             ),
-            findings=findings or ["请确认存在 original/game，且工作目录不存在或为空。"],
+            findings=findings or ["请确认存在 original/game，且 work 目录不存在或为空。"],
             work_dir=work_dir,
             game_root_updated=False,
         )
@@ -122,15 +101,11 @@ def summarize_work_bootstrap_output(output: str, exit_code: int) -> WorkBootstra
         )
 
     if status == "skipped":
-        skip_notice = (
-            _translate_work_bootstrap_message(message)
-            or "如需重新初始化，请先手动清空或移除工作目录。"
-        )
-        skip_notices = findings or [skip_notice]
+        skip_notices = findings or [message or "如需重新初始化，请先手动清空或移除 work 目录。"]
         return WorkBootstrapSummary(
             status="warning",
-            heading="工作目录已存在",
-            message="工作目录已存在且非空，未做任何修改。",
+            heading="未准备工作目录",
+            message="work 目录已存在且非空，未做任何修改。",
             facts=extend_facts_with_notices(facts, skip_notices),
             findings=skip_notices,
             work_dir=work_dir,
@@ -160,7 +135,7 @@ def summarize_work_bootstrap_output(output: str, exit_code: int) -> WorkBootstra
 
 
 def with_game_root_persist_warning(summary: WorkBootstrapSummary) -> WorkBootstrapSummary:
-    notice = "未能保存项目路径到配置文件，请手动切换到工作目录。"
+    notice = "未能更新 translator_config.json 中的 game_root，请手动切换到 work 目录。"
     return WorkBootstrapSummary(
         status="warning",
         heading="工作目录已复制，但路径未保存",
