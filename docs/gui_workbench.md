@@ -161,6 +161,8 @@ python gemini_translate_batch.py preview-revisions <manifest>
 
 选择「维护 · 同步订正」时，GUI 只调用 `sync-revisions`（**不带 `--apply`**），生成预览报告后停止；适合小范围 smoke test。
 
+确认预览后，Batch 与同步订正均通过「应用订正」按钮调用 `apply-revisions <manifest>`，对**已预览的 manifest** 写回，而不是重新跑 `sync-revisions --apply`。
+
 订正写回与普通翻译写回**分离**：
 
 - 普通 `check -> apply` 的 `safe / warn / block` 闸门**不覆盖**订正 manifest。

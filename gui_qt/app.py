@@ -748,6 +748,8 @@ class MainWindow(QMainWindow):
             self.workbench_status_tabs.setCurrentIndex(index)
 
     def _writeback_issues_ready(self, summary: WritebackSummary) -> bool:
+        if self._uses_revision_writeback():
+            return False
         return summary.status == "warn" and bool(summary.manifest_path)
 
     def _load_writeback_manifest(self) -> dict[str, object] | None:
@@ -1654,19 +1656,20 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        manifest_path = self._writeback_manifest_path
         self.log_view.clear()
         self._focus_log_tab()
         self._active_command = "apply"
         self._apply_output_lines = []
         self._focus_workbench_status_tab(2)
-        self._set_writeback_summary(running_writeback_summary())
+        self._set_writeback_summary(running_writeback_summary(manifest_path=manifest_path))
         self._append_log(
-            f"=== 正在写回：gemini_translate_batch.py apply {self._writeback_manifest_path} ===\n"
+            f"=== 正在写回：gemini_translate_batch.py apply {manifest_path} ===\n"
         )
         self._set_task_running(True)
         self.runner.run(
             self.state.get_batch_script_path(),
-            ["apply", self._writeback_manifest_path],
+            ["apply", manifest_path],
         )
 
     def _on_apply_revision(self) -> None:
@@ -1704,26 +1707,27 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        manifest_path = summary.manifest_path or self._writeback_manifest_path
+        if not manifest_path:
+            QMessageBox.information(self, "无法写回订正", "没有可写回的订正任务清单。")
+            return
+
         self.log_view.clear()
         self._focus_log_tab()
         self._active_command = "apply_revision"
         self._apply_revision_output_lines = []
         self._focus_workbench_status_tab(2)
-        self._set_writeback_summary(running_writeback_summary())
+        self._set_writeback_summary(
+            running_writeback_summary(
+                manifest_path=manifest_path,
+                heading="正在应用订正",
+                message="正在写回订正；完成后这里会显示写回摘要。",
+            )
+        )
         self._set_task_running(True)
 
-        if spec.mode == WorkMode.SYNC_REVISION:
-            command_label = "gemini_translate_batch.py sync-revisions --apply"
-            args = ["sync-revisions", "--apply"]
-        else:
-            if not self._writeback_manifest_path:
-                QMessageBox.information(self, "无法写回订正", "没有可写回的订正任务清单。")
-                self._set_task_running(False)
-                return
-            command_label = (
-                f"gemini_translate_batch.py apply-revisions {self._writeback_manifest_path}"
-            )
-            args = ["apply-revisions", self._writeback_manifest_path]
+        command_label = f"gemini_translate_batch.py apply-revisions {manifest_path}"
+        args = ["apply-revisions", manifest_path]
 
         self._append_log(f"=== 正在写回订正：{command_label} ===\n")
         self.runner.run(self.state.get_batch_script_path(), args)
@@ -1737,10 +1741,18 @@ class MainWindow(QMainWindow):
         resolved_manifest_path = manifest_path or self._manifest_path_from_sync_revision_output(
             output
         )
+        already_applied = False
+        if resolved_manifest_path:
+            try:
+                loaded = self.state.load_manifest_file(resolved_manifest_path)
+                already_applied = bool(loaded.get("revision_applied_at"))
+            except ValueError:
+                pass
         summary = summarize_revision_writeback_from_preview_output(
             output,
             exit_code,
             manifest_path=resolved_manifest_path,
+            already_applied=already_applied,
         )
         self._set_writeback_summary(summary)
         self._refresh_diagnostics_context()

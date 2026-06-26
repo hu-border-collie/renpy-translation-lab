@@ -378,12 +378,19 @@ def stale_writeback_summary() -> WritebackSummary:
     )
 
 
-def running_writeback_summary() -> WritebackSummary:
+def running_writeback_summary(
+    *,
+    manifest_path: str = "",
+    heading: str = "正在写回翻译",
+    message: str = "正在写回；完成后这里会显示写回摘要。",
+) -> WritebackSummary:
+    facts = [format_manifest_path_fact(manifest_path)] if manifest_path else []
     return WritebackSummary(
         status="running",
-        heading="正在写回翻译",
-        message="正在写回；完成后这里会显示写回摘要。",
-        facts=[],
+        heading=heading,
+        message=message,
+        facts=facts,
         findings=[],
         can_apply=False,
+        manifest_path=manifest_path,
     )

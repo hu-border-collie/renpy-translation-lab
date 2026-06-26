@@ -12,6 +12,7 @@ def summarize_revision_writeback_from_preview_output(
     exit_code: int,
     *,
     manifest_path: str = "",
+    already_applied: bool = False,
 ) -> WritebackSummary:
     if exit_code != 0:
         return WritebackSummary(
@@ -65,6 +66,17 @@ def summarize_revision_writeback_from_preview_output(
             manifest_path=manifest_path,
         )
 
+    if already_applied:
+        return WritebackSummary(
+            status="applied",
+            heading="订正已写回",
+            message="该订正任务已经写回过。",
+            facts=facts,
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+
     if valid_items > 0:
         return WritebackSummary(
             status="safe",
@@ -77,7 +89,7 @@ def summarize_revision_writeback_from_preview_output(
         )
 
     return WritebackSummary(
-        status="warn",
+        status="idle",
         heading="当前没有可写回订正",
         message="预览已完成，但没有可写回的订正项；请查看预览报告后再决定是否调整任务。",
         facts=extend_facts_with_notices(facts, findings),
@@ -165,7 +177,7 @@ def summarize_revision_writeback_from_manifest(
         )
 
     return WritebackSummary(
-        status="warn",
+        status="idle",
         heading="当前没有可写回订正",
         message="最近一次订正预览没有可写回项；请查看预览报告后再决定是否调整任务。",
         facts=extend_facts_with_notices(facts, findings),

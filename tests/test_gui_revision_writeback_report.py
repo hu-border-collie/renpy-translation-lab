@@ -35,7 +35,18 @@ class GuiRevisionWritebackReportTests(unittest.TestCase):
             manifest_path="C:\\package\\manifest.json",
         )
 
-        self.assertEqual(summary.status, "warn")
+        self.assertEqual(summary.status, "idle")
+        self.assertFalse(summary.can_apply)
+
+    def test_preview_already_applied_blocks_apply(self):
+        summary = summarize_revision_writeback_from_preview_output(
+            PREVIEW_OUTPUT,
+            0,
+            manifest_path="C:\\package\\manifest.json",
+            already_applied=True,
+        )
+
+        self.assertEqual(summary.status, "applied")
         self.assertFalse(summary.can_apply)
 
     def test_preview_nonzero_exit_blocks_apply(self):
