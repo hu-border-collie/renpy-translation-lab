@@ -2110,7 +2110,7 @@ class MainWindow(QMainWindow):
                     self.state.set_game_root(summary.work_dir)
                     self._refresh_project_label()
                 except ValueError as exc:
-                    self._append_log(f"更新 translator_config.json 失败：{exc}")
+                    self._append_log(f"未能保存项目路径：{exc}")
                     game_root_update_failed = True
                     summary = with_game_root_persist_warning(summary)
             self._set_doctor_summary(work_bootstrap_to_doctor_summary(summary))
@@ -2118,7 +2118,7 @@ class MainWindow(QMainWindow):
             self._set_task_running(False)
             if game_root_update_failed:
                 self.statusBar().showMessage(
-                    "工作目录已复制，但更新 game_root 失败，请查看诊断日志。",
+                    "工作目录已复制，但项目路径未保存，请查看诊断日志。",
                     8000,
                 )
             elif exit_code == 0 and summary.status == "ready":

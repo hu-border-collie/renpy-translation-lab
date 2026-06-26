@@ -164,7 +164,7 @@ def with_game_root_persist_warning(summary: WorkBootstrapSummary) -> WorkBootstr
     return WorkBootstrapSummary(
         status="warning",
         heading="工作目录已复制，但路径未保存",
-        message="文件已复制到 work/game，但未能将 game_root 写入配置文件。",
+        message="工作目录已复制，但未能保存项目路径到配置文件。",
         facts=extend_facts_with_notices(summary.facts, [notice]),
         findings=[notice],
         work_dir=summary.work_dir,
