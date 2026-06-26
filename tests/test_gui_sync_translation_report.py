@@ -7,6 +7,7 @@ SUCCESS_OUTPUT = """
 Found 2 files.
 Processing: script.rpy
   Found 3 lines to translate.
+  Translated 3/3 items. (Received 42 chars of translation)
   Done with script.rpy.
 Progress log: logs/sync_progress.json
 """
@@ -42,6 +43,41 @@ class GuiSyncTranslationReportTests(unittest.TestCase):
         update = summarize_sync_translation_output("boom", 1)
 
         self.assertEqual(update.status, "failed")
+
+    def test_summarize_missing_tl_dir_fails_even_with_zero_files(self):
+        update = summarize_sync_translation_output(
+            "Found 0 files.\nWARNING: TL_DIR does not exist after prepare step.\n",
+            0,
+        )
+
+        self.assertEqual(update.status, "failed")
+        self.assertIn("翻译目录不存在", update.heading)
+
+    def test_summarize_retry_exhausted_without_translation_fails(self):
+        update = summarize_sync_translation_output(
+            "Found 1 files.\n"
+            "Processing: script.rpy\n"
+            "  Found 3 lines to translate.\n"
+            "  Translated 0/3 items. (Received 0 chars of translation)\n"
+            "  Done with script.rpy.\n",
+            0,
+        )
+
+        self.assertEqual(update.status, "failed")
+        self.assertIn("未完成", update.heading)
+
+    def test_summarize_partial_translation_warns(self):
+        update = summarize_sync_translation_output(
+            "Found 1 files.\n"
+            "Processing: script.rpy\n"
+            "  Found 3 lines to translate.\n"
+            "  Translated 1/3 items. (Received 12 chars of translation)\n"
+            "  Done with script.rpy.\n",
+            0,
+        )
+
+        self.assertEqual(update.status, "warning")
+        self.assertIn("部分完成", update.message)
 
 
 if __name__ == "__main__":

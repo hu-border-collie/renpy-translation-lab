@@ -8,7 +8,7 @@ from .translation_workflow import WorkflowStep, WorkflowUpdate
 class SyncTranslationWorkflow:
     def __init__(self, pending_steps: list[str] | None = None):
         self.manifest_path = ""
-        self._pending_steps = list(pending_steps or ["run"])
+        self._pending_steps = ["run"] if pending_steps is None else list(pending_steps)
 
     @classmethod
     def start_new(cls) -> "SyncTranslationWorkflow":
