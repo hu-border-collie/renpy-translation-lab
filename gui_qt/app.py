@@ -269,9 +269,9 @@ class MainWindow(QMainWindow):
                 label.setMinimumHeight(target_height)
                 changed = True
 
-        sync_label(self.doctor_message_label)
-        sync_label(self.doctor_facts_label)
-        sync_label(self.doctor_details_label)
+        # The project check pane is scrollable, so Qt can size those labels
+        # lazily inside the scroll area. Measuring long doctor output here is
+        # synchronous on the GUI thread and makes checks/tab switches feel slow.
         sync_label(self.workflow_message_label)
         sync_label(self.workflow_facts_label)
         sync_label(self.writeback_message_label)

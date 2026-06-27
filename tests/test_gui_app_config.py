@@ -698,6 +698,101 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
             self.assertTrue(any("已将关键词提取报告复制一份至" in msg for msg in logged_messages))
 
+    def test_sync_layout_sizes_skips_scrollable_doctor_labels(self):
+        class RaisingLabel:
+            def __init__(self, text):
+                self._text = text
+
+            def text(self):
+                return self._text
+
+            def isVisible(self):
+                return True
+
+            def fontMetrics(self):
+                raise AssertionError("scrollable doctor labels should not be measured")
+
+            def minimumHeight(self):
+                return 0
+
+            def setMinimumHeight(self, height):
+                raise AssertionError("scrollable doctor labels should not be resized")
+
+        class FakeRect:
+            def height(self):
+                return 20
+
+        class FakeMetrics:
+            def boundingRect(self, *args):
+                return FakeRect()
+
+        class MeasuredLabel:
+            def __init__(self, text=""):
+                self._text = text
+                self.minimum_height = 0
+                self.measured = False
+
+            def text(self):
+                return self._text
+
+            def isVisible(self):
+                return bool(self._text)
+
+            def fontMetrics(self):
+                self.measured = True
+                return FakeMetrics()
+
+            def minimumHeight(self):
+                return self.minimum_height
+
+            def setMinimumHeight(self, height):
+                self.minimum_height = height
+
+        class FakeLayout:
+            def __init__(self):
+                self.invalidated = False
+
+            def invalidate(self):
+                self.invalidated = True
+
+        class FakeWidget:
+            def __init__(self):
+                self._layout = FakeLayout()
+
+            def layout(self):
+                return self._layout
+
+        class FakeTabs:
+            def __init__(self):
+                self.widget = FakeWidget()
+                self.updated = False
+
+            def width(self):
+                return 320
+
+            def currentWidget(self):
+                return self.widget
+
+            def updateGeometry(self):
+                self.updated = True
+
+        tabs = FakeTabs()
+        self.window.workbench_status_tabs = tabs
+        self.window.doctor_message_label = RaisingLabel("doctor message")
+        self.window.doctor_facts_label = RaisingLabel("doctor facts")
+        self.window.doctor_details_label = RaisingLabel("doctor details")
+        self.window.workflow_message_label = MeasuredLabel("workflow message")
+        self.window.workflow_facts_label = MeasuredLabel()
+        self.window.writeback_message_label = MeasuredLabel()
+        self.window.writeback_facts_label = MeasuredLabel()
+        self.window.writeback_details_label = MeasuredLabel()
+
+        self.window._sync_layout_sizes()
+
+        self.assertTrue(self.window.workflow_message_label.measured)
+        self.assertEqual(self.window.workflow_message_label.minimum_height, 24)
+        self.assertTrue(tabs.widget.layout().invalidated)
+        self.assertTrue(tabs.updated)
 
 if __name__ == "__main__":
     unittest.main()
