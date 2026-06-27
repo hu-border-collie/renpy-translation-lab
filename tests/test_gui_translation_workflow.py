@@ -83,6 +83,18 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
 
         self.assertEqual(workflow.current_step().args, ["status", "C:\\package\\manifest.json"])
 
+    def test_resume_checked_manifest_uses_last_check_summary_as_complete(self):
+        workflow = TranslationWorkflow.resume_manifest(
+            r"C:\package\manifest.json",
+            {
+                "job_name": "batches/example",
+                "job_state": "JOB_STATE_SUCCEEDED",
+                "last_check_summary": {"safety_level": "safe"},
+            },
+        )
+
+        self.assertIsNone(workflow.current_step())
+
     def test_resume_succeeded_manifest_starts_from_download_and_check(self):
         manifest_path = r"C:\package\manifest.json"
         workflow = TranslationWorkflow.resume_manifest(

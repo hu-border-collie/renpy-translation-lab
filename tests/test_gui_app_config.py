@@ -37,6 +37,58 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         return FakeTimeline()
 
+    def _make_resume_state(
+        self,
+        manifest=None,
+        *,
+        latest_manifest=Path("C:/dummy/manifest.json"),
+        game_root=Path("C:/dummy/project"),
+        load_error=None,
+        batch_script_path=Path("C:/tool/gemini_translate_batch.py"),
+    ):
+        manifest_data = dict(manifest or {})
+
+        class FakeState:
+            def get_game_root(self):
+                return game_root
+
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return latest_manifest
+
+            def load_resume_manifest(self, path, work_mode):
+                if load_error is not None:
+                    raise load_error
+                return dict(manifest_data)
+
+            def get_batch_script_path(self):
+                return batch_script_path
+
+        return FakeState()
+
+    def _prepare_resume_refresh(
+        self,
+        *,
+        work_mode,
+        manifest=None,
+        latest_manifest=Path("C:/dummy/manifest.json"),
+        load_error=None,
+    ):
+        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
+        self.window._current_work_mode = lambda: work_mode
+        self.window.state = self._make_resume_state(
+            manifest,
+            latest_manifest=latest_manifest,
+            load_error=load_error,
+        )
+        self.window.timeline = self._fake_timeline()
+        summary_calls = []
+        self.window._set_workflow_summary = (
+            lambda status, heading, message, facts=None: summary_calls.append(
+                (status, heading, message, facts)
+            )
+        )
+        return summary_calls
+
     def test_sync_models_for_save_preserves_fallback_models(self):
         models = self.window._sync_models_for_save(
             ["gemini-primary", "gemini-fallback", "gemini-primary", "", 123],
@@ -221,19 +273,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
     def test_refresh_workflow_from_latest_manifest_no_manifest_shows_idle(self):
         from gui_qt.work_modes import WorkMode
 
-        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
-        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
-
-        class FakeState:
-            def get_game_root(self):
-                return Path("C:/dummy/project")
-            def get_latest_manifest_path_for_mode(self, game_root, mode):
-                return None
-        self.window.state = FakeState()
-        self.window.timeline = self._fake_timeline()
-
-        summary_calls = []
-        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.KEYWORD_EXTRACTION,
+            latest_manifest=None,
+        )
 
         self.window._refresh_workflow_from_latest_manifest()
 
@@ -243,21 +286,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
     def test_refresh_workflow_from_latest_manifest_load_error_shows_idle(self):
         from gui_qt.work_modes import WorkMode
 
-        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
-        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
-
-        class FakeState:
-            def get_game_root(self):
-                return Path("C:/dummy/project")
-            def get_latest_manifest_path_for_mode(self, game_root, mode):
-                return Path("C:/dummy/manifest.json")
-            def load_resume_manifest(self, path, work_mode):
-                raise ValueError("Dummy load error")
-        self.window.state = FakeState()
-        self.window.timeline = self._fake_timeline()
-
-        summary_calls = []
-        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.KEYWORD_EXTRACTION,
+            load_error=ValueError("Dummy load error"),
+        )
 
         self.window._refresh_workflow_from_latest_manifest()
 
@@ -267,29 +299,18 @@ class GuiAppConfigHelperTests(unittest.TestCase):
     def test_refresh_workflow_from_latest_manifest_running_job_state(self):
         from gui_qt.work_modes import WorkMode
 
-        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
-        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
-
-        class FakeState:
-            def get_game_root(self):
-                return Path("C:/dummy/project")
-            def get_latest_manifest_path_for_mode(self, game_root, mode):
-                return Path("C:/dummy/manifest.json")
-            def load_resume_manifest(self, path, work_mode):
-                return {
-                    "job_name": "jobs/12345",
-                    "job_state": "JOB_STATE_RUNNING",
-                    "summary": {
-                        "file_count": 3,
-                        "chunk_count": 10,
-                        "item_count": 100,
-                    }
-                }
-        self.window.state = FakeState()
-        self.window.timeline = self._fake_timeline()
-
-        summary_calls = []
-        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.KEYWORD_EXTRACTION,
+            manifest={
+                "job_name": "jobs/12345",
+                "job_state": "JOB_STATE_RUNNING",
+                "summary": {
+                    "file_count": 3,
+                    "chunk_count": 10,
+                    "item_count": 100,
+                },
+            },
+        )
 
         self.window._refresh_workflow_from_latest_manifest()
 
@@ -307,24 +328,13 @@ class GuiAppConfigHelperTests(unittest.TestCase):
     def test_refresh_workflow_from_latest_manifest_failed_job_state(self):
         from gui_qt.work_modes import WorkMode
 
-        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
-        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
-
-        class FakeState:
-            def get_game_root(self):
-                return Path("C:/dummy/project")
-            def get_latest_manifest_path_for_mode(self, game_root, mode):
-                return Path("C:/dummy/manifest.json")
-            def load_resume_manifest(self, path, work_mode):
-                return {
-                    "job_state": "JOB_STATE_FAILED",
-                    "job_error": "Quota exceeded",
-                }
-        self.window.state = FakeState()
-        self.window.timeline = self._fake_timeline()
-
-        summary_calls = []
-        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.KEYWORD_EXTRACTION,
+            manifest={
+                "job_state": "JOB_STATE_FAILED",
+                "job_error": "Quota exceeded",
+            },
+        )
 
         self.window._refresh_workflow_from_latest_manifest()
 
@@ -337,23 +347,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
     def test_refresh_workflow_from_latest_manifest_cancelled_job_state_is_terminal(self):
         from gui_qt.work_modes import WorkMode
 
-        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
-        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
-
-        class FakeState:
-            def get_game_root(self):
-                return Path("C:/dummy/project")
-            def get_latest_manifest_path_for_mode(self, game_root, mode):
-                return Path("C:/dummy/manifest.json")
-            def load_resume_manifest(self, path, work_mode):
-                return {
-                    "job_state": "JOB_STATE_CANCELLED",
-                }
-        self.window.state = FakeState()
-        self.window.timeline = self._fake_timeline()
-
-        summary_calls = []
-        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.KEYWORD_EXTRACTION,
+            manifest={"job_state": "JOB_STATE_CANCELLED"},
+        )
 
         self.window._refresh_workflow_from_latest_manifest()
 
@@ -370,23 +367,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         from gui_qt.work_modes import WorkMode
         from unittest.mock import patch, MagicMock
 
-        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
-        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
-
-        class FakeState:
-            def get_game_root(self):
-                return Path("C:/dummy/project")
-            def get_latest_manifest_path_for_mode(self, game_root, mode):
-                return Path("C:/dummy/manifest.json")
-            def load_resume_manifest(self, path, work_mode):
-                return {
-                    "job_state": "JOB_STATE_SUCCEEDED",
-                }
-        self.window.state = FakeState()
-        self.window.timeline = self._fake_timeline()
-
-        summary_calls = []
-        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.KEYWORD_EXTRACTION,
+            manifest={"job_state": "JOB_STATE_SUCCEEDED"},
+        )
 
         mock_workflow = MagicMock()
         mock_workflow.current_step.return_value = MagicMock(key="download")
@@ -406,23 +390,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         from gui_qt.work_modes import WorkMode
         from unittest.mock import patch, MagicMock
 
-        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
-        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
-
-        class FakeState:
-            def get_game_root(self):
-                return Path("C:/dummy/project")
-            def get_latest_manifest_path_for_mode(self, game_root, mode):
-                return Path("C:/dummy/manifest.json")
-            def load_resume_manifest(self, path, work_mode):
-                return {
-                    "job_state": "done",
-                }
-        self.window.state = FakeState()
-        self.window.timeline = self._fake_timeline()
-
-        summary_calls = []
-        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.KEYWORD_EXTRACTION,
+            manifest={"job_state": "done"},
+        )
 
         mock_workflow = MagicMock()
         mock_workflow.current_step.return_value = None
@@ -443,23 +414,17 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         from unittest.mock import MagicMock, patch
 
         self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
-
-        class FakeState:
-            def get_game_root(self):
-                return Path("C:/dummy/project")
-            def get_latest_manifest_path_for_mode(self, game_root, mode):
-                return Path("C:/dummy/manifest.json")
-            def load_resume_manifest(self, path, work_mode):
-                return {
-                    "mode": "keyword_extraction",
-                    "base_dir": "C:/dummy/project",
-                    "job_name": "batches/keywords",
-                    "job_state": "JOB_STATE_SUCCEEDED",
-                    "keyword_export": {
-                        "markdown_path": "C:/dummy/keyword_candidates.md",
-                    },
-                }
-        self.window.state = FakeState()
+        self.window.state = self._make_resume_state(
+            {
+                "mode": "keyword_extraction",
+                "base_dir": "C:/dummy/project",
+                "job_name": "batches/keywords",
+                "job_state": "JOB_STATE_SUCCEEDED",
+                "keyword_export": {
+                    "markdown_path": "C:/dummy/keyword_candidates.md",
+                },
+            }
+        )
         self.window.timeline = self._fake_timeline()
 
         summary_calls = []
@@ -503,21 +468,15 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         manifest_path = Path("C:/dummy/manifest.json")
         self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
         self.window.timeline = self._fake_timeline()
-
-        class FakeState:
-            def get_game_root(self):
-                return Path("C:/dummy/project")
-            def get_latest_manifest_path_for_mode(self, game_root, mode):
-                return manifest_path
-            def load_resume_manifest(self, path, work_mode):
-                return {
-                    "mode": "translation",
-                    "base_dir": "C:/dummy/project",
-                    "job_name": "batches/translation",
-                    "job_state": "JOB_STATE_SUCCEEDED",
-                }
-            def get_batch_script_path(self):
-                return Path("C:/tool/gemini_translate_batch.py")
+        self.window.state = self._make_resume_state(
+            {
+                "mode": "translation",
+                "base_dir": "C:/dummy/project",
+                "job_name": "batches/translation",
+                "job_state": "JOB_STATE_SUCCEEDED",
+            },
+            latest_manifest=manifest_path,
+        )
 
         class FakeRunner:
             def __init__(self):
@@ -533,7 +492,6 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def text(self):
                 return "继续翻译"
 
-        self.window.state = FakeState()
         self.window.runner = FakeRunner()
         self.window.log_view = FakeLogView()
         self.window.resume_btn = FakeResumeButton()
