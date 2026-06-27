@@ -535,6 +535,38 @@ class GuiProjectStateTests(unittest.TestCase):
             self.assertIsNotNone(latest)
             self.assertEqual(Path(latest).resolve(), manifest3.resolve())
 
+    def test_get_latest_manifest_path_for_mode_stops_on_unreadable_latest_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+
+            logs_dir = root / "logs" / "batch_jobs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+
+            corrupt_dir = logs_dir / "job_corrupt"
+            corrupt_dir.mkdir()
+            corrupt_manifest = corrupt_dir / "manifest.json"
+            corrupt_manifest.write_text("{", encoding="utf-8")
+            (logs_dir / "latest_manifest.txt").write_text(str(corrupt_manifest), encoding="utf-8")
+
+            old_dir = logs_dir / "job_old"
+            old_dir.mkdir()
+            old_manifest = old_dir / "manifest.json"
+            old_manifest.write_text(json.dumps({
+                "mode": "keyword_extraction",
+                "base_dir": "C:/correct/project",
+            }), encoding="utf-8")
+
+            state.get_logs_dir = lambda: logs_dir
+            state._normalized_path_text = lambda p: os.path.normcase(os.path.abspath(p))
+
+            latest = state.get_latest_manifest_path_for_mode(
+                Path("C:/correct/project"),
+                WorkMode.KEYWORD_EXTRACTION,
+            )
+
+            self.assertIsNone(latest)
+
     def test_get_latest_manifest_path_for_mode_reuses_history_index(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -51,6 +51,8 @@ class KeywordBatchWorkflow:
     def resume_manifest(cls, manifest_path: str, manifest: dict[str, object]) -> "KeywordBatchWorkflow":
         if manifest.get("keyword_export"):
             return cls([], manifest_path=manifest_path)
+        if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
+            return cls(["download", "export-keywords"], manifest_path=manifest_path)
         if not manifest.get("job_name"):
             return cls(["submit", "status"], manifest_path=manifest_path)
         return cls.resume_latest(manifest_path)

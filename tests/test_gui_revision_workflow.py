@@ -87,6 +87,17 @@ class GuiRevisionWorkflowTests(unittest.TestCase):
 
         self.assertEqual(workflow.current_step().args, ["status", "C:\\package\\manifest.json"])
 
+    def test_resume_succeeded_manifest_starts_from_download_and_preview(self):
+        manifest_path = r"C:\package\manifest.json"
+        workflow = RevisionBatchWorkflow.resume_manifest(
+            manifest_path,
+            {"job_name": "batches/example", "job_state": "JOB_STATE_SUCCEEDED"},
+        )
+
+        self.assertEqual(workflow.current_step().args, ["download", manifest_path])
+        workflow.complete_current_step(0, "Saved results to: " + r"C:\package\results.jsonl" + "\n")
+        self.assertEqual(workflow.current_step().args, ["preview-revisions", manifest_path])
+
     def test_status_succeeded_continues_to_download_and_preview(self):
         workflow = RevisionBatchWorkflow.resume_latest("C:\\package\\manifest.json")
 

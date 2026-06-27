@@ -104,8 +104,13 @@ from .theme_helpers import (
     read_gui_theme_from_config,
     write_gui_theme_to_config,
 )
-from .translation_workflow import WorkflowUpdate
-from .user_copy import format_job_fact, format_job_state_fact, format_manifest_path_fact
+from .translation_workflow import TERMINAL_FAILURE_STATES, WorkflowUpdate
+from .user_copy import (
+    format_job_fact,
+    format_job_state_fact,
+    format_manifest_path_fact,
+    job_state_label,
+)
 from .work_modes import (
     TASK_CATEGORY_ORDER,
     TaskCategory,
@@ -1454,9 +1459,38 @@ class MainWindow(QMainWindow):
         self.timeline.set_steps(steps)
         self.timeline.set_current_step(None, "idle")
 
+    def _sync_timeline_from_workflow_status(
+        self,
+        status: str,
+        workflow: Any | None = None,
+        *,
+        step_key: str | None = None,
+    ) -> None:
+        if not hasattr(self, "timeline"):
+            return
+        if not self.timeline.steps:
+            self.timeline.set_current_step(None, "idle")
+            self.timeline.setVisible(False)
+            return
+        if step_key is None and workflow is not None:
+            current_step = workflow.current_step()
+            step_key = current_step.key if current_step else None
+        if status == "idle":
+            self.timeline.set_current_step(None, "idle")
+            self.timeline.setVisible(False)
+            return
+        if status == "done":
+            self.timeline.set_current_step(None, "done")
+        else:
+            self.timeline.set_current_step(step_key, status)
+        self.timeline.setVisible(True)
+
     def _refresh_workflow_idle_summary(self) -> None:
         if self.kill_btn.isEnabled():
             return
+        if hasattr(self, "timeline"):
+            self.timeline.set_current_step(None, "idle")
+            self.timeline.setVisible(False)
         spec = work_mode_spec(self._current_work_mode())
         self._set_workflow_summary(
             "idle",
@@ -1492,6 +1526,7 @@ class MainWindow(QMainWindow):
             return
 
         job_state = manifest.get("job_state")
+        job_state_text = job_state if isinstance(job_state, str) else ""
         job_name = manifest.get("job_name")
         job_error = manifest.get("job_error")
 
@@ -1499,8 +1534,8 @@ class MainWindow(QMainWindow):
         facts.append(format_manifest_path_fact(str(latest_manifest)))
         if job_name:
             facts.append(format_job_fact(job_name))
-        if job_state:
-            facts.append(format_job_state_fact(job_state))
+        if job_state_text:
+            facts.append(format_job_state_fact(job_state_text))
 
         summary_info = manifest.get("summary", {})
         if isinstance(summary_info, dict):
@@ -1519,16 +1554,25 @@ class MainWindow(QMainWindow):
                 else:
                     facts.append(f"待翻译项：{item_count} 项")
 
-        is_waiting = job_state in ("JOB_STATE_PENDING", "JOB_STATE_RUNNING")
+        is_waiting = job_state_text in ("JOB_STATE_PENDING", "JOB_STATE_RUNNING")
+        timeline_step_key = None
+        workflow = None
 
         if is_waiting:
             status = "waiting"
+            timeline_step_key = "status"
             heading = f"最新{spec.label}任务进行中"
             message = "云端批量任务处理中。可以点击下方「查询云端状态」按钮进行刷新。"
-        elif job_state == "JOB_STATE_FAILED":
+        elif job_state_text in TERMINAL_FAILURE_STATES:
             status = "failed"
-            heading = f"最新{spec.label}任务已失败"
-            message = f"云端任务执行失败：{job_error or '未知错误'}。可以重新开始或继续任务以重试。"
+            timeline_step_key = "status"
+            if job_state_text == "JOB_STATE_FAILED":
+                heading = f"最新{spec.label}任务已失败"
+                message = f"云端任务执行失败：{job_error or '未知错误'}。可以重新开始或继续任务以重试。"
+            else:
+                heading = f"最新{spec.label}任务无法继续"
+                detail = f"：{job_error}" if job_error else ""
+                message = f"云端任务状态为「{job_state_label(job_state_text)}」{detail}，无法继续该任务；可以重新开始。"
         else:
             workflow = resume_workflow(spec.mode, str(latest_manifest), manifest)
             if workflow and workflow.current_step() is None:
@@ -1545,6 +1589,11 @@ class MainWindow(QMainWindow):
             heading=heading,
             message=message,
             facts=facts,
+        )
+        self._sync_timeline_from_workflow_status(
+            status,
+            workflow,
+            step_key=timeline_step_key,
         )
 
     def _set_workflow_from_bootstrap_summary(self, summary: BootstrapSummary) -> None:
@@ -1954,6 +2003,7 @@ class MainWindow(QMainWindow):
                 "该任务流程的所有步骤已全部执行完毕。",
                 facts,
             )
+            self._sync_timeline_from_workflow_status("done", workflow)
             self._refresh_diagnostics_context()
             self._refresh_writeback_from_latest_manifest()
             writeback_summary = self._current_writeback_summary()
@@ -2517,7 +2567,8 @@ class MainWindow(QMainWindow):
 
         update = self._workflow.complete_current_step(exit_code, step_output)
 
-        if step_key == "export-keywords" and exit_code == 0:
+        keyword_export_completed = step_key == "export-keywords" and exit_code == 0
+        if keyword_export_completed:
             self._copy_keyword_reports_to_game_parent(manifest_path)
 
         if "Safety status:" in step_output:
@@ -2547,9 +2598,12 @@ class MainWindow(QMainWindow):
             not finish_spec.supports_translation_writeback
             and finish_spec.mode not in self._revision_writeback_modes()
         ):
-            self._set_writeback_summary(
-                idle_writeback_summary_for_work_mode(finish_spec.mode)
-            )
+            if finish_spec.mode == WorkMode.KEYWORD_EXTRACTION and keyword_export_completed:
+                self._refresh_writeback_from_latest_manifest()
+            else:
+                self._set_writeback_summary(
+                    idle_writeback_summary_for_work_mode(finish_spec.mode)
+                )
         if update.status == "failed":
             self.statusBar().showMessage("翻译任务失败，请查看诊断日志。", 8000)
         elif update.status == "waiting":

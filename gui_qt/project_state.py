@@ -64,7 +64,7 @@ class ProjectState:
                 content = latest_file.read_text(encoding="utf-8").strip()
                 if content and Path(content).exists():
                     return Path(content)
-            except Exception:
+            except OSError:
                 pass
         return None
 
@@ -85,10 +85,10 @@ class ProjectState:
         if latest is not None:
             try:
                 manifest = self.load_manifest_file(latest)
-                if self._manifest_matches(manifest, expected_mode, normalized_game_root):
-                    return latest
-            except Exception:
-                pass
+            except ValueError:
+                return None
+            if self._manifest_matches(manifest, expected_mode, normalized_game_root):
+                return latest
 
         for _, path, actual_mode, base_dir in self._manifest_history_index():
             if not self._manifest_mode_matches(actual_mode, expected_mode):
@@ -130,7 +130,7 @@ class ProjectState:
                         actual_text,
                         self._normalized_path_text(base_dir),
                     ))
-                except Exception:
+                except (OSError, ValueError):
                     continue
 
         entries.sort(key=lambda entry: entry[0], reverse=True)

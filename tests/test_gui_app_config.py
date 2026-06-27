@@ -16,6 +16,27 @@ class GuiAppConfigHelperTests(unittest.TestCase):
     def setUp(self):
         self.window = MainWindow.__new__(MainWindow)
 
+    def _fake_timeline(self):
+        class FakeTimeline:
+            def __init__(self):
+                self.steps = [
+                    ("status", "云端执行"),
+                    ("download", "下载结果"),
+                    ("check", "安全校验"),
+                ]
+                self.visible = None
+                self.current_step_key = None
+                self.status = None
+
+            def set_current_step(self, step_key, status="running"):
+                self.current_step_key = step_key
+                self.status = status
+
+            def setVisible(self, visible):
+                self.visible = visible
+
+        return FakeTimeline()
+
     def test_sync_models_for_save_preserves_fallback_models(self):
         models = self.window._sync_models_for_save(
             ["gemini-primary", "gemini-fallback", "gemini-primary", "", 123],
@@ -209,6 +230,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def get_latest_manifest_path_for_mode(self, game_root, mode):
                 return None
         self.window.state = FakeState()
+        self.window.timeline = self._fake_timeline()
 
         summary_calls = []
         self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
@@ -232,6 +254,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def load_resume_manifest(self, path, work_mode):
                 raise ValueError("Dummy load error")
         self.window.state = FakeState()
+        self.window.timeline = self._fake_timeline()
 
         summary_calls = []
         self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
@@ -263,6 +286,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                     }
                 }
         self.window.state = FakeState()
+        self.window.timeline = self._fake_timeline()
 
         summary_calls = []
         self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
@@ -276,6 +300,9 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertIn("云端任务：jobs/12345", facts)
         self.assertIn("任务状态：处理中", facts)
         self.assertIn("扫描文件：3 个", facts)
+        self.assertTrue(self.window.timeline.visible)
+        self.assertEqual(self.window.timeline.current_step_key, "status")
+        self.assertEqual(self.window.timeline.status, "waiting")
 
     def test_refresh_workflow_from_latest_manifest_failed_job_state(self):
         from gui_qt.work_modes import WorkMode
@@ -294,6 +321,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                     "job_error": "Quota exceeded",
                 }
         self.window.state = FakeState()
+        self.window.timeline = self._fake_timeline()
 
         summary_calls = []
         self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
@@ -305,6 +333,38 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(status, "failed")
         self.assertIn("任务已失败", heading)
         self.assertIn("Quota exceeded", message)
+
+    def test_refresh_workflow_from_latest_manifest_cancelled_job_state_is_terminal(self):
+        from gui_qt.work_modes import WorkMode
+
+        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
+        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/project")
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return Path("C:/dummy/manifest.json")
+            def load_resume_manifest(self, path, work_mode):
+                return {
+                    "job_state": "JOB_STATE_CANCELLED",
+                }
+        self.window.state = FakeState()
+        self.window.timeline = self._fake_timeline()
+
+        summary_calls = []
+        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+
+        self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        status, heading, message, facts = summary_calls[0]
+        self.assertEqual(status, "failed")
+        self.assertIn("无法继续", heading)
+        self.assertIn("已取消", message)
+        self.assertTrue(self.window.timeline.visible)
+        self.assertEqual(self.window.timeline.current_step_key, "status")
+        self.assertEqual(self.window.timeline.status, "failed")
 
     def test_refresh_workflow_from_latest_manifest_resumable_job_state(self):
         from gui_qt.work_modes import WorkMode
@@ -323,6 +383,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                     "job_state": "JOB_STATE_SUCCEEDED",
                 }
         self.window.state = FakeState()
+        self.window.timeline = self._fake_timeline()
 
         summary_calls = []
         self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
@@ -337,6 +398,9 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         status, heading, message, facts = summary_calls[0]
         self.assertEqual(status, "ready")
         self.assertIn("可继续最新", heading)
+        self.assertTrue(self.window.timeline.visible)
+        self.assertEqual(self.window.timeline.current_step_key, "download")
+        self.assertEqual(self.window.timeline.status, "ready")
 
     def test_refresh_workflow_from_latest_manifest_completed_job_state(self):
         from gui_qt.work_modes import WorkMode
@@ -355,6 +419,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                     "job_state": "done",
                 }
         self.window.state = FakeState()
+        self.window.timeline = self._fake_timeline()
 
         summary_calls = []
         self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
@@ -369,6 +434,9 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         status, heading, message, facts = summary_calls[0]
         self.assertEqual(status, "done")
         self.assertIn("任务已完成", heading)
+        self.assertTrue(self.window.timeline.visible)
+        self.assertIsNone(self.window.timeline.current_step_key)
+        self.assertEqual(self.window.timeline.status, "done")
 
     def test_resume_completed_keyword_manifest_shows_result_summary(self):
         from gui_qt.work_modes import WorkMode
@@ -392,6 +460,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                     },
                 }
         self.window.state = FakeState()
+        self.window.timeline = self._fake_timeline()
 
         summary_calls = []
         self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
@@ -419,11 +488,123 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         status, heading, message, facts = summary_calls[0]
         self.assertEqual(status, "done")
         self.assertIn("任务已完成", heading)
+        self.assertTrue(self.window.timeline.visible)
+        self.assertIsNone(self.window.timeline.current_step_key)
+        self.assertEqual(self.window.timeline.status, "done")
         self.assertTrue(any("任务记录" in fact for fact in facts))
         self.window._refresh_diagnostics_context.assert_called_once()
         self.window._refresh_writeback_from_latest_manifest.assert_called_once()
         self.assertEqual(focus_calls, [2])
         self.assertIn("任务已完成", status_bar.messages[-1][0])
+
+    def test_resume_after_successful_status_query_runs_download_next(self):
+        from gui_qt.work_modes import WorkMode
+
+        manifest_path = Path("C:/dummy/manifest.json")
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window.timeline = self._fake_timeline()
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/project")
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return manifest_path
+            def load_resume_manifest(self, path, work_mode):
+                return {
+                    "mode": "translation",
+                    "base_dir": "C:/dummy/project",
+                    "job_name": "batches/translation",
+                    "job_state": "JOB_STATE_SUCCEEDED",
+                }
+            def get_batch_script_path(self):
+                return Path("C:/tool/gemini_translate_batch.py")
+
+        class FakeRunner:
+            def __init__(self):
+                self.calls = []
+            def run(self, script_path, args):
+                self.calls.append((script_path, args))
+
+        class FakeLogView:
+            def clear(self):
+                pass
+
+        class FakeResumeButton:
+            def text(self):
+                return "继续翻译"
+
+        self.window.state = FakeState()
+        self.window.runner = FakeRunner()
+        self.window.log_view = FakeLogView()
+        self.window.resume_btn = FakeResumeButton()
+        self.window._focus_log_tab = lambda: None
+        self.window._focus_workbench_status_tab = lambda index: None
+        self.window._refresh_diagnostics_context = lambda: None
+        self.window._append_log = lambda message: None
+        self.window._set_task_running = lambda running: None
+        summary_calls = []
+        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+
+        self.window._on_resume_translation()
+
+        self.assertEqual(len(self.window.runner.calls), 1)
+        script_path, args = self.window.runner.calls[0]
+        self.assertEqual(script_path, Path("C:/tool/gemini_translate_batch.py"))
+        self.assertEqual(args, ["download", str(manifest_path)])
+        self.assertEqual(summary_calls[-1][0], "running")
+        self.assertTrue(self.window.timeline.visible)
+        self.assertEqual(self.window.timeline.current_step_key, "download")
+
+    def test_keyword_export_finish_refreshes_keyword_result_summary(self):
+        from gui_qt.translation_workflow import WorkflowStep, WorkflowUpdate
+        from gui_qt.work_modes import WorkMode
+        from unittest.mock import MagicMock
+
+        class FakeWorkflow:
+            manifest_path = "C:/dummy/manifest.json"
+
+            def current_step(self):
+                return WorkflowStep(
+                    "export-keywords",
+                    ["export-keywords", self.manifest_path],
+                    "正在导出关键词报告",
+                    "正在整理候选术语与剧情概要报告。",
+                )
+
+            def complete_current_step(self, exit_code, output):
+                return WorkflowUpdate(
+                    status="done",
+                    heading="关键词提取完成",
+                    message="done",
+                    facts=[],
+                    should_continue=False,
+                )
+
+        class FakeStatusBar:
+            def __init__(self):
+                self.messages = []
+            def showMessage(self, text, timeout):
+                self.messages.append((text, timeout))
+
+        self.window._workflow = FakeWorkflow()
+        self.window._workflow_step_output_lines = ["Keyword candidates: 3 deduped from 5 raw"]
+        self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+        self.window._copy_keyword_reports_to_game_parent = MagicMock()
+        self.window._uses_revision_writeback = lambda: False
+        self.window._set_workflow_update = MagicMock()
+        self.window._refresh_diagnostics_context = MagicMock()
+        self.window._set_task_running = MagicMock()
+        self.window._refresh_writeback_from_latest_manifest = MagicMock()
+        self.window._set_writeback_summary = MagicMock()
+        status_bar = FakeStatusBar()
+        self.window.statusBar = lambda: status_bar
+
+        self.window._on_workflow_step_finished(0)
+
+        self.window._copy_keyword_reports_to_game_parent.assert_called_once_with("C:/dummy/manifest.json")
+        self.window._refresh_writeback_from_latest_manifest.assert_called_once()
+        self.window._set_writeback_summary.assert_not_called()
+        self.assertIn("关键词提取完成", status_bar.messages[-1][0])
 
     def test_update_resume_btn_text_uses_current_status_without_disk_lookup(self):
         from gui_qt.work_modes import WorkMode

@@ -97,6 +97,8 @@ class TranslationWorkflow:
     def resume_manifest(cls, manifest_path: str, manifest: dict[str, object]) -> "TranslationWorkflow":
         if manifest.get("last_check"):
             return cls([], manifest_path=manifest_path)
+        if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
+            return cls(["download", "check"], manifest_path=manifest_path)
         if not manifest.get("job_name"):
             return cls(["submit", "status"], manifest_path=manifest_path)
         return cls.resume_latest(manifest_path)
