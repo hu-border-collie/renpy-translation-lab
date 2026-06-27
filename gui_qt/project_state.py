@@ -64,9 +64,116 @@ class ProjectState:
                 content = latest_file.read_text(encoding="utf-8").strip()
                 if content and Path(content).exists():
                     return Path(content)
-            except Exception:
+            except OSError:
                 pass
         return None
+
+    def get_latest_manifest_path_for_mode(
+        self,
+        game_root: Path,
+        work_mode: Any,
+    ) -> Path | None:
+        from .work_modes import manifest_mode_for_work_mode
+        expected_mode = manifest_mode_for_work_mode(work_mode)
+        if expected_mode is None:
+            return None
+        normalized_game_root = self._normalized_path_text(game_root)
+
+        # Prefer the CLI's current pointer so newly-created jobs are visible
+        # immediately even when the broader history index is cached.
+        latest = self.get_latest_manifest_path()
+        if latest is not None:
+            try:
+                manifest = self.load_manifest_file(latest)
+            except ValueError:
+                return None
+            if self._manifest_matches(manifest, expected_mode, normalized_game_root):
+                return latest
+
+        for _, path, actual_mode, base_dir in self._manifest_history_index():
+            if not self._manifest_mode_matches(actual_mode, expected_mode):
+                continue
+            if base_dir == normalized_game_root:
+                return path
+
+        return None
+
+    def invalidate_manifest_history_cache(self) -> None:
+        self._manifest_history_cache_signature = None
+        self._manifest_history_entries = None
+
+    def _manifest_history_index(self) -> list[tuple[int, Path, str, str]]:
+        logs_dir = self.get_logs_dir()
+        signature = self._manifest_history_signature(logs_dir)
+        cached_signature = getattr(self, "_manifest_history_cache_signature", None)
+        cached_entries = getattr(self, "_manifest_history_entries", None)
+        if cached_signature == signature and cached_entries is not None:
+            return cached_entries
+
+        entries: list[tuple[int, Path, str, str]] = []
+        if logs_dir.exists():
+            for root, _, files in os.walk(logs_dir):
+                if "manifest.json" not in files:
+                    continue
+                path = Path(root) / "manifest.json"
+                try:
+                    stat = path.stat()
+                    manifest = self.load_manifest_file(path)
+                    actual_mode = manifest.get("mode", "translation")
+                    actual_text = actual_mode.strip() if isinstance(actual_mode, str) else "translation"
+                    base_dir = manifest.get("base_dir")
+                    if not isinstance(base_dir, str) or not base_dir.strip():
+                        continue
+                    entries.append((
+                        stat.st_mtime_ns,
+                        path,
+                        actual_text,
+                        self._normalized_path_text(base_dir),
+                    ))
+                except (OSError, ValueError):
+                    continue
+
+        entries.sort(key=lambda entry: entry[0], reverse=True)
+        self._manifest_history_cache_signature = signature
+        self._manifest_history_entries = entries
+        return entries
+
+    def _manifest_history_signature(self, logs_dir: Path) -> tuple[str, int | None, int | None]:
+        latest_file = logs_dir / "latest_manifest.txt"
+
+        def mtime_ns(path: Path) -> int | None:
+            try:
+                return path.stat().st_mtime_ns
+            except OSError:
+                return None
+
+        return (
+            self._normalized_path_text(logs_dir),
+            mtime_ns(logs_dir),
+            mtime_ns(latest_file),
+        )
+
+    def _manifest_matches(
+        self,
+        manifest: dict[str, Any],
+        expected_mode: str,
+        normalized_game_root: str,
+    ) -> bool:
+        actual_mode = manifest.get("mode", "translation")
+        actual_text = actual_mode.strip() if isinstance(actual_mode, str) else "translation"
+        if not self._manifest_mode_matches(actual_text, expected_mode):
+            return False
+        base_dir = manifest.get("base_dir")
+        return (
+            isinstance(base_dir, str)
+            and bool(base_dir.strip())
+            and self._normalized_path_text(base_dir) == normalized_game_root
+        )
+
+    def _manifest_mode_matches(self, actual_text: str, expected_mode: str) -> bool:
+        if expected_mode == "translation":
+            return actual_text in {"", "translation"}
+        return actual_text == expected_mode
 
     def load_manifest_file(self, manifest_path: str | Path) -> dict[str, Any]:
         manifest = self._read_json_object(Path(manifest_path), "batch manifest")

@@ -78,6 +78,17 @@ class GuiKeywordWorkflowTests(unittest.TestCase):
 
         self.assertEqual(workflow.current_step().args, ["status", "C:\\package\\manifest.json"])
 
+    def test_resume_succeeded_manifest_starts_from_download_and_export(self):
+        manifest_path = r"C:\package\manifest.json"
+        workflow = KeywordBatchWorkflow.resume_manifest(
+            manifest_path,
+            {"job_name": "batches/example", "job_state": "JOB_STATE_SUCCEEDED"},
+        )
+
+        self.assertEqual(workflow.current_step().args, ["download", manifest_path])
+        workflow.complete_current_step(0, "Saved results to: " + r"C:\package\results.jsonl" + "\n")
+        self.assertEqual(workflow.current_step().args, ["export-keywords", manifest_path])
+
     def test_status_succeeded_continues_to_download_and_export(self):
         workflow = KeywordBatchWorkflow.resume_latest("C:\\package\\manifest.json")
 
@@ -110,6 +121,18 @@ class GuiKeywordWorkflowTests(unittest.TestCase):
 
         self.assertEqual(update.status, "failed")
         self.assertFalse(update.should_continue)
+        self.assertIsNone(workflow.current_step())
+
+    def test_resume_completed_manifest_returns_empty_steps(self):
+        workflow = KeywordBatchWorkflow.resume_manifest(
+            "C:\\package\\manifest.json",
+            {
+                "job_name": "batches/example",
+                "keyword_export": {
+                    "jsonl_path": "C:\\package\\keyword_candidates.jsonl"
+                }
+            }
+        )
         self.assertIsNone(workflow.current_step())
 
 

@@ -482,6 +482,124 @@ class GuiProjectStateTests(unittest.TestCase):
             self.assertEqual(saved["batch"]["model"], "gemini-new-batch")
             self.assertEqual(saved["batch"]["thinking_level"], "high")
 
+    def test_get_latest_manifest_path_for_mode_walks_logs_and_filters_correctly(self):
+        from gui_qt.work_modes import WorkMode
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+
+            logs_dir = root / "logs" / "batch_jobs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+
+            dir1 = logs_dir / "job1"
+            dir1.mkdir()
+            manifest1 = dir1 / "manifest.json"
+            manifest1.write_text(json.dumps({
+                "mode": "keyword_extraction",
+                "base_dir": "C:/different/project",
+            }), encoding="utf-8")
+
+            dir2 = logs_dir / "job2"
+            dir2.mkdir()
+            manifest2 = dir2 / "manifest.json"
+            manifest2.write_text(json.dumps({
+                "mode": "translation",
+                "base_dir": "C:/correct/project",
+            }), encoding="utf-8")
+
+            dir3 = logs_dir / "job3"
+            dir3.mkdir()
+            manifest3 = dir3 / "manifest.json"
+            manifest3.write_text(json.dumps({
+                "mode": "keyword_extraction",
+                "base_dir": "C:/correct/project",
+            }), encoding="utf-8")
+
+            dir4 = logs_dir / "job4"
+            dir4.mkdir()
+            manifest4 = dir4 / "manifest.json"
+            manifest4.write_text(json.dumps({
+                "mode": "keyword_extraction",
+                "base_dir": "C:/correct/project",
+            }), encoding="utf-8")
+
+            os.utime(manifest4, (1000, 1000))
+            os.utime(manifest3, (2000, 2000))
+
+            state.get_logs_dir = lambda: logs_dir
+            state._normalized_path_text = lambda p: os.path.normcase(os.path.abspath(p))
+
+            game_root = Path("C:/correct/project")
+            latest = state.get_latest_manifest_path_for_mode(game_root, WorkMode.KEYWORD_EXTRACTION)
+
+            self.assertIsNotNone(latest)
+            self.assertEqual(Path(latest).resolve(), manifest3.resolve())
+
+    def test_get_latest_manifest_path_for_mode_stops_on_unreadable_latest_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+
+            logs_dir = root / "logs" / "batch_jobs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+
+            corrupt_dir = logs_dir / "job_corrupt"
+            corrupt_dir.mkdir()
+            corrupt_manifest = corrupt_dir / "manifest.json"
+            corrupt_manifest.write_text("{", encoding="utf-8")
+            (logs_dir / "latest_manifest.txt").write_text(str(corrupt_manifest), encoding="utf-8")
+
+            old_dir = logs_dir / "job_old"
+            old_dir.mkdir()
+            old_manifest = old_dir / "manifest.json"
+            old_manifest.write_text(json.dumps({
+                "mode": "keyword_extraction",
+                "base_dir": "C:/correct/project",
+            }), encoding="utf-8")
+
+            state.get_logs_dir = lambda: logs_dir
+            state._normalized_path_text = lambda p: os.path.normcase(os.path.abspath(p))
+
+            latest = state.get_latest_manifest_path_for_mode(
+                Path("C:/correct/project"),
+                WorkMode.KEYWORD_EXTRACTION,
+            )
+
+            self.assertIsNone(latest)
+
+    def test_get_latest_manifest_path_for_mode_reuses_history_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            logs_dir = root / "logs" / "batch_jobs"
+            manifest_dir = logs_dir / "job1"
+            manifest_dir.mkdir(parents=True, exist_ok=True)
+            manifest = manifest_dir / "manifest.json"
+            manifest.write_text(json.dumps({
+                "mode": "keyword_extraction",
+                "base_dir": "C:/correct/project",
+            }), encoding="utf-8")
+
+            state.get_logs_dir = lambda: logs_dir
+            state._normalized_path_text = lambda p: os.path.normcase(os.path.abspath(p))
+            original_load_manifest_file = state.load_manifest_file
+            loaded_paths = []
+
+            def recording_load_manifest_file(path):
+                loaded_paths.append(Path(path))
+                return original_load_manifest_file(path)
+
+            state.load_manifest_file = recording_load_manifest_file
+            game_root = Path("C:/correct/project")
+
+            first = state.get_latest_manifest_path_for_mode(game_root, WorkMode.KEYWORD_EXTRACTION)
+            first_read_count = len(loaded_paths)
+            second = state.get_latest_manifest_path_for_mode(game_root, WorkMode.KEYWORD_EXTRACTION)
+
+            self.assertEqual(Path(first).resolve(), manifest.resolve())
+            self.assertEqual(Path(second).resolve(), manifest.resolve())
+            self.assertGreater(first_read_count, 0)
+            self.assertEqual(len(loaded_paths), first_read_count)
 
 if __name__ == "__main__":
     unittest.main()

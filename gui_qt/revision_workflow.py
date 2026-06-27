@@ -49,6 +49,10 @@ class RevisionBatchWorkflow:
 
     @classmethod
     def resume_manifest(cls, manifest_path: str, manifest: dict[str, object]) -> "RevisionBatchWorkflow":
+        if manifest.get("last_revision_preview"):
+            return cls([], manifest_path=manifest_path)
+        if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
+            return cls(["download", "preview-revisions"], manifest_path=manifest_path)
         if not manifest.get("job_name"):
             return cls(["submit", "status"], manifest_path=manifest_path)
         return cls.resume_latest(manifest_path)
@@ -93,6 +97,14 @@ class RevisionBatchWorkflow:
         if key == "status":
             status_update = self._finish_status(output)
             if status_update is not None:
+                if getattr(self, "only_query", False) and status_update.status == "running":
+                    return WorkflowUpdate(
+                        status="ready",
+                        heading="云端任务已完成",
+                        message="查询结果：云端批量任务已成功完成！请点击「继续订正」下载并预览订正内容。",
+                        facts=status_update.facts,
+                        should_continue=False,
+                    )
                 return status_update
         if key == "preview-revisions":
             return self._finish_preview(output)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 
+from .check_report import WritebackSummary
 from .translation_workflow import WorkflowUpdate
 
 
@@ -40,6 +41,50 @@ def summarize_keyword_export_output(output: str, exit_code: int) -> WorkflowUpda
         heading="关键词提取完成",
         message=message,
         facts=facts,
+    )
+
+
+def summarize_keyword_result_from_manifest(manifest: dict[str, object]) -> WritebackSummary | None:
+    export = manifest.get("keyword_export")
+    if not isinstance(export, dict):
+        return None
+
+    manifest_path = manifest.get("_manifest_path")
+    if not isinstance(manifest_path, str) or not manifest_path.strip():
+        manifest_path = ""
+
+    facts: list[str] = []
+    if manifest_path:
+        facts.append(f"任务记录：\n  {manifest_path}")
+
+    summary = export.get("summary")
+    if isinstance(summary, dict):
+        deduped = summary.get("candidate_count_deduped")
+        raw = summary.get("candidate_count_raw")
+        if isinstance(deduped, int) and isinstance(raw, int):
+            facts.append(f"关键词候选：{deduped} 个去重 / {raw} 个原始")
+        chunk_summary_count = summary.get("chunk_summary_count")
+        if isinstance(chunk_summary_count, int):
+            facts.append(f"剧情概要：{chunk_summary_count} 条")
+
+    for key, label in (
+        ("markdown_path", "候选 Markdown"),
+        ("jsonl_path", "候选 JSONL"),
+        ("summary_markdown_path", "概要 Markdown"),
+        ("summary_jsonl_path", "概要 JSONL"),
+    ):
+        path = export.get(key)
+        if isinstance(path, str) and path.strip():
+            facts.append(f"{label}：\n  {path.strip()}")
+
+    return WritebackSummary(
+        status="safe",
+        heading="关键词报告已生成",
+        message="批量关键词任务已完成；报告不会修改游戏脚本，可在诊断页复制完整路径。",
+        facts=facts,
+        findings=[],
+        can_apply=False,
+        manifest_path=manifest_path,
     )
 
 

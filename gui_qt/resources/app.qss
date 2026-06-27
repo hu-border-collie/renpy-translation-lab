@@ -272,10 +272,12 @@ QTabWidget#workbench_status_tabs > QTabBar::tab:selected {
     color: #2563eb;
 }
 
-/* Project Path Frame styling */
-#project_frame {
-    background-color: #ffffff;
-    border: 1px solid #e2e8f0;
+/* Project Path, Mode selector, and Action Frame styling (Glassmorphism) */
+#project_frame,
+#mode_frame,
+#action_frame {
+    background-color: rgba(255, 255, 255, 0.85);
+    border: 1px solid rgba(15, 23, 42, 0.08);
     border-radius: 8px;
 }
 
@@ -287,12 +289,6 @@ QTabWidget#workbench_status_tabs > QTabBar::tab:selected {
     padding: 6px 10px;
     font-family: "Consolas", "Courier New", monospace;
     font-size: 12px;
-}
-
-#action_frame {
-    background-color: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
 }
 
 QLabel#action_group_label {
@@ -396,8 +392,8 @@ QPushButton:disabled {
 QPushButton#save_config_btn,
 QPushButton#api_btn,
 QPushButton#translate_btn {
-    background-color: #2563eb;
-    border: 1px solid #2563eb;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563eb, stop:1 #3b82f6);
+    border: 1px solid #1d4ed8;
     color: #ffffff;
     font-weight: 600;
     min-width: 108px;
@@ -406,15 +402,15 @@ QPushButton#translate_btn {
 QPushButton#save_config_btn:hover,
 QPushButton#api_btn:hover,
 QPushButton#translate_btn:hover {
-    background-color: #1d4ed8;
-    border-color: #1d4ed8;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1d4ed8, stop:1 #2563eb);
+    border-color: #1e40af;
 }
 
 QPushButton#save_config_btn:pressed,
 QPushButton#api_btn:pressed,
 QPushButton#translate_btn:pressed {
-    background-color: #1e40af;
-    border-color: #1e40af;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1e3a8a, stop:1 #1d4ed8);
+    border-color: #1d4ed8;
 }
 
 QPushButton#save_config_btn:disabled,
@@ -639,27 +635,28 @@ QTextEdit#writeback_findings_view {
 }
 
 QPushButton#apply_btn {
-    background-color: #15803d;
-    border: 1px solid #15803d;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #15803d, stop:1 #22c55e);
+    border: 1px solid #166534;
     color: #ffffff;
     font-weight: 600;
     min-width: 108px;
 }
 
 QPushButton#apply_btn:hover {
-    background-color: #166534;
-    border-color: #166534;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #166534, stop:1 #15803d);
+    border-color: #14532d;
 }
 
 QPushButton#apply_btn:pressed {
-    background-color: #14532d;
-    border-color: #14532d;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #14532d, stop:1 #166534);
+    border-color: #166534;
 }
 
 QPushButton#apply_btn:disabled {
     background-color: #f1f5f9;
     border-color: #e2e8f0;
     color: #cbd5e1;
+    font-weight: 600;
 }
 
 QTextEdit#doctor_findings_view {
