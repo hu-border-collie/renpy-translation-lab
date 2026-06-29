@@ -7031,6 +7031,31 @@ def _load_store_count(store, count_method_name):
         return 0, str(exc), {}
 
 
+def _resolve_source_index_expected_segments(store, metadata):
+    expected_raw = metadata.get('last_scanned_total')
+    try:
+        expected = int(expected_raw)
+    except (TypeError, ValueError):
+        expected = 0
+    if expected > 0:
+        return expected, ''
+
+    if not os.path.isdir(legacy.TL_DIR):
+        return 0, ''
+
+    try:
+        scanned = len(collect_source_segments_for_jobs(all_rag_file_jobs()))
+    except Exception as exc:
+        return 0, str(exc)
+
+    if scanned > 0:
+        try:
+            store.set_metadata(last_scanned_total=scanned)
+        except Exception as exc:
+            return scanned, str(exc)
+    return scanned, ''
+
+
 def collect_doctor_context_status():
     rag_store_dir = RAG_STORE_DIR or get_default_rag_store_dir()
     source_index_store_dir = SOURCE_INDEX_STORE_DIR or get_default_source_index_store_dir()
@@ -7075,15 +7100,14 @@ def collect_doctor_context_status():
             source_index_status['source_segments'] = count
             schema_version = metadata.get('schema_version', '')
             source_index_status['schema_version'] = schema_version if schema_version is not None else ''
-            expected_raw = metadata.get('last_scanned_total')
-            try:
-                expected_segments = int(expected_raw)
-            except (TypeError, ValueError):
-                expected_segments = 0
+            expected_segments, expected_error = _resolve_source_index_expected_segments(store, metadata)
             if expected_segments > 0:
                 source_index_status['expected_segments'] = expected_segments
             source_index_status['updated_at'] = metadata.get('updated_at', '')
-            source_index_status['error'] = error
+            combined_error = ' | '.join(
+                part for part in (error, expected_error) if part
+            )
+            source_index_status['error'] = combined_error
 
     return {
         'rag': rag_status,

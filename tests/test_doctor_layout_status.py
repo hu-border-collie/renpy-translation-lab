@@ -180,6 +180,19 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         self.assertIn("gemini_translate_batch.py build", joined)
         self.assertNotIn("switch to", joined)
 
+    def test_resolve_source_index_expected_segments_scans_when_metadata_missing(self):
+        with (
+            mock.patch.object(batch_mod, 'collect_source_segments_for_jobs', return_value=[{}, {}, {}]),
+            mock.patch.object(batch_mod.legacy, 'TL_DIR', 'C:/Games/Example/work/game/tl/schinese'),
+            mock.patch.object(batch_mod.os.path, 'isdir', return_value=True),
+        ):
+            store = mock.Mock()
+            expected, error = batch_mod._resolve_source_index_expected_segments(store, {})
+
+        self.assertEqual(expected, 3)
+        self.assertEqual(error, '')
+        store.set_metadata.assert_called_once_with(last_scanned_total=3)
+
     def test_incomplete_source_index_blocks_batch_translation_recommendation(self):
         report = _layout_report(
             base_dir="C:/Games/Example/work",
