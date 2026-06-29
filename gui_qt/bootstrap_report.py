@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 
 from .summary_helpers import extend_facts_with_notices
@@ -253,6 +254,141 @@ def update_bootstrap_progress_from_line(
         )
 
     return state
+
+
+_BOOTSTRAP_ETA_MIN_ELAPSED_SECONDS = 3.0
+_BOOTSTRAP_ETA_MIN_PROGRESS_SEGMENTS = 16
+
+
+@dataclass
+class BootstrapProgressTracker:
+    started_at: float | None = None
+    last_stored_segments: int = 0
+    last_sample_at: float | None = None
+    seconds_per_segment: float | None = None
+
+    def reset(self) -> None:
+        self.started_at = None
+        self.last_stored_segments = 0
+        self.last_sample_at = None
+        self.seconds_per_segment = None
+
+    def observe(
+        self,
+        state: BootstrapProgressState,
+        now: float | None = None,
+    ) -> None:
+        if state.kind != "source_index" or state.total_segments <= 0:
+            return
+        if now is None:
+            now = time.monotonic()
+
+        stored = max(state.stored_segments, 0)
+        if self.started_at is None:
+            if stored <= 0:
+                return
+            self.started_at = now
+            self.last_stored_segments = stored
+            self.last_sample_at = now
+            return
+
+        if stored <= self.last_stored_segments:
+            return
+
+        delta_stored = stored - self.last_stored_segments
+        delta_time = now - (self.last_sample_at or now)
+        if delta_stored <= 0 or delta_time <= 0:
+            return
+
+        sample_rate = delta_time / delta_stored
+        if self.seconds_per_segment is None:
+            self.seconds_per_segment = sample_rate
+        else:
+            self.seconds_per_segment = (
+                self.seconds_per_segment * 0.6 + sample_rate * 0.4
+            )
+        self.last_stored_segments = stored
+        self.last_sample_at = now
+
+    def estimate_remaining_seconds(
+        self,
+        state: BootstrapProgressState,
+        now: float | None = None,
+    ) -> int | None:
+        if state.kind != "source_index" or state.total_segments <= 0:
+            return None
+        if now is None:
+            now = time.monotonic()
+
+        stored = min(max(state.stored_segments, 0), state.total_segments)
+        remaining_segments = state.total_segments - stored
+        if remaining_segments <= 0:
+            return 0
+
+        used_fallback_rate = False
+        seconds_per_segment = self.seconds_per_segment
+        if seconds_per_segment is None and self.started_at is not None:
+            elapsed = now - self.started_at
+            if (
+                stored >= _BOOTSTRAP_ETA_MIN_PROGRESS_SEGMENTS
+                and elapsed >= _BOOTSTRAP_ETA_MIN_ELAPSED_SECONDS
+            ):
+                seconds_per_segment = elapsed / stored
+                used_fallback_rate = True
+
+        if seconds_per_segment is None:
+            return None
+
+        estimate = remaining_segments * seconds_per_segment
+        if not used_fallback_rate and self.last_sample_at is not None:
+            estimate -= now - self.last_sample_at
+        return max(0, int(estimate + 0.5))
+
+
+def create_bootstrap_progress_tracker() -> BootstrapProgressTracker:
+    return BootstrapProgressTracker()
+
+
+def format_remaining_duration_zh(seconds: int) -> str:
+    if seconds <= 0:
+        return "即将完成"
+    if seconds < 60:
+        return f"约剩 {seconds} 秒"
+    minutes, secs = divmod(seconds, 60)
+    if seconds < 3600:
+        if secs >= 30:
+            minutes += 1
+            secs = 0
+        if secs:
+            return f"约剩 {minutes} 分 {secs} 秒"
+        return f"约剩 {minutes} 分"
+    hours, minutes = divmod(minutes, 60)
+    if minutes >= 30:
+        hours += 1
+        minutes = 0
+    if minutes:
+        return f"约剩 {hours} 小时 {minutes} 分"
+    return f"约剩 {hours} 小时"
+
+
+def format_bootstrap_progress_bar_label(
+    state: BootstrapProgressState,
+    remaining_seconds: int | None = None,
+) -> str:
+    if state.total_segments <= 0 and state.stored_segments <= 0:
+        return "正在扫描原文…"
+
+    total = max(state.total_segments, 1)
+    stored = min(max(state.stored_segments, 0), total)
+    percent = (stored * 100) // total
+    label = f"{percent}%（{stored}/{total}）"
+    if (
+        remaining_seconds is not None
+        and remaining_seconds > 0
+        and stored < total
+    ):
+        label += f" · {format_remaining_duration_zh(remaining_seconds)}"
+    return label
 
 
 def format_bootstrap_progress_facts(state: BootstrapProgressState) -> list[str]:

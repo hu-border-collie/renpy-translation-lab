@@ -1,9 +1,14 @@
 import unittest
 
 from gui_qt.bootstrap_report import (
+    BootstrapProgressState,
+    BootstrapProgressTracker,
     coerce_bool,
     create_bootstrap_progress_state,
+    create_bootstrap_progress_tracker,
+    format_bootstrap_progress_bar_label,
     format_bootstrap_progress_facts,
+    format_remaining_duration_zh,
     idle_bootstrap_summary,
     read_batch_context_flags,
     summarize_rag_bootstrap_output,
@@ -144,6 +149,41 @@ Source Index bootstrap final summary:
         )
 
         self.assertEqual(state.embedding_done, 64)
+
+    def test_format_remaining_duration_zh(self):
+        self.assertEqual(format_remaining_duration_zh(0), "即将完成")
+        self.assertEqual(format_remaining_duration_zh(45), "约剩 45 秒")
+        self.assertEqual(format_remaining_duration_zh(125), "约剩 2 分 5 秒")
+        self.assertEqual(format_remaining_duration_zh(3720), "约剩 1 小时 2 分")
+
+    def test_bootstrap_progress_tracker_estimates_remaining_seconds(self):
+        tracker = create_bootstrap_progress_tracker()
+        state = BootstrapProgressState(
+            kind="source_index",
+            total_segments=100,
+            stored_segments=20,
+        )
+        tracker.observe(state, now=10.0)
+        self.assertEqual(tracker.estimate_remaining_seconds(state, now=20.0), 40)
+
+        state = BootstrapProgressState(
+            kind="source_index",
+            total_segments=100,
+            stored_segments=36,
+        )
+        tracker.observe(state, now=20.0)
+        self.assertEqual(tracker.estimate_remaining_seconds(state, now=20.0), 40)
+        self.assertEqual(tracker.estimate_remaining_seconds(state, now=25.0), 35)
+
+    def test_format_bootstrap_progress_bar_label_includes_eta(self):
+        state = BootstrapProgressState(
+            kind="source_index",
+            total_segments=28886,
+            stored_segments=9473,
+        )
+        label = format_bootstrap_progress_bar_label(state, 4525)
+        self.assertIn("32%（9473/28886）", label)
+        self.assertIn("约剩 1 小时 15 分", label)
 
 
 if __name__ == "__main__":

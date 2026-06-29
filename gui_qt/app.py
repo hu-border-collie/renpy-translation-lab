@@ -42,8 +42,11 @@ from .api_key_dialog import ApiKeyDialog
 from .api_key_helpers import mask_api_key
 from .bootstrap_report import (
     BootstrapProgressState,
+    BootstrapProgressTracker,
     BootstrapSummary,
     create_bootstrap_progress_state,
+    create_bootstrap_progress_tracker,
+    format_bootstrap_progress_bar_label,
     format_bootstrap_progress_facts,
     read_batch_context_flags,
     running_bootstrap_summary,
@@ -169,6 +172,12 @@ class MainWindow(QMainWindow):
         self._apply_revision_output_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
         self._bootstrap_progress: BootstrapProgressState | None = None
+        self._bootstrap_progress_tracker: BootstrapProgressTracker | None = None
+        self._bootstrap_progress_eta_timer = QTimer(self)
+        self._bootstrap_progress_eta_timer.setInterval(1000)
+        self._bootstrap_progress_eta_timer.timeout.connect(
+            self._on_bootstrap_progress_eta_tick
+        )
         self._work_bootstrap_output_lines: list[str] = []
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
@@ -1639,8 +1648,18 @@ class MainWindow(QMainWindow):
 
     def _clear_bootstrap_progress_ui(self) -> None:
         self._bootstrap_progress = None
+        self._bootstrap_progress_tracker = None
+        if hasattr(self, "_bootstrap_progress_eta_timer"):
+            self._bootstrap_progress_eta_timer.stop()
         if hasattr(self, "workflow_progress_bar"):
             self.workflow_progress_bar.setVisible(False)
+
+    def _on_bootstrap_progress_eta_tick(self) -> None:
+        if (
+            self._active_command == "bootstrap_source_index"
+            and self._bootstrap_progress is not None
+        ):
+            self._apply_bootstrap_progress_ui()
 
     def _apply_bootstrap_progress_ui(self) -> None:
         if not hasattr(self, "workflow_progress_bar"):
@@ -1657,6 +1676,10 @@ class MainWindow(QMainWindow):
             self.workflow_progress_bar.setVisible(False)
             return
 
+        tracker = self._bootstrap_progress_tracker
+        if tracker is not None:
+            tracker.observe(state)
+
         if state.total_segments <= 0 and state.stored_segments <= 0:
             self.workflow_progress_bar.setRange(0, 0)
             self.workflow_progress_bar.setFormat("正在扫描原文…")
@@ -1664,10 +1687,16 @@ class MainWindow(QMainWindow):
         else:
             total = max(state.total_segments, 1)
             stored = min(max(state.stored_segments, 0), total)
+            remaining_seconds = (
+                tracker.estimate_remaining_seconds(state)
+                if tracker is not None
+                else None
+            )
             self.workflow_progress_bar.setRange(0, total)
             self.workflow_progress_bar.setValue(stored)
-            percent = (stored * 100) // total
-            self.workflow_progress_bar.setFormat(f"{percent}%（{stored}/{total}）")
+            self.workflow_progress_bar.setFormat(
+                format_bootstrap_progress_bar_label(state, remaining_seconds)
+            )
             self.workflow_progress_bar.setVisible(True)
 
         facts = format_bootstrap_progress_facts(state)
@@ -2058,6 +2087,15 @@ class MainWindow(QMainWindow):
         self._active_command = command
         self._bootstrap_output_lines = []
         self._bootstrap_progress = create_bootstrap_progress_state(kind)
+        self._bootstrap_progress_tracker = (
+            create_bootstrap_progress_tracker()
+            if kind == "source_index"
+            else None
+        )
+        if kind == "source_index" and hasattr(self, "_bootstrap_progress_eta_timer"):
+            self._bootstrap_progress_eta_timer.start()
+        elif hasattr(self, "_bootstrap_progress_eta_timer"):
+            self._bootstrap_progress_eta_timer.stop()
         self._focus_workbench_status_tab(1)
         self._set_workflow_from_bootstrap_summary(running_summary)
         self._append_log(f"=== 正在运行：{log_heading} ===\n")
