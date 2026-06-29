@@ -250,6 +250,66 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(flags["rag_enabled"])
         self.assertFalse(flags["source_index_enabled"])
 
+    def test_save_config_persists_context_storage_location(self):
+        from gui_qt.work_modes import WorkMode
+
+        saved_configs = []
+        config = {
+            "sync": {"rag": {}},
+            "batch": {"rag": {}, "source_index": {}, "model": "gemini-3.1-flash-lite"},
+        }
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/Game/work")
+            def load_translator_config(self):
+                return config
+            def save_translator_config(self, saved_config):
+                saved_configs.append(saved_config)
+
+        class FakeCheckBox:
+            def __init__(self, checked):
+                self._checked = checked
+            def isChecked(self):
+                return self._checked
+
+        class FakeCombo:
+            def __init__(self, text="", data=""):
+                self._text = text
+                self._data = data
+            def currentText(self):
+                return self._text
+            def currentData(self):
+                return self._data
+
+        class FakeStatusBar:
+            def showMessage(self, text, timeout):
+                pass
+
+        self.window.state = FakeState()
+        self.window.rag_enabled_cb = FakeCheckBox(True)
+        self.window.source_index_enabled_cb = FakeCheckBox(True)
+        self.window.bootstrap_on_build_cb = FakeCheckBox(False)
+        self.window.context_storage_game_cb = FakeCheckBox(True)
+        self.window.sync_model_combo = FakeCombo("gemini-sync")
+        self.window.batch_model_combo = FakeCombo("gemini-3.1-flash-lite")
+        self.window.sync_embedding_combo = FakeCombo("gemini-embedding-001")
+        self.window.batch_embedding_combo = FakeCombo("gemini-embedding-001")
+        self.window.batch_thinking_combo = FakeCombo(data="minimal")
+        self.window._batch_thinking_user_changed = False
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window._append_log = lambda _text: None
+        self.window.statusBar = lambda: FakeStatusBar()
+
+        saved = self.window._on_save_config()
+
+        self.assertTrue(saved)
+        self.assertEqual(len(saved_configs), 1)
+        self.assertEqual(saved_configs[0]["context_storage"]["location"], "game")
+        self.assertEqual(saved_configs[0]["context_storage"]["game_dir_name"], "translation_context")
+        self.assertTrue(saved_configs[0]["batch"]["rag"]["enabled"])
+        self.assertTrue(saved_configs[0]["batch"]["source_index"]["enabled"])
+
     def test_bootstrap_task_ready_uses_saved_config(self):
         from gui_qt.work_modes import WorkMode, work_mode_spec
 
@@ -564,6 +624,123 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._set_writeback_summary.assert_not_called()
         self.assertIn("关键词提取完成", status_bar.messages[-1][0])
 
+    def test_sync_keyword_finish_copies_reports_from_sync_run_output(self):
+        from gui_qt.translation_workflow import WorkflowStep, WorkflowUpdate
+        from gui_qt.work_modes import WorkMode
+        from unittest.mock import MagicMock
+
+        class FakeWorkflow:
+            manifest_path = ""
+
+            def current_step(self):
+                return WorkflowStep(
+                    "sync-keywords",
+                    ["sync-keywords"],
+                    "正在同步提取关键词",
+                    "正在扫描翻译文本并生成术语与剧情报告。",
+                )
+
+            def complete_current_step(self, exit_code, output):
+                return WorkflowUpdate(
+                    status="done",
+                    heading="同步关键词提取完成",
+                    message="done",
+                    facts=[],
+                    should_continue=False,
+                )
+
+        class FakeStatusBar:
+            def __init__(self):
+                self.messages = []
+            def showMessage(self, text, timeout):
+                self.messages.append((text, timeout))
+
+        output = "Sync keyword run: C:/dummy/sync_keywords\nKeyword candidates: 2 deduped from 3 raw"
+        self.window._workflow = FakeWorkflow()
+        self.window._workflow_step_output_lines = output.splitlines()
+        self.window._current_work_mode = lambda: WorkMode.SYNC_KEYWORD_EXTRACTION
+        self.window._copy_sync_keyword_reports_to_game_parent = MagicMock()
+        self.window._copy_keyword_reports_to_game_parent = MagicMock()
+        self.window._uses_revision_writeback = lambda: False
+        self.window._set_workflow_update = MagicMock()
+        self.window._refresh_diagnostics_context = MagicMock()
+        self.window._set_task_running = MagicMock()
+        self.window._set_writeback_summary = MagicMock()
+        status_bar = FakeStatusBar()
+        self.window.statusBar = lambda: status_bar
+
+        self.window._on_workflow_step_finished(0)
+
+        self.window._copy_sync_keyword_reports_to_game_parent.assert_called_once_with(output)
+        self.window._copy_keyword_reports_to_game_parent.assert_not_called()
+        self.window._set_writeback_summary.assert_called_once()
+        self.assertIn("同步关键词提取完成", status_bar.messages[-1][0])
+
+    def test_leaving_dirty_config_tab_can_stay_on_config(self):
+        from unittest.mock import patch
+
+        class FakeMessageBox:
+            class Icon:
+                Warning = object()
+            class ButtonRole:
+                AcceptRole = object()
+                DestructiveRole = object()
+                RejectRole = object()
+
+            shown = False
+
+            def __init__(self, parent=None):
+                self._stay_btn = object()
+                self._buttons = []
+            def setIcon(self, icon):
+                pass
+            def setWindowTitle(self, title):
+                pass
+            def setText(self, text):
+                pass
+            def setInformativeText(self, text):
+                pass
+            def addButton(self, text, role):
+                button = self._stay_btn if text == "留在配置页" else object()
+                self._buttons.append((text, button))
+                return button
+            def setDefaultButton(self, button):
+                pass
+            def exec(self):
+                FakeMessageBox.shown = True
+            def clickedButton(self):
+                return self._stay_btn
+
+        class FakeTabs:
+            def __init__(self, config_tab, other_tab):
+                self.config_tab = config_tab
+                self.other_tab = other_tab
+                self.current_index = 1
+            def widget(self, index):
+                return self.config_tab if index == 1 else self.other_tab
+            def setCurrentIndex(self, index):
+                self.current_index = index
+
+        config_tab = object()
+        other_tab = object()
+        self.window._config_tab = config_tab
+        self.window._diagnostics_tab = object()
+        self.window.tab_widget = FakeTabs(config_tab, other_tab)
+        self.window._last_main_tab_index = 1
+        self.window._handling_config_tab_leave = False
+        self.window._loading_config_to_ui = False
+        self.window._config_ui_saved_snapshot = {"dirty": False}
+        self.window._current_config_ui_snapshot = lambda: {"dirty": True}
+        self.window._refresh_api_status = lambda: None
+        self.window._refresh_diagnostics_context = lambda: None
+
+        with patch("gui_qt.app.QMessageBox", FakeMessageBox):
+            self.window._on_tab_changed(0)
+
+        self.assertTrue(FakeMessageBox.shown)
+        self.assertEqual(self.window.tab_widget.current_index, 1)
+        self.assertEqual(self.window._last_main_tab_index, 1)
+
     def test_update_resume_btn_text_uses_current_status_without_disk_lookup(self):
         from gui_qt.work_modes import WorkMode
         from unittest.mock import MagicMock
@@ -696,6 +873,38 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             self.assertTrue((target_dir / "keyword_chunk_summaries.md").exists())
             self.assertEqual((target_dir / "keyword_candidates.md").read_text(encoding="utf-8"), "candidates")
 
+            self.assertTrue(any("已将关键词提取报告复制一份至" in msg for msg in logged_messages))
+
+    def test_copy_sync_keyword_reports_to_game_parent_copies_successfully(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            game_root = tmp_path / "Game" / "work"
+            game_root.mkdir(parents=True, exist_ok=True)
+
+            sync_dir = tmp_path / "logs" / "sync_runs" / "job_sync_keywords"
+            sync_dir.mkdir(parents=True, exist_ok=True)
+            (sync_dir / "keyword_candidates.md").write_text("candidates", encoding="utf-8")
+            (sync_dir / "keyword_chunk_summaries.md").write_text("summaries", encoding="utf-8")
+
+            class FakeState:
+                def get_game_root(self):
+                    return game_root
+            self.window.state = FakeState()
+
+            logged_messages = []
+            self.window._append_log = lambda msg: logged_messages.append(msg)
+
+            self.window._copy_sync_keyword_reports_to_game_parent(
+                f"Sync keyword run: {sync_dir}\n"
+                "Keyword candidates: 2 deduped from 3 raw\n"
+            )
+
+            target_dir = tmp_path / "Game" / "extracted_keywords"
+            self.assertTrue((target_dir / "keyword_candidates.md").exists())
+            self.assertTrue((target_dir / "keyword_chunk_summaries.md").exists())
+            self.assertEqual((target_dir / "keyword_candidates.md").read_text(encoding="utf-8"), "candidates")
             self.assertTrue(any("已将关键词提取报告复制一份至" in msg for msg in logged_messages))
 
     def test_sync_layout_sizes_skips_scrollable_doctor_labels(self):

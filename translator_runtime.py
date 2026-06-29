@@ -42,6 +42,8 @@ BASE_DIR = os.path.abspath(ENV_GAME_ROOT) if ENV_GAME_ROOT else os.path.abspath(
 TL_DIR = os.path.abspath(os.path.join(BASE_DIR, TL_SUBDIR))
 WORK_GAME_SUBDIR = "game"
 WORK_GAME_DIR = os.path.abspath(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
+CONTEXT_STORAGE_LOCATION = "tool"
+CONTEXT_STORAGE_GAME_DIR_NAME = "translation_context"
 SOURCE_GAME_DIR = ""
 PREP_ENABLED = True
 PREP_UNPACK_RPA = True
@@ -359,6 +361,39 @@ def _normalize_task_type(value, default):
     return default
 
 
+def _normalize_context_storage_location(value):
+    if isinstance(value, str):
+        normalized = value.strip().lower().replace("-", "_")
+        if normalized in {"game", "game_dir", "game_directory"}:
+            return "game"
+        if normalized in {"tool", "project", "repo", "repository", "internal"}:
+            return "tool"
+    return "tool"
+
+
+def _normalize_context_storage_dir_name(value):
+    if not isinstance(value, str):
+        return "translation_context"
+    text = value.strip().replace("\\", "/").strip("/")
+    if not text:
+        return "translation_context"
+    parts = [part for part in text.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        return "translation_context"
+    return "/".join(parts)
+
+
+def load_context_storage_settings(config):
+    global CONTEXT_STORAGE_LOCATION, CONTEXT_STORAGE_GAME_DIR_NAME
+    storage = config.get("context_storage")
+    if not isinstance(storage, dict):
+        storage = {}
+    location = storage.get("location", config.get("context_storage_location"))
+    CONTEXT_STORAGE_LOCATION = _normalize_context_storage_location(location)
+    dir_name = storage.get("game_dir_name", storage.get("directory_name", storage.get("directory")))
+    CONTEXT_STORAGE_GAME_DIR_NAME = _normalize_context_storage_dir_name(dir_name)
+
+
 def _resolve_path(base_dir, value):
     if value is None:
         return ""
@@ -616,6 +651,8 @@ def load_sync_story_memory_settings(config):
     graph_file = story_config.get("graph_file")
     if graph_file:
         SYNC_STORY_MEMORY_GRAPH_FILE = resolve_story_memory_graph_path(graph_file)
+    elif SYNC_STORY_MEMORY_ENABLED:
+        SYNC_STORY_MEMORY_GRAPH_FILE = get_default_story_memory_graph_path()
     else:
         SYNC_STORY_MEMORY_GRAPH_FILE = ""
     _SYNC_STORY_GRAPH = None
@@ -744,6 +781,8 @@ def load_translator_settings():
             BASE_DIR = original_root
     else:
         BASE_DIR = _canonical_abs_path(os.path.join(ROOT_DIR, ".."))
+
+    load_context_storage_settings(config)
 
     glossary_file = config.get("glossary_file")
     if glossary_file is None:
@@ -1747,8 +1786,39 @@ def guess_project_slug():
     return _slugify(base_name)
 
 
+def get_context_storage_location():
+    return CONTEXT_STORAGE_LOCATION
+
+
+def get_context_storage_root(base_dir=None):
+    if CONTEXT_STORAGE_LOCATION == "game":
+        return _canonical_abs_path(os.path.join(resolve_project_root(base_dir), CONTEXT_STORAGE_GAME_DIR_NAME))
+    return LOG_DIR
+
+
+def get_default_context_store_dir(store_name, base_dir=None):
+    root = get_context_storage_root(base_dir)
+    if CONTEXT_STORAGE_LOCATION == "game":
+        return os.path.join(root, store_name)
+    return os.path.join(root, store_name, guess_project_slug())
+
+
+def get_default_batch_rag_store_dir():
+    return get_default_context_store_dir("rag_store")
+
+
+def get_default_source_index_store_dir():
+    return get_default_context_store_dir("source_index_store")
+
+
+def get_default_story_memory_graph_path():
+    if CONTEXT_STORAGE_LOCATION == "game":
+        return os.path.join(get_context_storage_root(), "story_memory", "story_graph.json")
+    return os.path.join(LOG_DIR, "story_memory", "story_graph.json")
+
+
 def get_default_sync_rag_store_dir():
-    return os.path.join(LOG_DIR, "rag_store", guess_project_slug())
+    return get_default_context_store_dir("rag_store")
 
 
 def get_sync_rag_store():

@@ -23,6 +23,11 @@ Doctor report:
 - Pending translation: task_count=5, file_count=2
 """
 
+CONTEXT_OUTPUT = DOCTOR_OUTPUT + """
+- RAG context: enabled=True, store_dir=C:/logs/rag_store/example, store_exists=True, history_records=12, bootstrap_on_build=True, updated_at=2026-06-29T12:00:00, error=
+- Source index context: enabled=True, store_dir=C:/logs/source_index_store/example, store_exists=False, source_segments=0, schema_version=, updated_at=, error=
+"""
+
 GENERATE_TEMPLATE_OUTPUT = """
 ============================================================
 Gemini Batch Translator (Ren'Py)
@@ -106,6 +111,24 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(parsed["counts"]["old_lines"], 10)
         self.assertEqual(parsed["pending"]["task_count"], 5)
         self.assertEqual(parsed["pending"]["file_count"], 2)
+
+    def test_parse_doctor_output_extracts_context_status(self):
+        parsed = parse_doctor_output(CONTEXT_OUTPUT)
+
+        self.assertEqual(parsed["rag_context"]["enabled"], True)
+        self.assertEqual(parsed["rag_context"]["history_records"], 12)
+        self.assertEqual(parsed["rag_context"]["bootstrap_on_build"], True)
+        self.assertEqual(parsed["source_index_context"]["enabled"], True)
+        self.assertEqual(parsed["source_index_context"]["store_exists"], False)
+        self.assertEqual(parsed["source_index_context"]["source_segments"], 0)
+
+    def test_successful_report_shows_context_status(self):
+        summary = summarize_doctor_output(CONTEXT_OUTPUT, exit_code=0, api_key_count=1)
+
+        self.assertTrue(any("记忆库：已启用，记录数 12" in fact for fact in summary.facts))
+        self.assertTrue(any("记忆库路径：C:/logs/rag_store/example" in fact for fact in summary.facts))
+        self.assertTrue(any("原文索引：已启用，尚未创建" in fact for fact in summary.facts))
+        self.assertTrue(any("原文索引路径：C:/logs/source_index_store/example" in fact for fact in summary.facts))
 
     def test_successful_existing_tl_without_api_key_is_warning(self):
         summary = summarize_doctor_output(DOCTOR_OUTPUT, exit_code=0, api_key_count=0)

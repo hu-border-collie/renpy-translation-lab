@@ -171,13 +171,12 @@ class WizardTimeline(QWidget):
             painter.drawLine(x1 + radius + 1, y_center, x2 - radius - 1, y_center)
 
         # 2. Draw nodes and text
-        family = self.font().family()
-        font_index = QFont(family)
-        font_index.setPointSize(9)
+        font_index = QFont(self.font())
+        font_index.setPixelSize(13)
         font_index.setBold(True)
 
-        font_label = QFont(family)
-        font_label.setPointSize(9)
+        font_label = QFont(self.font())
+        font_label.setPixelSize(13)
 
         for i, (_, label) in enumerate(self.steps):
             x = int(spacing * (i + 0.5))

@@ -83,7 +83,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 - 按钮行：环境检查、准备工作目录、开始翻译、继续任务、停止。
 - **准备工作目录**：当 `work/` 不存在或为空且存在 `original/game` 时，把 `original/game` 复制到 `work/game/`；不生成 TL。成功后 GUI 会尝试把 `game_root` 自动改到 `work/`。
 - 内层 Tab（标签随子任务变化，批量翻译默认为「翻译进度」）：
-  - **环境检查**：`doctor` 的普通语言摘要。
+  - **环境检查**：`doctor` 的普通语言摘要，并显示记忆库 / 原文索引的启用状态、记录 / 片段数和存储路径。
   - **翻译进度**（或提取进度 / 订正进度等）：友好进度与任务事实行。
   - **写回**（或写回说明 / 订正写回 / 结果说明）：检查或预览摘要，以及写回相关按钮。
 
@@ -188,15 +188,19 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 如果 build 已生成 package 但还没有 job，恢复会从 submit 继续，而不是错误地直接跑 status。
 
-`export-keywords` 完成后，界面会摘要候选数量与 JSONL / Markdown 报告路径，完整路径可在诊断页复制。诊断页对关键词任务记录会显示 `export-keywords` 等命令，而不是翻译的 `check/apply`。
+`export-keywords` 完成后，界面会摘要候选数量与 JSONL / Markdown 报告路径，并把四个关键词报告复制到当前 `work` 目录上级的 `extracted_keywords/`；完整原始路径仍可在诊断页复制。诊断页对关键词任务记录会显示 `export-keywords` 等命令，而不是翻译的 `check/apply`。
 
 ### 同步关键词
 
-在工作台选择「分析与准备 · 同步关键词」后点击「提取关键词」，GUI 会调用 `gemini_translate_batch.py sync-keywords`（无额外参数）。适合小范围即时生成报告；不支持从任务记录恢复。运行前需已配置 API Key。
+在工作台选择「分析与准备 · 同步关键词」后点击「提取关键词」，GUI 会调用 `gemini_translate_batch.py sync-keywords`（无额外参数）。适合小范围即时生成报告；完成后同样会把关键词报告复制到 `extracted_keywords/`。不支持从任务记录恢复。运行前需已配置 API Key。
 
 ## 批量上下文预建
 
-若项目已有一部分译文，或希望在 build 时检索相关剧情原文，可在配置页启用批量上下文并预建本地库：
+若项目已有一部分译文，或希望在 build 时检索相关剧情原文，可在配置页启用批量上下文并预建本地库。
+
+配置页的「上下文库保存到游戏目录」会把默认 RAG / 原文索引 / 剧情图谱路径切到当前 `work` 同级的 `translation_context/`；关闭时仍使用工具项目内的 `logs/`。Batch manifest、检查失败报告、补译包等运行记录仍保存在工具日志目录。
+
+预建流程：
 
 ```text
 保存批量上下文开关 -> 工作台选「分析与准备」-> 预建记忆库 / 原文索引 -> 切回「翻译 · 批量翻译」开始翻译

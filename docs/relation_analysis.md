@@ -22,7 +22,7 @@ python extract_relations.py /path/to/game/tl/schinese --mode semantic
 - 不传 `--characters` 时，会自动选择主要说话人。
 - 可以用 `--auto-characters` 控制自动推断数量。
 - 可以用 `--portraits off` 禁用从 `archive.rpa` 自动读取头像。
-- 可以用 `--story-seed-output logs/story_memory/story_graph.seed.json` 在 relation 模式额外导出 Story Memory 候选 seed。
+- 可以用 `--story-seed-output <GameProject>/translation_context/story_memory/story_graph.seed.json` 在 relation 模式额外导出 Story Memory 候选 seed。
 - `relation` 模式不需要 Gemini API。
 - `semantic` 模式需要有效的 Gemini API key。
 

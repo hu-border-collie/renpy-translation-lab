@@ -8,6 +8,7 @@ This is the first version shell (per #42):
 from __future__ import annotations
 
 import sys
+import re
 from pathlib import Path
 from typing import Any
 
@@ -164,6 +165,9 @@ class MainWindow(QMainWindow):
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
+        self._config_ui_saved_snapshot: dict[str, object] = {}
+        self._last_main_tab_index = 0
+        self._handling_config_tab_leave = False
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -185,6 +189,7 @@ class MainWindow(QMainWindow):
 
         self.batch_model_combo.currentTextChanged.connect(self._on_batch_model_changed)
         self.batch_thinking_combo.currentIndexChanged.connect(self._on_batch_thinking_changed)
+        self._last_main_tab_index = self.tab_widget.currentIndex()
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
 
         # Connect runner
@@ -627,6 +632,12 @@ class MainWindow(QMainWindow):
 
         self.bootstrap_on_build_cb = QCheckBox("开始翻译时自动暖 RAG 库")
         context_layout.addWidget(self.bootstrap_on_build_cb)
+
+        self.context_storage_game_cb = QCheckBox("上下文库保存到游戏目录")
+        self.context_storage_game_cb.setToolTip(
+            "启用后，默认 RAG / 原文索引 / 剧情图谱路径会使用 work 同级的 translation_context/。"
+        )
+        context_layout.addWidget(self.context_storage_game_cb)
 
         layout.addWidget(context_box)
 
@@ -1764,11 +1775,77 @@ class MainWindow(QMainWindow):
 
         self.api_status_label.setText(message)
 
+    def _current_config_ui_snapshot(self) -> dict[str, object]:
+        thinking_val = self.batch_thinking_combo.currentData()
+        thinking_level = thinking_val if isinstance(thinking_val, str) else ""
+        return {
+            "rag_enabled": self.rag_enabled_cb.isChecked(),
+            "source_index_enabled": self.source_index_enabled_cb.isChecked(),
+            "bootstrap_on_build": self.bootstrap_on_build_cb.isChecked(),
+            "context_storage_location": "game" if self.context_storage_game_cb.isChecked() else "tool",
+            "sync_model": self.sync_model_combo.currentText().strip(),
+            "batch_model": self.batch_model_combo.currentText().strip(),
+            "sync_embedding_model": self.sync_embedding_combo.currentText().strip(),
+            "batch_embedding_model": self.batch_embedding_combo.currentText().strip(),
+            "batch_thinking_level": thinking_level,
+        }
+
+    def _config_tab_has_unsaved_changes(self) -> bool:
+        if self._loading_config_to_ui:
+            return False
+        if not self._config_ui_saved_snapshot:
+            return False
+        return self._current_config_ui_snapshot() != self._config_ui_saved_snapshot
+
+    def _confirm_leave_config_tab(self, previous_index: int) -> bool:
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Icon.Warning)
+        message.setWindowTitle("配置尚未保存")
+        message.setText("配置页有未保存的更改。")
+        message.setInformativeText("离开前可以保存配置，或留在配置页继续检查。")
+        save_btn = message.addButton("保存并离开", QMessageBox.ButtonRole.AcceptRole)
+        discard_btn = message.addButton("不保存离开", QMessageBox.ButtonRole.DestructiveRole)
+        stay_btn = message.addButton("留在配置页", QMessageBox.ButtonRole.RejectRole)
+        message.setDefaultButton(save_btn)
+        message.exec()
+        clicked = message.clickedButton()
+
+        if clicked is save_btn:
+            if self._on_save_config():
+                return True
+            clicked = stay_btn
+        elif clicked is discard_btn:
+            self._load_config_to_ui()
+            return True
+
+        self._handling_config_tab_leave = True
+        try:
+            self.tab_widget.setCurrentIndex(previous_index)
+        finally:
+            self._handling_config_tab_leave = False
+        return False
+
     def _on_tab_changed(self, index: int) -> None:
-        if self.tab_widget.widget(index) is self._config_tab:
+        if self._handling_config_tab_leave:
+            self._last_main_tab_index = index
+            return
+
+        previous_index = self._last_main_tab_index
+        previous_widget = self.tab_widget.widget(previous_index) if previous_index >= 0 else None
+        current_widget = self.tab_widget.widget(index)
+        if (
+            previous_widget is self._config_tab
+            and current_widget is not self._config_tab
+            and self._config_tab_has_unsaved_changes()
+        ):
+            if not self._confirm_leave_config_tab(previous_index):
+                return
+
+        if current_widget is self._config_tab:
             self._refresh_api_status()
-        if self.tab_widget.widget(index) is getattr(self, "_diagnostics_tab", None):
+        if current_widget is getattr(self, "_diagnostics_tab", None):
             self._refresh_diagnostics_context()
+        self._last_main_tab_index = index
 
 
     def _on_manage_api_keys(self):
@@ -2535,15 +2612,15 @@ class MainWindow(QMainWindow):
 
         self._set_task_running(False)
 
-    def _copy_keyword_reports_to_game_parent(self, manifest_path: str) -> None:
-        if not manifest_path:
+    def _copy_keyword_report_dir_to_game_parent(self, report_dir: Path | str | None) -> None:
+        if not report_dir:
             return
         game_root = self.state.get_game_root()
         if not game_root:
             return
 
         target_dir = game_root.parent / "extracted_keywords"
-        manifest_dir = Path(manifest_path).parent
+        source_dir = Path(report_dir)
 
         files_to_copy = [
             "keyword_candidates.jsonl",
@@ -2557,7 +2634,7 @@ class MainWindow(QMainWindow):
             target_dir.mkdir(parents=True, exist_ok=True)
             import shutil
             for filename in files_to_copy:
-                src = manifest_dir / filename
+                src = source_dir / filename
                 if src.exists():
                     dest = target_dir / filename
                     shutil.copy2(src, dest)
@@ -2569,6 +2646,17 @@ class MainWindow(QMainWindow):
                 )
         except Exception as e:
             self._append_log(f"\n[系统警告] 复制关键词提取报告到游戏上级目录失败：{e}\n")
+
+    def _copy_keyword_reports_to_game_parent(self, manifest_path: str) -> None:
+        if not manifest_path:
+            return
+        self._copy_keyword_report_dir_to_game_parent(Path(manifest_path).parent)
+
+    def _copy_sync_keyword_reports_to_game_parent(self, output: str) -> None:
+        match = re.search(r"^Sync keyword run:\s*(.+?)\s*$", output, re.MULTILINE)
+        if not match:
+            return
+        self._copy_keyword_report_dir_to_game_parent(match.group(1).strip())
 
     def _on_workflow_step_finished(self, exit_code: int):
         if self._workflow is None:
@@ -2587,6 +2675,9 @@ class MainWindow(QMainWindow):
         keyword_export_completed = step_key == "export-keywords" and exit_code == 0
         if keyword_export_completed:
             self._copy_keyword_reports_to_game_parent(manifest_path)
+        sync_keyword_completed = step_key == "sync-keywords" and exit_code == 0
+        if sync_keyword_completed:
+            self._copy_sync_keyword_reports_to_game_parent(step_output)
 
         if "Safety status:" in step_output:
             self._update_writeback_from_check(step_output, exit_code, manifest_path)
@@ -2797,6 +2888,9 @@ class MainWindow(QMainWindow):
             self.rag_enabled_cb.setChecked(context_flags["rag_enabled"])
             self.source_index_enabled_cb.setChecked(context_flags["source_index_enabled"])
             self.bootstrap_on_build_cb.setChecked(context_flags["bootstrap_on_build"])
+            storage_config = self._config_section(config, "context_storage")
+            storage_location = self._config_string(storage_config.get("location")).lower()
+            self.context_storage_game_cb.setChecked(storage_location == "game")
             self._batch_thinking_config_has_key = "thinking_level" in batch_config
 
             # Populate sync model
@@ -2833,6 +2927,7 @@ class MainWindow(QMainWindow):
         finally:
             self._batch_thinking_user_changed = False
             self._loading_config_to_ui = False
+        self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
 
     def _on_batch_model_changed(self, text: str):
         is_thinking_supported = self._supports_batch_thinking(text)
@@ -2854,10 +2949,10 @@ class MainWindow(QMainWindow):
         if not self._loading_config_to_ui and not self._updating_batch_thinking_combo:
             self._batch_thinking_user_changed = True
 
-    def _on_save_config(self):
+    def _on_save_config(self) -> bool:
         if not self.state.get_game_root():
             QMessageBox.information(self, "未选择项目", "请先选择游戏的 work 目录。")
-            return
+            return False
 
         try:
             config = self.state.load_translator_config()
@@ -2866,7 +2961,10 @@ class MainWindow(QMainWindow):
             sync_rag_config = self._ensure_config_section(sync_config, "rag")
             batch_rag_config = self._ensure_config_section(batch_config, "rag")
             batch_source_index_config = self._ensure_config_section(batch_config, "source_index")
+            context_storage_config = self._ensure_config_section(config, "context_storage")
 
+            context_storage_config["location"] = "game" if self.context_storage_game_cb.isChecked() else "tool"
+            context_storage_config.setdefault("game_dir_name", "translation_context")
             batch_rag_config["enabled"] = self.rag_enabled_cb.isChecked()
             batch_rag_config["bootstrap_on_build"] = self.bootstrap_on_build_cb.isChecked()
             batch_source_index_config["enabled"] = self.source_index_enabled_cb.isChecked()
@@ -2898,9 +2996,12 @@ class MainWindow(QMainWindow):
                 self._apply_work_mode_ui(refresh_manifest_writeback=False)
             self._append_log("配置已成功保存至 translator_config.json。")
             self.statusBar().showMessage("配置已成功保存", 3000)
+            self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
+            return True
         except Exception as exc:
             QMessageBox.warning(self, "保存配置失败", str(exc))
             self._append_log(f"保存配置失败：{exc}")
+            return False
 
 
 def run_app(argv: list[str] | None = None) -> int:

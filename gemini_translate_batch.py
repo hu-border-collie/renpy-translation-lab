@@ -413,6 +413,8 @@ def load_batch_settings():
     graph_file = story_config.get('graph_file')
     if graph_file:
         STORY_MEMORY_GRAPH_FILE = legacy.resolve_story_memory_graph_path(graph_file)
+    elif STORY_MEMORY_ENABLED:
+        STORY_MEMORY_GRAPH_FILE = legacy.get_default_story_memory_graph_path()
     else:
         STORY_MEMORY_GRAPH_FILE = ''
     _STORY_GRAPH = None
@@ -582,11 +584,11 @@ def hash_key(text):
 
 
 def get_default_rag_store_dir():
-    return os.path.join(LOG_DIR, 'rag_store', guess_project_slug())
+    return legacy.get_default_batch_rag_store_dir()
 
 
 def get_default_source_index_store_dir():
-    return os.path.join(LOG_DIR, 'source_index_store', guess_project_slug())
+    return legacy.get_default_source_index_store_dir()
 
 
 def get_source_index_char_budget():
@@ -6993,6 +6995,77 @@ def collect_doctor_recommendations(report):
     return recommendations
 
 
+def _store_dir_has_context_files(store_dir, file_names):
+    if not store_dir:
+        return False
+    if os.path.isdir(store_dir):
+        return True
+    for file_name in file_names:
+        if os.path.isfile(os.path.join(store_dir, file_name)):
+            return True
+    return False
+
+
+def _load_store_count(store, count_method_name):
+    try:
+        count_method = getattr(store, count_method_name)
+        return count_method(), '', getattr(store, 'metadata', {}) or {}
+    except Exception as exc:
+        return 0, str(exc), {}
+
+
+def collect_doctor_context_status():
+    rag_store_dir = RAG_STORE_DIR or get_default_rag_store_dir()
+    source_index_store_dir = SOURCE_INDEX_STORE_DIR or get_default_source_index_store_dir()
+
+    rag_status = {
+        'enabled': RAG_ENABLED,
+        'store_dir': rag_store_dir if RAG_ENABLED else '',
+        'store_exists': False,
+        'history_records': 0,
+        'bootstrap_on_build': RAG_BOOTSTRAP_ON_BUILD,
+        'updated_at': '',
+        'error': '',
+    }
+    if RAG_ENABLED:
+        rag_exists = _store_dir_has_context_files(rag_store_dir, ('history.jsonl', 'metadata.json'))
+        rag_status['store_exists'] = rag_exists
+        if rag_exists:
+            store = JsonRagStore(rag_store_dir)
+            count, error, metadata = _load_store_count(store, 'count_history')
+            rag_status['history_records'] = count
+            rag_status['updated_at'] = metadata.get('updated_at', '')
+            rag_status['error'] = error
+
+    source_index_status = {
+        'enabled': SOURCE_INDEX_ENABLED,
+        'store_dir': source_index_store_dir if SOURCE_INDEX_ENABLED else '',
+        'store_exists': False,
+        'source_segments': 0,
+        'schema_version': '',
+        'updated_at': '',
+        'error': '',
+    }
+    if SOURCE_INDEX_ENABLED:
+        source_exists = _store_dir_has_context_files(
+            source_index_store_dir,
+            ('source_segments.jsonl', 'source_metadata.json'),
+        )
+        source_index_status['store_exists'] = source_exists
+        if source_exists:
+            store = JsonSourceIndexStore(source_index_store_dir)
+            count, error, metadata = _load_store_count(store, 'count_segments')
+            source_index_status['source_segments'] = count
+            schema_version = metadata.get('schema_version', '')
+            source_index_status['schema_version'] = schema_version if schema_version is not None else ''
+            source_index_status['updated_at'] = metadata.get('updated_at', '')
+            source_index_status['error'] = error
+
+    return {
+        'rag': rag_status,
+        'source_index': source_index_status,
+    }
+
 def collect_doctor_report():
     source_game_dir = legacy._guess_source_game_dir()
     template_info = legacy.get_prepare_template_command_info(source_game_dir)
@@ -7083,6 +7156,8 @@ def collect_doctor_report():
         except Exception as exc:
             print(f'Warning: Could not compute pending translation counts: {exc}')
 
+    context_status = collect_doctor_context_status()
+
     report = {
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
@@ -7107,6 +7182,7 @@ def collect_doctor_report():
         'counts': counts,
         'pending_task_count': pending_task_count,
         'pending_file_count': pending_file_count,
+        'context_status': context_status,
         'warnings': warnings,
     }
     layout_context = collect_doctor_layout_context(report)
@@ -7118,6 +7194,9 @@ def collect_doctor_report():
 
 def print_doctor_report(report):
     counts = report['counts']
+    context_status = report.get('context_status') or {}
+    rag_context = context_status.get('rag') or {}
+    source_index_context = context_status.get('source_index') or {}
     print('Doctor report:')
     print(f"- Base dir: {report['base_dir']}")
     print(f"- TL dir: {report['tl_dir']} (exists: {report['tl_exists']})")
@@ -7160,6 +7239,26 @@ def print_doctor_report(report):
             f"task_count={report['pending_task_count']}, "
             f"file_count={report['pending_file_count']}"
         )
+    print(
+        '- RAG context: '
+        f"enabled={rag_context.get('enabled', False)}, "
+        f"store_dir={rag_context.get('store_dir') or ''}, "
+        f"store_exists={rag_context.get('store_exists', False)}, "
+        f"history_records={rag_context.get('history_records', 0)}, "
+        f"bootstrap_on_build={rag_context.get('bootstrap_on_build', False)}, "
+        f"updated_at={rag_context.get('updated_at') or ''}, "
+        f"error={rag_context.get('error') or ''}"
+    )
+    print(
+        '- Source index context: '
+        f"enabled={source_index_context.get('enabled', False)}, "
+        f"store_dir={source_index_context.get('store_dir') or ''}, "
+        f"store_exists={source_index_context.get('store_exists', False)}, "
+        f"source_segments={source_index_context.get('source_segments', 0)}, "
+        f"schema_version={source_index_context.get('schema_version') or ''}, "
+        f"updated_at={source_index_context.get('updated_at') or ''}, "
+        f"error={source_index_context.get('error') or ''}"
+    )
     if report['warnings']:
         print('Warnings:')
         for warning in report['warnings']:

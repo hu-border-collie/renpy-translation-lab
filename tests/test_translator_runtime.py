@@ -1775,6 +1775,81 @@ class BootstrapWorkTests(unittest.TestCase):
                 str(project.resolve()),
             )
 
+    def test_context_storage_game_defaults_use_project_root(self):
+        old_values = {
+            'base': runtime.BASE_DIR,
+            'log': runtime.LOG_DIR,
+            'location': runtime.CONTEXT_STORAGE_LOCATION,
+            'dir_name': runtime.CONTEXT_STORAGE_GAME_DIR_NAME,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / 'Game_Example'
+                work = project / 'work'
+                work.mkdir(parents=True)
+                runtime.BASE_DIR = str(work)
+                runtime.LOG_DIR = str(Path(tmp) / 'tool_logs')
+                runtime.load_context_storage_settings({
+                    'context_storage': {
+                        'location': 'game',
+                        'game_dir_name': 'translation_context',
+                    }
+                })
+
+                self.assertEqual(
+                    runtime.get_context_storage_root(),
+                    str((project / 'translation_context').resolve()),
+                )
+                self.assertEqual(
+                    runtime.get_default_batch_rag_store_dir(),
+                    str((project / 'translation_context' / 'rag_store').resolve()),
+                )
+                self.assertEqual(
+                    runtime.get_default_source_index_store_dir(),
+                    str((project / 'translation_context' / 'source_index_store').resolve()),
+                )
+                self.assertEqual(
+                    runtime.get_default_story_memory_graph_path(),
+                    str((project / 'translation_context' / 'story_memory' / 'story_graph.json').resolve()),
+                )
+        finally:
+            runtime.BASE_DIR = old_values['base']
+            runtime.LOG_DIR = old_values['log']
+            runtime.CONTEXT_STORAGE_LOCATION = old_values['location']
+            runtime.CONTEXT_STORAGE_GAME_DIR_NAME = old_values['dir_name']
+
+    def test_context_storage_tool_defaults_keep_log_slug_layout(self):
+        old_values = {
+            'base': runtime.BASE_DIR,
+            'log': runtime.LOG_DIR,
+            'location': runtime.CONTEXT_STORAGE_LOCATION,
+            'dir_name': runtime.CONTEXT_STORAGE_GAME_DIR_NAME,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / 'Game_Example'
+                work = project / 'work'
+                work.mkdir(parents=True)
+                log_dir = Path(tmp) / 'tool_logs'
+                runtime.BASE_DIR = str(work)
+                runtime.LOG_DIR = str(log_dir)
+                runtime.load_context_storage_settings({'context_storage': {'location': 'tool'}})
+
+                self.assertEqual(runtime.get_context_storage_root(), str(log_dir))
+                self.assertEqual(
+                    runtime.get_default_batch_rag_store_dir(),
+                    str(log_dir / 'rag_store' / 'Game_Example'),
+                )
+                self.assertEqual(
+                    runtime.get_default_story_memory_graph_path(),
+                    str(log_dir / 'story_memory' / 'story_graph.json'),
+                )
+        finally:
+            runtime.BASE_DIR = old_values['base']
+            runtime.LOG_DIR = old_values['log']
+            runtime.CONTEXT_STORAGE_LOCATION = old_values['location']
+            runtime.CONTEXT_STORAGE_GAME_DIR_NAME = old_values['dir_name']
+
     def test_resolve_project_root_from_original_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
