@@ -213,7 +213,7 @@ def update_bootstrap_progress_from_line(
 
     match = _SOURCE_INDEX_EMBEDDING_PROGRESS_RE.search(text)
     if match:
-        embedding_done = int(match.group(1))
+        embedding_done = int(match.group(3))
         embedding_total = int(match.group(2))
         stored = int(match.group(4))
         return BootstrapProgressState(

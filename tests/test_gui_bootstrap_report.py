@@ -128,6 +128,23 @@ Source Index bootstrap final summary:
         self.assertIn("入库进度：9473/28886 片段（32%）", facts)
         self.assertIn("本轮向量生成：64/19477", facts)
 
+    def test_update_bootstrap_progress_uses_embedded_count_not_scanned(self):
+        state = create_bootstrap_progress_state("source_index")
+        state = update_bootstrap_progress_from_line(
+            "- Total segments scanned from files: 100",
+            state,
+        )
+        state = update_bootstrap_progress_from_line(
+            "- New/updated segments (need embeddings): 100",
+            state,
+        )
+        state = update_bootstrap_progress_from_line(
+            "Source index embedding progress: 80/100 scanned, 64 embedded, 50 stored.",
+            state,
+        )
+
+        self.assertEqual(state.embedding_done, 64)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+import translator_runtime as runtime
+
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
@@ -2050,9 +2052,9 @@ class MainWindow(QMainWindow):
         self._bootstrap_progress = create_bootstrap_progress_state(kind)
         self._focus_workbench_status_tab(1)
         self._set_workflow_from_bootstrap_summary(running_summary)
-        self._apply_bootstrap_progress_ui()
         self._append_log(f"=== 正在运行：{log_heading} ===\n")
         self._set_task_running(True)
+        self._apply_bootstrap_progress_ui()
         self.runner.run(self.state.get_batch_script_path(), args)
         return True
 
@@ -2955,9 +2957,9 @@ class MainWindow(QMainWindow):
             self.source_index_enabled_cb.setChecked(context_flags["source_index_enabled"])
             self.bootstrap_on_build_cb.setChecked(context_flags["bootstrap_on_build"])
             storage_config = self._config_section(config, "context_storage")
-            storage_location = self._config_string(
+            storage_location = runtime._normalize_context_storage_location(
                 storage_config.get("location", config.get("context_storage_location", ""))
-            ).lower()
+            )
             self.context_storage_game_cb.setChecked(storage_location == "game")
             self._batch_thinking_config_has_key = "thinking_level" in batch_config
 
