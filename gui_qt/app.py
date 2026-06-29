@@ -2889,7 +2889,9 @@ class MainWindow(QMainWindow):
             self.source_index_enabled_cb.setChecked(context_flags["source_index_enabled"])
             self.bootstrap_on_build_cb.setChecked(context_flags["bootstrap_on_build"])
             storage_config = self._config_section(config, "context_storage")
-            storage_location = self._config_string(storage_config.get("location")).lower()
+            storage_location = self._config_string(
+                storage_config.get("location", config.get("context_storage_location", ""))
+            ).lower()
             self.context_storage_game_cb.setChecked(storage_location == "game")
             self._batch_thinking_config_has_key = "thinking_level" in batch_config
 
@@ -2964,7 +2966,18 @@ class MainWindow(QMainWindow):
             context_storage_config = self._ensure_config_section(config, "context_storage")
 
             context_storage_config["location"] = "game" if self.context_storage_game_cb.isChecked() else "tool"
-            context_storage_config.setdefault("game_dir_name", "translation_context")
+            context_storage_config["game_dir_name"] = (
+                self._config_string(
+                    context_storage_config.get(
+                        "game_dir_name",
+                        context_storage_config.get(
+                            "directory_name",
+                            context_storage_config.get("directory", "translation_context"),
+                        ),
+                    )
+                )
+                or "translation_context"
+            )
             batch_rag_config["enabled"] = self.rag_enabled_cb.isChecked()
             batch_rag_config["bootstrap_on_build"] = self.bootstrap_on_build_cb.isChecked()
             batch_source_index_config["enabled"] = self.source_index_enabled_cb.isChecked()

@@ -310,6 +310,122 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(saved_configs[0]["batch"]["rag"]["enabled"])
         self.assertTrue(saved_configs[0]["batch"]["source_index"]["enabled"])
 
+    def test_save_config_preserves_legacy_context_storage_dir_name(self):
+        from gui_qt.work_modes import WorkMode
+
+        saved_configs = []
+        config = {
+            "context_storage": {"directory_name": "my_context"},
+            "sync": {"rag": {}},
+            "batch": {"rag": {}, "source_index": {}, "model": "gemini-3.1-flash-lite"},
+        }
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/Game/work")
+            def load_translator_config(self):
+                return config
+            def save_translator_config(self, saved_config):
+                saved_configs.append(saved_config)
+
+        class FakeCheckBox:
+            def __init__(self, checked):
+                self._checked = checked
+            def isChecked(self):
+                return self._checked
+
+        class FakeCombo:
+            def __init__(self, text="", data=""):
+                self._text = text
+                self._data = data
+            def currentText(self):
+                return self._text
+            def currentData(self):
+                return self._data
+
+        class FakeStatusBar:
+            def showMessage(self, text, timeout):
+                pass
+
+        self.window.state = FakeState()
+        self.window.rag_enabled_cb = FakeCheckBox(True)
+        self.window.source_index_enabled_cb = FakeCheckBox(False)
+        self.window.bootstrap_on_build_cb = FakeCheckBox(False)
+        self.window.context_storage_game_cb = FakeCheckBox(True)
+        self.window.sync_model_combo = FakeCombo("gemini-sync")
+        self.window.batch_model_combo = FakeCombo("gemini-3.1-flash-lite")
+        self.window.sync_embedding_combo = FakeCombo("gemini-embedding-001")
+        self.window.batch_embedding_combo = FakeCombo("gemini-embedding-001")
+        self.window.batch_thinking_combo = FakeCombo(data="minimal")
+        self.window._batch_thinking_user_changed = False
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window._append_log = lambda _text: None
+        self.window.statusBar = lambda: FakeStatusBar()
+
+        saved = self.window._on_save_config()
+
+        self.assertTrue(saved)
+        self.assertEqual(saved_configs[0]["context_storage"]["game_dir_name"], "my_context")
+
+    def test_load_config_reads_legacy_context_storage_location(self):
+        config = {
+            "context_storage_location": "game",
+            "sync": {"rag": {}},
+            "batch": {"rag": {}, "source_index": {}, "model": "gemini-3.1-flash-lite"},
+        }
+
+        class FakeState:
+            def load_translator_config(self):
+                return config
+
+        class FakeCheckBox:
+            def __init__(self):
+                self._checked = False
+            def isChecked(self):
+                return self._checked
+            def setChecked(self, checked):
+                self._checked = checked
+
+        class FakeCombo:
+            def __init__(self, text=""):
+                self._text = text
+                self._index = -1
+            def findData(self, _data):
+                return 0
+            def findText(self, _text):
+                return -1
+            def setCurrentIndex(self, index):
+                self._index = index
+            def addItem(self, text, _data=None):
+                self._text = text
+            def count(self):
+                return 1
+            def currentText(self):
+                return self._text
+            def currentData(self):
+                return ""
+            def setEnabled(self, _enabled):
+                pass
+
+        self.window.state = FakeState()
+        self.window._loading_config_to_ui = False
+        self.window._batch_thinking_user_changed = False
+        self.window._updating_batch_thinking_combo = False
+        self.window.rag_enabled_cb = FakeCheckBox()
+        self.window.source_index_enabled_cb = FakeCheckBox()
+        self.window.bootstrap_on_build_cb = FakeCheckBox()
+        self.window.context_storage_game_cb = FakeCheckBox()
+        self.window.theme_combo = FakeCombo()
+        self.window.sync_model_combo = FakeCombo()
+        self.window.batch_model_combo = FakeCombo()
+        self.window.sync_embedding_combo = FakeCombo()
+        self.window.batch_embedding_combo = FakeCombo()
+        self.window.batch_thinking_combo = FakeCombo()
+
+        self.window._load_config_to_ui()
+
+        self.assertTrue(self.window.context_storage_game_cb.isChecked())
+
     def test_bootstrap_task_ready_uses_saved_config(self):
         from gui_qt.work_modes import WorkMode, work_mode_spec
 

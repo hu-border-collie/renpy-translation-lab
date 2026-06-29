@@ -1818,6 +1818,48 @@ class BootstrapWorkTests(unittest.TestCase):
             runtime.CONTEXT_STORAGE_LOCATION = old_values['location']
             runtime.CONTEXT_STORAGE_GAME_DIR_NAME = old_values['dir_name']
 
+    def test_normalize_context_storage_dir_name_rejects_absolute_paths(self):
+        self.assertEqual(
+            runtime._normalize_context_storage_dir_name('C:\\ctx'),
+            'translation_context',
+        )
+        self.assertEqual(
+            runtime._normalize_context_storage_dir_name('/translation_context'),
+            'translation_context',
+        )
+        self.assertEqual(
+            runtime._normalize_context_storage_dir_name('custom_context'),
+            'custom_context',
+        )
+
+    def test_context_storage_tool_defaults_use_base_dir_slug(self):
+        old_values = {
+            'base': runtime.BASE_DIR,
+            'log': runtime.LOG_DIR,
+            'location': runtime.CONTEXT_STORAGE_LOCATION,
+            'dir_name': runtime.CONTEXT_STORAGE_GAME_DIR_NAME,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_a = Path(tmp) / 'Game_Example'
+                project_b = Path(tmp) / 'Other_Game'
+                (project_a / 'work').mkdir(parents=True)
+                (project_b / 'work').mkdir(parents=True)
+                log_dir = Path(tmp) / 'tool_logs'
+                runtime.BASE_DIR = str(project_a / 'work')
+                runtime.LOG_DIR = str(log_dir)
+                runtime.load_context_storage_settings({'context_storage': {'location': 'tool'}})
+
+                self.assertEqual(
+                    runtime.get_default_context_store_dir('rag_store', str(project_b / 'work')),
+                    str(log_dir / 'rag_store' / 'Other_Game'),
+                )
+        finally:
+            runtime.BASE_DIR = old_values['base']
+            runtime.LOG_DIR = old_values['log']
+            runtime.CONTEXT_STORAGE_LOCATION = old_values['location']
+            runtime.CONTEXT_STORAGE_GAME_DIR_NAME = old_values['dir_name']
+
     def test_context_storage_tool_defaults_keep_log_slug_layout(self):
         old_values = {
             'base': runtime.BASE_DIR,
@@ -1839,6 +1881,10 @@ class BootstrapWorkTests(unittest.TestCase):
                 self.assertEqual(
                     runtime.get_default_batch_rag_store_dir(),
                     str(log_dir / 'rag_store' / 'Game_Example'),
+                )
+                self.assertEqual(
+                    runtime.get_default_source_index_store_dir(),
+                    str(log_dir / 'source_index_store' / 'Game_Example'),
                 )
                 self.assertEqual(
                     runtime.get_default_story_memory_graph_path(),

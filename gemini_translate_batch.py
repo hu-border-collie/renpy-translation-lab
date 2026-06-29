@@ -6998,8 +6998,8 @@ def collect_doctor_recommendations(report):
 def _store_dir_has_context_files(store_dir, file_names):
     if not store_dir:
         return False
-    if os.path.isdir(store_dir):
-        return True
+    if not os.path.isdir(store_dir):
+        return False
     for file_name in file_names:
         if os.path.isfile(os.path.join(store_dir, file_name)):
             return True

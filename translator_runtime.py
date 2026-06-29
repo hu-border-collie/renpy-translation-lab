@@ -374,11 +374,16 @@ def _normalize_context_storage_location(value):
 def _normalize_context_storage_dir_name(value):
     if not isinstance(value, str):
         return "translation_context"
-    text = value.strip().replace("\\", "/").strip("/")
+    stripped = value.strip()
+    if os.path.isabs(stripped):
+        return "translation_context"
+    raw = stripped.replace("\\", "/")
+    text = raw.strip("/")
     if not text:
         return "translation_context"
     parts = [part for part in text.split("/") if part]
-    if not parts or any(part in {".", ".."} for part in parts):
+    drive, _ = os.path.splitdrive(raw)
+    if drive or not parts or any(part in {".", ".."} for part in parts):
         return "translation_context"
     return "/".join(parts)
 
@@ -1778,12 +1783,17 @@ def _slugify(text):
     return text or "sync"
 
 
-def guess_project_slug():
-    base_name = os.path.basename(os.path.abspath(BASE_DIR))
+def _project_slug_from_base_dir(base_dir):
+    base_name = os.path.basename(os.path.abspath(base_dir))
     if base_name.lower() == "work":
-        parent = os.path.basename(os.path.dirname(os.path.abspath(BASE_DIR)))
+        parent = os.path.basename(os.path.dirname(os.path.abspath(base_dir)))
         return _slugify(parent or base_name)
-    return _slugify(base_name)
+    project_root = resolve_project_root(base_dir)
+    return _slugify(os.path.basename(os.path.normpath(project_root)))
+
+
+def guess_project_slug():
+    return _project_slug_from_base_dir(BASE_DIR)
 
 
 def get_context_storage_location():
@@ -1800,7 +1810,8 @@ def get_default_context_store_dir(store_name, base_dir=None):
     root = get_context_storage_root(base_dir)
     if CONTEXT_STORAGE_LOCATION == "game":
         return os.path.join(root, store_name)
-    return os.path.join(root, store_name, guess_project_slug())
+    slug = _project_slug_from_base_dir(base_dir or BASE_DIR)
+    return os.path.join(root, store_name, slug)
 
 
 def get_default_batch_rag_store_dir():
