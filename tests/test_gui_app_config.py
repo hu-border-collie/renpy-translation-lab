@@ -233,6 +233,62 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             ],
         )
 
+    def test_bootstrap_summary_syncs_timeline_for_terminal_states(self):
+        from gui_qt.bootstrap_report import BootstrapSummary, running_bootstrap_summary
+
+        class FakeTimeline:
+            def __init__(self):
+                self.steps = [("run", "同步运行")]
+                self.visible = None
+                self.current_step_key = "unset"
+                self.status = "unset"
+
+            def set_current_step(self, step_key, status="running"):
+                self.current_step_key = step_key
+                self.status = status
+
+            def setVisible(self, visible):
+                self.visible = visible
+
+        class FakeProgressBar:
+            def __init__(self):
+                self.visible = True
+
+            def setVisible(self, visible):
+                self.visible = visible
+
+        self.window.timeline = FakeTimeline()
+        self.window.workflow_progress_bar = FakeProgressBar()
+        self.window._bootstrap_progress = object()
+        summary_calls = []
+        self.window._set_workflow_summary = (
+            lambda status, heading, message, facts: summary_calls.append(
+                (status, heading, message, facts)
+            )
+        )
+
+        self.window._set_workflow_from_bootstrap_summary(running_bootstrap_summary("rag"))
+        self.assertEqual(self.window.timeline.current_step_key, "run")
+        self.assertEqual(self.window.timeline.status, "running")
+        self.assertFalse(self.window.timeline.visible)
+
+        self.window._set_workflow_from_bootstrap_summary(
+            BootstrapSummary(
+                kind="rag",
+                status="failed",
+                heading="预建失败",
+                message="出错",
+                facts=[],
+                findings=[],
+            )
+        )
+        self.assertEqual(self.window.timeline.current_step_key, "run")
+        self.assertEqual(self.window.timeline.status, "failed")
+        self.assertFalse(self.window.timeline.visible)
+        self.assertIsNone(self.window._bootstrap_progress)
+        self.assertFalse(self.window.workflow_progress_bar.visible)
+        self.assertEqual(summary_calls[-1][0], "failed")
+
     def test_saved_batch_context_flags_reads_persisted_config(self):
         class FakeState:
             def load_translator_config(self):

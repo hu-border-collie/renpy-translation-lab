@@ -1675,11 +1675,19 @@ class MainWindow(QMainWindow):
             self.workflow_facts_label.setText("\n".join(facts))
 
     def _set_workflow_from_bootstrap_summary(self, summary: BootstrapSummary) -> None:
-        if hasattr(self, "timeline"):
-            self.timeline.set_current_step(None, "idle")
-            self.timeline.setVisible(False)
-        if summary.status in {"ready", "warning", "failed", "idle", "stale"}:
+        if summary.status == "running":
+            self._sync_timeline_from_workflow_status("running", step_key="run")
+        elif summary.status in {"ready", "warning"}:
+            self._sync_timeline_from_workflow_status("done", step_key="run")
             self._clear_bootstrap_progress_ui()
+        elif summary.status == "failed":
+            self._sync_timeline_from_workflow_status("failed", step_key="run")
+            self._clear_bootstrap_progress_ui()
+        elif summary.status in {"idle", "stale"}:
+            self._sync_timeline_from_workflow_status("idle", step_key="run")
+            self._clear_bootstrap_progress_ui()
+        if hasattr(self, "timeline"):
+            self.timeline.setVisible(False)
         self._set_workflow_summary(
             summary.status,
             summary.heading,
