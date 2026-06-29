@@ -541,6 +541,22 @@ QLabel#workflow_facts_label {
     font-size: 14px;
 }
 
+QProgressBar#workflow_progress_bar {
+    border: 1px solid #475569;
+    border-radius: 6px;
+    background: #1e293b;
+    color: #e2e8f0;
+    font-size: 12px;
+    min-height: 18px;
+    max-height: 22px;
+    text-align: center;
+}
+
+QProgressBar#workflow_progress_bar::chunk {
+    background-color: #3b82f6;
+    border-radius: 5px;
+}
+
 QFrame#workflow_separator {
     color: #334155;
     margin-top: 4px;

@@ -2,10 +2,13 @@ import unittest
 
 from gui_qt.bootstrap_report import (
     coerce_bool,
+    create_bootstrap_progress_state,
+    format_bootstrap_progress_facts,
     idle_bootstrap_summary,
     read_batch_context_flags,
     summarize_rag_bootstrap_output,
     summarize_source_index_bootstrap_output,
+    update_bootstrap_progress_from_line,
 )
 
 
@@ -91,6 +94,39 @@ Source Index bootstrap final summary:
     def test_idle_bootstrap_summary_is_idle(self):
         summary = idle_bootstrap_summary()
         self.assertEqual(summary.status, "idle")
+
+    def test_update_bootstrap_progress_from_pre_run_and_embedding_lines(self):
+        state = create_bootstrap_progress_state("source_index")
+        state = update_bootstrap_progress_from_line(
+            "- Total segments scanned from files: 28886",
+            state,
+        )
+        state = update_bootstrap_progress_from_line(
+            "- Unchanged segments (reusing embeddings): 9409",
+            state,
+        )
+        state = update_bootstrap_progress_from_line(
+            "- New/updated segments (need embeddings): 19477",
+            state,
+        )
+        state = update_bootstrap_progress_from_line(
+            "Reused embeddings written: 9409.",
+            state,
+        )
+        state = update_bootstrap_progress_from_line(
+            "Source index embedding progress: 64/19477 scanned, 64 embedded, 9473 stored.",
+            state,
+        )
+
+        self.assertEqual(state.total_segments, 28886)
+        self.assertEqual(state.reused_embeddings, 9409)
+        self.assertEqual(state.embedding_total, 19477)
+        self.assertEqual(state.embedding_done, 64)
+        self.assertEqual(state.stored_segments, 9473)
+
+        facts = format_bootstrap_progress_facts(state)
+        self.assertIn("入库进度：9473/28886 片段（32%）", facts)
+        self.assertIn("本轮向量生成：64/19477", facts)
 
 
 if __name__ == "__main__":

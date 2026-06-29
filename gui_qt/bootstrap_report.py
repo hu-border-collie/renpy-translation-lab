@@ -19,6 +19,37 @@ class BootstrapSummary:
     findings: list[str]
 
 
+@dataclass(frozen=True)
+class BootstrapProgressState:
+    kind: str = "source_index"
+    phase: str = "starting"
+    total_segments: int = 0
+    stored_segments: int = 0
+    embedding_total: int = 0
+    embedding_done: int = 0
+    reused_embeddings: int = 0
+
+
+_SOURCE_INDEX_PRE_RUN_TOTAL_RE = re.compile(
+    r"- Total segments scanned from files:\s*(\d+)"
+)
+_SOURCE_INDEX_PRE_RUN_PENDING_RE = re.compile(
+    r"- New/updated segments \(need embeddings\):\s*(\d+)"
+)
+_SOURCE_INDEX_PRE_RUN_REUSED_RE = re.compile(
+    r"- Unchanged segments \(reusing embeddings\):\s*(\d+)"
+)
+_SOURCE_INDEX_REUSED_WRITTEN_RE = re.compile(
+    r"Reused embeddings written:\s*(\d+)"
+)
+_SOURCE_INDEX_EMBEDDING_TOTAL_RE = re.compile(
+    r"Generating embeddings for\s*(\d+)\s*segments"
+)
+_SOURCE_INDEX_EMBEDDING_PROGRESS_RE = re.compile(
+    r"Source index embedding progress:\s*(\d+)/(\d+)\s*scanned,\s*(\d+)\s*embedded,\s*(\d+)\s*stored"
+)
+
+
 RAG_SUMMARY_HEADER = "RAG bootstrap summary:"
 SOURCE_INDEX_SUMMARY_HEADER = "Source Index bootstrap final summary:"
 
@@ -102,6 +133,148 @@ def idle_bootstrap_summary() -> BootstrapSummary:
         facts=[],
         findings=[],
     )
+
+
+def create_bootstrap_progress_state(kind: str) -> BootstrapProgressState:
+    return BootstrapProgressState(kind=kind or "source_index")
+
+
+def update_bootstrap_progress_from_line(
+    line: str,
+    state: BootstrapProgressState,
+) -> BootstrapProgressState:
+    if state.kind != "source_index":
+        return state
+
+    text = line.strip()
+    if not text:
+        return state
+
+    match = _SOURCE_INDEX_PRE_RUN_TOTAL_RE.search(text)
+    if match:
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase=state.phase,
+            total_segments=int(match.group(1)),
+            stored_segments=state.stored_segments,
+            embedding_total=state.embedding_total,
+            embedding_done=state.embedding_done,
+            reused_embeddings=state.reused_embeddings,
+        )
+
+    match = _SOURCE_INDEX_PRE_RUN_PENDING_RE.search(text)
+    if match:
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase=state.phase,
+            total_segments=state.total_segments,
+            stored_segments=state.stored_segments,
+            embedding_total=int(match.group(1)),
+            embedding_done=state.embedding_done,
+            reused_embeddings=state.reused_embeddings,
+        )
+
+    match = _SOURCE_INDEX_PRE_RUN_REUSED_RE.search(text)
+    if match:
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase="reusing",
+            total_segments=state.total_segments,
+            stored_segments=state.stored_segments,
+            embedding_total=state.embedding_total,
+            embedding_done=state.embedding_done,
+            reused_embeddings=int(match.group(1)),
+        )
+
+    match = _SOURCE_INDEX_REUSED_WRITTEN_RE.search(text)
+    if match:
+        stored = int(match.group(1))
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase="embedding",
+            total_segments=state.total_segments,
+            stored_segments=stored,
+            embedding_total=state.embedding_total,
+            embedding_done=state.embedding_done,
+            reused_embeddings=max(state.reused_embeddings, stored),
+        )
+
+    match = _SOURCE_INDEX_EMBEDDING_TOTAL_RE.search(text)
+    if match:
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase="embedding",
+            total_segments=state.total_segments,
+            stored_segments=state.stored_segments,
+            embedding_total=int(match.group(1)),
+            embedding_done=state.embedding_done,
+            reused_embeddings=state.reused_embeddings,
+        )
+
+    match = _SOURCE_INDEX_EMBEDDING_PROGRESS_RE.search(text)
+    if match:
+        embedding_done = int(match.group(1))
+        embedding_total = int(match.group(2))
+        stored = int(match.group(4))
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase="embedding",
+            total_segments=state.total_segments,
+            stored_segments=stored,
+            embedding_total=embedding_total,
+            embedding_done=embedding_done,
+            reused_embeddings=state.reused_embeddings,
+        )
+
+    if text.startswith("Pruning ") and "stale segments" in text:
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase="pruning",
+            total_segments=state.total_segments,
+            stored_segments=state.stored_segments,
+            embedding_total=state.embedding_total,
+            embedding_done=state.embedding_done,
+            reused_embeddings=state.reused_embeddings,
+        )
+
+    if text.startswith("Sync complete."):
+        total = state.total_segments
+        stored = state.stored_segments
+        if total > 0 and stored < total:
+            stored = total
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase="done",
+            total_segments=total,
+            stored_segments=stored,
+            embedding_total=state.embedding_total,
+            embedding_done=state.embedding_done,
+            reused_embeddings=state.reused_embeddings,
+        )
+
+    return state
+
+
+def format_bootstrap_progress_facts(state: BootstrapProgressState) -> list[str]:
+    if state.kind != "source_index":
+        return []
+
+    facts: list[str] = []
+    if state.total_segments > 0:
+        percent = (state.stored_segments * 100) // state.total_segments
+        facts.append(
+            f"入库进度：{state.stored_segments}/{state.total_segments} 片段（{percent}%）"
+        )
+    if state.embedding_total > 0:
+        facts.append(
+            f"本轮向量生成：{state.embedding_done}/{state.embedding_total}"
+        )
+    elif state.reused_embeddings > 0 and state.phase in {"reusing", "embedding", "starting"}:
+        facts.append(f"已复用向量：{state.reused_embeddings} 片段")
+
+    if state.phase == "pruning":
+        facts.append("正在清理失效片段…")
+    return facts
 
 
 def running_bootstrap_summary(kind: str) -> BootstrapSummary:

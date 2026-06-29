@@ -33,17 +33,22 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QLayout,
+    QProgressBar,
 )
 
 from .api_key_dialog import ApiKeyDialog
 from .api_key_helpers import mask_api_key
 from .bootstrap_report import (
+    BootstrapProgressState,
     BootstrapSummary,
+    create_bootstrap_progress_state,
+    format_bootstrap_progress_facts,
     read_batch_context_flags,
     running_bootstrap_summary,
     stale_bootstrap_summary,
     summarize_rag_bootstrap_output,
     summarize_source_index_bootstrap_output,
+    update_bootstrap_progress_from_line,
 )
 from .apply_failure_dialog import ApplyFailureDialog
 from .apply_failure_report import (
@@ -161,6 +166,7 @@ class MainWindow(QMainWindow):
         self._apply_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
+        self._bootstrap_progress: BootstrapProgressState | None = None
         self._work_bootstrap_output_lines: list[str] = []
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
@@ -471,6 +477,11 @@ class MainWindow(QMainWindow):
         self.workflow_message_label.setWordWrap(True)
         self.workflow_message_label.setObjectName("summary_body_label")
         workflow_layout.addWidget(self.workflow_message_label)
+        self.workflow_progress_bar = QProgressBar()
+        self.workflow_progress_bar.setObjectName("workflow_progress_bar")
+        self.workflow_progress_bar.setVisible(False)
+        self.workflow_progress_bar.setTextVisible(True)
+        workflow_layout.addWidget(self.workflow_progress_bar)
         self.workflow_facts_label = QLabel()
         self.workflow_facts_label.setWordWrap(True)
         self.workflow_facts_label.setObjectName("workflow_facts_label")
@@ -1624,7 +1635,51 @@ class MainWindow(QMainWindow):
             step_key=timeline_step_key,
         )
 
+    def _clear_bootstrap_progress_ui(self) -> None:
+        self._bootstrap_progress = None
+        if hasattr(self, "workflow_progress_bar"):
+            self.workflow_progress_bar.setVisible(False)
+
+    def _apply_bootstrap_progress_ui(self) -> None:
+        if not hasattr(self, "workflow_progress_bar"):
+            return
+
+        state = self._bootstrap_progress
+        if self._active_command == "bootstrap_rag" and self.kill_btn.isEnabled():
+            self.workflow_progress_bar.setRange(0, 0)
+            self.workflow_progress_bar.setFormat("正在处理…")
+            self.workflow_progress_bar.setVisible(True)
+            return
+
+        if state is None or state.kind != "source_index":
+            self.workflow_progress_bar.setVisible(False)
+            return
+
+        if state.total_segments <= 0 and state.stored_segments <= 0:
+            self.workflow_progress_bar.setRange(0, 0)
+            self.workflow_progress_bar.setFormat("正在扫描原文…")
+            self.workflow_progress_bar.setVisible(True)
+        else:
+            total = max(state.total_segments, 1)
+            stored = min(max(state.stored_segments, 0), total)
+            self.workflow_progress_bar.setRange(0, total)
+            self.workflow_progress_bar.setValue(stored)
+            percent = (stored * 100) // total
+            self.workflow_progress_bar.setFormat(f"{percent}%（{stored}/{total}）")
+            self.workflow_progress_bar.setVisible(True)
+
+        facts = format_bootstrap_progress_facts(state)
+        if facts:
+            self.workflow_facts_label.setText("\n".join(facts))
+
     def _set_workflow_from_bootstrap_summary(self, summary: BootstrapSummary) -> None:
+        if summary.status == "running":
+            self._sync_timeline_from_workflow_status("running", step_key="run")
+        elif summary.status in {"ready", "warning"}:
+            self._sync_timeline_from_workflow_status("done", step_key="run")
+            self._clear_bootstrap_progress_ui()
+        elif summary.status in {"failed", "idle", "stale"}:
+            self._clear_bootstrap_progress_ui()
         self._set_workflow_summary(
             summary.status,
             summary.heading,
@@ -1994,8 +2049,10 @@ class MainWindow(QMainWindow):
         self._focus_log_tab()
         self._active_command = command
         self._bootstrap_output_lines = []
+        self._bootstrap_progress = create_bootstrap_progress_state(kind)
         self._focus_workbench_status_tab(1)
         self._set_workflow_from_bootstrap_summary(running_summary)
+        self._apply_bootstrap_progress_ui()
         self._append_log(f"=== 正在运行：{log_heading} ===\n")
         self._set_task_running(True)
         self.runner.run(self.state.get_batch_script_path(), args)
@@ -2289,6 +2346,17 @@ class MainWindow(QMainWindow):
             self._build_retry_output_lines.append(text)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
             self._bootstrap_output_lines.append(text)
+            if (
+                self._active_command == "bootstrap_source_index"
+                and self._bootstrap_progress is not None
+            ):
+                self._bootstrap_progress = update_bootstrap_progress_from_line(
+                    text,
+                    self._bootstrap_progress,
+                )
+                self._apply_bootstrap_progress_ui()
+            elif self._active_command == "bootstrap_rag":
+                self._apply_bootstrap_progress_ui()
         elif self._active_command == "bootstrap_work":
             self._work_bootstrap_output_lines.append(text)
         self._append_log(text)
