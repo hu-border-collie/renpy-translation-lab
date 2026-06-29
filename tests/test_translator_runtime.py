@@ -1824,6 +1824,10 @@ class BootstrapWorkTests(unittest.TestCase):
             'translation_context',
         )
         self.assertEqual(
+            runtime._normalize_context_storage_dir_name('C:/ctx'),
+            'translation_context',
+        )
+        self.assertEqual(
             runtime._normalize_context_storage_dir_name('/translation_context'),
             'translation_context',
         )

@@ -378,12 +378,13 @@ def _normalize_context_storage_dir_name(value):
     if os.path.isabs(stripped):
         return "translation_context"
     raw = stripped.replace("\\", "/")
+    if re.match(r"^[A-Za-z]:", raw) or raw.startswith("//"):
+        return "translation_context"
     text = raw.strip("/")
     if not text:
         return "translation_context"
     parts = [part for part in text.split("/") if part]
-    drive, _ = os.path.splitdrive(raw)
-    if drive or not parts or any(part in {".", ".."} for part in parts):
+    if not parts or any(part in {".", ".."} for part in parts):
         return "translation_context"
     return "/".join(parts)
 
