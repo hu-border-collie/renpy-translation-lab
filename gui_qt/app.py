@@ -1674,6 +1674,7 @@ class MainWindow(QMainWindow):
 
     def _set_workflow_from_bootstrap_summary(self, summary: BootstrapSummary) -> None:
         if hasattr(self, "timeline"):
+            self.timeline.set_current_step(None, "idle")
             self.timeline.setVisible(False)
         if summary.status in {"ready", "warning", "failed", "idle", "stale"}:
             self._clear_bootstrap_progress_ui()
