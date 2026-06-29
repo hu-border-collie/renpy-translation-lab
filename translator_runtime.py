@@ -1072,14 +1072,24 @@ def work_dir_bootstrap_allowed(base_dir=None):
 
 
 def _copy_game_directory(source_game_dir, target_game_dir):
+    total_files = sum(len(files) for _, _, files in os.walk(source_game_dir))
     files_copied = 0
+    if total_files:
+        print(f"Work bootstrap copy progress: 0/{total_files} files.", flush=True)
     for root, _, files in os.walk(source_game_dir):
         rel = os.path.relpath(root, source_game_dir)
         dest_dir = target_game_dir if rel == "." else os.path.join(target_game_dir, rel)
         os.makedirs(dest_dir, exist_ok=True)
         for file_name in files:
-            shutil.copy2(os.path.join(root, file_name), os.path.join(dest_dir, file_name))
+            src_path = os.path.join(root, file_name)
+            dest_path = os.path.join(dest_dir, file_name)
+            shutil.copy2(src_path, dest_path)
             files_copied += 1
+            rel_file = os.path.relpath(src_path, source_game_dir).replace(os.sep, "/")
+            print(
+                f"Work bootstrap copy progress: {files_copied}/{total_files} files, file={rel_file}.",
+                flush=True,
+            )
     return files_copied
 
 

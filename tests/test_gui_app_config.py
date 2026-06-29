@@ -16,6 +16,56 @@ class GuiAppConfigHelperTests(unittest.TestCase):
     def setUp(self):
         self.window = MainWindow.__new__(MainWindow)
 
+    def test_on_cli_line_ready_updates_workflow_progress_bar(self):
+        from gui_qt.workflow_progress import create_workflow_progress_state
+
+        class FakeProgressBar:
+            def __init__(self):
+                self.visible = False
+                self.range_values = None
+                self.value = None
+                self.format = ""
+
+            def setRange(self, minimum, maximum):
+                self.range_values = (minimum, maximum)
+
+            def setValue(self, value):
+                self.value = value
+
+            def setFormat(self, value):
+                self.format = value
+
+            def setVisible(self, visible):
+                self.visible = visible
+
+        class FakeLabel:
+            def __init__(self):
+                self.text = ""
+
+            def setText(self, text):
+                self.text = text
+
+        self.window._active_command = "translation_workflow"
+        self.window._workflow_step_output_lines = []
+        self.window._workflow_progress = create_workflow_progress_state("sync_requests")
+        self.window._workflow_progress_base_facts = ["Manifest: C:/dummy/manifest.json"]
+        self.window.workflow_progress_bar = FakeProgressBar()
+        self.window.workflow_facts_label = FakeLabel()
+        self.window._append_log = lambda text: None
+
+        self.window._on_cli_line_ready("[2/4] sync-key")
+
+        self.assertEqual(self.window._workflow_step_output_lines, ["[2/4] sync-key"])
+        self.assertTrue(self.window.workflow_progress_bar.visible)
+        self.assertEqual(self.window.workflow_progress_bar.range_values, (0, 4))
+        self.assertEqual(self.window.workflow_progress_bar.value, 2)
+        self.assertEqual(self.window.workflow_progress_bar.format, "请求 2/4")
+        self.assertEqual(
+            self.window.workflow_facts_label.text,
+            "Manifest: C:/dummy/manifest.json\n当前请求：sync-key",
+        )
+
+
     def _fake_timeline(self):
         class FakeTimeline:
             def __init__(self):

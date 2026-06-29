@@ -5650,9 +5650,13 @@ def load_external_rag_seed_records(seed_jsonl_paths, quality_state='external_see
     }
 
 
-def embed_history_records(records):
+def embed_history_records(records, *, progress_offset=0, progress_total=None):
     embedded_records = []
     batch_size = 16
+    total = len(records) if progress_total is None else progress_total
+    if total:
+        completed = min(max(progress_offset, 0), total)
+        print(f'RAG update progress: {completed}/{total} records.', flush=True)
     for start in range(0, len(records), batch_size):
         batch = records[start:start + batch_size]
         vectors = embed_texts([record['source_text'] for record in batch], RAG_DOCUMENT_TASK_TYPE)
@@ -5665,6 +5669,9 @@ def embed_history_records(records):
             enriched['embedding_text_kind'] = 'source_text'
             enriched['embedding_text_checksum'] = hash_text(record.get('source_text', ''))
             embedded_records.append(enriched)
+        if total:
+            completed = min(max(progress_offset + len(embedded_records), 0), total)
+            print(f'RAG update progress: {completed}/{total} records.', flush=True)
     return embedded_records
 
 
@@ -5752,12 +5759,21 @@ def sync_rag_store_for_jobs(
         'history_records_before': store.count_history(),
     }
     stats.update(extra_summary or {})
+    print(
+        f'RAG scan progress: {len(base_records)} records scanned from '
+        f'{len(scan_jobs)} files, {len(pending_records)} pending.',
+        flush=True,
+    )
     if not pending_records:
         stats['history_records_after'] = store.count_history()
         return stats
 
     try:
-        embedded_records = embed_history_records(records_to_embed)
+        embedded_records = embed_history_records(
+            records_to_embed,
+            progress_offset=len(records_with_reused_embedding),
+            progress_total=len(pending_records),
+        )
         stats['embedded'] = len(embedded_records)
         stats['upserted'] = store.upsert_history(records_with_reused_embedding + embedded_records)
         stats['history_records_after'] = store.count_history()

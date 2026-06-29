@@ -137,6 +137,11 @@ from .work_modes import (
     work_modes_for_category,
 )
 from .workflow_factory import create_workflow, resume_workflow
+from .workflow_progress import (
+    WorkflowProgressState,
+    create_workflow_progress_state,
+    update_workflow_progress_from_line,
+)
 from .widget_helpers import NoWheelComboBox, NoWheelTabWidget
 from .wizard_timeline import WizardTimeline
 
@@ -173,6 +178,8 @@ class MainWindow(QMainWindow):
         self._bootstrap_output_lines: list[str] = []
         self._bootstrap_progress: BootstrapProgressState | None = None
         self._bootstrap_progress_tracker: BootstrapProgressTracker | None = None
+        self._workflow_progress: WorkflowProgressState | None = None
+        self._workflow_progress_base_facts: list[str] = []
         self._bootstrap_progress_eta_timer = QTimer(self)
         self._bootstrap_progress_eta_timer.setInterval(1000)
         self._bootstrap_progress_eta_timer.timeout.connect(
@@ -1649,10 +1656,54 @@ class MainWindow(QMainWindow):
     def _clear_bootstrap_progress_ui(self) -> None:
         self._bootstrap_progress = None
         self._bootstrap_progress_tracker = None
+        self._workflow_progress = None
+        self._workflow_progress_base_facts = []
         if hasattr(self, "_bootstrap_progress_eta_timer"):
             self._bootstrap_progress_eta_timer.stop()
         if hasattr(self, "workflow_progress_bar"):
             self.workflow_progress_bar.setVisible(False)
+
+    def _clear_workflow_progress_ui(self) -> None:
+        self._workflow_progress = None
+        self._workflow_progress_base_facts = []
+        if hasattr(self, "workflow_progress_bar"):
+            self.workflow_progress_bar.setVisible(False)
+
+    def _apply_workflow_progress_ui(self) -> None:
+        if not hasattr(self, "workflow_progress_bar"):
+            return
+
+        state = self._workflow_progress
+        if state is None or not state.visible:
+            self.workflow_progress_bar.setVisible(False)
+            return
+
+        if state.indeterminate or state.total <= 0:
+            self.workflow_progress_bar.setRange(0, 0)
+        else:
+            total = max(state.total, 1)
+            current = min(max(state.current, 0), total)
+            self.workflow_progress_bar.setRange(0, total)
+            self.workflow_progress_bar.setValue(current)
+        self.workflow_progress_bar.setFormat(state.label or "正在处理…")
+        self.workflow_progress_bar.setVisible(True)
+
+        if hasattr(self, "workflow_facts_label"):
+            facts = list(self._workflow_progress_base_facts)
+            for fact in state.facts:
+                if fact and fact not in facts:
+                    facts.append(fact)
+            self.workflow_facts_label.setText("\n".join(facts))
+
+    def _workflow_progress_kind_for_step(self, step: Any) -> str:
+        spec = work_mode_spec(self._current_work_mode())
+        if spec.mode == WorkMode.BATCH_TRANSLATION and step.key == "build":
+            return "source_index_build"
+        if spec.mode == WorkMode.SYNC_TRANSLATION and step.key == "run":
+            return "sync_translation"
+        if spec.mode in {WorkMode.SYNC_KEYWORD_EXTRACTION, WorkMode.SYNC_REVISION}:
+            return "sync_requests"
+        return ""
 
     def _on_bootstrap_progress_eta_tick(self) -> None:
         if (
@@ -1667,6 +1718,10 @@ class MainWindow(QMainWindow):
 
         state = self._bootstrap_progress
         if self._active_command == "bootstrap_rag" and self.kill_btn.isEnabled():
+            workflow_state = getattr(self, "_workflow_progress", None)
+            if workflow_state is not None and workflow_state.visible:
+                self._apply_workflow_progress_ui()
+                return
             self.workflow_progress_bar.setRange(0, 0)
             self.workflow_progress_bar.setFormat("正在处理…")
             self.workflow_progress_bar.setVisible(True)
@@ -2031,9 +2086,18 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         self._active_command = "bootstrap_work"
         self._work_bootstrap_output_lines = []
-        self._focus_workbench_status_tab(0)
+        self._workflow_progress = create_workflow_progress_state("work_bootstrap")
+        self._workflow_progress_base_facts = []
+        self._focus_workbench_status_tab(1)
         doctor_summary = work_bootstrap_to_doctor_summary(running_work_bootstrap_summary())
         self._set_doctor_summary(doctor_summary)
+        self._set_workflow_summary(
+            "running",
+            doctor_summary.heading,
+            doctor_summary.message,
+            doctor_summary.facts,
+        )
+        self._apply_workflow_progress_ui()
         self._append_log("=== 正在运行：gemini_translate_batch.py bootstrap-work ===\n")
         self._set_task_running(True)
         self.runner.run(self.state.get_batch_script_path(), ["bootstrap-work"])
@@ -2092,6 +2156,12 @@ class MainWindow(QMainWindow):
             if kind == "source_index"
             else None
         )
+        self._workflow_progress = (
+            create_workflow_progress_state("rag_bootstrap")
+            if kind == "rag"
+            else None
+        )
+        self._workflow_progress_base_facts = list(running_summary.facts)
         if kind == "source_index" and hasattr(self, "_bootstrap_progress_eta_timer"):
             self._bootstrap_progress_eta_timer.start()
         elif hasattr(self, "_bootstrap_progress_eta_timer"):
@@ -2384,6 +2454,11 @@ class MainWindow(QMainWindow):
             self._doctor_output_lines.append(text)
         elif self._active_command == "translation_workflow":
             self._workflow_step_output_lines.append(text)
+            self._workflow_progress = update_workflow_progress_from_line(
+                text,
+                self._workflow_progress,
+            )
+            self._apply_workflow_progress_ui()
         elif self._active_command == "apply":
             self._apply_output_lines.append(text)
         elif self._active_command == "apply_revision":
@@ -2402,9 +2477,18 @@ class MainWindow(QMainWindow):
                 )
                 self._apply_bootstrap_progress_ui()
             elif self._active_command == "bootstrap_rag":
+                self._workflow_progress = update_workflow_progress_from_line(
+                    text,
+                    self._workflow_progress,
+                )
                 self._apply_bootstrap_progress_ui()
         elif self._active_command == "bootstrap_work":
             self._work_bootstrap_output_lines.append(text)
+            self._workflow_progress = update_workflow_progress_from_line(
+                text,
+                self._workflow_progress,
+            )
+            self._apply_workflow_progress_ui()
         self._append_log(text)
 
     def _append_log(self, text: str):
@@ -2485,13 +2569,22 @@ class MainWindow(QMainWindow):
             self._set_task_running(False)
             self._active_command = ""
             self._workflow = None
+            self._clear_workflow_progress_ui()
             return
 
         facts = []
         if self._workflow.manifest_path:
             facts.append(format_manifest_path_fact(self._workflow.manifest_path))
+        self._workflow_progress_base_facts = list(facts)
+        progress_kind = self._workflow_progress_kind_for_step(step)
+        self._workflow_progress = (
+            create_workflow_progress_state(progress_kind)
+            if progress_kind
+            else None
+        )
         self._workflow_step_output_lines = []
         self._set_workflow_summary("running", step.heading, step.message, facts)
+        self._apply_workflow_progress_ui()
         if step.script_basename == "gemini_translate.py":
             script_path = self.state.get_sync_script_path()
         else:
@@ -2709,6 +2802,13 @@ class MainWindow(QMainWindow):
                     game_root_update_failed = True
                     summary = with_game_root_persist_warning(summary)
             self._set_doctor_summary(work_bootstrap_to_doctor_summary(summary))
+            self._set_workflow_summary(
+                summary.status,
+                summary.heading,
+                summary.message,
+                summary.facts,
+            )
+            self._clear_workflow_progress_ui()
             self._active_command = ""
             self._set_task_running(False)
             if game_root_update_failed:
@@ -2804,6 +2904,7 @@ class MainWindow(QMainWindow):
                 manifest_path,
             )
         self._set_workflow_update(update)
+        self._clear_workflow_progress_ui()
         self._workflow_step_output_lines = []
         self._refresh_diagnostics_context()
 
