@@ -175,6 +175,24 @@ Source Index bootstrap final summary:
         self.assertEqual(tracker.estimate_remaining_seconds(state, now=20.0), 40)
         self.assertEqual(tracker.estimate_remaining_seconds(state, now=25.0), 35)
 
+    def test_bootstrap_progress_tracker_accepts_zero_timestamp(self):
+        tracker = create_bootstrap_progress_tracker()
+        state = BootstrapProgressState(
+            kind="source_index",
+            total_segments=100,
+            stored_segments=20,
+        )
+        tracker.observe(state, now=0.0)
+
+        state = BootstrapProgressState(
+            kind="source_index",
+            total_segments=100,
+            stored_segments=40,
+        )
+        tracker.observe(state, now=10.0)
+
+        self.assertEqual(tracker.estimate_remaining_seconds(state, now=10.0), 30)
+
     def test_format_bootstrap_progress_bar_label_includes_eta(self):
         state = BootstrapProgressState(
             kind="source_index",

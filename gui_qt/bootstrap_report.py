@@ -296,7 +296,8 @@ class BootstrapProgressTracker:
             return
 
         delta_stored = stored - self.last_stored_segments
-        delta_time = now - (self.last_sample_at or now)
+        last_sample_at = self.last_sample_at
+        delta_time = now - (last_sample_at if last_sample_at is not None else now)
         if delta_stored <= 0 or delta_time <= 0:
             return
 
