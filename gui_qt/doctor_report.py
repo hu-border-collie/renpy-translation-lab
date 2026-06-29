@@ -160,11 +160,15 @@ def format_context_status_facts(
     if source_index_context:
         if source_index_context.get("enabled") is True:
             segments = _int_context_value(source_index_context, "source_segments")
+            expected = _int_context_value(source_index_context, "expected_segments")
             schema_version = source_index_context.get("schema_version")
             if source_index_context.get("store_exists") is not True:
                 detail = "尚未创建（建议先预建原文索引）"
             elif segments == 0:
                 detail = "片段数 0（建议先预建原文索引）"
+            elif expected > 0 and segments < expected:
+                percent = (segments * 100) // expected
+                detail = f"片段数 {segments}/{expected}（约 {percent}%，预建未完成）"
             else:
                 detail = f"片段数 {segments}"
             if schema_version:

@@ -5883,6 +5883,7 @@ def bootstrap_source_index(skip_prepare=False, prune=True):
 
     scan_jobs = all_rag_file_jobs()
     scanned_segments = collect_source_segments_for_jobs(scan_jobs)
+    store.set_metadata(last_scanned_total=len(scanned_segments))
 
     stored_before = store.count_segments()
     scanned_ids = {seg['source_id'] for seg in scanned_segments}
@@ -6987,9 +6988,25 @@ def collect_doctor_recommendations(report):
         recommendations.append(
             'prepare is disabled; enable prepare.enabled in translator_config.json, then run build.'
         )
-    elif has_tl and report.get('pending_task_count', 0) > 0:
+    context_status = report.get('context_status') or {}
+    source_index = context_status.get('source_index') or {}
+    if source_index.get('enabled'):
+        segments = int(source_index.get('source_segments') or 0)
+        expected = int(source_index.get('expected_segments') or 0)
+        if not source_index.get('store_exists') or segments <= 0:
+            recommendations.append(
+                'Source index is enabled but not built; run bootstrap-source-index.'
+            )
+            return recommendations
+        if expected > 0 and segments < expected:
+            recommendations.append(
+                'Source index bootstrap is incomplete; run bootstrap-source-index.'
+            )
+            return recommendations
+
+    if has_tl and report.get('pending_task_count', 0) > 0:
         recommendations.append(
-            f"Found {report['pending_task_count']} pending lines; run build when API keys are configured."
+            'Pending translation lines are ready; start batch translation when API keys are configured.'
         )
 
     return recommendations
@@ -7058,6 +7075,13 @@ def collect_doctor_context_status():
             source_index_status['source_segments'] = count
             schema_version = metadata.get('schema_version', '')
             source_index_status['schema_version'] = schema_version if schema_version is not None else ''
+            expected_raw = metadata.get('last_scanned_total')
+            try:
+                expected_segments = int(expected_raw)
+            except (TypeError, ValueError):
+                expected_segments = 0
+            if expected_segments > 0:
+                source_index_status['expected_segments'] = expected_segments
             source_index_status['updated_at'] = metadata.get('updated_at', '')
             source_index_status['error'] = error
 
@@ -7255,6 +7279,7 @@ def print_doctor_report(report):
         f"store_dir={source_index_context.get('store_dir') or ''}, "
         f"store_exists={source_index_context.get('store_exists', False)}, "
         f"source_segments={source_index_context.get('source_segments', 0)}, "
+        f"expected_segments={source_index_context.get('expected_segments', 0)}, "
         f"schema_version={source_index_context.get('schema_version') or ''}, "
         f"updated_at={source_index_context.get('updated_at') or ''}, "
         f"error={source_index_context.get('error') or ''}"

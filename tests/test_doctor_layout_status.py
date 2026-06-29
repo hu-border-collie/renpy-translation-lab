@@ -180,6 +180,28 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         self.assertIn("gemini_translate_batch.py build", joined)
         self.assertNotIn("switch to", joined)
 
+    def test_incomplete_source_index_blocks_batch_translation_recommendation(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=3,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 110407
+        report["context_status"] = {
+            "source_index": {
+                "enabled": True,
+                "store_exists": True,
+                "source_segments": 10385,
+                "expected_segments": 28886,
+            }
+        }
+
+        recommendations = batch_mod.collect_doctor_recommendations(report)
+
+        self.assertEqual(len(recommendations), 1)
+        self.assertIn("incomplete", recommendations[0])
+        self.assertNotIn("Pending translation lines", recommendations[0])
+
 
 if __name__ == "__main__":
     unittest.main()

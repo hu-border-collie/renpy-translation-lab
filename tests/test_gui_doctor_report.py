@@ -284,6 +284,41 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(fact, "建议：点击「准备工作目录」")
 
+    def test_format_doctor_recommendation_fact_for_ready_pending_lines(self):
+        fact = format_doctor_recommendation_fact(
+            "Pending translation lines are ready; start batch translation when API keys are configured."
+        )
+
+        self.assertEqual(
+            fact,
+            "建议：切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交云端任务",
+        )
+
+    def test_partial_source_index_shows_progress_in_facts(self):
+        output = """
+Doctor report:
+- Base dir: C:/Games/Example/work
+- TL dir: C:/Games/Example/work/game/tl/schinese (exists: True)
+- Mode: existing_tl_only
+- Layout status: ready
+- TL scan: rpy_files=3, translate_blocks=10, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=100
+- Pending translation: task_count=110407, file_count=12
+- Source index context: enabled=True, store_dir=C:/logs/source_index_store/demo, store_exists=True, source_segments=10385, expected_segments=28886, schema_version=1, updated_at=, error=
+Recommendations:
+- Source index bootstrap is incomplete; run bootstrap-source-index.
+"""
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertTrue(
+            any("原文索引：已启用，片段数 10385/28886" in fact for fact in summary.facts)
+        )
+        self.assertTrue(
+            any("继续运行「预建原文索引」补全索引库" in fact for fact in summary.facts)
+        )
+        self.assertFalse(
+            any("提交约 110407" in fact for fact in summary.facts)
+        )
+
     def test_stale_summary_marks_previous_result_invalid(self):
         summary = stale_summary()
 
