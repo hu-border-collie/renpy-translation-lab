@@ -344,6 +344,55 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             'updated_at': '2026-06-14T09:00:00',
         }
 
+    def test_search_segments_reuses_candidate_cache_and_invalidates_on_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JsonSourceIndexStore(tmp)
+            store.upsert_segments([
+                self.make_segment('s1', source='Alpha', embedding=[1.0, 0.0, 0.0]),
+                self.make_segment('s2', source='Beta', embedding=[0.0, 1.0, 0.0]),
+            ])
+
+            results, diagnostics = store.search_segments(
+                [1.0, 0.0, 0.0],
+                top_k=1,
+                min_similarity=0.0,
+                embedding_model='gemini-embedding-001',
+                embedding_task_type='RETRIEVAL_DOCUMENT',
+                embedding_dim=3,
+                return_diagnostics=True,
+            )
+
+            cache_key = ('gemini-embedding-001', 'RETRIEVAL_DOCUMENT', 3)
+            self.assertEqual(results[0]['source_id'], 's1')
+            self.assertEqual(diagnostics['segments_seen'], 2)
+            self.assertIn(cache_key, store._search_cache)
+            cached = store._search_cache[cache_key]
+
+            store.search_segments(
+                [0.0, 1.0, 0.0],
+                top_k=1,
+                min_similarity=0.0,
+                embedding_model='gemini-embedding-001',
+                embedding_task_type='RETRIEVAL_DOCUMENT',
+                embedding_dim=3,
+            )
+            self.assertIs(store._search_cache[cache_key], cached)
+
+            store.upsert_segments([
+                self.make_segment('s3', source='Gamma', embedding=[0.0, 0.0, 1.0]),
+            ])
+            self.assertEqual(store._search_cache, {})
+
+            results = store.search_segments(
+                [0.0, 0.0, 1.0],
+                top_k=1,
+                min_similarity=0.0,
+                embedding_model='gemini-embedding-001',
+                embedding_task_type='RETRIEVAL_DOCUMENT',
+                embedding_dim=3,
+            )
+            self.assertEqual(results[0]['source_id'], 's3')
+
     def test_retrieve_source_hits_enabled_and_lookup(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, replace
 
 
@@ -19,6 +20,11 @@ class WorkflowProgressState:
     file_total: int = 0
     current_file_done: int = 0
     current_file_total: int = 0
+    started_at: float | None = None
+    last_sample_at: float | None = None
+    last_sample_current: int = 0
+    seconds_per_unit: float | None = None
+    remaining_seconds: int | None = None
 
 
 _SOURCE_INDEX_BUILD_TOTAL_RE = re.compile(
@@ -46,6 +52,8 @@ _WORK_COPY_TOTAL_RE = re.compile(r"Work bootstrap copy progress:\s*0/(\d+)\s*fil
 _WORK_COPY_PROGRESS_RE = re.compile(
     r"Work bootstrap copy progress:\s*(\d+)/(\d+)\s*files,\s*file=(.+)\."
 )
+_WORKFLOW_ETA_MIN_ELAPSED_SECONDS = 5.0
+_WORKFLOW_ETA_MIN_PROGRESS_UNITS = 2
 
 
 def create_workflow_progress_state(kind: str) -> WorkflowProgressState | None:
@@ -69,20 +77,22 @@ def create_workflow_progress_state(kind: str) -> WorkflowProgressState | None:
 def update_workflow_progress_from_line(
     line: str,
     state: WorkflowProgressState | None,
+    *,
+    now: float | None = None,
 ) -> WorkflowProgressState | None:
     text = line.strip()
     if state is None or not text:
         return state
     if state.kind == "source_index_build":
-        return _update_source_index_build_progress(text, state)
+        return _with_progress_timing(state, _update_source_index_build_progress(text, state), now=now)
     if state.kind == "sync_translation":
-        return _update_sync_translation_progress(text, state)
+        return _with_progress_timing(state, _update_sync_translation_progress(text, state), now=now)
     if state.kind == "sync_requests":
-        return _update_sync_request_progress(text, state)
+        return _with_progress_timing(state, _update_sync_request_progress(text, state), now=now)
     if state.kind == "rag_bootstrap":
-        return _update_rag_bootstrap_progress(text, state)
+        return _with_progress_timing(state, _update_rag_bootstrap_progress(text, state), now=now)
     if state.kind == "work_bootstrap":
-        return _update_work_bootstrap_progress(text, state)
+        return _with_progress_timing(state, _update_work_bootstrap_progress(text, state), now=now)
     return state
 
 
@@ -349,6 +359,123 @@ def _update_work_bootstrap_progress(
             indeterminate=False,
         )
     return state
+
+
+def _with_progress_timing(
+    previous: WorkflowProgressState,
+    updated: WorkflowProgressState,
+    *,
+    now: float | None = None,
+) -> WorkflowProgressState:
+    if updated is previous:
+        return updated
+    if not updated.visible or updated.indeterminate or updated.total <= 0:
+        return replace(
+            updated,
+            started_at=None,
+            last_sample_at=None,
+            last_sample_current=updated.current,
+            seconds_per_unit=None,
+            remaining_seconds=None,
+        )
+
+    if now is None:
+        now = time.monotonic()
+
+    current = min(max(updated.current, 0), max(updated.total, 1))
+    total = max(updated.total, 1)
+    same_series = (
+        previous.visible
+        and not previous.indeterminate
+        and previous.total == updated.total
+        and previous.current <= current
+    )
+    started_at = previous.started_at if same_series and previous.started_at is not None else now
+    last_sample_at = previous.last_sample_at if same_series else None
+    last_sample_current = previous.last_sample_current if same_series else 0
+    seconds_per_unit = previous.seconds_per_unit if same_series else None
+
+    if current <= 0:
+        return replace(
+            updated,
+            started_at=started_at,
+            last_sample_at=None,
+            last_sample_current=0,
+            seconds_per_unit=None,
+            remaining_seconds=None,
+        )
+
+    if current >= total:
+        return replace(
+            updated,
+            started_at=started_at,
+            last_sample_at=now,
+            last_sample_current=current,
+            remaining_seconds=0,
+        )
+
+    delta_units = current - last_sample_current
+    if last_sample_at is not None and delta_units > 0:
+        delta_seconds = now - last_sample_at
+        if delta_seconds > 0:
+            sample_rate = delta_seconds / delta_units
+            seconds_per_unit = (
+                sample_rate
+                if seconds_per_unit is None
+                else seconds_per_unit * 0.6 + sample_rate * 0.4
+            )
+        last_sample_at = now
+        last_sample_current = current
+    elif last_sample_at is None:
+        last_sample_at = now
+        last_sample_current = current
+
+    elapsed = now - started_at if started_at is not None else 0
+    if (
+        seconds_per_unit is None
+        and current >= _WORKFLOW_ETA_MIN_PROGRESS_UNITS
+        and elapsed >= _WORKFLOW_ETA_MIN_ELAPSED_SECONDS
+    ):
+        seconds_per_unit = elapsed / current
+
+    remaining_seconds = None
+    label = updated.label
+    if seconds_per_unit is not None:
+        remaining_seconds = max(0, int((total - current) * seconds_per_unit + 0.5))
+        if remaining_seconds > 0:
+            label = f"{label} · {format_remaining_duration_zh(remaining_seconds)}"
+
+    return replace(
+        updated,
+        label=label,
+        started_at=started_at,
+        last_sample_at=last_sample_at,
+        last_sample_current=last_sample_current,
+        seconds_per_unit=seconds_per_unit,
+        remaining_seconds=remaining_seconds,
+    )
+
+
+def format_remaining_duration_zh(seconds: int) -> str:
+    if seconds <= 0:
+        return "即将完成"
+    if seconds < 60:
+        return f"约剩 {seconds} 秒"
+    minutes, secs = divmod(seconds, 60)
+    if seconds < 3600:
+        if secs >= 30:
+            minutes += 1
+            secs = 0
+        if secs:
+            return f"约剩 {minutes} 分 {secs} 秒"
+        return f"约剩 {minutes} 分"
+    hours, minutes = divmod(minutes, 60)
+    if minutes >= 30:
+        hours += 1
+        minutes = 0
+    if minutes:
+        return f"约剩 {hours} 小时 {minutes} 分"
+    return f"约剩 {hours} 小时"
 
 
 def _current_file_index(state: WorkflowProgressState) -> int:

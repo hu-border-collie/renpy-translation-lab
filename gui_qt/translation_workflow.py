@@ -41,6 +41,7 @@ class WorkflowUpdate:
     message: str
     facts: list[str]
     should_continue: bool = False
+    timeline_step_key: str | None = None
 
 
 STEP_TEXT = {
@@ -49,6 +50,8 @@ STEP_TEXT = {
     "status": ("正在刷新任务状态", "正在查询云端任务处理状态。"),
     "download": ("正在获取翻译结果", "任务已完成，正在下载结果文件。"),
     "check": ("正在检查翻译结果", "正在校验结果是否可以进入写回前预览。"),
+    "merge-retry": ("正在合并补译结果", "正在把补译结果合并回父翻译包。"),
+    "check-parent": ("正在重新检查父任务", "补译结果已合并，正在重新校验父翻译包。"),
 }
 
 
@@ -68,6 +71,17 @@ def extract_safety_status(output: str) -> str:
     return _extract_line_value(output, "Safety status:")
 
 
+def output_has_quota_error(output: str) -> bool:
+    return any(
+        marker in output
+        for marker in ("RESOURCE_EXHAUSTED", "429", "Quota/resource limit hit")
+    )
+
+
+def extract_suggested_split_command(output: str) -> str:
+    return _extract_line_value(output, "Suggested split command:")
+
+
 def manifest_path_for_package(package_path: str) -> str:
     if re.match(r"^[A-Za-z]:", package_path) or package_path.startswith("\\\\") or "\\" in package_path:
         return str(PureWindowsPath(package_path) / "manifest.json")
@@ -81,9 +95,16 @@ def _extract_line_value(output: str, prefix: str) -> str:
 
 
 class TranslationWorkflow:
-    def __init__(self, pending_steps: list[str], manifest_path: str = ""):
+    def __init__(
+        self,
+        pending_steps: list[str],
+        manifest_path: str = "",
+        *,
+        retry_parent_manifest_path: str = "",
+    ):
         self._pending_steps = list(pending_steps)
         self.manifest_path = manifest_path
+        self.retry_parent_manifest_path = retry_parent_manifest_path
 
     @classmethod
     def start_new(cls) -> "TranslationWorkflow":
@@ -95,6 +116,9 @@ class TranslationWorkflow:
 
     @classmethod
     def resume_manifest(cls, manifest_path: str, manifest: dict[str, object]) -> "TranslationWorkflow":
+        retry_parent = _stripped(manifest.get("retry_of_manifest"))
+        if retry_parent:
+            return cls.resume_retry_manifest(manifest_path, manifest, retry_parent)
         if manifest.get("last_check") or manifest.get("last_check_summary"):
             return cls([], manifest_path=manifest_path)
         if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
@@ -102,6 +126,43 @@ class TranslationWorkflow:
         if not manifest.get("job_name"):
             return cls(["submit", "status"], manifest_path=manifest_path)
         return cls.resume_latest(manifest_path)
+
+    @classmethod
+    def resume_retry_manifest(
+        cls,
+        manifest_path: str,
+        manifest: dict[str, object],
+        retry_parent_manifest_path: str,
+    ) -> "TranslationWorkflow":
+        check_summary = manifest.get("last_check_summary")
+        safety = ""
+        if isinstance(check_summary, dict):
+            safety = _stripped(check_summary.get("safety_level"))
+        if safety == "safe":
+            return cls(
+                ["merge-retry", "check-parent"],
+                manifest_path=manifest_path,
+                retry_parent_manifest_path=retry_parent_manifest_path,
+            )
+        if check_summary:
+            return cls(
+                [],
+                manifest_path=manifest_path,
+                retry_parent_manifest_path=retry_parent_manifest_path,
+            )
+        if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
+            return cls(
+                ["download", "check"],
+                manifest_path=manifest_path,
+                retry_parent_manifest_path=retry_parent_manifest_path,
+            )
+        if not manifest.get("job_name"):
+            return cls(
+                ["submit", "status"],
+                manifest_path=manifest_path,
+                retry_parent_manifest_path=retry_parent_manifest_path,
+            )
+        return cls(["status"], manifest_path=manifest_path, retry_parent_manifest_path=retry_parent_manifest_path)
 
     def current_step(self) -> WorkflowStep | None:
         if not self._pending_steps:
@@ -127,12 +188,7 @@ class TranslationWorkflow:
         key = self._pending_steps.pop(0)
         if exit_code != 0:
             self._pending_steps.clear()
-            return WorkflowUpdate(
-                status="failed",
-                heading="翻译流程中断",
-                message=f"{STEP_TEXT[key][0]}没有正常完成，请查看下方原始输出。",
-                facts=self._facts(),
-            )
+            return self._finish_failed_step(key, output)
 
         if key == "build":
             return self._finish_build(output)
@@ -154,8 +210,37 @@ class TranslationWorkflow:
                 return status_update
         if key == "check":
             return self._finish_check(output)
+        if key == "merge-retry":
+            if self.retry_parent_manifest_path:
+                self.manifest_path = self.retry_parent_manifest_path
+            return self._continue_or_finish()
+        if key == "check-parent":
+            if self.retry_parent_manifest_path:
+                self.manifest_path = self.retry_parent_manifest_path
+            self.retry_parent_manifest_path = ""
+            return self._finish_check(output)
 
         return self._continue_or_finish()
+
+    def _finish_failed_step(self, key: str, output: str) -> WorkflowUpdate:
+        message = f"{STEP_TEXT[key][0]}没有正常完成，请查看下方原始输出。"
+        extra_facts: list[str] = []
+        if key == "submit" and output_has_quota_error(output):
+            message = (
+                "提交云端任务时命中配额或资源限制。当前批量包可能过大，"
+                "建议先运行拆包，把当前任务拆成小包后再继续提交。"
+            )
+            extra_facts.append("建议：先运行 split 拆包，再继续最新任务。")
+            command = extract_suggested_split_command(output)
+            if command:
+                extra_facts.append(f"拆包命令：{command}")
+
+        return WorkflowUpdate(
+            status="failed",
+            heading="翻译流程中断",
+            message=message,
+            facts=self._facts(extra_facts),
+        )
 
     def _finish_build(self, output: str) -> WorkflowUpdate:
         package_path = extract_created_package_path(output)
@@ -208,14 +293,24 @@ class TranslationWorkflow:
     def _finish_check(self, output: str) -> WorkflowUpdate:
         safety = extract_safety_status(output)
         if safety == "safe":
+            if self.retry_parent_manifest_path:
+                self._pending_steps[:] = ["merge-retry", "check-parent"]
+                return self._continue_or_finish(
+                    extra_facts=[format_safety_fact(safety, prefix="补译检查结果")],
+                )
             heading = "翻译结果检查通过"
             message = "检查结果为可写回，可以进入写回前确认。"
         elif safety in {"warn", "block"}:
-            heading = "翻译结果需要处理"
+            heading = "补译结果仍需处理" if self.retry_parent_manifest_path else "翻译结果需要处理"
             message = (
                 f"检查结果为 {safety_level_label(safety)}，普通流程不应写回；"
                 "请先查看问题并重试或修复。"
             )
+            if self.retry_parent_manifest_path:
+                message = (
+                    f"补译包检查结果为 {safety_level_label(safety)}，暂不能合并回父任务；"
+                    "请先查看问题清单，必要时继续补译或人工处理。"
+                )
         else:
             heading = "翻译结果检查完成"
             message = "未能识别安全状态，请查看原始输出。"
@@ -242,6 +337,10 @@ class TranslationWorkflow:
         )
 
     def _args_for_step(self, key: str) -> list[str]:
+        if key == "merge-retry":
+            return ["merge-retry", self.retry_parent_manifest_path, self.manifest_path]
+        if key == "check-parent":
+            return ["check", self.retry_parent_manifest_path]
         if key == "build" or not self.manifest_path:
             return [key]
         return [key, self.manifest_path]
@@ -253,3 +352,7 @@ class TranslationWorkflow:
         if extra_facts:
             facts.extend(extra_facts)
         return facts
+
+
+def _stripped(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""

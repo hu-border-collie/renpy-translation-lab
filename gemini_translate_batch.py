@@ -81,6 +81,8 @@ BATCH_MAX_OUTPUT_TOKENS = 32768
 BATCH_TEMPERATURE = 0.2
 BATCH_THINKING_LEVEL = 'minimal'
 BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
+BATCH_SPLIT_RECOMMEND_CHUNKS = 400
+BATCH_SPLIT_RECOMMEND_ITEMS = 12000
 BATCH_MACRO_SETTING = ''
 MANIFEST_MODE_TRANSLATION = 'translation'
 MANIFEST_MODE_KEYWORD_EXTRACTION = 'keyword_extraction'
@@ -669,7 +671,84 @@ def collect_chunk_known_terms(chunk):
     return terms
 
 
-def allow_non_chinese_batch_translation(manifest, chunk, original, translated):
+def _manifest_tl_base_dir(manifest):
+    base_dir = manifest.get('tl_dir') if isinstance(manifest, dict) else ''
+    if isinstance(base_dir, str) and base_dir.strip():
+        return base_dir.strip()
+    return legacy.TL_DIR
+
+
+def _manifest_file_path_for_chunk(manifest, chunk):
+    if not isinstance(chunk, dict):
+        return ''
+    file_key = chunk.get('file_rel_path') or chunk.get('file') or ''
+    if not isinstance(file_key, str) or not file_key.strip():
+        return ''
+    try:
+        return resolve_path_under_dir(
+            _manifest_tl_base_dir(manifest),
+            file_key,
+            f'manifest file key {file_key}',
+        )
+    except SystemExit:
+        return ''
+
+
+def _item_source_line_number(item):
+    if not isinstance(item, dict):
+        return 0
+    for field in ('line_number', 'target_line_number'):
+        try:
+            value = int(item.get(field) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0:
+            return value
+    try:
+        line_index = int(item.get('line') or 0)
+    except (TypeError, ValueError):
+        return 0
+    return line_index + 1 if line_index >= 0 else 0
+
+
+def _read_line_at(path, line_number):
+    if not path or line_number <= 0:
+        return ''
+    try:
+        with open(path, 'r', encoding='utf-8-sig') as handle:
+            for current_number, line in enumerate(handle, 1):
+                if current_number == line_number:
+                    return line
+    except OSError:
+        return ''
+    return ''
+
+
+def is_manifest_keyword_argument_item(manifest, chunk, item):
+    if not isinstance(item, dict):
+        return False
+    line = _read_line_at(_manifest_file_path_for_chunk(manifest, chunk), _item_source_line_number(item))
+    if not line:
+        return False
+    return legacy.is_keyword_argument_string_span(line, item.get('start'), item.get('end'))
+
+
+def is_manifest_say_speaker_label_item(manifest, chunk, item):
+    if not isinstance(item, dict):
+        return False
+    line = _read_line_at(_manifest_file_path_for_chunk(manifest, chunk), _item_source_line_number(item))
+    if not line:
+        return False
+    return legacy.is_say_speaker_label_string_span(line, item.get('start'), item.get('end'))
+
+
+def allow_non_chinese_batch_translation(manifest, chunk, original, translated, item=None):
+    unchanged = (original or '').strip() == (translated or '').strip()
+    if unchanged and (
+        is_manifest_keyword_argument_item(manifest, chunk, item)
+        or is_manifest_say_speaker_label_item(manifest, chunk, item)
+    ):
+        return True
     return legacy.allow_non_chinese_term_translation(
         original,
         translated,
@@ -1073,6 +1152,177 @@ def save_manifest(manifest, update_latest=True):
     if update_latest:
         remember_latest_manifest(manifest_path)
 
+
+def safe_nonnegative_int(value):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
+
+
+def manifest_summary_counts(manifest):
+    summary = manifest.get('summary') if isinstance(manifest.get('summary'), dict) else {}
+    chunk_count = safe_nonnegative_int(summary.get('chunk_count'))
+    item_count = safe_nonnegative_int(summary.get('item_count'))
+    chunks = manifest.get('chunks')
+    if isinstance(chunks, list):
+        if not chunk_count:
+            chunk_count = len(chunks)
+        if not item_count:
+            for chunk in chunks:
+                if isinstance(chunk, dict):
+                    items = chunk.get('items')
+                    if isinstance(items, list):
+                        item_count += len(items)
+    return chunk_count, item_count
+
+
+def manifest_exceeds_split_recommendation(manifest):
+    chunk_count, item_count = manifest_summary_counts(manifest)
+    return (
+        chunk_count > BATCH_SPLIT_RECOMMEND_CHUNKS
+        or item_count > BATCH_SPLIT_RECOMMEND_ITEMS
+    )
+
+
+def quote_command_arg(value):
+    text = str(value or '')
+    if text == '' or re.search(r'\s|["&]', text):
+        return '"' + text.replace('"', '\\"') + '"'
+    return text
+
+
+def split_display_name_prefix(manifest):
+    display_name = manifest.get('display_name')
+    if isinstance(display_name, str) and display_name.strip():
+        return display_name.strip()
+    package_dir = manifest.get('_package_dir')
+    if isinstance(package_dir, str) and package_dir.strip():
+        return os.path.basename(package_dir.rstrip('\\/')) or BATCH_DISPLAY_NAME_PREFIX
+    return BATCH_DISPLAY_NAME_PREFIX
+
+
+def build_split_recommendation(manifest):
+    if not manifest_exceeds_split_recommendation(manifest):
+        return {}
+    chunk_count, item_count = manifest_summary_counts(manifest)
+    manifest_path = manifest.get('_manifest_path') or ''
+    prefix = split_display_name_prefix(manifest)
+    command = ' '.join([
+        'python',
+        'gemini_translate_batch.py',
+        'split',
+        quote_command_arg(manifest_path),
+        '--max-chunks',
+        str(BATCH_SPLIT_RECOMMEND_CHUNKS),
+        '--max-items',
+        str(BATCH_SPLIT_RECOMMEND_ITEMS),
+        '--display-name-prefix',
+        quote_command_arg(prefix),
+    ])
+    return {
+        'reason': 'quota_or_resource_exhausted',
+        'chunk_count': chunk_count,
+        'item_count': item_count,
+        'max_chunks': BATCH_SPLIT_RECOMMEND_CHUNKS,
+        'max_items': BATCH_SPLIT_RECOMMEND_ITEMS,
+        'command': command,
+    }
+
+
+def attach_submit_split_recommendation(manifest):
+    recommendation = build_split_recommendation(manifest)
+    if recommendation:
+        manifest['split_recommended'] = True
+        manifest['last_submit_quota_recommendation'] = recommendation
+    else:
+        manifest.pop('split_recommended', None)
+        manifest.pop('last_submit_quota_recommendation', None)
+    return recommendation
+
+
+def print_submit_split_recommendation(recommendation):
+    print('Quota/resource limit hit during batch submit.')
+    if not recommendation:
+        print('Wait for quota reset or retry with another API key before submitting again.')
+        return
+    print(
+        f"Package size: {recommendation['chunk_count']} chunks, "
+        f"{recommendation['item_count']} items."
+    )
+    print(f"Suggested split command: {recommendation['command']}")
+    print('After splitting, continue from the first split manifest.')
+
+
+def load_json_object_file(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def next_split_manifest_path(manifest):
+    split_index = safe_nonnegative_int(manifest.get('split_index'))
+    split_total = safe_nonnegative_int(manifest.get('split_total'))
+    if not split_index or not split_total or split_index >= split_total:
+        return ''
+
+    current_path = manifest.get('_manifest_path')
+    current_abs = os.path.abspath(current_path) if isinstance(current_path, str) and current_path else ''
+    parent_path = manifest.get('split_from_manifest')
+    children = []
+    if isinstance(parent_path, str) and parent_path.strip() and os.path.isfile(parent_path):
+        parent_manifest = load_json_object_file(parent_path)
+        raw_children = parent_manifest.get('split_children')
+        if isinstance(raw_children, list):
+            children = [child for child in raw_children if isinstance(child, str) and child.strip()]
+
+    candidate = ''
+    if children:
+        normalized_current = os.path.normcase(os.path.abspath(current_abs)) if current_abs else ''
+        for position, child in enumerate(children):
+            if os.path.normcase(os.path.abspath(child)) == normalized_current:
+                if position + 1 < len(children):
+                    candidate = children[position + 1]
+                break
+        if not candidate and split_index < len(children):
+            candidate = children[split_index]
+
+    if not candidate:
+        package_dir = manifest.get('_package_dir')
+        if not isinstance(package_dir, str) or not package_dir.strip():
+            package_dir = os.path.dirname(current_abs)
+        if package_dir:
+            split_root = os.path.dirname(package_dir)
+            candidate = os.path.join(
+                split_root,
+                f'part{split_index + 1:02d}_of_{split_total:02d}',
+                'manifest.json',
+            )
+
+    if not candidate:
+        return ''
+    candidate = os.path.abspath(candidate)
+    return candidate if os.path.isfile(candidate) else ''
+
+
+def mark_next_split_after_apply(manifest):
+    next_manifest = next_split_manifest_path(manifest)
+    if next_manifest:
+        manifest['next_split_manifest_path'] = next_manifest
+        manifest['next_split_ready_at'] = datetime.now().isoformat(timespec='seconds')
+    return next_manifest
+
+
+def print_next_split_after_apply(next_manifest):
+    if not next_manifest:
+        return
+    print(f'Next split manifest: {next_manifest}')
+    print('Latest manifest set to next split package.')
+    print('Run continue/status from the GUI to submit or monitor the next split package.')
 
 def stable_json_dumps(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
@@ -3091,8 +3341,16 @@ def submit_manifest(target=None, display_name_override='', model_override=''):
             return manifest['_manifest_path']
         except Exception as exc:
             last_error = exc
+            quota_error = is_quota_error(exc)
             manifest['last_submit_error'] = str(exc)
+            manifest['last_submit_error_type'] = (
+                'quota_or_resource_exhausted' if quota_error else 'submit_error'
+            )
             manifest['job_state'] = 'SUBMIT_FAILED'
+            recommendation = attach_submit_split_recommendation(manifest) if quota_error else {}
+            if not quota_error:
+                manifest.pop('split_recommended', None)
+                manifest.pop('last_submit_quota_recommendation', None)
             if uploaded_file is not None:
                 manifest['uploaded_file_name'] = getattr(uploaded_file, 'name', '')
                 manifest.setdefault('uploaded_file_names', [])
@@ -3100,10 +3358,13 @@ def submit_manifest(target=None, display_name_override='', model_override=''):
                     manifest['uploaded_file_names'].append(manifest['uploaded_file_name'])
             save_manifest(manifest)
 
-            if is_quota_error(exc) and attempt < attempts and legacy.rotate_api_key():
+            if quota_error and attempt < attempts and legacy.rotate_api_key():
                 print(f'Quota hit during batch submit. Retrying with next API key ({attempt}/{attempts})...')
                 continue
+            if quota_error:
+                print_submit_split_recommendation(recommendation)
             raise
+
 
     if last_error is not None:
         raise last_error
@@ -4279,6 +4540,7 @@ def collect_revision_actions(manifest, validate_sources=False):
                     chunk,
                     source_text,
                     revised_translation,
+                    item=target_item,
                 ):
                     valid = True
                     reason = 'OK'
@@ -4729,6 +4991,7 @@ def collect_result_actions(manifest, validate_sources=False):
                     chunk,
                     target_unit.text,
                     result_item['translation'],
+                    item=target_item,
                 ):
                     valid = True
                     reason = 'OK'
@@ -5099,7 +5362,11 @@ def apply_results(target=None, force=False):
         'failure_count': len(failure_entries),
         'rag': rag_apply_summary,
     }
-    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    next_split_manifest = mark_next_split_after_apply(manifest)
+    should_update_latest = manifest.get('execution') != 'sync'
+    save_manifest(manifest, update_latest=should_update_latest and not next_split_manifest)
+    if next_split_manifest and should_update_latest:
+        remember_latest_manifest(next_split_manifest)
 
     print_check_summary(summary)
     print(f'Applied files: {applied_files}')
@@ -5107,6 +5374,7 @@ def apply_results(target=None, force=False):
     print(f'Failures logged: {len(failure_entries)}')
     if rag_apply_summary:
         print(f"RAG store updated: {rag_apply_summary.get('upserted', 0)} entries")
+    print_next_split_after_apply(next_split_manifest)
     if failure_entries:
         print(f"Failure log: {os.path.join(manifest['_package_dir'], 'failures.jsonl')}")
     return manifest

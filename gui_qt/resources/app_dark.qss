@@ -255,6 +255,13 @@ QTabWidget#workbench_status_tabs QWidget {
     background-color: #1e293b;
 }
 
+QScrollArea#workflow_summary_scroll,
+QWidget#workflow_summary_viewport,
+QWidget#workflow_summary_content {
+    background-color: #1e293b;
+    border: none;
+}
+
 QTabWidget#workbench_status_tabs > QTabBar::tab {
     background-color: #0f172a;
     border: 1px solid #334155;
@@ -447,6 +454,36 @@ QPushButton#secondary_btn:disabled {
     color: #64748b;
 }
 
+
+/* Compact table action buttons */
+QPushButton#split_select_btn {
+    background-color: #1e293b;
+    border: 1px solid #475569;
+    border-radius: 6px;
+    color: #cbd5e1;
+    font-weight: 500;
+    min-width: 72px;
+    min-height: 28px;
+    padding: 0px 10px;
+    text-align: center;
+}
+
+QPushButton#split_select_btn:hover {
+    background-color: #334155;
+    border-color: #64748b;
+    color: #f8fafc;
+}
+
+QPushButton#split_select_btn:pressed {
+    background-color: #0f172a;
+}
+
+QPushButton#split_select_btn:disabled {
+    background-color: #1e293b;
+    border-color: #334155;
+    color: #64748b;
+}
+
 /* Danger Action Button */
 QPushButton#kill_btn {
     background-color: #ef4444;
@@ -555,6 +592,29 @@ QProgressBar#workflow_progress_bar {
 QProgressBar#workflow_progress_bar::chunk {
     background-color: #3b82f6;
     border-radius: 5px;
+}
+
+QTableWidget#split_status_table {
+    border: 1px solid #334155;
+    border-radius: 6px;
+    background: #0f172a;
+    alternate-background-color: #162033;
+    color: #cbd5e1;
+    gridline-color: #334155;
+}
+
+QTableWidget#split_status_table::item {
+    padding: 4px 6px;
+}
+
+QTableWidget#split_status_table QHeaderView::section {
+    background-color: #1e293b;
+    color: #cbd5e1;
+    border: none;
+    border-right: 1px solid #334155;
+    border-bottom: 1px solid #334155;
+    padding: 5px 6px;
+    font-weight: 600;
 }
 
 QFrame#workflow_separator {

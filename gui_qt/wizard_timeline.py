@@ -21,7 +21,7 @@ class WizardTimeline(QWidget):
         super().__init__(parent)
         self.steps: list[tuple[str, str]] = []  # list of (key, label)
         self.current_step_key: str | None = None
-        self.status: str = "idle"  # idle, running, ready, done, failed, waiting
+        self.status: str = "idle"  # idle, running, ready, done, failed, waiting, stale
 
         # Pulse animation state
         self._anim_timer = QTimer(self)
@@ -135,7 +135,7 @@ class WizardTimeline(QWidget):
             if idx == current_idx:
                 if self.status == "failed":
                     return "failed"
-                if self.status in {"waiting", "ready"}:
+                if self.status in {"waiting", "ready", "stale"}:
                     return "waiting"
                 return "running"
             return "pending"

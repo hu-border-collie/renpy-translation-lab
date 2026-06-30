@@ -113,6 +113,101 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             self.assertEqual(runtime.missing_preserved_terms('Moon rises.', '月亮升起。'), [])
             self.assertEqual(runtime.missing_preserved_terms('Lou laughs.', 'CloudLou笑了。'), ['Lou'])
 
+    def test_short_preserve_terms_do_not_match_contractions(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['Don']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'don'}),
+        ):
+            self.assertEqual(runtime.missing_preserved_terms("Don't move.", '别动。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('Don moved.', '他动了。'), ['Don'])
+
+    def test_preserve_terms_allow_renpy_field_translation_conversion(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['[Main]']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'[main]'}),
+        ):
+            self.assertEqual(
+                runtime.missing_preserved_terms('[Main], are you listening?', '[Main!t]，你在听吗？'),
+                [],
+            )
+
+    def test_short_preserve_terms_allow_matching_renpy_name_field(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['Gil', 'Don']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'gil', 'don'}),
+        ):
+            self.assertEqual(runtime.missing_preserved_terms('coach Gil said so.', '[Gil_name!t] 教练这么说。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('Don said so.', '[Gil_name!t] 这么说。'), ['Don'])
+
+    def test_non_chinese_term_translation_allows_repeated_preserved_phrase(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['Music Appreciation']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'music appreciation'}),
+        ):
+            self.assertTrue(runtime.allow_non_chinese_term_translation(
+                'Music Appreciation...Music Appreciation...',
+                'Music Appreciation……Music Appreciation……',
+            ))
+
+    def test_translation_templates_skip_keyword_argument_strings(self):
+        lines = [
+            'translate schinese sample_block:\n',
+            '\n',
+            '    # "[Main]" "Hello there." (ctc="ctc_blink", ctc_position="nestled")\n',
+            '    "[Main]" "Hello there." (ctc="ctc_blink", ctc_position="nestled")\n',
+        ]
+
+        task_texts = [task['text'] for task in runtime.collect_tasks(lines)]
+
+        self.assertIn('Hello there.', task_texts)
+        self.assertNotIn('ctc_blink', task_texts)
+        self.assertNotIn('nestled', task_texts)
+
+    def test_batch_non_chinese_allowance_accepts_say_speaker_label_item(self):
+        line = '    "Terry" "Hello there." (ctc="ctc_blink", ctc_position="nestled")\n'
+        start = line.index('"Terry"')
+        end = start + len('"Terry"')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_path = Path(tmpdir) / 'sample.rpy'
+            sample_path.write_text(line, encoding='utf-8')
+            item = {'start': start, 'end': end, 'line_number': 1}
+            manifest = {'tl_dir': tmpdir}
+            chunk = {'file_rel_path': 'sample.rpy', 'glossary_hits': [], 'history_hits': []}
+
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                manifest,
+                chunk,
+                'Terry',
+                'Terry',
+                item=item,
+            ))
+
+    def test_batch_non_chinese_allowance_accepts_manifest_keyword_argument_item(self):
+        line = '    "[Main]" "Hello there." (ctc="ctc_blink", ctc_position="nestled")\n'
+        start = line.index('"ctc_blink"')
+        end = start + len('"ctc_blink"')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_path = Path(tmpdir) / 'sample.rpy'
+            sample_path.write_text(line, encoding='utf-8')
+            item = {'start': start, 'end': end, 'line_number': 1}
+            manifest = {'tl_dir': tmpdir}
+            chunk = {'file_rel_path': 'sample.rpy', 'glossary_hits': [], 'history_hits': []}
+
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                manifest,
+                chunk,
+                'ctc_blink',
+                'ctc_blink',
+                item=item,
+            ))
+            self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+                manifest,
+                chunk,
+                'ctc_blink',
+                'ctc_blink',
+                item=None,
+            ))
+
     def test_phrase_preserve_terms_allow_non_chinese_punctuation_change(self):
         with (
             mock.patch.object(runtime, 'PRESERVE_TERMS', [

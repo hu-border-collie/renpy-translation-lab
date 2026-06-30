@@ -34,6 +34,23 @@ class GuiWorkflowProgressTests(unittest.TestCase):
         self.assertEqual(state.current, 3)
         self.assertEqual(state.label, "检索原文索引 3/3")
 
+    def test_source_index_build_progress_adds_eta_with_zero_start_time(self):
+        state = create_workflow_progress_state("source_index_build")
+
+        state = update_workflow_progress_from_line(
+            "Source index retrieval for build: 10 chunks to query.",
+            state,
+            now=0.0,
+        )
+        state = update_workflow_progress_from_line(
+            "Source index retrieval progress: 5/10 chunks, file=script.rpy, chunk=5.",
+            state,
+            now=10.0,
+        )
+
+        self.assertEqual(state.remaining_seconds, 10)
+        self.assertIn("约剩 10 秒", state.label)
+
     def test_sync_request_progress_tracks_request_rows(self):
         state = create_workflow_progress_state("sync_requests")
 

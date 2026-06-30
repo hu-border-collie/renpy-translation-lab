@@ -176,6 +176,7 @@ NON_TRANSLATABLE_TAG_ONLY = re.compile(r"^\{[^}]+\}$")
 NON_TRANSLATABLE_SYMBOLS = re.compile(r"^[^A-Za-z0-9\u4e00-\u9fff]+$")
 RENPY_TAG_RE = re.compile(r"\{[^}]*\}")
 RENPY_FIELD_RE = re.compile(r"\[[^\]]+\]")
+RENPY_FIELD_TOKEN_RE = re.compile(r"\[(?P<name>[^\]!:]+)(?:![^\]]*)?\]")
 WORD_TOKEN_RE = re.compile(r"[A-Za-z]+")
 VOWEL_RE = re.compile(r"[aeiou]", re.IGNORECASE)
 REPEATED_CHAR_RE = re.compile(r"(.)\\1{2,}")
@@ -2054,6 +2055,18 @@ def contains_chinese(text):
         return False
     return any("\u4e00" <= ch <= "\u9fff" for ch in text)
 
+def _translated_has_renpy_field_for_term(translated, term):
+    if not translated or not term or not term.isalpha():
+        return False
+    expected = term.lower()
+    for match in RENPY_FIELD_TOKEN_RE.finditer(translated):
+        field_name = match.group("name") or ""
+        field_tokens = [token.lower() for token in WORD_TOKEN_RE.findall(field_name)]
+        if field_tokens and field_tokens[0] == expected:
+            return True
+    return False
+
+
 def missing_preserved_terms(original, translated):
     if not original or not translated:
         return []
@@ -2061,12 +2074,19 @@ def missing_preserved_terms(original, translated):
     for term in PRESERVE_TERMS:
         if not term or term not in original:
             continue
+        if term.startswith("[") and term.endswith("]"):
+            term_field = RENPY_FIELD_TOKEN_RE.fullmatch(term)
+            if term_field:
+                field_name = term_field.group("name")
+                field_pattern = re.compile(rf"\[{re.escape(field_name)}(?:![^\]]*)?\]")
+                if field_pattern.search(translated):
+                    continue
         # Avoid false positives for short alphabetic fragments (e.g., "Mo" in "Moon").
         if term.isalpha() and len(term) <= 3:
-            pattern = rf"(?<![A-Za-z0-9_]){re.escape(term)}(?![A-Za-z0-9_])"
+            pattern = rf"(?<![A-Za-z0-9_']){re.escape(term)}(?![A-Za-z0-9_'])"
             if not re.search(pattern, original):
                 continue
-            if not re.search(pattern, translated):
+            if not re.search(pattern, translated) and not _translated_has_renpy_field_for_term(translated, term):
                 missing.append(term)
             continue
         if term not in translated:
@@ -2237,8 +2257,15 @@ def _term_token_sequence_matches(tokens, terms):
     for term in terms:
         if not isinstance(term, str) or not term.strip():
             continue
-        if token_tuple == tuple(_extract_word_tokens(term)):
+        term_tokens = tuple(_extract_word_tokens(term))
+        if not term_tokens:
+            continue
+        if token_tuple == term_tokens:
             return True
+        if len(token_tuple) % len(term_tokens) == 0:
+            repeated = term_tokens * (len(token_tuple) // len(term_tokens))
+            if token_tuple == repeated:
+                return True
     return False
 
 
@@ -3270,6 +3297,80 @@ def _translate_block_name(line):
     return match.group(1) if match else None
 
 
+def _previous_significant_token_index(tokens, start_index):
+    for token_index in range(start_index - 1, -1, -1):
+        token = tokens[token_index]
+        if token.type in {tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}:
+            continue
+        return token_index
+    return None
+
+
+def _is_keyword_argument_string_token(tokens, token_index):
+    equal_index = _previous_significant_token_index(tokens, token_index)
+    if equal_index is None or tokens[equal_index].string != "=":
+        return False
+    name_index = _previous_significant_token_index(tokens, equal_index)
+    return name_index is not None and tokens[name_index].type == tokenize.NAME
+
+
+def is_keyword_argument_string_span(line, start_col, end_col):
+    try:
+        start_col = int(start_col)
+        end_col = int(end_col)
+    except (TypeError, ValueError):
+        return False
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
+    except Exception:
+        return False
+    for token_index, token in enumerate(tokens):
+        if token.type != tokenize.STRING:
+            continue
+        if token.start[1] == start_col and token.end[1] == end_col:
+            return _is_keyword_argument_string_token(tokens, token_index)
+    return False
+
+
+def _has_later_non_keyword_string(tokens, token_index):
+    for later_index in range(token_index + 1, len(tokens)):
+        later = tokens[later_index]
+        if later.type != tokenize.STRING:
+            continue
+        if not _is_keyword_argument_string_token(tokens, later_index):
+            return True
+    return False
+
+
+def _is_say_speaker_label_string_token(line, tokens, token_index):
+    token = tokens[token_index]
+    if token.type != tokenize.STRING:
+        return False
+    if _is_keyword_argument_string_token(tokens, token_index):
+        return False
+    if line[:token.start[1]].strip():
+        return False
+    return _has_later_non_keyword_string(tokens, token_index)
+
+
+def is_say_speaker_label_string_span(line, start_col, end_col):
+    try:
+        start_col = int(start_col)
+        end_col = int(end_col)
+    except (TypeError, ValueError):
+        return False
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
+    except Exception:
+        return False
+    for token_index, token in enumerate(tokens):
+        if token.type != tokenize.STRING:
+            continue
+        if token.start[1] == start_col and token.end[1] == end_col:
+            return _is_say_speaker_label_string_token(line, tokens, token_index)
+    return False
+
+
 def _is_translation_target_text(text_val):
     if not text_val or contains_chinese(text_val) or len(text_val) <= 1:
         return False
@@ -3332,7 +3433,7 @@ def scan_all_translation_units(lines, file_rel_path, mode=translation_core.MODE_
 
         try:
             tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
-            for token in tokens:
+            for token_index, token in enumerate(tokens):
                 if token.type != tokenize.STRING:
                     continue
                 if _is_character_display_token(idx, token, character_display_spans):
@@ -3349,11 +3450,9 @@ def scan_all_translation_units(lines, file_rel_path, mode=translation_core.MODE_
                 if source_for_id is None:
                     source_for_id = text_val
 
-                if (
-                    mode == translation_core.MODE_TRANSLATION
-                    and not (is_translation_file and source_marker is not None)
-                    and not _is_translation_target_text(text_val)
-                ):
+                should_translate = _is_translation_target_text(text_val)
+                identity_bearing = (is_translation_file and source_marker is not None) or should_translate
+                if mode == translation_core.MODE_TRANSLATION and not identity_bearing:
                     continue
                 if mode == translation_core.MODE_REVISION and is_translation_file and source_marker is None:
                     continue
@@ -3433,8 +3532,10 @@ def collect_tasks(lines, skip_translated=True):
 
         try:
             tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
-            for token in tokens:
+            for token_index, token in enumerate(tokens):
                 if token.type != tokenize.STRING:
+                    continue
+                if is_translation_file and _is_keyword_argument_string_token(tokens, token_index):
                     continue
                 if _is_character_display_token(idx, token, character_display_spans):
                     continue

@@ -66,6 +66,63 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         )
 
 
+    def test_short_job_name_compacts_batch_ids(self):
+        job_name = "batches/l10v1nppy30lvv2cbzbhedje4oqnqlzedlve"
+
+        self.assertEqual(self.window._short_job_name(job_name), "batches/l10v1nppy3...")
+        self.assertEqual(self.window._short_job_name("batches/short"), "batches/short")
+
+    def test_split_submit_button_only_shows_when_remaining_packages_need_submit(self):
+        from gui_qt.work_modes import WorkMode
+
+        class FakeButton:
+            def __init__(self):
+                self.visible = None
+                self.enabled = None
+                self.text = ""
+
+            def setVisible(self, visible):
+                self.visible = visible
+
+            def setEnabled(self, enabled):
+                self.enabled = enabled
+
+            def setText(self, text):
+                self.text = text
+
+        class FakeKillButton:
+            def __init__(self, enabled=False):
+                self.enabled = enabled
+
+            def isEnabled(self):
+                return self.enabled
+
+        class FakeEntry:
+            def __init__(self, needs_submit):
+                self.needs_submit = needs_submit
+
+        button = FakeButton()
+        self.window.split_submit_btn = button
+        self.window.kill_btn = FakeKillButton()
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window._split_status_entries = []
+
+        self.window._update_split_submit_btn([FakeEntry(False), FakeEntry(False)])
+
+        self.assertFalse(button.visible)
+        self.assertFalse(button.enabled)
+
+        self.window._update_split_submit_btn([FakeEntry(False), FakeEntry(True)])
+
+        self.assertTrue(button.visible)
+        self.assertTrue(button.enabled)
+        self.assertEqual(button.text, "提交剩余包")
+
+        self.window.kill_btn = FakeKillButton(enabled=True)
+        self.window._update_split_submit_btn([FakeEntry(False), FakeEntry(True)], running=False)
+
+        self.assertTrue(button.enabled)
+
     def _fake_timeline(self):
         class FakeTimeline:
             def __init__(self):
@@ -666,6 +723,59 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(self.window.timeline.current_step_key, "status")
         self.assertEqual(self.window.timeline.status, "waiting")
 
+    def test_refresh_workflow_from_latest_retry_warn_shows_actionable_state(self):
+        from gui_qt.work_modes import WorkMode
+
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.BATCH_TRANSLATION,
+            manifest={
+                "job_name": "batches/retry",
+                "job_state": "JOB_STATE_SUCCEEDED",
+                "retry_of_manifest": r"C:\package\manifest.json",
+                "last_check_summary": {"safety_level": "warn"},
+            },
+            latest_manifest=Path(r"C:\package\retry_parts\retry1\manifest.json"),
+        )
+        self.window._split_entries_for_manifest = lambda *_args, **_kwargs: []
+        self.window._render_split_status_entries = lambda *_args, **_kwargs: None
+
+        self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        status, heading, message, facts = summary_calls[0]
+        self.assertEqual(status, "stale")
+        self.assertIn("补译结果仍需处理", heading)
+        self.assertIn("暂不能合并", message)
+        self.assertIn(r"父任务：C:\package\manifest.json", facts)
+        self.assertTrue(self.window.timeline.visible)
+        self.assertEqual(self.window.timeline.current_step_key, "check")
+        self.assertEqual(self.window.timeline.status, "stale")
+
+    def test_refresh_workflow_from_latest_retry_safe_prompts_merge(self):
+        from gui_qt.work_modes import WorkMode
+
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.BATCH_TRANSLATION,
+            manifest={
+                "job_name": "batches/retry",
+                "job_state": "JOB_STATE_SUCCEEDED",
+                "retry_of_manifest": r"C:\package\manifest.json",
+                "last_check_summary": {"safety_level": "safe"},
+            },
+            latest_manifest=Path(r"C:\package\retry_parts\retry1\manifest.json"),
+        )
+        self.window._split_entries_for_manifest = lambda *_args, **_kwargs: []
+        self.window._render_split_status_entries = lambda *_args, **_kwargs: None
+
+        self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        status, heading, message, _facts = summary_calls[0]
+        self.assertEqual(status, "ready")
+        self.assertIn("补译后续处理", heading)
+        self.assertIn("继续翻译", message)
+        self.assertEqual(self.window.timeline.current_step_key, "merge-retry")
+
     def test_refresh_workflow_from_latest_manifest_failed_job_state(self):
         from gui_qt.work_modes import WorkMode
 
@@ -749,6 +859,35 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(self.window.timeline.visible)
         self.assertIsNone(self.window.timeline.current_step_key)
         self.assertEqual(self.window.timeline.status, "done")
+
+    def test_refresh_workflow_from_latest_manifest_warn_stops_at_check_step(self):
+        from gui_qt.work_modes import WorkMode
+        from unittest.mock import MagicMock, patch
+
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.BATCH_TRANSLATION,
+            manifest={
+                "job_name": "batches/example",
+                "job_state": "JOB_STATE_SUCCEEDED",
+                "last_check_summary": {"safety_level": "warn"},
+            },
+        )
+        self.window._split_entries_for_manifest = lambda *_args, **_kwargs: []
+        self.window._render_split_status_entries = lambda *_args, **_kwargs: None
+        mock_workflow = MagicMock()
+        mock_workflow.current_step.return_value = None
+
+        with patch("gui_qt.app.resume_workflow", return_value=mock_workflow):
+            self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        status, heading, message, _facts = summary_calls[0]
+        self.assertEqual(status, "stale")
+        self.assertIn("需要先处理问题", heading)
+        self.assertIn("暂不能写回", message)
+        self.assertTrue(self.window.timeline.visible)
+        self.assertEqual(self.window.timeline.current_step_key, "check")
+        self.assertEqual(self.window.timeline.status, "stale")
 
     def test_resume_completed_keyword_manifest_shows_result_summary(self):
         from gui_qt.work_modes import WorkMode
@@ -1074,6 +1213,47 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertFalse(summary.can_apply)
         self.assertIn("关键词报告已生成", summary.heading)
         self.assertTrue(any("候选 Markdown" in fact for fact in summary.facts))
+
+    def test_refresh_writeback_from_latest_translation_manifest_syncs_split_status(self):
+        from gui_qt.work_modes import WorkMode
+
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/project")
+
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return Path("C:/dummy/split_parts/part02_of_10/manifest.json")
+
+            def load_resume_manifest(self, path, work_mode):
+                return {
+                    "_manifest_path": str(path),
+                    "last_check_summary": {
+                        "safety_level": "warn",
+                        "pending_files": 12,
+                        "pending_lines": 11813,
+                        "failure_items": 12,
+                    },
+                }
+
+        self.window.state = FakeState()
+        summaries = []
+        split_refreshes = []
+        self.window._set_writeback_summary = lambda summary: summaries.append(summary)
+        self.window._refresh_split_status_ui = (
+            lambda **kwargs: split_refreshes.append(kwargs)
+        )
+
+        self.window._refresh_writeback_from_latest_manifest()
+
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].status, "warn")
+        self.assertEqual(len(split_refreshes), 1)
+        self.assertEqual(
+            split_refreshes[0]["manifest_path"],
+            str(Path("C:/dummy/split_parts/part02_of_10/manifest.json")),
+        )
 
     def test_keyword_result_hides_writeback_action_buttons(self):
         from gui_qt.check_report import WritebackSummary

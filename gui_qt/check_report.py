@@ -34,6 +34,10 @@ def extract_safety_status(output: str) -> str:
     return _parse_line_value(output, "Safety status:")
 
 
+def extract_next_split_manifest(output: str) -> str:
+    return _parse_line_value(output, "Next split manifest:")
+
+
 def parse_check_output(output: str) -> dict[str, object]:
     parsed: dict[str, object] = {
         "safety_status": extract_safety_status(output),
@@ -209,10 +213,16 @@ def summarize_apply_output(
     if isinstance(failures_logged, int) and failures_logged > 0:
         facts.append(f"失败日志条目：{failures_logged}")
 
+    next_split_manifest = extract_next_split_manifest(output)
+    message = "写回已完成。建议在游戏中抽查关键剧情文本。"
+    if next_split_manifest:
+        facts.append(f"下一拆分包：{next_split_manifest}")
+        message = "写回已完成，已切换到下一拆分包；可继续提交后续任务。"
+
     return WritebackSummary(
         status="applied",
         heading="翻译写回完成",
-        message="写回已完成。建议在游戏中抽查关键剧情文本。",
+        message=message,
         facts=facts,
         findings=[],
         can_apply=False,
@@ -235,10 +245,15 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
             applied_lines = apply_summary.get("applied_lines")
             if isinstance(applied_files, int) and isinstance(applied_lines, int):
                 facts.append(f"已写回 {applied_files} 个文件，{applied_lines} 处译文行")
+        next_split_manifest = manifest.get("next_split_manifest_path")
+        message = "该任务已经写回过。"
+        if isinstance(next_split_manifest, str) and next_split_manifest.strip():
+            facts.append(f"下一拆分包：{next_split_manifest.strip()}")
+            message = "该任务已经写回过，下一拆分包已准备继续。"
         return WritebackSummary(
             status="applied",
             heading="翻译已写回",
-            message="该任务已经写回过。",
+            message=message,
             facts=facts,
             findings=[],
             can_apply=False,
