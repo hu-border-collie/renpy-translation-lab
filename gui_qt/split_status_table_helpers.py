@@ -1,8 +1,6 @@
 """Pure helpers for split-status table layout (no Qt dependency)."""
 from __future__ import annotations
 
-from typing import Literal
-
 SPLIT_TABLE_GROUP_WIDTH = 6
 SPLIT_ACTION_COLUMN_OFFSET = 5
 SPLIT_ACTION_BUTTON_LABEL = "\u9009\u62e9"
@@ -10,9 +8,6 @@ SPLIT_ACTION_BUTTON_MIN_WIDTH = 72
 SPLIT_ACTION_BUTTON_HEIGHT = 28
 SPLIT_ACTION_CELL_MARGIN_H = 8
 SPLIT_ACTION_CELL_MARGIN_V = 6
-
-ButtonVisualState = Literal["normal", "hover", "pressed"]
-
 
 def is_split_action_column(column: int) -> bool:
     return column % SPLIT_TABLE_GROUP_WIDTH == SPLIT_ACTION_COLUMN_OFFSET
@@ -45,17 +40,3 @@ def split_action_item_payload(
     }
 
 
-def split_action_button_colors(*, dark: bool, state: ButtonVisualState) -> tuple[str, str, str]:
-    if dark:
-        palette = {
-            "normal": ("#1e293b", "#475569", "#cbd5e1"),
-            "hover": ("#334155", "#64748b", "#f8fafc"),
-            "pressed": ("#0f172a", "#64748b", "#f8fafc"),
-        }
-    else:
-        palette = {
-            "normal": ("#ffffff", "#cbd5e1", "#475569"),
-            "hover": ("#f8fafc", "#94a3b8", "#0f172a"),
-            "pressed": ("#f1f5f9", "#94a3b8", "#0f172a"),
-        }
-    return palette[state]

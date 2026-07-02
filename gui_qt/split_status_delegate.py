@@ -4,13 +4,21 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QEvent, QModelIndex, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QHelpEvent, QPainter
-from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolTip, QWidget
+from PySide6.QtGui import QHelpEvent, QPainter
+from PySide6.QtWidgets import (
+    QPushButton,
+    QStyle,
+    QStyleOptionButton,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QToolTip,
+    QWidget,
+)
 
 from .split_status_table_helpers import (
+    SPLIT_ACTION_BUTTON_HEIGHT,
     SPLIT_ACTION_BUTTON_LABEL,
-    ButtonVisualState,
-    split_action_button_colors,
+    SPLIT_ACTION_BUTTON_MIN_WIDTH,
     split_action_button_rect,
 )
 
@@ -37,6 +45,7 @@ class SplitStatusActionDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self._hover_index: QModelIndex | None = None
         self._pressed_index: QModelIndex | None = None
+        self._style_button: QPushButton | None = None
 
     def paint(
         self,
@@ -49,25 +58,36 @@ class SplitStatusActionDelegate(QStyledItemDelegate):
             self._paint_empty_cell(painter, option)
             return
 
-        state = self._visual_state(index)
-        dark = option.palette.window().color().lightness() < 128
-        bg_color, border_color, text_color = split_action_button_colors(dark=dark, state=state)
         rect = option.rect
         painter.save()
-        painter.fillRect(rect, option.backgroundBrush.color())
+        painter.fillRect(rect, option.backgroundBrush)
 
         left, top, width, height = split_action_button_rect(float(rect.width()), float(rect.height()))
-        button_rect = QRectF(rect.left() + left, rect.top() + top, width, height)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QColor(border_color))
-        painter.setBrush(QColor(bg_color))
-        painter.drawRoundedRect(button_rect, 6.0, 6.0)
+        button_rect = QRect(
+            int(rect.left() + left),
+            int(rect.top() + top),
+            int(width),
+            int(height),
+        )
+        style_button = self._ensure_style_button(option)
+        btn_option = QStyleOptionButton()
+        btn_option.initFrom(style_button)
+        btn_option.rect = button_rect
+        btn_option.text = SPLIT_ACTION_BUTTON_LABEL
+        btn_option.state = QStyle.StateFlag.State_Enabled
+        if self._pressed_index == index:
+            btn_option.state |= QStyle.StateFlag.State_Sunken
+        elif self._hover_index == index:
+            btn_option.state |= QStyle.StateFlag.State_MouseOver
 
-        font = QFont(option.font)
-        font.setWeight(QFont.Weight.Medium)
-        painter.setFont(font)
-        painter.setPen(QColor(text_color))
-        painter.drawText(button_rect, int(Qt.AlignmentFlag.AlignCenter), SPLIT_ACTION_BUTTON_LABEL)
+        widget = option.widget
+        if widget is not None:
+            widget.style().drawControl(
+                QStyle.ControlElement.CE_PushButton,
+                btn_option,
+                painter,
+                style_button,
+            )
         painter.restore()
 
     def editorEvent(
@@ -90,8 +110,7 @@ class SplitStatusActionDelegate(QStyledItemDelegate):
                 return False
             if self._event_hits_button(event, option):
                 self._pressed_index = index
-                if self.parent() is not None and hasattr(self.parent(), "viewport"):
-                    self.parent().viewport().update(option.rect)
+                self._repaint_index(option, index)
                 return True
             return False
         if event_type == QEvent.Type.MouseButtonRelease:
@@ -101,11 +120,9 @@ class SplitStatusActionDelegate(QStyledItemDelegate):
             self._pressed_index = None
             if pressed == index and self._event_hits_button(event, option):
                 self.select_requested.emit(payload["manifest_path"])
-                if self.parent() is not None and hasattr(self.parent(), "viewport"):
-                    self.parent().viewport().update(option.rect)
+                self._repaint_index(option, index)
                 return True
-            if self.parent() is not None and hasattr(self.parent(), "viewport"):
-                self.parent().viewport().update(option.rect)
+            self._repaint_index(option, index)
             return False
         if event_type == QEvent.Type.Leave:
             self.clear_hover_state()
@@ -128,12 +145,18 @@ class SplitStatusActionDelegate(QStyledItemDelegate):
         QToolTip.showText(event.globalPos(), f"\u5207\u6362\u5230 {part_label}", view)
         return True
 
-    def _visual_state(self, index: QModelIndex) -> ButtonVisualState:
-        if self._pressed_index == index:
-            return "pressed"
-        if self._hover_index == index:
-            return "hover"
-        return "normal"
+    def _ensure_style_button(self, option: QStyleOptionViewItem) -> QPushButton:
+        if self._style_button is None:
+            parent = option.widget if option.widget is not None else self.parent()
+            self._style_button = QPushButton(SPLIT_ACTION_BUTTON_LABEL, parent)
+            self._style_button.setObjectName("split_select_btn")
+            self._style_button.setFixedSize(
+                SPLIT_ACTION_BUTTON_MIN_WIDTH,
+                SPLIT_ACTION_BUTTON_HEIGHT,
+            )
+            self._style_button.hide()
+            self._style_button.ensurePolished()
+        return self._style_button
 
     def _event_hits_button(self, event: QEvent, option: QStyleOptionViewItem) -> bool:
         if not hasattr(event, "position"):
@@ -173,6 +196,12 @@ class SplitStatusActionDelegate(QStyledItemDelegate):
         if view is None or not hasattr(view, "viewport"):
             return
         view.viewport().update(view.visualRect(previous))
+
+    def _repaint_index(self, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        widget = option.widget
+        if widget is None or not hasattr(widget, "viewport"):
+            return
+        widget.viewport().update(widget.visualRect(index))
 
     def _paint_empty_cell(self, painter: QPainter, option: QStyleOptionViewItem) -> None:
         if option.state & QStyle.StateFlag.State_Selected:

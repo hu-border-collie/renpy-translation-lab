@@ -458,10 +458,10 @@ QPushButton#secondary_btn:disabled {
 /* Compact table action buttons */
 QPushButton#split_select_btn {
     background-color: #ffffff;
-    border: 1px solid #cbd5e1;
+    border: 1px solid #94a3b8;
     border-radius: 6px;
-    color: #475569;
-    font-weight: 500;
+    color: #334155;
+    font-weight: 600;
     min-width: 72px;
     min-height: 28px;
     padding: 0px 10px;
@@ -470,12 +470,13 @@ QPushButton#split_select_btn {
 
 QPushButton#split_select_btn:hover {
     background-color: #f8fafc;
-    border-color: #94a3b8;
+    border-color: #64748b;
     color: #0f172a;
 }
 
 QPushButton#split_select_btn:pressed {
-    background-color: #f1f5f9;
+    background-color: #e2e8f0;
+    border-color: #64748b;
 }
 
 QPushButton#split_select_btn:disabled {

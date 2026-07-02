@@ -278,8 +278,12 @@ class MainWindow(QMainWindow):
     def _deferred_startup_refresh(self) -> None:
         self._apply_work_mode_ui(
             refresh_manifest_writeback=True,
-            refresh_diagnostics=True,
+            refresh_diagnostics=False,
         )
+        QTimer.singleShot(0, self._deferred_startup_diagnostics_refresh)
+
+    def _deferred_startup_diagnostics_refresh(self) -> None:
+        self._refresh_manifest_derived_ui(refresh_diagnostics=True)
 
     def eventFilter(self, watched: Any, event: QEvent) -> bool:
         if watched is self.work_mode_hint_label and event.type() == QEvent.Type.Resize:
@@ -1074,6 +1078,26 @@ class MainWindow(QMainWindow):
             return False
         return canonical_abs_path(left).lower() == canonical_abs_path(right).lower()
 
+    def _split_entries_unchanged(
+        self,
+        entries: list[SplitManifestEntry],
+    ) -> bool:
+        previous = self._split_status_entries
+        if len(previous) != len(entries):
+            return False
+        for old_entry, new_entry in zip(previous, entries):
+            if (
+                old_entry.manifest_path != new_entry.manifest_path
+                or old_entry.status_kind != new_entry.status_kind
+                or old_entry.status_label != new_entry.status_label
+                or old_entry.item_count != new_entry.item_count
+                or old_entry.chunk_count != new_entry.chunk_count
+                or old_entry.job_name != new_entry.job_name
+                or old_entry.selectable != new_entry.selectable
+            ):
+                return False
+        return True
+
     def _split_entries_for_manifest(
         self,
         manifest_path: str,
@@ -1288,6 +1312,46 @@ class MainWindow(QMainWindow):
             selected_manifest_path=selected_manifest_path,
         )
 
+    def _update_split_status_selection_ui(self, selected_manifest_path: str) -> None:
+        if not hasattr(self, "split_status_table") or not self._split_status_entries:
+            return
+        rows = self.split_status_table.rowCount()
+        if rows <= 0:
+            return
+        for index, entry in enumerate(self._split_status_entries):
+            group_index = index // rows if rows else 0
+            row = index % rows if rows else 0
+            base_column = group_index * 6
+            if base_column + 5 >= self.split_status_table.columnCount():
+                continue
+            is_current = self._same_manifest_path(entry.manifest_path, selected_manifest_path)
+            part_item = self.split_status_table.item(row, base_column + 0)
+            if part_item is not None:
+                current_suffix = "\uff08\u5f53\u524d\uff09" if is_current else ""
+                part_item.setText(f"{entry.part_label}{current_suffix}")
+                font = part_item.font()
+                font.setBold(is_current)
+                part_item.setFont(font)
+            action_item = self.split_status_table.item(row, base_column + 5)
+            if action_item is None:
+                continue
+            show_action_button = entry.selectable and not is_current
+            action_payload = split_action_item_payload(
+                selectable=show_action_button,
+                manifest_path=entry.manifest_path,
+                part_label=entry.part_label,
+            )
+            if action_payload is not None:
+                action_item.setData(SPLIT_ACTION_DATA_ROLE, action_payload)
+                action_item.setToolTip(f"\u5207\u6362\u5230 {entry.part_label}")
+            else:
+                action_item.setData(SPLIT_ACTION_DATA_ROLE, None)
+                action_item.setToolTip("")
+            model_index = self.split_status_table.model().index(row, base_column + 5)
+            self.split_status_table.viewport().update(
+                self.split_status_table.visualRect(model_index)
+            )
+
     def _update_split_status_job_column_texts(self, profile: dict[str, int]) -> None:
         if not hasattr(self, "split_status_table"):
             return
@@ -1475,6 +1539,22 @@ class MainWindow(QMainWindow):
         self.split_submit_btn.setText("提交剩余包")
         self.split_submit_btn.setEnabled(has_split_group and needs_submit and not running)
 
+    def _refresh_writeback_for_manifest_path(self, manifest_path: str) -> None:
+        spec = work_mode_spec(self._current_work_mode())
+        if not spec.supports_translation_writeback:
+            self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+            return
+        try:
+            manifest = self.state.load_manifest_file(manifest_path, lite=True)
+        except ValueError:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+        summary = summarize_manifest_writeback(manifest)
+        if summary is None:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+        self._set_writeback_summary(summary)
+
     def _select_split_manifest(self, manifest_path: str) -> None:
         try:
             self.state.remember_latest_manifest_path(manifest_path)
@@ -1483,13 +1563,30 @@ class MainWindow(QMainWindow):
             return
         self._workflow = None
         self._workflow_step_output_lines = []
-        self._refresh_manifest_derived_ui(refresh_writeback=True)
+        self._split_status_selected_manifest_path = manifest_path
+        if self._split_status_entries:
+            self._update_split_status_selection_ui(manifest_path)
+        else:
+            self._refresh_split_status_ui(manifest_path=manifest_path)
+        self._refresh_writeback_for_manifest_path(manifest_path)
+        QTimer.singleShot(
+            0,
+            lambda path=manifest_path: self._deferred_select_split_manifest_refresh(path),
+        )
         writeback_summary = self._current_writeback_summary()
         if writeback_summary.status not in {"idle", "running", "stale"}:
             self._focus_workbench_status_tab(2)
         else:
             self._focus_workbench_status_tab(1)
         self.statusBar().showMessage("已选择拆分包；可继续下载、检查或写回。", 5000)
+
+    def _deferred_select_split_manifest_refresh(self, manifest_path: str) -> None:
+        if not self._same_manifest_path(
+            manifest_path,
+            self._split_status_selected_manifest_path,
+        ):
+            return
+        self._refresh_workflow_from_latest_manifest()
 
     def _writeback_issues_ready(self, summary: WritebackSummary) -> bool:
         if self._uses_revision_writeback():
@@ -2327,10 +2424,15 @@ class MainWindow(QMainWindow):
             workflow,
             step_key=timeline_step_key,
         )
-        self._render_split_status_entries(
-            split_entries,
-            selected_manifest_path=retry_parent_text or str(latest_manifest),
-        )
+        selected_manifest_path = retry_parent_text or str(latest_manifest)
+        if self._split_entries_unchanged(split_entries):
+            self._split_status_selected_manifest_path = selected_manifest_path
+            self._update_split_status_selection_ui(selected_manifest_path)
+        else:
+            self._render_split_status_entries(
+                split_entries,
+                selected_manifest_path=selected_manifest_path,
+            )
 
     def _clear_bootstrap_progress_ui(self) -> None:
         self._bootstrap_progress = None
