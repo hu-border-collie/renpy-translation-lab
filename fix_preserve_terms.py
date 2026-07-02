@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
+import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -129,23 +129,36 @@ def patch_results_manifest(manifest_path: str, failure_path: Path) -> int:
     return changed
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest='command', required=True)
+
+    manual = subparsers.add_parser('manual', help='Patch a manual translations JSONL file')
+    manual.add_argument('jsonl', type=Path, help='manual_translations/translations.jsonl path')
+    manual.add_argument('failures', type=Path, help='check_failures.jsonl path')
+
+    results = subparsers.add_parser('results', help='Patch a batch results.jsonl via manifest')
+    results.add_argument('manifest', help='Batch manifest path')
+    results.add_argument('failures', type=Path, help='check_failures.jsonl path')
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     legacy.load_config()
     legacy.load_translator_settings()
     legacy.load_glossary()
     batch.load_batch_settings()
-    base = Path(r'C:\RenPy_Workspace\renpy-translation-lab\logs\batch_jobs\20260630_004454_Game_AfterClass\split_parts')
 
-    p08_manual = base / 'part08_of_10/retry_parts/20260701_230648_retry/manual_translations/translations.jsonl'
-    p08_fail = base / 'part08_of_10/retry_parts/20260701_230648_retry/check_failures.jsonl'
-    n08 = patch_manual_translations(p08_manual, p08_fail)
-    print(f'part08 manual: {n08} rows patched')
+    if args.command == 'manual':
+        changed = patch_manual_translations(args.jsonl, args.failures)
+        print(f'Manual translations patched: {changed} rows ({args.jsonl})')
+        return 0
 
-    p07_manifest = str(base / 'part07_of_10/manifest.json')
-    p07_fail = base / 'part07_of_10/check_failures.jsonl'
-    n07 = patch_results_manifest(p07_manifest, p07_fail)
-    print(f'part07 root results: {n07} items patched')
+    changed = patch_results_manifest(args.manifest, args.failures)
+    print(f'Results manifest patched: {changed} items ({args.manifest})')
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

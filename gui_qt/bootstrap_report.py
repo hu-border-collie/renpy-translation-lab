@@ -5,6 +5,7 @@ import re
 import time
 from dataclasses import dataclass
 
+from .duration_format import format_remaining_duration_zh
 from .summary_helpers import extend_facts_with_notices
 from .user_copy import format_bootstrap_fact
 from typing import Any
@@ -348,28 +349,6 @@ class BootstrapProgressTracker:
 
 def create_bootstrap_progress_tracker() -> BootstrapProgressTracker:
     return BootstrapProgressTracker()
-
-
-def format_remaining_duration_zh(seconds: int) -> str:
-    if seconds <= 0:
-        return "即将完成"
-    if seconds < 60:
-        return f"约剩 {seconds} 秒"
-    minutes, secs = divmod(seconds, 60)
-    if seconds < 3600:
-        if secs >= 30:
-            minutes += 1
-            secs = 0
-        if secs:
-            return f"约剩 {minutes} 分 {secs} 秒"
-        return f"约剩 {minutes} 分"
-    hours, minutes = divmod(minutes, 60)
-    if minutes >= 30:
-        hours += 1
-        minutes = 0
-    if minutes:
-        return f"约剩 {hours} 小时 {minutes} 分"
-    return f"约剩 {hours} 小时"
 
 
 def format_bootstrap_progress_bar_label(
