@@ -5,6 +5,7 @@ import io
 import json
 import os
 import pickle
+import re
 import shutil
 import subprocess
 import sys
@@ -2327,7 +2328,16 @@ class BootstrapWorkTests(unittest.TestCase):
 
             self.assertEqual(copied, 60)
             self.assertEqual(lines[0], 'Work bootstrap copy progress: 0/60 files.')
-            self.assertEqual(lines[-1], 'Work bootstrap copy progress: 60/60 files, file=file_059.txt.')
+            progress_counts = []
+            for line in lines[1:]:
+                match = re.fullmatch(
+                    r'Work bootstrap copy progress: (\d+)/60 files, file=(.+)\.',
+                    line,
+                )
+                self.assertIsNotNone(match, line)
+                progress_counts.append(int(match.group(1)))
+                self.assertRegex(match.group(2), r'^file_\d{3}\.txt$')
+            self.assertEqual(progress_counts, [1, 25, 50, 60])
             self.assertLess(len(lines), 60)
 
     def test_bootstrap_work_from_original_skips_non_empty_work(self):
