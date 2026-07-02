@@ -1,11 +1,19 @@
 import unittest
 
 from gui_qt.bootstrap_report import (
+    BootstrapProgressState,
+    BootstrapProgressTracker,
     coerce_bool,
+    create_bootstrap_progress_state,
+    create_bootstrap_progress_tracker,
+    format_bootstrap_progress_bar_label,
+    format_bootstrap_progress_facts,
+    format_remaining_duration_zh,
     idle_bootstrap_summary,
     read_batch_context_flags,
     summarize_rag_bootstrap_output,
     summarize_source_index_bootstrap_output,
+    update_bootstrap_progress_from_line,
 )
 
 
@@ -91,6 +99,109 @@ Source Index bootstrap final summary:
     def test_idle_bootstrap_summary_is_idle(self):
         summary = idle_bootstrap_summary()
         self.assertEqual(summary.status, "idle")
+
+    def test_update_bootstrap_progress_from_pre_run_and_embedding_lines(self):
+        state = create_bootstrap_progress_state("source_index")
+        state = update_bootstrap_progress_from_line(
+            "- Total segments scanned from files: 28886",
+            state,
+        )
+        state = update_bootstrap_progress_from_line(
+            "- Unchanged segments (reusing embeddings): 9409",
+            state,
+        )
+        state = update_bootstrap_progress_from_line(
+            "- New/updated segments (need embeddings): 19477",
+            state,
+        )
+        state = update_bootstrap_progress_from_line(
+            "Reused embeddings written: 9409.",
+            state,
+        )
+        state = update_bootstrap_progress_from_line(
+            "Source index embedding progress: 64/19477 scanned, 64 embedded, 9473 stored.",
+            state,
+        )
+
+        self.assertEqual(state.total_segments, 28886)
+        self.assertEqual(state.reused_embeddings, 9409)
+        self.assertEqual(state.embedding_total, 19477)
+        self.assertEqual(state.embedding_done, 64)
+        self.assertEqual(state.stored_segments, 9473)
+
+        facts = format_bootstrap_progress_facts(state)
+        self.assertIn("入库进度：9473/28886 片段（32%）", facts)
+        self.assertIn("本轮向量生成：64/19477", facts)
+
+    def test_update_bootstrap_progress_uses_embedded_count_not_scanned(self):
+        state = create_bootstrap_progress_state("source_index")
+        state = update_bootstrap_progress_from_line(
+            "- Total segments scanned from files: 100",
+            state,
+        )
+        state = update_bootstrap_progress_from_line(
+            "- New/updated segments (need embeddings): 100",
+            state,
+        )
+        state = update_bootstrap_progress_from_line(
+            "Source index embedding progress: 80/100 scanned, 64 embedded, 50 stored.",
+            state,
+        )
+
+        self.assertEqual(state.embedding_done, 64)
+
+    def test_format_remaining_duration_zh(self):
+        self.assertEqual(format_remaining_duration_zh(0), "即将完成")
+        self.assertEqual(format_remaining_duration_zh(45), "约剩 45 秒")
+        self.assertEqual(format_remaining_duration_zh(125), "约剩 2 分 5 秒")
+        self.assertEqual(format_remaining_duration_zh(3720), "约剩 1 小时 2 分")
+
+    def test_bootstrap_progress_tracker_estimates_remaining_seconds(self):
+        tracker = create_bootstrap_progress_tracker()
+        state = BootstrapProgressState(
+            kind="source_index",
+            total_segments=100,
+            stored_segments=20,
+        )
+        tracker.observe(state, now=10.0)
+        self.assertEqual(tracker.estimate_remaining_seconds(state, now=20.0), 40)
+
+        state = BootstrapProgressState(
+            kind="source_index",
+            total_segments=100,
+            stored_segments=36,
+        )
+        tracker.observe(state, now=20.0)
+        self.assertEqual(tracker.estimate_remaining_seconds(state, now=20.0), 40)
+        self.assertEqual(tracker.estimate_remaining_seconds(state, now=25.0), 35)
+
+    def test_bootstrap_progress_tracker_accepts_zero_timestamp(self):
+        tracker = create_bootstrap_progress_tracker()
+        state = BootstrapProgressState(
+            kind="source_index",
+            total_segments=100,
+            stored_segments=20,
+        )
+        tracker.observe(state, now=0.0)
+
+        state = BootstrapProgressState(
+            kind="source_index",
+            total_segments=100,
+            stored_segments=40,
+        )
+        tracker.observe(state, now=10.0)
+
+        self.assertEqual(tracker.estimate_remaining_seconds(state, now=10.0), 30)
+
+    def test_format_bootstrap_progress_bar_label_includes_eta(self):
+        state = BootstrapProgressState(
+            kind="source_index",
+            total_segments=28886,
+            stored_segments=9473,
+        )
+        label = format_bootstrap_progress_bar_label(state, 4525)
+        self.assertIn("32%（9473/28886）", label)
+        self.assertIn("约剩 1 小时 15 分", label)
 
 
 if __name__ == "__main__":

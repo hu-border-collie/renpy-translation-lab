@@ -783,8 +783,8 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
                 scan_all_files=False,
                 extra_records=[new_record]
             )
-            # 验证确实被调用了，但参数是一个空列表 [] (因为没有需要向外部 API 请求 embedding 的记录)
-            mock_embed.assert_called_once_with([])
+            # 验证确实被调用了，但待请求列表为空；复用记录会计入进度 offset。
+            mock_embed.assert_called_once_with([], progress_offset=1, progress_total=1)
             self.assertEqual(stats["reused_embeddings"], 1)
             self.assertEqual(stats["embedding_pending"], 0)
 

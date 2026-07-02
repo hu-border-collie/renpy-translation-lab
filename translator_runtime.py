@@ -42,6 +42,8 @@ BASE_DIR = os.path.abspath(ENV_GAME_ROOT) if ENV_GAME_ROOT else os.path.abspath(
 TL_DIR = os.path.abspath(os.path.join(BASE_DIR, TL_SUBDIR))
 WORK_GAME_SUBDIR = "game"
 WORK_GAME_DIR = os.path.abspath(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
+CONTEXT_STORAGE_LOCATION = "tool"
+CONTEXT_STORAGE_GAME_DIR_NAME = "translation_context"
 SOURCE_GAME_DIR = ""
 PREP_ENABLED = True
 PREP_UNPACK_RPA = True
@@ -136,6 +138,10 @@ INCLUDE_FILES = set()
 INCLUDE_PREFIXES = set()
 
 NORMALIZE_TRANSLATION_MAP = {}
+PRESERVE_TERM_ALIASES = {
+    "H.U.": ("H. U.", "Highwell University", "Highwell Uni"),
+    "H. U.": ("H.U.", "Highwell University", "Highwell Uni"),
+}
 
 SPECIAL_ESCAPES = [
     ("\\", "\\\\"),
@@ -154,7 +160,7 @@ NON_TRANSLATABLE_PATTERNS = [
     re.compile(r"^www\\.", re.IGNORECASE),
 ]
 
-NON_TRANSLATABLE_EXACT = {
+BUILTIN_NON_TRANSLATABLE_EXACT = {
     "Esc",
     "Ctrl",
     "Shift",
@@ -166,14 +172,23 @@ NON_TRANSLATABLE_EXACT = {
     "Up",
     "Down",
     "Caps",
+    "Page Up",
+    "Page Down",
+    "Home",
+    "End",
+    "Insert",
+    "Delete",
+    "Backspace",
     "DejaVu Sans",
     "Opendyslexic",
 }
+NON_TRANSLATABLE_EXACT = set(BUILTIN_NON_TRANSLATABLE_EXACT)
 
 NON_TRANSLATABLE_TAG_ONLY = re.compile(r"^\{[^}]+\}$")
 NON_TRANSLATABLE_SYMBOLS = re.compile(r"^[^A-Za-z0-9\u4e00-\u9fff]+$")
 RENPY_TAG_RE = re.compile(r"\{[^}]*\}")
 RENPY_FIELD_RE = re.compile(r"\[[^\]]+\]")
+RENPY_FIELD_TOKEN_RE = re.compile(r"\[(?P<name>[^\]!:]+)(?:![^\]]*)?\]")
 WORD_TOKEN_RE = re.compile(r"[A-Za-z]+")
 VOWEL_RE = re.compile(r"[aeiou]", re.IGNORECASE)
 REPEATED_CHAR_RE = re.compile(r"(.)\\1{2,}")
@@ -182,6 +197,12 @@ MULTI_DOT_PATTERN = re.compile(r"(\.{2,}|…{2,})")
 # Matches sequences like "A B C" or "A. B. C." (single-letter tokens only)
 LETTER_SEQUENCE_RE = re.compile(r"^(?:[A-Za-z]\.?)(?:\s+[A-Za-z]\.?)+$")
 FILE_NAME_SIMPLE_RE = re.compile(r"^[\w.-]+\.\w+$", re.IGNORECASE)
+PRESERVE_TERM_SOURCE_EXCLUSION_PATTERNS = {
+    "Mark": [re.compile(r"\bMark my words\b", re.IGNORECASE)],
+}
+ROMAN_NUMERAL_LABEL_RE = re.compile(r"^(?:[+-][IVXLCDM]+|[IVXLCDM]{2,})$", re.IGNORECASE)
+STRFTIME_FORMAT_RE = re.compile(r"^(?:%[A-Za-z]|[%:\s,./\-0-9])+$")
+RENPY_IDENTIFIER_LABEL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:_name|_label|_id)$")
 STRING_LITERAL_PREFIX_RE = re.compile(r"(?is)^(?P<prefix>[rubf]*)(?P<quote>'''|\"\"\"|'|\")")
 TL_COMMENT_SOURCE_RE = re.compile(r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"\s*$')
 TL_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
@@ -359,6 +380,45 @@ def _normalize_task_type(value, default):
     return default
 
 
+def _normalize_context_storage_location(value):
+    if isinstance(value, str):
+        normalized = value.strip().lower().replace("-", "_")
+        if normalized in {"game", "game_dir", "game_directory"}:
+            return "game"
+        if normalized in {"tool", "project", "repo", "repository", "internal"}:
+            return "tool"
+    return "tool"
+
+
+def _normalize_context_storage_dir_name(value):
+    if not isinstance(value, str):
+        return "translation_context"
+    stripped = value.strip()
+    if os.path.isabs(stripped):
+        return "translation_context"
+    raw = stripped.replace("\\", "/")
+    if re.match(r"^[A-Za-z]:", raw) or raw.startswith("//"):
+        return "translation_context"
+    text = raw.strip("/")
+    if not text:
+        return "translation_context"
+    parts = [part for part in text.split("/") if part]
+    if not parts or any(part in {".", ".."} for part in parts):
+        return "translation_context"
+    return "/".join(parts)
+
+
+def load_context_storage_settings(config):
+    global CONTEXT_STORAGE_LOCATION, CONTEXT_STORAGE_GAME_DIR_NAME
+    storage = config.get("context_storage")
+    if not isinstance(storage, dict):
+        storage = {}
+    location = storage.get("location", config.get("context_storage_location"))
+    CONTEXT_STORAGE_LOCATION = _normalize_context_storage_location(location)
+    dir_name = storage.get("game_dir_name", storage.get("directory_name", storage.get("directory")))
+    CONTEXT_STORAGE_GAME_DIR_NAME = _normalize_context_storage_dir_name(dir_name)
+
+
 def _resolve_path(base_dir, value):
     if value is None:
         return ""
@@ -518,10 +578,15 @@ def load_glossary():
 
     non_translatable = _coerce_str_list(data.get("non_translatable_exact"))
     if non_translatable:
-        NON_TRANSLATABLE_EXACT = set(non_translatable)
-        print(f"Loaded {len(NON_TRANSLATABLE_EXACT)} non-translatable exact terms.")
+        NON_TRANSLATABLE_EXACT = set(BUILTIN_NON_TRANSLATABLE_EXACT)
+        NON_TRANSLATABLE_EXACT.update(non_translatable)
+        print(
+            f"Loaded {len(non_translatable)} non-translatable exact terms "
+            f"(+{len(BUILTIN_NON_TRANSLATABLE_EXACT)} built-in)."
+        )
     elif "non_translatable_exact" in data:
-        print("Warning: glossary.json non_translatable_exact is empty; using defaults.")
+        NON_TRANSLATABLE_EXACT = set(BUILTIN_NON_TRANSLATABLE_EXACT)
+        print("Warning: glossary.json non_translatable_exact is empty; using built-in defaults.")
 
     normalize_map = data.get("normalize_map")
     if isinstance(normalize_map, dict) and normalize_map:
@@ -616,6 +681,8 @@ def load_sync_story_memory_settings(config):
     graph_file = story_config.get("graph_file")
     if graph_file:
         SYNC_STORY_MEMORY_GRAPH_FILE = resolve_story_memory_graph_path(graph_file)
+    elif SYNC_STORY_MEMORY_ENABLED:
+        SYNC_STORY_MEMORY_GRAPH_FILE = get_default_story_memory_graph_path()
     else:
         SYNC_STORY_MEMORY_GRAPH_FILE = ""
     _SYNC_STORY_GRAPH = None
@@ -744,6 +811,8 @@ def load_translator_settings():
             BASE_DIR = original_root
     else:
         BASE_DIR = _canonical_abs_path(os.path.join(ROOT_DIR, ".."))
+
+    load_context_storage_settings(config)
 
     glossary_file = config.get("glossary_file")
     if glossary_file is None:
@@ -1026,15 +1095,40 @@ def work_dir_bootstrap_allowed(base_dir=None):
     return False, work_dir, "work directory already exists and is not empty"
 
 
+WORK_BOOTSTRAP_COPY_PROGRESS_INTERVAL = 25
+
+
+def _should_emit_bootstrap_copy_progress(files_copied, total_files):
+    if total_files <= 0:
+        return False
+    if files_copied >= total_files:
+        return True
+    if files_copied == 1:
+        return True
+    return files_copied % WORK_BOOTSTRAP_COPY_PROGRESS_INTERVAL == 0
+
+
 def _copy_game_directory(source_game_dir, target_game_dir):
+    total_files = sum(len(files) for _, _, files in os.walk(source_game_dir))
     files_copied = 0
+    if total_files:
+        print(f"Work bootstrap copy progress: 0/{total_files} files.", flush=True)
     for root, _, files in os.walk(source_game_dir):
         rel = os.path.relpath(root, source_game_dir)
         dest_dir = target_game_dir if rel == "." else os.path.join(target_game_dir, rel)
         os.makedirs(dest_dir, exist_ok=True)
         for file_name in files:
-            shutil.copy2(os.path.join(root, file_name), os.path.join(dest_dir, file_name))
+            src_path = os.path.join(root, file_name)
+            dest_path = os.path.join(dest_dir, file_name)
+            shutil.copy2(src_path, dest_path)
             files_copied += 1
+            if not _should_emit_bootstrap_copy_progress(files_copied, total_files):
+                continue
+            rel_file = os.path.relpath(src_path, source_game_dir).replace(os.sep, "/")
+            print(
+                f"Work bootstrap copy progress: {files_copied}/{total_files} files, file={rel_file}.",
+                flush=True,
+            )
     return files_copied
 
 
@@ -1739,16 +1833,53 @@ def _slugify(text):
     return text or "sync"
 
 
-def guess_project_slug():
-    base_name = os.path.basename(os.path.abspath(BASE_DIR))
+def _project_slug_from_base_dir(base_dir):
+    base_name = os.path.basename(os.path.abspath(base_dir))
     if base_name.lower() == "work":
-        parent = os.path.basename(os.path.dirname(os.path.abspath(BASE_DIR)))
+        parent = os.path.basename(os.path.dirname(os.path.abspath(base_dir)))
         return _slugify(parent or base_name)
-    return _slugify(base_name)
+    project_root = resolve_project_root(base_dir)
+    return _slugify(os.path.basename(os.path.normpath(project_root)))
+
+
+def guess_project_slug():
+    return _project_slug_from_base_dir(BASE_DIR)
+
+
+def get_context_storage_location():
+    return CONTEXT_STORAGE_LOCATION
+
+
+def get_context_storage_root(base_dir=None):
+    if CONTEXT_STORAGE_LOCATION == "game":
+        return _canonical_abs_path(os.path.join(resolve_project_root(base_dir), CONTEXT_STORAGE_GAME_DIR_NAME))
+    return LOG_DIR
+
+
+def get_default_context_store_dir(store_name, base_dir=None):
+    root = get_context_storage_root(base_dir)
+    if CONTEXT_STORAGE_LOCATION == "game":
+        return os.path.join(root, store_name)
+    slug = _project_slug_from_base_dir(base_dir or BASE_DIR)
+    return os.path.join(root, store_name, slug)
+
+
+def get_default_batch_rag_store_dir():
+    return get_default_context_store_dir("rag_store")
+
+
+def get_default_source_index_store_dir():
+    return get_default_context_store_dir("source_index_store")
+
+
+def get_default_story_memory_graph_path():
+    if CONTEXT_STORAGE_LOCATION == "game":
+        return os.path.join(get_context_storage_root(), "story_memory", "story_graph.json")
+    return os.path.join(LOG_DIR, "story_memory", "story_graph.json")
 
 
 def get_default_sync_rag_store_dir():
-    return os.path.join(LOG_DIR, "rag_store", guess_project_slug())
+    return get_default_context_store_dir("rag_store")
 
 
 def get_sync_rag_store():
@@ -1962,6 +2093,32 @@ def contains_chinese(text):
         return False
     return any("\u4e00" <= ch <= "\u9fff" for ch in text)
 
+def _translated_has_renpy_field_for_term(translated, term):
+    if not translated or not term or not term.isalpha():
+        return False
+    expected = term.lower()
+    for match in RENPY_FIELD_TOKEN_RE.finditer(translated):
+        field_name = match.group("name") or ""
+        field_tokens = [token.lower() for token in WORD_TOKEN_RE.findall(field_name)]
+        if field_tokens and field_tokens[0] == expected:
+            return True
+    return False
+
+
+def _source_usage_excluded_for_preserve_term(original, term):
+    for pattern in PRESERVE_TERM_SOURCE_EXCLUSION_PATTERNS.get(term, []):
+        if pattern.search(original or ""):
+            return True
+    return False
+
+
+def _translated_contains_preserve_alias(translated, term):
+    for alias in PRESERVE_TERM_ALIASES.get(term, ()):
+        if alias and alias in (translated or ""):
+            return True
+    return False
+
+
 def missing_preserved_terms(original, translated):
     if not original or not translated:
         return []
@@ -1969,12 +2126,23 @@ def missing_preserved_terms(original, translated):
     for term in PRESERVE_TERMS:
         if not term or term not in original:
             continue
+        if _source_usage_excluded_for_preserve_term(original, term):
+            continue
+        if _translated_contains_preserve_alias(translated, term):
+            continue
+        if term.startswith("[") and term.endswith("]"):
+            term_field = RENPY_FIELD_TOKEN_RE.fullmatch(term)
+            if term_field:
+                field_name = term_field.group("name")
+                field_pattern = re.compile(rf"\[{re.escape(field_name)}(?:![^\]]*)?\]")
+                if field_pattern.search(translated):
+                    continue
         # Avoid false positives for short alphabetic fragments (e.g., "Mo" in "Moon").
         if term.isalpha() and len(term) <= 3:
-            pattern = rf"(?<![A-Za-z0-9_]){re.escape(term)}(?![A-Za-z0-9_])"
+            pattern = rf"(?<![A-Za-z0-9_']){re.escape(term)}(?![A-Za-z0-9_'])"
             if not re.search(pattern, original):
                 continue
-            if not re.search(pattern, translated):
+            if not re.search(pattern, translated) and not _translated_has_renpy_field_for_term(translated, term):
                 missing.append(term)
             continue
         if term not in translated:
@@ -1995,6 +2163,12 @@ def is_non_translatable(text):
     if NON_TRANSLATABLE_SYMBOLS.match(stripped):
         return True
     if FILE_NAME_PATTERN.match(stripped) or FILE_NAME_SIMPLE_RE.match(stripped):
+        return True
+    if ROMAN_NUMERAL_LABEL_RE.match(stripped):
+        return True
+    if "%" in stripped and STRFTIME_FORMAT_RE.match(stripped):
+        return True
+    if RENPY_IDENTIFIER_LABEL_RE.match(stripped):
         return True
     if LETTER_SEQUENCE_RE.match(stripped):
         return True
@@ -2145,8 +2319,15 @@ def _term_token_sequence_matches(tokens, terms):
     for term in terms:
         if not isinstance(term, str) or not term.strip():
             continue
-        if token_tuple == tuple(_extract_word_tokens(term)):
+        term_tokens = tuple(_extract_word_tokens(term))
+        if not term_tokens:
+            continue
+        if token_tuple == term_tokens:
             return True
+        if len(token_tuple) % len(term_tokens) == 0:
+            repeated = term_tokens * (len(token_tuple) // len(term_tokens))
+            if token_tuple == repeated:
+                return True
     return False
 
 
@@ -3178,6 +3359,80 @@ def _translate_block_name(line):
     return match.group(1) if match else None
 
 
+def _previous_significant_token_index(tokens, start_index):
+    for token_index in range(start_index - 1, -1, -1):
+        token = tokens[token_index]
+        if token.type in {tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER}:
+            continue
+        return token_index
+    return None
+
+
+def _is_keyword_argument_string_token(tokens, token_index):
+    equal_index = _previous_significant_token_index(tokens, token_index)
+    if equal_index is None or tokens[equal_index].string != "=":
+        return False
+    name_index = _previous_significant_token_index(tokens, equal_index)
+    return name_index is not None and tokens[name_index].type == tokenize.NAME
+
+
+def is_keyword_argument_string_span(line, start_col, end_col):
+    try:
+        start_col = int(start_col)
+        end_col = int(end_col)
+    except (TypeError, ValueError):
+        return False
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
+    except Exception:
+        return False
+    for token_index, token in enumerate(tokens):
+        if token.type != tokenize.STRING:
+            continue
+        if token.start[1] == start_col and token.end[1] == end_col:
+            return _is_keyword_argument_string_token(tokens, token_index)
+    return False
+
+
+def _has_later_non_keyword_string(tokens, token_index):
+    for later_index in range(token_index + 1, len(tokens)):
+        later = tokens[later_index]
+        if later.type != tokenize.STRING:
+            continue
+        if not _is_keyword_argument_string_token(tokens, later_index):
+            return True
+    return False
+
+
+def _is_say_speaker_label_string_token(line, tokens, token_index):
+    token = tokens[token_index]
+    if token.type != tokenize.STRING:
+        return False
+    if _is_keyword_argument_string_token(tokens, token_index):
+        return False
+    if line[:token.start[1]].strip():
+        return False
+    return _has_later_non_keyword_string(tokens, token_index)
+
+
+def is_say_speaker_label_string_span(line, start_col, end_col):
+    try:
+        start_col = int(start_col)
+        end_col = int(end_col)
+    except (TypeError, ValueError):
+        return False
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
+    except Exception:
+        return False
+    for token_index, token in enumerate(tokens):
+        if token.type != tokenize.STRING:
+            continue
+        if token.start[1] == start_col and token.end[1] == end_col:
+            return _is_say_speaker_label_string_token(line, tokens, token_index)
+    return False
+
+
 def _is_translation_target_text(text_val):
     if not text_val or contains_chinese(text_val) or len(text_val) <= 1:
         return False
@@ -3240,8 +3495,10 @@ def scan_all_translation_units(lines, file_rel_path, mode=translation_core.MODE_
 
         try:
             tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
-            for token in tokens:
+            for token_index, token in enumerate(tokens):
                 if token.type != tokenize.STRING:
+                    continue
+                if is_translation_file and _is_keyword_argument_string_token(tokens, token_index):
                     continue
                 if _is_character_display_token(idx, token, character_display_spans):
                     continue
@@ -3257,11 +3514,9 @@ def scan_all_translation_units(lines, file_rel_path, mode=translation_core.MODE_
                 if source_for_id is None:
                     source_for_id = text_val
 
-                if (
-                    mode == translation_core.MODE_TRANSLATION
-                    and not (is_translation_file and source_marker is not None)
-                    and not _is_translation_target_text(text_val)
-                ):
+                should_translate = _is_translation_target_text(text_val)
+                identity_bearing = (is_translation_file and source_marker is not None) or should_translate
+                if mode == translation_core.MODE_TRANSLATION and not identity_bearing:
                     continue
                 if mode == translation_core.MODE_REVISION and is_translation_file and source_marker is None:
                     continue
@@ -3341,8 +3596,10 @@ def collect_tasks(lines, skip_translated=True):
 
         try:
             tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
-            for token in tokens:
+            for token_index, token in enumerate(tokens):
                 if token.type != tokenize.STRING:
+                    continue
+                if is_translation_file and _is_keyword_argument_string_token(tokens, token_index):
                     continue
                 if _is_character_display_token(idx, token, character_display_spans):
                     continue

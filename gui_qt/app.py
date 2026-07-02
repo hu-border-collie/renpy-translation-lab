@@ -8,11 +8,14 @@ This is the first version shell (per #42):
 from __future__ import annotations
 
 import sys
+import re
 from pathlib import Path
 from typing import Any
 
+import translator_runtime as runtime
+
 from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QBrush, QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -32,17 +35,30 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QLayout,
+    QProgressBar,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QAbstractItemView,
+    QSizePolicy,
 )
 
 from .api_key_dialog import ApiKeyDialog
 from .api_key_helpers import mask_api_key
 from .bootstrap_report import (
+    BootstrapProgressState,
+    BootstrapProgressTracker,
     BootstrapSummary,
+    create_bootstrap_progress_state,
+    create_bootstrap_progress_tracker,
+    format_bootstrap_progress_bar_label,
+    format_bootstrap_progress_facts,
     read_batch_context_flags,
     running_bootstrap_summary,
     stale_bootstrap_summary,
     summarize_rag_bootstrap_output,
     summarize_source_index_bootstrap_output,
+    update_bootstrap_progress_from_line,
 )
 from .apply_failure_dialog import ApplyFailureDialog
 from .apply_failure_report import (
@@ -73,6 +89,12 @@ from .revision_writeback_report import (
     summarize_revision_writeback_from_manifest,
     summarize_revision_writeback_from_preview_output,
 )
+from .split_batch import (
+    SplitManifestEntry,
+    load_split_manifest_entries,
+    summarize_split_entries,
+)
+from .split_batch_workflow import SplitBatchQueueWorkflow
 from .retry_preview_dialog import RetryPreviewDialog
 from .retry_report import (
     assess_retry_eligibility,
@@ -110,6 +132,7 @@ from .user_copy import (
     format_job_state_fact,
     format_manifest_path_fact,
     job_state_label,
+    safety_level_label,
 )
 from .work_modes import (
     TASK_CATEGORY_ORDER,
@@ -126,6 +149,11 @@ from .work_modes import (
     work_modes_for_category,
 )
 from .workflow_factory import create_workflow, resume_workflow
+from .workflow_progress import (
+    WorkflowProgressState,
+    create_workflow_progress_state,
+    update_workflow_progress_from_line,
+)
 from .widget_helpers import NoWheelComboBox, NoWheelTabWidget
 from .wizard_timeline import WizardTimeline
 
@@ -155,15 +183,28 @@ class MainWindow(QMainWindow):
         self._active_command = ""
         self._doctor_output_lines: list[str] = []
         self._workflow = None
+        self._split_status_entries: list[SplitManifestEntry] = []
         self._work_mode = WorkMode.BATCH_TRANSLATION
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
+        self._bootstrap_progress: BootstrapProgressState | None = None
+        self._bootstrap_progress_tracker: BootstrapProgressTracker | None = None
+        self._workflow_progress: WorkflowProgressState | None = None
+        self._workflow_progress_base_facts: list[str] = []
+        self._bootstrap_progress_eta_timer = QTimer(self)
+        self._bootstrap_progress_eta_timer.setInterval(1000)
+        self._bootstrap_progress_eta_timer.timeout.connect(
+            self._on_bootstrap_progress_eta_tick
+        )
         self._work_bootstrap_output_lines: list[str] = []
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
+        self._config_ui_saved_snapshot: dict[str, object] = {}
+        self._last_main_tab_index = 0
+        self._handling_config_tab_leave = False
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -185,6 +226,7 @@ class MainWindow(QMainWindow):
 
         self.batch_model_combo.currentTextChanged.connect(self._on_batch_model_changed)
         self.batch_thinking_combo.currentIndexChanged.connect(self._on_batch_thinking_changed)
+        self._last_main_tab_index = self.tab_widget.currentIndex()
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
 
         # Connect runner
@@ -209,6 +251,12 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched: Any, event: QEvent) -> bool:
         if watched is self.work_mode_hint_label and event.type() == QEvent.Type.Resize:
             self._sync_work_mode_hint_height()
+        if (
+            hasattr(self, "split_status_table")
+            and watched is self.split_status_table.viewport()
+            and event.type() == QEvent.Type.Resize
+        ):
+            self._sync_split_status_table_columns()
         return super().eventFilter(watched, event)
 
     def _sync_work_mode_hint_height(self) -> None:
@@ -245,6 +293,11 @@ class MainWindow(QMainWindow):
             return
 
         width = self.workbench_status_tabs.width()
+        workflow_scroll = getattr(self, "workflow_scroll", None)
+        if workflow_scroll is not None:
+            workflow_viewport = workflow_scroll.viewport()
+            if workflow_viewport is not None and workflow_viewport.width() > 0:
+                width = workflow_viewport.width()
         if width <= 0:
             width = 400
         label_width = max(100, width - 24)
@@ -278,10 +331,18 @@ class MainWindow(QMainWindow):
         sync_label(self.writeback_facts_label)
         sync_label(self.writeback_details_label)
 
+        if hasattr(self, "split_status_table") and self.split_status_table.isVisible():
+            self._sync_split_status_table_columns()
+
         if changed:
             current = self.workbench_status_tabs.currentWidget()
             if current is not None and current.layout() is not None:
                 current.layout().invalidate()
+            if workflow_scroll is not None and workflow_scroll.widget() is not None:
+                workflow_content_layout = workflow_scroll.widget().layout()
+                if workflow_content_layout is not None:
+                    workflow_content_layout.invalidate()
+                workflow_scroll.widget().updateGeometry()
             self.workbench_status_tabs.updateGeometry()
 
     def _build_workbench_tab(self) -> None:
@@ -357,52 +418,66 @@ class MainWindow(QMainWindow):
 
         action_frame = QFrame()
         action_frame.setObjectName("action_frame")
-        action_outer = QHBoxLayout(action_frame)
+        action_outer = QVBoxLayout(action_frame)
         action_outer.setContentsMargins(12, 10, 12, 10)
-        action_outer.setSpacing(12)
+        action_outer.setSpacing(8)
 
         prep_group = QHBoxLayout()
-        prep_group.setSpacing(8)
+        prep_group.setSpacing(12)
         prep_label = QLabel("项目准备")
         prep_label.setObjectName("action_group_label")
+        prep_label.setMinimumWidth(84)
         prep_group.addWidget(prep_label)
         self.doctor_btn = QPushButton("环境检查")
         self.doctor_btn.setObjectName("secondary_btn")
+        self.doctor_btn.setMinimumWidth(160)
         self.doctor_btn.clicked.connect(self._on_run_doctor)
         prep_group.addWidget(self.doctor_btn)
         self.bootstrap_work_btn = QPushButton("准备工作目录")
         self.bootstrap_work_btn.setObjectName("secondary_btn")
+        self.bootstrap_work_btn.setMinimumWidth(160)
         self.bootstrap_work_btn.clicked.connect(self._on_bootstrap_work)
         prep_group.addWidget(self.bootstrap_work_btn)
+        prep_group.addStretch()
         action_outer.addLayout(prep_group)
 
         action_separator = QFrame()
-        action_separator.setFrameShape(QFrame.Shape.VLine)
+        action_separator.setFrameShape(QFrame.Shape.HLine)
         action_separator.setObjectName("action_separator")
         action_outer.addWidget(action_separator)
 
         translate_group = QHBoxLayout()
-        translate_group.setSpacing(8)
+        translate_group.setSpacing(12)
         self.translate_group_label = QLabel("翻译任务")
         self.translate_group_label.setObjectName("action_group_label")
+        self.translate_group_label.setMinimumWidth(84)
         translate_group.addWidget(self.translate_group_label)
         self.translate_btn = QPushButton("开始翻译")
         self.translate_btn.setObjectName("translate_btn")
+        self.translate_btn.setMinimumWidth(160)
         self.translate_btn.clicked.connect(self._on_start_translation)
         translate_group.addWidget(self.translate_btn)
         self.resume_btn = QPushButton("继续翻译")
         self.resume_btn.setObjectName("secondary_btn")
+        self.resume_btn.setMinimumWidth(160)
         self.resume_btn.clicked.connect(self._on_resume_translation)
         translate_group.addWidget(self.resume_btn)
-        action_outer.addLayout(translate_group)
-
-        action_outer.addStretch()
+        self.split_submit_btn = QPushButton("提交剩余包")
+        self.split_submit_btn.setObjectName("secondary_btn")
+        self.split_submit_btn.setMinimumWidth(180)
+        self.split_submit_btn.setToolTip("提交当前拆分组中尚未提交的包")
+        self.split_submit_btn.clicked.connect(self._on_submit_remaining_split_packages)
+        self.split_submit_btn.setVisible(False)
+        translate_group.addWidget(self.split_submit_btn)
+        translate_group.addStretch()
 
         self.kill_btn = QPushButton("停止")
         self.kill_btn.setObjectName("kill_btn")
+        self.kill_btn.setMinimumWidth(90)
         self.kill_btn.clicked.connect(self._on_kill)
         self.kill_btn.setEnabled(False)
-        action_outer.addWidget(self.kill_btn)
+        translate_group.addWidget(self.kill_btn)
+        action_outer.addLayout(translate_group)
         layout.addWidget(action_frame)
 
         self.timeline = WizardTimeline()
@@ -456,7 +531,21 @@ class MainWindow(QMainWindow):
 
         workflow_tab = QWidget()
         self._style_themed_surface(workflow_tab)
-        workflow_layout = QVBoxLayout(workflow_tab)
+        workflow_outer_layout = QVBoxLayout(workflow_tab)
+        workflow_outer_layout.setContentsMargins(0, 0, 0, 0)
+        workflow_outer_layout.setSpacing(0)
+        self.workflow_scroll = QScrollArea()
+        self.workflow_scroll.setObjectName("workflow_summary_scroll")
+        self._style_themed_surface(self.workflow_scroll)
+        self.workflow_scroll.setWidgetResizable(True)
+        self.workflow_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        workflow_viewport = self.workflow_scroll.viewport()
+        workflow_viewport.setObjectName("workflow_summary_viewport")
+        self._style_themed_surface(workflow_viewport)
+        workflow_content = QWidget()
+        workflow_content.setObjectName("workflow_summary_content")
+        self._style_themed_surface(workflow_content)
+        workflow_layout = QVBoxLayout(workflow_content)
         workflow_layout.setContentsMargins(12, 12, 12, 12)
         workflow_layout.setSpacing(6)
         self.workflow_status_label = QLabel()
@@ -464,13 +553,48 @@ class MainWindow(QMainWindow):
         workflow_layout.addWidget(self.workflow_status_label)
         self.workflow_message_label = QLabel()
         self.workflow_message_label.setWordWrap(True)
+        self.workflow_message_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.workflow_message_label.setObjectName("summary_body_label")
         workflow_layout.addWidget(self.workflow_message_label)
+        self.workflow_progress_bar = QProgressBar()
+        self.workflow_progress_bar.setObjectName("workflow_progress_bar")
+        self.workflow_progress_bar.setVisible(False)
+        self.workflow_progress_bar.setTextVisible(True)
+        workflow_layout.addWidget(self.workflow_progress_bar)
         self.workflow_facts_label = QLabel()
         self.workflow_facts_label.setWordWrap(True)
+        self.workflow_facts_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.workflow_facts_label.setObjectName("workflow_facts_label")
         workflow_layout.addWidget(self.workflow_facts_label)
+        self.split_status_title = QLabel("拆分包状态")
+        self.split_status_title.setObjectName("diagnostics_section_label")
+        self.split_status_title.setVisible(False)
+        workflow_layout.addWidget(self.split_status_title)
+        self.split_status_table = QTableWidget(0, 6)
+        self.split_status_table.setObjectName("split_status_table")
+        self.split_status_table.setHorizontalHeaderLabels(["包", "状态", "项", "块", "云端任务", "操作"])
+        self.split_status_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.split_status_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.split_status_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.split_status_table.setAlternatingRowColors(True)
+        self.split_status_table.setWordWrap(False)
+        self.split_status_table.setMinimumHeight(260)
+        self.split_status_table.setMaximumHeight(360)
+        self.split_status_table.verticalHeader().setVisible(False)
+        self.split_status_table.viewport().installEventFilter(self)
+        split_header = self.split_status_table.horizontalHeader()
+        split_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        split_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        split_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        split_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        split_header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        split_header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self._configure_split_status_table_columns()
+        self.split_status_table.setVisible(False)
+        workflow_layout.addWidget(self.split_status_table)
         workflow_layout.addStretch()
+        self.workflow_scroll.setWidget(workflow_content)
+        workflow_outer_layout.addWidget(self.workflow_scroll, 1)
         self.workbench_status_tabs.addTab(workflow_tab, "翻译进度")
 
         writeback_tab = QWidget()
@@ -627,6 +751,12 @@ class MainWindow(QMainWindow):
 
         self.bootstrap_on_build_cb = QCheckBox("开始翻译时自动暖 RAG 库")
         context_layout.addWidget(self.bootstrap_on_build_cb)
+
+        self.context_storage_game_cb = QCheckBox("上下文库保存到游戏目录")
+        self.context_storage_game_cb.setToolTip(
+            "启用后，默认 RAG / 原文索引 / 剧情图谱路径会使用 work 同级的 translation_context/。"
+        )
+        context_layout.addWidget(self.context_storage_game_cb)
 
         layout.addWidget(context_box)
 
@@ -897,6 +1027,360 @@ class MainWindow(QMainWindow):
     def _focus_workbench_status_tab(self, index: int) -> None:
         if 0 <= index < self.workbench_status_tabs.count():
             self.workbench_status_tabs.setCurrentIndex(index)
+
+    def _same_manifest_path(self, left: str, right: str) -> bool:
+        if not left or not right:
+            return False
+        return runtime.canonical_abs_path(left).lower() == runtime.canonical_abs_path(right).lower()
+
+    def _split_entries_for_manifest(
+        self,
+        manifest_path: str,
+        manifest: dict[str, object] | None = None,
+    ) -> list[SplitManifestEntry]:
+        if work_mode_spec(self._current_work_mode()).mode != WorkMode.BATCH_TRANSLATION:
+            return []
+        try:
+            loaded = manifest if manifest is not None else self.state.load_manifest_file(manifest_path)
+        except ValueError:
+            return []
+        source_manifest_path = manifest_path
+        source_manifest = loaded
+        retry_parent = loaded.get("retry_of_manifest") if isinstance(loaded, dict) else None
+        if isinstance(retry_parent, str) and retry_parent.strip():
+            source_manifest_path = retry_parent.strip()
+            try:
+                source_manifest = self.state.load_manifest_file(source_manifest_path)
+            except ValueError:
+                source_manifest = None
+        entries = load_split_manifest_entries(source_manifest_path, source_manifest)
+        return entries if len(entries) > 1 else []
+
+    def _load_latest_split_entries(self) -> tuple[str, list[SplitManifestEntry]]:
+        spec = work_mode_spec(self._current_work_mode())
+        if spec.mode != WorkMode.BATCH_TRANSLATION:
+            return "", []
+        game_root = self.state.get_game_root()
+        if game_root is None:
+            return "", []
+        latest_manifest = self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+        if latest_manifest is None:
+            return "", []
+        try:
+            manifest = self.state.load_manifest_file(latest_manifest)
+        except ValueError:
+            return "", []
+        return str(latest_manifest), self._split_entries_for_manifest(str(latest_manifest), manifest)
+
+    def _render_split_status_entries(
+        self,
+        entries: list[SplitManifestEntry],
+        *,
+        selected_manifest_path: str = "",
+    ) -> None:
+        self._split_status_entries = list(entries)
+        if not hasattr(self, "split_status_table"):
+            return
+        if not entries:
+            self.split_status_table.setRowCount(0)
+            self.split_status_table.setVisible(False)
+            self.split_status_title.setVisible(False)
+            self._update_split_submit_btn(entries)
+            return
+
+        profile = self._configure_split_status_table_columns()
+        group_count = max(1, profile["groups"])
+        rows = (len(entries) + group_count - 1) // group_count
+        self.split_status_table.setRowCount(rows)
+        for row in range(rows):
+            for column in range(self.split_status_table.columnCount()):
+                self.split_status_table.removeCellWidget(row, column)
+                self._set_split_table_item(row, column, "")
+
+        for index, entry in enumerate(entries):
+            group_index = index // rows if rows else 0
+            row = index % rows if rows else 0
+            base_column = group_index * 6
+            self._render_split_status_entry(
+                row,
+                base_column,
+                entry,
+                profile,
+                selected_manifest_path=selected_manifest_path,
+            )
+
+        self.split_status_table.resizeRowsToContents()
+        for row in range(self.split_status_table.rowCount()):
+            self.split_status_table.setRowHeight(row, max(self.split_status_table.rowHeight(row), 44))
+        self._configure_split_status_table_columns()
+        self.split_status_title.setVisible(True)
+        self.split_status_table.setVisible(True)
+        self._update_split_submit_btn(entries)
+
+    def _split_status_table_profile(self) -> dict[str, int]:
+        table = getattr(self, "split_status_table", None)
+        width = 0
+        if table is not None:
+            width = table.viewport().width() or table.width()
+        if width >= 1500:
+            return {
+                "groups": 2,
+                "part_width": 132,
+                "status_width": 150,
+                "item_width": 72,
+                "chunk_width": 60,
+                "action_width": 132,
+                "job_chars": 42,
+            }
+        if width >= 980:
+            return {
+                "groups": 1,
+                "part_width": 130,
+                "status_width": 145,
+                "item_width": 72,
+                "chunk_width": 64,
+                "action_width": 124,
+                "job_chars": 64,
+            }
+        return {
+            "groups": 1,
+            "part_width": 112,
+            "status_width": 118,
+            "item_width": 62,
+            "chunk_width": 56,
+            "action_width": 108,
+            "job_chars": 32,
+        }
+
+    def _configure_split_status_table_columns(self) -> dict[str, int]:
+        profile = self._split_status_table_profile()
+        if not hasattr(self, "split_status_table"):
+            return profile
+        group_count = max(1, profile["groups"])
+        self._split_status_table_group_count = group_count
+        self._split_status_table_profile_key = (group_count, profile["job_chars"])
+        headers = ["\u5305", "\u72b6\u6001", "\u9879", "\u5757", "\u4e91\u7aef\u4efb\u52a1", "\u64cd\u4f5c"] * group_count
+        if self.split_status_table.columnCount() != len(headers):
+            self.split_status_table.setColumnCount(len(headers))
+        self.split_status_table.setHorizontalHeaderLabels(headers)
+        header = self.split_status_table.horizontalHeader()
+        for group_index in range(group_count):
+            base = group_index * 6
+            header.setSectionResizeMode(base + 0, QHeaderView.ResizeMode.Fixed)
+            header.setSectionResizeMode(base + 1, QHeaderView.ResizeMode.Fixed)
+            header.setSectionResizeMode(base + 2, QHeaderView.ResizeMode.Fixed)
+            header.setSectionResizeMode(base + 3, QHeaderView.ResizeMode.Fixed)
+            header.setSectionResizeMode(base + 4, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(base + 5, QHeaderView.ResizeMode.Fixed)
+            self.split_status_table.setColumnWidth(base + 0, profile["part_width"])
+            self.split_status_table.setColumnWidth(base + 1, profile["status_width"])
+            self.split_status_table.setColumnWidth(base + 2, profile["item_width"])
+            self.split_status_table.setColumnWidth(base + 3, profile["chunk_width"])
+            self.split_status_table.setColumnWidth(base + 5, profile["action_width"])
+        return profile
+
+    def _sync_split_status_table_columns(self) -> None:
+        if not hasattr(self, "split_status_table"):
+            return
+        previous_profile_key = getattr(self, "_split_status_table_profile_key", None)
+        profile = self._configure_split_status_table_columns()
+        current_profile_key = (max(1, profile["groups"]), profile["job_chars"])
+        if (
+            current_profile_key != previous_profile_key
+            and self.split_status_table.isVisible()
+            and self._split_status_entries
+        ):
+            QTimer.singleShot(0, self._refresh_split_status_ui)
+
+    def _render_split_status_entry(
+        self,
+        row: int,
+        base_column: int,
+        entry: SplitManifestEntry,
+        profile: dict[str, int],
+        *,
+        selected_manifest_path: str,
+    ) -> None:
+        current_suffix = "\uff08\u5f53\u524d\uff09" if self._same_manifest_path(entry.manifest_path, selected_manifest_path) else ""
+        is_current = bool(current_suffix)
+        self._set_split_table_item(
+            row,
+            base_column + 0,
+            f"{entry.part_label}{current_suffix}",
+            tooltip=entry.manifest_path,
+        )
+        self._set_split_table_item(row, base_column + 1, entry.status_label, tooltip=entry.job_state or entry.status_label)
+        self._set_split_table_item(row, base_column + 2, "" if entry.item_count is None else str(entry.item_count))
+        self._set_split_table_item(row, base_column + 3, "" if entry.chunk_count is None else str(entry.chunk_count))
+        self._set_split_table_item(
+            row,
+            base_column + 4,
+            self._split_job_text(entry, profile["job_chars"]),
+            tooltip=entry.job_name or entry.manifest_path,
+        )
+        self._set_split_table_item(row, base_column + 5, "")
+        if entry.selectable:
+            select_btn = QPushButton("\u9009\u62e9")
+            select_btn.setObjectName("split_select_btn")
+            select_btn.setMinimumHeight(30)
+            select_btn.setMaximumHeight(30)
+            select_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            select_btn.setToolTip(f"\u5207\u6362\u5230 {entry.part_label}")
+            select_btn.clicked.connect(
+                lambda _checked=False, path=entry.manifest_path: self._select_split_manifest(path)
+            )
+            cell = QWidget()
+            cell.setObjectName("split_status_action_cell")
+            cell_layout = QHBoxLayout(cell)
+            cell_layout.setContentsMargins(8, 6, 8, 6)
+            cell_layout.setSpacing(0)
+            cell_layout.addWidget(select_btn)
+            self.split_status_table.setCellWidget(row, base_column + 5, cell)
+        self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
+
+    def _split_job_text(self, entry: SplitManifestEntry, max_chars: int) -> str:
+        text = entry.job_name if entry.job_name else entry.display_name
+        if not text or max_chars <= 0 or len(text) <= max_chars:
+            return text
+        if text.startswith("batches/") and max_chars > 16:
+            suffix_limit = max_chars - len("batches/") - 3
+            return f"batches/{text.split('/', 1)[1][:suffix_limit]}..."
+        return f"{text[:max(1, max_chars - 3)]}..."
+
+    def _set_split_table_item(
+        self,
+        row: int,
+        column: int,
+        text: str,
+        *,
+        tooltip: str = "",
+    ) -> None:
+        item = QTableWidgetItem(text)
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        alignment = Qt.AlignmentFlag.AlignVCenter
+        if column % 6 in {2, 3, 5}:
+            alignment |= Qt.AlignmentFlag.AlignHCenter
+        else:
+            alignment |= Qt.AlignmentFlag.AlignLeft
+        item.setTextAlignment(alignment)
+        if tooltip:
+            item.setToolTip(tooltip)
+        self.split_status_table.setItem(row, column, item)
+
+    def _apply_split_table_row_style(
+        self,
+        row: int,
+        entry: SplitManifestEntry,
+        *,
+        base_column: int = 0,
+        is_current: bool,
+    ) -> None:
+        bg_color, text_color, status_color = self._split_status_row_colors(entry.status_kind)
+        background = QBrush(QColor(bg_color))
+        foreground = QBrush(QColor(text_color))
+        status_foreground = QBrush(QColor(status_color))
+        for column in range(base_column, min(base_column + 6, self.split_status_table.columnCount())):
+            item = self.split_status_table.item(row, column)
+            if item is None:
+                continue
+            item.setBackground(background)
+            item.setForeground(status_foreground if column == base_column + 1 else foreground)
+            font = item.font()
+            font.setBold(column == base_column + 1 or (is_current and column == base_column))
+            item.setFont(font)
+
+    def _split_status_row_colors(self, status_kind: str) -> tuple[str, str, str]:
+        dark = self.palette().window().color().lightness() < 128
+        if dark:
+            colors = {
+                "applied": ("#052e2b", "#d1fae5", "#34d399"),
+                "checked_safe": ("#12351f", "#dcfce7", "#4ade80"),
+                "checked_warn": ("#422006", "#fef3c7", "#fbbf24"),
+                "checked_block": ("#450a0a", "#fee2e2", "#f87171"),
+                "failed": ("#450a0a", "#fee2e2", "#f87171"),
+                "downloaded": ("#172554", "#dbeafe", "#60a5fa"),
+                "running": ("#3b2505", "#fef3c7", "#f59e0b"),
+                "submitted": ("#1e293b", "#cbd5e1", "#93c5fd"),
+                "succeeded": ("#14345b", "#dbeafe", "#60a5fa"),
+                "unsubmitted": ("#111827", "#94a3b8", "#94a3b8"),
+            }
+            return colors.get(status_kind, ("#0f172a", "#cbd5e1", "#cbd5e1"))
+        colors = {
+            "applied": ("#d1fae5", "#064e3b", "#047857"),
+            "checked_safe": ("#dcfce7", "#14532d", "#15803d"),
+            "checked_warn": ("#fef3c7", "#78350f", "#b45309"),
+            "checked_block": ("#fee2e2", "#7f1d1d", "#dc2626"),
+            "failed": ("#fee2e2", "#7f1d1d", "#dc2626"),
+            "downloaded": ("#dbeafe", "#1e3a8a", "#2563eb"),
+            "running": ("#fef3c7", "#78350f", "#d97706"),
+            "submitted": ("#e2e8f0", "#334155", "#2563eb"),
+            "succeeded": ("#e0f2fe", "#075985", "#0284c7"),
+            "unsubmitted": ("#f8fafc", "#64748b", "#64748b"),
+        }
+        return colors.get(status_kind, ("#f8fafc", "#334155", "#334155"))
+
+    def _short_job_name(self, job_name: str) -> str:
+        if not job_name:
+            return ""
+        if job_name.startswith("batches/"):
+            suffix = job_name.split("/", 1)[1]
+            return f"batches/{suffix[:10]}..." if len(suffix) > 13 else job_name
+        return f"{job_name[:18]}..." if len(job_name) > 21 else job_name
+
+    def _refresh_split_status_ui(
+        self,
+        *,
+        manifest_path: str | None = None,
+        manifest: dict[str, object] | None = None,
+    ) -> list[SplitManifestEntry]:
+        if manifest_path:
+            entries = self._split_entries_for_manifest(manifest_path, manifest)
+            selected_manifest_path = manifest_path
+        else:
+            selected_manifest_path, entries = self._load_latest_split_entries()
+        self._render_split_status_entries(
+            entries,
+            selected_manifest_path=selected_manifest_path or "",
+        )
+        return entries
+
+    def _update_split_submit_btn(
+        self,
+        entries: list[SplitManifestEntry] | None = None,
+        *,
+        running: bool | None = None,
+    ) -> None:
+        if not hasattr(self, "split_submit_btn"):
+            return
+        if work_mode_spec(self._current_work_mode()).mode != WorkMode.BATCH_TRANSLATION:
+            self.split_submit_btn.setVisible(False)
+            self.split_submit_btn.setEnabled(False)
+            return
+        current_entries = self._split_status_entries if entries is None else entries
+        has_split_group = len(current_entries) > 1
+        needs_submit = any(entry.needs_submit for entry in current_entries)
+        if running is None:
+            running = self.kill_btn.isEnabled()
+        self.split_submit_btn.setVisible(has_split_group and needs_submit)
+        self.split_submit_btn.setText("提交剩余包")
+        self.split_submit_btn.setEnabled(has_split_group and needs_submit and not running)
+
+    def _select_split_manifest(self, manifest_path: str) -> None:
+        try:
+            self.state.remember_latest_manifest_path(manifest_path)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法选择拆分包", str(exc))
+            return
+        self._workflow = None
+        self._workflow_step_output_lines = []
+        self._refresh_workflow_from_latest_manifest()
+        self._refresh_writeback_from_latest_manifest()
+        writeback_summary = self._current_writeback_summary()
+        if writeback_summary.status not in {"idle", "running", "stale"}:
+            self._focus_workbench_status_tab(2)
+        else:
+            self._focus_workbench_status_tab(1)
+        self.statusBar().showMessage("已选择拆分包；可继续下载、检查或写回。", 5000)
 
     def _writeback_issues_ready(self, summary: WritebackSummary) -> bool:
         if self._uses_revision_writeback():
@@ -1406,6 +1890,9 @@ class MainWindow(QMainWindow):
         else:
             self.resume_btn.setText(spec.resume_button_label or "继续任务")
 
+    def _resume_button_is_query_mode(self) -> bool:
+        return hasattr(self, "resume_btn") and self.resume_btn.text() == "查询云端状态"
+
     def _apply_work_mode_ui(self, *, refresh_manifest_writeback: bool = False) -> None:
         spec = work_mode_spec(self._current_work_mode())
         self._update_timeline_steps(spec.mode)
@@ -1434,6 +1921,7 @@ class MainWindow(QMainWindow):
         bootstrap_ready = self._bootstrap_task_ready(spec)
         self.translate_btn.setEnabled(spec.implemented and bootstrap_ready and not running)
         self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
+        self._update_split_submit_btn(running=running)
 
     def _update_timeline_steps(self, mode: WorkMode) -> None:
         from .work_modes import WorkMode
@@ -1508,6 +1996,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "timeline"):
             self.timeline.set_current_step(None, "idle")
             self.timeline.setVisible(False)
+        self._render_split_status_entries([])
         spec = work_mode_spec(self._current_work_mode())
         self._set_workflow_summary(
             "idle",
@@ -1546,6 +2035,13 @@ class MainWindow(QMainWindow):
         job_state_text = job_state if isinstance(job_state, str) else ""
         job_name = manifest.get("job_name")
         job_error = manifest.get("job_error")
+        retry_parent = manifest.get("retry_of_manifest")
+        retry_parent_text = retry_parent.strip() if isinstance(retry_parent, str) else ""
+        latest_safety = ""
+        check_summary = manifest.get("last_check_summary")
+        if isinstance(check_summary, dict):
+            safety_value = check_summary.get("safety_level")
+            latest_safety = safety_value.strip().lower() if isinstance(safety_value, str) else ""
 
         facts = []
         facts.append(format_manifest_path_fact(str(latest_manifest)))
@@ -1571,6 +2067,12 @@ class MainWindow(QMainWindow):
                 else:
                     facts.append(f"待翻译项：{item_count} 项")
 
+        if retry_parent_text:
+            facts.append(f"父任务：{retry_parent_text}")
+
+        split_entries = self._split_entries_for_manifest(str(latest_manifest), manifest)
+        facts.extend(summarize_split_entries(split_entries))
+
         is_waiting = job_state_text in ("JOB_STATE_PENDING", "JOB_STATE_RUNNING")
         timeline_step_key = None
         workflow = None
@@ -1592,7 +2094,32 @@ class MainWindow(QMainWindow):
                 message = f"云端任务状态为「{job_state_label(job_state_text)}」{detail}，无法继续该任务；可以重新开始。"
         else:
             workflow = resume_workflow(spec.mode, str(latest_manifest), manifest)
-            if workflow and workflow.current_step() is None:
+            if retry_parent_text:
+                if workflow and workflow.current_step() is None and latest_safety in {"warn", "block"}:
+                    status = "stale" if latest_safety == "warn" else "failed"
+                    timeline_step_key = "check"
+                    heading = "补译结果仍需处理"
+                    message = (
+                        f"补译包检查结果为「{safety_level_label(latest_safety)}」，暂不能合并回父任务。"
+                        "请先查看问题清单，必要时继续补译或人工处理。"
+                    )
+                elif workflow and workflow.current_step() is None:
+                    status = "done"
+                    heading = "补译任务已完成"
+                    message = "补译包流程已完成。"
+                else:
+                    status = "ready"
+                    heading = "可继续补译后续处理"
+                    message = "检测到补译任务还有后续步骤，点击「继续翻译」继续执行。"
+            elif workflow and workflow.current_step() is None and latest_safety in {"warn", "block"}:
+                status = "stale" if latest_safety == "warn" else "failed"
+                timeline_step_key = "check"
+                heading = "需要先处理问题"
+                message = (
+                    f"最近一次检查结果为「{safety_level_label(latest_safety)}」，暂不能写回。"
+                    "可先查看问题清单，必要时生成「补译包」并预览；处理完重新检查后，显示「可写回」才能写入项目。"
+                )
+            elif workflow and workflow.current_step() is None:
                 status = "done"
                 heading = f"最新{spec.label}任务已完成"
                 message = "该任务流程的所有步骤已全部执行完毕。"
@@ -1612,8 +2139,130 @@ class MainWindow(QMainWindow):
             workflow,
             step_key=timeline_step_key,
         )
+        self._render_split_status_entries(
+            split_entries,
+            selected_manifest_path=retry_parent_text or str(latest_manifest),
+        )
+
+    def _clear_bootstrap_progress_ui(self) -> None:
+        self._bootstrap_progress = None
+        self._bootstrap_progress_tracker = None
+        self._workflow_progress = None
+        self._workflow_progress_base_facts = []
+        if hasattr(self, "_bootstrap_progress_eta_timer"):
+            self._bootstrap_progress_eta_timer.stop()
+        if hasattr(self, "workflow_progress_bar"):
+            self.workflow_progress_bar.setVisible(False)
+
+    def _clear_workflow_progress_ui(self) -> None:
+        self._workflow_progress = None
+        self._workflow_progress_base_facts = []
+        if hasattr(self, "workflow_progress_bar"):
+            self.workflow_progress_bar.setVisible(False)
+
+    def _apply_workflow_progress_ui(self) -> None:
+        if not hasattr(self, "workflow_progress_bar"):
+            return
+
+        state = self._workflow_progress
+        if state is None or not state.visible:
+            self.workflow_progress_bar.setVisible(False)
+            return
+
+        if state.indeterminate or state.total <= 0:
+            self.workflow_progress_bar.setRange(0, 0)
+        else:
+            total = max(state.total, 1)
+            current = min(max(state.current, 0), total)
+            self.workflow_progress_bar.setRange(0, total)
+            self.workflow_progress_bar.setValue(current)
+        self.workflow_progress_bar.setFormat(state.label or "正在处理…")
+        self.workflow_progress_bar.setVisible(True)
+
+        if hasattr(self, "workflow_facts_label"):
+            facts = list(self._workflow_progress_base_facts)
+            for fact in state.facts:
+                if fact and fact not in facts:
+                    facts.append(fact)
+            self.workflow_facts_label.setText("\n".join(facts))
+
+    def _workflow_progress_kind_for_step(self, step: Any) -> str:
+        spec = work_mode_spec(self._current_work_mode())
+        if spec.mode == WorkMode.BATCH_TRANSLATION and step.key == "build":
+            return "source_index_build"
+        if spec.mode == WorkMode.SYNC_TRANSLATION and step.key == "run":
+            return "sync_translation"
+        if spec.mode in {WorkMode.SYNC_KEYWORD_EXTRACTION, WorkMode.SYNC_REVISION}:
+            return "sync_requests"
+        return ""
+
+    def _on_bootstrap_progress_eta_tick(self) -> None:
+        if (
+            self._active_command == "bootstrap_source_index"
+            and self._bootstrap_progress is not None
+        ):
+            self._apply_bootstrap_progress_ui()
+
+    def _apply_bootstrap_progress_ui(self) -> None:
+        if not hasattr(self, "workflow_progress_bar"):
+            return
+
+        state = self._bootstrap_progress
+        if self._active_command == "bootstrap_rag" and self.kill_btn.isEnabled():
+            workflow_state = getattr(self, "_workflow_progress", None)
+            if workflow_state is not None and workflow_state.visible:
+                self._apply_workflow_progress_ui()
+                return
+            self.workflow_progress_bar.setRange(0, 0)
+            self.workflow_progress_bar.setFormat("正在处理…")
+            self.workflow_progress_bar.setVisible(True)
+            return
+
+        if state is None or state.kind != "source_index":
+            self.workflow_progress_bar.setVisible(False)
+            return
+
+        tracker = self._bootstrap_progress_tracker
+        if tracker is not None:
+            tracker.observe(state)
+
+        if state.total_segments <= 0 and state.stored_segments <= 0:
+            self.workflow_progress_bar.setRange(0, 0)
+            self.workflow_progress_bar.setFormat("正在扫描原文…")
+            self.workflow_progress_bar.setVisible(True)
+        else:
+            total = max(state.total_segments, 1)
+            stored = min(max(state.stored_segments, 0), total)
+            remaining_seconds = (
+                tracker.estimate_remaining_seconds(state)
+                if tracker is not None
+                else None
+            )
+            self.workflow_progress_bar.setRange(0, total)
+            self.workflow_progress_bar.setValue(stored)
+            self.workflow_progress_bar.setFormat(
+                format_bootstrap_progress_bar_label(state, remaining_seconds)
+            )
+            self.workflow_progress_bar.setVisible(True)
+
+        facts = format_bootstrap_progress_facts(state)
+        if facts:
+            self.workflow_facts_label.setText("\n".join(facts))
 
     def _set_workflow_from_bootstrap_summary(self, summary: BootstrapSummary) -> None:
+        if summary.status == "running":
+            self._sync_timeline_from_workflow_status("running", step_key="run")
+        elif summary.status in {"ready", "warning"}:
+            self._sync_timeline_from_workflow_status("done", step_key="run")
+            self._clear_bootstrap_progress_ui()
+        elif summary.status == "failed":
+            self._sync_timeline_from_workflow_status("failed", step_key="run")
+            self._clear_bootstrap_progress_ui()
+        elif summary.status in {"idle", "stale"}:
+            self._sync_timeline_from_workflow_status("idle", step_key="run")
+            self._clear_bootstrap_progress_ui()
+        if hasattr(self, "timeline"):
+            self.timeline.setVisible(False)
         self._set_workflow_summary(
             summary.status,
             summary.heading,
@@ -1697,6 +2346,7 @@ class MainWindow(QMainWindow):
             self._set_writeback_summary(idle_writeback_summary())
             return
         self._set_writeback_summary(summary)
+        self._refresh_split_status_ui(manifest_path=str(latest_manifest), manifest=manifest)
 
     # --- UI actions ---
 
@@ -1764,11 +2414,77 @@ class MainWindow(QMainWindow):
 
         self.api_status_label.setText(message)
 
+    def _current_config_ui_snapshot(self) -> dict[str, object]:
+        thinking_val = self.batch_thinking_combo.currentData()
+        thinking_level = thinking_val if isinstance(thinking_val, str) else ""
+        return {
+            "rag_enabled": self.rag_enabled_cb.isChecked(),
+            "source_index_enabled": self.source_index_enabled_cb.isChecked(),
+            "bootstrap_on_build": self.bootstrap_on_build_cb.isChecked(),
+            "context_storage_location": "game" if self.context_storage_game_cb.isChecked() else "tool",
+            "sync_model": self.sync_model_combo.currentText().strip(),
+            "batch_model": self.batch_model_combo.currentText().strip(),
+            "sync_embedding_model": self.sync_embedding_combo.currentText().strip(),
+            "batch_embedding_model": self.batch_embedding_combo.currentText().strip(),
+            "batch_thinking_level": thinking_level,
+        }
+
+    def _config_tab_has_unsaved_changes(self) -> bool:
+        if self._loading_config_to_ui:
+            return False
+        if not self._config_ui_saved_snapshot:
+            return False
+        return self._current_config_ui_snapshot() != self._config_ui_saved_snapshot
+
+    def _confirm_leave_config_tab(self, previous_index: int) -> bool:
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Icon.Warning)
+        message.setWindowTitle("配置尚未保存")
+        message.setText("配置页有未保存的更改。")
+        message.setInformativeText("离开前可以保存配置，或留在配置页继续检查。")
+        save_btn = message.addButton("保存并离开", QMessageBox.ButtonRole.AcceptRole)
+        discard_btn = message.addButton("不保存离开", QMessageBox.ButtonRole.DestructiveRole)
+        stay_btn = message.addButton("留在配置页", QMessageBox.ButtonRole.RejectRole)
+        message.setDefaultButton(save_btn)
+        message.exec()
+        clicked = message.clickedButton()
+
+        if clicked is save_btn:
+            if self._on_save_config():
+                return True
+            clicked = stay_btn
+        elif clicked is discard_btn:
+            self._load_config_to_ui()
+            return True
+
+        self._handling_config_tab_leave = True
+        try:
+            self.tab_widget.setCurrentIndex(previous_index)
+        finally:
+            self._handling_config_tab_leave = False
+        return False
+
     def _on_tab_changed(self, index: int) -> None:
-        if self.tab_widget.widget(index) is self._config_tab:
+        if self._handling_config_tab_leave:
+            self._last_main_tab_index = index
+            return
+
+        previous_index = self._last_main_tab_index
+        previous_widget = self.tab_widget.widget(previous_index) if previous_index >= 0 else None
+        current_widget = self.tab_widget.widget(index)
+        if (
+            previous_widget is self._config_tab
+            and current_widget is not self._config_tab
+            and self._config_tab_has_unsaved_changes()
+        ):
+            if not self._confirm_leave_config_tab(previous_index):
+                return
+
+        if current_widget is self._config_tab:
             self._refresh_api_status()
-        if self.tab_widget.widget(index) is getattr(self, "_diagnostics_tab", None):
+        if current_widget is getattr(self, "_diagnostics_tab", None):
             self._refresh_diagnostics_context()
+        self._last_main_tab_index = index
 
 
     def _on_manage_api_keys(self):
@@ -1862,9 +2578,18 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         self._active_command = "bootstrap_work"
         self._work_bootstrap_output_lines = []
-        self._focus_workbench_status_tab(0)
+        self._workflow_progress = create_workflow_progress_state("work_bootstrap")
+        self._workflow_progress_base_facts = []
+        self._focus_workbench_status_tab(1)
         doctor_summary = work_bootstrap_to_doctor_summary(running_work_bootstrap_summary())
         self._set_doctor_summary(doctor_summary)
+        self._set_workflow_summary(
+            "running",
+            doctor_summary.heading,
+            doctor_summary.message,
+            doctor_summary.facts,
+        )
+        self._apply_workflow_progress_ui()
         self._append_log("=== 正在运行：gemini_translate_batch.py bootstrap-work ===\n")
         self._set_task_running(True)
         self.runner.run(self.state.get_batch_script_path(), ["bootstrap-work"])
@@ -1917,10 +2642,27 @@ class MainWindow(QMainWindow):
         self._focus_log_tab()
         self._active_command = command
         self._bootstrap_output_lines = []
+        self._bootstrap_progress = create_bootstrap_progress_state(kind)
+        self._bootstrap_progress_tracker = (
+            create_bootstrap_progress_tracker()
+            if kind == "source_index"
+            else None
+        )
+        self._workflow_progress = (
+            create_workflow_progress_state("rag_bootstrap")
+            if kind == "rag"
+            else None
+        )
+        self._workflow_progress_base_facts = list(running_summary.facts)
+        if kind == "source_index" and hasattr(self, "_bootstrap_progress_eta_timer"):
+            self._bootstrap_progress_eta_timer.start()
+        elif hasattr(self, "_bootstrap_progress_eta_timer"):
+            self._bootstrap_progress_eta_timer.stop()
         self._focus_workbench_status_tab(1)
         self._set_workflow_from_bootstrap_summary(running_summary)
         self._append_log(f"=== 正在运行：{log_heading} ===\n")
         self._set_task_running(True)
+        self._apply_bootstrap_progress_ui()
         self.runner.run(self.state.get_batch_script_path(), args)
         return True
 
@@ -2002,6 +2744,26 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "无法继续最新任务", str(exc))
             return
 
+        only_query = self._resume_button_is_query_mode()
+        split_entries = self._split_entries_for_manifest(str(latest_manifest), manifest)
+        if only_query and spec.mode == WorkMode.BATCH_TRANSLATION and len(split_entries) > 1:
+            split_workflow = SplitBatchQueueWorkflow.refresh_status(
+                split_entries,
+                anchor_manifest_path=str(latest_manifest),
+            )
+            if split_workflow.current_step() is not None:
+                self.log_view.clear()
+                self._focus_log_tab()
+                self._workflow = split_workflow
+                self._refresh_diagnostics_context()
+                self._active_command = "translation_workflow"
+                self._workflow_step_output_lines = []
+                self._focus_workbench_status_tab(1)
+                self._append_log("=== 正在刷新全部拆分包状态 ===\n")
+                self._set_task_running(True)
+                self._run_workflow_current_step()
+                return
+
         workflow = resume_workflow(spec.mode, str(latest_manifest), manifest)
         if workflow is None:
             QMessageBox.information(self, "无法继续任务", spec.not_implemented_message)
@@ -2029,7 +2791,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"最新{spec.label}任务已完成。", 6000)
             return
 
-        only_query = (self.resume_btn.text() == "查询云端状态")
+        only_query = self._resume_button_is_query_mode()
         workflow.only_query = only_query
 
         self.log_view.clear()
@@ -2040,6 +2802,49 @@ class MainWindow(QMainWindow):
         self._workflow_step_output_lines = []
         self._focus_workbench_status_tab(1)
         self._append_log(f"=== 正在继续最新 {spec.label} 任务 ===\n")
+        self._set_task_running(True)
+        self._run_workflow_current_step()
+
+    def _on_submit_remaining_split_packages(self) -> None:
+        spec = work_mode_spec(self._current_work_mode())
+        if spec.mode != WorkMode.BATCH_TRANSLATION:
+            return
+        latest_manifest, entries = self._load_latest_split_entries()
+        pending_count = sum(1 for entry in entries if entry.needs_submit)
+        if not latest_manifest or not entries or pending_count <= 0:
+            QMessageBox.information(self, "没有待提交拆分包", "当前拆分组没有尚未提交的包。")
+            self._refresh_split_status_ui()
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "确认批量提交",
+            (
+                f"将按顺序提交 {pending_count} 个尚未提交的拆分包。\n"
+                "已提交、处理中、已完成或已写回的包不会重复提交。"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        workflow = SplitBatchQueueWorkflow.submit_remaining(
+            entries,
+            anchor_manifest_path=latest_manifest,
+        )
+        if workflow.current_step() is None:
+            QMessageBox.information(self, "没有待提交拆分包", "当前拆分组没有尚未提交的包。")
+            return
+
+        self.log_view.clear()
+        self._focus_log_tab()
+        self._workflow = workflow
+        self._refresh_diagnostics_context()
+        self._active_command = "translation_workflow"
+        self._workflow_step_output_lines = []
+        self._focus_workbench_status_tab(1)
+        self._append_log(f"=== 正在批量提交剩余拆分包（{pending_count} 个） ===\n")
         self._set_task_running(True)
         self._run_workflow_current_step()
 
@@ -2204,6 +3009,11 @@ class MainWindow(QMainWindow):
             self._doctor_output_lines.append(text)
         elif self._active_command == "translation_workflow":
             self._workflow_step_output_lines.append(text)
+            self._workflow_progress = update_workflow_progress_from_line(
+                text,
+                self._workflow_progress,
+            )
+            self._apply_workflow_progress_ui()
         elif self._active_command == "apply":
             self._apply_output_lines.append(text)
         elif self._active_command == "apply_revision":
@@ -2212,8 +3022,28 @@ class MainWindow(QMainWindow):
             self._build_retry_output_lines.append(text)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
             self._bootstrap_output_lines.append(text)
+            if (
+                self._active_command == "bootstrap_source_index"
+                and self._bootstrap_progress is not None
+            ):
+                self._bootstrap_progress = update_bootstrap_progress_from_line(
+                    text,
+                    self._bootstrap_progress,
+                )
+                self._apply_bootstrap_progress_ui()
+            elif self._active_command == "bootstrap_rag":
+                self._workflow_progress = update_workflow_progress_from_line(
+                    text,
+                    self._workflow_progress,
+                )
+                self._apply_bootstrap_progress_ui()
         elif self._active_command == "bootstrap_work":
             self._work_bootstrap_output_lines.append(text)
+            self._workflow_progress = update_workflow_progress_from_line(
+                text,
+                self._workflow_progress,
+            )
+            self._apply_workflow_progress_ui()
         self._append_log(text)
 
     def _append_log(self, text: str):
@@ -2233,6 +3063,7 @@ class MainWindow(QMainWindow):
         bootstrap_ready = self._bootstrap_task_ready(spec)
         self.translate_btn.setEnabled(spec.implemented and bootstrap_ready and not running)
         self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
+        self._update_split_submit_btn(running=running)
         self.save_config_btn.setEnabled(not running)
         writeback_summary = self._current_writeback_summary()
         self.apply_btn.setEnabled(
@@ -2266,12 +3097,13 @@ class MainWindow(QMainWindow):
         self._sync_layout_sizes()
 
     def _set_workflow_update(self, update: WorkflowUpdate):
+        override_step_key = update.timeline_step_key
         if self._workflow is not None:
             current_step = self._workflow.current_step()
-            step_key = current_step.key if current_step else self.timeline.current_step_key
+            step_key = override_step_key or (current_step.key if current_step else self.timeline.current_step_key)
             self.timeline.set_current_step(step_key, update.status)
         else:
-            self.timeline.set_current_step(self.timeline.current_step_key, update.status)
+            self.timeline.set_current_step(override_step_key or self.timeline.current_step_key, update.status)
         self._set_workflow_summary(
             update.status,
             update.heading,
@@ -2294,13 +3126,22 @@ class MainWindow(QMainWindow):
             self._set_task_running(False)
             self._active_command = ""
             self._workflow = None
+            self._clear_workflow_progress_ui()
             return
 
         facts = []
         if self._workflow.manifest_path:
             facts.append(format_manifest_path_fact(self._workflow.manifest_path))
+        self._workflow_progress_base_facts = list(facts)
+        progress_kind = self._workflow_progress_kind_for_step(step)
+        self._workflow_progress = (
+            create_workflow_progress_state(progress_kind)
+            if progress_kind
+            else None
+        )
         self._workflow_step_output_lines = []
         self._set_workflow_summary("running", step.heading, step.message, facts)
+        self._apply_workflow_progress_ui()
         if step.script_basename == "gemini_translate.py":
             script_path = self.state.get_sync_script_path()
         else:
@@ -2419,6 +3260,8 @@ class MainWindow(QMainWindow):
             )
             self._set_writeback_summary(summary)
             self._refresh_diagnostics_context()
+            if exit_code == 0:
+                self._refresh_workflow_from_latest_manifest()
             self._active_command = ""
             self._set_task_running(False)
             if exit_code == 0:
@@ -2518,6 +3361,13 @@ class MainWindow(QMainWindow):
                     game_root_update_failed = True
                     summary = with_game_root_persist_warning(summary)
             self._set_doctor_summary(work_bootstrap_to_doctor_summary(summary))
+            self._set_workflow_summary(
+                summary.status,
+                summary.heading,
+                summary.message,
+                summary.facts,
+            )
+            self._clear_workflow_progress_ui()
             self._active_command = ""
             self._set_task_running(False)
             if game_root_update_failed:
@@ -2535,15 +3385,15 @@ class MainWindow(QMainWindow):
 
         self._set_task_running(False)
 
-    def _copy_keyword_reports_to_game_parent(self, manifest_path: str) -> None:
-        if not manifest_path:
+    def _copy_keyword_report_dir_to_game_parent(self, report_dir: Path | str | None) -> None:
+        if not report_dir:
             return
         game_root = self.state.get_game_root()
         if not game_root:
             return
 
         target_dir = game_root.parent / "extracted_keywords"
-        manifest_dir = Path(manifest_path).parent
+        source_dir = Path(report_dir)
 
         files_to_copy = [
             "keyword_candidates.jsonl",
@@ -2557,7 +3407,7 @@ class MainWindow(QMainWindow):
             target_dir.mkdir(parents=True, exist_ok=True)
             import shutil
             for filename in files_to_copy:
-                src = manifest_dir / filename
+                src = source_dir / filename
                 if src.exists():
                     dest = target_dir / filename
                     shutil.copy2(src, dest)
@@ -2569,6 +3419,17 @@ class MainWindow(QMainWindow):
                 )
         except Exception as e:
             self._append_log(f"\n[系统警告] 复制关键词提取报告到游戏上级目录失败：{e}\n")
+
+    def _copy_keyword_reports_to_game_parent(self, manifest_path: str) -> None:
+        if not manifest_path:
+            return
+        self._copy_keyword_report_dir_to_game_parent(Path(manifest_path).parent)
+
+    def _copy_sync_keyword_reports_to_game_parent(self, output: str) -> None:
+        match = re.search(r"^Sync keyword run:\s*(.+?)\s*$", output, re.MULTILINE)
+        if not match:
+            return
+        self._copy_keyword_report_dir_to_game_parent(match.group(1).strip())
 
     def _on_workflow_step_finished(self, exit_code: int):
         if self._workflow is None:
@@ -2582,11 +3443,21 @@ class MainWindow(QMainWindow):
         current_step = self._workflow.current_step()
         step_key = current_step.key if current_step else ""
 
+        restore_latest_manifest_path = getattr(self._workflow, "restore_latest_manifest_path", "")
         update = self._workflow.complete_current_step(exit_code, step_output)
+
+        if restore_latest_manifest_path and not update.should_continue:
+            try:
+                self.state.remember_latest_manifest_path(restore_latest_manifest_path)
+            except ValueError as exc:
+                self._append_log(f"[GUI] 无法恢复最新任务指针：{exc}")
 
         keyword_export_completed = step_key == "export-keywords" and exit_code == 0
         if keyword_export_completed:
             self._copy_keyword_reports_to_game_parent(manifest_path)
+        sync_keyword_completed = step_key == "sync-keywords" and exit_code == 0
+        if sync_keyword_completed:
+            self._copy_sync_keyword_reports_to_game_parent(step_output)
 
         if "Safety status:" in step_output:
             self._update_writeback_from_check(step_output, exit_code, manifest_path)
@@ -2599,8 +3470,11 @@ class MainWindow(QMainWindow):
                 manifest_path,
             )
         self._set_workflow_update(update)
+        self._clear_workflow_progress_ui()
         self._workflow_step_output_lines = []
         self._refresh_diagnostics_context()
+        if restore_latest_manifest_path:
+            self._refresh_split_status_ui(manifest_path=restore_latest_manifest_path)
 
         if update.should_continue:
             self.statusBar().showMessage(update.heading, 3000)
@@ -2797,6 +3671,11 @@ class MainWindow(QMainWindow):
             self.rag_enabled_cb.setChecked(context_flags["rag_enabled"])
             self.source_index_enabled_cb.setChecked(context_flags["source_index_enabled"])
             self.bootstrap_on_build_cb.setChecked(context_flags["bootstrap_on_build"])
+            storage_config = self._config_section(config, "context_storage")
+            storage_location = runtime._normalize_context_storage_location(
+                storage_config.get("location", config.get("context_storage_location", ""))
+            )
+            self.context_storage_game_cb.setChecked(storage_location == "game")
             self._batch_thinking_config_has_key = "thinking_level" in batch_config
 
             # Populate sync model
@@ -2833,6 +3712,7 @@ class MainWindow(QMainWindow):
         finally:
             self._batch_thinking_user_changed = False
             self._loading_config_to_ui = False
+        self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
 
     def _on_batch_model_changed(self, text: str):
         is_thinking_supported = self._supports_batch_thinking(text)
@@ -2854,10 +3734,10 @@ class MainWindow(QMainWindow):
         if not self._loading_config_to_ui and not self._updating_batch_thinking_combo:
             self._batch_thinking_user_changed = True
 
-    def _on_save_config(self):
+    def _on_save_config(self) -> bool:
         if not self.state.get_game_root():
             QMessageBox.information(self, "未选择项目", "请先选择游戏的 work 目录。")
-            return
+            return False
 
         try:
             config = self.state.load_translator_config()
@@ -2866,7 +3746,21 @@ class MainWindow(QMainWindow):
             sync_rag_config = self._ensure_config_section(sync_config, "rag")
             batch_rag_config = self._ensure_config_section(batch_config, "rag")
             batch_source_index_config = self._ensure_config_section(batch_config, "source_index")
+            context_storage_config = self._ensure_config_section(config, "context_storage")
 
+            context_storage_config["location"] = "game" if self.context_storage_game_cb.isChecked() else "tool"
+            context_storage_config["game_dir_name"] = (
+                self._config_string(
+                    context_storage_config.get(
+                        "game_dir_name",
+                        context_storage_config.get(
+                            "directory_name",
+                            context_storage_config.get("directory", "translation_context"),
+                        ),
+                    )
+                )
+                or "translation_context"
+            )
             batch_rag_config["enabled"] = self.rag_enabled_cb.isChecked()
             batch_rag_config["bootstrap_on_build"] = self.bootstrap_on_build_cb.isChecked()
             batch_source_index_config["enabled"] = self.source_index_enabled_cb.isChecked()
@@ -2898,9 +3792,12 @@ class MainWindow(QMainWindow):
                 self._apply_work_mode_ui(refresh_manifest_writeback=False)
             self._append_log("配置已成功保存至 translator_config.json。")
             self.statusBar().showMessage("配置已成功保存", 3000)
+            self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
+            return True
         except Exception as exc:
             QMessageBox.warning(self, "保存配置失败", str(exc))
             self._append_log(f"保存配置失败：{exc}")
+            return False
 
 
 def run_app(argv: list[str] | None = None) -> int:

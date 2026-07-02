@@ -2,6 +2,10 @@
   "game_root": "C:/games/Game_Example/work",
   "glossary_file": "glossary.json",
   "tl_subdir": "game/tl/schinese",
+  "context_storage": {
+    "location": "tool",
+    "game_dir_name": "translation_context"
+  },
   "include_files": [],
   "include_prefixes": [],
   "prepare": {
@@ -35,7 +39,7 @@
     },
     "story_memory": {
       "enabled": false,
-      "graph_file": "logs/story_memory/story_graph.json",
+      "graph_file": "",
       "max_context_chars": 800,
       "top_k_relations": 4,
       "top_k_terms": 8,
@@ -76,7 +80,7 @@
     },
     "story_memory": {
       "enabled": false,
-      "graph_file": "logs/story_memory/story_graph.json",
+      "graph_file": "",
       "max_context_chars": 1200,
       "top_k_relations": 6,
       "top_k_terms": 12,

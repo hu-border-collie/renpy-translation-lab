@@ -64,6 +64,18 @@ DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS: tuple[tuple[str, str], ...] = (
         "prepare is disabled; enable prepare.enabled in translator_config.json, then run build.",
         "建议：在配置中启用 prepare 后点击「开始翻译」",
     ),
+    (
+        "Source index is enabled but not built; run bootstrap-source-index.",
+        "建议：先在「分析与准备」运行「预建原文索引」",
+    ),
+    (
+        "Source index bootstrap is incomplete; run bootstrap-source-index.",
+        "建议：继续运行「预建原文索引」补全索引库",
+    ),
+    (
+        "Pending translation lines are ready; start batch translation when API keys are configured.",
+        "建议：切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交云端任务",
+    ),
 )
 
 DOCTOR_WARNING_TRANSLATIONS: tuple[tuple[str, str], ...] = (
@@ -150,9 +162,6 @@ def format_doctor_warning_fact(warning: str) -> str:
 def format_doctor_recommendation_fact(recommendation: str) -> str:
     """Render doctor recommendations in the same `标签：值` style as other facts."""
     text = recommendation.strip()
-    if text.startswith("Found ") and "pending lines" in text:
-        count = text.removeprefix("Found ").split(" pending", 1)[0].strip()
-        return f"建议：点击「开始翻译」提交约 {count} 条待译行"
     for prefix, rendered in DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS:
         if text.startswith(prefix):
             if prefix == "game_root should use work directory; switch to":

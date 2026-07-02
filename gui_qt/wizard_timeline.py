@@ -21,7 +21,7 @@ class WizardTimeline(QWidget):
         super().__init__(parent)
         self.steps: list[tuple[str, str]] = []  # list of (key, label)
         self.current_step_key: str | None = None
-        self.status: str = "idle"  # idle, running, ready, done, failed, waiting
+        self.status: str = "idle"  # idle, running, ready, done, failed, waiting, stale
 
         # Pulse animation state
         self._anim_timer = QTimer(self)
@@ -135,7 +135,7 @@ class WizardTimeline(QWidget):
             if idx == current_idx:
                 if self.status == "failed":
                     return "failed"
-                if self.status in {"waiting", "ready"}:
+                if self.status in {"waiting", "ready", "stale"}:
                     return "waiting"
                 return "running"
             return "pending"
@@ -171,13 +171,16 @@ class WizardTimeline(QWidget):
             painter.drawLine(x1 + radius + 1, y_center, x2 - radius - 1, y_center)
 
         # 2. Draw nodes and text
-        family = self.font().family()
-        font_index = QFont(family)
-        font_index.setPointSize(9)
+        # Use standalone pixel-sized fonts. Copying QWidget.font() after QSS px
+        # rules leaves pointSize at -1 and can trigger Qt warnings when toggled.
+        font_index = QFont()
+        font_index.setPixelSize(13)
         font_index.setBold(True)
 
-        font_label = QFont(family)
-        font_label.setPointSize(9)
+        font_label = QFont()
+        font_label.setPixelSize(13)
+        font_label_bold = QFont(font_label)
+        font_label_bold.setBold(True)
 
         for i, (_, label) in enumerate(self.steps):
             x = int(spacing * (i + 0.5))
@@ -242,14 +245,10 @@ class WizardTimeline(QWidget):
                 )
 
             # Draw label below the circle
-            painter.setFont(font_label)
             painter.setPen(QPen(text_color))
-            # Bold for active/running/failed/waiting step
             if state in {"running", "waiting", "failed"}:
-                font_label.setBold(True)
-                painter.setFont(font_label)
+                painter.setFont(font_label_bold)
             else:
-                font_label.setBold(False)
                 painter.setFont(font_label)
 
             label_rect = QRect(x - int(spacing / 2), y_center + radius + 4, int(spacing), 20)

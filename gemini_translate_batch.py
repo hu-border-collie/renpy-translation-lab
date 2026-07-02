@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import argparse
 import ast
+import copy
 import hashlib
 import io
 import json
@@ -75,12 +76,17 @@ def initialize_batch_logging():
 BATCH_MODEL = 'gemini-3.1-flash-lite'
 BATCH_TARGET_SIZE = 60
 BATCH_TARGET_CHARS = 18000
+BATCH_RETRY_TARGET_SIZE = 8
+BATCH_RETRY_TARGET_CHARS = 4000
 BATCH_CONTEXT_BEFORE = 30
 BATCH_CONTEXT_AFTER = 10
 BATCH_MAX_OUTPUT_TOKENS = 32768
 BATCH_TEMPERATURE = 0.2
 BATCH_THINKING_LEVEL = 'minimal'
+BATCH_SAFETY_SETTINGS = []
 BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
+BATCH_SPLIT_RECOMMEND_CHUNKS = 400
+BATCH_SPLIT_RECOMMEND_ITEMS = 12000
 BATCH_MACRO_SETTING = ''
 MANIFEST_MODE_TRANSLATION = 'translation'
 MANIFEST_MODE_KEYWORD_EXTRACTION = 'keyword_extraction'
@@ -228,10 +234,48 @@ def normalize_task_type(value, default):
     return default
 
 
+def normalize_batch_safety_settings(value):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return []
+        normalized = cleaned.lower().replace('-', '_')
+        if normalized in {'relaxed_adult', 'adult', 'sexually_explicit_block_none'}:
+            return [
+                {
+                    'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+                    'threshold': 'BLOCK_NONE',
+                }
+            ]
+        return []
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+
+    settings = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        category = str(entry.get('category') or entry.get('harm_category') or '').strip().upper()
+        threshold = str(entry.get('threshold') or entry.get('block_threshold') or '').strip().upper()
+        if not category or not threshold:
+            continue
+        if not category.startswith('HARM_CATEGORY_'):
+            category = f'HARM_CATEGORY_{category}'
+        if threshold in {'NONE', 'NO_BLOCK', 'BLOCKNONE'}:
+            threshold = 'BLOCK_NONE'
+        settings.append({'category': category, 'threshold': threshold})
+    return settings
+
+
 def load_batch_settings():
     global BATCH_MODEL, BATCH_TARGET_SIZE, BATCH_CONTEXT_BEFORE, BATCH_CONTEXT_AFTER
-    global BATCH_TARGET_CHARS, BATCH_MAX_OUTPUT_TOKENS, BATCH_TEMPERATURE, BATCH_THINKING_LEVEL
-    global BATCH_DISPLAY_NAME_PREFIX, BATCH_MACRO_SETTING
+    global BATCH_TARGET_CHARS, BATCH_RETRY_TARGET_SIZE, BATCH_RETRY_TARGET_CHARS
+    global BATCH_MAX_OUTPUT_TOKENS, BATCH_TEMPERATURE, BATCH_THINKING_LEVEL
+    global BATCH_SAFETY_SETTINGS, BATCH_DISPLAY_NAME_PREFIX, BATCH_MACRO_SETTING
     global KEYWORD_DISPLAY_NAME_PREFIX, KEYWORD_CHUNK_SIZE, KEYWORD_MAX_CANDIDATES_PER_CHUNK
     global REVISION_DISPLAY_NAME_PREFIX, REVISION_CHUNK_SIZE
     global RAG_ENABLED, RAG_STORE_DIR, RAG_EMBEDDING_MODEL, RAG_QUERY_TASK_TYPE
@@ -270,6 +314,8 @@ def load_batch_settings():
             config.get('batch_thinking_level'),
             BATCH_THINKING_LEVEL,
         )
+    if 'batch_safety_settings' in config:
+        BATCH_SAFETY_SETTINGS = normalize_batch_safety_settings(config.get('batch_safety_settings'))
 
     display_name_prefix = config.get('batch_display_name_prefix')
     if isinstance(display_name_prefix, str) and display_name_prefix.strip():
@@ -298,6 +344,11 @@ def load_batch_settings():
     )
     BATCH_CONTEXT_BEFORE = coerce_positive_int(batch.get('context_before'), BATCH_CONTEXT_BEFORE)
     BATCH_CONTEXT_AFTER = coerce_positive_int(batch.get('context_after'), BATCH_CONTEXT_AFTER)
+    BATCH_RETRY_TARGET_SIZE = coerce_positive_int(batch.get('retry_chunk_size'), BATCH_RETRY_TARGET_SIZE)
+    BATCH_RETRY_TARGET_CHARS = coerce_positive_int(
+        batch.get('retry_max_source_chars', batch.get('retry_target_chars')),
+        BATCH_RETRY_TARGET_CHARS,
+    )
     BATCH_MAX_OUTPUT_TOKENS = coerce_positive_int(
         batch.get('max_output_tokens'),
         BATCH_MAX_OUTPUT_TOKENS,
@@ -308,6 +359,8 @@ def load_batch_settings():
             batch.get('thinking_level'),
             BATCH_THINKING_LEVEL,
         )
+    if 'safety_settings' in batch:
+        BATCH_SAFETY_SETTINGS = normalize_batch_safety_settings(batch.get('safety_settings'))
 
     keyword_config = batch.get('keyword_extraction')
     if not isinstance(keyword_config, dict):
@@ -413,6 +466,8 @@ def load_batch_settings():
     graph_file = story_config.get('graph_file')
     if graph_file:
         STORY_MEMORY_GRAPH_FILE = legacy.resolve_story_memory_graph_path(graph_file)
+    elif STORY_MEMORY_ENABLED:
+        STORY_MEMORY_GRAPH_FILE = legacy.get_default_story_memory_graph_path()
     else:
         STORY_MEMORY_GRAPH_FILE = ''
     _STORY_GRAPH = None
@@ -582,11 +637,11 @@ def hash_key(text):
 
 
 def get_default_rag_store_dir():
-    return os.path.join(LOG_DIR, 'rag_store', guess_project_slug())
+    return legacy.get_default_batch_rag_store_dir()
 
 
 def get_default_source_index_store_dir():
-    return os.path.join(LOG_DIR, 'source_index_store', guess_project_slug())
+    return legacy.get_default_source_index_store_dir()
 
 
 def get_source_index_char_budget():
@@ -667,13 +722,301 @@ def collect_chunk_known_terms(chunk):
     return terms
 
 
-def allow_non_chinese_batch_translation(manifest, chunk, original, translated):
+def _manifest_tl_base_dir(manifest):
+    base_dir = manifest.get('tl_dir') if isinstance(manifest, dict) else ''
+    if isinstance(base_dir, str) and base_dir.strip():
+        return base_dir.strip()
+    return legacy.TL_DIR
+
+
+def _manifest_file_path_for_chunk(manifest, chunk):
+    if not isinstance(chunk, dict):
+        return ''
+    file_key = chunk.get('file_rel_path') or chunk.get('file') or ''
+    if not isinstance(file_key, str) or not file_key.strip():
+        return ''
+    try:
+        return resolve_path_under_dir(
+            _manifest_tl_base_dir(manifest),
+            file_key,
+            f'manifest file key {file_key}',
+        )
+    except SystemExit:
+        return ''
+
+
+def _item_source_line_number(item):
+    if not isinstance(item, dict):
+        return 0
+    for field in ('line_number', 'target_line_number'):
+        try:
+            value = int(item.get(field) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0:
+            return value
+    try:
+        line_index = int(item.get('line') or 0)
+    except (TypeError, ValueError):
+        return 0
+    return line_index + 1 if line_index >= 0 else 0
+
+
+def _read_line_at(path, line_number):
+    if not path or line_number <= 0:
+        return ''
+    try:
+        with open(path, 'r', encoding='utf-8-sig') as handle:
+            for current_number, line in enumerate(handle, 1):
+                if current_number == line_number:
+                    return line
+    except OSError:
+        return ''
+    return ''
+
+
+def is_manifest_keyword_argument_item(manifest, chunk, item):
+    if not isinstance(item, dict):
+        return False
+    line = _read_line_at(_manifest_file_path_for_chunk(manifest, chunk), _item_source_line_number(item))
+    if not line:
+        return False
+    return legacy.is_keyword_argument_string_span(line, item.get('start'), item.get('end'))
+
+
+def is_manifest_say_speaker_label_item(manifest, chunk, item):
+    if not isinstance(item, dict):
+        return False
+    line = _read_line_at(_manifest_file_path_for_chunk(manifest, chunk), _item_source_line_number(item))
+    if not line:
+        return False
+    return legacy.is_say_speaker_label_string_span(line, item.get('start'), item.get('end'))
+
+def is_manifest_old_new_static_label_item(manifest, chunk, item):
+    if not isinstance(item, dict):
+        return False
+    line = _read_line_at(_manifest_file_path_for_chunk(manifest, chunk), _item_source_line_number(item))
+    if not line:
+        return False
+    stripped = line.lstrip()
+    return stripped.startswith('old ') or stripped.startswith('new ')
+
+STATIC_NAME_CREDIT_REL_PATHS = {
+    'screens_menu_about.rpy',
+    'screens_menu_gallery_bg.rpy',
+    'screens_patronlistitem.rpy',
+}
+GAME_LINE_COMMENT_RE = re.compile(r'^\s*#\s+(.+?):(\d+)\s*$')
+OLD_NEW_LINE_RE = re.compile(r'^\s*(?:old|new)\s+"(?P<text>.*)"\s*$')
+STATIC_NAME_PUNCT_TRANSLATION = str.maketrans({
+    '。': '.',
+    '，': ',',
+    '、': ',',
+    '！': '!',
+    '？': '?',
+    '：': ':',
+    '；': ';',
+})
+
+
+def normalize_static_name_or_credit_text(text):
+    return compact_text((text or '').translate(STATIC_NAME_PUNCT_TRANSLATION))
+
+
+def static_name_or_credit_text_matches(original, translated):
+    return normalize_static_name_or_credit_text(original) == normalize_static_name_or_credit_text(translated)
+
+
+NON_CHINESE_TOKEN_PUNCT_TRANSLATION = str.maketrans({
+    '。': '.',
+    '，': ',',
+    '、': ',',
+    '！': '!',
+    '？': '?',
+    '：': ':',
+    '；': ';',
+    '“': '"',
+    '”': '"',
+    '‘': "'",
+    '’': "'",
+})
+
+
+def normalize_non_chinese_token_text(text):
+    cleaned = legacy.RENPY_TAG_RE.sub('', text or '')
+    cleaned = legacy.RENPY_FIELD_RE.sub('', cleaned)
+    cleaned = cleaned.translate(NON_CHINESE_TOKEN_PUNCT_TRANSLATION).strip()
+    cleaned = cleaned.strip('"\'')
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    cleaned = re.sub(r'[.!?,:;]+$', '', cleaned).strip()
+    return cleaned
+
+
+def looks_like_preserved_or_acronym_text(text):
+    cleaned = normalize_non_chinese_token_text(text)
+    if not cleaned or legacy.contains_chinese(cleaned):
+        return False
+    tokens = legacy.WORD_TOKEN_RE.findall(cleaned)
+    if not tokens or len(tokens) > 4:
+        return False
+    for token in tokens:
+        if token.lower() in legacy.PRESERVE_TERMS_LOWER:
+            continue
+        if token.isupper() and 1 <= len(token) <= 8:
+            continue
+        return False
+    return True
+
+
+def matching_preserved_or_acronym_non_chinese_text(original, translated):
+    if legacy.contains_chinese(translated or ''):
+        return False
+    original_norm = normalize_non_chinese_token_text(original)
+    translated_norm = normalize_non_chinese_token_text(translated)
+    if not original_norm or original_norm.lower() != translated_norm.lower():
+        return False
+    return looks_like_preserved_or_acronym_text(original_norm)
+
+
+def looks_like_static_name_or_credit_text(text):
+    cleaned = legacy.RENPY_TAG_RE.sub('', text or '')
+    cleaned = legacy.RENPY_FIELD_RE.sub('', cleaned)
+    cleaned = cleaned.strip()
+    if not cleaned or legacy.contains_chinese(cleaned):
+        return False
+    if ':' in cleaned or any(mark in cleaned for mark in '!?！？'):
+        return False
+
+    tokens = legacy.WORD_TOKEN_RE.findall(cleaned)
+    if not tokens:
+        return True
+    if len(tokens) > 12:
+        return False
+    if legacy.is_non_translatable(cleaned):
+        return True
+
+    allowed_particles = {'a', 'an', 'and', 'de', 'del', 'der', 'of', 'the', 'van', 'von'}
+    for token in tokens:
+        if token.lower() in allowed_particles:
+            continue
+        if token.isupper() or token[:1].isupper():
+            continue
+        return False
+    return True
+
+
+def _manifest_base_dir(manifest):
+    base_dir = manifest.get('base_dir') if isinstance(manifest, dict) else ''
+    if isinstance(base_dir, str) and base_dir.strip():
+        return base_dir.strip()
+    return legacy.BASE_DIR
+
+
+def _read_source_line_for_tl_item(manifest, chunk, item):
+    tl_path = _manifest_file_path_for_chunk(manifest, chunk)
+    line_number = _item_source_line_number(item)
+    if not tl_path or line_number <= 0:
+        return ''
+    try:
+        with open(tl_path, 'r', encoding='utf-8-sig') as handle:
+            lines = handle.readlines()
+    except OSError:
+        return ''
+    start_index = max(0, line_number - 6)
+    end_index = min(len(lines), line_number)
+    for index in range(end_index - 1, start_index - 1, -1):
+        match = GAME_LINE_COMMENT_RE.match(lines[index])
+        if not match:
+            continue
+        source_rel_path, source_line_number = match.groups()
+        try:
+            source_path = resolve_path_under_dir(
+                _manifest_base_dir(manifest),
+                source_rel_path,
+                f'game source line {source_rel_path}',
+            )
+            return _read_line_at(source_path, int(source_line_number))
+        except (SystemExit, ValueError):
+            return ''
+    return ''
+
+
+def is_manifest_player_name_comparison_item(manifest, chunk, original, item):
+    if not isinstance(item, dict):
+        return False
+    line = _read_source_line_for_tl_item(manifest, chunk, item)
+    if not line:
+        return False
+    if not re.search(r'\b(?:Main|main_nm|yourname|persistent\.MainEP)\b\s*==\s*_\(', line):
+        return False
+    compared_name_match = re.search(r'_\(\s*["\']([^"\']+)["\']\s*\)', line)
+    if not compared_name_match:
+        return False
+    compared_name = compared_name_match.group(1)
+    if compact_text(original) != compact_text(compared_name):
+        return False
+    return looks_like_static_name_or_credit_text(original)
+
+
+def is_manifest_static_non_chinese_item(manifest, chunk, original, translated, item=None):
+    if not static_name_or_credit_text_matches(original, translated):
+        return False
+    if legacy.contains_chinese(translated or ''):
+        return False
+
+    rel_path = str((chunk or {}).get('file_rel_path') or '').replace('\\', '/').lower()
+    rel_name = os.path.basename(rel_path)
+    if rel_name == 'screens_patronlistitem.rpy':
+        return True
+
+    if rel_name in STATIC_NAME_CREDIT_REL_PATHS:
+        return looks_like_static_name_or_credit_text(original)
+
+    if rel_name == 'screens_charselect.rpy':
+        if any(mark in (original or '') for mark in ':!?！？'):
+            return False
+        return looks_like_static_name_or_credit_text(original)
+
+    if is_manifest_old_new_static_label_item(manifest, chunk, item):
+        line = _read_line_at(_manifest_file_path_for_chunk(manifest, chunk), _item_source_line_number(item))
+        label_match = OLD_NEW_LINE_RE.match(line or '')
+        if not label_match:
+            return False
+        if compact_text(original) != compact_text(label_match.group('text')):
+            return False
+        return looks_like_static_name_or_credit_text(original)
+
+    if rel_name == 'script.rpy' and is_manifest_player_name_comparison_item(manifest, chunk, original, item):
+        return True
+
+    if rel_path.endswith('script_define.rpy') or rel_path.startswith('script_characters'):
+        cleaned = legacy.RENPY_TAG_RE.sub('', original or '').strip()
+        if legacy.is_non_translatable(cleaned):
+            return True
+        if any(mark in cleaned for mark in '.!?。！？'):
+            return False
+        tokens = legacy.WORD_TOKEN_RE.findall(cleaned)
+        return 1 <= len(tokens) <= 3
+
+    return False
+
+
+def allow_non_chinese_batch_translation(manifest, chunk, original, translated, item=None):
+    unchanged = (original or '').strip() == (translated or '').strip()
+    if (
+        (unchanged and (
+            is_manifest_keyword_argument_item(manifest, chunk, item)
+            or is_manifest_say_speaker_label_item(manifest, chunk, item)
+        ))
+        or is_manifest_static_non_chinese_item(manifest, chunk, original, translated, item)
+        or matching_preserved_or_acronym_non_chinese_text(original, translated)
+    ):
+        return True
     return legacy.allow_non_chinese_term_translation(
         original,
         translated,
         known_terms=collect_chunk_known_terms(chunk),
     )
-
 
 def compact_text(text):
     return re.sub(r'\s+', ' ', text or '').strip()
@@ -1071,6 +1414,184 @@ def save_manifest(manifest, update_latest=True):
     if update_latest:
         remember_latest_manifest(manifest_path)
 
+
+def safe_nonnegative_int(value):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
+
+
+def manifest_summary_counts(manifest):
+    summary = manifest.get('summary') if isinstance(manifest.get('summary'), dict) else {}
+    chunk_count = safe_nonnegative_int(summary.get('chunk_count'))
+    item_count = safe_nonnegative_int(summary.get('item_count'))
+    chunks = manifest.get('chunks')
+    if isinstance(chunks, list):
+        if not chunk_count:
+            chunk_count = len(chunks)
+        if not item_count:
+            for chunk in chunks:
+                if isinstance(chunk, dict):
+                    items = chunk.get('items')
+                    if isinstance(items, list):
+                        item_count += len(items)
+    return chunk_count, item_count
+
+
+def manifest_exceeds_split_recommendation(manifest):
+    chunk_count, item_count = manifest_summary_counts(manifest)
+    return (
+        chunk_count > BATCH_SPLIT_RECOMMEND_CHUNKS
+        or item_count > BATCH_SPLIT_RECOMMEND_ITEMS
+    )
+
+
+def quote_command_arg(value):
+    text = str(value or '')
+    if text == '' or re.search(r'\s|["&]', text):
+        return '"' + text.replace('"', '\\"') + '"'
+    return text
+
+
+def split_display_name_prefix(manifest):
+    display_name = manifest.get('display_name')
+    if isinstance(display_name, str) and display_name.strip():
+        return display_name.strip()
+    package_dir = manifest.get('_package_dir')
+    if isinstance(package_dir, str) and package_dir.strip():
+        return os.path.basename(package_dir.rstrip('\\/')) or BATCH_DISPLAY_NAME_PREFIX
+    return BATCH_DISPLAY_NAME_PREFIX
+
+
+def build_split_recommendation(manifest):
+    if not manifest_exceeds_split_recommendation(manifest):
+        return {}
+    chunk_count, item_count = manifest_summary_counts(manifest)
+    manifest_path = manifest.get('_manifest_path') or ''
+    prefix = split_display_name_prefix(manifest)
+    command = ' '.join([
+        'python',
+        'gemini_translate_batch.py',
+        'split',
+        quote_command_arg(manifest_path),
+        '--max-chunks',
+        str(BATCH_SPLIT_RECOMMEND_CHUNKS),
+        '--max-items',
+        str(BATCH_SPLIT_RECOMMEND_ITEMS),
+        '--display-name-prefix',
+        quote_command_arg(prefix),
+    ])
+    return {
+        'reason': 'quota_or_resource_exhausted',
+        'chunk_count': chunk_count,
+        'item_count': item_count,
+        'max_chunks': BATCH_SPLIT_RECOMMEND_CHUNKS,
+        'max_items': BATCH_SPLIT_RECOMMEND_ITEMS,
+        'command': command,
+    }
+
+
+def attach_submit_split_recommendation(manifest):
+    recommendation = build_split_recommendation(manifest)
+    if recommendation:
+        manifest['split_recommended'] = True
+        manifest['last_submit_quota_recommendation'] = recommendation
+    else:
+        manifest.pop('split_recommended', None)
+        manifest.pop('last_submit_quota_recommendation', None)
+    return recommendation
+
+
+def _clear_submit_failure_metadata(manifest):
+    manifest['last_submit_error'] = ''
+    manifest.pop('last_submit_error_type', None)
+    manifest.pop('split_recommended', None)
+    manifest.pop('last_submit_quota_recommendation', None)
+
+
+def print_submit_split_recommendation(recommendation):
+    print('Quota/resource limit hit during batch submit.')
+    if not recommendation:
+        print('Wait for quota reset or retry with another API key before submitting again.')
+        return
+    print(
+        f"Package size: {recommendation['chunk_count']} chunks, "
+        f"{recommendation['item_count']} items."
+    )
+    print(f"Suggested split command: {recommendation['command']}")
+    print('After splitting, continue from the first split manifest.')
+
+
+def load_json_object_file(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def next_split_manifest_path(manifest):
+    split_index = safe_nonnegative_int(manifest.get('split_index'))
+    split_total = safe_nonnegative_int(manifest.get('split_total'))
+    if not split_index or not split_total or split_index >= split_total:
+        return ''
+
+    current_path = manifest.get('_manifest_path')
+    current_abs = _canonical_abs_path(current_path) if isinstance(current_path, str) and current_path else ''
+    parent_path = manifest.get('split_from_manifest')
+    children = []
+    if isinstance(parent_path, str) and parent_path.strip() and os.path.isfile(parent_path):
+        parent_manifest = load_json_object_file(parent_path)
+        raw_children = parent_manifest.get('split_children')
+        if isinstance(raw_children, list):
+            children = [child for child in raw_children if isinstance(child, str) and child.strip()]
+
+    candidate = ''
+    if children:
+        normalized_current = _normalized_abs_path(current_abs) if current_abs else ''
+        for position, child in enumerate(children):
+            if _normalized_abs_path(child) == normalized_current:
+                if position + 1 < len(children):
+                    candidate = children[position + 1]
+                break
+        if not candidate and split_index < len(children):
+            candidate = children[split_index]
+
+    if not candidate:
+        package_dir = manifest.get('_package_dir')
+        if not isinstance(package_dir, str) or not package_dir.strip():
+            package_dir = os.path.dirname(current_abs)
+        if package_dir:
+            split_root = os.path.dirname(package_dir)
+            candidate = os.path.join(
+                split_root,
+                f'part{split_index + 1:02d}_of_{split_total:02d}',
+                'manifest.json',
+            )
+
+    if not candidate:
+        return ''
+    candidate = _canonical_abs_path(candidate)
+    return candidate if os.path.isfile(candidate) else ''
+
+
+def mark_next_split_after_apply(manifest):
+    next_manifest = next_split_manifest_path(manifest)
+    if next_manifest:
+        manifest['next_split_manifest_path'] = next_manifest
+        manifest['next_split_ready_at'] = datetime.now().isoformat(timespec='seconds')
+    return next_manifest
+
+
+def print_next_split_after_apply(next_manifest):
+    if not next_manifest:
+        return
+    print(f'Next split manifest: {next_manifest}')
+    print('Latest manifest set to next split package.')
+    print('Run continue/status from the GUI to submit or monitor the next split package.')
 
 def stable_json_dumps(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
@@ -1654,33 +2175,34 @@ def build_generation_config(target_items):
 
 
 def build_batch_request(chunk):
+    request = {
+        'system_instruction': {'parts': [{'text': build_system_instruction()}]},
+        'contents': [
+            {
+                'role': 'user',
+                'parts': [
+                    {
+                        'text': build_user_prompt(
+                            chunk['context_past'],
+                            chunk['items'],
+                            chunk['context_future'],
+                            glossary_hits=chunk.get('glossary_hits') or [],
+                            history_hits=chunk.get('history_hits') or [],
+                            story_hits=chunk.get('story_hits') if 'story_hits' in chunk else None,
+                            source_hits=chunk.get('source_hits') or [],
+                        )
+                    }
+                ],
+            }
+        ],
+        'generation_config': build_generation_config(chunk['items']),
+    }
+    if BATCH_SAFETY_SETTINGS:
+        request['safety_settings'] = BATCH_SAFETY_SETTINGS
     return {
         'key': chunk['key'],
-        'request': {
-            'system_instruction': {'parts': [{'text': build_system_instruction()}]},
-            'contents': [
-                {
-                    'role': 'user',
-                    'parts': [
-                        {
-                            'text': build_user_prompt(
-                                chunk['context_past'],
-                                chunk['items'],
-                                chunk['context_future'],
-                                glossary_hits=chunk.get('glossary_hits') or [],
-                                history_hits=chunk.get('history_hits') or [],
-                                story_hits=chunk.get('story_hits') if 'story_hits' in chunk else None,
-                                source_hits=chunk.get('source_hits') or [],
-                            )
-                        }
-                    ],
-                }
-            ],
-            'generation_config': build_generation_config(chunk['items']),
-        },
+        'request': request,
     }
-
-
 
 def task_text_char_count(task):
     text = task.get('text', '') if isinstance(task, dict) else ''
@@ -2660,8 +3182,9 @@ def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix
         with open(part_manifest_path, 'w', encoding='utf-8') as handle:
             json.dump(part_manifest, handle, ensure_ascii=False, indent=2)
 
-        created_manifests.append(part_manifest_path)
-        remember_latest_manifest(part_manifest_path)
+        canonical_manifest_path = _canonical_abs_path(part_manifest_path)
+        created_manifests.append(canonical_manifest_path)
+        remember_latest_manifest(canonical_manifest_path)
 
         print(f'Created split package: {part_dir}')
         print(f"Chunks: {part_manifest['summary']['chunk_count']}")
@@ -2682,11 +3205,14 @@ def current_batch_settings_snapshot():
     return {
         'target_size': BATCH_TARGET_SIZE,
         'target_chars': BATCH_TARGET_CHARS,
+        'retry_target_size': BATCH_RETRY_TARGET_SIZE,
+        'retry_target_chars': BATCH_RETRY_TARGET_CHARS,
         'context_before': BATCH_CONTEXT_BEFORE,
         'context_after': BATCH_CONTEXT_AFTER,
         'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
         'temperature': BATCH_TEMPERATURE,
         'thinking_level': BATCH_THINKING_LEVEL,
+        'safety_settings': BATCH_SAFETY_SETTINGS,
     }
 
 
@@ -2704,11 +3230,97 @@ def create_unique_child_dir(root_dir, name):
     raise SystemExit(f'Could not create unique directory for {name}.')
 
 
-def chunk_target_signature(chunk):
-    items = []
-    for item in chunk.get('items') or []:
+def retry_root_for_manifest(manifest):
+    package_dir = os.path.normpath(manifest['_package_dir'])
+    parts = package_dir.split(os.sep)
+    if 'retry_parts' not in parts:
+        return os.path.join(package_dir, 'retry_parts')
+    retry_index = parts.index('retry_parts')
+    split_package_dir = os.sep.join(parts[:retry_index])
+    if not split_package_dir:
+        return os.path.join(package_dir, 'retry_parts')
+    return os.path.join(split_package_dir, 'retry_parts')
+
+
+def retry_chunk_limits():
+    return (
+        max(1, min(BATCH_TARGET_SIZE, BATCH_RETRY_TARGET_SIZE)),
+        max(1, min(BATCH_TARGET_CHARS, BATCH_RETRY_TARGET_CHARS)),
+    )
+
+
+def iter_retry_item_ranges(items):
+    max_items, max_chars = retry_chunk_limits()
+    total = len(items)
+    start = 0
+    while start < total:
+        end = start
+        current_chars = 0
+        while end < total and (end - start) < max_items:
+            item_chars = task_text_char_count(items[end])
+            if end > start and current_chars + item_chars > max_chars:
+                break
+            current_chars += item_chars
+            end += 1
+        if end == start:
+            end = start + 1
+        yield start, end
+        start = end
+
+
+def build_retry_subchunk(chunk, start, end, sub_index):
+    items = chunk.get('items') or []
+    subchunk = copy.deepcopy(chunk)
+    subitems = copy.deepcopy(items[start:end])
+    parent_key = str(chunk.get('key') or '')
+    subchunk['key'] = f'{parent_key}-retry-{sub_index:03d}'
+    subchunk['retry_parent_key'] = parent_key
+    subchunk['retry_item_start'] = start
+    subchunk['retry_item_end'] = end
+    subchunk['retry_item_ids'] = [item.get('id') for item in subitems]
+    subchunk['items'] = subitems
+    subchunk['line_numbers'] = [item.get('line') for item in subitems if item.get('line') is not None]
+    subchunk['source_char_count'] = sum(task_text_char_count(item) for item in subitems)
+
+    context_past = copy.deepcopy(chunk.get('context_past') or [])
+    context_future = copy.deepcopy(chunk.get('context_future') or [])
+    if BATCH_CONTEXT_BEFORE:
+        context_past = (context_past + copy.deepcopy(items[max(0, start - BATCH_CONTEXT_BEFORE):start]))[-BATCH_CONTEXT_BEFORE:]
+    if BATCH_CONTEXT_AFTER:
+        context_future = (copy.deepcopy(items[end:min(len(items), end + BATCH_CONTEXT_AFTER)]) + context_future)[:BATCH_CONTEXT_AFTER]
+    subchunk['context_past'] = context_past
+    subchunk['context_future'] = context_future
+    return subchunk
+
+
+def split_retry_chunk(chunk):
+    items = chunk.get('items') or []
+    if not items:
+        return [copy.deepcopy(chunk)]
+
+    ranges = list(iter_retry_item_ranges(items))
+    if len(ranges) <= 1:
+        return [copy.deepcopy(chunk)]
+    return [
+        build_retry_subchunk(chunk, start, end, index)
+        for index, (start, end) in enumerate(ranges, start=1)
+    ]
+
+
+def build_retry_chunks_for_keys(manifest, retry_keys):
+    retry_key_set = set(retry_keys)
+    retry_chunks = []
+    for chunk in manifest.get('chunks') or []:
+        if chunk.get('key') in retry_key_set:
+            retry_chunks.extend(split_retry_chunk(chunk))
+    return retry_chunks
+
+
+def chunk_item_target_shapes(chunk, items=None):
+    shapes = []
+    for item in items if items is not None else (chunk.get('items') or []):
         source_text = item.get('source', item.get('text', ''))
-        items.append(
+        shapes.append(
             {
                 'id': item.get('id', ''),
                 'file_rel_path': item.get('file_rel_path', chunk.get('file_rel_path', '')),
@@ -2718,12 +3330,28 @@ def chunk_target_signature(chunk):
                 'source_checksum': hash_text(source_text),
             }
         )
+    return shapes
+
+
+def retry_subchunk_matches_parent(parent_chunk, retry_chunk):
+    parent_shapes = {
+        shape['id']: shape
+        for shape in chunk_item_target_shapes(parent_chunk)
+        if shape.get('id')
+    }
+    for shape in chunk_item_target_shapes(retry_chunk):
+        if parent_shapes.get(shape.get('id')) != shape:
+            return False
+    return True
+
+
+def chunk_target_signature(chunk):
     return stable_json_sha256(
         {
             'key': chunk.get('key', ''),
             'file_rel_path': chunk.get('file_rel_path', ''),
             'chunk_index': chunk.get('chunk_index'),
-            'items': items,
+            'items': chunk_item_target_shapes(chunk),
         }
     )
 
@@ -2841,14 +3469,10 @@ def build_retry_package(target=None, display_name_override=''):
         print('No retry chunks needed.')
         return None
 
-    retry_key_set = set(retry_keys)
-    retry_chunks = [
-        chunk
-        for chunk in manifest.get('chunks') or []
-        if chunk.get('key') in retry_key_set
-    ]
+
+    retry_chunks = build_retry_chunks_for_keys(manifest, retry_keys)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    retry_root = os.path.join(manifest['_package_dir'], 'retry_parts')
+    retry_root = retry_root_for_manifest(manifest)
     retry_dir = create_unique_child_dir(retry_root, f'{timestamp}_retry')
 
     input_jsonl_path = os.path.join(retry_dir, 'requests.jsonl')
@@ -2878,6 +3502,7 @@ def build_retry_package(target=None, display_name_override=''):
         'summary': {
             'file_count': len(retry_files),
             'chunk_count': len(retry_chunks),
+            'source_chunk_count': len(retry_keys),
             'item_count': sum(len(chunk.get('items') or []) for chunk in retry_chunks),
         },
         'files': retry_files,
@@ -2903,7 +3528,8 @@ def build_retry_package(target=None, display_name_override=''):
     remember_latest_manifest(retry_manifest_path)
 
     print(f'Created retry package: {retry_dir}')
-    print(f"Retry chunks: {retry_manifest['summary']['chunk_count']}")
+    print(f"Retry source chunks: {retry_manifest['summary']['source_chunk_count']}")
+    print(f"Retry request chunks: {retry_manifest['summary']['chunk_count']}")
     print(f"Retry items: {retry_manifest['summary']['item_count']}")
     print(f"Failure items considered: {len(failure_entries)}")
     print(f'Manifest: {retry_manifest_path}')
@@ -2935,6 +3561,82 @@ def load_result_rows_by_key(manifest, label):
     return rows, rows_by_key, result_path
 
 
+def result_items_from_row(row, label, allow_empty=False):
+    response_payload = row.get('response', {}) if isinstance(row, dict) else {}
+    response_text = extract_text_from_response_payload(response_payload)
+    if not response_text:
+        if allow_empty:
+            return []
+        raise SystemExit(f'Missing text in {label} result row: {row.get("key", "") if isinstance(row, dict) else ""}')
+    try:
+        return normalize_result_items(parse_json_payload(response_text))
+    except Exception as exc:
+        if allow_empty:
+            return []
+        raise SystemExit(f'Failed to parse {label} result row JSON: {exc}') from exc
+
+
+def response_payload_with_text(response_payload, response_text):
+    payload = copy.deepcopy(response_payload) if isinstance(response_payload, dict) else {}
+    target = payload.get('response') if isinstance(payload.get('response'), dict) else payload
+    candidates = target.get('candidates')
+    if not isinstance(candidates, list) or not candidates:
+        candidates = [{}]
+        target['candidates'] = candidates
+    candidate = candidates[0] if isinstance(candidates[0], dict) else {}
+    candidates[0] = candidate
+    content = candidate.get('content') if isinstance(candidate.get('content'), dict) else {}
+    content['parts'] = [{'text': response_text}]
+    content.setdefault('role', 'model')
+    candidate['content'] = content
+    candidate.setdefault('finishReason', 'STOP')
+    return payload
+
+
+def compact_result_items_for_response(result_items):
+    compacted = []
+    for item in result_items:
+        item_id = item.get('id')
+        if not item_id:
+            continue
+        compacted.append({'id': item_id, 'translation': item.get('translation', '')})
+    return compacted
+
+
+def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks, retry_rows_by_key):
+    merged_by_id = {}
+    if parent_row:
+        for item in result_items_from_row(parent_row, 'parent', allow_empty=True):
+            if item.get('id'):
+                merged_by_id[item['id']] = item
+
+    replaced_ids = set()
+    for retry_chunk in retry_chunks:
+        retry_key = retry_chunk.get('key')
+        retry_row = retry_rows_by_key.get(retry_key)
+        if not retry_row:
+            raise SystemExit(f'Retry result is missing row for partial chunk: {retry_key}')
+        allowed_ids = {item.get('id') for item in retry_chunk.get('items') or []}
+        for item in result_items_from_row(retry_row, 'retry'):
+            item_id = item.get('id')
+            if item_id in allowed_ids:
+                merged_by_id[item_id] = item
+                replaced_ids.add(item_id)
+
+    ordered_items = []
+    for target_item in parent_chunk.get('items') or []:
+        item_id = target_item.get('id')
+        if item_id in merged_by_id:
+            ordered_items.append(merged_by_id[item_id])
+
+    merged_row = copy.deepcopy(parent_row) if isinstance(parent_row, dict) else {}
+    merged_row['key'] = parent_chunk.get('key')
+    merged_row.pop('error', None)
+    merged_text = json.dumps(compact_result_items_for_response(ordered_items), ensure_ascii=False, indent=2)
+    merged_row['response'] = response_payload_with_text(merged_row.get('response', {}), merged_text)
+    return merged_row, len(replaced_ids)
+
+
 def assert_retry_manifest_matches_parent(parent_manifest, retry_manifest):
     retry_of_manifest = retry_manifest.get('retry_of_manifest')
     if retry_of_manifest and _normalized_abs_path(retry_of_manifest) != _normalized_abs_path(parent_manifest['_manifest_path']):
@@ -2950,12 +3652,15 @@ def assert_retry_manifest_matches_parent(parent_manifest, retry_manifest):
 
     for chunk in retry_chunks:
         key = chunk.get('key')
-        parent_chunk = parent_chunks.get(key)
+        parent_key = chunk.get('retry_parent_key') or key
+        parent_chunk = parent_chunks.get(parent_key)
         if not parent_chunk:
             raise SystemExit(f'Retry chunk is not present in parent manifest: {key}')
-        if chunk_target_signature(chunk) != chunk_target_signature(parent_chunk):
+        if chunk.get('retry_parent_key'):
+            if not retry_subchunk_matches_parent(parent_chunk, chunk):
+                raise SystemExit(f'Retry chunk target shape differs from parent manifest: {key}')
+        elif chunk_target_signature(chunk) != chunk_target_signature(parent_chunk):
             raise SystemExit(f'Retry chunk target shape differs from parent manifest: {key}')
-
 
 def merge_retry_results(parent_target, retry_target):
     parent_manifest = load_manifest(parent_target)
@@ -2964,8 +3669,10 @@ def merge_retry_results(parent_target, retry_target):
     require_manifest_mode(retry_manifest, MANIFEST_MODE_TRANSLATION, 'merge-retry')
     assert_retry_manifest_matches_parent(parent_manifest, retry_manifest)
 
-    retry_keys = [chunk['key'] for chunk in retry_manifest.get('chunks') or []]
+    retry_chunks = retry_manifest.get('chunks') or []
+    retry_keys = [chunk['key'] for chunk in retry_chunks]
     retry_key_set = set(retry_keys)
+    parent_chunks = {chunk['key']: chunk for chunk in parent_manifest.get('chunks') or []}
     parent_rows, parent_rows_by_key, parent_result_path = load_result_rows_by_key(parent_manifest, 'parent')
     retry_rows, retry_rows_by_key, retry_result_path = load_result_rows_by_key(retry_manifest, 'retry')
 
@@ -2977,20 +3684,60 @@ def merge_retry_results(parent_target, retry_target):
     if missing_retry_rows:
         raise SystemExit(f'Retry result is missing rows for chunks: {sorted(missing_retry_rows)[:5]}')
 
+    direct_retry_keys = []
+    partial_chunks_by_parent = {}
+    for chunk in retry_chunks:
+        parent_key = chunk.get('retry_parent_key')
+        if parent_key:
+            partial_chunks_by_parent.setdefault(parent_key, []).append(chunk)
+        else:
+            direct_retry_keys.append(chunk.get('key'))
+    direct_retry_key_set = set(direct_retry_keys)
+
     merged_rows = []
     replaced_keys = set()
+    replaced_item_count = 0
     for row in parent_rows:
         key = row.get('key')
-        if key in retry_rows_by_key:
+        if key in direct_retry_key_set:
             merged_rows.append(retry_rows_by_key[key])
             replaced_keys.add(key)
+            retry_chunk = next((chunk for chunk in retry_chunks if chunk.get('key') == key), {})
+            replaced_item_count += len(retry_chunk.get('items') or [])
+        elif key in partial_chunks_by_parent:
+            parent_chunk = parent_chunks.get(key)
+            merged_row, item_count = merge_parent_row_with_retry_item_rows(
+                row,
+                parent_chunk,
+                partial_chunks_by_parent[key],
+                retry_rows_by_key,
+            )
+            merged_rows.append(merged_row)
+            replaced_keys.add(key)
+            replaced_item_count += item_count
         else:
             merged_rows.append(row)
 
-    for key in retry_keys:
+    for key in direct_retry_keys:
         if key not in parent_rows_by_key:
             merged_rows.append(retry_rows_by_key[key])
             replaced_keys.add(key)
+            retry_chunk = next((chunk for chunk in retry_chunks if chunk.get('key') == key), {})
+            replaced_item_count += len(retry_chunk.get('items') or [])
+
+    for parent_key, partial_chunks in partial_chunks_by_parent.items():
+        if parent_key in parent_rows_by_key:
+            continue
+        parent_chunk = parent_chunks.get(parent_key)
+        merged_row, item_count = merge_parent_row_with_retry_item_rows(
+            {},
+            parent_chunk,
+            partial_chunks,
+            retry_rows_by_key,
+        )
+        merged_rows.append(merged_row)
+        replaced_keys.add(parent_key)
+        replaced_item_count += item_count
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     merged_name = f'results.merged_{timestamp}.jsonl'
@@ -3007,7 +3754,7 @@ def merge_retry_results(parent_target, retry_target):
             'previous_result_jsonl_path': parent_result_path,
             'merged_result_jsonl_path': merged_path,
             'replaced_chunks': len(replaced_keys),
-            'replaced_items': sum(len(chunk.get('items') or []) for chunk in retry_manifest.get('chunks') or []),
+            'replaced_items': replaced_item_count,
         }
     )
     parent_manifest['last_retry_merged_manifest_path'] = retry_manifest['_manifest_path']
@@ -3063,7 +3810,7 @@ def submit_manifest(target=None, display_name_override='', model_override=''):
             manifest.setdefault('uploaded_file_names', [])
             if manifest['uploaded_file_name'] and manifest['uploaded_file_name'] not in manifest['uploaded_file_names']:
                 manifest['uploaded_file_names'].append(manifest['uploaded_file_name'])
-            manifest['last_submit_error'] = ''
+            _clear_submit_failure_metadata(manifest)
             save_manifest(manifest)
             print(f'Uploaded file: {uploaded_file.name}')
 
@@ -3081,7 +3828,7 @@ def submit_manifest(target=None, display_name_override='', model_override=''):
             manifest['submitted_api_key_index'] = getattr(legacy, 'CURRENT_KEY_INDEX', 0)
             manifest['submitted_api_key_number'] = manifest['submitted_api_key_index'] + 1
             manifest['last_status_api_key_index'] = manifest['submitted_api_key_index']
-            manifest['last_submit_error'] = ''
+            _clear_submit_failure_metadata(manifest)
             save_manifest(manifest)
 
             print(f"Batch job created: {manifest['job_name']}")
@@ -3089,8 +3836,16 @@ def submit_manifest(target=None, display_name_override='', model_override=''):
             return manifest['_manifest_path']
         except Exception as exc:
             last_error = exc
+            quota_error = is_quota_error(exc)
             manifest['last_submit_error'] = str(exc)
+            manifest['last_submit_error_type'] = (
+                'quota_or_resource_exhausted' if quota_error else 'submit_error'
+            )
             manifest['job_state'] = 'SUBMIT_FAILED'
+            recommendation = attach_submit_split_recommendation(manifest) if quota_error else {}
+            if not quota_error:
+                manifest.pop('split_recommended', None)
+                manifest.pop('last_submit_quota_recommendation', None)
             if uploaded_file is not None:
                 manifest['uploaded_file_name'] = getattr(uploaded_file, 'name', '')
                 manifest.setdefault('uploaded_file_names', [])
@@ -3098,10 +3853,13 @@ def submit_manifest(target=None, display_name_override='', model_override=''):
                     manifest['uploaded_file_names'].append(manifest['uploaded_file_name'])
             save_manifest(manifest)
 
-            if is_quota_error(exc) and attempt < attempts and legacy.rotate_api_key():
+            if quota_error and attempt < attempts and legacy.rotate_api_key():
                 print(f'Quota hit during batch submit. Retrying with next API key ({attempt}/{attempts})...')
                 continue
+            if quota_error:
+                print_submit_split_recommendation(recommendation)
             raise
+
 
     if last_error is not None:
         raise last_error
@@ -4277,6 +5035,7 @@ def collect_revision_actions(manifest, validate_sources=False):
                     chunk,
                     source_text,
                     revised_translation,
+                    item=target_item,
                 ):
                     valid = True
                     reason = 'OK'
@@ -4727,6 +5486,7 @@ def collect_result_actions(manifest, validate_sources=False):
                     chunk,
                     target_unit.text,
                     result_item['translation'],
+                    item=target_item,
                 ):
                     valid = True
                     reason = 'OK'
@@ -4892,6 +5652,9 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
         system_instruction = request_payload.get('system_instruction')
         if system_instruction:
             config['system_instruction'] = system_instruction
+        safety_settings = request_payload.get('safety_settings')
+        if safety_settings:
+            config['safety_settings'] = safety_settings
 
         expected_items = len(((manifest.get('chunks') or []) and next((chunk['items'] for chunk in manifest['chunks'] if chunk['key'] == key), [])) or [])
         parse_ok = False
@@ -5097,7 +5860,11 @@ def apply_results(target=None, force=False):
         'failure_count': len(failure_entries),
         'rag': rag_apply_summary,
     }
-    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    next_split_manifest = mark_next_split_after_apply(manifest)
+    should_update_latest = manifest.get('execution') != 'sync'
+    save_manifest(manifest, update_latest=should_update_latest and not next_split_manifest)
+    if next_split_manifest and should_update_latest:
+        remember_latest_manifest(next_split_manifest)
 
     print_check_summary(summary)
     print(f'Applied files: {applied_files}')
@@ -5105,6 +5872,7 @@ def apply_results(target=None, force=False):
     print(f'Failures logged: {len(failure_entries)}')
     if rag_apply_summary:
         print(f"RAG store updated: {rag_apply_summary.get('upserted', 0)} entries")
+    print_next_split_after_apply(next_split_manifest)
     if failure_entries:
         print(f"Failure log: {os.path.join(manifest['_package_dir'], 'failures.jsonl')}")
     return manifest
@@ -5648,9 +6416,13 @@ def load_external_rag_seed_records(seed_jsonl_paths, quality_state='external_see
     }
 
 
-def embed_history_records(records):
+def embed_history_records(records, *, progress_offset=0, progress_total=None):
     embedded_records = []
     batch_size = 16
+    total = len(records) if progress_total is None else progress_total
+    if total:
+        completed = min(max(progress_offset, 0), total)
+        print(f'RAG update progress: {completed}/{total} records.', flush=True)
     for start in range(0, len(records), batch_size):
         batch = records[start:start + batch_size]
         vectors = embed_texts([record['source_text'] for record in batch], RAG_DOCUMENT_TASK_TYPE)
@@ -5663,6 +6435,9 @@ def embed_history_records(records):
             enriched['embedding_text_kind'] = 'source_text'
             enriched['embedding_text_checksum'] = hash_text(record.get('source_text', ''))
             embedded_records.append(enriched)
+        if total:
+            completed = min(max(progress_offset + len(embedded_records), 0), total)
+            print(f'RAG update progress: {completed}/{total} records.', flush=True)
     return embedded_records
 
 
@@ -5750,12 +6525,21 @@ def sync_rag_store_for_jobs(
         'history_records_before': store.count_history(),
     }
     stats.update(extra_summary or {})
+    print(
+        f'RAG scan progress: {len(base_records)} records scanned from '
+        f'{len(scan_jobs)} files, {len(pending_records)} pending.',
+        flush=True,
+    )
     if not pending_records:
         stats['history_records_after'] = store.count_history()
         return stats
 
     try:
-        embedded_records = embed_history_records(records_to_embed)
+        embedded_records = embed_history_records(
+            records_to_embed,
+            progress_offset=len(records_with_reused_embedding),
+            progress_total=len(pending_records),
+        )
         stats['embedded'] = len(embedded_records)
         stats['upserted'] = store.upsert_history(records_with_reused_embedding + embedded_records)
         stats['history_records_after'] = store.count_history()
@@ -5881,6 +6665,7 @@ def bootstrap_source_index(skip_prepare=False, prune=True):
 
     scan_jobs = all_rag_file_jobs()
     scanned_segments = collect_source_segments_for_jobs(scan_jobs)
+    store.set_metadata(last_scanned_total=len(scanned_segments))
 
     stored_before = store.count_segments()
     scanned_ids = {seg['source_id'] for seg in scanned_segments}
@@ -6233,30 +7018,32 @@ def build_repair_request(job):
         build_system_instruction()
         + '\nSome targets may be short interjections, short UI text, or short reactions. Translate them naturally in context.'
     )
+    request = {
+        'system_instruction': {'parts': [{'text': instruction}]},
+        'contents': [
+            {
+                'role': 'user',
+                'parts': [
+                    {
+                        'text': build_user_prompt(
+                            job['context_past'],
+                            job['items'],
+                            job['context_future'],
+                            story_hits=job.get('story_hits') if 'story_hits' in job else None,
+                            source_hits=job.get('source_hits') or [],
+                        )
+                    }
+                ],
+            }
+        ],
+        'generation_config': build_generation_config(job['items']),
+    }
+    if BATCH_SAFETY_SETTINGS:
+        request['safety_settings'] = BATCH_SAFETY_SETTINGS
     return {
         'key': job['key'],
-        'request': {
-            'system_instruction': {'parts': [{'text': instruction}]},
-            'contents': [
-                {
-                    'role': 'user',
-                    'parts': [
-                        {
-                            'text': build_user_prompt(
-                                job['context_past'],
-                                job['items'],
-                                job['context_future'],
-                                story_hits=job.get('story_hits') if 'story_hits' in job else None,
-                                source_hits=job.get('source_hits') or [],
-                            )
-                        }
-                    ],
-                }
-            ],
-            'generation_config': build_generation_config(job['items']),
-        },
+        'request': request,
     }
-
 
 def run_sync_request(request_payload, model_name, api_key_index=None):
     attempts = 1 if api_key_index is not None else max(1, len(getattr(legacy, 'API_KEYS', [])))
@@ -6269,6 +7056,9 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
             system_instruction = request_payload.get('system_instruction')
             if system_instruction:
                 config['system_instruction'] = system_instruction
+            safety_settings = request_payload.get('safety_settings')
+            if safety_settings:
+                config['safety_settings'] = safety_settings
             response = client.models.generate_content(
                 model=model_name,
                 contents=request_payload.get('contents') or [],
@@ -6985,13 +7775,131 @@ def collect_doctor_recommendations(report):
         recommendations.append(
             'prepare is disabled; enable prepare.enabled in translator_config.json, then run build.'
         )
-    elif has_tl and report.get('pending_task_count', 0) > 0:
+    context_status = report.get('context_status') or {}
+    source_index = context_status.get('source_index') or {}
+    if source_index.get('enabled'):
+        segments = int(source_index.get('source_segments') or 0)
+        expected = int(source_index.get('expected_segments') or 0)
+        if not source_index.get('store_exists') or segments <= 0:
+            recommendations.append(
+                'Source index is enabled but not built; run bootstrap-source-index.'
+            )
+            return recommendations
+        if expected > 0 and segments < expected:
+            recommendations.append(
+                'Source index bootstrap is incomplete; run bootstrap-source-index.'
+            )
+            return recommendations
+
+    if has_tl and report.get('pending_task_count', 0) > 0:
         recommendations.append(
-            f"Found {report['pending_task_count']} pending lines; run build when API keys are configured."
+            'Pending translation lines are ready; start batch translation when API keys are configured.'
         )
 
     return recommendations
 
+
+def _store_dir_has_context_files(store_dir, file_names):
+    if not store_dir:
+        return False
+    if not os.path.isdir(store_dir):
+        return False
+    for file_name in file_names:
+        if os.path.isfile(os.path.join(store_dir, file_name)):
+            return True
+    return False
+
+
+def _load_store_count(store, count_method_name):
+    try:
+        count_method = getattr(store, count_method_name)
+        return count_method(), '', getattr(store, 'metadata', {}) or {}
+    except Exception as exc:
+        return 0, str(exc), {}
+
+
+def _resolve_source_index_expected_segments(store, metadata):
+    expected_raw = metadata.get('last_scanned_total')
+    try:
+        expected = int(expected_raw)
+    except (TypeError, ValueError):
+        expected = 0
+    if expected > 0:
+        return expected, ''
+
+    if not os.path.isdir(legacy.TL_DIR):
+        return 0, ''
+
+    try:
+        scanned = len(collect_source_segments_for_jobs(all_rag_file_jobs()))
+    except Exception as exc:
+        return 0, str(exc)
+
+    if scanned > 0:
+        try:
+            store.set_metadata(last_scanned_total=scanned)
+        except Exception as exc:
+            return scanned, str(exc)
+    return scanned, ''
+
+
+def collect_doctor_context_status():
+    rag_store_dir = RAG_STORE_DIR or get_default_rag_store_dir()
+    source_index_store_dir = SOURCE_INDEX_STORE_DIR or get_default_source_index_store_dir()
+
+    rag_status = {
+        'enabled': RAG_ENABLED,
+        'store_dir': rag_store_dir if RAG_ENABLED else '',
+        'store_exists': False,
+        'history_records': 0,
+        'bootstrap_on_build': RAG_BOOTSTRAP_ON_BUILD,
+        'updated_at': '',
+        'error': '',
+    }
+    if RAG_ENABLED:
+        rag_exists = _store_dir_has_context_files(rag_store_dir, ('history.jsonl', 'metadata.json'))
+        rag_status['store_exists'] = rag_exists
+        if rag_exists:
+            store = JsonRagStore(rag_store_dir)
+            count, error, metadata = _load_store_count(store, 'count_history')
+            rag_status['history_records'] = count
+            rag_status['updated_at'] = metadata.get('updated_at', '')
+            rag_status['error'] = error
+
+    source_index_status = {
+        'enabled': SOURCE_INDEX_ENABLED,
+        'store_dir': source_index_store_dir if SOURCE_INDEX_ENABLED else '',
+        'store_exists': False,
+        'source_segments': 0,
+        'schema_version': '',
+        'updated_at': '',
+        'error': '',
+    }
+    if SOURCE_INDEX_ENABLED:
+        source_exists = _store_dir_has_context_files(
+            source_index_store_dir,
+            ('source_segments.jsonl', 'source_metadata.json'),
+        )
+        source_index_status['store_exists'] = source_exists
+        if source_exists:
+            store = JsonSourceIndexStore(source_index_store_dir)
+            count, error, metadata = _load_store_count(store, 'count_segments')
+            source_index_status['source_segments'] = count
+            schema_version = metadata.get('schema_version', '')
+            source_index_status['schema_version'] = schema_version if schema_version is not None else ''
+            expected_segments, expected_error = _resolve_source_index_expected_segments(store, metadata)
+            if expected_segments > 0:
+                source_index_status['expected_segments'] = expected_segments
+            source_index_status['updated_at'] = metadata.get('updated_at', '')
+            combined_error = ' | '.join(
+                part for part in (error, expected_error) if part
+            )
+            source_index_status['error'] = combined_error
+
+    return {
+        'rag': rag_status,
+        'source_index': source_index_status,
+    }
 
 def collect_doctor_report():
     source_game_dir = legacy._guess_source_game_dir()
@@ -7083,6 +7991,8 @@ def collect_doctor_report():
         except Exception as exc:
             print(f'Warning: Could not compute pending translation counts: {exc}')
 
+    context_status = collect_doctor_context_status()
+
     report = {
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
@@ -7107,6 +8017,7 @@ def collect_doctor_report():
         'counts': counts,
         'pending_task_count': pending_task_count,
         'pending_file_count': pending_file_count,
+        'context_status': context_status,
         'warnings': warnings,
     }
     layout_context = collect_doctor_layout_context(report)
@@ -7118,6 +8029,9 @@ def collect_doctor_report():
 
 def print_doctor_report(report):
     counts = report['counts']
+    context_status = report.get('context_status') or {}
+    rag_context = context_status.get('rag') or {}
+    source_index_context = context_status.get('source_index') or {}
     print('Doctor report:')
     print(f"- Base dir: {report['base_dir']}")
     print(f"- TL dir: {report['tl_dir']} (exists: {report['tl_exists']})")
@@ -7160,6 +8074,27 @@ def print_doctor_report(report):
             f"task_count={report['pending_task_count']}, "
             f"file_count={report['pending_file_count']}"
         )
+    print(
+        '- RAG context: '
+        f"enabled={rag_context.get('enabled', False)}, "
+        f"store_dir={rag_context.get('store_dir') or ''}, "
+        f"store_exists={rag_context.get('store_exists', False)}, "
+        f"history_records={rag_context.get('history_records', 0)}, "
+        f"bootstrap_on_build={rag_context.get('bootstrap_on_build', False)}, "
+        f"updated_at={rag_context.get('updated_at') or ''}, "
+        f"error={rag_context.get('error') or ''}"
+    )
+    print(
+        '- Source index context: '
+        f"enabled={source_index_context.get('enabled', False)}, "
+        f"store_dir={source_index_context.get('store_dir') or ''}, "
+        f"store_exists={source_index_context.get('store_exists', False)}, "
+        f"source_segments={source_index_context.get('source_segments', 0)}, "
+        f"expected_segments={source_index_context.get('expected_segments', 0)}, "
+        f"schema_version={source_index_context.get('schema_version') or ''}, "
+        f"updated_at={source_index_context.get('updated_at') or ''}, "
+        f"error={source_index_context.get('error') or ''}"
+    )
     if report['warnings']:
         print('Warnings:')
         for warning in report['warnings']:

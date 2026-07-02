@@ -255,6 +255,13 @@ QTabWidget#workbench_status_tabs QWidget {
     background-color: #ffffff;
 }
 
+QScrollArea#workflow_summary_scroll,
+QWidget#workflow_summary_viewport,
+QWidget#workflow_summary_content {
+    background-color: #ffffff;
+    border: none;
+}
+
 QTabWidget#workbench_status_tabs > QTabBar::tab {
     background-color: #f8fafc;
     border: 1px solid #e2e8f0;
@@ -447,6 +454,36 @@ QPushButton#secondary_btn:disabled {
     color: #cbd5e1;
 }
 
+
+/* Compact table action buttons */
+QPushButton#split_select_btn {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    color: #475569;
+    font-weight: 500;
+    min-width: 72px;
+    min-height: 28px;
+    padding: 0px 10px;
+    text-align: center;
+}
+
+QPushButton#split_select_btn:hover {
+    background-color: #f8fafc;
+    border-color: #94a3b8;
+    color: #0f172a;
+}
+
+QPushButton#split_select_btn:pressed {
+    background-color: #f1f5f9;
+}
+
+QPushButton#split_select_btn:disabled {
+    background-color: #f1f5f9;
+    border-color: #e2e8f0;
+    color: #cbd5e1;
+}
+
 /* Danger Action Button */
 QPushButton#kill_btn {
     background-color: #ef4444;
@@ -539,6 +576,45 @@ QLabel#workflow_status_label[status="failed"] {
 QLabel#workflow_facts_label {
     color: #334155;
     font-size: 14px;
+}
+
+QProgressBar#workflow_progress_bar {
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #f8fafc;
+    color: #334155;
+    font-size: 12px;
+    min-height: 18px;
+    max-height: 22px;
+    text-align: center;
+}
+
+QProgressBar#workflow_progress_bar::chunk {
+    background-color: #2563eb;
+    border-radius: 5px;
+}
+
+QTableWidget#split_status_table {
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #f8fafc;
+    alternate-background-color: #f1f5f9;
+    color: #334155;
+    gridline-color: #e2e8f0;
+}
+
+QTableWidget#split_status_table::item {
+    padding: 4px 6px;
+}
+
+QTableWidget#split_status_table QHeaderView::section {
+    background-color: #e2e8f0;
+    color: #334155;
+    border: none;
+    border-right: 1px solid #cbd5e1;
+    border-bottom: 1px solid #cbd5e1;
+    padding: 5px 6px;
+    font-weight: 600;
 }
 
 QFrame#workflow_separator {

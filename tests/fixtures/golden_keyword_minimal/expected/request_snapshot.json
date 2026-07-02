@@ -15,7 +15,7 @@
         "chapter01/keywords.rpy:2:keyword:0",
         "chapter01/keywords.rpy:5:keyword:1"
       ],
-      "system_instruction_sha256": "0b3714ae80303fe380c603eb3db7a25aa96b49bdf4a5f333189402a0878e5d6d",
+      "system_instruction_sha256": "4ba09fb166d966c6fa69eb0d206807627a9dbdd5b894c292b5168c5f5ef10c36",
       "user_prompt_sha256": "f43ad090ffe3634f8fec06e6818d103109873b52fb04ec1c52618ac3d26d2f5c",
       "generation_config": {
         "keys": [
@@ -107,7 +107,7 @@
         "chapter01/keywords.rpy:9:keyword:2",
         "chapter01/keywords.rpy:12:keyword:3"
       ],
-      "system_instruction_sha256": "0b3714ae80303fe380c603eb3db7a25aa96b49bdf4a5f333189402a0878e5d6d",
+      "system_instruction_sha256": "4ba09fb166d966c6fa69eb0d206807627a9dbdd5b894c292b5168c5f5ef10c36",
       "user_prompt_sha256": "cf2b0379021530f50669ddfa6bddc15a1419cb5653070e29aabddbe96ed12725",
       "generation_config": {
         "keys": [

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 
+from .duration_format import format_remaining_duration_zh
 from .summary_helpers import extend_facts_with_notices
 from .user_copy import format_bootstrap_fact
 from typing import Any
@@ -17,6 +19,37 @@ class BootstrapSummary:
     message: str
     facts: list[str]
     findings: list[str]
+
+
+@dataclass(frozen=True)
+class BootstrapProgressState:
+    kind: str = "source_index"
+    phase: str = "starting"
+    total_segments: int = 0
+    stored_segments: int = 0
+    embedding_total: int = 0
+    embedding_done: int = 0
+    reused_embeddings: int = 0
+
+
+_SOURCE_INDEX_PRE_RUN_TOTAL_RE = re.compile(
+    r"- Total segments scanned from files:\s*(\d+)"
+)
+_SOURCE_INDEX_PRE_RUN_PENDING_RE = re.compile(
+    r"- New/updated segments \(need embeddings\):\s*(\d+)"
+)
+_SOURCE_INDEX_PRE_RUN_REUSED_RE = re.compile(
+    r"- Unchanged segments \(reusing embeddings\):\s*(\d+)"
+)
+_SOURCE_INDEX_REUSED_WRITTEN_RE = re.compile(
+    r"Reused embeddings written:\s*(\d+)"
+)
+_SOURCE_INDEX_EMBEDDING_TOTAL_RE = re.compile(
+    r"Generating embeddings for\s*(\d+)\s*segments"
+)
+_SOURCE_INDEX_EMBEDDING_PROGRESS_RE = re.compile(
+    r"Source index embedding progress:\s*(\d+)/(\d+)\s*scanned,\s*(\d+)\s*embedded,\s*(\d+)\s*stored"
+)
 
 
 RAG_SUMMARY_HEADER = "RAG bootstrap summary:"
@@ -102,6 +135,262 @@ def idle_bootstrap_summary() -> BootstrapSummary:
         facts=[],
         findings=[],
     )
+
+
+def create_bootstrap_progress_state(kind: str) -> BootstrapProgressState:
+    return BootstrapProgressState(kind=kind or "source_index")
+
+
+def update_bootstrap_progress_from_line(
+    line: str,
+    state: BootstrapProgressState,
+) -> BootstrapProgressState:
+    if state.kind != "source_index":
+        return state
+
+    text = line.strip()
+    if not text:
+        return state
+
+    match = _SOURCE_INDEX_PRE_RUN_TOTAL_RE.search(text)
+    if match:
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase=state.phase,
+            total_segments=int(match.group(1)),
+            stored_segments=state.stored_segments,
+            embedding_total=state.embedding_total,
+            embedding_done=state.embedding_done,
+            reused_embeddings=state.reused_embeddings,
+        )
+
+    match = _SOURCE_INDEX_PRE_RUN_PENDING_RE.search(text)
+    if match:
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase=state.phase,
+            total_segments=state.total_segments,
+            stored_segments=state.stored_segments,
+            embedding_total=int(match.group(1)),
+            embedding_done=state.embedding_done,
+            reused_embeddings=state.reused_embeddings,
+        )
+
+    match = _SOURCE_INDEX_PRE_RUN_REUSED_RE.search(text)
+    if match:
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase="reusing",
+            total_segments=state.total_segments,
+            stored_segments=state.stored_segments,
+            embedding_total=state.embedding_total,
+            embedding_done=state.embedding_done,
+            reused_embeddings=int(match.group(1)),
+        )
+
+    match = _SOURCE_INDEX_REUSED_WRITTEN_RE.search(text)
+    if match:
+        stored = int(match.group(1))
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase="embedding",
+            total_segments=state.total_segments,
+            stored_segments=stored,
+            embedding_total=state.embedding_total,
+            embedding_done=state.embedding_done,
+            reused_embeddings=max(state.reused_embeddings, stored),
+        )
+
+    match = _SOURCE_INDEX_EMBEDDING_TOTAL_RE.search(text)
+    if match:
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase="embedding",
+            total_segments=state.total_segments,
+            stored_segments=state.stored_segments,
+            embedding_total=int(match.group(1)),
+            embedding_done=state.embedding_done,
+            reused_embeddings=state.reused_embeddings,
+        )
+
+    match = _SOURCE_INDEX_EMBEDDING_PROGRESS_RE.search(text)
+    if match:
+        embedding_done = int(match.group(3))
+        embedding_total = int(match.group(2))
+        stored = int(match.group(4))
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase="embedding",
+            total_segments=state.total_segments,
+            stored_segments=stored,
+            embedding_total=embedding_total,
+            embedding_done=embedding_done,
+            reused_embeddings=state.reused_embeddings,
+        )
+
+    if text.startswith("Pruning ") and "stale segments" in text:
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase="pruning",
+            total_segments=state.total_segments,
+            stored_segments=state.stored_segments,
+            embedding_total=state.embedding_total,
+            embedding_done=state.embedding_done,
+            reused_embeddings=state.reused_embeddings,
+        )
+
+    if text.startswith("Sync complete."):
+        total = state.total_segments
+        stored = state.stored_segments
+        if total > 0 and stored < total:
+            stored = total
+        return BootstrapProgressState(
+            kind=state.kind,
+            phase="done",
+            total_segments=total,
+            stored_segments=stored,
+            embedding_total=state.embedding_total,
+            embedding_done=state.embedding_done,
+            reused_embeddings=state.reused_embeddings,
+        )
+
+    return state
+
+
+_BOOTSTRAP_ETA_MIN_ELAPSED_SECONDS = 3.0
+_BOOTSTRAP_ETA_MIN_PROGRESS_SEGMENTS = 16
+
+
+@dataclass
+class BootstrapProgressTracker:
+    started_at: float | None = None
+    last_stored_segments: int = 0
+    last_sample_at: float | None = None
+    seconds_per_segment: float | None = None
+
+    def reset(self) -> None:
+        self.started_at = None
+        self.last_stored_segments = 0
+        self.last_sample_at = None
+        self.seconds_per_segment = None
+
+    def observe(
+        self,
+        state: BootstrapProgressState,
+        now: float | None = None,
+    ) -> None:
+        if state.kind != "source_index" or state.total_segments <= 0:
+            return
+        if now is None:
+            now = time.monotonic()
+
+        stored = max(state.stored_segments, 0)
+        if self.started_at is None:
+            if stored <= 0:
+                return
+            self.started_at = now
+            self.last_stored_segments = stored
+            self.last_sample_at = now
+            return
+
+        if stored <= self.last_stored_segments:
+            return
+
+        delta_stored = stored - self.last_stored_segments
+        last_sample_at = self.last_sample_at
+        delta_time = now - (last_sample_at if last_sample_at is not None else now)
+        if delta_stored <= 0 or delta_time <= 0:
+            return
+
+        sample_rate = delta_time / delta_stored
+        if self.seconds_per_segment is None:
+            self.seconds_per_segment = sample_rate
+        else:
+            self.seconds_per_segment = (
+                self.seconds_per_segment * 0.6 + sample_rate * 0.4
+            )
+        self.last_stored_segments = stored
+        self.last_sample_at = now
+
+    def estimate_remaining_seconds(
+        self,
+        state: BootstrapProgressState,
+        now: float | None = None,
+    ) -> int | None:
+        if state.kind != "source_index" or state.total_segments <= 0:
+            return None
+        if now is None:
+            now = time.monotonic()
+
+        stored = min(max(state.stored_segments, 0), state.total_segments)
+        remaining_segments = state.total_segments - stored
+        if remaining_segments <= 0:
+            return 0
+
+        used_fallback_rate = False
+        seconds_per_segment = self.seconds_per_segment
+        if seconds_per_segment is None and self.started_at is not None:
+            elapsed = now - self.started_at
+            if (
+                stored >= _BOOTSTRAP_ETA_MIN_PROGRESS_SEGMENTS
+                and elapsed >= _BOOTSTRAP_ETA_MIN_ELAPSED_SECONDS
+            ):
+                seconds_per_segment = elapsed / stored
+                used_fallback_rate = True
+
+        if seconds_per_segment is None:
+            return None
+
+        estimate = remaining_segments * seconds_per_segment
+        if not used_fallback_rate and self.last_sample_at is not None:
+            estimate -= now - self.last_sample_at
+        return max(0, int(estimate + 0.5))
+
+
+def create_bootstrap_progress_tracker() -> BootstrapProgressTracker:
+    return BootstrapProgressTracker()
+
+
+def format_bootstrap_progress_bar_label(
+    state: BootstrapProgressState,
+    remaining_seconds: int | None = None,
+) -> str:
+    if state.total_segments <= 0 and state.stored_segments <= 0:
+        return "正在扫描原文…"
+
+    total = max(state.total_segments, 1)
+    stored = min(max(state.stored_segments, 0), total)
+    percent = (stored * 100) // total
+    label = f"{percent}%（{stored}/{total}）"
+    if (
+        remaining_seconds is not None
+        and remaining_seconds > 0
+        and stored < total
+    ):
+        label += f" · {format_remaining_duration_zh(remaining_seconds)}"
+    return label
+
+
+def format_bootstrap_progress_facts(state: BootstrapProgressState) -> list[str]:
+    if state.kind != "source_index":
+        return []
+
+    facts: list[str] = []
+    if state.total_segments > 0:
+        percent = (state.stored_segments * 100) // state.total_segments
+        facts.append(
+            f"入库进度：{state.stored_segments}/{state.total_segments} 片段（{percent}%）"
+        )
+    if state.embedding_total > 0:
+        facts.append(
+            f"本轮向量生成：{state.embedding_done}/{state.embedding_total}"
+        )
+    elif state.reused_embeddings > 0 and state.phase in {"reusing", "embedding", "starting"}:
+        facts.append(f"已复用向量：{state.reused_embeddings} 片段")
+
+    if state.phase == "pruning":
+        facts.append("正在清理失效片段…")
+    return facts
 
 
 def running_bootstrap_summary(kind: str) -> BootstrapSummary:

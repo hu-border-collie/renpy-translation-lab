@@ -116,6 +116,31 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertFalse(summary.can_apply)
         self.assertIn("已写回 2 个文件", "\n".join(summary.facts))
 
+    def test_summarize_apply_output_shows_next_split_manifest(self):
+        summary = summarize_apply_output(
+            APPLY_OUTPUT + "Next split manifest: C:\\pkg\\part02\\manifest.json\n",
+            exit_code=0,
+            manifest_path="C:\\pkg\\part01\\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "applied")
+        self.assertIn("下一拆分包", "\n".join(summary.facts))
+        self.assertIn("继续提交", summary.message)
+
+    def test_summarize_manifest_writeback_shows_next_split_manifest(self):
+        summary = summarize_manifest_writeback(
+            {
+                "_manifest_path": "C:\\pkg\\part01\\manifest.json",
+                "applied_at": "2026-06-30T12:00:00",
+                "apply_summary": {"applied_files": 1, "applied_lines": 5},
+                "next_split_manifest_path": "C:\\pkg\\part02\\manifest.json",
+            }
+        )
+
+        self.assertEqual(summary.status, "applied")
+        self.assertIn("下一拆分包", "\n".join(summary.facts))
+        self.assertIn("下一拆分包", summary.message)
+
     def test_summarize_manifest_warn_points_to_remediation_commands(self):
         summary = summarize_manifest_writeback(
             {

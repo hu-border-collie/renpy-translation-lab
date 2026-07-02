@@ -139,6 +139,157 @@ class BatchRepairRegressionTests(unittest.TestCase):
             self.assertEqual(first_child['story_memory_summary']['story_hit_rate'], 1.0)
             self.assertEqual(first_child['story_memory_summary']['truncated_story_blocks'], 0)
             self.assertGreater(first_child['story_memory_summary']['formatted_char_count'], 0)
+            first_child['_manifest_path'] = created[0]
+            first_child['_package_dir'] = str(Path(created[0]).parent)
+            next_manifest = batch_mod._canonical_abs_path(created[1])
+            self.assertEqual(
+                batch_mod.next_split_manifest_path(first_child),
+                next_manifest,
+            )
+            self.assertEqual(
+                batch_mod.mark_next_split_after_apply(first_child),
+                next_manifest,
+            )
+            self.assertEqual(first_child['next_split_manifest_path'], next_manifest)
+
+    def test_submit_quota_failure_records_split_recommendation(self):
+        class QuotaError(Exception):
+            status_code = 429
+
+        class UploadedFile:
+            name = 'files/uploaded'
+
+        class FakeFiles:
+            def upload(self, **_kwargs):
+                return UploadedFile()
+
+        class FakeBatches:
+            def create(self, **_kwargs):
+                raise QuotaError('429 RESOURCE_EXHAUSTED')
+
+        class FakeClient:
+            files = FakeFiles()
+            batches = FakeBatches()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_dir = root / 'package'
+            package_dir.mkdir()
+            input_path = package_dir / 'requests.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            latest_path = root / 'latest_manifest.txt'
+            input_path.write_text('{}\n', encoding='utf-8')
+            chunks = [
+                {'key': f'chunk-{index}', 'items': [{'id': str(index)}]}
+                for index in range(401)
+            ]
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'display_name': 'demo large package',
+                        'batch_model': 'gemini-test',
+                        'input_jsonl_path': str(input_path),
+                        'job_name': '',
+                        'summary': {'chunk_count': 401, 'item_count': 401},
+                        'chunks': chunks,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+            fake_types = mock.Mock(UploadFileConfig=lambda **kwargs: kwargs)
+            stdout = io.StringIO()
+
+            with mock.patch.object(batch_mod, 'LATEST_MANIFEST_FILE', str(latest_path)), \
+                 mock.patch.object(batch_mod.legacy, 'API_KEYS', ['key']), \
+                 mock.patch.object(batch_mod, 'genai_types', fake_types), \
+                 mock.patch.object(batch_mod, 'create_batch_client', return_value=FakeClient()), \
+                 mock.patch('sys.stdout', stdout):
+                with self.assertRaises(QuotaError):
+                    batch_mod.submit_manifest(str(manifest_path))
+
+            saved = json.loads(manifest_path.read_text(encoding='utf-8'))
+            recommendation = saved['last_submit_quota_recommendation']
+            self.assertEqual(saved['job_state'], 'SUBMIT_FAILED')
+            self.assertEqual(saved['last_submit_error_type'], 'quota_or_resource_exhausted')
+            self.assertTrue(saved['split_recommended'])
+            self.assertIn('--max-chunks 400', recommendation['command'])
+            self.assertIn('--max-items 12000', recommendation['command'])
+            self.assertIn('Suggested split command:', stdout.getvalue())
+
+    def test_submit_manifest_clears_split_recommendation_after_quota_retry_success(self):
+        class QuotaError(Exception):
+            status_code = 429
+
+        class UploadedFile:
+            name = 'files/uploaded'
+
+        class BatchJob:
+            name = 'batches/job-1'
+            state = 'JOB_STATE_PENDING'
+
+        class FakeFiles:
+            def upload(self, **_kwargs):
+                return UploadedFile()
+
+        class FakeBatches:
+            def __init__(self):
+                self.calls = 0
+
+            def create(self, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise QuotaError('429 RESOURCE_EXHAUSTED')
+                return BatchJob()
+
+        class FakeClient:
+            def __init__(self):
+                self.batches = FakeBatches()
+
+            files = FakeFiles()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_dir = root / 'package'
+            package_dir.mkdir()
+            input_path = package_dir / 'requests.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            latest_path = root / 'latest_manifest.txt'
+            input_path.write_text('{}\n', encoding='utf-8')
+            chunks = [
+                {'key': f'chunk-{index}', 'items': [{'id': str(index)}]}
+                for index in range(401)
+            ]
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'display_name': 'demo large package',
+                        'batch_model': 'gemini-test',
+                        'input_jsonl_path': str(input_path),
+                        'job_name': '',
+                        'summary': {'chunk_count': 401, 'item_count': 401},
+                        'chunks': chunks,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+            fake_types = mock.Mock(UploadFileConfig=lambda **kwargs: kwargs)
+
+            with mock.patch.object(batch_mod, 'LATEST_MANIFEST_FILE', str(latest_path)), \
+                 mock.patch.object(batch_mod.legacy, 'API_KEYS', ['key-a', 'key-b']), \
+                 mock.patch.object(batch_mod, 'genai_types', fake_types), \
+                 mock.patch.object(batch_mod, 'create_batch_client', return_value=FakeClient()), \
+                 mock.patch.object(batch_mod.legacy, 'rotate_api_key', return_value=True):
+                result = batch_mod.submit_manifest(str(manifest_path))
+
+            saved = json.loads(manifest_path.read_text(encoding='utf-8'))
+            self.assertEqual(result, str(manifest_path))
+            self.assertEqual(saved['job_name'], 'batches/job-1')
+            self.assertEqual(saved['last_submit_error'], '')
+            self.assertNotIn('last_submit_error_type', saved)
+            self.assertNotIn('split_recommended', saved)
+            self.assertNotIn('last_submit_quota_recommendation', saved)
 
     def test_retry_package_and_merge_replace_only_failed_chunks(self):
         old_tl_dir = batch_mod.legacy.TL_DIR

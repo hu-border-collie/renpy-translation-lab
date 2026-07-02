@@ -30,21 +30,34 @@ def truncate_text(text, limit=220):
     return text[:limit - 3] + '...'
 
 
-def cosine_similarity(left, right):
+def vector_norm(values):
+    if not values:
+        return 0.0
+    total = 0.0
+    for value in values:
+        number = float(value)
+        total += number * number
+    return math.sqrt(total)
+
+
+def dot_product(left, right):
     if not left or not right or len(left) != len(right):
         return 0.0
-    dot = 0.0
-    left_norm = 0.0
-    right_norm = 0.0
+    total = 0.0
     for left_value, right_value in zip(left, right):
-        left_num = float(left_value)
-        right_num = float(right_value)
-        dot += left_num * right_num
-        left_norm += left_num * left_num
-        right_norm += right_num * right_num
+        try:
+            total += left_value * right_value
+        except TypeError:
+            total += float(left_value) * float(right_value)
+    return total
+
+
+def cosine_similarity(left, right):
+    left_norm = vector_norm(left)
+    right_norm = vector_norm(right)
     if left_norm <= 0.0 or right_norm <= 0.0:
         return 0.0
-    return dot / math.sqrt(left_norm * right_norm)
+    return dot_product(left, right) / (left_norm * right_norm)
 
 
 class JsonRagStoreLockError(RuntimeError):
@@ -521,6 +534,7 @@ class JsonSourceIndexStore(object):
         self.metadata = {}
         self.segments = {}
         self.file_index = {}
+        self._search_cache = {}
 
     def _warn(self, message):
         print(f'Warning: {message}')
@@ -535,6 +549,7 @@ class JsonSourceIndexStore(object):
         self.metadata = self._load_json_file(self.metadata_path)
         self.segments = {}
         self.file_index = {}
+        self._search_cache = {}
         if os.path.isfile(self.segments_path):
             with open(self.segments_path, 'r', encoding='utf-8-sig') as handle:
                 for line_number, raw_line in enumerate(handle, start=1):
@@ -905,6 +920,7 @@ class JsonSourceIndexStore(object):
                     {'segment_count': len(self.segments)},
                     lock_info,
                 )
+                self._search_cache = {}
         return changed
 
     def delete_segments(self, source_ids):
@@ -924,24 +940,26 @@ class JsonSourceIndexStore(object):
                     {'segment_count': len(self.segments)},
                     lock_info,
                 )
+                self._search_cache = {}
         return changed
 
     def segment_ids_for_file(self, file_rel_path):
         self.load()
         return list(self.file_index.get(file_rel_path, set()))
 
-    def search_segments(
+    def _segment_search_candidates(
         self,
-        query_vector,
-        top_k=4,
-        min_similarity=0.72,
         embedding_model=None,
         embedding_task_type=None,
         embedding_dim=None,
-        return_diagnostics=False,
     ):
         self.load()
-        results = []
+        cache_key = (embedding_model, embedding_task_type, embedding_dim)
+        cached = self._search_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        candidates = []
         diagnostics = {
             'segments_seen': 0,
             'segments_with_embedding': 0,
@@ -972,18 +990,56 @@ class JsonSourceIndexStore(object):
                 if metadata.get('embedding_dim') != embedding_dim or len(vector) != embedding_dim:
                     diagnostics['filtered_embedding_dim_count'] += 1
                     continue
-            score = cosine_similarity(query_vector, vector)
+            try:
+                norm = vector_norm(vector)
+            except (TypeError, ValueError):
+                diagnostics['invalid_embedding_count'] += 1
+                continue
+            if norm <= 0.0:
+                diagnostics['invalid_embedding_count'] += 1
+                continue
+            candidates.append((record, vector, norm))
+        diagnostics['metadata_filtered_count'] = (
+            diagnostics['filtered_embedding_model_count']
+            + diagnostics['filtered_embedding_task_type_count']
+            + diagnostics['filtered_embedding_dim_count']
+        )
+        cached = (candidates, diagnostics)
+        self._search_cache[cache_key] = cached
+        return cached
+
+    def search_segments(
+        self,
+        query_vector,
+        top_k=4,
+        min_similarity=0.72,
+        embedding_model=None,
+        embedding_task_type=None,
+        embedding_dim=None,
+        return_diagnostics=False,
+    ):
+        candidates, base_diagnostics = self._segment_search_candidates(
+            embedding_model=embedding_model,
+            embedding_task_type=embedding_task_type,
+            embedding_dim=embedding_dim,
+        )
+        diagnostics = dict(base_diagnostics)
+        results = []
+        try:
+            query_norm = vector_norm(query_vector)
+        except (TypeError, ValueError):
+            query_norm = 0.0
+        for record, vector, vector_norm_value in candidates:
+            if query_norm > 0.0:
+                score = dot_product(query_vector, vector) / (query_norm * vector_norm_value)
+            else:
+                score = 0.0
             if score < min_similarity:
                 diagnostics['below_similarity_count'] += 1
                 continue
             result = dict(record)
             result['score'] = score
             results.append(result)
-        diagnostics['metadata_filtered_count'] = (
-            diagnostics['filtered_embedding_model_count']
-            + diagnostics['filtered_embedding_task_type_count']
-            + diagnostics['filtered_embedding_dim_count']
-        )
         diagnostics['matched_before_top_k'] = len(results)
         results.sort(key=lambda item: float(item.get('score') or 0.0), reverse=True)
         if top_k > 0:

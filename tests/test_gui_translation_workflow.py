@@ -83,6 +83,47 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
 
         self.assertEqual(workflow.current_step().args, ["status", "C:\\package\\manifest.json"])
 
+    def test_resume_safe_retry_manifest_merges_then_checks_parent(self):
+        retry_path = r"C:\package\retry_parts\retry1\manifest.json"
+        parent_path = r"C:\package\manifest.json"
+        workflow = TranslationWorkflow.resume_manifest(
+            retry_path,
+            {
+                "retry_of_manifest": parent_path,
+                "job_name": "batches/retry",
+                "job_state": "JOB_STATE_SUCCEEDED",
+                "last_check_summary": {"safety_level": "safe"},
+            },
+        )
+
+        self.assertEqual(workflow.current_step().args, ["merge-retry", parent_path, retry_path])
+        update = workflow.complete_current_step(0, f"Merged retry results into: {parent_path}\n")
+        self.assertTrue(update.should_continue)
+        self.assertEqual(workflow.current_step().args, ["check", parent_path])
+        final = workflow.complete_current_step(0, "Safety status: safe\n")
+        self.assertEqual(final.status, "done")
+        self.assertEqual(workflow.manifest_path, parent_path)
+
+    def test_retry_check_safe_continues_to_merge(self):
+        retry_path = r"C:\package\retry_parts\retry1\manifest.json"
+        parent_path = r"C:\package\manifest.json"
+        workflow = TranslationWorkflow.resume_manifest(
+            retry_path,
+            {
+                "retry_of_manifest": parent_path,
+                "job_name": "batches/retry",
+                "job_state": "JOB_STATE_SUCCEEDED",
+            },
+        )
+
+        self.assertEqual(workflow.current_step().args, ["download", retry_path])
+        workflow.complete_current_step(0, r"Saved results to: C:\package\retry_parts\retry1\results.jsonl" + "\n")
+        self.assertEqual(workflow.current_step().args, ["check", retry_path])
+        update = workflow.complete_current_step(0, "Safety status: safe\n")
+
+        self.assertTrue(update.should_continue)
+        self.assertEqual(workflow.current_step().args, ["merge-retry", parent_path, retry_path])
+
     def test_resume_checked_manifest_uses_last_check_summary_as_complete(self):
         workflow = TranslationWorkflow.resume_manifest(
             r"C:\package\manifest.json",
@@ -139,6 +180,24 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
 
         self.assertEqual(update.status, "failed")
         self.assertFalse(update.should_continue)
+        self.assertIsNone(workflow.current_step())
+
+    def test_submit_quota_failure_recommends_split(self):
+        workflow = TranslationWorkflow.resume_manifest(
+            "C:\\package\\manifest.json",
+            {"job_name": ""},
+        )
+
+        output = (
+            "RESOURCE_EXHAUSTED\n"
+            "Suggested split command: python gemini_translate_batch.py split C:\\package\\manifest.json --max-chunks 400\n"
+        )
+        update = workflow.complete_current_step(1, output)
+
+        self.assertEqual(update.status, "failed")
+        self.assertIn("配额", update.message)
+        self.assertIn("拆包", update.message)
+        self.assertTrue(any("拆包命令" in fact for fact in update.facts))
         self.assertIsNone(workflow.current_step())
 
 

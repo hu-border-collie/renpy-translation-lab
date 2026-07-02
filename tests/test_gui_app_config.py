@@ -16,6 +16,113 @@ class GuiAppConfigHelperTests(unittest.TestCase):
     def setUp(self):
         self.window = MainWindow.__new__(MainWindow)
 
+    def test_on_cli_line_ready_updates_workflow_progress_bar(self):
+        from gui_qt.workflow_progress import create_workflow_progress_state
+
+        class FakeProgressBar:
+            def __init__(self):
+                self.visible = False
+                self.range_values = None
+                self.value = None
+                self.format = ""
+
+            def setRange(self, minimum, maximum):
+                self.range_values = (minimum, maximum)
+
+            def setValue(self, value):
+                self.value = value
+
+            def setFormat(self, value):
+                self.format = value
+
+            def setVisible(self, visible):
+                self.visible = visible
+
+        class FakeLabel:
+            def __init__(self):
+                self.text = ""
+
+            def setText(self, text):
+                self.text = text
+
+        self.window._active_command = "translation_workflow"
+        self.window._workflow_step_output_lines = []
+        self.window._workflow_progress = create_workflow_progress_state("sync_requests")
+        self.window._workflow_progress_base_facts = ["Manifest: C:/dummy/manifest.json"]
+        self.window.workflow_progress_bar = FakeProgressBar()
+        self.window.workflow_facts_label = FakeLabel()
+        self.window._append_log = lambda text: None
+
+        self.window._on_cli_line_ready("[2/4] sync-key")
+
+        self.assertEqual(self.window._workflow_step_output_lines, ["[2/4] sync-key"])
+        self.assertTrue(self.window.workflow_progress_bar.visible)
+        self.assertEqual(self.window.workflow_progress_bar.range_values, (0, 4))
+        self.assertEqual(self.window.workflow_progress_bar.value, 2)
+        self.assertEqual(self.window.workflow_progress_bar.format, "请求 2/4")
+        self.assertEqual(
+            self.window.workflow_facts_label.text,
+            "Manifest: C:/dummy/manifest.json\n当前请求：sync-key",
+        )
+
+
+    def test_short_job_name_compacts_batch_ids(self):
+        job_name = "batches/l10v1nppy30lvv2cbzbhedje4oqnqlzedlve"
+
+        self.assertEqual(self.window._short_job_name(job_name), "batches/l10v1nppy3...")
+        self.assertEqual(self.window._short_job_name("batches/short"), "batches/short")
+
+    def test_split_submit_button_only_shows_when_remaining_packages_need_submit(self):
+        from gui_qt.work_modes import WorkMode
+
+        class FakeButton:
+            def __init__(self):
+                self.visible = None
+                self.enabled = None
+                self.text = ""
+
+            def setVisible(self, visible):
+                self.visible = visible
+
+            def setEnabled(self, enabled):
+                self.enabled = enabled
+
+            def setText(self, text):
+                self.text = text
+
+        class FakeKillButton:
+            def __init__(self, enabled=False):
+                self.enabled = enabled
+
+            def isEnabled(self):
+                return self.enabled
+
+        class FakeEntry:
+            def __init__(self, needs_submit):
+                self.needs_submit = needs_submit
+
+        button = FakeButton()
+        self.window.split_submit_btn = button
+        self.window.kill_btn = FakeKillButton()
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window._split_status_entries = []
+
+        self.window._update_split_submit_btn([FakeEntry(False), FakeEntry(False)])
+
+        self.assertFalse(button.visible)
+        self.assertFalse(button.enabled)
+
+        self.window._update_split_submit_btn([FakeEntry(False), FakeEntry(True)])
+
+        self.assertTrue(button.visible)
+        self.assertTrue(button.enabled)
+        self.assertEqual(button.text, "提交剩余包")
+
+        self.window.kill_btn = FakeKillButton(enabled=True)
+        self.window._update_split_submit_btn([FakeEntry(False), FakeEntry(True)], running=False)
+
+        self.assertTrue(button.enabled)
+
     def _fake_timeline(self):
         class FakeTimeline:
             def __init__(self):
@@ -233,6 +340,62 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             ],
         )
 
+    def test_bootstrap_summary_syncs_timeline_for_terminal_states(self):
+        from gui_qt.bootstrap_report import BootstrapSummary, running_bootstrap_summary
+
+        class FakeTimeline:
+            def __init__(self):
+                self.steps = [("run", "同步运行")]
+                self.visible = None
+                self.current_step_key = "unset"
+                self.status = "unset"
+
+            def set_current_step(self, step_key, status="running"):
+                self.current_step_key = step_key
+                self.status = status
+
+            def setVisible(self, visible):
+                self.visible = visible
+
+        class FakeProgressBar:
+            def __init__(self):
+                self.visible = True
+
+            def setVisible(self, visible):
+                self.visible = visible
+
+        self.window.timeline = FakeTimeline()
+        self.window.workflow_progress_bar = FakeProgressBar()
+        self.window._bootstrap_progress = object()
+        summary_calls = []
+        self.window._set_workflow_summary = (
+            lambda status, heading, message, facts: summary_calls.append(
+                (status, heading, message, facts)
+            )
+        )
+
+        self.window._set_workflow_from_bootstrap_summary(running_bootstrap_summary("rag"))
+        self.assertEqual(self.window.timeline.current_step_key, "run")
+        self.assertEqual(self.window.timeline.status, "running")
+        self.assertFalse(self.window.timeline.visible)
+
+        self.window._set_workflow_from_bootstrap_summary(
+            BootstrapSummary(
+                kind="rag",
+                status="failed",
+                heading="预建失败",
+                message="出错",
+                facts=[],
+                findings=[],
+            )
+        )
+        self.assertEqual(self.window.timeline.current_step_key, "run")
+        self.assertEqual(self.window.timeline.status, "failed")
+        self.assertFalse(self.window.timeline.visible)
+        self.assertIsNone(self.window._bootstrap_progress)
+        self.assertFalse(self.window.workflow_progress_bar.visible)
+        self.assertEqual(summary_calls[-1][0], "failed")
+
     def test_saved_batch_context_flags_reads_persisted_config(self):
         class FakeState:
             def load_translator_config(self):
@@ -249,6 +412,241 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         self.assertTrue(flags["rag_enabled"])
         self.assertFalse(flags["source_index_enabled"])
+
+    def test_save_config_persists_context_storage_location(self):
+        from gui_qt.work_modes import WorkMode
+
+        saved_configs = []
+        config = {
+            "sync": {"rag": {}},
+            "batch": {"rag": {}, "source_index": {}, "model": "gemini-3.1-flash-lite"},
+        }
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/Game/work")
+            def load_translator_config(self):
+                return config
+            def save_translator_config(self, saved_config):
+                saved_configs.append(saved_config)
+
+        class FakeCheckBox:
+            def __init__(self, checked):
+                self._checked = checked
+            def isChecked(self):
+                return self._checked
+
+        class FakeCombo:
+            def __init__(self, text="", data=""):
+                self._text = text
+                self._data = data
+            def currentText(self):
+                return self._text
+            def currentData(self):
+                return self._data
+
+        class FakeStatusBar:
+            def showMessage(self, text, timeout):
+                pass
+
+        self.window.state = FakeState()
+        self.window.rag_enabled_cb = FakeCheckBox(True)
+        self.window.source_index_enabled_cb = FakeCheckBox(True)
+        self.window.bootstrap_on_build_cb = FakeCheckBox(False)
+        self.window.context_storage_game_cb = FakeCheckBox(True)
+        self.window.sync_model_combo = FakeCombo("gemini-sync")
+        self.window.batch_model_combo = FakeCombo("gemini-3.1-flash-lite")
+        self.window.sync_embedding_combo = FakeCombo("gemini-embedding-001")
+        self.window.batch_embedding_combo = FakeCombo("gemini-embedding-001")
+        self.window.batch_thinking_combo = FakeCombo(data="minimal")
+        self.window._batch_thinking_user_changed = False
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window._append_log = lambda _text: None
+        self.window.statusBar = lambda: FakeStatusBar()
+
+        saved = self.window._on_save_config()
+
+        self.assertTrue(saved)
+        self.assertEqual(len(saved_configs), 1)
+        self.assertEqual(saved_configs[0]["context_storage"]["location"], "game")
+        self.assertEqual(saved_configs[0]["context_storage"]["game_dir_name"], "translation_context")
+        self.assertTrue(saved_configs[0]["batch"]["rag"]["enabled"])
+        self.assertTrue(saved_configs[0]["batch"]["source_index"]["enabled"])
+
+    def test_save_config_preserves_legacy_context_storage_dir_name(self):
+        from gui_qt.work_modes import WorkMode
+
+        saved_configs = []
+        config = {
+            "context_storage": {"directory_name": "my_context"},
+            "sync": {"rag": {}},
+            "batch": {"rag": {}, "source_index": {}, "model": "gemini-3.1-flash-lite"},
+        }
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/Game/work")
+            def load_translator_config(self):
+                return config
+            def save_translator_config(self, saved_config):
+                saved_configs.append(saved_config)
+
+        class FakeCheckBox:
+            def __init__(self, checked):
+                self._checked = checked
+            def isChecked(self):
+                return self._checked
+
+        class FakeCombo:
+            def __init__(self, text="", data=""):
+                self._text = text
+                self._data = data
+            def currentText(self):
+                return self._text
+            def currentData(self):
+                return self._data
+
+        class FakeStatusBar:
+            def showMessage(self, text, timeout):
+                pass
+
+        self.window.state = FakeState()
+        self.window.rag_enabled_cb = FakeCheckBox(True)
+        self.window.source_index_enabled_cb = FakeCheckBox(False)
+        self.window.bootstrap_on_build_cb = FakeCheckBox(False)
+        self.window.context_storage_game_cb = FakeCheckBox(True)
+        self.window.sync_model_combo = FakeCombo("gemini-sync")
+        self.window.batch_model_combo = FakeCombo("gemini-3.1-flash-lite")
+        self.window.sync_embedding_combo = FakeCombo("gemini-embedding-001")
+        self.window.batch_embedding_combo = FakeCombo("gemini-embedding-001")
+        self.window.batch_thinking_combo = FakeCombo(data="minimal")
+        self.window._batch_thinking_user_changed = False
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window._append_log = lambda _text: None
+        self.window.statusBar = lambda: FakeStatusBar()
+
+        saved = self.window._on_save_config()
+
+        self.assertTrue(saved)
+        self.assertEqual(saved_configs[0]["context_storage"]["game_dir_name"], "my_context")
+
+    def test_load_config_reads_legacy_context_storage_location(self):
+        config = {
+            "context_storage_location": "game",
+            "sync": {"rag": {}},
+            "batch": {"rag": {}, "source_index": {}, "model": "gemini-3.1-flash-lite"},
+        }
+
+        class FakeState:
+            def load_translator_config(self):
+                return config
+
+        class FakeCheckBox:
+            def __init__(self):
+                self._checked = False
+            def isChecked(self):
+                return self._checked
+            def setChecked(self, checked):
+                self._checked = checked
+
+        class FakeCombo:
+            def __init__(self, text=""):
+                self._text = text
+                self._index = -1
+            def findData(self, _data):
+                return 0
+            def findText(self, _text):
+                return -1
+            def setCurrentIndex(self, index):
+                self._index = index
+            def addItem(self, text, _data=None):
+                self._text = text
+            def count(self):
+                return 1
+            def currentText(self):
+                return self._text
+            def currentData(self):
+                return ""
+            def setEnabled(self, _enabled):
+                pass
+
+        self.window.state = FakeState()
+        self.window._loading_config_to_ui = False
+        self.window._batch_thinking_user_changed = False
+        self.window._updating_batch_thinking_combo = False
+        self.window.rag_enabled_cb = FakeCheckBox()
+        self.window.source_index_enabled_cb = FakeCheckBox()
+        self.window.bootstrap_on_build_cb = FakeCheckBox()
+        self.window.context_storage_game_cb = FakeCheckBox()
+        self.window.theme_combo = FakeCombo()
+        self.window.sync_model_combo = FakeCombo()
+        self.window.batch_model_combo = FakeCombo()
+        self.window.sync_embedding_combo = FakeCombo()
+        self.window.batch_embedding_combo = FakeCombo()
+        self.window.batch_thinking_combo = FakeCombo()
+
+        self.window._load_config_to_ui()
+
+        self.assertTrue(self.window.context_storage_game_cb.isChecked())
+
+    def test_load_config_normalizes_context_storage_location_aliases(self):
+        config = {
+            "context_storage": {"location": "game_dir"},
+            "sync": {"rag": {}},
+            "batch": {"rag": {}, "source_index": {}, "model": "gemini-3.1-flash-lite"},
+        }
+
+        class FakeState:
+            def load_translator_config(self):
+                return config
+
+        class FakeCheckBox:
+            def __init__(self):
+                self._checked = False
+            def isChecked(self):
+                return self._checked
+            def setChecked(self, checked):
+                self._checked = checked
+
+        class FakeCombo:
+            def __init__(self, text=""):
+                self._text = text
+                self._index = -1
+            def findData(self, _data):
+                return 0
+            def findText(self, _text):
+                return -1
+            def setCurrentIndex(self, index):
+                self._index = index
+            def addItem(self, text, _data=None):
+                self._text = text
+            def count(self):
+                return 1
+            def currentText(self):
+                return self._text
+            def currentData(self):
+                return ""
+            def setEnabled(self, _enabled):
+                pass
+
+        self.window.state = FakeState()
+        self.window._loading_config_to_ui = False
+        self.window._batch_thinking_user_changed = False
+        self.window._updating_batch_thinking_combo = False
+        self.window.rag_enabled_cb = FakeCheckBox()
+        self.window.source_index_enabled_cb = FakeCheckBox()
+        self.window.bootstrap_on_build_cb = FakeCheckBox()
+        self.window.context_storage_game_cb = FakeCheckBox()
+        self.window.theme_combo = FakeCombo()
+        self.window.sync_model_combo = FakeCombo()
+        self.window.batch_model_combo = FakeCombo()
+        self.window.sync_embedding_combo = FakeCombo()
+        self.window.batch_embedding_combo = FakeCombo()
+        self.window.batch_thinking_combo = FakeCombo()
+
+        self.window._load_config_to_ui()
+
+        self.assertTrue(self.window.context_storage_game_cb.isChecked())
 
     def test_bootstrap_task_ready_uses_saved_config(self):
         from gui_qt.work_modes import WorkMode, work_mode_spec
@@ -324,6 +722,59 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(self.window.timeline.visible)
         self.assertEqual(self.window.timeline.current_step_key, "status")
         self.assertEqual(self.window.timeline.status, "waiting")
+
+    def test_refresh_workflow_from_latest_retry_warn_shows_actionable_state(self):
+        from gui_qt.work_modes import WorkMode
+
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.BATCH_TRANSLATION,
+            manifest={
+                "job_name": "batches/retry",
+                "job_state": "JOB_STATE_SUCCEEDED",
+                "retry_of_manifest": r"C:\package\manifest.json",
+                "last_check_summary": {"safety_level": "warn"},
+            },
+            latest_manifest=Path(r"C:\package\retry_parts\retry1\manifest.json"),
+        )
+        self.window._split_entries_for_manifest = lambda *_args, **_kwargs: []
+        self.window._render_split_status_entries = lambda *_args, **_kwargs: None
+
+        self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        status, heading, message, facts = summary_calls[0]
+        self.assertEqual(status, "stale")
+        self.assertIn("补译结果仍需处理", heading)
+        self.assertIn("暂不能合并", message)
+        self.assertIn(r"父任务：C:\package\manifest.json", facts)
+        self.assertTrue(self.window.timeline.visible)
+        self.assertEqual(self.window.timeline.current_step_key, "check")
+        self.assertEqual(self.window.timeline.status, "stale")
+
+    def test_refresh_workflow_from_latest_retry_safe_prompts_merge(self):
+        from gui_qt.work_modes import WorkMode
+
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.BATCH_TRANSLATION,
+            manifest={
+                "job_name": "batches/retry",
+                "job_state": "JOB_STATE_SUCCEEDED",
+                "retry_of_manifest": r"C:\package\manifest.json",
+                "last_check_summary": {"safety_level": "safe"},
+            },
+            latest_manifest=Path(r"C:\package\retry_parts\retry1\manifest.json"),
+        )
+        self.window._split_entries_for_manifest = lambda *_args, **_kwargs: []
+        self.window._render_split_status_entries = lambda *_args, **_kwargs: None
+
+        self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        status, heading, message, _facts = summary_calls[0]
+        self.assertEqual(status, "ready")
+        self.assertIn("补译后续处理", heading)
+        self.assertIn("继续翻译", message)
+        self.assertEqual(self.window.timeline.current_step_key, "merge-retry")
 
     def test_refresh_workflow_from_latest_manifest_failed_job_state(self):
         from gui_qt.work_modes import WorkMode
@@ -408,6 +859,35 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(self.window.timeline.visible)
         self.assertIsNone(self.window.timeline.current_step_key)
         self.assertEqual(self.window.timeline.status, "done")
+
+    def test_refresh_workflow_from_latest_manifest_warn_stops_at_check_step(self):
+        from gui_qt.work_modes import WorkMode
+        from unittest.mock import MagicMock, patch
+
+        summary_calls = self._prepare_resume_refresh(
+            work_mode=WorkMode.BATCH_TRANSLATION,
+            manifest={
+                "job_name": "batches/example",
+                "job_state": "JOB_STATE_SUCCEEDED",
+                "last_check_summary": {"safety_level": "warn"},
+            },
+        )
+        self.window._split_entries_for_manifest = lambda *_args, **_kwargs: []
+        self.window._render_split_status_entries = lambda *_args, **_kwargs: None
+        mock_workflow = MagicMock()
+        mock_workflow.current_step.return_value = None
+
+        with patch("gui_qt.app.resume_workflow", return_value=mock_workflow):
+            self.window._refresh_workflow_from_latest_manifest()
+
+        self.assertEqual(len(summary_calls), 1)
+        status, heading, message, _facts = summary_calls[0]
+        self.assertEqual(status, "stale")
+        self.assertIn("需要先处理问题", heading)
+        self.assertIn("暂不能写回", message)
+        self.assertTrue(self.window.timeline.visible)
+        self.assertEqual(self.window.timeline.current_step_key, "check")
+        self.assertEqual(self.window.timeline.status, "stale")
 
     def test_resume_completed_keyword_manifest_shows_result_summary(self):
         from gui_qt.work_modes import WorkMode
@@ -564,6 +1044,123 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._set_writeback_summary.assert_not_called()
         self.assertIn("关键词提取完成", status_bar.messages[-1][0])
 
+    def test_sync_keyword_finish_copies_reports_from_sync_run_output(self):
+        from gui_qt.translation_workflow import WorkflowStep, WorkflowUpdate
+        from gui_qt.work_modes import WorkMode
+        from unittest.mock import MagicMock
+
+        class FakeWorkflow:
+            manifest_path = ""
+
+            def current_step(self):
+                return WorkflowStep(
+                    "sync-keywords",
+                    ["sync-keywords"],
+                    "正在同步提取关键词",
+                    "正在扫描翻译文本并生成术语与剧情报告。",
+                )
+
+            def complete_current_step(self, exit_code, output):
+                return WorkflowUpdate(
+                    status="done",
+                    heading="同步关键词提取完成",
+                    message="done",
+                    facts=[],
+                    should_continue=False,
+                )
+
+        class FakeStatusBar:
+            def __init__(self):
+                self.messages = []
+            def showMessage(self, text, timeout):
+                self.messages.append((text, timeout))
+
+        output = "Sync keyword run: C:/dummy/sync_keywords\nKeyword candidates: 2 deduped from 3 raw"
+        self.window._workflow = FakeWorkflow()
+        self.window._workflow_step_output_lines = output.splitlines()
+        self.window._current_work_mode = lambda: WorkMode.SYNC_KEYWORD_EXTRACTION
+        self.window._copy_sync_keyword_reports_to_game_parent = MagicMock()
+        self.window._copy_keyword_reports_to_game_parent = MagicMock()
+        self.window._uses_revision_writeback = lambda: False
+        self.window._set_workflow_update = MagicMock()
+        self.window._refresh_diagnostics_context = MagicMock()
+        self.window._set_task_running = MagicMock()
+        self.window._set_writeback_summary = MagicMock()
+        status_bar = FakeStatusBar()
+        self.window.statusBar = lambda: status_bar
+
+        self.window._on_workflow_step_finished(0)
+
+        self.window._copy_sync_keyword_reports_to_game_parent.assert_called_once_with(output)
+        self.window._copy_keyword_reports_to_game_parent.assert_not_called()
+        self.window._set_writeback_summary.assert_called_once()
+        self.assertIn("同步关键词提取完成", status_bar.messages[-1][0])
+
+    def test_leaving_dirty_config_tab_can_stay_on_config(self):
+        from unittest.mock import patch
+
+        class FakeMessageBox:
+            class Icon:
+                Warning = object()
+            class ButtonRole:
+                AcceptRole = object()
+                DestructiveRole = object()
+                RejectRole = object()
+
+            shown = False
+
+            def __init__(self, parent=None):
+                self._stay_btn = object()
+                self._buttons = []
+            def setIcon(self, icon):
+                pass
+            def setWindowTitle(self, title):
+                pass
+            def setText(self, text):
+                pass
+            def setInformativeText(self, text):
+                pass
+            def addButton(self, text, role):
+                button = self._stay_btn if text == "留在配置页" else object()
+                self._buttons.append((text, button))
+                return button
+            def setDefaultButton(self, button):
+                pass
+            def exec(self):
+                FakeMessageBox.shown = True
+            def clickedButton(self):
+                return self._stay_btn
+
+        class FakeTabs:
+            def __init__(self, config_tab, other_tab):
+                self.config_tab = config_tab
+                self.other_tab = other_tab
+                self.current_index = 1
+            def widget(self, index):
+                return self.config_tab if index == 1 else self.other_tab
+            def setCurrentIndex(self, index):
+                self.current_index = index
+
+        config_tab = object()
+        other_tab = object()
+        self.window._config_tab = config_tab
+        self.window._diagnostics_tab = object()
+        self.window.tab_widget = FakeTabs(config_tab, other_tab)
+        self.window._last_main_tab_index = 1
+        self.window._handling_config_tab_leave = False
+        self.window._loading_config_to_ui = False
+        self.window._config_ui_saved_snapshot = {"dirty": False}
+        self.window._current_config_ui_snapshot = lambda: {"dirty": True}
+        self.window._refresh_api_status = lambda: None
+        self.window._refresh_diagnostics_context = lambda: None
+
+        with patch("gui_qt.app.QMessageBox", FakeMessageBox):
+            self.window._on_tab_changed(0)
+
+        self.assertTrue(FakeMessageBox.shown)
+        self.assertEqual(self.window.tab_widget.current_index, 1)
+        self.assertEqual(self.window._last_main_tab_index, 1)
+
     def test_update_resume_btn_text_uses_current_status_without_disk_lookup(self):
         from gui_qt.work_modes import WorkMode
         from unittest.mock import MagicMock
@@ -616,6 +1213,47 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertFalse(summary.can_apply)
         self.assertIn("关键词报告已生成", summary.heading)
         self.assertTrue(any("候选 Markdown" in fact for fact in summary.facts))
+
+    def test_refresh_writeback_from_latest_translation_manifest_syncs_split_status(self):
+        from gui_qt.work_modes import WorkMode
+
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/project")
+
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                return Path("C:/dummy/split_parts/part02_of_10/manifest.json")
+
+            def load_resume_manifest(self, path, work_mode):
+                return {
+                    "_manifest_path": str(path),
+                    "last_check_summary": {
+                        "safety_level": "warn",
+                        "pending_files": 12,
+                        "pending_lines": 11813,
+                        "failure_items": 12,
+                    },
+                }
+
+        self.window.state = FakeState()
+        summaries = []
+        split_refreshes = []
+        self.window._set_writeback_summary = lambda summary: summaries.append(summary)
+        self.window._refresh_split_status_ui = (
+            lambda **kwargs: split_refreshes.append(kwargs)
+        )
+
+        self.window._refresh_writeback_from_latest_manifest()
+
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].status, "warn")
+        self.assertEqual(len(split_refreshes), 1)
+        self.assertEqual(
+            split_refreshes[0]["manifest_path"],
+            str(Path("C:/dummy/split_parts/part02_of_10/manifest.json")),
+        )
 
     def test_keyword_result_hides_writeback_action_buttons(self):
         from gui_qt.check_report import WritebackSummary
@@ -696,6 +1334,38 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             self.assertTrue((target_dir / "keyword_chunk_summaries.md").exists())
             self.assertEqual((target_dir / "keyword_candidates.md").read_text(encoding="utf-8"), "candidates")
 
+            self.assertTrue(any("已将关键词提取报告复制一份至" in msg for msg in logged_messages))
+
+    def test_copy_sync_keyword_reports_to_game_parent_copies_successfully(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            game_root = tmp_path / "Game" / "work"
+            game_root.mkdir(parents=True, exist_ok=True)
+
+            sync_dir = tmp_path / "logs" / "sync_runs" / "job_sync_keywords"
+            sync_dir.mkdir(parents=True, exist_ok=True)
+            (sync_dir / "keyword_candidates.md").write_text("candidates", encoding="utf-8")
+            (sync_dir / "keyword_chunk_summaries.md").write_text("summaries", encoding="utf-8")
+
+            class FakeState:
+                def get_game_root(self):
+                    return game_root
+            self.window.state = FakeState()
+
+            logged_messages = []
+            self.window._append_log = lambda msg: logged_messages.append(msg)
+
+            self.window._copy_sync_keyword_reports_to_game_parent(
+                f"Sync keyword run: {sync_dir}\n"
+                "Keyword candidates: 2 deduped from 3 raw\n"
+            )
+
+            target_dir = tmp_path / "Game" / "extracted_keywords"
+            self.assertTrue((target_dir / "keyword_candidates.md").exists())
+            self.assertTrue((target_dir / "keyword_chunk_summaries.md").exists())
+            self.assertEqual((target_dir / "keyword_candidates.md").read_text(encoding="utf-8"), "candidates")
             self.assertTrue(any("已将关键词提取报告复制一份至" in msg for msg in logged_messages))
 
     def test_sync_layout_sizes_skips_scrollable_doctor_labels(self):

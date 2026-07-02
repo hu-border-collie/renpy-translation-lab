@@ -60,6 +60,24 @@ def _parse_counts(raw_counts: str) -> dict[str, int]:
     return counts
 
 
+def _parse_context_fields(raw_fields: str) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    for part in raw_fields.split(", "):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        bool_value = _parse_bool(value)
+        if bool_value is not None:
+            fields[key] = bool_value
+        elif re.fullmatch(r"-?\d+", value):
+            fields[key] = int(value)
+        else:
+            fields[key] = value
+    return fields
+
+
 def format_tl_scan_facts(
     counts: dict[str, int],
     pending: dict[str, int] | None = None,
@@ -98,6 +116,70 @@ def format_tl_scan_facts(
             facts.append(
                 f"界面字符串：原文 {old_lines} 条，译文 {new_lines} 条（可能格式异常）"
             )
+
+    return facts
+
+
+def _int_context_value(context: dict[str, object], key: str) -> int:
+    value = context.get(key)
+    return value if isinstance(value, int) else 0
+
+
+def format_context_status_facts(
+    rag_context: dict[str, object] | None,
+    source_index_context: dict[str, object] | None,
+) -> list[str]:
+    facts: list[str] = []
+
+    if rag_context:
+        if rag_context.get("enabled") is True:
+            records = _int_context_value(rag_context, "history_records")
+            bootstrap_on_build = rag_context.get("bootstrap_on_build") is True
+            if rag_context.get("store_exists") is not True:
+                detail = "尚未创建"
+                if bootstrap_on_build:
+                    detail += "（build 会自动补建）"
+                else:
+                    detail += "（建议先预建记忆库）"
+            elif records == 0:
+                detail = "记录数 0"
+                if bootstrap_on_build:
+                    detail += "（build 会自动补建）"
+                else:
+                    detail += "（建议先预建记忆库）"
+            else:
+                detail = f"记录数 {records}"
+            facts.append(f"记忆库：已启用，{detail}")
+            if rag_context.get("store_dir"):
+                facts.append(f"记忆库路径：{rag_context['store_dir']}")
+            if rag_context.get("error"):
+                facts.append(f"记忆库读取异常：{rag_context['error']}")
+        elif rag_context.get("enabled") is False:
+            facts.append("记忆库：未启用")
+
+    if source_index_context:
+        if source_index_context.get("enabled") is True:
+            segments = _int_context_value(source_index_context, "source_segments")
+            expected = _int_context_value(source_index_context, "expected_segments")
+            schema_version = source_index_context.get("schema_version")
+            if source_index_context.get("store_exists") is not True:
+                detail = "尚未创建（建议先预建原文索引）"
+            elif segments == 0:
+                detail = "片段数 0（建议先预建原文索引）"
+            elif expected > 0 and segments < expected:
+                percent = (segments * 100) // expected
+                detail = f"片段数 {segments}/{expected}（约 {percent}%，预建未完成）"
+            else:
+                detail = f"片段数 {segments}"
+            if schema_version:
+                detail += f"，schema v{schema_version}"
+            facts.append(f"原文索引：已启用，{detail}")
+            if source_index_context.get("store_dir"):
+                facts.append(f"原文索引路径：{source_index_context['store_dir']}")
+            if source_index_context.get("error"):
+                facts.append(f"原文索引读取异常：{source_index_context['error']}")
+        elif source_index_context.get("enabled") is False:
+            facts.append("原文索引：未启用")
 
     return facts
 
@@ -195,6 +277,14 @@ def parse_doctor_output(output: str) -> dict[str, object]:
             parsed["pending"] = _parse_counts(line.split(":", 1)[1])
             continue
 
+        if line.startswith("- RAG context:"):
+            parsed["rag_context"] = _parse_context_fields(line.split(":", 1)[1])
+            continue
+
+        if line.startswith("- Source index context:"):
+            parsed["source_index_context"] = _parse_context_fields(line.split(":", 1)[1])
+            continue
+
     return parsed
 
 
@@ -268,6 +358,13 @@ def summarize_doctor_output(
     if counts:
         for fact in format_tl_scan_facts(counts, pending=pending):
             append_unique_fact(facts, fact)
+    for fact in format_context_status_facts(
+        parsed.get("rag_context") if isinstance(parsed.get("rag_context"), dict) else None,
+        parsed.get("source_index_context")
+        if isinstance(parsed.get("source_index_context"), dict)
+        else None,
+    ):
+        append_unique_fact(facts, fact)
 
     findings = list(warnings)
     if api_key_count is not None:

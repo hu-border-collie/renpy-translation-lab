@@ -5,6 +5,7 @@ import io
 import json
 import os
 import pickle
+import re
 import shutil
 import subprocess
 import sys
@@ -113,6 +114,132 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             self.assertEqual(runtime.missing_preserved_terms('Moon rises.', '月亮升起。'), [])
             self.assertEqual(runtime.missing_preserved_terms('Lou laughs.', 'CloudLou笑了。'), ['Lou'])
 
+    def test_short_preserve_terms_do_not_match_contractions(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['Don']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'don'}),
+        ):
+            self.assertEqual(runtime.missing_preserved_terms("Don't move.", '别动。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('Don moved.', '他动了。'), ['Don'])
+
+    def test_preserve_terms_allow_renpy_field_translation_conversion(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['[Main]']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'[main]'}),
+        ):
+            self.assertEqual(
+                runtime.missing_preserved_terms('[Main], are you listening?', '[Main!t]，你在听吗？'),
+                [],
+            )
+
+    def test_preserve_terms_ignore_common_mark_my_words_idiom(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['Mark']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'mark'}),
+        ):
+            self.assertEqual(
+                runtime.missing_preserved_terms('Mark my words, this will work.', '???????????'),
+                [],
+            )
+            self.assertEqual(runtime.missing_preserved_terms('Mark said so.', '?????'), ['Mark'])
+
+    def test_short_preserve_terms_allow_matching_renpy_name_field(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['Gil', 'Don']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'gil', 'don'}),
+        ):
+            self.assertEqual(runtime.missing_preserved_terms('coach Gil said so.', '[Gil_name!t] 教练这么说。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('Don said so.', '[Gil_name!t] 这么说。'), ['Don'])
+
+    def test_preserve_terms_allow_known_aliases(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['H.U.']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'h.u.'}),
+        ):
+            self.assertEqual(runtime.missing_preserved_terms('I am in H.U. now.', '我现在在Highwell University。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('I am in H.U. now.', '我现在在学校。'), ['H.U.'])
+    def test_non_chinese_term_translation_allows_repeated_preserved_phrase(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['Music Appreciation']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'music appreciation'}),
+        ):
+            self.assertTrue(runtime.allow_non_chinese_term_translation(
+                'Music Appreciation...Music Appreciation...',
+                'Music Appreciation……Music Appreciation……',
+            ))
+
+    def test_non_translatable_accepts_ui_labels_formats_and_identifiers(self):
+        self.assertTrue(runtime.is_non_translatable('Page Up'))
+        self.assertTrue(runtime.is_non_translatable('+III'))
+        self.assertTrue(runtime.is_non_translatable('%b %d, %H:%M'))
+        self.assertTrue(runtime.is_non_translatable('AndersF_name'))
+        self.assertFalse(runtime.is_non_translatable('I'))
+
+    def test_translation_templates_skip_keyword_argument_strings(self):
+        lines = [
+            'translate schinese sample_block:\n',
+            '\n',
+            '    # "[Main]" "Hello there." (ctc="ctc_blink", ctc_position="nestled")\n',
+            '    "[Main]" "Hello there." (ctc="ctc_blink", ctc_position="nestled")\n',
+        ]
+
+        tasks = runtime.collect_tasks(lines)
+        task_texts = [task['text'] for task in tasks]
+        mapping = runtime.scan_all_translation_units(lines, 'sample.rpy')
+        scanned_texts = [value[3] for value in mapping.values()]
+
+        self.assertIn('Hello there.', task_texts)
+        self.assertNotIn('ctc_blink', task_texts)
+        self.assertNotIn('nestled', task_texts)
+        self.assertEqual(scanned_texts, ['Hello there.'])
+        self.assertEqual(tasks[0]['block_index'], 1)
+        self.assertTrue(all(':sample_block:1:' in identity for identity in mapping))
+
+    def test_batch_non_chinese_allowance_accepts_say_speaker_label_item(self):
+        line = '    "Terry" "Hello there." (ctc="ctc_blink", ctc_position="nestled")\n'
+        start = line.index('"Terry"')
+        end = start + len('"Terry"')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_path = Path(tmpdir) / 'sample.rpy'
+            sample_path.write_text(line, encoding='utf-8')
+            item = {'start': start, 'end': end, 'line_number': 1}
+            manifest = {'tl_dir': tmpdir}
+            chunk = {'file_rel_path': 'sample.rpy', 'glossary_hits': [], 'history_hits': []}
+
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                manifest,
+                chunk,
+                'Terry',
+                'Terry',
+                item=item,
+            ))
+
+    def test_batch_non_chinese_allowance_accepts_manifest_keyword_argument_item(self):
+        line = '    "[Main]" "Hello there." (ctc="ctc_blink", ctc_position="nestled")\n'
+        start = line.index('"ctc_blink"')
+        end = start + len('"ctc_blink"')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_path = Path(tmpdir) / 'sample.rpy'
+            sample_path.write_text(line, encoding='utf-8')
+            item = {'start': start, 'end': end, 'line_number': 1}
+            manifest = {'tl_dir': tmpdir}
+            chunk = {'file_rel_path': 'sample.rpy', 'glossary_hits': [], 'history_hits': []}
+
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                manifest,
+                chunk,
+                'ctc_blink',
+                'ctc_blink',
+                item=item,
+            ))
+            self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+                manifest,
+                chunk,
+                'ctc_blink',
+                'ctc_blink',
+                item=None,
+            ))
+
     def test_phrase_preserve_terms_allow_non_chinese_punctuation_change(self):
         with (
             mock.patch.object(runtime, 'PRESERVE_TERMS', [
@@ -131,6 +258,144 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             self.assertTrue(runtime.allow_non_chinese_term_translation('Raven Three!', 'Raven Three！'))
             self.assertTrue(runtime.allow_non_chinese_term_translation('Mrs. de Bruin?', 'Mrs. de Bruin？'))
             self.assertFalse(runtime.allow_non_chinese_term_translation('New Heart?', 'New Heart？'))
+
+    def test_batch_request_includes_request_level_safety_settings(self):
+        old_safety_settings = batch_mod.BATCH_SAFETY_SETTINGS
+        try:
+            batch_mod.BATCH_SAFETY_SETTINGS = [
+                {
+                    'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+                    'threshold': 'BLOCK_NONE',
+                }
+            ]
+            request = batch_mod.build_batch_request({
+                'key': 'chunk-1',
+                'context_past': [],
+                'context_future': [],
+                'glossary_hits': [],
+                'history_hits': [],
+                'source_hits': [],
+                'items': [{'id': 'item-1', 'text': 'Hello'}],
+            })
+        finally:
+            batch_mod.BATCH_SAFETY_SETTINGS = old_safety_settings
+
+        self.assertNotIn('safety_settings', request['request']['generation_config'])
+        self.assertEqual(
+            request['request']['safety_settings'],
+            [{'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'}],
+        )
+
+    def test_batch_safety_settings_normalizer_accepts_adult_preset(self):
+        self.assertEqual(
+            batch_mod.normalize_batch_safety_settings('relaxed_adult'),
+            [{'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'}],
+        )
+        self.assertEqual(
+            batch_mod.normalize_batch_safety_settings([
+                {'category': 'sexually_explicit', 'threshold': 'none'},
+            ]),
+            [{'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'}],
+        )
+
+    def test_batch_non_chinese_allowance_accepts_preserved_names_and_acronyms(self):
+        with mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'gilly', 'dearmer'}):
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                {},
+                {'glossary_hits': [], 'history_hits': []},
+                '"AR?"',
+                '“AR？”',
+            ))
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                {},
+                {'glossary_hits': [], 'history_hits': []},
+                'G-gilly!?',
+                'G-Gilly！？',
+            ))
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                {},
+                {'glossary_hits': [], 'history_hits': []},
+                'Dearmer',
+                'Dearmer',
+            ))
+            self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+                {},
+                {'glossary_hits': [], 'history_hits': []},
+                '"Macroeconomics."',
+                '"Macroeconomics。"',
+            ))
+    def test_batch_non_chinese_allowance_accepts_static_context_items(self):
+        self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'screens_patronlistitem.rpy'},
+            'Alpha, Beta, Gamma',
+            'Alpha, Beta, Gamma',
+        ))
+        self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'screens_menu_about.rpy'},
+            '{a=https://example.test}Dirk the Red Panda{/a}.',
+            '{a=https://example.test}Dirk the Red Panda{/a}。',
+        ))
+        self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'screens_menu_about.rpy'},
+            'Avi, MJ, Sinta, Steven.',
+            'Avi, MJ, Sinta, Steven。',
+        ))
+        self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'screens_menu_about.rpy'},
+            'Main Writer: Andy Peng',
+            'Main Writer: Andy Peng',
+        ))
+        self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'screens_charselect.rpy'},
+            'Lars Dearmer',
+            'Lars Dearmer',
+        ))
+        self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'screens_charselect.rpy'},
+            'Birthday: April 25th',
+            'Birthday: April 25th',
+        ))
+        self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'script_define.rpy'},
+            'Theodore',
+            'Theodore',
+        ))
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmpdir:
+            base_dir = Path(tmpdir)
+            source_path = base_dir / 'game' / 'script.rpy'
+            source_path.parent.mkdir(parents=True)
+            source_path.write_text('if Main == _("Herbert"):\n    pass\n', encoding='utf-8')
+            tl_dir = base_dir / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            tl_path = tl_dir / 'script.rpy'
+            tl_path.write_text('# game/script.rpy:1\nold "Herbert"\nnew "Herbert"\n', encoding='utf-8')
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                {'base_dir': str(base_dir), 'tl_dir': str(tl_dir)},
+                {'file_rel_path': 'script.rpy'},
+                'Herbert',
+                'Herbert',
+                item={'line_number': 3},
+            ))
+            self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+                {'base_dir': str(base_dir), 'tl_dir': str(tl_dir)},
+                {'file_rel_path': 'script.rpy'},
+                'No',
+                'No',
+                item={'line_number': 3},
+            ))
+        self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'script.rpy', 'glossary_hits': [], 'history_hits': []},
+            'But who is this Campbell?',
+            'But who is this Campbell?',
+        ))
 
     def test_batch_non_chinese_allowance_uses_glossary_without_rag_enabled(self):
         chunk = {
@@ -1775,6 +2040,131 @@ class BootstrapWorkTests(unittest.TestCase):
                 str(project.resolve()),
             )
 
+    def test_context_storage_game_defaults_use_project_root(self):
+        old_values = {
+            'base': runtime.BASE_DIR,
+            'log': runtime.LOG_DIR,
+            'location': runtime.CONTEXT_STORAGE_LOCATION,
+            'dir_name': runtime.CONTEXT_STORAGE_GAME_DIR_NAME,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / 'Game_Example'
+                work = project / 'work'
+                work.mkdir(parents=True)
+                runtime.BASE_DIR = str(work)
+                runtime.LOG_DIR = str(Path(tmp) / 'tool_logs')
+                runtime.load_context_storage_settings({
+                    'context_storage': {
+                        'location': 'game',
+                        'game_dir_name': 'translation_context',
+                    }
+                })
+
+                self.assertEqual(
+                    runtime.get_context_storage_root(),
+                    str((project / 'translation_context').resolve()),
+                )
+                self.assertEqual(
+                    runtime.get_default_batch_rag_store_dir(),
+                    str((project / 'translation_context' / 'rag_store').resolve()),
+                )
+                self.assertEqual(
+                    runtime.get_default_source_index_store_dir(),
+                    str((project / 'translation_context' / 'source_index_store').resolve()),
+                )
+                self.assertEqual(
+                    runtime.get_default_story_memory_graph_path(),
+                    str((project / 'translation_context' / 'story_memory' / 'story_graph.json').resolve()),
+                )
+        finally:
+            runtime.BASE_DIR = old_values['base']
+            runtime.LOG_DIR = old_values['log']
+            runtime.CONTEXT_STORAGE_LOCATION = old_values['location']
+            runtime.CONTEXT_STORAGE_GAME_DIR_NAME = old_values['dir_name']
+
+    def test_normalize_context_storage_dir_name_rejects_absolute_paths(self):
+        self.assertEqual(
+            runtime._normalize_context_storage_dir_name('C:\\ctx'),
+            'translation_context',
+        )
+        self.assertEqual(
+            runtime._normalize_context_storage_dir_name('C:/ctx'),
+            'translation_context',
+        )
+        self.assertEqual(
+            runtime._normalize_context_storage_dir_name('/translation_context'),
+            'translation_context',
+        )
+        self.assertEqual(
+            runtime._normalize_context_storage_dir_name('custom_context'),
+            'custom_context',
+        )
+
+    def test_context_storage_tool_defaults_use_base_dir_slug(self):
+        old_values = {
+            'base': runtime.BASE_DIR,
+            'log': runtime.LOG_DIR,
+            'location': runtime.CONTEXT_STORAGE_LOCATION,
+            'dir_name': runtime.CONTEXT_STORAGE_GAME_DIR_NAME,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_a = Path(tmp) / 'Game_Example'
+                project_b = Path(tmp) / 'Other_Game'
+                (project_a / 'work').mkdir(parents=True)
+                (project_b / 'work').mkdir(parents=True)
+                log_dir = Path(tmp) / 'tool_logs'
+                runtime.BASE_DIR = str(project_a / 'work')
+                runtime.LOG_DIR = str(log_dir)
+                runtime.load_context_storage_settings({'context_storage': {'location': 'tool'}})
+
+                self.assertEqual(
+                    runtime.get_default_context_store_dir('rag_store', str(project_b / 'work')),
+                    str(log_dir / 'rag_store' / 'Other_Game'),
+                )
+        finally:
+            runtime.BASE_DIR = old_values['base']
+            runtime.LOG_DIR = old_values['log']
+            runtime.CONTEXT_STORAGE_LOCATION = old_values['location']
+            runtime.CONTEXT_STORAGE_GAME_DIR_NAME = old_values['dir_name']
+
+    def test_context_storage_tool_defaults_keep_log_slug_layout(self):
+        old_values = {
+            'base': runtime.BASE_DIR,
+            'log': runtime.LOG_DIR,
+            'location': runtime.CONTEXT_STORAGE_LOCATION,
+            'dir_name': runtime.CONTEXT_STORAGE_GAME_DIR_NAME,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / 'Game_Example'
+                work = project / 'work'
+                work.mkdir(parents=True)
+                log_dir = Path(tmp) / 'tool_logs'
+                runtime.BASE_DIR = str(work)
+                runtime.LOG_DIR = str(log_dir)
+                runtime.load_context_storage_settings({'context_storage': {'location': 'tool'}})
+
+                self.assertEqual(runtime.get_context_storage_root(), str(log_dir))
+                self.assertEqual(
+                    runtime.get_default_batch_rag_store_dir(),
+                    str(log_dir / 'rag_store' / 'Game_Example'),
+                )
+                self.assertEqual(
+                    runtime.get_default_source_index_store_dir(),
+                    str(log_dir / 'source_index_store' / 'Game_Example'),
+                )
+                self.assertEqual(
+                    runtime.get_default_story_memory_graph_path(),
+                    str(log_dir / 'story_memory' / 'story_graph.json'),
+                )
+        finally:
+            runtime.BASE_DIR = old_values['base']
+            runtime.LOG_DIR = old_values['log']
+            runtime.CONTEXT_STORAGE_LOCATION = old_values['location']
+            runtime.CONTEXT_STORAGE_GAME_DIR_NAME = old_values['dir_name']
+
     def test_resolve_project_root_from_original_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1925,6 +2315,37 @@ class BootstrapWorkTests(unittest.TestCase):
             self.assertTrue((project / 'work' / 'game' / 'images' / 'logo.png').is_file())
             self.assertEqual(result['files_copied'], 2)
 
+    def test_copy_game_directory_throttles_bootstrap_progress_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'source'
+            target = Path(tmp) / 'target'
+            source.mkdir()
+            for index in range(60):
+                (source / f'file_{index:03d}.txt').write_text('x', encoding='utf-8')
+
+            with mock.patch('sys.stdout', new_callable=io.StringIO) as stdout:
+                copied = runtime._copy_game_directory(str(source), str(target))
+
+            lines = [
+                line.strip()
+                for line in stdout.getvalue().splitlines()
+                if line.startswith('Work bootstrap copy progress:')
+            ]
+
+            self.assertEqual(copied, 60)
+            self.assertEqual(lines[0], 'Work bootstrap copy progress: 0/60 files.')
+            progress_counts = []
+            for line in lines[1:]:
+                match = re.fullmatch(
+                    r'Work bootstrap copy progress: (\d+)/60 files, file=(.+)\.',
+                    line,
+                )
+                self.assertIsNotNone(match, line)
+                progress_counts.append(int(match.group(1)))
+                self.assertRegex(match.group(2), r'^file_\d{3}\.txt$')
+            self.assertEqual(progress_counts, [1, 25, 50, 60])
+            self.assertLess(len(lines), 60)
+
     def test_bootstrap_work_from_original_skips_non_empty_work(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2013,7 +2434,6 @@ class BootstrapWorkTests(unittest.TestCase):
                 runtime.BASE_DIR,
                 runtime.canonical_abs_path(project / 'work'),
             )
-
 
 if __name__ == '__main__':
     unittest.main()
