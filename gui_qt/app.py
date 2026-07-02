@@ -1268,7 +1268,6 @@ class MainWindow(QMainWindow):
     def _update_split_status_job_column_texts(self, profile: dict[str, int]) -> None:
         if not hasattr(self, "split_status_table"):
             return
-        group_count = max(1, profile["groups"])
         rows = self.split_status_table.rowCount()
         if rows <= 0:
             return
