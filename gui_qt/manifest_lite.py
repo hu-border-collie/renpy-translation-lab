@@ -95,8 +95,17 @@ def read_manifest_lite(path: str | Path) -> dict[str, Any]:
             if marker_offset is not None:
                 head_limit = marker_offset
                 head = handle.read(head_limit).decode("utf-8-sig", errors="replace")
-                handle.seek(marker_offset)
-                tail = handle.read().decode("utf-8-sig", errors="replace")
+                # Tail metadata lives after the huge ``chunks`` array near EOF.
+                # Never read from the marker through EOF; that would decode the
+                # entire chunks payload and stall the GUI for multi-MB manifests.
+                if size > _TAIL_READ_BYTES:
+                    handle.seek(size - _TAIL_READ_BYTES)
+                    tail = handle.read().decode("utf-8-sig", errors="replace")
+                elif head_limit < size:
+                    handle.seek(head_limit)
+                    tail = handle.read().decode("utf-8-sig", errors="replace")
+                else:
+                    tail = head
             else:
                 head_limit = min(_HEAD_READ_BYTES, size)
                 head = handle.read(head_limit).decode("utf-8-sig", errors="replace")

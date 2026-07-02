@@ -1569,24 +1569,12 @@ class MainWindow(QMainWindow):
         else:
             self._refresh_split_status_ui(manifest_path=manifest_path)
         self._refresh_writeback_for_manifest_path(manifest_path)
-        QTimer.singleShot(
-            0,
-            lambda path=manifest_path: self._deferred_select_split_manifest_refresh(path),
-        )
         writeback_summary = self._current_writeback_summary()
         if writeback_summary.status not in {"idle", "running", "stale"}:
             self._focus_workbench_status_tab(2)
         else:
             self._focus_workbench_status_tab(1)
         self.statusBar().showMessage("已选择拆分包；可继续下载、检查或写回。", 5000)
-
-    def _deferred_select_split_manifest_refresh(self, manifest_path: str) -> None:
-        if not self._same_manifest_path(
-            manifest_path,
-            self._split_status_selected_manifest_path,
-        ):
-            return
-        self._refresh_workflow_from_latest_manifest()
 
     def _writeback_issues_ready(self, summary: WritebackSummary) -> bool:
         if self._uses_revision_writeback():
