@@ -12,8 +12,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-import translator_runtime as runtime
-
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QGuiApplication
 from PySide6.QtWidgets import (
@@ -43,6 +41,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
+from .path_utils import canonical_abs_path, normalize_context_storage_location
 from .api_key_dialog import ApiKeyDialog
 from .api_key_helpers import mask_api_key
 from .bootstrap_report import (
@@ -163,14 +162,40 @@ _DIAGNOSTICS_IDLE_LOG_PX = 180
 _DIAGNOSTICS_RUNNING_CONTEXT_RATIO = 0.32
 
 
+_LOG_FLUSH_INTERVAL_MS = 80
+_LAYOUT_SYNC_DEBOUNCE_MS = 32
+_UI_PROGRESS_FLUSH_INTERVAL_MS = 100
+
+
 class MainWindow(QMainWindow):
-    def __init__(self, *, qt_app: QApplication | None = None, resources_dir: Path | None = None):
+    def __init__(
+        self,
+        *,
+        qt_app: QApplication | None = None,
+        resources_dir: Path | None = None,
+        project_state: ProjectState | None = None,
+    ):
         super().__init__()
         self.setWindowTitle("Ren'Py Translation Lab - 图形工作台")
         self.setMinimumSize(960, 640)
         self.resize(960, 760)
 
-        self.state = ProjectState()
+        self.state = project_state or ProjectState()
+        self._diagnostics_context_fingerprint: tuple[object, ...] | None = None
+        self._pending_log_lines: list[str] = []
+        self._workflow_progress_dirty = False
+        self._log_flush_timer = QTimer(self)
+        self._log_flush_timer.setSingleShot(True)
+        self._log_flush_timer.setInterval(_LOG_FLUSH_INTERVAL_MS)
+        self._log_flush_timer.timeout.connect(self._flush_pending_log_lines)
+        self._progress_flush_timer = QTimer(self)
+        self._progress_flush_timer.setSingleShot(True)
+        self._progress_flush_timer.setInterval(_UI_PROGRESS_FLUSH_INTERVAL_MS)
+        self._progress_flush_timer.timeout.connect(self._flush_throttled_progress_ui)
+        self._layout_sync_timer = QTimer(self)
+        self._layout_sync_timer.setSingleShot(True)
+        self._layout_sync_timer.setInterval(_LAYOUT_SYNC_DEBOUNCE_MS)
+        self._layout_sync_timer.timeout.connect(self._sync_layout_sizes)
         self._qt_app = qt_app
         self._resources_dir = resources_dir or Path(__file__).resolve().parent / "resources"
         self._theme_preference = DEFAULT_THEME_PREFERENCE
@@ -184,6 +209,7 @@ class MainWindow(QMainWindow):
         self._doctor_output_lines: list[str] = []
         self._workflow = None
         self._split_status_entries: list[SplitManifestEntry] = []
+        self._split_status_selected_manifest_path = ""
         self._work_mode = WorkMode.BATCH_TRANSLATION
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
@@ -239,13 +265,18 @@ class MainWindow(QMainWindow):
         self._refresh_api_status()
         self._load_config_to_ui()
         self._set_doctor_summary(idle_summary())
-        self._apply_work_mode_ui(refresh_manifest_writeback=True)
-        self._refresh_diagnostics_context()
+        QTimer.singleShot(0, self._deferred_startup_refresh)
         QTimer.singleShot(0, self._sync_work_mode_hint_height)
 
         # Status
         self.statusBar().showMessage(
             "图形界面是可选组件；核心命令行不受影响。"
+        )
+
+    def _deferred_startup_refresh(self) -> None:
+        self._apply_work_mode_ui(
+            refresh_manifest_writeback=True,
+            refresh_diagnostics=True,
         )
 
     def eventFilter(self, watched: Any, event: QEvent) -> bool:
@@ -286,7 +317,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event: QEvent) -> None:
         super().resizeEvent(event)
-        self._sync_layout_sizes()
+        self._layout_sync_timer.start()
 
     def _sync_layout_sizes(self) -> None:
         if not hasattr(self, "doctor_message_label") or not hasattr(self, "workbench_status_tabs"):
@@ -1031,7 +1062,7 @@ class MainWindow(QMainWindow):
     def _same_manifest_path(self, left: str, right: str) -> bool:
         if not left or not right:
             return False
-        return runtime.canonical_abs_path(left).lower() == runtime.canonical_abs_path(right).lower()
+        return canonical_abs_path(left).lower() == canonical_abs_path(right).lower()
 
     def _split_entries_for_manifest(
         self,
@@ -1079,6 +1110,7 @@ class MainWindow(QMainWindow):
         selected_manifest_path: str = "",
     ) -> None:
         self._split_status_entries = list(entries)
+        self._split_status_selected_manifest_path = selected_manifest_path
         if not hasattr(self, "split_status_table"):
             return
         if not entries:
@@ -1190,7 +1222,67 @@ class MainWindow(QMainWindow):
             and self.split_status_table.isVisible()
             and self._split_status_entries
         ):
-            QTimer.singleShot(0, self._refresh_split_status_ui)
+            if (
+                previous_profile_key is not None
+                and current_profile_key[0] == previous_profile_key[0]
+            ):
+                self._update_split_status_job_column_texts(profile)
+            else:
+                entries = list(self._split_status_entries)
+                selected_manifest_path = self._split_status_selected_manifest_path
+                QTimer.singleShot(
+                    0,
+                    lambda entries=entries,
+                    selected_manifest_path=selected_manifest_path,
+                    profile_key=current_profile_key: self._deferred_render_split_status_entries(
+                        entries,
+                        selected_manifest_path=selected_manifest_path,
+                        expected_profile_key=profile_key,
+                    ),
+                )
+
+    def _deferred_render_split_status_entries(
+        self,
+        entries: list[SplitManifestEntry],
+        *,
+        selected_manifest_path: str,
+        expected_profile_key: tuple[int, int],
+    ) -> None:
+        if not hasattr(self, "split_status_table") or not self.split_status_table.isVisible():
+            return
+        if not self._split_status_entries:
+            return
+        if list(self._split_status_entries) != entries:
+            return
+        if self._split_status_selected_manifest_path != selected_manifest_path:
+            return
+        profile = self._split_status_table_profile()
+        current_profile_key = (max(1, profile["groups"]), profile["job_chars"])
+        if current_profile_key != expected_profile_key:
+            return
+        self._render_split_status_entries(
+            entries,
+            selected_manifest_path=selected_manifest_path,
+        )
+
+    def _update_split_status_job_column_texts(self, profile: dict[str, int]) -> None:
+        if not hasattr(self, "split_status_table"):
+            return
+        rows = self.split_status_table.rowCount()
+        if rows <= 0:
+            return
+        for index, entry in enumerate(self._split_status_entries):
+            group_index = index // rows
+            row = index % rows
+            base_column = group_index * 6
+            if base_column + 4 >= self.split_status_table.columnCount():
+                continue
+            self._set_split_table_item(
+                row,
+                base_column + 4,
+                self._split_job_text(entry, profile["job_chars"]),
+                tooltip=entry.job_name or entry.manifest_path,
+            )
 
     def _render_split_status_entry(
         self,
@@ -1373,8 +1465,7 @@ class MainWindow(QMainWindow):
             return
         self._workflow = None
         self._workflow_step_output_lines = []
-        self._refresh_workflow_from_latest_manifest()
-        self._refresh_writeback_from_latest_manifest()
+        self._refresh_manifest_derived_ui(refresh_writeback=True)
         writeback_summary = self._current_writeback_summary()
         if writeback_summary.status not in {"idle", "running", "stale"}:
             self._focus_workbench_status_tab(2)
@@ -1671,7 +1762,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message, 3000)
 
     def _on_clear_log(self) -> None:
-        self.log_view.clear()
+        self._clear_log_view()
         self.statusBar().showMessage("诊断日志已清空。", 3000)
 
     def _resolve_diagnostics_manifest_path(self) -> str | None:
@@ -1698,7 +1789,49 @@ class MainWindow(QMainWindow):
         except ValueError:
             return None
 
-    def _refresh_diagnostics_context(self) -> None:
+    def _refresh_manifest_derived_ui(
+        self,
+        *,
+        refresh_writeback: bool = False,
+        refresh_diagnostics: bool = False,
+    ) -> None:
+        spec = work_mode_spec(self._current_work_mode())
+        game_root = self.state.get_game_root()
+        latest_manifest = None
+        manifest = None
+
+        needs_manifest = (
+            (spec.supports_resume and not self.kill_btn.isEnabled())
+            or refresh_writeback
+            or refresh_diagnostics
+        )
+        if needs_manifest and game_root is not None and spec.manifest_mode is not None:
+            latest_manifest, manifest = self.state.load_latest_resume_manifest_for_mode(
+                game_root,
+                spec.mode,
+            )
+
+        self._refresh_workflow_from_latest_manifest(
+            latest_manifest=latest_manifest,
+            manifest=manifest,
+        )
+        if refresh_writeback:
+            self._refresh_writeback_from_latest_manifest(
+                latest_manifest=latest_manifest,
+                manifest=manifest,
+            )
+        if refresh_diagnostics:
+            self._refresh_diagnostics_context(
+                latest_manifest_path=latest_manifest,
+                manifest=manifest,
+            )
+
+    def _refresh_diagnostics_context(
+        self,
+        *,
+        latest_manifest_path: Path | str | None = None,
+        manifest: dict[str, object] | None = None,
+    ) -> None:
         spec = work_mode_spec(self._current_work_mode())
         if spec.mode == WorkMode.SYNC_TRANSLATION:
             context = sync_diagnostics_context(
@@ -1710,18 +1843,23 @@ class MainWindow(QMainWindow):
 
         uses_batch_manifest = spec.manifest_mode is not None
         game_root = self.state.get_game_root()
-        latest_manifest = (
-            self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
-            if (uses_batch_manifest and game_root is not None)
-            else None
-        )
+        latest_manifest = latest_manifest_path
+        if latest_manifest is None and uses_batch_manifest and game_root is not None:
+            latest_manifest = self.state.get_latest_manifest_path_for_mode(
+                game_root,
+                spec.mode,
+            )
         if self._workflow is not None and self._workflow.manifest_path:
             manifest_path = self._workflow.manifest_path
         elif self._writeback_manifest_path:
             manifest_path = self._writeback_manifest_path
         else:
             manifest_path = str(latest_manifest) if latest_manifest is not None else None
-        manifest = self._load_diagnostics_manifest(manifest_path)
+        if manifest is None or (
+            manifest_path
+            and str(manifest.get("_manifest_path", "")) != str(manifest_path)
+        ):
+            manifest = self._load_diagnostics_manifest(manifest_path)
         context = build_diagnostics_context(
             latest_manifest_path=str(latest_manifest) if latest_manifest is not None else None,
             manifest=manifest,
@@ -1732,6 +1870,19 @@ class MainWindow(QMainWindow):
         self._set_diagnostics_context(context)
 
     def _set_diagnostics_context(self, context: DiagnosticsContext) -> None:
+        fingerprint = (
+            context.status,
+            context.heading,
+            context.message,
+            tuple(context.facts),
+            tuple((entry.label, entry.path) for entry in context.paths),
+            tuple((command.label, command.command) for command in context.commands),
+            context.manifest_json_preview,
+        )
+        if self._diagnostics_context_fingerprint == fingerprint:
+            return
+        self._diagnostics_context_fingerprint = fingerprint
+
         self.diagnostics_status_label.setText(context.heading)
         self.diagnostics_status_label.setProperty("status", context.status)
         self.diagnostics_status_label.style().unpolish(self.diagnostics_status_label)
@@ -1893,7 +2044,12 @@ class MainWindow(QMainWindow):
     def _resume_button_is_query_mode(self) -> bool:
         return hasattr(self, "resume_btn") and self.resume_btn.text() == "查询云端状态"
 
-    def _apply_work_mode_ui(self, *, refresh_manifest_writeback: bool = False) -> None:
+    def _apply_work_mode_ui(
+        self,
+        *,
+        refresh_manifest_writeback: bool = False,
+        refresh_diagnostics: bool = False,
+    ) -> None:
         spec = work_mode_spec(self._current_work_mode())
         self._update_timeline_steps(spec.mode)
         self.timeline.setVisible(False)
@@ -1914,9 +2070,13 @@ class MainWindow(QMainWindow):
         else:
             hint = spec.not_implemented_message
         self.work_mode_hint_label.setText(hint)
-        self._refresh_workflow_from_latest_manifest()
-        if refresh_manifest_writeback:
-            self._refresh_writeback_from_latest_manifest()
+        if refresh_manifest_writeback or refresh_diagnostics:
+            self._refresh_manifest_derived_ui(
+                refresh_writeback=refresh_manifest_writeback,
+                refresh_diagnostics=refresh_diagnostics,
+            )
+        else:
+            self._refresh_workflow_from_latest_manifest()
         running = self.kill_btn.isEnabled()
         bootstrap_ready = self._bootstrap_task_ready(spec)
         self.translate_btn.setEnabled(spec.implemented and bootstrap_ready and not running)
@@ -2004,7 +2164,12 @@ class MainWindow(QMainWindow):
             spec.idle_workflow_message,
         )
 
-    def _refresh_workflow_from_latest_manifest(self) -> None:
+    def _refresh_workflow_from_latest_manifest(
+        self,
+        *,
+        latest_manifest: Path | str | None = None,
+        manifest: dict[str, object] | None = None,
+    ) -> None:
         if self.kill_btn.isEnabled():
             return
         spec = work_mode_spec(self._current_work_mode())
@@ -2017,19 +2182,24 @@ class MainWindow(QMainWindow):
             self._refresh_workflow_idle_summary()
             return
 
-        latest_manifest = self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+        if latest_manifest is None:
+            latest_manifest = self.state.get_latest_manifest_path_for_mode(
+                game_root,
+                spec.mode,
+            )
         if latest_manifest is None:
             self._refresh_workflow_idle_summary()
             return
 
-        try:
-            manifest = self.state.load_resume_manifest(
-                latest_manifest,
-                work_mode=spec.mode,
-            )
-        except ValueError:
-            self._refresh_workflow_idle_summary()
-            return
+        if manifest is None:
+            try:
+                manifest = self.state.load_resume_manifest(
+                    latest_manifest,
+                    work_mode=spec.mode,
+                )
+            except ValueError:
+                self._refresh_workflow_idle_summary()
+                return
 
         job_state = manifest.get("job_state")
         job_state_text = job_state if isinstance(job_state, str) else ""
@@ -2270,26 +2440,32 @@ class MainWindow(QMainWindow):
             summary.facts,
         )
 
-    def _refresh_writeback_from_latest_manifest(self) -> None:
+    def _refresh_writeback_from_latest_manifest(
+        self,
+        *,
+        latest_manifest: Path | str | None = None,
+        manifest: dict[str, object] | None = None,
+    ) -> None:
         spec = work_mode_spec(self._current_work_mode())
         game_root = self.state.get_game_root()
         if spec.mode == WorkMode.REVISION:
-            latest_manifest = (
-                self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
-                if game_root is not None
-                else None
-            )
+            if latest_manifest is None and game_root is not None:
+                latest_manifest = self.state.get_latest_manifest_path_for_mode(
+                    game_root,
+                    spec.mode,
+                )
             if latest_manifest is None:
                 self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
                 return
-            try:
-                manifest = self.state.load_resume_manifest(
-                    latest_manifest,
-                    work_mode=spec.mode,
-                )
-            except ValueError:
-                self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
-                return
+            if manifest is None:
+                try:
+                    manifest = self.state.load_resume_manifest(
+                        latest_manifest,
+                        work_mode=spec.mode,
+                    )
+                except ValueError:
+                    self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+                    return
             summary = summarize_revision_writeback_from_manifest(manifest)
             if summary is None:
                 self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
@@ -2297,22 +2473,23 @@ class MainWindow(QMainWindow):
             self._set_writeback_summary(summary)
             return
         if spec.mode == WorkMode.KEYWORD_EXTRACTION:
-            latest_manifest = (
-                self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
-                if game_root is not None
-                else None
-            )
+            if latest_manifest is None and game_root is not None:
+                latest_manifest = self.state.get_latest_manifest_path_for_mode(
+                    game_root,
+                    spec.mode,
+                )
             if latest_manifest is None:
                 self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
                 return
-            try:
-                manifest = self.state.load_resume_manifest(
-                    latest_manifest,
-                    work_mode=spec.mode,
-                )
-            except ValueError:
-                self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
-                return
+            if manifest is None:
+                try:
+                    manifest = self.state.load_resume_manifest(
+                        latest_manifest,
+                        work_mode=spec.mode,
+                    )
+                except ValueError:
+                    self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+                    return
             summary = summarize_keyword_result_from_manifest(manifest)
             if summary is None:
                 self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
@@ -2324,29 +2501,34 @@ class MainWindow(QMainWindow):
             self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
             return
 
-        latest_manifest = (
-            self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
-            if game_root is not None
-            else None
-        )
+        if latest_manifest is None and game_root is not None:
+            latest_manifest = self.state.get_latest_manifest_path_for_mode(
+                game_root,
+                spec.mode,
+            )
         if latest_manifest is None:
             self._set_writeback_summary(idle_writeback_summary())
             return
-        try:
-            manifest = self.state.load_resume_manifest(
-                latest_manifest,
-                work_mode=spec.mode,
-            )
-        except ValueError:
-            self._set_writeback_summary(idle_writeback_summary())
-            return
+        if manifest is None:
+            try:
+                manifest = self.state.load_resume_manifest(
+                    latest_manifest,
+                    work_mode=spec.mode,
+                )
+            except ValueError:
+                self._set_writeback_summary(idle_writeback_summary())
+                return
 
         summary = summarize_manifest_writeback(manifest)
         if summary is None:
             self._set_writeback_summary(idle_writeback_summary())
             return
         self._set_writeback_summary(summary)
-        self._refresh_split_status_ui(manifest_path=str(latest_manifest), manifest=manifest)
+        if not getattr(self, "_split_status_entries", []):
+            self._refresh_split_status_ui(
+                manifest_path=str(latest_manifest),
+                manifest=manifest,
+            )
 
     # --- UI actions ---
 
@@ -2553,7 +2735,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._active_command = "doctor"
         self._doctor_output_lines = []
         self._focus_workbench_status_tab(0)
@@ -2575,7 +2757,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._active_command = "bootstrap_work"
         self._work_bootstrap_output_lines = []
         self._workflow_progress = create_workflow_progress_state("work_bootstrap")
@@ -2638,7 +2820,7 @@ class MainWindow(QMainWindow):
             log_heading = "gemini_translate_batch.py bootstrap-source-index --skip-prepare"
             running_summary = running_bootstrap_summary("source_index")
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._focus_log_tab()
         self._active_command = command
         self._bootstrap_output_lines = []
@@ -2697,7 +2879,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "无法开始任务", spec.not_implemented_message)
             return
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._focus_log_tab()
         self._writeback_manifest_path = ""
         if spec.supports_translation_writeback:
@@ -2752,7 +2934,7 @@ class MainWindow(QMainWindow):
                 anchor_manifest_path=str(latest_manifest),
             )
             if split_workflow.current_step() is not None:
-                self.log_view.clear()
+                self._clear_log_view()
                 self._focus_log_tab()
                 self._workflow = split_workflow
                 self._refresh_diagnostics_context()
@@ -2794,7 +2976,7 @@ class MainWindow(QMainWindow):
         only_query = self._resume_button_is_query_mode()
         workflow.only_query = only_query
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._focus_log_tab()
         self._workflow = workflow
         self._refresh_diagnostics_context()
@@ -2837,7 +3019,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "没有待提交拆分包", "当前拆分组没有尚未提交的包。")
             return
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._focus_log_tab()
         self._workflow = workflow
         self._refresh_diagnostics_context()
@@ -2890,7 +3072,7 @@ class MainWindow(QMainWindow):
             return
 
         manifest_path = self._writeback_manifest_path
-        self.log_view.clear()
+        self._clear_log_view()
         self._focus_log_tab()
         self._active_command = "apply"
         self._apply_output_lines = []
@@ -2945,7 +3127,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "无法写回订正", "没有可写回的订正任务记录。")
             return
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._focus_log_tab()
         self._active_command = "apply_revision"
         self._apply_revision_output_lines = []
@@ -3013,7 +3195,7 @@ class MainWindow(QMainWindow):
                 text,
                 self._workflow_progress,
             )
-            self._apply_workflow_progress_ui()
+            self._schedule_progress_ui_flush()
         elif self._active_command == "apply":
             self._apply_output_lines.append(text)
         elif self._active_command == "apply_revision":
@@ -3030,25 +3212,76 @@ class MainWindow(QMainWindow):
                     text,
                     self._bootstrap_progress,
                 )
-                self._apply_bootstrap_progress_ui()
+                self._schedule_progress_ui_flush()
             elif self._active_command == "bootstrap_rag":
                 self._workflow_progress = update_workflow_progress_from_line(
                     text,
                     self._workflow_progress,
                 )
-                self._apply_bootstrap_progress_ui()
+                self._schedule_progress_ui_flush()
         elif self._active_command == "bootstrap_work":
             self._work_bootstrap_output_lines.append(text)
             self._workflow_progress = update_workflow_progress_from_line(
                 text,
                 self._workflow_progress,
             )
-            self._apply_workflow_progress_ui()
+            self._schedule_progress_ui_flush()
         self._append_log(text)
 
-    def _append_log(self, text: str):
-        self.log_view.append(text.rstrip("\n"))
-        # scroll to bottom
+    def _schedule_progress_ui_flush(self) -> None:
+        self._workflow_progress_dirty = True
+        timer = getattr(self, "_progress_flush_timer", None)
+        if timer is None:
+            self._flush_throttled_progress_ui()
+            return
+        if not timer.isActive():
+            timer.start()
+
+    def _flush_throttled_progress_ui(self) -> None:
+        if not self._workflow_progress_dirty:
+            return
+        self._workflow_progress_dirty = False
+        if self._active_command == "bootstrap_source_index":
+            self._apply_bootstrap_progress_ui()
+        elif self._active_command in {"bootstrap_rag", "bootstrap_work", "translation_workflow"}:
+            if self._active_command == "bootstrap_rag":
+                self._apply_bootstrap_progress_ui()
+            else:
+                self._apply_workflow_progress_ui()
+
+    def _clear_log_view(self) -> None:
+        pending = getattr(self, "_pending_log_lines", None)
+        if pending is not None:
+            pending.clear()
+        timer = getattr(self, "_log_flush_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        if hasattr(self, "log_view"):
+            self.log_view.clear()
+
+    def _append_log(self, text: str) -> None:
+        line = text.rstrip("\n")
+        if not line:
+            return
+        pending = getattr(self, "_pending_log_lines", None)
+        timer = getattr(self, "_log_flush_timer", None)
+        if pending is None or timer is None:
+            if hasattr(self, "log_view"):
+                self.log_view.append(line)
+                scrollbar = self.log_view.verticalScrollBar()
+                scrollbar.setValue(scrollbar.maximum())
+            return
+        pending.append(line)
+        if not timer.isActive():
+            timer.start()
+
+    def _flush_pending_log_lines(self) -> None:
+        if not self._pending_log_lines or not hasattr(self, "log_view"):
+            self._pending_log_lines = []
+            return
+        lines = self._pending_log_lines
+        self._pending_log_lines = []
+        self.log_view.append("\n".join(lines))
         scrollbar = self.log_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
@@ -3672,7 +3905,7 @@ class MainWindow(QMainWindow):
             self.source_index_enabled_cb.setChecked(context_flags["source_index_enabled"])
             self.bootstrap_on_build_cb.setChecked(context_flags["bootstrap_on_build"])
             storage_config = self._config_section(config, "context_storage")
-            storage_location = runtime._normalize_context_storage_location(
+            storage_location = normalize_context_storage_location(
                 storage_config.get("location", config.get("context_storage_location", ""))
             )
             self.context_storage_game_cb.setChecked(storage_location == "game")
@@ -3806,9 +4039,9 @@ def run_app(argv: list[str] | None = None) -> int:
 
     app = QApplication(argv)
     resources_dir = Path(__file__).resolve().parent / "resources"
-    bootstrap_state = ProjectState()
+    project_state = ProjectState()
     try:
-        bootstrap_config = bootstrap_state.load_translator_config()
+        bootstrap_config = project_state.load_translator_config()
         theme_preference = read_gui_theme_from_config(bootstrap_config)
     except Exception as exc:
         print(f"警告：无法读取主题配置，将使用系统跟随：{exc}")
@@ -3818,7 +4051,11 @@ def run_app(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"警告：无法加载 GUI 样式表：{exc}")
 
-    win = MainWindow(qt_app=app, resources_dir=resources_dir)
+    win = MainWindow(
+        qt_app=app,
+        resources_dir=resources_dir,
+        project_state=project_state,
+    )
     app.styleHints().colorSchemeChanged.connect(win._on_system_color_scheme_changed)
     win.show()
     return app.exec()

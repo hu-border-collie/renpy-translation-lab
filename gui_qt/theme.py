@@ -6,11 +6,20 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from .font_helpers import build_font_stylesheet, load_gui_fonts
+from .font_helpers import GuiFontFamilies, build_font_stylesheet, load_gui_fonts
 from .theme_helpers import (
+    clear_stylesheet_cache,
+    load_theme_stylesheet,
     resolve_effective_theme,
-    theme_stylesheet_filename,
 )
+
+_FONT_CACHE: dict[str, GuiFontFamilies] = {}
+
+
+def clear_theme_caches() -> None:
+    """Reset module-level caches; primarily intended for test isolation."""
+    clear_stylesheet_cache()
+    _FONT_CACHE.clear()
 
 
 def system_prefers_dark(app: QApplication) -> bool | None:
@@ -22,14 +31,14 @@ def system_prefers_dark(app: QApplication) -> bool | None:
     return None
 
 
-def load_theme_stylesheet(resources_dir: Path, effective_theme: str) -> str:
-    filename = theme_stylesheet_filename(effective_theme)
-    path = resources_dir / filename
-    if not path.exists() and effective_theme == "dark":
-        path = resources_dir / "app.qss"
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8")
+def cached_gui_fonts(resources_dir: Path) -> GuiFontFamilies:
+    cache_key = str(resources_dir.resolve())
+    cached = _FONT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    fonts = load_gui_fonts(resources_dir)
+    _FONT_CACHE[cache_key] = fonts
+    return fonts
 
 
 def apply_theme(app: QApplication, resources_dir: Path, preference: str) -> str:
@@ -38,7 +47,7 @@ def apply_theme(app: QApplication, resources_dir: Path, preference: str) -> str:
         system_is_dark=system_prefers_dark(app),
     )
     stylesheet = load_theme_stylesheet(resources_dir, effective)
-    font_stylesheet = build_font_stylesheet(load_gui_fonts(resources_dir))
+    font_stylesheet = build_font_stylesheet(cached_gui_fonts(resources_dir))
     if font_stylesheet:
         stylesheet = f"{font_stylesheet}\n{stylesheet}"
     if stylesheet:

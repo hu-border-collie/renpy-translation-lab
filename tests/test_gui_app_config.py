@@ -52,6 +52,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.workflow_progress_bar = FakeProgressBar()
         self.window.workflow_facts_label = FakeLabel()
         self.window._append_log = lambda text: None
+        self.window._progress_flush_timer = None
 
         self.window._on_cli_line_ready("[2/4] sync-key")
 
@@ -65,6 +66,36 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             "Manifest: C:/dummy/manifest.json\n当前请求：sync-key",
         )
 
+    def test_clear_log_view_flushes_pending_buffer(self):
+        class FakeLogView:
+            def __init__(self):
+                self.lines: list[str] = []
+
+            def append(self, text: str) -> None:
+                self.lines.append(text)
+
+            def clear(self) -> None:
+                self.lines.clear()
+
+            def verticalScrollBar(self):
+                class Bar:
+                    def setValue(self, _value: int) -> None:
+                        return None
+
+                    @property
+                    def maximum(self) -> int:
+                        return 0
+
+                return Bar()
+
+        self.window.log_view = FakeLogView()
+        self.window._pending_log_lines = ["stale line"]
+        self.window._log_flush_timer = None
+
+        self.window._clear_log_view()
+
+        self.assertEqual(self.window._pending_log_lines, [])
+        self.assertEqual(self.window.log_view.lines, [])
 
     def test_short_job_name_compacts_batch_ids(self):
         job_name = "batches/l10v1nppy30lvv2cbzbhedje4oqnqlzedlve"

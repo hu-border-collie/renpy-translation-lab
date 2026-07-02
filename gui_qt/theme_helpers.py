@@ -1,6 +1,7 @@
 """Pure helpers for GUI theme preference resolution (no Qt dependency)."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 THEME_SYSTEM = "system"
@@ -49,3 +50,29 @@ def write_gui_theme_to_config(config: dict[str, Any], preference: Any) -> None:
         gui = {}
         config["gui"] = gui
     gui["theme"] = normalize_theme_preference(preference)
+
+
+_STYLESHEET_CACHE: dict[tuple[str, str], str] = {}
+
+
+def clear_stylesheet_cache() -> None:
+    """Reset stylesheet cache; primarily intended for test isolation."""
+    _STYLESHEET_CACHE.clear()
+
+
+def load_theme_stylesheet(resources_dir: Path, effective_theme: str) -> str:
+    cache_key = (str(resources_dir.resolve()), effective_theme)
+    cached = _STYLESHEET_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    filename = theme_stylesheet_filename(effective_theme)
+    path = resources_dir / filename
+    if not path.exists() and effective_theme == "dark":
+        path = resources_dir / "app.qss"
+    if not path.exists():
+        stylesheet = ""
+    else:
+        stylesheet = path.read_text(encoding="utf-8")
+    _STYLESHEET_CACHE[cache_key] = stylesheet
+    return stylesheet
