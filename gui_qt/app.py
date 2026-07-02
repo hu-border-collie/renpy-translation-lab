@@ -1333,8 +1333,9 @@ class MainWindow(QMainWindow):
             self._split_job_text(entry, profile["job_chars"]),
             tooltip=entry.job_name or entry.manifest_path,
         )
+        show_action_button = entry.selectable and not is_current
         action_payload = split_action_item_payload(
-            selectable=entry.selectable,
+            selectable=show_action_button,
             manifest_path=entry.manifest_path,
             part_label=entry.part_label,
         )
