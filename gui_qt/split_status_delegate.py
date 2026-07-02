@@ -187,6 +187,16 @@ class SplitStatusActionDelegate(QStyledItemDelegate):
         if index.isValid():
             viewport.update(view.visualRect(index))
 
+    def clear_pressed_state(self) -> None:
+        previous = self._pressed_index
+        self._pressed_index = None
+        if previous is None or not previous.isValid():
+            return
+        view = self.parent()
+        if view is None or not hasattr(view, "viewport"):
+            return
+        view.viewport().update(view.visualRect(previous))
+
     def clear_hover_state(self) -> None:
         previous = self._hover_index
         self._hover_index = None

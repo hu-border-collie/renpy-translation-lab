@@ -296,10 +296,12 @@ class MainWindow(QMainWindow):
                 if delegate is not None:
                     if event.type() == QEvent.Type.Leave:
                         delegate.clear_hover_state()
+                        delegate.clear_pressed_state()
                     else:
                         index = self.split_status_table.indexAt(event.position().toPoint())
                         if not index.isValid() or not is_split_action_column(index.column()):
                             delegate.clear_hover_state()
+                            delegate.clear_pressed_state()
         return super().eventFilter(watched, event)
 
     def _sync_work_mode_hint_height(self) -> None:
@@ -1085,15 +1087,18 @@ class MainWindow(QMainWindow):
         previous = self._split_status_entries
         if len(previous) != len(entries):
             return False
-        for old_entry, new_entry in zip(previous, entries):
+        for old_entry, new_entry in zip(previous, entries, strict=True):
             if (
                 old_entry.manifest_path != new_entry.manifest_path
+                or old_entry.part_label != new_entry.part_label
                 or old_entry.status_kind != new_entry.status_kind
                 or old_entry.status_label != new_entry.status_label
                 or old_entry.item_count != new_entry.item_count
                 or old_entry.chunk_count != new_entry.chunk_count
                 or old_entry.job_name != new_entry.job_name
+                or old_entry.job_state != new_entry.job_state
                 or old_entry.selectable != new_entry.selectable
+                or old_entry.needs_submit != new_entry.needs_submit
             ):
                 return False
         return True
@@ -1160,6 +1165,7 @@ class MainWindow(QMainWindow):
         delegate = getattr(self, "_split_status_action_delegate", None)
         if delegate is not None:
             delegate.clear_hover_state()
+            delegate.clear_pressed_state()
         self.split_status_table.setRowCount(rows)
         for row in range(rows):
             for column in range(self.split_status_table.columnCount()):
@@ -1569,6 +1575,16 @@ class MainWindow(QMainWindow):
         else:
             self._refresh_split_status_ui(manifest_path=manifest_path)
         self._refresh_writeback_for_manifest_path(manifest_path)
+        try:
+            selected_manifest = self.state.load_manifest_file(manifest_path, lite=True)
+        except ValueError:
+            selected_manifest = None
+        if selected_manifest is not None:
+            self._refresh_workflow_from_latest_manifest(
+                latest_manifest=manifest_path,
+                manifest=selected_manifest,
+                split_entries=self._split_status_entries or None,
+            )
         writeback_summary = self._current_writeback_summary()
         if writeback_summary.status not in {"idle", "running", "stale"}:
             self._focus_workbench_status_tab(2)
@@ -2272,6 +2288,7 @@ class MainWindow(QMainWindow):
         *,
         latest_manifest: Path | str | None = None,
         manifest: dict[str, object] | None = None,
+        split_entries: list[SplitManifestEntry] | None = None,
     ) -> None:
         if self.kill_btn.isEnabled():
             return
@@ -2343,7 +2360,8 @@ class MainWindow(QMainWindow):
         if retry_parent_text:
             facts.append(f"父任务：{retry_parent_text}")
 
-        split_entries = self._split_entries_for_manifest(str(latest_manifest), manifest)
+        if split_entries is None:
+            split_entries = self._split_entries_for_manifest(str(latest_manifest), manifest)
         facts.extend(summarize_split_entries(split_entries))
 
         is_waiting = job_state_text in ("JOB_STATE_PENDING", "JOB_STATE_RUNNING")
