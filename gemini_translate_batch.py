@@ -1504,6 +1504,13 @@ def attach_submit_split_recommendation(manifest):
     return recommendation
 
 
+def _clear_submit_failure_metadata(manifest):
+    manifest['last_submit_error'] = ''
+    manifest.pop('last_submit_error_type', None)
+    manifest.pop('split_recommended', None)
+    manifest.pop('last_submit_quota_recommendation', None)
+
+
 def print_submit_split_recommendation(recommendation):
     print('Quota/resource limit hit during batch submit.')
     if not recommendation:
@@ -3803,7 +3810,7 @@ def submit_manifest(target=None, display_name_override='', model_override=''):
             manifest.setdefault('uploaded_file_names', [])
             if manifest['uploaded_file_name'] and manifest['uploaded_file_name'] not in manifest['uploaded_file_names']:
                 manifest['uploaded_file_names'].append(manifest['uploaded_file_name'])
-            manifest['last_submit_error'] = ''
+            _clear_submit_failure_metadata(manifest)
             save_manifest(manifest)
             print(f'Uploaded file: {uploaded_file.name}')
 
@@ -3821,7 +3828,7 @@ def submit_manifest(target=None, display_name_override='', model_override=''):
             manifest['submitted_api_key_index'] = getattr(legacy, 'CURRENT_KEY_INDEX', 0)
             manifest['submitted_api_key_number'] = manifest['submitted_api_key_index'] + 1
             manifest['last_status_api_key_index'] = manifest['submitted_api_key_index']
-            manifest['last_submit_error'] = ''
+            _clear_submit_failure_metadata(manifest)
             save_manifest(manifest)
 
             print(f"Batch job created: {manifest['job_name']}")

@@ -3498,6 +3498,8 @@ def scan_all_translation_units(lines, file_rel_path, mode=translation_core.MODE_
             for token_index, token in enumerate(tokens):
                 if token.type != tokenize.STRING:
                     continue
+                if is_translation_file and _is_keyword_argument_string_token(tokens, token_index):
+                    continue
                 if _is_character_display_token(idx, token, character_display_spans):
                     continue
                 try:

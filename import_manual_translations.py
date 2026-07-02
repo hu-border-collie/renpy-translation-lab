@@ -119,12 +119,17 @@ def import_manual_translations(manifest_path: str | Path) -> Path:
 def retry_merge_chain(leaf_manifest_path: str | Path) -> list[tuple[str, str]]:
     chain = []
     current = Path(leaf_manifest_path)
+    visited = {str(current)}
     while True:
         manifest = batch.load_manifest(str(current))
         parent = manifest.get('retry_of_manifest')
         if not parent:
             break
-        chain.append((str(parent), str(current)))
+        parent_text = str(parent)
+        if parent_text in visited:
+            raise SystemExit(f'Detected cyclic retry_of_manifest chain at {parent_text}')
+        visited.add(parent_text)
+        chain.append((parent_text, str(current)))
         current = Path(parent)
     return chain
 

@@ -183,11 +183,17 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             '    "[Main]" "Hello there." (ctc="ctc_blink", ctc_position="nestled")\n',
         ]
 
-        task_texts = [task['text'] for task in runtime.collect_tasks(lines)]
+        tasks = runtime.collect_tasks(lines)
+        task_texts = [task['text'] for task in tasks]
+        mapping = runtime.scan_all_translation_units(lines, 'sample.rpy')
+        scanned_texts = [value[3] for value in mapping.values()]
 
         self.assertIn('Hello there.', task_texts)
         self.assertNotIn('ctc_blink', task_texts)
         self.assertNotIn('nestled', task_texts)
+        self.assertEqual(scanned_texts, ['Hello there.'])
+        self.assertEqual(tasks[0]['block_index'], 1)
+        self.assertTrue(all(':sample_block:1:' in identity for identity in mapping))
 
     def test_batch_non_chinese_allowance_accepts_say_speaker_label_item(self):
         line = '    "Terry" "Hello there." (ctc="ctc_blink", ctc_position="nestled")\n'
