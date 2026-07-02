@@ -141,15 +141,16 @@ class BatchRepairRegressionTests(unittest.TestCase):
             self.assertGreater(first_child['story_memory_summary']['formatted_char_count'], 0)
             first_child['_manifest_path'] = created[0]
             first_child['_package_dir'] = str(Path(created[0]).parent)
+            next_manifest = batch_mod._canonical_abs_path(created[1])
             self.assertEqual(
                 batch_mod.next_split_manifest_path(first_child),
-                str(Path(created[1]).resolve()),
+                next_manifest,
             )
             self.assertEqual(
                 batch_mod.mark_next_split_after_apply(first_child),
-                str(Path(created[1]).resolve()),
+                next_manifest,
             )
-            self.assertEqual(first_child['next_split_manifest_path'], str(Path(created[1]).resolve()))
+            self.assertEqual(first_child['next_split_manifest_path'], next_manifest)
 
     def test_submit_quota_failure_records_split_recommendation(self):
         class QuotaError(Exception):

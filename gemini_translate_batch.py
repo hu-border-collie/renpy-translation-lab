@@ -1533,7 +1533,7 @@ def next_split_manifest_path(manifest):
         return ''
 
     current_path = manifest.get('_manifest_path')
-    current_abs = os.path.abspath(current_path) if isinstance(current_path, str) and current_path else ''
+    current_abs = _canonical_abs_path(current_path) if isinstance(current_path, str) and current_path else ''
     parent_path = manifest.get('split_from_manifest')
     children = []
     if isinstance(parent_path, str) and parent_path.strip() and os.path.isfile(parent_path):
@@ -1544,9 +1544,9 @@ def next_split_manifest_path(manifest):
 
     candidate = ''
     if children:
-        normalized_current = os.path.normcase(os.path.abspath(current_abs)) if current_abs else ''
+        normalized_current = _normalized_abs_path(current_abs) if current_abs else ''
         for position, child in enumerate(children):
-            if os.path.normcase(os.path.abspath(child)) == normalized_current:
+            if _normalized_abs_path(child) == normalized_current:
                 if position + 1 < len(children):
                     candidate = children[position + 1]
                 break
@@ -1567,7 +1567,7 @@ def next_split_manifest_path(manifest):
 
     if not candidate:
         return ''
-    candidate = os.path.abspath(candidate)
+    candidate = _canonical_abs_path(candidate)
     return candidate if os.path.isfile(candidate) else ''
 
 
@@ -3175,8 +3175,9 @@ def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix
         with open(part_manifest_path, 'w', encoding='utf-8') as handle:
             json.dump(part_manifest, handle, ensure_ascii=False, indent=2)
 
-        created_manifests.append(part_manifest_path)
-        remember_latest_manifest(part_manifest_path)
+        canonical_manifest_path = _canonical_abs_path(part_manifest_path)
+        created_manifests.append(canonical_manifest_path)
+        remember_latest_manifest(canonical_manifest_path)
 
         print(f'Created split package: {part_dir}')
         print(f"Chunks: {part_manifest['summary']['chunk_count']}")
