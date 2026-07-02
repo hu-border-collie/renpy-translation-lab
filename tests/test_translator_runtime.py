@@ -2308,6 +2308,28 @@ class BootstrapWorkTests(unittest.TestCase):
             self.assertTrue((project / 'work' / 'game' / 'images' / 'logo.png').is_file())
             self.assertEqual(result['files_copied'], 2)
 
+    def test_copy_game_directory_throttles_bootstrap_progress_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'source'
+            target = Path(tmp) / 'target'
+            source.mkdir()
+            for index in range(60):
+                (source / f'file_{index:03d}.txt').write_text('x', encoding='utf-8')
+
+            with mock.patch('sys.stdout', new_callable=io.StringIO) as stdout:
+                copied = runtime._copy_game_directory(str(source), str(target))
+
+            lines = [
+                line.strip()
+                for line in stdout.getvalue().splitlines()
+                if line.startswith('Work bootstrap copy progress:')
+            ]
+
+            self.assertEqual(copied, 60)
+            self.assertEqual(lines[0], 'Work bootstrap copy progress: 0/60 files.')
+            self.assertEqual(lines[-1], 'Work bootstrap copy progress: 60/60 files, file=file_059.txt.')
+            self.assertLess(len(lines), 60)
+
     def test_bootstrap_work_from_original_skips_non_empty_work(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

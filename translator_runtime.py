@@ -1095,6 +1095,19 @@ def work_dir_bootstrap_allowed(base_dir=None):
     return False, work_dir, "work directory already exists and is not empty"
 
 
+WORK_BOOTSTRAP_COPY_PROGRESS_INTERVAL = 25
+
+
+def _should_emit_bootstrap_copy_progress(files_copied, total_files):
+    if total_files <= 0:
+        return False
+    if files_copied >= total_files:
+        return True
+    if files_copied == 1:
+        return True
+    return files_copied % WORK_BOOTSTRAP_COPY_PROGRESS_INTERVAL == 0
+
+
 def _copy_game_directory(source_game_dir, target_game_dir):
     total_files = sum(len(files) for _, _, files in os.walk(source_game_dir))
     files_copied = 0
@@ -1109,6 +1122,8 @@ def _copy_game_directory(source_game_dir, target_game_dir):
             dest_path = os.path.join(dest_dir, file_name)
             shutil.copy2(src_path, dest_path)
             files_copied += 1
+            if not _should_emit_bootstrap_copy_progress(files_copied, total_files):
+                continue
             rel_file = os.path.relpath(src_path, source_game_dir).replace(os.sep, "/")
             print(
                 f"Work bootstrap copy progress: {files_copied}/{total_files} files, file={rel_file}.",
