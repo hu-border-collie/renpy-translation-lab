@@ -649,5 +649,43 @@ class GuiProjectStateTests(unittest.TestCase):
 
             self.assertEqual(read_calls["count"], 2)
 
+    def test_load_manifest_file_keeps_lite_and_full_cache_separate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            manifest = root / "manifest.json"
+            payload = {
+                "mode": "translation",
+                "base_dir": "C:/game/work",
+                "padding": "x" * 300_000,
+                "chunks": [{"key": "chunk-1"}],
+                "last_check_summary": {"safety_level": "safe"},
+            }
+            manifest.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            lite = state.load_manifest_file(manifest, lite=True)
+            full = state.load_manifest_file(manifest, lite=False)
+
+            self.assertNotIn("chunks", lite)
+            self.assertIn("chunks", full)
+            self.assertIsNot(lite, full)
+
+    def test_invalidate_manifest_file_cache_clears_lite_and_full(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps({"mode": "translation", "base_dir": "C:/game/work"}),
+                encoding="utf-8",
+            )
+
+            first = state.load_manifest_file(manifest)
+            state.invalidate_manifest_file_cache(manifest)
+            second = state.load_manifest_file(manifest)
+
+            self.assertEqual(first.get("mode"), "translation")
+            self.assertIsNot(second, first)
+
 if __name__ == "__main__":
     unittest.main()

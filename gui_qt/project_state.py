@@ -126,7 +126,10 @@ class ProjectState:
         if manifest_path is None:
             self._manifest_file_cache.clear()
             return
-        self._manifest_file_cache.pop(self._manifest_cache_key(Path(manifest_path)), None)
+        prefix = self._normalized_path_text(Path(manifest_path)) + "::"
+        for key in list(self._manifest_file_cache):
+            if key.startswith(prefix):
+                del self._manifest_file_cache[key]
 
     def load_latest_resume_manifest_for_mode(
         self,
@@ -229,30 +232,35 @@ class ProjectState:
         lite: bool | None = None,
     ) -> dict[str, Any]:
         path = Path(manifest_path)
-        cache_key = self._manifest_cache_key(path)
-        mtime_ns = self._manifest_mtime_ns(path)
-        if mtime_ns is not None:
-            cached = self._manifest_file_cache.get(cache_key)
-            if cached is not None and cached[0] == mtime_ns:
-                return cached[1]
+        if not path.exists():
+            manifest: dict[str, Any] = {"_manifest_path": str(path)}
+            return manifest
+
+        try:
+            stat = path.stat()
+        except OSError as exc:
+            raise ValueError(f"Failed to read batch manifest: {path}") from exc
 
         use_lite = (
             manifest_should_use_lite_reader(path)
             if lite is None
             else lite
         )
+        cache_key = self._manifest_cache_key(path, lite=use_lite)
+        mtime_ns = stat.st_mtime_ns
+        cached = self._manifest_file_cache.get(cache_key)
+        if cached is not None and cached[0] == mtime_ns:
+            return cached[1]
+
+        file_size = stat.st_size
         if use_lite:
-            if not path.exists():
-                manifest: dict[str, Any] = {}
-            else:
-                manifest = read_manifest_lite(path)
-                if not manifest and path.stat().st_size > 0:
-                    raise ValueError(f"Failed to read batch manifest: {path}")
+            manifest = read_manifest_lite(path)
+            if not manifest and file_size > 0:
+                raise ValueError(f"Failed to read batch manifest: {path}")
         else:
             manifest = self._read_json_object(path, "batch manifest")
         manifest["_manifest_path"] = str(path)
-        if mtime_ns is not None:
-            self._manifest_file_cache[cache_key] = (mtime_ns, manifest)
+        self._manifest_file_cache[cache_key] = (mtime_ns, manifest)
         return manifest
 
     def load_resume_manifest(
@@ -274,14 +282,9 @@ class ProjectState:
         )
         return manifest
 
-    def _manifest_cache_key(self, path: Path) -> str:
-        return self._normalized_path_text(path)
-
-    def _manifest_mtime_ns(self, path: Path) -> int | None:
-        try:
-            return path.stat().st_mtime_ns
-        except OSError:
-            return None
+    def _manifest_cache_key(self, path: Path, *, lite: bool) -> str:
+        mode = "lite" if lite else "full"
+        return f"{self._normalized_path_text(path)}::{mode}"
 
     def _normalized_path_text(self, path: str | Path) -> str:
         return os.path.normcase(canonical_abs_path(str(path)))

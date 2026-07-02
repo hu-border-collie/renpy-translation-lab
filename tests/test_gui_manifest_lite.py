@@ -35,6 +35,35 @@ class GuiManifestLiteTests(unittest.TestCase):
             self.assertEqual(lite.get("applied_at"), "2026-06-30T12:00:00")
             self.assertNotIn("chunks", lite)
 
+    def test_read_manifest_lite_skips_chunks_beyond_head_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "manifest.json"
+            head = {
+                "mode": "translation",
+                "base_dir": "C:/game/work",
+                "job_name": "batches/late-chunks",
+                "job_state": "JOB_STATE_SUCCEEDED",
+                "summary": {"item_count": 9, "chunk_count": 2, "file_count": 1},
+                "files": {"a.rpy": {"path": "C:/game/work/a.rpy"}},
+            }
+            tail = {
+                "last_check_summary": {"safety_level": "warn"},
+                "applied_at": "2026-06-30T13:00:00",
+            }
+            padding = "p" * 300_000
+            payload = {**head, "padding": padding, "chunks": [{"key": "chunk-1"}], **tail}
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            lite = read_manifest_lite(path)
+
+            self.assertEqual(lite.get("mode"), "translation")
+            self.assertEqual(lite.get("base_dir"), "C:/game/work")
+            self.assertEqual(lite.get("job_state"), "JOB_STATE_SUCCEEDED")
+            self.assertEqual(lite.get("summary", {}).get("item_count"), 9)
+            self.assertEqual(lite.get("last_check_summary", {}).get("safety_level"), "warn")
+            self.assertEqual(lite.get("applied_at"), "2026-06-30T13:00:00")
+            self.assertNotIn("chunks", lite)
+
     def test_read_manifest_index_fields_reads_only_header(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "manifest.json"

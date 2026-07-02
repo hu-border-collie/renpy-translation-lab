@@ -1232,11 +1232,38 @@ class MainWindow(QMainWindow):
                 selected_manifest_path = self._split_status_selected_manifest_path
                 QTimer.singleShot(
                     0,
-                    lambda: self._render_split_status_entries(
+                    lambda entries=entries,
+                    selected_manifest_path=selected_manifest_path,
+                    profile_key=current_profile_key: self._deferred_render_split_status_entries(
                         entries,
                         selected_manifest_path=selected_manifest_path,
+                        expected_profile_key=profile_key,
                     ),
                 )
+
+    def _deferred_render_split_status_entries(
+        self,
+        entries: list[SplitManifestEntry],
+        *,
+        selected_manifest_path: str,
+        expected_profile_key: tuple[int, int],
+    ) -> None:
+        if not hasattr(self, "split_status_table") or not self.split_status_table.isVisible():
+            return
+        if not self._split_status_entries:
+            return
+        if list(self._split_status_entries) != entries:
+            return
+        if self._split_status_selected_manifest_path != selected_manifest_path:
+            return
+        profile = self._split_status_table_profile()
+        current_profile_key = (max(1, profile["groups"]), profile["job_chars"])
+        if current_profile_key != expected_profile_key:
+            return
+        self._render_split_status_entries(
+            entries,
+            selected_manifest_path=selected_manifest_path,
+        )
 
     def _update_split_status_job_column_texts(self, profile: dict[str, int]) -> None:
         if not hasattr(self, "split_status_table"):
@@ -1736,7 +1763,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message, 3000)
 
     def _on_clear_log(self) -> None:
-        self.log_view.clear()
+        self._clear_log_view()
         self.statusBar().showMessage("诊断日志已清空。", 3000)
 
     def _resolve_diagnostics_manifest_path(self) -> str | None:
@@ -2709,7 +2736,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._active_command = "doctor"
         self._doctor_output_lines = []
         self._focus_workbench_status_tab(0)
@@ -2731,7 +2758,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._active_command = "bootstrap_work"
         self._work_bootstrap_output_lines = []
         self._workflow_progress = create_workflow_progress_state("work_bootstrap")
@@ -2794,7 +2821,7 @@ class MainWindow(QMainWindow):
             log_heading = "gemini_translate_batch.py bootstrap-source-index --skip-prepare"
             running_summary = running_bootstrap_summary("source_index")
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._focus_log_tab()
         self._active_command = command
         self._bootstrap_output_lines = []
@@ -2853,7 +2880,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "无法开始任务", spec.not_implemented_message)
             return
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._focus_log_tab()
         self._writeback_manifest_path = ""
         if spec.supports_translation_writeback:
@@ -2908,7 +2935,7 @@ class MainWindow(QMainWindow):
                 anchor_manifest_path=str(latest_manifest),
             )
             if split_workflow.current_step() is not None:
-                self.log_view.clear()
+                self._clear_log_view()
                 self._focus_log_tab()
                 self._workflow = split_workflow
                 self._refresh_diagnostics_context()
@@ -2950,7 +2977,7 @@ class MainWindow(QMainWindow):
         only_query = self._resume_button_is_query_mode()
         workflow.only_query = only_query
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._focus_log_tab()
         self._workflow = workflow
         self._refresh_diagnostics_context()
@@ -2993,7 +3020,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "没有待提交拆分包", "当前拆分组没有尚未提交的包。")
             return
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._focus_log_tab()
         self._workflow = workflow
         self._refresh_diagnostics_context()
@@ -3046,7 +3073,7 @@ class MainWindow(QMainWindow):
             return
 
         manifest_path = self._writeback_manifest_path
-        self.log_view.clear()
+        self._clear_log_view()
         self._focus_log_tab()
         self._active_command = "apply"
         self._apply_output_lines = []
@@ -3101,7 +3128,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "无法写回订正", "没有可写回的订正任务记录。")
             return
 
-        self.log_view.clear()
+        self._clear_log_view()
         self._focus_log_tab()
         self._active_command = "apply_revision"
         self._apply_revision_output_lines = []
@@ -3222,6 +3249,16 @@ class MainWindow(QMainWindow):
                 self._apply_bootstrap_progress_ui()
             else:
                 self._apply_workflow_progress_ui()
+
+    def _clear_log_view(self) -> None:
+        pending = getattr(self, "_pending_log_lines", None)
+        if pending is not None:
+            pending.clear()
+        timer = getattr(self, "_log_flush_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        if hasattr(self, "log_view"):
+            self.log_view.clear()
 
     def _append_log(self, text: str) -> None:
         line = text.rstrip("\n")

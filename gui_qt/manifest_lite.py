@@ -12,8 +12,21 @@ from pathlib import Path
 from typing import Any
 
 _CHUNKS_MARKER_RE = re.compile(r'"chunks"\s*:\s*\[')
+_CHUNKS_MARKER_BYTES = b'"chunks"'
 _HEAD_READ_BYTES = 262_144
 _TAIL_READ_BYTES = 524_288
+
+_HEAD_SCALAR_KEYS = (
+    "mode",
+    "base_dir",
+    "display_name",
+    "job_name",
+    "job_state",
+    "job_error",
+    "result_jsonl_path",
+    "retry_of_manifest",
+)
+_HEAD_INT_KEYS = ("split_index", "split_total")
 
 _TAIL_OBJECT_KEYS = (
     "last_check_summary",
@@ -72,37 +85,84 @@ def read_manifest_lite(path: str | Path) -> dict[str, Any]:
     if size < HEAVY_MANIFEST_BYTE_THRESHOLD:
         try:
             raw = manifest_path.read_text(encoding="utf-8-sig")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             return {}
         return _read_json_object(raw)
 
+    marker_offset = _locate_chunks_marker(manifest_path)
     try:
         with manifest_path.open("rb") as handle:
-            head = handle.read(min(_HEAD_READ_BYTES, size)).decode("utf-8-sig", errors="replace")
-            if size > _TAIL_READ_BYTES:
-                handle.seek(size - _TAIL_READ_BYTES)
+            if marker_offset is not None:
+                head_limit = marker_offset
+                head = handle.read(head_limit).decode("utf-8-sig", errors="replace")
+                handle.seek(marker_offset)
                 tail = handle.read().decode("utf-8-sig", errors="replace")
             else:
-                tail = head
-    except OSError:
+                head_limit = min(_HEAD_READ_BYTES, size)
+                head = handle.read(head_limit).decode("utf-8-sig", errors="replace")
+                if size > _TAIL_READ_BYTES:
+                    handle.seek(size - _TAIL_READ_BYTES)
+                    tail = handle.read().decode("utf-8-sig", errors="replace")
+                elif head_limit < size:
+                    tail = handle.read().decode("utf-8-sig", errors="replace")
+                else:
+                    tail = head
+    except (OSError, UnicodeDecodeError):
         return {}
 
-    if '"chunks"' not in head and '"chunks"' not in tail:
-        return _read_json_object(head if size <= _HEAD_READ_BYTES else head + tail)
-
     result: dict[str, Any] = {}
-    marker = _CHUNKS_MARKER_RE.search(head)
-    if marker is not None:
-        head_part = head[: marker.start()].rstrip().rstrip(",")
-        head_obj = _read_json_object(head_part + "}")
-        if head_obj:
-            result.update(head_obj)
-    else:
+    if marker_offset is not None:
+        marker = _CHUNKS_MARKER_RE.search(head)
+        if marker is not None:
+            head_part = head[: marker.start()].rstrip().rstrip(",")
+            head_obj = _read_json_object(head_part + "}")
+            if head_obj:
+                result.update(head_obj)
+        else:
+            result.update(_extract_sparse_head_fields(head))
+    elif '"chunks"' not in head and '"chunks"' not in tail:
         head_obj = _read_json_object(head.rstrip().rstrip(","))
         if head_obj:
             result.update(head_obj)
+        else:
+            result.update(_extract_sparse_head_fields(head))
+    else:
+        result.update(_extract_sparse_head_fields(head))
 
     result.update(_extract_tail_fields(tail))
+    result.pop("chunks", None)
+    return result
+
+
+def _locate_chunks_marker(path: Path) -> int | None:
+    with path.open("rb") as handle:
+        offset = 0
+        carry = b""
+        while True:
+            block = handle.read(1024 * 1024)
+            if not block:
+                return None
+            haystack = carry + block
+            idx = haystack.find(_CHUNKS_MARKER_BYTES)
+            if idx >= 0:
+                return offset - len(carry) + idx
+            carry = haystack[-(len(_CHUNKS_MARKER_BYTES) - 1) :] if len(_CHUNKS_MARKER_BYTES) > 1 else b""
+            offset += len(block)
+
+
+def _extract_sparse_head_fields(head: str) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key in _HEAD_SCALAR_KEYS:
+        value = _extract_quoted_field(head, key)
+        if value is not None:
+            result[key] = value
+    for key in _HEAD_INT_KEYS:
+        match = re.search(rf'"{re.escape(key)}"\s*:\s*(\d+)', head)
+        if match:
+            result[key] = int(match.group(1))
+    summary = _extract_json_value_after_key(head, "summary")
+    if isinstance(summary, dict):
+        result["summary"] = summary
     return result
 
 

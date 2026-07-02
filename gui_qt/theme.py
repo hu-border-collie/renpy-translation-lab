@@ -16,6 +16,12 @@ _STYLESHEET_CACHE: dict[tuple[str, str], str] = {}
 _FONT_CACHE: dict[str, GuiFontFamilies] = {}
 
 
+def clear_theme_caches() -> None:
+    """Reset module-level caches; primarily intended for test isolation."""
+    _STYLESHEET_CACHE.clear()
+    _FONT_CACHE.clear()
+
+
 def system_prefers_dark(app: QApplication) -> bool | None:
     scheme = app.styleHints().colorScheme()
     if scheme == Qt.ColorScheme.Dark:
