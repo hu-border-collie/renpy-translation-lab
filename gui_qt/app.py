@@ -94,6 +94,8 @@ from .split_batch import (
     summarize_split_entries,
 )
 from .split_batch_workflow import SplitBatchQueueWorkflow
+from .split_status_delegate import SPLIT_ACTION_DATA_ROLE, SplitStatusActionDelegate
+from .split_status_table_helpers import is_split_action_column, split_action_item_payload
 from .retry_preview_dialog import RetryPreviewDialog
 from .retry_report import (
     assess_retry_eligibility,
@@ -282,12 +284,18 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched: Any, event: QEvent) -> bool:
         if watched is self.work_mode_hint_label and event.type() == QEvent.Type.Resize:
             self._sync_work_mode_hint_height()
-        if (
-            hasattr(self, "split_status_table")
-            and watched is self.split_status_table.viewport()
-            and event.type() == QEvent.Type.Resize
-        ):
-            self._sync_split_status_table_columns()
+        if hasattr(self, "split_status_table") and watched is self.split_status_table.viewport():
+            if event.type() == QEvent.Type.Resize:
+                self._sync_split_status_table_columns()
+            elif event.type() in {QEvent.Type.Leave, QEvent.Type.MouseMove}:
+                delegate = getattr(self, "_split_status_action_delegate", None)
+                if delegate is not None:
+                    if event.type() == QEvent.Type.Leave:
+                        delegate.clear_hover_state()
+                    else:
+                        index = self.split_status_table.indexAt(event.position().toPoint())
+                        if not index.isValid() or not is_split_action_column(index.column()):
+                            delegate.clear_hover_state()
         return super().eventFilter(watched, event)
 
     def _sync_work_mode_hint_height(self) -> None:
@@ -613,6 +621,8 @@ class MainWindow(QMainWindow):
         self.split_status_table.setMaximumHeight(360)
         self.split_status_table.verticalHeader().setVisible(False)
         self.split_status_table.viewport().installEventFilter(self)
+        self._split_status_action_delegate = SplitStatusActionDelegate(self.split_status_table)
+        self._split_status_action_delegate.select_requested.connect(self._select_split_manifest)
         split_header = self.split_status_table.horizontalHeader()
         split_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         split_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
@@ -1123,10 +1133,12 @@ class MainWindow(QMainWindow):
         profile = self._configure_split_status_table_columns()
         group_count = max(1, profile["groups"])
         rows = (len(entries) + group_count - 1) // group_count
+        delegate = getattr(self, "_split_status_action_delegate", None)
+        if delegate is not None:
+            delegate.clear_hover_state()
         self.split_status_table.setRowCount(rows)
         for row in range(rows):
             for column in range(self.split_status_table.columnCount()):
-                self.split_status_table.removeCellWidget(row, column)
                 self._set_split_table_item(row, column, "")
 
         for index, entry in enumerate(entries):
@@ -1209,7 +1221,18 @@ class MainWindow(QMainWindow):
             self.split_status_table.setColumnWidth(base + 2, profile["item_width"])
             self.split_status_table.setColumnWidth(base + 3, profile["chunk_width"])
             self.split_status_table.setColumnWidth(base + 5, profile["action_width"])
+        self._ensure_split_status_action_delegates()
         return profile
+
+    def _ensure_split_status_action_delegates(self) -> None:
+        if not hasattr(self, "split_status_table"):
+            return
+        delegate = getattr(self, "_split_status_action_delegate", None)
+        if delegate is None:
+            return
+        for column in range(self.split_status_table.columnCount()):
+            if is_split_action_column(column):
+                self.split_status_table.setItemDelegateForColumn(column, delegate)
 
     def _sync_split_status_table_columns(self) -> None:
         if not hasattr(self, "split_status_table"):
@@ -1310,24 +1333,18 @@ class MainWindow(QMainWindow):
             self._split_job_text(entry, profile["job_chars"]),
             tooltip=entry.job_name or entry.manifest_path,
         )
-        self._set_split_table_item(row, base_column + 5, "")
-        if entry.selectable:
-            select_btn = QPushButton("\u9009\u62e9")
-            select_btn.setObjectName("split_select_btn")
-            select_btn.setMinimumHeight(30)
-            select_btn.setMaximumHeight(30)
-            select_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            select_btn.setToolTip(f"\u5207\u6362\u5230 {entry.part_label}")
-            select_btn.clicked.connect(
-                lambda _checked=False, path=entry.manifest_path: self._select_split_manifest(path)
-            )
-            cell = QWidget()
-            cell.setObjectName("split_status_action_cell")
-            cell_layout = QHBoxLayout(cell)
-            cell_layout.setContentsMargins(8, 6, 8, 6)
-            cell_layout.setSpacing(0)
-            cell_layout.addWidget(select_btn)
-            self.split_status_table.setCellWidget(row, base_column + 5, cell)
+        action_payload = split_action_item_payload(
+            selectable=entry.selectable,
+            manifest_path=entry.manifest_path,
+            part_label=entry.part_label,
+        )
+        action_item = QTableWidgetItem("")
+        action_item.setFlags(action_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        action_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        if action_payload is not None:
+            action_item.setData(SPLIT_ACTION_DATA_ROLE, action_payload)
+            action_item.setToolTip(f"\u5207\u6362\u5230 {entry.part_label}")
+        self.split_status_table.setItem(row, base_column + 5, action_item)
         self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
 
     def _split_job_text(self, entry: SplitManifestEntry, max_chars: int) -> str:
