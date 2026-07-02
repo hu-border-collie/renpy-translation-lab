@@ -122,8 +122,14 @@ def manifest_for_preview(manifest: dict[str, object]) -> dict[str, object]:
 
     files = manifest.get("files")
     chunks = manifest.get("chunks")
+    summary = manifest.get("summary")
     file_count = len(files) if isinstance(files, dict) else 0
     chunk_count = len(chunks) if isinstance(chunks, list) else 0
+    if isinstance(summary, dict):
+        if not file_count and isinstance(summary.get("file_count"), int):
+            file_count = summary["file_count"]
+        if not chunk_count and isinstance(summary.get("chunk_count"), int):
+            chunk_count = summary["chunk_count"]
     if file_count or chunk_count:
         preview["_preview_note"] = (
             f"预览已省略条目明细（{chunk_count} 块 / {file_count} 个文件）"

@@ -25,6 +25,7 @@ class GuiProjectStateTests(unittest.TestCase):
         state.config_path = root / "translator_config.json"
         state._game_root = None
         state._game_root_redirect_from = None
+        state._manifest_file_cache = {}
         return state
 
     def test_save_api_keys_preserves_existing_unknown_fields(self):
@@ -582,24 +583,71 @@ class GuiProjectStateTests(unittest.TestCase):
 
             state.get_logs_dir = lambda: logs_dir
             state._normalized_path_text = lambda p: os.path.normcase(os.path.abspath(p))
-            original_load_manifest_file = state.load_manifest_file
-            loaded_paths = []
-
-            def recording_load_manifest_file(path):
-                loaded_paths.append(Path(path))
-                return original_load_manifest_file(path)
-
-            state.load_manifest_file = recording_load_manifest_file
             game_root = Path("C:/correct/project")
 
-            first = state.get_latest_manifest_path_for_mode(game_root, WorkMode.KEYWORD_EXTRACTION)
-            first_read_count = len(loaded_paths)
-            second = state.get_latest_manifest_path_for_mode(game_root, WorkMode.KEYWORD_EXTRACTION)
+            first = state.get_latest_manifest_path_for_mode(
+                game_root,
+                WorkMode.KEYWORD_EXTRACTION,
+            )
+            first_index = state._manifest_history_index()
+            second = state.get_latest_manifest_path_for_mode(
+                game_root,
+                WorkMode.KEYWORD_EXTRACTION,
+            )
+            second_index = state._manifest_history_index()
 
             self.assertEqual(Path(first).resolve(), manifest.resolve())
             self.assertEqual(Path(second).resolve(), manifest.resolve())
-            self.assertGreater(first_read_count, 0)
-            self.assertEqual(len(loaded_paths), first_read_count)
+            self.assertIs(first_index, second_index)
+
+    def test_load_manifest_file_reuses_mtime_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps({"mode": "translation", "base_dir": "C:/game/work"}),
+                encoding="utf-8",
+            )
+
+            read_calls = {"count": 0}
+            original_read = state._read_json_object
+
+            def counting_read(path, description):
+                read_calls["count"] += 1
+                return original_read(path, description)
+
+            with patch.object(state, "_read_json_object", side_effect=counting_read):
+                first = state.load_manifest_file(manifest)
+                second = state.load_manifest_file(manifest)
+
+            self.assertEqual(first.get("mode"), "translation")
+            self.assertIs(second, first)
+            self.assertEqual(read_calls["count"], 1)
+
+    def test_invalidate_manifest_file_cache_forces_reload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps({"mode": "translation", "base_dir": "C:/game/work"}),
+                encoding="utf-8",
+            )
+
+            read_calls = {"count": 0}
+            original_read = state._read_json_object
+
+            def counting_read(path, description):
+                read_calls["count"] += 1
+                return original_read(path, description)
+
+            with patch.object(state, "_read_json_object", side_effect=counting_read):
+                state.load_manifest_file(manifest)
+                state.invalidate_manifest_file_cache(manifest)
+                state.load_manifest_file(manifest)
+
+            self.assertEqual(read_calls["count"], 2)
 
 if __name__ == "__main__":
     unittest.main()

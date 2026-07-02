@@ -1,12 +1,12 @@
 """Helpers for displaying and selecting split batch manifests in the GUI."""
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .manifest_lite import read_manifest_lite
 from .user_copy import job_state_label, safety_level_label
 
 
@@ -39,9 +39,8 @@ class SplitManifestEntry:
 
 def read_json_object(path: str | Path) -> dict[str, Any]:
     try:
-        raw = Path(path).read_text(encoding="utf-8-sig")
-        data = json.loads(raw or "{}")
-    except (OSError, json.JSONDecodeError):
+        data = read_manifest_lite(path)
+    except OSError:
         return {}
     return data if isinstance(data, dict) else {}
 

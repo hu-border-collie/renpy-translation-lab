@@ -52,6 +52,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.workflow_progress_bar = FakeProgressBar()
         self.window.workflow_facts_label = FakeLabel()
         self.window._append_log = lambda text: None
+        self.window._progress_flush_timer = None
 
         self.window._on_cli_line_ready("[2/4] sync-key")
 

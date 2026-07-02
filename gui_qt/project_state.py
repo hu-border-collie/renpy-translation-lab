@@ -16,7 +16,12 @@ import os
 from pathlib import Path
 from typing import Any
 
-import translator_runtime as runtime
+from .manifest_lite import (
+    manifest_should_use_lite_reader,
+    read_manifest_index_fields,
+    read_manifest_lite,
+)
+from .path_utils import canonical_abs_path, resolve_effective_game_root
 
 
 class ProjectState:
@@ -36,6 +41,7 @@ class ProjectState:
 
         self._game_root: Path | None = None
         self._game_root_redirect_from: Path | None = None
+        self._manifest_file_cache: dict[str, tuple[int, dict[str, Any]]] = {}
         self._load_game_root_from_config()
 
     # --- Path helpers ---
@@ -92,12 +98,14 @@ class ProjectState:
         # immediately even when the broader history index is cached.
         latest = self.get_latest_manifest_path()
         if latest is not None:
-            try:
-                manifest = self.load_manifest_file(latest)
-            except ValueError:
-                return None
+            manifest = read_manifest_index_fields(latest)
             if self._manifest_matches(manifest, expected_mode, normalized_game_root):
                 return latest
+            try:
+                if latest.stat().st_size > 0 and not manifest:
+                    return None
+            except OSError:
+                return None
 
         for _, path, actual_mode, base_dir in self._manifest_history_index():
             if not self._manifest_mode_matches(actual_mode, expected_mode):
@@ -110,6 +118,34 @@ class ProjectState:
     def invalidate_manifest_history_cache(self) -> None:
         self._manifest_history_cache_signature = None
         self._manifest_history_entries = None
+
+    def invalidate_manifest_file_cache(
+        self,
+        manifest_path: str | Path | None = None,
+    ) -> None:
+        if manifest_path is None:
+            self._manifest_file_cache.clear()
+            return
+        self._manifest_file_cache.pop(self._manifest_cache_key(Path(manifest_path)), None)
+
+    def load_latest_resume_manifest_for_mode(
+        self,
+        game_root: Path | None,
+        work_mode: Any,
+    ) -> tuple[Path | None, dict[str, Any] | None]:
+        if game_root is None:
+            return None, None
+        manifest_path = self.get_latest_manifest_path_for_mode(game_root, work_mode)
+        if manifest_path is None:
+            return None, None
+        try:
+            manifest = self.load_resume_manifest(
+                manifest_path,
+                work_mode=work_mode,
+            )
+        except ValueError:
+            return manifest_path, None
+        return manifest_path, manifest
 
     def _manifest_history_index(self) -> list[tuple[int, Path, str, str]]:
         logs_dir = self.get_logs_dir()
@@ -127,7 +163,9 @@ class ProjectState:
                 path = Path(root) / "manifest.json"
                 try:
                     stat = path.stat()
-                    manifest = self.load_manifest_file(path)
+                    manifest = read_manifest_index_fields(path)
+                    if not manifest:
+                        continue
                     actual_mode = manifest.get("mode", "translation")
                     actual_text = actual_mode.strip() if isinstance(actual_mode, str) else "translation"
                     base_dir = manifest.get("base_dir")
@@ -184,9 +222,37 @@ class ProjectState:
             return actual_text in {"", "translation"}
         return actual_text == expected_mode
 
-    def load_manifest_file(self, manifest_path: str | Path) -> dict[str, Any]:
-        manifest = self._read_json_object(Path(manifest_path), "batch manifest")
-        manifest["_manifest_path"] = str(Path(manifest_path))
+    def load_manifest_file(
+        self,
+        manifest_path: str | Path,
+        *,
+        lite: bool | None = None,
+    ) -> dict[str, Any]:
+        path = Path(manifest_path)
+        cache_key = self._manifest_cache_key(path)
+        mtime_ns = self._manifest_mtime_ns(path)
+        if mtime_ns is not None:
+            cached = self._manifest_file_cache.get(cache_key)
+            if cached is not None and cached[0] == mtime_ns:
+                return cached[1]
+
+        use_lite = (
+            manifest_should_use_lite_reader(path)
+            if lite is None
+            else lite
+        )
+        if use_lite:
+            if not path.exists():
+                manifest: dict[str, Any] = {}
+            else:
+                manifest = read_manifest_lite(path)
+                if not manifest and path.stat().st_size > 0:
+                    raise ValueError(f"Failed to read batch manifest: {path}")
+        else:
+            manifest = self._read_json_object(path, "batch manifest")
+        manifest["_manifest_path"] = str(path)
+        if mtime_ns is not None:
+            self._manifest_file_cache[cache_key] = (mtime_ns, manifest)
         return manifest
 
     def load_resume_manifest(
@@ -208,8 +274,17 @@ class ProjectState:
         )
         return manifest
 
+    def _manifest_cache_key(self, path: Path) -> str:
+        return self._normalized_path_text(path)
+
+    def _manifest_mtime_ns(self, path: Path) -> int | None:
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return None
+
     def _normalized_path_text(self, path: str | Path) -> str:
-        return os.path.normcase(runtime.canonical_abs_path(str(path)))
+        return os.path.normcase(canonical_abs_path(str(path)))
 
     def _resolve_api_keys_path(self) -> Path:
         root_api_keys = self.tool_root / "api_keys.json"
@@ -282,7 +357,7 @@ class ProjectState:
     def normalize_game_root(self, path: str | Path) -> tuple[Path, bool]:
         """Resolve project-root selections to nested work/ when that directory exists."""
         original = self._path_without_resolve(path)
-        effective = Path(runtime.canonical_abs_path(runtime.resolve_effective_game_root(str(original))))
+        effective = Path(canonical_abs_path(resolve_effective_game_root(str(original))))
         adjusted = self._normalized_path_text(original) != self._normalized_path_text(effective)
         return effective, adjusted
 
@@ -327,7 +402,7 @@ class ProjectState:
     def _save_game_root_to_config(self, game_root: Path) -> None:
         """Update only the game_root key, preserve everything else."""
         data = self._read_json_object(self.config_path, "translator_config.json")
-        data["game_root"] = runtime.canonical_abs_path(str(game_root))
+        data["game_root"] = canonical_abs_path(str(game_root))
         self._write_json_object(self.config_path, data)
 
     # --- Config helpers (api_keys + translator_config) ---
