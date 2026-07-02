@@ -176,7 +176,9 @@ def _is_selectable(
     has_result: bool,
 ) -> bool:
     if applied:
-        return False
+        # Completed packages stay selectable so the workbench can switch
+        # which manifest drives diagnostics/writeback summaries.
+        return True
     if safety_level:
         return True
     if job_state == "JOB_STATE_SUCCEEDED":

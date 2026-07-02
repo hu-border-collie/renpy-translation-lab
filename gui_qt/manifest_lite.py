@@ -72,6 +72,15 @@ def read_manifest_index_fields(path: str | Path) -> dict[str, Any]:
     return result
 
 
+def _read_tail_window(handle: Any, head: str, head_limit: int, size: int) -> str:
+    if size > _TAIL_READ_BYTES:
+        handle.seek(size - _TAIL_READ_BYTES)
+        return handle.read().decode("utf-8-sig", errors="replace")
+    if head_limit < size:
+        return handle.read().decode("utf-8-sig", errors="replace")
+    return head
+
+
 def read_manifest_lite(path: str | Path) -> dict[str, Any]:
     """Load manifest metadata without parsing the heavy ``chunks`` array."""
     manifest_path = Path(path)
@@ -95,18 +104,11 @@ def read_manifest_lite(path: str | Path) -> dict[str, Any]:
             if marker_offset is not None:
                 head_limit = marker_offset
                 head = handle.read(head_limit).decode("utf-8-sig", errors="replace")
-                handle.seek(marker_offset)
-                tail = handle.read().decode("utf-8-sig", errors="replace")
+                tail = _read_tail_window(handle, head, head_limit, size)
             else:
                 head_limit = min(_HEAD_READ_BYTES, size)
                 head = handle.read(head_limit).decode("utf-8-sig", errors="replace")
-                if size > _TAIL_READ_BYTES:
-                    handle.seek(size - _TAIL_READ_BYTES)
-                    tail = handle.read().decode("utf-8-sig", errors="replace")
-                elif head_limit < size:
-                    tail = handle.read().decode("utf-8-sig", errors="replace")
-                else:
-                    tail = head
+                tail = _read_tail_window(handle, head, head_limit, size)
     except (OSError, UnicodeDecodeError):
         return {}
 

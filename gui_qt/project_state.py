@@ -79,7 +79,6 @@ class ProjectState:
         try:
             latest_file.parent.mkdir(parents=True, exist_ok=True)
             latest_file.write_text(str(manifest_path), encoding="utf-8")
-            self.invalidate_manifest_history_cache()
         except OSError as exc:
             raise ValueError(f"Failed to update latest manifest pointer: {latest_file}") from exc
 

@@ -75,7 +75,7 @@ class GuiSplitBatchTests(unittest.TestCase):
         self.assertTrue(safe_entry.selectable)
         self.assertEqual(applied_entry.status_label, "已写回")
         self.assertEqual(applied_entry.status_kind, "applied")
-        self.assertFalse(applied_entry.selectable)
+        self.assertTrue(applied_entry.selectable)
 
     def test_submit_remaining_queue_only_uses_unsubmitted_entries(self):
         part1 = r"C:\pkg\part01_of_02\manifest.json"

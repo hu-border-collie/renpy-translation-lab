@@ -94,6 +94,8 @@ from .split_batch import (
     summarize_split_entries,
 )
 from .split_batch_workflow import SplitBatchQueueWorkflow
+from .split_status_delegate import SPLIT_ACTION_DATA_ROLE, SplitStatusActionDelegate
+from .split_status_table_helpers import is_split_action_column, split_action_item_payload
 from .retry_preview_dialog import RetryPreviewDialog
 from .retry_report import (
     assess_retry_eligibility,
@@ -276,18 +278,30 @@ class MainWindow(QMainWindow):
     def _deferred_startup_refresh(self) -> None:
         self._apply_work_mode_ui(
             refresh_manifest_writeback=True,
-            refresh_diagnostics=True,
+            refresh_diagnostics=False,
         )
+        QTimer.singleShot(0, self._deferred_startup_diagnostics_refresh)
+
+    def _deferred_startup_diagnostics_refresh(self) -> None:
+        self._refresh_manifest_derived_ui(refresh_diagnostics=True)
 
     def eventFilter(self, watched: Any, event: QEvent) -> bool:
         if watched is self.work_mode_hint_label and event.type() == QEvent.Type.Resize:
             self._sync_work_mode_hint_height()
-        if (
-            hasattr(self, "split_status_table")
-            and watched is self.split_status_table.viewport()
-            and event.type() == QEvent.Type.Resize
-        ):
-            self._sync_split_status_table_columns()
+        if hasattr(self, "split_status_table") and watched is self.split_status_table.viewport():
+            if event.type() == QEvent.Type.Resize:
+                self._sync_split_status_table_columns()
+            elif event.type() in {QEvent.Type.Leave, QEvent.Type.MouseMove}:
+                delegate = getattr(self, "_split_status_action_delegate", None)
+                if delegate is not None:
+                    if event.type() == QEvent.Type.Leave:
+                        delegate.clear_hover_state()
+                        delegate.clear_pressed_state()
+                    else:
+                        index = self.split_status_table.indexAt(event.position().toPoint())
+                        if not index.isValid() or not is_split_action_column(index.column()):
+                            delegate.clear_hover_state()
+                            delegate.clear_pressed_state()
         return super().eventFilter(watched, event)
 
     def _sync_work_mode_hint_height(self) -> None:
@@ -613,6 +627,8 @@ class MainWindow(QMainWindow):
         self.split_status_table.setMaximumHeight(360)
         self.split_status_table.verticalHeader().setVisible(False)
         self.split_status_table.viewport().installEventFilter(self)
+        self._split_status_action_delegate = SplitStatusActionDelegate(self.split_status_table)
+        self._split_status_action_delegate.select_requested.connect(self._select_split_manifest)
         split_header = self.split_status_table.horizontalHeader()
         split_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         split_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
@@ -1064,6 +1080,29 @@ class MainWindow(QMainWindow):
             return False
         return canonical_abs_path(left).lower() == canonical_abs_path(right).lower()
 
+    def _split_entries_unchanged(
+        self,
+        entries: list[SplitManifestEntry],
+    ) -> bool:
+        previous = self._split_status_entries
+        if len(previous) != len(entries):
+            return False
+        for old_entry, new_entry in zip(previous, entries, strict=True):
+            if (
+                old_entry.manifest_path != new_entry.manifest_path
+                or old_entry.part_label != new_entry.part_label
+                or old_entry.status_kind != new_entry.status_kind
+                or old_entry.status_label != new_entry.status_label
+                or old_entry.item_count != new_entry.item_count
+                or old_entry.chunk_count != new_entry.chunk_count
+                or old_entry.job_name != new_entry.job_name
+                or old_entry.job_state != new_entry.job_state
+                or old_entry.selectable != new_entry.selectable
+                or old_entry.needs_submit != new_entry.needs_submit
+            ):
+                return False
+        return True
+
     def _split_entries_for_manifest(
         self,
         manifest_path: str,
@@ -1123,10 +1162,13 @@ class MainWindow(QMainWindow):
         profile = self._configure_split_status_table_columns()
         group_count = max(1, profile["groups"])
         rows = (len(entries) + group_count - 1) // group_count
+        delegate = getattr(self, "_split_status_action_delegate", None)
+        if delegate is not None:
+            delegate.clear_hover_state()
+            delegate.clear_pressed_state()
         self.split_status_table.setRowCount(rows)
         for row in range(rows):
             for column in range(self.split_status_table.columnCount()):
-                self.split_status_table.removeCellWidget(row, column)
                 self._set_split_table_item(row, column, "")
 
         for index, entry in enumerate(entries):
@@ -1209,7 +1251,18 @@ class MainWindow(QMainWindow):
             self.split_status_table.setColumnWidth(base + 2, profile["item_width"])
             self.split_status_table.setColumnWidth(base + 3, profile["chunk_width"])
             self.split_status_table.setColumnWidth(base + 5, profile["action_width"])
+        self._ensure_split_status_action_delegates()
         return profile
+
+    def _ensure_split_status_action_delegates(self) -> None:
+        if not hasattr(self, "split_status_table"):
+            return
+        delegate = getattr(self, "_split_status_action_delegate", None)
+        if delegate is None:
+            return
+        for column in range(self.split_status_table.columnCount()):
+            if is_split_action_column(column):
+                self.split_status_table.setItemDelegateForColumn(column, delegate)
 
     def _sync_split_status_table_columns(self) -> None:
         if not hasattr(self, "split_status_table"):
@@ -1265,6 +1318,46 @@ class MainWindow(QMainWindow):
             selected_manifest_path=selected_manifest_path,
         )
 
+    def _update_split_status_selection_ui(self, selected_manifest_path: str) -> None:
+        if not hasattr(self, "split_status_table") or not self._split_status_entries:
+            return
+        rows = self.split_status_table.rowCount()
+        if rows <= 0:
+            return
+        for index, entry in enumerate(self._split_status_entries):
+            group_index = index // rows if rows else 0
+            row = index % rows if rows else 0
+            base_column = group_index * 6
+            if base_column + 5 >= self.split_status_table.columnCount():
+                continue
+            is_current = self._same_manifest_path(entry.manifest_path, selected_manifest_path)
+            part_item = self.split_status_table.item(row, base_column + 0)
+            if part_item is not None:
+                current_suffix = "\uff08\u5f53\u524d\uff09" if is_current else ""
+                part_item.setText(f"{entry.part_label}{current_suffix}")
+                font = part_item.font()
+                font.setBold(is_current)
+                part_item.setFont(font)
+            action_item = self.split_status_table.item(row, base_column + 5)
+            if action_item is None:
+                continue
+            show_action_button = entry.selectable and not is_current
+            action_payload = split_action_item_payload(
+                selectable=show_action_button,
+                manifest_path=entry.manifest_path,
+                part_label=entry.part_label,
+            )
+            if action_payload is not None:
+                action_item.setData(SPLIT_ACTION_DATA_ROLE, action_payload)
+                action_item.setToolTip(f"\u5207\u6362\u5230 {entry.part_label}")
+            else:
+                action_item.setData(SPLIT_ACTION_DATA_ROLE, None)
+                action_item.setToolTip("")
+            model_index = self.split_status_table.model().index(row, base_column + 5)
+            self.split_status_table.viewport().update(
+                self.split_status_table.visualRect(model_index)
+            )
+
     def _update_split_status_job_column_texts(self, profile: dict[str, int]) -> None:
         if not hasattr(self, "split_status_table"):
             return
@@ -1310,24 +1403,19 @@ class MainWindow(QMainWindow):
             self._split_job_text(entry, profile["job_chars"]),
             tooltip=entry.job_name or entry.manifest_path,
         )
-        self._set_split_table_item(row, base_column + 5, "")
-        if entry.selectable:
-            select_btn = QPushButton("\u9009\u62e9")
-            select_btn.setObjectName("split_select_btn")
-            select_btn.setMinimumHeight(30)
-            select_btn.setMaximumHeight(30)
-            select_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            select_btn.setToolTip(f"\u5207\u6362\u5230 {entry.part_label}")
-            select_btn.clicked.connect(
-                lambda _checked=False, path=entry.manifest_path: self._select_split_manifest(path)
-            )
-            cell = QWidget()
-            cell.setObjectName("split_status_action_cell")
-            cell_layout = QHBoxLayout(cell)
-            cell_layout.setContentsMargins(8, 6, 8, 6)
-            cell_layout.setSpacing(0)
-            cell_layout.addWidget(select_btn)
-            self.split_status_table.setCellWidget(row, base_column + 5, cell)
+        show_action_button = entry.selectable and not is_current
+        action_payload = split_action_item_payload(
+            selectable=show_action_button,
+            manifest_path=entry.manifest_path,
+            part_label=entry.part_label,
+        )
+        action_item = QTableWidgetItem("")
+        action_item.setFlags(action_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        action_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        if action_payload is not None:
+            action_item.setData(SPLIT_ACTION_DATA_ROLE, action_payload)
+            action_item.setToolTip(f"\u5207\u6362\u5230 {entry.part_label}")
+        self.split_status_table.setItem(row, base_column + 5, action_item)
         self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
 
     def _split_job_text(self, entry: SplitManifestEntry, max_chars: int) -> str:
@@ -1457,6 +1545,22 @@ class MainWindow(QMainWindow):
         self.split_submit_btn.setText("提交剩余包")
         self.split_submit_btn.setEnabled(has_split_group and needs_submit and not running)
 
+    def _refresh_writeback_for_manifest_path(self, manifest_path: str) -> None:
+        spec = work_mode_spec(self._current_work_mode())
+        if not spec.supports_translation_writeback:
+            self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+            return
+        try:
+            manifest = self.state.load_manifest_file(manifest_path, lite=True)
+        except ValueError:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+        summary = summarize_manifest_writeback(manifest)
+        if summary is None:
+            self._set_writeback_summary(idle_writeback_summary())
+            return
+        self._set_writeback_summary(summary)
+
     def _select_split_manifest(self, manifest_path: str) -> None:
         try:
             self.state.remember_latest_manifest_path(manifest_path)
@@ -1465,7 +1569,22 @@ class MainWindow(QMainWindow):
             return
         self._workflow = None
         self._workflow_step_output_lines = []
-        self._refresh_manifest_derived_ui(refresh_writeback=True)
+        self._split_status_selected_manifest_path = manifest_path
+        if self._split_status_entries:
+            self._update_split_status_selection_ui(manifest_path)
+        else:
+            self._refresh_split_status_ui(manifest_path=manifest_path)
+        self._refresh_writeback_for_manifest_path(manifest_path)
+        try:
+            selected_manifest = self.state.load_manifest_file(manifest_path, lite=True)
+        except ValueError:
+            selected_manifest = None
+        if selected_manifest is not None:
+            self._refresh_workflow_from_latest_manifest(
+                latest_manifest=manifest_path,
+                manifest=selected_manifest,
+                split_entries=self._split_status_entries or None,
+            )
         writeback_summary = self._current_writeback_summary()
         if writeback_summary.status not in {"idle", "running", "stale"}:
             self._focus_workbench_status_tab(2)
@@ -2169,6 +2288,7 @@ class MainWindow(QMainWindow):
         *,
         latest_manifest: Path | str | None = None,
         manifest: dict[str, object] | None = None,
+        split_entries: list[SplitManifestEntry] | None = None,
     ) -> None:
         if self.kill_btn.isEnabled():
             return
@@ -2240,7 +2360,8 @@ class MainWindow(QMainWindow):
         if retry_parent_text:
             facts.append(f"父任务：{retry_parent_text}")
 
-        split_entries = self._split_entries_for_manifest(str(latest_manifest), manifest)
+        if split_entries is None:
+            split_entries = self._split_entries_for_manifest(str(latest_manifest), manifest)
         facts.extend(summarize_split_entries(split_entries))
 
         is_waiting = job_state_text in ("JOB_STATE_PENDING", "JOB_STATE_RUNNING")
@@ -2309,10 +2430,15 @@ class MainWindow(QMainWindow):
             workflow,
             step_key=timeline_step_key,
         )
-        self._render_split_status_entries(
-            split_entries,
-            selected_manifest_path=retry_parent_text or str(latest_manifest),
-        )
+        selected_manifest_path = retry_parent_text or str(latest_manifest)
+        if self._split_entries_unchanged(split_entries):
+            self._split_status_selected_manifest_path = selected_manifest_path
+            self._update_split_status_selection_ui(selected_manifest_path)
+        else:
+            self._render_split_status_entries(
+                split_entries,
+                selected_manifest_path=selected_manifest_path,
+            )
 
     def _clear_bootstrap_progress_ui(self) -> None:
         self._bootstrap_progress = None

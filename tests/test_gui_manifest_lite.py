@@ -64,6 +64,37 @@ class GuiManifestLiteTests(unittest.TestCase):
             self.assertEqual(lite.get("applied_at"), "2026-06-30T13:00:00")
             self.assertNotIn("chunks", lite)
 
+    def test_read_manifest_lite_reads_eof_tail_when_chunks_start_early(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "manifest.json"
+            head = {
+                "mode": "translation",
+                "base_dir": "C:/game/work",
+                "job_name": "batches/early-chunks",
+                "job_state": "JOB_STATE_SUCCEEDED",
+                "summary": {"item_count": 4, "chunk_count": 1, "file_count": 1},
+            }
+            tail = {
+                "last_check_summary": {"safety_level": "safe"},
+                "applied_at": "2026-06-30T14:00:00",
+            }
+            # chunks starts immediately after a tiny header; the array body is huge.
+            chunks_body = ", ".join(f'{{"key": "chunk-{index}"}}' for index in range(120_000))
+            text = (
+                json.dumps(head, ensure_ascii=False)[:-1]
+                + f', "chunks": [{chunks_body}], '
+                + json.dumps(tail, ensure_ascii=False)[1:]
+            )
+            path.write_text(text, encoding="utf-8")
+
+            lite = read_manifest_lite(path)
+
+            self.assertEqual(lite.get("job_name"), "batches/early-chunks")
+            self.assertEqual(lite.get("summary", {}).get("item_count"), 4)
+            self.assertEqual(lite.get("last_check_summary", {}).get("safety_level"), "safe")
+            self.assertEqual(lite.get("applied_at"), "2026-06-30T14:00:00")
+            self.assertNotIn("chunks", lite)
+
     def test_read_manifest_index_fields_reads_only_header(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "manifest.json"
