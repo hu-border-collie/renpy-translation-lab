@@ -167,11 +167,14 @@ def category_label(category: str) -> str:
     return CATEGORY_LABELS.get(category, CATEGORY_LABELS["unknown"])
 
 
-def classify_reason_category(reason_code: str) -> str:
+def classify_reason_category(reason_code: str, error: str = "") -> str:
     """Map a reason code to retry/repair/manual/rebuild_check guidance."""
     text = str(reason_code or "").strip()
     if not text:
         return "unknown"
+    error_text = str(error or "").lower()
+    if text == "validation_failed" and "preserved terms missing" in error_text:
+        return REASON_CATEGORY_RETRY
     return REASON_CATEGORY_BY_CODE.get(text, "unknown")
 
 
@@ -292,18 +295,16 @@ def normalize_failure_entry(entry: dict[str, object]) -> CheckFailureItem:
 
 def group_failure_items(items: list[CheckFailureItem]) -> list[ReasonGroupSummary]:
     """Group failure items by reason code and status, sorted by count."""
-    counter: Counter[tuple[str, str]] = Counter()
-    status_by_reason: dict[str, str] = {}
+    counter: Counter[tuple[str, str, str]] = Counter()
     for item in items:
-        counter[(item.reason_code, item.status)] += 1
-        status_by_reason.setdefault(item.reason_code, item.status)
+        category = classify_reason_category(item.reason_code, item.error)
+        counter[(item.reason_code, item.status, category)] += 1
 
     groups: list[ReasonGroupSummary] = []
-    for (reason_code, status), count in sorted(
+    for (reason_code, status, category), count in sorted(
         counter.items(),
-        key=lambda pair: (-pair[1], pair[0][0], pair[0][1]),
+        key=lambda pair: (-pair[1], pair[0][0], pair[0][1], pair[0][2]),
     ):
-        category = classify_reason_category(reason_code)
         groups.append(
             ReasonGroupSummary(
                 reason_code=reason_code,

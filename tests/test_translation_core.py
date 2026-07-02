@@ -157,6 +157,19 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertNotIn('enum', candidate_schema['properties']['category'])
         self.assertIn('chunk_summary', keyword_schema['required'])
 
+    def test_translation_prompts_emphasize_renpy_interpolation_preservation(self):
+        system_text = translation_core.build_translation_system_instruction(['[Gil_name!t]'])
+        self.assertIn('[Gil_name!t]', system_text)
+        self.assertIn('never replace', system_text)
+        self.assertIn('never omit an item', system_text)
+
+        sync_text = translation_core.build_sync_translation_prompt(
+            [{'id': 'line-1', 'text': 'Coach [Gil_name!t] is here.'}],
+            ['[Gil_name!t]'],
+        )
+        self.assertIn('[Gil_name!t]', sync_text)
+        self.assertIn('never turn them into literal names', sync_text)
+
     def test_core_result_parsers_and_writeback_actions_are_mode_aware(self):
         translation_results = translation_core.normalize_model_results(
             {'translations': [{'id': 'a', 'translation': '\u4f60\u597d'}]},

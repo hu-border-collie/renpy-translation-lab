@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import argparse
 import ast
+import copy
 import hashlib
 import io
 import json
@@ -75,11 +76,14 @@ def initialize_batch_logging():
 BATCH_MODEL = 'gemini-3.1-flash-lite'
 BATCH_TARGET_SIZE = 60
 BATCH_TARGET_CHARS = 18000
+BATCH_RETRY_TARGET_SIZE = 8
+BATCH_RETRY_TARGET_CHARS = 4000
 BATCH_CONTEXT_BEFORE = 30
 BATCH_CONTEXT_AFTER = 10
 BATCH_MAX_OUTPUT_TOKENS = 32768
 BATCH_TEMPERATURE = 0.2
 BATCH_THINKING_LEVEL = 'minimal'
+BATCH_SAFETY_SETTINGS = []
 BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
 BATCH_SPLIT_RECOMMEND_CHUNKS = 400
 BATCH_SPLIT_RECOMMEND_ITEMS = 12000
@@ -230,10 +234,48 @@ def normalize_task_type(value, default):
     return default
 
 
+def normalize_batch_safety_settings(value):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return []
+        normalized = cleaned.lower().replace('-', '_')
+        if normalized in {'relaxed_adult', 'adult', 'sexually_explicit_block_none'}:
+            return [
+                {
+                    'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+                    'threshold': 'BLOCK_NONE',
+                }
+            ]
+        return []
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+
+    settings = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        category = str(entry.get('category') or entry.get('harm_category') or '').strip().upper()
+        threshold = str(entry.get('threshold') or entry.get('block_threshold') or '').strip().upper()
+        if not category or not threshold:
+            continue
+        if not category.startswith('HARM_CATEGORY_'):
+            category = f'HARM_CATEGORY_{category}'
+        if threshold in {'NONE', 'NO_BLOCK', 'BLOCKNONE'}:
+            threshold = 'BLOCK_NONE'
+        settings.append({'category': category, 'threshold': threshold})
+    return settings
+
+
 def load_batch_settings():
     global BATCH_MODEL, BATCH_TARGET_SIZE, BATCH_CONTEXT_BEFORE, BATCH_CONTEXT_AFTER
-    global BATCH_TARGET_CHARS, BATCH_MAX_OUTPUT_TOKENS, BATCH_TEMPERATURE, BATCH_THINKING_LEVEL
-    global BATCH_DISPLAY_NAME_PREFIX, BATCH_MACRO_SETTING
+    global BATCH_TARGET_CHARS, BATCH_RETRY_TARGET_SIZE, BATCH_RETRY_TARGET_CHARS
+    global BATCH_MAX_OUTPUT_TOKENS, BATCH_TEMPERATURE, BATCH_THINKING_LEVEL
+    global BATCH_SAFETY_SETTINGS, BATCH_DISPLAY_NAME_PREFIX, BATCH_MACRO_SETTING
     global KEYWORD_DISPLAY_NAME_PREFIX, KEYWORD_CHUNK_SIZE, KEYWORD_MAX_CANDIDATES_PER_CHUNK
     global REVISION_DISPLAY_NAME_PREFIX, REVISION_CHUNK_SIZE
     global RAG_ENABLED, RAG_STORE_DIR, RAG_EMBEDDING_MODEL, RAG_QUERY_TASK_TYPE
@@ -272,6 +314,8 @@ def load_batch_settings():
             config.get('batch_thinking_level'),
             BATCH_THINKING_LEVEL,
         )
+    if 'batch_safety_settings' in config:
+        BATCH_SAFETY_SETTINGS = normalize_batch_safety_settings(config.get('batch_safety_settings'))
 
     display_name_prefix = config.get('batch_display_name_prefix')
     if isinstance(display_name_prefix, str) and display_name_prefix.strip():
@@ -300,6 +344,11 @@ def load_batch_settings():
     )
     BATCH_CONTEXT_BEFORE = coerce_positive_int(batch.get('context_before'), BATCH_CONTEXT_BEFORE)
     BATCH_CONTEXT_AFTER = coerce_positive_int(batch.get('context_after'), BATCH_CONTEXT_AFTER)
+    BATCH_RETRY_TARGET_SIZE = coerce_positive_int(batch.get('retry_chunk_size'), BATCH_RETRY_TARGET_SIZE)
+    BATCH_RETRY_TARGET_CHARS = coerce_positive_int(
+        batch.get('retry_max_source_chars', batch.get('retry_target_chars')),
+        BATCH_RETRY_TARGET_CHARS,
+    )
     BATCH_MAX_OUTPUT_TOKENS = coerce_positive_int(
         batch.get('max_output_tokens'),
         BATCH_MAX_OUTPUT_TOKENS,
@@ -310,6 +359,8 @@ def load_batch_settings():
             batch.get('thinking_level'),
             BATCH_THINKING_LEVEL,
         )
+    if 'safety_settings' in batch:
+        BATCH_SAFETY_SETTINGS = normalize_batch_safety_settings(batch.get('safety_settings'))
 
     keyword_config = batch.get('keyword_extraction')
     if not isinstance(keyword_config, dict):
@@ -741,12 +792,224 @@ def is_manifest_say_speaker_label_item(manifest, chunk, item):
         return False
     return legacy.is_say_speaker_label_string_span(line, item.get('start'), item.get('end'))
 
+def is_manifest_old_new_static_label_item(manifest, chunk, item):
+    if not isinstance(item, dict):
+        return False
+    line = _read_line_at(_manifest_file_path_for_chunk(manifest, chunk), _item_source_line_number(item))
+    if not line:
+        return False
+    stripped = line.lstrip()
+    return stripped.startswith('old ') or stripped.startswith('new ')
+
+STATIC_NAME_CREDIT_REL_PATHS = {
+    'screens_menu_about.rpy',
+    'screens_menu_gallery_bg.rpy',
+    'screens_patronlistitem.rpy',
+}
+GAME_LINE_COMMENT_RE = re.compile(r'^\s*#\s+(.+?):(\d+)\s*$')
+OLD_NEW_LINE_RE = re.compile(r'^\s*(?:old|new)\s+"(?P<text>.*)"\s*$')
+STATIC_NAME_PUNCT_TRANSLATION = str.maketrans({
+    '。': '.',
+    '，': ',',
+    '、': ',',
+    '！': '!',
+    '？': '?',
+    '：': ':',
+    '；': ';',
+})
+
+
+def normalize_static_name_or_credit_text(text):
+    return compact_text((text or '').translate(STATIC_NAME_PUNCT_TRANSLATION))
+
+
+def static_name_or_credit_text_matches(original, translated):
+    return normalize_static_name_or_credit_text(original) == normalize_static_name_or_credit_text(translated)
+
+
+NON_CHINESE_TOKEN_PUNCT_TRANSLATION = str.maketrans({
+    '。': '.',
+    '，': ',',
+    '、': ',',
+    '！': '!',
+    '？': '?',
+    '：': ':',
+    '；': ';',
+    '“': '"',
+    '”': '"',
+    '‘': "'",
+    '’': "'",
+})
+
+
+def normalize_non_chinese_token_text(text):
+    cleaned = legacy.RENPY_TAG_RE.sub('', text or '')
+    cleaned = legacy.RENPY_FIELD_RE.sub('', cleaned)
+    cleaned = cleaned.translate(NON_CHINESE_TOKEN_PUNCT_TRANSLATION).strip()
+    cleaned = cleaned.strip('"\'')
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    cleaned = re.sub(r'[.!?,:;]+$', '', cleaned).strip()
+    return cleaned
+
+
+def looks_like_preserved_or_acronym_text(text):
+    cleaned = normalize_non_chinese_token_text(text)
+    if not cleaned or legacy.contains_chinese(cleaned):
+        return False
+    tokens = legacy.WORD_TOKEN_RE.findall(cleaned)
+    if not tokens or len(tokens) > 4:
+        return False
+    for token in tokens:
+        if token.lower() in legacy.PRESERVE_TERMS_LOWER:
+            continue
+        if token.isupper() and 1 <= len(token) <= 8:
+            continue
+        return False
+    return True
+
+
+def matching_preserved_or_acronym_non_chinese_text(original, translated):
+    if legacy.contains_chinese(translated or ''):
+        return False
+    original_norm = normalize_non_chinese_token_text(original)
+    translated_norm = normalize_non_chinese_token_text(translated)
+    if not original_norm or original_norm.lower() != translated_norm.lower():
+        return False
+    return looks_like_preserved_or_acronym_text(original_norm)
+
+
+def looks_like_static_name_or_credit_text(text):
+    cleaned = legacy.RENPY_TAG_RE.sub('', text or '')
+    cleaned = legacy.RENPY_FIELD_RE.sub('', cleaned)
+    cleaned = cleaned.strip()
+    if not cleaned or legacy.contains_chinese(cleaned):
+        return False
+    if ':' in cleaned or any(mark in cleaned for mark in '!?！？'):
+        return False
+
+    tokens = legacy.WORD_TOKEN_RE.findall(cleaned)
+    if not tokens:
+        return True
+    if len(tokens) > 12:
+        return False
+    if legacy.is_non_translatable(cleaned):
+        return True
+
+    allowed_particles = {'a', 'an', 'and', 'de', 'del', 'der', 'of', 'the', 'van', 'von'}
+    for token in tokens:
+        if token.lower() in allowed_particles:
+            continue
+        if token.isupper() or token[:1].isupper():
+            continue
+        return False
+    return True
+
+
+def _manifest_base_dir(manifest):
+    base_dir = manifest.get('base_dir') if isinstance(manifest, dict) else ''
+    if isinstance(base_dir, str) and base_dir.strip():
+        return base_dir.strip()
+    return legacy.BASE_DIR
+
+
+def _read_source_line_for_tl_item(manifest, chunk, item):
+    tl_path = _manifest_file_path_for_chunk(manifest, chunk)
+    line_number = _item_source_line_number(item)
+    if not tl_path or line_number <= 0:
+        return ''
+    try:
+        with open(tl_path, 'r', encoding='utf-8-sig') as handle:
+            lines = handle.readlines()
+    except OSError:
+        return ''
+    start_index = max(0, line_number - 6)
+    end_index = min(len(lines), line_number)
+    for index in range(end_index - 1, start_index - 1, -1):
+        match = GAME_LINE_COMMENT_RE.match(lines[index])
+        if not match:
+            continue
+        source_rel_path, source_line_number = match.groups()
+        try:
+            source_path = resolve_path_under_dir(
+                _manifest_base_dir(manifest),
+                source_rel_path,
+                f'game source line {source_rel_path}',
+            )
+            return _read_line_at(source_path, int(source_line_number))
+        except (SystemExit, ValueError):
+            return ''
+    return ''
+
+
+def is_manifest_player_name_comparison_item(manifest, chunk, original, item):
+    if not isinstance(item, dict):
+        return False
+    line = _read_source_line_for_tl_item(manifest, chunk, item)
+    if not line:
+        return False
+    if not re.search(r'\b(?:Main|main_nm|yourname|persistent\.MainEP)\b\s*==\s*_\(', line):
+        return False
+    compared_name_match = re.search(r'_\(\s*["\']([^"\']+)["\']\s*\)', line)
+    if not compared_name_match:
+        return False
+    compared_name = compared_name_match.group(1)
+    if compact_text(original) != compact_text(compared_name):
+        return False
+    return looks_like_static_name_or_credit_text(original)
+
+
+def is_manifest_static_non_chinese_item(manifest, chunk, original, translated, item=None):
+    if not static_name_or_credit_text_matches(original, translated):
+        return False
+    if legacy.contains_chinese(translated or ''):
+        return False
+
+    rel_path = str((chunk or {}).get('file_rel_path') or '').replace('\\', '/').lower()
+    rel_name = os.path.basename(rel_path)
+    if rel_name == 'screens_patronlistitem.rpy':
+        return True
+
+    if rel_name in STATIC_NAME_CREDIT_REL_PATHS:
+        return looks_like_static_name_or_credit_text(original)
+
+    if rel_name == 'screens_charselect.rpy':
+        if any(mark in (original or '') for mark in ':!?！？'):
+            return False
+        return looks_like_static_name_or_credit_text(original)
+
+    if is_manifest_old_new_static_label_item(manifest, chunk, item):
+        line = _read_line_at(_manifest_file_path_for_chunk(manifest, chunk), _item_source_line_number(item))
+        label_match = OLD_NEW_LINE_RE.match(line or '')
+        if not label_match:
+            return False
+        if compact_text(original) != compact_text(label_match.group('text')):
+            return False
+        return looks_like_static_name_or_credit_text(original)
+
+    if rel_name == 'script.rpy' and is_manifest_player_name_comparison_item(manifest, chunk, original, item):
+        return True
+
+    if rel_path.endswith('script_define.rpy') or rel_path.startswith('script_characters'):
+        cleaned = legacy.RENPY_TAG_RE.sub('', original or '').strip()
+        if legacy.is_non_translatable(cleaned):
+            return True
+        if any(mark in cleaned for mark in '.!?。！？'):
+            return False
+        tokens = legacy.WORD_TOKEN_RE.findall(cleaned)
+        return 1 <= len(tokens) <= 3
+
+    return False
+
 
 def allow_non_chinese_batch_translation(manifest, chunk, original, translated, item=None):
     unchanged = (original or '').strip() == (translated or '').strip()
-    if unchanged and (
-        is_manifest_keyword_argument_item(manifest, chunk, item)
-        or is_manifest_say_speaker_label_item(manifest, chunk, item)
+    if (
+        (unchanged and (
+            is_manifest_keyword_argument_item(manifest, chunk, item)
+            or is_manifest_say_speaker_label_item(manifest, chunk, item)
+        ))
+        or is_manifest_static_non_chinese_item(manifest, chunk, original, translated, item)
+        or matching_preserved_or_acronym_non_chinese_text(original, translated)
     ):
         return True
     return legacy.allow_non_chinese_term_translation(
@@ -754,7 +1017,6 @@ def allow_non_chinese_batch_translation(manifest, chunk, original, translated, i
         translated,
         known_terms=collect_chunk_known_terms(chunk),
     )
-
 
 def compact_text(text):
     return re.sub(r'\s+', ' ', text or '').strip()
@@ -1906,33 +2168,34 @@ def build_generation_config(target_items):
 
 
 def build_batch_request(chunk):
+    request = {
+        'system_instruction': {'parts': [{'text': build_system_instruction()}]},
+        'contents': [
+            {
+                'role': 'user',
+                'parts': [
+                    {
+                        'text': build_user_prompt(
+                            chunk['context_past'],
+                            chunk['items'],
+                            chunk['context_future'],
+                            glossary_hits=chunk.get('glossary_hits') or [],
+                            history_hits=chunk.get('history_hits') or [],
+                            story_hits=chunk.get('story_hits') if 'story_hits' in chunk else None,
+                            source_hits=chunk.get('source_hits') or [],
+                        )
+                    }
+                ],
+            }
+        ],
+        'generation_config': build_generation_config(chunk['items']),
+    }
+    if BATCH_SAFETY_SETTINGS:
+        request['safety_settings'] = BATCH_SAFETY_SETTINGS
     return {
         'key': chunk['key'],
-        'request': {
-            'system_instruction': {'parts': [{'text': build_system_instruction()}]},
-            'contents': [
-                {
-                    'role': 'user',
-                    'parts': [
-                        {
-                            'text': build_user_prompt(
-                                chunk['context_past'],
-                                chunk['items'],
-                                chunk['context_future'],
-                                glossary_hits=chunk.get('glossary_hits') or [],
-                                history_hits=chunk.get('history_hits') or [],
-                                story_hits=chunk.get('story_hits') if 'story_hits' in chunk else None,
-                                source_hits=chunk.get('source_hits') or [],
-                            )
-                        }
-                    ],
-                }
-            ],
-            'generation_config': build_generation_config(chunk['items']),
-        },
+        'request': request,
     }
-
-
 
 def task_text_char_count(task):
     text = task.get('text', '') if isinstance(task, dict) else ''
@@ -2934,11 +3197,14 @@ def current_batch_settings_snapshot():
     return {
         'target_size': BATCH_TARGET_SIZE,
         'target_chars': BATCH_TARGET_CHARS,
+        'retry_target_size': BATCH_RETRY_TARGET_SIZE,
+        'retry_target_chars': BATCH_RETRY_TARGET_CHARS,
         'context_before': BATCH_CONTEXT_BEFORE,
         'context_after': BATCH_CONTEXT_AFTER,
         'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
         'temperature': BATCH_TEMPERATURE,
         'thinking_level': BATCH_THINKING_LEVEL,
+        'safety_settings': BATCH_SAFETY_SETTINGS,
     }
 
 
@@ -2956,11 +3222,97 @@ def create_unique_child_dir(root_dir, name):
     raise SystemExit(f'Could not create unique directory for {name}.')
 
 
-def chunk_target_signature(chunk):
-    items = []
-    for item in chunk.get('items') or []:
+def retry_root_for_manifest(manifest):
+    package_dir = os.path.normpath(manifest['_package_dir'])
+    parts = package_dir.split(os.sep)
+    if 'retry_parts' not in parts:
+        return os.path.join(package_dir, 'retry_parts')
+    retry_index = parts.index('retry_parts')
+    split_package_dir = os.sep.join(parts[:retry_index])
+    if not split_package_dir:
+        return os.path.join(package_dir, 'retry_parts')
+    return os.path.join(split_package_dir, 'retry_parts')
+
+
+def retry_chunk_limits():
+    return (
+        max(1, min(BATCH_TARGET_SIZE, BATCH_RETRY_TARGET_SIZE)),
+        max(1, min(BATCH_TARGET_CHARS, BATCH_RETRY_TARGET_CHARS)),
+    )
+
+
+def iter_retry_item_ranges(items):
+    max_items, max_chars = retry_chunk_limits()
+    total = len(items)
+    start = 0
+    while start < total:
+        end = start
+        current_chars = 0
+        while end < total and (end - start) < max_items:
+            item_chars = task_text_char_count(items[end])
+            if end > start and current_chars + item_chars > max_chars:
+                break
+            current_chars += item_chars
+            end += 1
+        if end == start:
+            end = start + 1
+        yield start, end
+        start = end
+
+
+def build_retry_subchunk(chunk, start, end, sub_index):
+    items = chunk.get('items') or []
+    subchunk = copy.deepcopy(chunk)
+    subitems = copy.deepcopy(items[start:end])
+    parent_key = str(chunk.get('key') or '')
+    subchunk['key'] = f'{parent_key}-retry-{sub_index:03d}'
+    subchunk['retry_parent_key'] = parent_key
+    subchunk['retry_item_start'] = start
+    subchunk['retry_item_end'] = end
+    subchunk['retry_item_ids'] = [item.get('id') for item in subitems]
+    subchunk['items'] = subitems
+    subchunk['line_numbers'] = [item.get('line') for item in subitems if item.get('line') is not None]
+    subchunk['source_char_count'] = sum(task_text_char_count(item) for item in subitems)
+
+    context_past = copy.deepcopy(chunk.get('context_past') or [])
+    context_future = copy.deepcopy(chunk.get('context_future') or [])
+    if BATCH_CONTEXT_BEFORE:
+        context_past = (context_past + copy.deepcopy(items[max(0, start - BATCH_CONTEXT_BEFORE):start]))[-BATCH_CONTEXT_BEFORE:]
+    if BATCH_CONTEXT_AFTER:
+        context_future = (copy.deepcopy(items[end:min(len(items), end + BATCH_CONTEXT_AFTER)]) + context_future)[:BATCH_CONTEXT_AFTER]
+    subchunk['context_past'] = context_past
+    subchunk['context_future'] = context_future
+    return subchunk
+
+
+def split_retry_chunk(chunk):
+    items = chunk.get('items') or []
+    if not items:
+        return [copy.deepcopy(chunk)]
+
+    ranges = list(iter_retry_item_ranges(items))
+    if len(ranges) <= 1:
+        return [copy.deepcopy(chunk)]
+    return [
+        build_retry_subchunk(chunk, start, end, index)
+        for index, (start, end) in enumerate(ranges, start=1)
+    ]
+
+
+def build_retry_chunks_for_keys(manifest, retry_keys):
+    retry_key_set = set(retry_keys)
+    retry_chunks = []
+    for chunk in manifest.get('chunks') or []:
+        if chunk.get('key') in retry_key_set:
+            retry_chunks.extend(split_retry_chunk(chunk))
+    return retry_chunks
+
+
+def chunk_item_target_shapes(chunk, items=None):
+    shapes = []
+    for item in items if items is not None else (chunk.get('items') or []):
         source_text = item.get('source', item.get('text', ''))
-        items.append(
+        shapes.append(
             {
                 'id': item.get('id', ''),
                 'file_rel_path': item.get('file_rel_path', chunk.get('file_rel_path', '')),
@@ -2970,12 +3322,28 @@ def chunk_target_signature(chunk):
                 'source_checksum': hash_text(source_text),
             }
         )
+    return shapes
+
+
+def retry_subchunk_matches_parent(parent_chunk, retry_chunk):
+    parent_shapes = {
+        shape['id']: shape
+        for shape in chunk_item_target_shapes(parent_chunk)
+        if shape.get('id')
+    }
+    for shape in chunk_item_target_shapes(retry_chunk):
+        if parent_shapes.get(shape.get('id')) != shape:
+            return False
+    return True
+
+
+def chunk_target_signature(chunk):
     return stable_json_sha256(
         {
             'key': chunk.get('key', ''),
             'file_rel_path': chunk.get('file_rel_path', ''),
             'chunk_index': chunk.get('chunk_index'),
-            'items': items,
+            'items': chunk_item_target_shapes(chunk),
         }
     )
 
@@ -3093,14 +3461,10 @@ def build_retry_package(target=None, display_name_override=''):
         print('No retry chunks needed.')
         return None
 
-    retry_key_set = set(retry_keys)
-    retry_chunks = [
-        chunk
-        for chunk in manifest.get('chunks') or []
-        if chunk.get('key') in retry_key_set
-    ]
+
+    retry_chunks = build_retry_chunks_for_keys(manifest, retry_keys)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    retry_root = os.path.join(manifest['_package_dir'], 'retry_parts')
+    retry_root = retry_root_for_manifest(manifest)
     retry_dir = create_unique_child_dir(retry_root, f'{timestamp}_retry')
 
     input_jsonl_path = os.path.join(retry_dir, 'requests.jsonl')
@@ -3130,6 +3494,7 @@ def build_retry_package(target=None, display_name_override=''):
         'summary': {
             'file_count': len(retry_files),
             'chunk_count': len(retry_chunks),
+            'source_chunk_count': len(retry_keys),
             'item_count': sum(len(chunk.get('items') or []) for chunk in retry_chunks),
         },
         'files': retry_files,
@@ -3155,7 +3520,8 @@ def build_retry_package(target=None, display_name_override=''):
     remember_latest_manifest(retry_manifest_path)
 
     print(f'Created retry package: {retry_dir}')
-    print(f"Retry chunks: {retry_manifest['summary']['chunk_count']}")
+    print(f"Retry source chunks: {retry_manifest['summary']['source_chunk_count']}")
+    print(f"Retry request chunks: {retry_manifest['summary']['chunk_count']}")
     print(f"Retry items: {retry_manifest['summary']['item_count']}")
     print(f"Failure items considered: {len(failure_entries)}")
     print(f'Manifest: {retry_manifest_path}')
@@ -3187,6 +3553,82 @@ def load_result_rows_by_key(manifest, label):
     return rows, rows_by_key, result_path
 
 
+def result_items_from_row(row, label, allow_empty=False):
+    response_payload = row.get('response', {}) if isinstance(row, dict) else {}
+    response_text = extract_text_from_response_payload(response_payload)
+    if not response_text:
+        if allow_empty:
+            return []
+        raise SystemExit(f'Missing text in {label} result row: {row.get("key", "") if isinstance(row, dict) else ""}')
+    try:
+        return normalize_result_items(parse_json_payload(response_text))
+    except Exception as exc:
+        if allow_empty:
+            return []
+        raise SystemExit(f'Failed to parse {label} result row JSON: {exc}') from exc
+
+
+def response_payload_with_text(response_payload, response_text):
+    payload = copy.deepcopy(response_payload) if isinstance(response_payload, dict) else {}
+    target = payload.get('response') if isinstance(payload.get('response'), dict) else payload
+    candidates = target.get('candidates')
+    if not isinstance(candidates, list) or not candidates:
+        candidates = [{}]
+        target['candidates'] = candidates
+    candidate = candidates[0] if isinstance(candidates[0], dict) else {}
+    candidates[0] = candidate
+    content = candidate.get('content') if isinstance(candidate.get('content'), dict) else {}
+    content['parts'] = [{'text': response_text}]
+    content.setdefault('role', 'model')
+    candidate['content'] = content
+    candidate.setdefault('finishReason', 'STOP')
+    return payload
+
+
+def compact_result_items_for_response(result_items):
+    compacted = []
+    for item in result_items:
+        item_id = item.get('id')
+        if not item_id:
+            continue
+        compacted.append({'id': item_id, 'translation': item.get('translation', '')})
+    return compacted
+
+
+def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks, retry_rows_by_key):
+    merged_by_id = {}
+    if parent_row:
+        for item in result_items_from_row(parent_row, 'parent', allow_empty=True):
+            if item.get('id'):
+                merged_by_id[item['id']] = item
+
+    replaced_ids = set()
+    for retry_chunk in retry_chunks:
+        retry_key = retry_chunk.get('key')
+        retry_row = retry_rows_by_key.get(retry_key)
+        if not retry_row:
+            raise SystemExit(f'Retry result is missing row for partial chunk: {retry_key}')
+        allowed_ids = {item.get('id') for item in retry_chunk.get('items') or []}
+        for item in result_items_from_row(retry_row, 'retry'):
+            item_id = item.get('id')
+            if item_id in allowed_ids:
+                merged_by_id[item_id] = item
+                replaced_ids.add(item_id)
+
+    ordered_items = []
+    for target_item in parent_chunk.get('items') or []:
+        item_id = target_item.get('id')
+        if item_id in merged_by_id:
+            ordered_items.append(merged_by_id[item_id])
+
+    merged_row = copy.deepcopy(parent_row) if isinstance(parent_row, dict) else {}
+    merged_row['key'] = parent_chunk.get('key')
+    merged_row.pop('error', None)
+    merged_text = json.dumps(compact_result_items_for_response(ordered_items), ensure_ascii=False, indent=2)
+    merged_row['response'] = response_payload_with_text(merged_row.get('response', {}), merged_text)
+    return merged_row, len(replaced_ids)
+
+
 def assert_retry_manifest_matches_parent(parent_manifest, retry_manifest):
     retry_of_manifest = retry_manifest.get('retry_of_manifest')
     if retry_of_manifest and _normalized_abs_path(retry_of_manifest) != _normalized_abs_path(parent_manifest['_manifest_path']):
@@ -3202,12 +3644,15 @@ def assert_retry_manifest_matches_parent(parent_manifest, retry_manifest):
 
     for chunk in retry_chunks:
         key = chunk.get('key')
-        parent_chunk = parent_chunks.get(key)
+        parent_key = chunk.get('retry_parent_key') or key
+        parent_chunk = parent_chunks.get(parent_key)
         if not parent_chunk:
             raise SystemExit(f'Retry chunk is not present in parent manifest: {key}')
-        if chunk_target_signature(chunk) != chunk_target_signature(parent_chunk):
+        if chunk.get('retry_parent_key'):
+            if not retry_subchunk_matches_parent(parent_chunk, chunk):
+                raise SystemExit(f'Retry chunk target shape differs from parent manifest: {key}')
+        elif chunk_target_signature(chunk) != chunk_target_signature(parent_chunk):
             raise SystemExit(f'Retry chunk target shape differs from parent manifest: {key}')
-
 
 def merge_retry_results(parent_target, retry_target):
     parent_manifest = load_manifest(parent_target)
@@ -3216,8 +3661,10 @@ def merge_retry_results(parent_target, retry_target):
     require_manifest_mode(retry_manifest, MANIFEST_MODE_TRANSLATION, 'merge-retry')
     assert_retry_manifest_matches_parent(parent_manifest, retry_manifest)
 
-    retry_keys = [chunk['key'] for chunk in retry_manifest.get('chunks') or []]
+    retry_chunks = retry_manifest.get('chunks') or []
+    retry_keys = [chunk['key'] for chunk in retry_chunks]
     retry_key_set = set(retry_keys)
+    parent_chunks = {chunk['key']: chunk for chunk in parent_manifest.get('chunks') or []}
     parent_rows, parent_rows_by_key, parent_result_path = load_result_rows_by_key(parent_manifest, 'parent')
     retry_rows, retry_rows_by_key, retry_result_path = load_result_rows_by_key(retry_manifest, 'retry')
 
@@ -3229,20 +3676,60 @@ def merge_retry_results(parent_target, retry_target):
     if missing_retry_rows:
         raise SystemExit(f'Retry result is missing rows for chunks: {sorted(missing_retry_rows)[:5]}')
 
+    direct_retry_keys = []
+    partial_chunks_by_parent = {}
+    for chunk in retry_chunks:
+        parent_key = chunk.get('retry_parent_key')
+        if parent_key:
+            partial_chunks_by_parent.setdefault(parent_key, []).append(chunk)
+        else:
+            direct_retry_keys.append(chunk.get('key'))
+    direct_retry_key_set = set(direct_retry_keys)
+
     merged_rows = []
     replaced_keys = set()
+    replaced_item_count = 0
     for row in parent_rows:
         key = row.get('key')
-        if key in retry_rows_by_key:
+        if key in direct_retry_key_set:
             merged_rows.append(retry_rows_by_key[key])
             replaced_keys.add(key)
+            retry_chunk = next((chunk for chunk in retry_chunks if chunk.get('key') == key), {})
+            replaced_item_count += len(retry_chunk.get('items') or [])
+        elif key in partial_chunks_by_parent:
+            parent_chunk = parent_chunks.get(key)
+            merged_row, item_count = merge_parent_row_with_retry_item_rows(
+                row,
+                parent_chunk,
+                partial_chunks_by_parent[key],
+                retry_rows_by_key,
+            )
+            merged_rows.append(merged_row)
+            replaced_keys.add(key)
+            replaced_item_count += item_count
         else:
             merged_rows.append(row)
 
-    for key in retry_keys:
+    for key in direct_retry_keys:
         if key not in parent_rows_by_key:
             merged_rows.append(retry_rows_by_key[key])
             replaced_keys.add(key)
+            retry_chunk = next((chunk for chunk in retry_chunks if chunk.get('key') == key), {})
+            replaced_item_count += len(retry_chunk.get('items') or [])
+
+    for parent_key, partial_chunks in partial_chunks_by_parent.items():
+        if parent_key in parent_rows_by_key:
+            continue
+        parent_chunk = parent_chunks.get(parent_key)
+        merged_row, item_count = merge_parent_row_with_retry_item_rows(
+            {},
+            parent_chunk,
+            partial_chunks,
+            retry_rows_by_key,
+        )
+        merged_rows.append(merged_row)
+        replaced_keys.add(parent_key)
+        replaced_item_count += item_count
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     merged_name = f'results.merged_{timestamp}.jsonl'
@@ -3259,7 +3746,7 @@ def merge_retry_results(parent_target, retry_target):
             'previous_result_jsonl_path': parent_result_path,
             'merged_result_jsonl_path': merged_path,
             'replaced_chunks': len(replaced_keys),
-            'replaced_items': sum(len(chunk.get('items') or []) for chunk in retry_manifest.get('chunks') or []),
+            'replaced_items': replaced_item_count,
         }
     )
     parent_manifest['last_retry_merged_manifest_path'] = retry_manifest['_manifest_path']
@@ -5157,6 +5644,9 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
         system_instruction = request_payload.get('system_instruction')
         if system_instruction:
             config['system_instruction'] = system_instruction
+        safety_settings = request_payload.get('safety_settings')
+        if safety_settings:
+            config['safety_settings'] = safety_settings
 
         expected_items = len(((manifest.get('chunks') or []) and next((chunk['items'] for chunk in manifest['chunks'] if chunk['key'] == key), [])) or [])
         parse_ok = False
@@ -6520,30 +7010,32 @@ def build_repair_request(job):
         build_system_instruction()
         + '\nSome targets may be short interjections, short UI text, or short reactions. Translate them naturally in context.'
     )
+    request = {
+        'system_instruction': {'parts': [{'text': instruction}]},
+        'contents': [
+            {
+                'role': 'user',
+                'parts': [
+                    {
+                        'text': build_user_prompt(
+                            job['context_past'],
+                            job['items'],
+                            job['context_future'],
+                            story_hits=job.get('story_hits') if 'story_hits' in job else None,
+                            source_hits=job.get('source_hits') or [],
+                        )
+                    }
+                ],
+            }
+        ],
+        'generation_config': build_generation_config(job['items']),
+    }
+    if BATCH_SAFETY_SETTINGS:
+        request['safety_settings'] = BATCH_SAFETY_SETTINGS
     return {
         'key': job['key'],
-        'request': {
-            'system_instruction': {'parts': [{'text': instruction}]},
-            'contents': [
-                {
-                    'role': 'user',
-                    'parts': [
-                        {
-                            'text': build_user_prompt(
-                                job['context_past'],
-                                job['items'],
-                                job['context_future'],
-                                story_hits=job.get('story_hits') if 'story_hits' in job else None,
-                                source_hits=job.get('source_hits') or [],
-                            )
-                        }
-                    ],
-                }
-            ],
-            'generation_config': build_generation_config(job['items']),
-        },
+        'request': request,
     }
-
 
 def run_sync_request(request_payload, model_name, api_key_index=None):
     attempts = 1 if api_key_index is not None else max(1, len(getattr(legacy, 'API_KEYS', [])))
@@ -6556,6 +7048,9 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
             system_instruction = request_payload.get('system_instruction')
             if system_instruction:
                 config['system_instruction'] = system_instruction
+            safety_settings = request_payload.get('safety_settings')
+            if safety_settings:
+                config['safety_settings'] = safety_settings
             response = client.models.generate_content(
                 model=model_name,
                 contents=request_payload.get('contents') or [],

@@ -131,6 +131,17 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 [],
             )
 
+    def test_preserve_terms_ignore_common_mark_my_words_idiom(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['Mark']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'mark'}),
+        ):
+            self.assertEqual(
+                runtime.missing_preserved_terms('Mark my words, this will work.', '???????????'),
+                [],
+            )
+            self.assertEqual(runtime.missing_preserved_terms('Mark said so.', '?????'), ['Mark'])
+
     def test_short_preserve_terms_allow_matching_renpy_name_field(self):
         with (
             mock.patch.object(runtime, 'PRESERVE_TERMS', ['Gil', 'Don']),
@@ -139,6 +150,13 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             self.assertEqual(runtime.missing_preserved_terms('coach Gil said so.', '[Gil_name!t] 教练这么说。'), [])
             self.assertEqual(runtime.missing_preserved_terms('Don said so.', '[Gil_name!t] 这么说。'), ['Don'])
 
+    def test_preserve_terms_allow_known_aliases(self):
+        with (
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['H.U.']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'h.u.'}),
+        ):
+            self.assertEqual(runtime.missing_preserved_terms('I am in H.U. now.', '我现在在Highwell University。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('I am in H.U. now.', '我现在在学校。'), ['H.U.'])
     def test_non_chinese_term_translation_allows_repeated_preserved_phrase(self):
         with (
             mock.patch.object(runtime, 'PRESERVE_TERMS', ['Music Appreciation']),
@@ -148,6 +166,13 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 'Music Appreciation...Music Appreciation...',
                 'Music Appreciation……Music Appreciation……',
             ))
+
+    def test_non_translatable_accepts_ui_labels_formats_and_identifiers(self):
+        self.assertTrue(runtime.is_non_translatable('Page Up'))
+        self.assertTrue(runtime.is_non_translatable('+III'))
+        self.assertTrue(runtime.is_non_translatable('%b %d, %H:%M'))
+        self.assertTrue(runtime.is_non_translatable('AndersF_name'))
+        self.assertFalse(runtime.is_non_translatable('I'))
 
     def test_translation_templates_skip_keyword_argument_strings(self):
         lines = [
@@ -226,6 +251,144 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             self.assertTrue(runtime.allow_non_chinese_term_translation('Raven Three!', 'Raven Three！'))
             self.assertTrue(runtime.allow_non_chinese_term_translation('Mrs. de Bruin?', 'Mrs. de Bruin？'))
             self.assertFalse(runtime.allow_non_chinese_term_translation('New Heart?', 'New Heart？'))
+
+    def test_batch_request_includes_request_level_safety_settings(self):
+        old_safety_settings = batch_mod.BATCH_SAFETY_SETTINGS
+        try:
+            batch_mod.BATCH_SAFETY_SETTINGS = [
+                {
+                    'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+                    'threshold': 'BLOCK_NONE',
+                }
+            ]
+            request = batch_mod.build_batch_request({
+                'key': 'chunk-1',
+                'context_past': [],
+                'context_future': [],
+                'glossary_hits': [],
+                'history_hits': [],
+                'source_hits': [],
+                'items': [{'id': 'item-1', 'text': 'Hello'}],
+            })
+        finally:
+            batch_mod.BATCH_SAFETY_SETTINGS = old_safety_settings
+
+        self.assertNotIn('safety_settings', request['request']['generation_config'])
+        self.assertEqual(
+            request['request']['safety_settings'],
+            [{'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'}],
+        )
+
+    def test_batch_safety_settings_normalizer_accepts_adult_preset(self):
+        self.assertEqual(
+            batch_mod.normalize_batch_safety_settings('relaxed_adult'),
+            [{'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'}],
+        )
+        self.assertEqual(
+            batch_mod.normalize_batch_safety_settings([
+                {'category': 'sexually_explicit', 'threshold': 'none'},
+            ]),
+            [{'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'}],
+        )
+
+    def test_batch_non_chinese_allowance_accepts_preserved_names_and_acronyms(self):
+        with mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'gilly', 'dearmer'}):
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                {},
+                {'glossary_hits': [], 'history_hits': []},
+                '"AR?"',
+                '“AR？”',
+            ))
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                {},
+                {'glossary_hits': [], 'history_hits': []},
+                'G-gilly!?',
+                'G-Gilly！？',
+            ))
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                {},
+                {'glossary_hits': [], 'history_hits': []},
+                'Dearmer',
+                'Dearmer',
+            ))
+            self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+                {},
+                {'glossary_hits': [], 'history_hits': []},
+                '"Macroeconomics."',
+                '"Macroeconomics。"',
+            ))
+    def test_batch_non_chinese_allowance_accepts_static_context_items(self):
+        self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'screens_patronlistitem.rpy'},
+            'Alpha, Beta, Gamma',
+            'Alpha, Beta, Gamma',
+        ))
+        self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'screens_menu_about.rpy'},
+            '{a=https://example.test}Dirk the Red Panda{/a}.',
+            '{a=https://example.test}Dirk the Red Panda{/a}。',
+        ))
+        self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'screens_menu_about.rpy'},
+            'Avi, MJ, Sinta, Steven.',
+            'Avi, MJ, Sinta, Steven。',
+        ))
+        self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'screens_menu_about.rpy'},
+            'Main Writer: Andy Peng',
+            'Main Writer: Andy Peng',
+        ))
+        self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'screens_charselect.rpy'},
+            'Lars Dearmer',
+            'Lars Dearmer',
+        ))
+        self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'screens_charselect.rpy'},
+            'Birthday: April 25th',
+            'Birthday: April 25th',
+        ))
+        self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'script_define.rpy'},
+            'Theodore',
+            'Theodore',
+        ))
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmpdir:
+            base_dir = Path(tmpdir)
+            source_path = base_dir / 'game' / 'script.rpy'
+            source_path.parent.mkdir(parents=True)
+            source_path.write_text('if Main == _("Herbert"):\n    pass\n', encoding='utf-8')
+            tl_dir = base_dir / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            tl_path = tl_dir / 'script.rpy'
+            tl_path.write_text('# game/script.rpy:1\nold "Herbert"\nnew "Herbert"\n', encoding='utf-8')
+            self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
+                {'base_dir': str(base_dir), 'tl_dir': str(tl_dir)},
+                {'file_rel_path': 'script.rpy'},
+                'Herbert',
+                'Herbert',
+                item={'line_number': 3},
+            ))
+            self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+                {'base_dir': str(base_dir), 'tl_dir': str(tl_dir)},
+                {'file_rel_path': 'script.rpy'},
+                'No',
+                'No',
+                item={'line_number': 3},
+            ))
+        self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
+            {},
+            {'file_rel_path': 'script.rpy', 'glossary_hits': [], 'history_hits': []},
+            'But who is this Campbell?',
+            'But who is this Campbell?',
+        ))
 
     def test_batch_non_chinese_allowance_uses_glossary_without_rag_enabled(self):
         chunk = {
@@ -2233,7 +2396,6 @@ class BootstrapWorkTests(unittest.TestCase):
                 runtime.BASE_DIR,
                 runtime.canonical_abs_path(project / 'work'),
             )
-
 
 if __name__ == '__main__':
     unittest.main()

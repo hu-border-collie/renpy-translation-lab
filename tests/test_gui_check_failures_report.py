@@ -4,6 +4,7 @@ import unittest
 from gui_qt.check_failures_report import (
     REASON_CATEGORY_MANUAL,
     REASON_CATEGORY_REBUILD,
+    REASON_CATEGORY_REPAIR,
     REASON_CATEGORY_RETRY,
     build_check_issues_report,
     classify_reason_category,
@@ -88,6 +89,22 @@ class GuiCheckFailuresReportTests(unittest.TestCase):
         self.assertEqual(
             classify_reason_category("missing_manifest_file"),
             REASON_CATEGORY_REBUILD,
+        )
+
+    def test_classify_validation_preserve_term_failures_as_retry(self):
+        self.assertEqual(
+            classify_reason_category(
+                "validation_failed",
+                "Validation failed: Preserved terms missing: [Gil_name!t]",
+            ),
+            REASON_CATEGORY_RETRY,
+        )
+        self.assertEqual(
+            classify_reason_category(
+                "validation_failed",
+                "Validation failed: No Chinese characters",
+            ),
+            REASON_CATEGORY_REPAIR,
         )
 
     def test_group_failure_items_sorts_by_count(self):

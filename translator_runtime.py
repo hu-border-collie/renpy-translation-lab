@@ -138,6 +138,10 @@ INCLUDE_FILES = set()
 INCLUDE_PREFIXES = set()
 
 NORMALIZE_TRANSLATION_MAP = {}
+PRESERVE_TERM_ALIASES = {
+    "H.U.": ("H. U.", "Highwell University", "Highwell Uni"),
+    "H. U.": ("H.U.", "Highwell University", "Highwell Uni"),
+}
 
 SPECIAL_ESCAPES = [
     ("\\", "\\\\"),
@@ -156,7 +160,7 @@ NON_TRANSLATABLE_PATTERNS = [
     re.compile(r"^www\\.", re.IGNORECASE),
 ]
 
-NON_TRANSLATABLE_EXACT = {
+BUILTIN_NON_TRANSLATABLE_EXACT = {
     "Esc",
     "Ctrl",
     "Shift",
@@ -168,9 +172,17 @@ NON_TRANSLATABLE_EXACT = {
     "Up",
     "Down",
     "Caps",
+    "Page Up",
+    "Page Down",
+    "Home",
+    "End",
+    "Insert",
+    "Delete",
+    "Backspace",
     "DejaVu Sans",
     "Opendyslexic",
 }
+NON_TRANSLATABLE_EXACT = set(BUILTIN_NON_TRANSLATABLE_EXACT)
 
 NON_TRANSLATABLE_TAG_ONLY = re.compile(r"^\{[^}]+\}$")
 NON_TRANSLATABLE_SYMBOLS = re.compile(r"^[^A-Za-z0-9\u4e00-\u9fff]+$")
@@ -185,6 +197,12 @@ MULTI_DOT_PATTERN = re.compile(r"(\.{2,}|…{2,})")
 # Matches sequences like "A B C" or "A. B. C." (single-letter tokens only)
 LETTER_SEQUENCE_RE = re.compile(r"^(?:[A-Za-z]\.?)(?:\s+[A-Za-z]\.?)+$")
 FILE_NAME_SIMPLE_RE = re.compile(r"^[\w.-]+\.\w+$", re.IGNORECASE)
+PRESERVE_TERM_SOURCE_EXCLUSION_PATTERNS = {
+    "Mark": [re.compile(r"\bMark my words\b", re.IGNORECASE)],
+}
+ROMAN_NUMERAL_LABEL_RE = re.compile(r"^(?:[+-][IVXLCDM]+|[IVXLCDM]{2,})$", re.IGNORECASE)
+STRFTIME_FORMAT_RE = re.compile(r"^(?:%[A-Za-z]|[%:\s,./\-0-9])+$")
+RENPY_IDENTIFIER_LABEL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:_name|_label|_id)$")
 STRING_LITERAL_PREFIX_RE = re.compile(r"(?is)^(?P<prefix>[rubf]*)(?P<quote>'''|\"\"\"|'|\")")
 TL_COMMENT_SOURCE_RE = re.compile(r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"\s*$')
 TL_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
@@ -560,10 +578,15 @@ def load_glossary():
 
     non_translatable = _coerce_str_list(data.get("non_translatable_exact"))
     if non_translatable:
-        NON_TRANSLATABLE_EXACT = set(non_translatable)
-        print(f"Loaded {len(NON_TRANSLATABLE_EXACT)} non-translatable exact terms.")
+        NON_TRANSLATABLE_EXACT = set(BUILTIN_NON_TRANSLATABLE_EXACT)
+        NON_TRANSLATABLE_EXACT.update(non_translatable)
+        print(
+            f"Loaded {len(non_translatable)} non-translatable exact terms "
+            f"(+{len(BUILTIN_NON_TRANSLATABLE_EXACT)} built-in)."
+        )
     elif "non_translatable_exact" in data:
-        print("Warning: glossary.json non_translatable_exact is empty; using defaults.")
+        NON_TRANSLATABLE_EXACT = set(BUILTIN_NON_TRANSLATABLE_EXACT)
+        print("Warning: glossary.json non_translatable_exact is empty; using built-in defaults.")
 
     normalize_map = data.get("normalize_map")
     if isinstance(normalize_map, dict) and normalize_map:
@@ -2067,12 +2090,30 @@ def _translated_has_renpy_field_for_term(translated, term):
     return False
 
 
+def _source_usage_excluded_for_preserve_term(original, term):
+    for pattern in PRESERVE_TERM_SOURCE_EXCLUSION_PATTERNS.get(term, []):
+        if pattern.search(original or ""):
+            return True
+    return False
+
+
+def _translated_contains_preserve_alias(translated, term):
+    for alias in PRESERVE_TERM_ALIASES.get(term, ()):
+        if alias and alias in (translated or ""):
+            return True
+    return False
+
+
 def missing_preserved_terms(original, translated):
     if not original or not translated:
         return []
     missing = []
     for term in PRESERVE_TERMS:
         if not term or term not in original:
+            continue
+        if _source_usage_excluded_for_preserve_term(original, term):
+            continue
+        if _translated_contains_preserve_alias(translated, term):
             continue
         if term.startswith("[") and term.endswith("]"):
             term_field = RENPY_FIELD_TOKEN_RE.fullmatch(term)
@@ -2107,6 +2148,12 @@ def is_non_translatable(text):
     if NON_TRANSLATABLE_SYMBOLS.match(stripped):
         return True
     if FILE_NAME_PATTERN.match(stripped) or FILE_NAME_SIMPLE_RE.match(stripped):
+        return True
+    if ROMAN_NUMERAL_LABEL_RE.match(stripped):
+        return True
+    if "%" in stripped and STRFTIME_FORMAT_RE.match(stripped):
+        return True
+    if RENPY_IDENTIFIER_LABEL_RE.match(stripped):
         return True
     if LETTER_SEQUENCE_RE.match(stripped):
         return True
