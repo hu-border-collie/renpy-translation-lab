@@ -1,10 +1,20 @@
 import unittest
 
-from PySide6.QtWidgets import QApplication, QPushButton
+try:
+    from PySide6.QtWidgets import QApplication, QPushButton
 
-from gui_qt.responsive_layout import ResponsiveActionPanel
+    from gui_qt.responsive_layout import ResponsiveActionPanel
+except ImportError as exc:
+    ResponsiveActionPanel = None  # type: ignore[assignment,misc]
+    IMPORT_ERROR = exc
+else:
+    IMPORT_ERROR = None
 
 
+@unittest.skipIf(
+    ResponsiveActionPanel is None,
+    f"GUI dependencies are unavailable: {IMPORT_ERROR}",
+)
 class ResponsiveActionPanelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

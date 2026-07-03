@@ -14,7 +14,7 @@ class ManifestResumeSummaryTests(unittest.TestCase):
         manifest = {
             "job_state": "RESULTS_MERGED",
             "job_name": "batches/example",
-            "summary": {"file_count": 17, "chunk_count": 285, "item_count": 11015},
+            "summary": {"file_count": 5, "chunk_count": 42, "item_count": 800},
         }
         with mock.patch("gui_qt.manifest_resume_summary.resume_workflow") as resume_mock:
             workflow = mock.Mock()
@@ -22,7 +22,7 @@ class ManifestResumeSummaryTests(unittest.TestCase):
             resume_mock.return_value = workflow
             display = build_manifest_workflow_display(
                 spec,
-                "C:/logs/batch_jobs/20260615_Game_GloryHounds/manifest.json",
+                "C:/logs/batch_jobs/20260615_Game_Example/manifest.json",
                 manifest,
             )
 

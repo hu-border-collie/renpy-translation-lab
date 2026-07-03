@@ -345,10 +345,10 @@ class GuiDoctorReportTests(unittest.TestCase):
     def test_substantially_complete_stays_green_despite_optional_rag_wording(self):
         output = DOCTOR_OUTPUT.replace(
             "- Pending translation: task_count=5, file_count=2",
-            "- Pending translation: task_count=77, file_count=29",
+            "- Pending translation: task_count=45, file_count=12",
         ).replace(
             "commented_original_lines=2",
-            "commented_original_lines=112858",
+            "commented_original_lines=85000",
         ) + (
             "\nRecommendations:\n"
             "- Project is substantially complete; remaining pending lines are minor. "
@@ -388,21 +388,21 @@ Doctor report:
 - Mode: existing_tl_only
 - Layout status: ready
 - TL scan: rpy_files=3, translate_blocks=10, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=100
-- Pending translation: task_count=110407, file_count=12
-- Source index context: enabled=True, store_dir=C:/logs/source_index_store/demo, store_exists=True, source_segments=10385, expected_segments=28886, schema_version=1, updated_at=, error=
+- Pending translation: task_count=8500, file_count=12
+- Source index context: enabled=True, store_dir=C:/logs/source_index_store/demo, store_exists=True, source_segments=4200, expected_segments=12000, schema_version=1, updated_at=, error=
 Recommendations:
 - Source index bootstrap is incomplete; run bootstrap-source-index.
 """
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
 
         self.assertTrue(
-            any("原文索引：已启用，片段数 10385/28886" in fact for fact in summary.facts)
+            any("原文索引：已启用，片段数 4200/12000" in fact for fact in summary.facts)
         )
         self.assertTrue(
             any("继续运行「预建原文索引」补全索引库" in fact for fact in summary.facts)
         )
         self.assertFalse(
-            any("提交约 110407" in fact for fact in summary.facts)
+            any("提交约 8500" in fact for fact in summary.facts)
         )
 
     def test_stale_summary_marks_previous_result_invalid(self):
