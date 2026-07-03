@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 DEFAULT_GLOSSARY_NAME = "glossary.json"
@@ -9,9 +10,14 @@ DEFAULT_MACRO_SETTING_NAME = "macro_setting.md"
 
 
 def canonical_abs_path(path: str | os.PathLike[str]) -> str:
+    """Return a stable absolute path (long path on Windows, not 8.3 short names)."""
     if not path:
         return ""
-    return os.path.abspath(str(path))
+    abs_path = os.path.abspath(str(path))
+    try:
+        return str(Path(abs_path).resolve(strict=False))
+    except OSError:
+        return abs_path
 
 
 def expected_project_asset_paths(game_root: str | os.PathLike[str]) -> dict[str, str]:

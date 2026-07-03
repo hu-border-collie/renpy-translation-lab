@@ -126,6 +126,28 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertTrue(any("术语表：当前项目缺少 glossary.json" in fact for fact in facts))
         self.assertTrue(any("风格设定：当前项目缺少 macro_setting.md" in fact for fact in facts))
 
+    def test_format_project_assets_facts_reports_mismatched_paths(self):
+        facts = format_project_assets_facts(
+            {
+                "glossary_exists": True,
+                "glossary_matches_project": False,
+                "macro_exists": True,
+                "macro_matches_project": False,
+                "glossary_file": "C:/Games/Other/work/glossary.json",
+                "macro_setting_file": "C:/Games/Other/work/macro_setting.md",
+            }
+        )
+
+        self.assertTrue(any("术语表：路径与当前项目不匹配" in fact for fact in facts))
+        self.assertTrue(any("风格设定：路径与当前项目不匹配" in fact for fact in facts))
+
+    def test_primary_recommendation_message_ignores_template_prep_suggestions(self):
+        message = primary_recommendation_message(
+            ["建议：点击「开始翻译」生成翻译模板"],
+        )
+
+        self.assertEqual(message, "")
+
     def test_parse_doctor_output_extracts_context_status(self):
         parsed = parse_doctor_output(CONTEXT_OUTPUT)
 

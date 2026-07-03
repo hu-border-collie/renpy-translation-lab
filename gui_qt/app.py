@@ -2134,6 +2134,7 @@ class MainWindow(QMainWindow):
         self._workflow = None
         self._workflow_step_output_lines = []
         self._writeback_manifest_path = ""
+        self._clear_completed_manifest_snapshot()
         self._apply_work_mode_ui(refresh_manifest_writeback=refresh_manifest_writeback)
 
     def _update_resume_btn_text(self) -> None:

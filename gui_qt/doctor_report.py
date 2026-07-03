@@ -198,13 +198,19 @@ def format_project_assets_facts(project_assets: dict[str, object] | None) -> lis
     facts: list[str] = []
     glossary_exists = project_assets.get("glossary_exists") is True
     macro_exists = project_assets.get("macro_exists") is True
+    glossary_matches = project_assets.get("glossary_matches_project")
+    macro_matches = project_assets.get("macro_matches_project")
 
-    if glossary_exists:
+    if glossary_matches is False:
+        facts.append("术语表：路径与当前项目不匹配")
+    elif glossary_exists:
         facts.append("术语表：已找到 glossary.json")
     else:
         facts.append("术语表：当前项目缺少 glossary.json（将使用默认保留词）")
 
-    if macro_exists:
+    if macro_matches is False:
+        facts.append("风格设定：路径与当前项目不匹配")
+    elif macro_exists:
         facts.append("风格设定：已找到 macro_setting.md")
     else:
         facts.append("风格设定：当前项目缺少 macro_setting.md（批量翻译无项目口吻指引）")

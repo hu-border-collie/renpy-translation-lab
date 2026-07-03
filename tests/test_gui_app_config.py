@@ -1517,5 +1517,19 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(tabs.widget.layout().invalidated)
         self.assertTrue(tabs.updated)
 
+    def test_set_work_mode_clears_completed_manifest_snapshot(self):
+        from gui_qt.work_modes import WorkMode
+
+        self.window._work_mode = WorkMode.BATCH_TRANSLATION
+        self.window._completed_manifest_snapshot = {"manifest_path": "C:/dummy/manifest.json"}
+        self.window._viewing_completed_manifest = True
+        cleared = []
+        self.window._clear_completed_manifest_snapshot = lambda: cleared.append(True)
+        self.window._apply_work_mode_ui = lambda **_kwargs: None
+
+        self.window._set_work_mode(WorkMode.KEYWORD_EXTRACTION, refresh_manifest_writeback=False)
+
+        self.assertEqual(cleared, [True])
+
 if __name__ == "__main__":
     unittest.main()

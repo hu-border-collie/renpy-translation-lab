@@ -7,12 +7,28 @@ from unittest import mock
 
 import gemini_translate_batch as batch_mod
 from project_asset_paths import (
+    canonical_abs_path,
     expected_project_asset_paths,
+    paths_match_project,
     sync_project_asset_paths_in_config,
 )
 
 
 class ProjectAssetPathsTests(unittest.TestCase):
+    def test_canonical_abs_path_resolves_relative_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = Path(tmp) / "Game" / "work"
+            nested.mkdir(parents=True)
+            asset = nested / "glossary.json"
+            asset.write_text("{}", encoding="utf-8")
+
+            resolved = canonical_abs_path(asset)
+            expected = expected_project_asset_paths(nested)["glossary_file"]
+
+            self.assertTrue(
+                paths_match_project(resolved, expected),
+            )
+
     def test_sync_project_asset_paths_in_config(self):
         work_dir = "C:/Games/Example/work"
         config = {

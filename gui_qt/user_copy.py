@@ -246,7 +246,7 @@ def primary_recommendation_message(recommendation_facts: list[str]) -> str:
         return "补译环境已就绪，可以开始批量翻译。"
     if "没有待译条目" in first:
         return "当前没有待译条目，请先检查或刷新翻译模板。"
-    if "开始翻译" in first:
+    if "打包并提交" in first:
         return "翻译环境已就绪，可以开始批量翻译。"
     return ""
 
