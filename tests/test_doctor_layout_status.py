@@ -167,7 +167,7 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         self.assertIn("switch to C:/Games/Example/work", joined)
         self.assertNotIn("bootstrap-work", joined)
 
-    def test_work_root_without_tl_recommends_build_when_template_available(self):
+    def test_work_root_without_tl_recommends_generate_template_when_available(self):
         report = _layout_report(
             base_dir="C:/Games/Example/work",
             can_generate_template=True,
@@ -177,7 +177,7 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         recommendations = batch_mod.collect_doctor_recommendations(report)
         joined = " ".join(recommendations)
 
-        self.assertIn("gemini_translate_batch.py build", joined)
+        self.assertIn("gemini_translate_batch.py generate-template", joined)
         self.assertNotIn("switch to", joined)
 
     def test_resolve_source_index_expected_segments_scans_when_metadata_missing(self):

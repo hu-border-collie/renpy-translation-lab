@@ -24,11 +24,12 @@ class DoctorSummary:
     message: str
     facts: list[str]
     findings: list[str]
+    mode: str = ""
 
 
 MODE_MESSAGES = {
     "can_generate_template": "Ren'Py 模板生成环境可用；翻译模板尚未生成。",
-    "existing_tl_only": "已有翻译文件可处理；模板生成环境不可用，后续依赖现有翻译文件。",
+    "existing_tl_only": "翻译模板已就绪，可以开始翻译流程。",
     "blocked_missing_template": "缺少可处理的翻译文件，也无法自动生成模板。",
 }
 
@@ -494,6 +495,7 @@ def summarize_doctor_output(
         message=message,
         facts=facts,
         findings=findings,
+        mode=mode,
     )
 
 
@@ -504,6 +506,7 @@ def running_summary() -> DoctorSummary:
         message="正在运行环境检查；完成后这里会显示摘要。",
         facts=[],
         findings=[],
+        mode="",
     )
 
 
@@ -514,6 +517,7 @@ def idle_summary() -> DoctorSummary:
         message="选择 work 目录（或项目根目录）后点击「环境检查」。",
         facts=[],
         findings=[],
+        mode="",
     )
 
 
@@ -524,4 +528,5 @@ def stale_summary() -> DoctorSummary:
         message="当前摘要已清空；请针对新的 work 目录重新运行环境检查。",
         facts=[],
         findings=[],
+        mode="",
     )

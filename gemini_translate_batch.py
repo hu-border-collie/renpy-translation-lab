@@ -7872,13 +7872,13 @@ def collect_doctor_recommendations(report):
         )
     elif not has_tl and report.get('prepare_enabled') and report.get('can_generate_template'):
         recommendations.append(
-            'Missing translation files; run: python gemini_translate_batch.py build '
-            '(build runs prepare automatically: unpack RPA if needed, generate tl template).'
+            'Missing translation files; run: python gemini_translate_batch.py generate-template '
+            '(runs prepare only: unpack RPA if needed, generate tl template).'
         )
     elif not has_tl and report.get('prepare_enabled') and mode == 'blocked_missing_template':
         recommendations.append(
             'Install Ren\'Py SDK or set prepare.renpy_sdk_dir, then run: '
-            'python gemini_translate_batch.py build.'
+            'python gemini_translate_batch.py generate-template.'
         )
     elif not has_tl and not report.get('prepare_enabled'):
         recommendations.append(
@@ -8226,10 +8226,10 @@ def collect_doctor_report():
         else:
             warnings.append('Ren\'Py SDK/game launcher not found; existing TL files can still be processed.')
 
-    if can_generate_template:
-        mode = 'can_generate_template'
-    elif has_tl_files:
+    if has_tl_files:
         mode = 'existing_tl_only'
+    elif can_generate_template:
+        mode = 'can_generate_template'
     else:
         mode = 'blocked_missing_template'
 
@@ -8398,6 +8398,75 @@ def run_bootstrap_work(*, save_game_root=True, refresh_runtime_paths=True):
     return result
 
 
+def print_template_generation_summary(result):
+    print('Template generation summary:')
+    print(f"- status: {result.get('status', '')}")
+    print(f"- tl_dir: {result.get('tl_dir', '')}")
+    print(f"- tl_exists: {result.get('tl_exists', False)}")
+    print(f"- rpy_files: {result.get('rpy_files', 0)}")
+    print(f"- language: {result.get('language', '')}")
+    print(f"- message: {result.get('message', '')}")
+
+
+def _build_template_generation_result(status, message, counts=None):
+    if counts is None:
+        counts = collect_tl_doctor_counts()
+    return {
+        'status': status,
+        'tl_dir': legacy.TL_DIR,
+        'tl_exists': os.path.isdir(legacy.TL_DIR),
+        'rpy_files': counts['rpy_files'],
+        'language': legacy.PREP_LANGUAGE,
+        'message': message,
+    }
+
+
+def _raise_generate_template_failure(result):
+    print_template_generation_summary(result)
+    raise SystemExit(f"[GenerateTemplate] {result['message']}")
+
+
+def run_generate_template():
+    if not legacy.PREP_ENABLED:
+        _raise_generate_template_failure(
+            _build_template_generation_result(
+                'failed',
+                'prepare is disabled in translator_config.json',
+            )
+        )
+
+    if not legacy.PREP_GENERATE_TEMPLATE:
+        _raise_generate_template_failure(
+            _build_template_generation_result(
+                'failed',
+                'prepare.generate_template is disabled in translator_config.json',
+            )
+        )
+
+    try:
+        legacy.run_prepare_steps()
+    except SystemExit as exc:
+        message = str(exc.args[0]) if exc.args else 'Template generation failed during prepare.'
+        _raise_generate_template_failure(
+            _build_template_generation_result('failed', message)
+        )
+
+    counts = collect_tl_doctor_counts()
+    rpy_files = counts['rpy_files']
+    if rpy_files > 0:
+        status = 'ready'
+        message = f'Translation template ready with {rpy_files} TL file(s).'
+    else:
+        status = 'failed'
+        message = 'Template generation finished but no TL files were found.'
+
+    result = _build_template_generation_result(status, message, counts=counts)
+    print_template_generation_summary(result)
+    if status != 'ready':
+        raise SystemExit(f"[GenerateTemplate] {message}")
+    return result
+
+
 def print_banner():
     print('=' * 60)
     print('Gemini Batch Translator (Ren\'Py)')
@@ -8438,6 +8507,11 @@ def build_arg_parser():
         '--no-update-game-root',
         action='store_true',
         help='Do not update translator_config.json game_root to work/ after bootstrap.',
+    )
+
+    subparsers.add_parser(
+        'generate-template',
+        help='Run prepare steps only to generate or refresh tl/<language> templates.',
     )
 
     build_parser = subparsers.add_parser('build', help='Build local batch package and JSONL only.')
@@ -8792,6 +8866,14 @@ def main(argv=None):
             save_game_root=update_game_root,
             refresh_runtime_paths=update_game_root,
         )
+        return
+
+    if command == 'generate-template':
+        legacy.load_translator_settings()
+        legacy.load_glossary()
+        load_batch_settings()
+        print_banner()
+        run_generate_template()
         return
 
     initialize_batch_logging()
