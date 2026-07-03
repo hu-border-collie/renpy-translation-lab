@@ -212,6 +212,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         load_error=None,
     ):
         self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
+        self.window._completed_manifest_snapshot = None
+        self.window._viewing_completed_manifest = False
+        self.window._split_status_entries = []
+        self.window._split_status_selected_manifest_path = ""
         self.window._current_work_mode = lambda: work_mode
         self.window.state = self._make_resume_state(
             manifest,
@@ -225,6 +229,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                 (status, heading, message, facts)
             )
         )
+        self.window._render_split_status_entries = lambda *_args, **_kwargs: None
+        self.window._update_completed_manifest_entry_ui = lambda: None
         return summary_calls
 
     def test_sync_models_for_save_preserves_fallback_models(self):
@@ -869,7 +875,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(self.window.timeline.status, "ready")
 
     def test_refresh_workflow_from_latest_manifest_completed_job_state(self):
-        from gui_qt.work_modes import WorkMode
+        from gui_qt.work_modes import WorkMode, work_mode_spec
         from unittest.mock import patch, MagicMock
 
         summary_calls = self._prepare_resume_refresh(
@@ -880,16 +886,17 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         mock_workflow = MagicMock()
         mock_workflow.current_step.return_value = None
 
-        with patch("gui_qt.app.resume_workflow", return_value=mock_workflow):
+        with patch("gui_qt.manifest_resume_summary.resume_workflow", return_value=mock_workflow):
             self.window._refresh_workflow_from_latest_manifest()
 
         self.assertEqual(len(summary_calls), 1)
         status, heading, message, facts = summary_calls[0]
-        self.assertEqual(status, "done")
-        self.assertIn("任务已完成", heading)
-        self.assertTrue(self.window.timeline.visible)
-        self.assertIsNone(self.window.timeline.current_step_key)
-        self.assertEqual(self.window.timeline.status, "done")
+        spec = work_mode_spec(WorkMode.KEYWORD_EXTRACTION)
+        self.assertEqual(status, "idle")
+        self.assertEqual(heading, spec.idle_workflow_heading)
+        self.assertTrue(any("已完成" in fact for fact in (facts or [])))
+        self.assertIsNotNone(self.window._completed_manifest_snapshot)
+        self.assertFalse(self.window.timeline.visible)
 
     def test_refresh_workflow_from_latest_manifest_warn_stops_at_check_step(self):
         from gui_qt.work_modes import WorkMode
@@ -908,7 +915,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         mock_workflow = MagicMock()
         mock_workflow.current_step.return_value = None
 
-        with patch("gui_qt.app.resume_workflow", return_value=mock_workflow):
+        with patch("gui_qt.workflow_factory.resume_workflow", return_value=mock_workflow):
             self.window._refresh_workflow_from_latest_manifest()
 
         self.assertEqual(len(summary_calls), 1)
@@ -921,9 +928,17 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(self.window.timeline.status, "stale")
 
     def test_resume_completed_keyword_manifest_shows_result_summary(self):
-        from gui_qt.work_modes import WorkMode
+        from gui_qt.work_modes import WorkMode, work_mode_spec
         from unittest.mock import MagicMock, patch
 
+        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
+        self.window._completed_manifest_snapshot = None
+        self.window._viewing_completed_manifest = False
+        self.window._split_status_entries = []
+        self.window._split_status_selected_manifest_path = ""
+        self.window._split_entries_for_manifest = lambda *_args, **_kwargs: []
+        self.window._render_split_status_entries = lambda *_args, **_kwargs: None
+        self.window._update_completed_manifest_entry_ui = lambda: None
         self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
         self.window.state = self._make_resume_state(
             {
@@ -957,17 +972,20 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         mock_workflow = MagicMock()
         mock_workflow.current_step.return_value = None
 
-        with patch("gui_qt.app.resume_workflow", return_value=mock_workflow):
+        with (
+            patch("gui_qt.app.resume_workflow", return_value=mock_workflow),
+            patch("gui_qt.manifest_resume_summary.resume_workflow", return_value=mock_workflow),
+        ):
             self.window._on_resume_translation()
 
         self.assertEqual(len(summary_calls), 1)
         status, heading, message, facts = summary_calls[0]
-        self.assertEqual(status, "done")
-        self.assertIn("任务已完成", heading)
-        self.assertTrue(self.window.timeline.visible)
-        self.assertIsNone(self.window.timeline.current_step_key)
-        self.assertEqual(self.window.timeline.status, "done")
-        self.assertTrue(any("任务记录" in fact for fact in facts))
+        spec = work_mode_spec(WorkMode.KEYWORD_EXTRACTION)
+        self.assertEqual(status, "idle")
+        self.assertEqual(heading, spec.idle_workflow_heading)
+        self.assertTrue(any("已完成" in fact for fact in (facts or [])))
+        self.assertIsNotNone(self.window._completed_manifest_snapshot)
+        self.assertFalse(self.window.timeline.visible)
         self.window._refresh_diagnostics_context.assert_called_once()
         self.window._refresh_writeback_from_latest_manifest.assert_called_once()
         self.assertEqual(focus_calls, [2])
@@ -1058,6 +1076,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._workflow = FakeWorkflow()
         self.window._workflow_step_output_lines = ["Keyword candidates: 3 deduped from 5 raw"]
         self.window._current_work_mode = lambda: WorkMode.KEYWORD_EXTRACTION
+        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
+        self.window._refresh_workflow_from_latest_manifest = MagicMock()
         self.window._copy_keyword_reports_to_game_parent = MagicMock()
         self.window._uses_revision_writeback = lambda: False
         self.window._set_workflow_update = MagicMock()
@@ -1110,6 +1130,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._workflow = FakeWorkflow()
         self.window._workflow_step_output_lines = output.splitlines()
         self.window._current_work_mode = lambda: WorkMode.SYNC_KEYWORD_EXTRACTION
+        self.window.kill_btn = type("FakeBtn", (), {"isEnabled": lambda _self: False})()
+        self.window._refresh_workflow_from_latest_manifest = MagicMock()
         self.window._copy_sync_keyword_reports_to_game_parent = MagicMock()
         self.window._copy_keyword_reports_to_game_parent = MagicMock()
         self.window._uses_revision_writeback = lambda: False

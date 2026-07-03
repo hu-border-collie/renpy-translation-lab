@@ -21,6 +21,8 @@ from .manifest_lite import (
     read_manifest_index_fields,
     read_manifest_lite,
 )
+from project_asset_paths import sync_project_asset_paths_in_config
+
 from .path_utils import canonical_abs_path, resolve_effective_game_root
 
 
@@ -402,9 +404,11 @@ class ProjectState:
             pass
 
     def _save_game_root_to_config(self, game_root: Path) -> None:
-        """Update only the game_root key, preserve everything else."""
+        """Update game_root and sync per-project asset paths, preserve everything else."""
         data = self._read_json_object(self.config_path, "translator_config.json")
-        data["game_root"] = canonical_abs_path(str(game_root))
+        normalized_root = canonical_abs_path(str(game_root))
+        data["game_root"] = normalized_root
+        sync_project_asset_paths_in_config(data, normalized_root)
         self._write_json_object(self.config_path, data)
 
     # --- Config helpers (api_keys + translator_config) ---

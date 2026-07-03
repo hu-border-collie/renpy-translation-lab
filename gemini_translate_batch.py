@@ -4822,6 +4822,29 @@ def translated_text_variants(translated):
     return variants
 
 
+def filter_non_translatable_noop_relocation_missing(missing_items, result_items):
+    """Drop relocation misses that only preserve non-translatable source text."""
+    if not missing_items:
+        return []
+    result_by_id = {
+        str(item.get('id') or ''): item.get('translation', '')
+        for item in result_items or []
+        if isinstance(item, dict)
+    }
+    remaining = []
+    for item in missing_items:
+        source = item.get('text') or item.get('source') or ''
+        item_id = str(item.get('id') or '')
+        translated = result_by_id.get(item_id, '')
+        if (
+            legacy.is_non_translatable(source)
+            and (translated or '').strip() == (source or '').strip()
+        ):
+            continue
+        remaining.append(item)
+    return remaining
+
+
 def filter_already_applied_relocation_missing(manifest, chunk, missing_items, result_items, summary):
     if not missing_items:
         return []
@@ -5439,6 +5462,10 @@ def collect_result_actions(manifest, validate_sources=False):
                 relocation_missing,
                 result_items,
                 summary,
+            )
+            relocation_missing = filter_non_translatable_noop_relocation_missing(
+                relocation_missing,
+                result_items,
             )
             relocation_missing_ids = record_v2_relocation_failures(
                 manifest,
@@ -7734,6 +7761,85 @@ def assess_doctor_layout_status(report, context=None):
     return 'failed'
 
 
+def _doctor_pending_task_count(report):
+    try:
+        return int(report.get('pending_task_count') or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _doctor_pending_baseline(report):
+    counts = report.get('counts') or {}
+    baseline = int(counts.get('commented_original_lines') or 0)
+    if baseline <= 0:
+        baseline = int(counts.get('translate_blocks') or 0)
+    return baseline
+
+
+def _doctor_pending_is_minor(report):
+    """True when remaining pending lines are negligible for a mostly-finished project."""
+    pending = _doctor_pending_task_count(report)
+    if pending <= 0:
+        return True
+    baseline = _doctor_pending_baseline(report)
+    if baseline <= 0:
+        return pending < 50
+    return pending < 50 or (pending / baseline) < 0.01
+
+
+def _doctor_should_recommend_enabling_rag(report):
+    pending = _doctor_pending_task_count(report)
+    if pending <= 0 or not _doctor_has_existing_translations(report):
+        return False
+    if _doctor_pending_is_minor(report):
+        return False
+    baseline = _doctor_pending_baseline(report)
+    if pending >= 150:
+        return True
+    if baseline > 0 and (pending / baseline) >= 0.01:
+        return True
+    return pending >= 50
+
+
+def _doctor_source_index_needs_bootstrap(source_index):
+    if not source_index.get('enabled'):
+        return ''
+    segments = int(source_index.get('source_segments') or 0)
+    expected = int(source_index.get('expected_segments') or 0)
+    if not source_index.get('store_exists') or segments <= 0:
+        return 'missing'
+    if expected > 0 and segments < expected:
+        return 'incomplete'
+    return ''
+
+
+def _doctor_rag_needs_bootstrap(rag):
+    if not rag.get('enabled'):
+        return False
+    if not rag.get('store_exists'):
+        return True
+    return int(rag.get('history_records') or 0) <= 0
+
+
+def _doctor_has_existing_translations(report):
+    counts = report.get('counts') or {}
+    if int(counts.get('old_lines') or 0) > 0:
+        return True
+
+    translate_blocks = int(counts.get('translate_blocks') or 0)
+    pending = _doctor_pending_task_count(report)
+    if translate_blocks > 0 and pending > 0 and pending < translate_blocks:
+        return True
+    return False
+
+
+def _doctor_is_incremental_translation(report):
+    pending = _doctor_pending_task_count(report)
+    if pending <= 0:
+        return False
+    return _doctor_has_existing_translations(report)
+
+
 def collect_doctor_recommendations(report):
     recommendations = []
 
@@ -7755,6 +7861,9 @@ def collect_doctor_recommendations(report):
 
     mode = report.get('mode', '')
     has_tl = report.get('counts', {}).get('rpy_files', 0) > 0
+    pending = _doctor_pending_task_count(report)
+    has_existing_translations = _doctor_has_existing_translations(report)
+
     if report.get('work_bootstrap_allowed') and report.get('original_game_dir'):
         recommendations.append(
             'work directory is missing or empty and original/game exists; '
@@ -7775,25 +7884,81 @@ def collect_doctor_recommendations(report):
         recommendations.append(
             'prepare is disabled; enable prepare.enabled in translator_config.json, then run build.'
         )
+        return recommendations
+
     context_status = report.get('context_status') or {}
     source_index = context_status.get('source_index') or {}
-    if source_index.get('enabled'):
-        segments = int(source_index.get('source_segments') or 0)
-        expected = int(source_index.get('expected_segments') or 0)
-        if not source_index.get('store_exists') or segments <= 0:
-            recommendations.append(
-                'Source index is enabled but not built; run bootstrap-source-index.'
-            )
-            return recommendations
-        if expected > 0 and segments < expected:
-            recommendations.append(
-                'Source index bootstrap is incomplete; run bootstrap-source-index.'
-            )
-            return recommendations
+    rag = context_status.get('rag') or {}
 
-    if has_tl and report.get('pending_task_count', 0) > 0:
+    source_index_status = _doctor_source_index_needs_bootstrap(source_index)
+    if source_index_status == 'missing':
         recommendations.append(
-            'Pending translation lines are ready; start batch translation when API keys are configured.'
+            'Source index is enabled but not built; run bootstrap-source-index.'
+        )
+        return recommendations
+    if source_index_status == 'incomplete':
+        recommendations.append(
+            'Source index bootstrap is incomplete; run bootstrap-source-index.'
+        )
+        return recommendations
+
+    if _doctor_rag_needs_bootstrap(rag):
+        if rag.get('bootstrap_on_build'):
+            recommendations.append(
+                'RAG store is empty; run bootstrap-rag before batch translation, '
+                'or start batch translation to warm the store automatically on build.'
+            )
+        else:
+            recommendations.append(
+                'RAG store is enabled but empty; run bootstrap-rag before batch translation.'
+            )
+        return recommendations
+
+    if (
+        not rag.get('enabled')
+        and has_existing_translations
+        and pending > 0
+        and _doctor_should_recommend_enabling_rag(report)
+    ):
+        recommendations.append(
+            'Existing translations detected with RAG disabled; enable RAG and run bootstrap-rag '
+            'for better terminology consistency, then start batch translation.'
+        )
+        return recommendations
+
+    if has_tl and pending > 0 and has_existing_translations and _doctor_pending_is_minor(report):
+        recommendations.append(
+            'Project is substantially complete; remaining pending lines are minor. '
+            'Batch translation and RAG bootstrap are optional.'
+        )
+        return recommendations
+
+    if (
+        not source_index.get('enabled')
+        and pending > 0
+        and has_tl
+        and not has_existing_translations
+    ):
+        recommendations.append(
+            'Source index is disabled; enable it and run bootstrap-source-index '
+            'for better story context on a new translation project.'
+        )
+        return recommendations
+
+    if has_tl and pending > 0:
+        if _doctor_is_incremental_translation(report):
+            recommendations.append(
+                'Incremental translation is ready; start batch translation when API keys are configured.'
+            )
+        else:
+            recommendations.append(
+                'Pending translation lines are ready; start batch translation when API keys are configured.'
+            )
+        return recommendations
+
+    if has_tl and pending == 0:
+        recommendations.append(
+            'No pending translation lines detected; review TL files or refresh templates before starting a new batch.'
         )
 
     return recommendations
@@ -7901,6 +8066,93 @@ def collect_doctor_context_status():
         'source_index': source_index_status,
     }
 
+def _read_translator_config_object():
+    if not os.path.exists(legacy.TRANSLATOR_CONFIG):
+        return {}
+    try:
+        with open(legacy.TRANSLATOR_CONFIG, 'r', encoding='utf-8-sig') as handle:
+            data = json.load(handle) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def collect_doctor_project_assets_status(base_dir):
+    from project_asset_paths import expected_project_asset_paths, paths_match_project
+
+    config = _read_translator_config_object()
+    expected = expected_project_asset_paths(base_dir)
+
+    glossary_configured = config.get('glossary_file') or config.get('glossary_path') or ''
+    batch = config.get('batch') if isinstance(config.get('batch'), dict) else {}
+    macro_configured = batch.get('macro_setting_file') or ''
+
+    glossary_resolved = (
+        legacy._resolve_preferred_path(legacy.TOOL_DIR, base_dir, glossary_configured)
+        if glossary_configured
+        else expected['glossary_file']
+    )
+    macro_resolved = (
+        legacy._resolve_preferred_path(base_dir, base_dir, macro_configured)
+        if macro_configured
+        else expected['macro_setting_file']
+    )
+
+    return {
+        'glossary_file': glossary_resolved or expected['glossary_file'],
+        'glossary_exists': os.path.isfile(glossary_resolved or expected['glossary_file']),
+        'glossary_matches_project': paths_match_project(
+            glossary_resolved or glossary_configured,
+            expected['glossary_file'],
+        ),
+        'macro_setting_file': macro_resolved or expected['macro_setting_file'],
+        'macro_exists': os.path.isfile(macro_resolved or expected['macro_setting_file']),
+        'macro_matches_project': paths_match_project(
+            macro_resolved or macro_configured,
+            expected['macro_setting_file'],
+        ),
+        'expected_glossary_file': expected['glossary_file'],
+        'expected_macro_setting_file': expected['macro_setting_file'],
+    }
+
+
+def collect_doctor_project_assets_warnings(project_assets):
+    warnings = []
+    if not project_assets:
+        return warnings
+
+    glossary_file = project_assets.get('glossary_file') or ''
+    macro_file = project_assets.get('macro_setting_file') or ''
+
+    if not project_assets.get('glossary_matches_project'):
+        expected = project_assets.get('expected_glossary_file') or ''
+        warnings.append(
+            f'glossary_file does not match current project; expected {expected}, '
+            f'configured {glossary_file or "(not set)"}.'
+        )
+    elif not project_assets.get('glossary_exists'):
+        expected = project_assets.get('expected_glossary_file') or glossary_file
+        warnings.append(
+            f'glossary.json not found for current project ({expected}); '
+            'batch translation will fall back to default preserve terms.'
+        )
+
+    if not project_assets.get('macro_matches_project'):
+        expected = project_assets.get('expected_macro_setting_file') or ''
+        warnings.append(
+            f'macro_setting_file does not match current project; expected {expected}, '
+            f'configured {macro_file or "(not set)"}.'
+        )
+    elif not project_assets.get('macro_exists'):
+        expected = project_assets.get('expected_macro_setting_file') or macro_file
+        warnings.append(
+            f'macro_setting.md not found for current project ({expected}); '
+            'batch translation will run without project style guidance.'
+        )
+
+    return warnings
+
+
 def collect_doctor_report():
     source_game_dir = legacy._guess_source_game_dir()
     template_info = legacy.get_prepare_template_command_info(source_game_dir)
@@ -7992,6 +8244,8 @@ def collect_doctor_report():
             print(f'Warning: Could not compute pending translation counts: {exc}')
 
     context_status = collect_doctor_context_status()
+    project_assets = collect_doctor_project_assets_status(legacy.BASE_DIR)
+    warnings.extend(collect_doctor_project_assets_warnings(project_assets))
 
     report = {
         'base_dir': legacy.BASE_DIR,
@@ -8018,6 +8272,7 @@ def collect_doctor_report():
         'pending_task_count': pending_task_count,
         'pending_file_count': pending_file_count,
         'context_status': context_status,
+        'project_assets': project_assets,
         'warnings': warnings,
     }
     layout_context = collect_doctor_layout_context(report)
@@ -8074,6 +8329,12 @@ def print_doctor_report(report):
             f"task_count={report['pending_task_count']}, "
             f"file_count={report['pending_file_count']}"
         )
+        if report['pending_task_count'] > 0:
+            print(
+                '  Note: counts English strings without Han characters; may include '
+                'preserved names, patron lists, or punctuation-only updates. '
+                'This does not indicate missed batch writeback.'
+            )
     print(
         '- RAG context: '
         f"enabled={rag_context.get('enabled', False)}, "
@@ -8094,6 +8355,16 @@ def print_doctor_report(report):
         f"schema_version={source_index_context.get('schema_version') or ''}, "
         f"updated_at={source_index_context.get('updated_at') or ''}, "
         f"error={source_index_context.get('error') or ''}"
+    )
+    project_assets = report.get('project_assets') or {}
+    print(
+        '- Project assets: '
+        f"glossary_exists={project_assets.get('glossary_exists', False)}, "
+        f"glossary_matches_project={project_assets.get('glossary_matches_project', False)}, "
+        f"glossary_file={project_assets.get('glossary_file') or ''}, "
+        f"macro_exists={project_assets.get('macro_exists', False)}, "
+        f"macro_matches_project={project_assets.get('macro_matches_project', False)}, "
+        f"macro_setting_file={project_assets.get('macro_setting_file') or ''}"
     )
     if report['warnings']:
         print('Warnings:')

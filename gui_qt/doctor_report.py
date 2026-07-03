@@ -8,8 +8,11 @@ from dataclasses import dataclass
 from .summary_helpers import append_unique_fact
 from .user_copy import (
     doctor_mode_label,
+    findings_require_attention,
     format_doctor_recommendation_fact,
     format_doctor_warning_fact,
+    primary_recommendation_message,
+    recommendation_requires_attention,
     translate_doctor_warning,
 )
 
@@ -101,6 +104,10 @@ def format_tl_scan_facts(
             facts.append(
                 f"待翻译条目：约 {task_count} 条（分布在 {file_count} 个文件中，与 build 统计一致）"
             )
+            facts.append(
+                "说明：此项统计仍含英文且无汉字的字符串，可能包含故意保留的专名、"
+                "赞助名单或仅改标点的行，不代表批量翻译漏翻；批次是否完成请以任务记录的写回状态为准。"
+            )
         else:
             facts.append("待翻译条目：0 条（当前没有需要批量翻译的待译行）")
 
@@ -180,6 +187,35 @@ def format_context_status_facts(
                 facts.append(f"原文索引读取异常：{source_index_context['error']}")
         elif source_index_context.get("enabled") is False:
             facts.append("原文索引：未启用")
+
+    return facts
+
+
+def format_project_assets_facts(project_assets: dict[str, object] | None) -> list[str]:
+    if not project_assets:
+        return []
+
+    facts: list[str] = []
+    glossary_exists = project_assets.get("glossary_exists") is True
+    macro_exists = project_assets.get("macro_exists") is True
+
+    if glossary_exists:
+        facts.append("术语表：已找到 glossary.json")
+    else:
+        facts.append("术语表：当前项目缺少 glossary.json（将使用默认保留词）")
+
+    if macro_exists:
+        facts.append("风格设定：已找到 macro_setting.md")
+    else:
+        facts.append("风格设定：当前项目缺少 macro_setting.md（批量翻译无项目口吻指引）")
+
+    glossary_file = project_assets.get("glossary_file")
+    if isinstance(glossary_file, str) and glossary_file.strip():
+        facts.append(f"术语表路径：{glossary_file}")
+
+    macro_file = project_assets.get("macro_setting_file")
+    if isinstance(macro_file, str) and macro_file.strip():
+        facts.append(f"风格设定路径：{macro_file}")
 
     return facts
 
@@ -285,6 +321,10 @@ def parse_doctor_output(output: str) -> dict[str, object]:
             parsed["source_index_context"] = _parse_context_fields(line.split(":", 1)[1])
             continue
 
+        if line.startswith("- Project assets:"):
+            parsed["project_assets"] = _parse_context_fields(line.split(":", 1)[1])
+            continue
+
     return parsed
 
 
@@ -365,6 +405,12 @@ def summarize_doctor_output(
         else None,
     ):
         append_unique_fact(facts, fact)
+    for fact in format_project_assets_facts(
+        parsed.get("project_assets")
+        if isinstance(parsed.get("project_assets"), dict)
+        else None,
+    ):
+        append_unique_fact(facts, fact)
 
     findings = list(warnings)
     if api_key_count is not None:
@@ -383,6 +429,8 @@ def summarize_doctor_output(
         append_unique_fact(facts, fact)
     for warning in warnings:
         append_unique_fact(facts, format_doctor_warning_fact(warning))
+
+    recommendation_message = primary_recommendation_message(recommendation_facts)
 
     if exit_code != 0:
         return DoctorSummary(
@@ -407,7 +455,7 @@ def summarize_doctor_output(
         if layout_status == "ready" and api_key_count == 0:
             status = "warning"
             heading = LAYOUT_STATUS_HEADINGS["attention"][1]
-        elif layout_status == "ready" and findings:
+        elif layout_status == "ready" and findings_require_attention(findings):
             status = "warning"
             heading = LAYOUT_STATUS_HEADINGS["attention"][1]
     elif mode == "blocked_missing_template":
@@ -415,8 +463,10 @@ def summarize_doctor_output(
         heading = "项目检查失败"
         message = MODE_MESSAGES.get(mode, "项目检查失败。")
     else:
-        needs_attention = bool(findings) or bool(recommendation_facts) or (
-            api_key_count is not None and api_key_count == 0
+        needs_attention = (
+            findings_require_attention(findings)
+            or recommendation_requires_attention(recommendation_facts)
+            or (api_key_count is not None and api_key_count == 0)
         )
         if needs_attention:
             status = "warning"
@@ -425,6 +475,13 @@ def summarize_doctor_output(
             status = "ready"
             heading = "项目检查通过"
         message = MODE_MESSAGES.get(mode, "项目检查已完成。")
+
+    if recommendation_message:
+        message = recommendation_message
+        if recommendation_requires_attention(recommendation_facts) and status == "ready":
+            status = "warning"
+            heading = LAYOUT_STATUS_HEADINGS["attention"][1]
+
     return DoctorSummary(
         status=status,
         heading=heading,
