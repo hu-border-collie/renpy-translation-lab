@@ -51,6 +51,50 @@ class ManifestResumeSummaryTests(unittest.TestCase):
         self.assertFalse(display.archive_when_idle)
         self.assertEqual(display.status, "ready")
 
+    def test_retry_manifest_with_safety_warn_stays_active(self):
+        spec = WORK_MODE_SPECS[WorkMode.BATCH_TRANSLATION]
+        manifest = {
+            "job_state": "JOB_STATE_SUCCEEDED",
+            "job_name": "batches/retry",
+            "retry_of_manifest": "C:/logs/batch_jobs/parent/manifest.json",
+            "last_check_summary": {"safety_level": "warn"},
+        }
+        with mock.patch("gui_qt.manifest_resume_summary.resume_workflow") as resume_mock:
+            workflow = mock.Mock()
+            workflow.current_step.return_value = None
+            resume_mock.return_value = workflow
+            display = build_manifest_workflow_display(
+                spec,
+                "C:/logs/batch_jobs/retry/manifest.json",
+                manifest,
+            )
+
+        self.assertFalse(display.archive_when_idle)
+        self.assertEqual(display.status, "stale")
+        self.assertEqual(display.timeline_step_key, "check")
+        self.assertEqual(display.heading, "补译结果仍需处理")
+
+    def test_retry_manifest_completed_archives_when_idle(self):
+        spec = WORK_MODE_SPECS[WorkMode.BATCH_TRANSLATION]
+        manifest = {
+            "job_state": "RESULTS_MERGED",
+            "job_name": "batches/retry",
+            "retry_of_manifest": "C:/logs/batch_jobs/parent/manifest.json",
+        }
+        with mock.patch("gui_qt.manifest_resume_summary.resume_workflow") as resume_mock:
+            workflow = mock.Mock()
+            workflow.current_step.return_value = None
+            resume_mock.return_value = workflow
+            display = build_manifest_workflow_display(
+                spec,
+                "C:/logs/batch_jobs/retry/manifest.json",
+                manifest,
+            )
+
+        self.assertTrue(display.archive_when_idle)
+        self.assertEqual(display.status, "done")
+        self.assertEqual(display.heading, "补译任务已完成")
+
 
 if __name__ == "__main__":
     unittest.main()

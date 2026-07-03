@@ -29,6 +29,61 @@ class ManifestWorkflowDisplay:
     archive_when_idle: bool
 
 
+@dataclass(frozen=True)
+class _ResumeDisplayCopy:
+    safety_heading: str
+    safety_message: str
+    done_heading: str
+    done_message: str
+    ready_heading: str
+    ready_message: str
+
+
+def _display_for_resumed_workflow(
+    workflow: Any | None,
+    *,
+    latest_safety: str,
+    copy: _ResumeDisplayCopy,
+) -> tuple[str, str, str, str | None]:
+    if workflow and workflow.current_step() is None and latest_safety in {"warn", "block"}:
+        status = "stale" if latest_safety == "warn" else "failed"
+        message = copy.safety_message.format(safety=safety_level_label(latest_safety))
+        return status, copy.safety_heading, message, "check"
+    if workflow and workflow.current_step() is None:
+        return "done", copy.done_heading, copy.done_message, None
+    return "ready", copy.ready_heading, copy.ready_message, None
+
+
+def _resume_display_copy(spec: WorkModeSpec, *, is_retry: bool) -> _ResumeDisplayCopy:
+    if is_retry:
+        return _ResumeDisplayCopy(
+            safety_heading="补译结果仍需处理",
+            safety_message=(
+                "补译包检查结果为「{safety}」，暂不能合并回父任务。"
+                "请先查看问题清单，必要时继续补译或人工处理。"
+            ),
+            done_heading="补译任务已完成",
+            done_message="补译包流程已完成。",
+            ready_heading="可继续补译后续处理",
+            ready_message="检测到补译任务还有后续步骤，点击「继续翻译」继续执行。",
+        )
+    return _ResumeDisplayCopy(
+        safety_heading="需要先处理问题",
+        safety_message=(
+            "最近一次检查结果为「{safety}」，暂不能写回。"
+            "可先查看问题清单，必要时生成「补译包」并预览；"
+            "处理完重新检查后，显示「可写回」才能写入项目。"
+        ),
+        done_heading=f"最新{spec.label}任务已完成",
+        done_message="该任务流程的所有步骤已全部执行完毕。",
+        ready_heading=f"可继续最新{spec.label}任务",
+        ready_message=(
+            f"检测到未完成的最新任务，"
+            f"点击「{spec.resume_button_label or '继续任务'}」继续执行。"
+        ),
+    )
+
+
 def _manifest_item_count_label(spec: WorkModeSpec, item_count: object) -> str | None:
     if item_count is None:
         return None
@@ -110,43 +165,12 @@ def build_manifest_workflow_display(
             )
     else:
         workflow = resume_workflow(spec.mode, manifest_path, manifest)
-        if retry_parent_text:
-            if workflow and workflow.current_step() is None and latest_safety in {"warn", "block"}:
-                status = "stale" if latest_safety == "warn" else "failed"
-                timeline_step_key = "check"
-                heading = "补译结果仍需处理"
-                message = (
-                    f"补译包检查结果为「{safety_level_label(latest_safety)}」，暂不能合并回父任务。"
-                    "请先查看问题清单，必要时继续补译或人工处理。"
-                )
-            elif workflow and workflow.current_step() is None:
-                status = "done"
-                heading = "补译任务已完成"
-                message = "补译包流程已完成。"
-            else:
-                status = "ready"
-                heading = "可继续补译后续处理"
-                message = "检测到补译任务还有后续步骤，点击「继续翻译」继续执行。"
-        elif workflow and workflow.current_step() is None and latest_safety in {"warn", "block"}:
-            status = "stale" if latest_safety == "warn" else "failed"
-            timeline_step_key = "check"
-            heading = "需要先处理问题"
-            message = (
-                f"最近一次检查结果为「{safety_level_label(latest_safety)}」，暂不能写回。"
-                "可先查看问题清单，必要时生成「补译包」并预览；"
-                "处理完重新检查后，显示「可写回」才能写入项目。"
-            )
-        elif workflow and workflow.current_step() is None:
-            status = "done"
-            heading = f"最新{spec.label}任务已完成"
-            message = "该任务流程的所有步骤已全部执行完毕。"
-        else:
-            status = "ready"
-            heading = f"可继续最新{spec.label}任务"
-            message = (
-                f"检测到未完成的最新任务，"
-                f"点击「{spec.resume_button_label or '继续任务'}」继续执行。"
-            )
+        copy = _resume_display_copy(spec, is_retry=bool(retry_parent_text))
+        status, heading, message, timeline_step_key = _display_for_resumed_workflow(
+            workflow,
+            latest_safety=latest_safety,
+            copy=copy,
+        )
 
     selected_manifest_path = retry_parent_text or manifest_path
     return ManifestWorkflowDisplay(
