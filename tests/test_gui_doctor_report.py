@@ -1,12 +1,13 @@
 import unittest
 
 from gui_qt.doctor_report import (
+    format_project_assets_facts,
     format_tl_scan_facts,
     parse_doctor_output,
     stale_summary,
     summarize_doctor_output,
 )
-from gui_qt.user_copy import format_doctor_recommendation_fact
+from gui_qt.user_copy import format_doctor_recommendation_fact, primary_recommendation_message
 
 
 DOCTOR_OUTPUT = """
@@ -112,6 +113,41 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(parsed["pending"]["task_count"], 5)
         self.assertEqual(parsed["pending"]["file_count"], 2)
 
+    def test_format_project_assets_facts_reports_missing_files(self):
+        facts = format_project_assets_facts(
+            {
+                "glossary_exists": False,
+                "macro_exists": False,
+                "glossary_file": "C:/Games/Example/work/glossary.json",
+                "macro_setting_file": "C:/Games/Example/work/macro_setting.md",
+            }
+        )
+
+        self.assertTrue(any("术语表：当前项目缺少 glossary.json" in fact for fact in facts))
+        self.assertTrue(any("风格设定：当前项目缺少 macro_setting.md" in fact for fact in facts))
+
+    def test_format_project_assets_facts_reports_mismatched_paths(self):
+        facts = format_project_assets_facts(
+            {
+                "glossary_exists": True,
+                "glossary_matches_project": False,
+                "macro_exists": True,
+                "macro_matches_project": False,
+                "glossary_file": "C:/Games/Other/work/glossary.json",
+                "macro_setting_file": "C:/Games/Other/work/macro_setting.md",
+            }
+        )
+
+        self.assertTrue(any("术语表：路径与当前项目不匹配" in fact for fact in facts))
+        self.assertTrue(any("风格设定：路径与当前项目不匹配" in fact for fact in facts))
+
+    def test_primary_recommendation_message_ignores_template_prep_suggestions(self):
+        message = primary_recommendation_message(
+            ["建议：点击「开始翻译」生成翻译模板"],
+        )
+
+        self.assertEqual(message, "")
+
     def test_parse_doctor_output_extracts_context_status(self):
         parsed = parse_doctor_output(CONTEXT_OUTPUT)
 
@@ -147,6 +183,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertTrue(any("API 密钥：已配置 2 个" in fact for fact in summary.facts))
         self.assertTrue(any("翻译文件：3 个" in fact for fact in summary.facts))
         self.assertTrue(any("待翻译条目：约 5 条" in fact for fact in summary.facts))
+        self.assertTrue(any("不代表批量翻译漏翻" in fact for fact in summary.facts))
         self.assertTrue(any("剧情对话：2 条" in fact for fact in summary.facts))
         self.assertTrue(any("界面字符串：10 条" in fact for fact in summary.facts))
         self.assertFalse(any("old/new 行数" in fact for fact in summary.facts))
@@ -294,6 +331,77 @@ class GuiDoctorReportTests(unittest.TestCase):
             "建议：切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交云端任务",
         )
 
+    def test_format_doctor_recommendation_fact_for_empty_rag(self):
+        fact = format_doctor_recommendation_fact(
+            "RAG store is enabled but empty; run bootstrap-rag before batch translation."
+        )
+
+        self.assertEqual(
+            fact,
+            "建议：先在「分析与准备」运行「预建记忆库」，再开始批量翻译",
+        )
+
+    def test_primary_recommendation_message_for_incremental_translation(self):
+        message = primary_recommendation_message(
+            [
+                "建议：补译环境已就绪；切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交",
+            ]
+        )
+
+        self.assertEqual(message, "补译环境已就绪，可以开始批量翻译。")
+
+    def test_summarize_doctor_output_uses_primary_recommendation_message(self):
+        output = DOCTOR_OUTPUT + (
+            "\nRecommendations:\n"
+            "- RAG store is enabled but empty; run bootstrap-rag before batch translation.\n"
+        )
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.message, "记忆库尚未建立，建议先预建记忆库再开始翻译。")
+        self.assertEqual(summary.status, "warning")
+        self.assertTrue(
+            any("预建记忆库" in fact for fact in summary.facts),
+        )
+
+    def test_substantially_complete_stays_green_despite_optional_rag_wording(self):
+        output = DOCTOR_OUTPUT.replace(
+            "- Pending translation: task_count=5, file_count=2",
+            "- Pending translation: task_count=45, file_count=12",
+        ).replace(
+            "commented_original_lines=2",
+            "commented_original_lines=85000",
+        ) + (
+            "\nRecommendations:\n"
+            "- Project is substantially complete; remaining pending lines are minor. "
+            "Batch translation and RAG bootstrap are optional.\n"
+        )
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertEqual(
+            summary.message,
+            "项目已基本译完；剩余待译行很少，可忽略或按需补译。",
+        )
+
+    def test_incremental_ready_stays_green_with_informational_rag_warning(self):
+        output = DOCTOR_OUTPUT + (
+            "\nWarnings:\n"
+            "- RAG store contains legacy ID format keys. They will be seamlessly "
+            "migrated on the next successful writeback.\n"
+            "\nRecommendations:\n"
+            "- Incremental translation is ready; start batch translation when API keys are configured.\n"
+        )
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertEqual(summary.message, "补译环境已就绪，可以开始批量翻译。")
+        self.assertTrue(any("记忆库含有旧版键格式" in fact for fact in summary.facts))
+
     def test_partial_source_index_shows_progress_in_facts(self):
         output = """
 Doctor report:
@@ -302,21 +410,21 @@ Doctor report:
 - Mode: existing_tl_only
 - Layout status: ready
 - TL scan: rpy_files=3, translate_blocks=10, string_sections=0, old_lines=0, new_lines=0, commented_original_lines=100
-- Pending translation: task_count=110407, file_count=12
-- Source index context: enabled=True, store_dir=C:/logs/source_index_store/demo, store_exists=True, source_segments=10385, expected_segments=28886, schema_version=1, updated_at=, error=
+- Pending translation: task_count=8500, file_count=12
+- Source index context: enabled=True, store_dir=C:/logs/source_index_store/demo, store_exists=True, source_segments=4200, expected_segments=12000, schema_version=1, updated_at=, error=
 Recommendations:
 - Source index bootstrap is incomplete; run bootstrap-source-index.
 """
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
 
         self.assertTrue(
-            any("原文索引：已启用，片段数 10385/28886" in fact for fact in summary.facts)
+            any("原文索引：已启用，片段数 4200/12000" in fact for fact in summary.facts)
         )
         self.assertTrue(
             any("继续运行「预建原文索引」补全索引库" in fact for fact in summary.facts)
         )
         self.assertFalse(
-            any("提交约 110407" in fact for fact in summary.facts)
+            any("提交约 8500" in fact for fact in summary.facts)
         )
 
     def test_stale_summary_marks_previous_result_invalid(self):
@@ -339,6 +447,7 @@ Recommendations:
 
         self.assertIn("翻译文件：49 个", facts)
         self.assertTrue(any("待翻译条目：约 48394 条" in fact for fact in facts))
+        self.assertTrue(any("不代表批量翻译漏翻" in fact for fact in facts))
         self.assertTrue(any("剧情对话：49863 条" in fact for fact in facts))
         self.assertTrue(any("界面字符串：637 条" in fact for fact in facts))
 

@@ -199,13 +199,13 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             rpy_files=3,
             layout_status="ready",
         )
-        report["pending_task_count"] = 110407
+        report["pending_task_count"] = 8500
         report["context_status"] = {
             "source_index": {
                 "enabled": True,
                 "store_exists": True,
-                "source_segments": 10385,
-                "expected_segments": 28886,
+                "source_segments": 4200,
+                "expected_segments": 12000,
             }
         }
 
@@ -214,6 +214,130 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         self.assertEqual(len(recommendations), 1)
         self.assertIn("incomplete", recommendations[0])
         self.assertNotIn("Pending translation lines", recommendations[0])
+
+    def test_empty_rag_blocks_batch_translation_when_enabled(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=20,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 240
+        report["counts"] = {
+            "rpy_files": 20,
+            "translate_blocks": 12000,
+            "old_lines": 120,
+            "new_lines": 120,
+        }
+        report["context_status"] = {
+            "rag": {
+                "enabled": True,
+                "store_exists": False,
+                "history_records": 0,
+                "bootstrap_on_build": False,
+            },
+            "source_index": {
+                "enabled": True,
+                "store_exists": True,
+                "source_segments": 2979,
+                "expected_segments": 2979,
+            },
+        }
+
+        recommendations = batch_mod.collect_doctor_recommendations(report)
+
+        self.assertEqual(len(recommendations), 1)
+        self.assertIn("bootstrap-rag", recommendations[0])
+        self.assertNotIn("Pending translation lines", recommendations[0])
+
+    def test_incremental_translation_uses_incremental_recommendation(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=20,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 240
+        report["counts"] = {
+            "rpy_files": 20,
+            "translate_blocks": 12000,
+            "old_lines": 120,
+            "new_lines": 120,
+        }
+        report["context_status"] = {
+            "rag": {
+                "enabled": True,
+                "store_exists": True,
+                "history_records": 5200,
+            },
+            "source_index": {
+                "enabled": True,
+                "store_exists": True,
+                "source_segments": 2979,
+                "expected_segments": 2979,
+            },
+        }
+
+        recommendations = batch_mod.collect_doctor_recommendations(report)
+
+        self.assertEqual(len(recommendations), 1)
+        self.assertIn("Incremental translation", recommendations[0])
+
+    def test_mostly_complete_project_without_rag_does_not_require_bootstrap(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=48,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 45
+        report["counts"] = {
+            "rpy_files": 48,
+            "translate_blocks": 120000,
+            "old_lines": 800,
+            "new_lines": 800,
+            "commented_original_lines": 85000,
+        }
+        report["context_status"] = {
+            "rag": {"enabled": False},
+            "source_index": {
+                "enabled": True,
+                "store_exists": True,
+                "source_segments": 12000,
+                "expected_segments": 12000,
+            },
+        }
+
+        recommendations = batch_mod.collect_doctor_recommendations(report)
+
+        self.assertEqual(len(recommendations), 1)
+        self.assertIn("substantially complete", recommendations[0])
+        self.assertNotIn("RAG disabled", recommendations[0])
+
+    def test_existing_translations_without_rag_recommends_enable_rag(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=20,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 240
+        report["counts"] = {
+            "rpy_files": 20,
+            "translate_blocks": 12000,
+            "old_lines": 120,
+            "new_lines": 120,
+        }
+        report["context_status"] = {
+            "rag": {"enabled": False},
+            "source_index": {
+                "enabled": True,
+                "store_exists": True,
+                "source_segments": 2979,
+                "expected_segments": 2979,
+            },
+        }
+
+        recommendations = batch_mod.collect_doctor_recommendations(report)
+
+        self.assertEqual(len(recommendations), 1)
+        self.assertIn("RAG disabled", recommendations[0])
 
 
 if __name__ == "__main__":

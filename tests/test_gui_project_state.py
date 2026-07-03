@@ -397,7 +397,12 @@ class GuiProjectStateTests(unittest.TestCase):
 
             saved = json.loads(state.config_path.read_text(encoding="utf-8"))
             self.assert_same_path(saved["game_root"], game_root)
-            self.assertEqual(saved["batch"], {"model": "gemini-test"})
+            self.assertEqual(saved["batch"]["model"], "gemini-test")
+            self.assert_same_path(
+                saved["batch"]["macro_setting_file"],
+                game_root / "macro_setting.md",
+            )
+            self.assert_same_path(saved["glossary_file"], game_root / "glossary.json")
             self.assertEqual(saved["include_files"], ["script.rpy"])
             self.assert_same_path(state.get_game_root(), game_root)
 

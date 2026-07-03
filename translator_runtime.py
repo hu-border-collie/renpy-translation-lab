@@ -1143,6 +1143,8 @@ def _apply_game_root(work_dir):
 
 
 def persist_game_root(work_dir):
+    from project_asset_paths import sync_project_asset_paths_in_config
+
     normalized = _canonical_abs_path(work_dir)
     config = {}
     if os.path.exists(TRANSLATOR_CONFIG):
@@ -1153,6 +1155,7 @@ def persist_game_root(work_dir):
             config = {}
 
     config["game_root"] = normalized
+    sync_project_asset_paths_in_config(config, normalized)
     with open(TRANSLATOR_CONFIG, "w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2, ensure_ascii=False)
         handle.write("\n")

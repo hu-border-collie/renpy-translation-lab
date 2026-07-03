@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
+from .responsive_layout import ResponsiveActionPanel
 from .api_key_dialog import ApiKeyDialog
 from .api_key_helpers import mask_api_key
 from .bootstrap_report import (
@@ -112,6 +113,11 @@ from .doctor_report import (
     stale_summary,
     summarize_doctor_output,
 )
+from .manifest_resume_summary import (
+    ManifestWorkflowDisplay,
+    build_manifest_workflow_display,
+    completed_manifest_entry_fact,
+)
 from .work_bootstrap_report import (
     running_work_bootstrap_summary,
     summarize_work_bootstrap_output,
@@ -127,13 +133,11 @@ from .theme_helpers import (
     read_gui_theme_from_config,
     write_gui_theme_to_config,
 )
-from .translation_workflow import TERMINAL_FAILURE_STATES, WorkflowUpdate
+from .translation_workflow import WorkflowUpdate
 from .user_copy import (
     format_job_fact,
     format_job_state_fact,
     format_manifest_path_fact,
-    job_state_label,
-    safety_level_label,
 )
 from .work_modes import (
     TASK_CATEGORY_ORDER,
@@ -212,6 +216,8 @@ class MainWindow(QMainWindow):
         self._workflow = None
         self._split_status_entries: list[SplitManifestEntry] = []
         self._split_status_selected_manifest_path = ""
+        self._completed_manifest_snapshot: dict[str, object] | None = None
+        self._viewing_completed_manifest = False
         self._work_mode = WorkMode.BATCH_TRANSLATION
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
@@ -467,62 +473,31 @@ class MainWindow(QMainWindow):
         action_outer.setContentsMargins(12, 10, 12, 10)
         action_outer.setSpacing(8)
 
-        prep_group = QHBoxLayout()
-        prep_group.setSpacing(12)
-        prep_label = QLabel("项目准备")
-        prep_label.setObjectName("action_group_label")
-        prep_label.setMinimumWidth(84)
-        prep_group.addWidget(prep_label)
-        self.doctor_btn = QPushButton("环境检查")
+        self.action_panel = ResponsiveActionPanel()
+        self.translate_group_label = self.action_panel.translate_label
+        self.doctor_btn = self.action_panel.add_prep_button(QPushButton("环境检查"))
         self.doctor_btn.setObjectName("secondary_btn")
-        self.doctor_btn.setMinimumWidth(160)
         self.doctor_btn.clicked.connect(self._on_run_doctor)
-        prep_group.addWidget(self.doctor_btn)
-        self.bootstrap_work_btn = QPushButton("准备工作目录")
+        self.bootstrap_work_btn = self.action_panel.add_prep_button(QPushButton("准备工作目录"))
         self.bootstrap_work_btn.setObjectName("secondary_btn")
-        self.bootstrap_work_btn.setMinimumWidth(160)
         self.bootstrap_work_btn.clicked.connect(self._on_bootstrap_work)
-        prep_group.addWidget(self.bootstrap_work_btn)
-        prep_group.addStretch()
-        action_outer.addLayout(prep_group)
-
-        action_separator = QFrame()
-        action_separator.setFrameShape(QFrame.Shape.HLine)
-        action_separator.setObjectName("action_separator")
-        action_outer.addWidget(action_separator)
-
-        translate_group = QHBoxLayout()
-        translate_group.setSpacing(12)
-        self.translate_group_label = QLabel("翻译任务")
-        self.translate_group_label.setObjectName("action_group_label")
-        self.translate_group_label.setMinimumWidth(84)
-        translate_group.addWidget(self.translate_group_label)
-        self.translate_btn = QPushButton("开始翻译")
+        self.translate_btn = self.action_panel.add_translate_button(QPushButton("开始翻译"))
         self.translate_btn.setObjectName("translate_btn")
-        self.translate_btn.setMinimumWidth(160)
         self.translate_btn.clicked.connect(self._on_start_translation)
-        translate_group.addWidget(self.translate_btn)
-        self.resume_btn = QPushButton("继续翻译")
+        self.resume_btn = self.action_panel.add_translate_button(QPushButton("继续翻译"))
         self.resume_btn.setObjectName("secondary_btn")
-        self.resume_btn.setMinimumWidth(160)
         self.resume_btn.clicked.connect(self._on_resume_translation)
-        translate_group.addWidget(self.resume_btn)
-        self.split_submit_btn = QPushButton("提交剩余包")
+        self.split_submit_btn = self.action_panel.add_translate_button(QPushButton("提交剩余包"))
         self.split_submit_btn.setObjectName("secondary_btn")
-        self.split_submit_btn.setMinimumWidth(180)
         self.split_submit_btn.setToolTip("提交当前拆分组中尚未提交的包")
         self.split_submit_btn.clicked.connect(self._on_submit_remaining_split_packages)
         self.split_submit_btn.setVisible(False)
-        translate_group.addWidget(self.split_submit_btn)
-        translate_group.addStretch()
-
-        self.kill_btn = QPushButton("停止")
+        self.kill_btn = self.action_panel.add_translate_trailing(QPushButton("停止"))
         self.kill_btn.setObjectName("kill_btn")
-        self.kill_btn.setMinimumWidth(90)
         self.kill_btn.clicked.connect(self._on_kill)
         self.kill_btn.setEnabled(False)
-        translate_group.addWidget(self.kill_btn)
-        action_outer.addLayout(translate_group)
+        self.action_panel.finish_setup()
+        action_outer.addWidget(self.action_panel)
         layout.addWidget(action_frame)
 
         self.timeline = WizardTimeline()
@@ -611,6 +586,20 @@ class MainWindow(QMainWindow):
         self.workflow_facts_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.workflow_facts_label.setObjectName("workflow_facts_label")
         workflow_layout.addWidget(self.workflow_facts_label)
+        completed_actions = QHBoxLayout()
+        completed_actions.setSpacing(8)
+        self.view_last_completed_btn = QPushButton("查看上次已完成任务")
+        self.view_last_completed_btn.setObjectName("secondary_btn")
+        self.view_last_completed_btn.setVisible(False)
+        self.view_last_completed_btn.clicked.connect(self._on_view_last_completed_task)
+        completed_actions.addWidget(self.view_last_completed_btn)
+        self.hide_completed_view_btn = QPushButton("返回概览")
+        self.hide_completed_view_btn.setObjectName("secondary_btn")
+        self.hide_completed_view_btn.setVisible(False)
+        self.hide_completed_view_btn.clicked.connect(self._on_hide_completed_manifest_view)
+        completed_actions.addWidget(self.hide_completed_view_btn)
+        completed_actions.addStretch()
+        workflow_layout.addLayout(completed_actions)
         self.split_status_title = QLabel("拆分包状态")
         self.split_status_title.setObjectName("diagnostics_section_label")
         self.split_status_title.setVisible(False)
@@ -1545,6 +1534,7 @@ class MainWindow(QMainWindow):
         self.split_submit_btn.setText("提交剩余包")
         self.split_submit_btn.setEnabled(has_split_group and needs_submit and not running)
 
+
     def _refresh_writeback_for_manifest_path(self, manifest_path: str) -> None:
         spec = work_mode_spec(self._current_work_mode())
         if not spec.supports_translation_writeback:
@@ -1584,6 +1574,7 @@ class MainWindow(QMainWindow):
                 latest_manifest=manifest_path,
                 manifest=selected_manifest,
                 split_entries=self._split_status_entries or None,
+                force_expand=True,
             )
         writeback_summary = self._current_writeback_summary()
         if writeback_summary.status not in {"idle", "running", "stale"}:
@@ -2143,6 +2134,7 @@ class MainWindow(QMainWindow):
         self._workflow = None
         self._workflow_step_output_lines = []
         self._writeback_manifest_path = ""
+        self._clear_completed_manifest_snapshot()
         self._apply_work_mode_ui(refresh_manifest_writeback=refresh_manifest_writeback)
 
     def _update_resume_btn_text(self) -> None:
@@ -2269,6 +2261,69 @@ class MainWindow(QMainWindow):
             self.timeline.set_current_step(step_key, status)
         self.timeline.setVisible(True)
 
+    def _clear_completed_manifest_snapshot(self) -> None:
+        self._completed_manifest_snapshot = None
+        self._viewing_completed_manifest = False
+        self._update_completed_manifest_entry_ui()
+
+    def _update_completed_manifest_entry_ui(self) -> None:
+        if not hasattr(self, "view_last_completed_btn"):
+            return
+        running = self.kill_btn.isEnabled()
+        if self._viewing_completed_manifest:
+            self.view_last_completed_btn.setVisible(False)
+            self.hide_completed_view_btn.setVisible(not running)
+            return
+        has_snapshot = self._completed_manifest_snapshot is not None
+        self.view_last_completed_btn.setVisible(has_snapshot and not running)
+        self.hide_completed_view_btn.setVisible(False)
+
+    def _apply_manifest_workflow_display(
+        self,
+        display: ManifestWorkflowDisplay,
+        split_entries: list[SplitManifestEntry],
+    ) -> None:
+        self._set_workflow_summary(
+            display.status,
+            display.heading,
+            display.message,
+            list(display.facts),
+        )
+        self._sync_timeline_from_workflow_status(
+            display.status,
+            display.workflow,
+            step_key=display.timeline_step_key,
+        )
+        if self._split_entries_unchanged(split_entries):
+            self._split_status_selected_manifest_path = display.selected_manifest_path
+            self._update_split_status_selection_ui(display.selected_manifest_path)
+        else:
+            self._render_split_status_entries(
+                split_entries,
+                selected_manifest_path=display.selected_manifest_path,
+            )
+
+    def _show_completed_manifest_snapshot(self) -> None:
+        snapshot = self._completed_manifest_snapshot
+        if not isinstance(snapshot, dict):
+            return
+        display = snapshot.get("display")
+        split_entries = snapshot.get("split_entries")
+        if not isinstance(display, ManifestWorkflowDisplay):
+            return
+        entries = split_entries if isinstance(split_entries, list) else []
+        self._viewing_completed_manifest = True
+        self._apply_manifest_workflow_display(display, entries)
+        self._update_completed_manifest_entry_ui()
+
+    def _on_view_last_completed_task(self) -> None:
+        self._show_completed_manifest_snapshot()
+        self._focus_workbench_status_tab(1)
+
+    def _on_hide_completed_manifest_view(self) -> None:
+        self._viewing_completed_manifest = False
+        self._refresh_workflow_idle_summary()
+
     def _refresh_workflow_idle_summary(self) -> None:
         if self.kill_btn.isEnabled():
             return
@@ -2277,11 +2332,18 @@ class MainWindow(QMainWindow):
             self.timeline.setVisible(False)
         self._render_split_status_entries([])
         spec = work_mode_spec(self._current_work_mode())
+        facts: list[str] = []
+        if self._completed_manifest_snapshot and not self._viewing_completed_manifest:
+            manifest_path = self._completed_manifest_snapshot.get("manifest_path")
+            if isinstance(manifest_path, str) and manifest_path.strip():
+                facts.append(completed_manifest_entry_fact(spec, manifest_path))
         self._set_workflow_summary(
             "idle",
             spec.idle_workflow_heading,
             spec.idle_workflow_message,
+            facts,
         )
+        self._update_completed_manifest_entry_ui()
 
     def _refresh_workflow_from_latest_manifest(
         self,
@@ -2289,6 +2351,7 @@ class MainWindow(QMainWindow):
         latest_manifest: Path | str | None = None,
         manifest: dict[str, object] | None = None,
         split_entries: list[SplitManifestEntry] | None = None,
+        force_expand: bool = False,
     ) -> None:
         if self.kill_btn.isEnabled():
             return
@@ -2321,124 +2384,36 @@ class MainWindow(QMainWindow):
                 self._refresh_workflow_idle_summary()
                 return
 
-        job_state = manifest.get("job_state")
-        job_state_text = job_state if isinstance(job_state, str) else ""
-        job_name = manifest.get("job_name")
-        job_error = manifest.get("job_error")
-        retry_parent = manifest.get("retry_of_manifest")
-        retry_parent_text = retry_parent.strip() if isinstance(retry_parent, str) else ""
-        latest_safety = ""
-        check_summary = manifest.get("last_check_summary")
-        if isinstance(check_summary, dict):
-            safety_value = check_summary.get("safety_level")
-            latest_safety = safety_value.strip().lower() if isinstance(safety_value, str) else ""
-
-        facts = []
-        facts.append(format_manifest_path_fact(str(latest_manifest)))
-        if job_name:
-            facts.append(format_job_fact(job_name))
-        if job_state_text:
-            facts.append(format_job_state_fact(job_state_text))
-
-        summary_info = manifest.get("summary", {})
-        if isinstance(summary_info, dict):
-            file_count = summary_info.get("file_count")
-            chunk_count = summary_info.get("chunk_count")
-            item_count = summary_info.get("item_count")
-            if file_count is not None:
-                facts.append(f"扫描文件：{file_count} 个")
-            if chunk_count is not None:
-                facts.append(f"分块数量：{chunk_count} 个")
-            if item_count is not None:
-                if spec.mode == WorkMode.KEYWORD_EXTRACTION:
-                    facts.append(f"待处理行：{item_count} 行")
-                elif spec.mode == WorkMode.REVISION:
-                    facts.append(f"待修订项：{item_count} 项")
-                else:
-                    facts.append(f"待翻译项：{item_count} 项")
-
-        if retry_parent_text:
-            facts.append(f"父任务：{retry_parent_text}")
+        if self._viewing_completed_manifest and not force_expand:
+            snapshot = self._completed_manifest_snapshot
+            if isinstance(snapshot, dict) and snapshot.get("manifest_path") == str(latest_manifest):
+                self._show_completed_manifest_snapshot()
+                return
 
         if split_entries is None:
             split_entries = self._split_entries_for_manifest(str(latest_manifest), manifest)
-        facts.extend(summarize_split_entries(split_entries))
-
-        is_waiting = job_state_text in ("JOB_STATE_PENDING", "JOB_STATE_RUNNING")
-        timeline_step_key = None
-        workflow = None
-
-        if is_waiting:
-            status = "waiting"
-            timeline_step_key = "status"
-            heading = f"最新{spec.label}任务进行中"
-            message = "云端批量任务处理中。可以点击下方「查询云端状态」按钮进行刷新。"
-        elif job_state_text in TERMINAL_FAILURE_STATES:
-            status = "failed"
-            timeline_step_key = "status"
-            if job_state_text == "JOB_STATE_FAILED":
-                heading = f"最新{spec.label}任务已失败"
-                message = f"云端任务执行失败：{job_error or '未知错误'}。可以重新开始或继续任务以重试。"
-            else:
-                heading = f"最新{spec.label}任务无法继续"
-                detail = f"：{job_error}" if job_error else ""
-                message = f"云端任务状态为「{job_state_label(job_state_text)}」{detail}，无法继续该任务；可以重新开始。"
-        else:
-            workflow = resume_workflow(spec.mode, str(latest_manifest), manifest)
-            if retry_parent_text:
-                if workflow and workflow.current_step() is None and latest_safety in {"warn", "block"}:
-                    status = "stale" if latest_safety == "warn" else "failed"
-                    timeline_step_key = "check"
-                    heading = "补译结果仍需处理"
-                    message = (
-                        f"补译包检查结果为「{safety_level_label(latest_safety)}」，暂不能合并回父任务。"
-                        "请先查看问题清单，必要时继续补译或人工处理。"
-                    )
-                elif workflow and workflow.current_step() is None:
-                    status = "done"
-                    heading = "补译任务已完成"
-                    message = "补译包流程已完成。"
-                else:
-                    status = "ready"
-                    heading = "可继续补译后续处理"
-                    message = "检测到补译任务还有后续步骤，点击「继续翻译」继续执行。"
-            elif workflow and workflow.current_step() is None and latest_safety in {"warn", "block"}:
-                status = "stale" if latest_safety == "warn" else "failed"
-                timeline_step_key = "check"
-                heading = "需要先处理问题"
-                message = (
-                    f"最近一次检查结果为「{safety_level_label(latest_safety)}」，暂不能写回。"
-                    "可先查看问题清单，必要时生成「补译包」并预览；处理完重新检查后，显示「可写回」才能写入项目。"
-                )
-            elif workflow and workflow.current_step() is None:
-                status = "done"
-                heading = f"最新{spec.label}任务已完成"
-                message = "该任务流程的所有步骤已全部执行完毕。"
-            else:
-                status = "ready"
-                heading = f"可继续最新{spec.label}任务"
-                message = f"检测到未完成的最新任务，点击「{spec.resume_button_label or '继续任务'}」继续执行。"
-
-        self._set_workflow_summary(
-            status=status,
-            heading=heading,
-            message=message,
-            facts=facts,
+        split_fact_lines = summarize_split_entries(split_entries)
+        display = build_manifest_workflow_display(
+            spec,
+            str(latest_manifest),
+            manifest,
+            extra_facts=split_fact_lines,
         )
-        self._sync_timeline_from_workflow_status(
-            status,
-            workflow,
-            step_key=timeline_step_key,
-        )
-        selected_manifest_path = retry_parent_text or str(latest_manifest)
-        if self._split_entries_unchanged(split_entries):
-            self._split_status_selected_manifest_path = selected_manifest_path
-            self._update_split_status_selection_ui(selected_manifest_path)
-        else:
-            self._render_split_status_entries(
-                split_entries,
-                selected_manifest_path=selected_manifest_path,
-            )
+
+        if display.archive_when_idle and not force_expand:
+            self._completed_manifest_snapshot = {
+                "manifest_path": str(latest_manifest),
+                "display": display,
+                "split_entries": list(split_entries),
+            }
+            self._viewing_completed_manifest = False
+            self._refresh_workflow_idle_summary()
+            return
+
+        self._completed_manifest_snapshot = None
+        self._viewing_completed_manifest = False
+        self._apply_manifest_workflow_display(display, split_entries)
+        self._update_completed_manifest_entry_ui()
 
     def _clear_bootstrap_progress_ui(self) -> None:
         self._bootstrap_progress = None
@@ -2685,6 +2660,7 @@ class MainWindow(QMainWindow):
             self._doctor_output_lines = []
             self._workflow = None
             self._workflow_step_output_lines = []
+            self._clear_completed_manifest_snapshot()
             self._set_doctor_summary(stale_summary())
             spec = work_mode_spec(self._current_work_mode())
             if spec.is_bootstrap:
@@ -3007,6 +2983,7 @@ class MainWindow(QMainWindow):
 
         self._clear_log_view()
         self._focus_log_tab()
+        self._clear_completed_manifest_snapshot()
         self._writeback_manifest_path = ""
         if spec.supports_translation_writeback:
             self._set_writeback_summary(stale_writeback_summary())
@@ -3077,22 +3054,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "无法继续任务", spec.not_implemented_message)
             return
         if workflow.current_step() is None:
-            facts = [format_manifest_path_fact(str(latest_manifest))]
-            job_name = manifest.get("job_name")
-            job_state = manifest.get("job_state")
-            if job_name:
-                facts.append(format_job_fact(job_name))
-            if job_state:
-                facts.append(format_job_state_fact(job_state))
-            self._set_workflow_summary(
-                "done",
-                f"最新{spec.label}任务已完成",
-                "该任务流程的所有步骤已全部执行完毕。",
-                facts,
-            )
-            self._sync_timeline_from_workflow_status("done", workflow)
             self._refresh_diagnostics_context()
             self._refresh_writeback_from_latest_manifest()
+            self._refresh_workflow_from_latest_manifest(
+                latest_manifest=latest_manifest,
+                manifest=manifest,
+            )
             writeback_summary = self._current_writeback_summary()
             if writeback_summary.status not in {"idle", "running", "stale"}:
                 self._focus_workbench_status_tab(2)
@@ -3828,7 +3795,9 @@ class MainWindow(QMainWindow):
                 exit_code,
                 manifest_path,
             )
-        self._set_workflow_update(update)
+        archive_completed = not update.should_continue and update.status == "done"
+        if not archive_completed:
+            self._set_workflow_update(update)
         self._clear_workflow_progress_ui()
         self._workflow_step_output_lines = []
         self._refresh_diagnostics_context()
@@ -3858,7 +3827,9 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("翻译任务失败，请查看诊断日志。", 8000)
         elif update.status == "waiting":
             self.statusBar().showMessage("批量任务仍在处理，可稍后继续最新任务。", 8000)
-        elif update.status == "done":
+        elif archive_completed:
+            self._viewing_completed_manifest = False
+            self._refresh_workflow_from_latest_manifest()
             self.statusBar().showMessage(update.heading, 6000)
         else:
             self.statusBar().showMessage("翻译任务流程完成。", 6000)
