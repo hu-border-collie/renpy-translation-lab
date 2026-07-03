@@ -5,6 +5,10 @@ try:
 
     from gui_qt.app import MainWindow
     from gui_qt.doctor_report import DoctorSummary
+    from gui_qt.template_generation_report import (
+        summarize_template_generation_output,
+        template_generation_to_doctor_summary,
+    )
     from gui_qt.work_modes import WorkMode
 except ImportError as exc:
     MainWindow = None  # type: ignore[assignment,misc]
@@ -81,6 +85,25 @@ class GuiTranslateButtonLabelTests(unittest.TestCase):
             )
         )
 
+        self.assertTrue(window.translate_btn.isEnabled())
+
+    def test_button_keeps_generate_template_after_unknown_cli_status(self):
+        window = MainWindow()
+        window._work_mode = WorkMode.BATCH_TRANSLATION
+        window._doctor_check_completed = True
+        unknown_output = """
+Template generation summary:
+- status: pending
+- tl_dir: C:\\Games\\Example\\work\\game\\tl\\schinese
+- tl_exists: False
+- rpy_files: 0
+- language: schinese
+- message:
+"""
+        summary = summarize_template_generation_output(unknown_output, exit_code=0)
+        window._set_doctor_summary(template_generation_to_doctor_summary(summary))
+
+        self.assertEqual(window.translate_btn.text(), "生成翻译模板")
         self.assertTrue(window.translate_btn.isEnabled())
 
     def test_button_keeps_generate_template_after_generation_failure(self):

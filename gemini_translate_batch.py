@@ -8408,8 +8408,9 @@ def print_template_generation_summary(result):
     print(f"- message: {result.get('message', '')}")
 
 
-def _build_template_generation_result(status, message):
-    counts = collect_tl_doctor_counts()
+def _build_template_generation_result(status, message, counts=None):
+    if counts is None:
+        counts = collect_tl_doctor_counts()
     return {
         'status': status,
         'tl_dir': legacy.TL_DIR,
@@ -8459,7 +8460,7 @@ def run_generate_template():
         status = 'failed'
         message = 'Template generation finished but no TL files were found.'
 
-    result = _build_template_generation_result(status, message)
+    result = _build_template_generation_result(status, message, counts=counts)
     print_template_generation_summary(result)
     if status != 'ready':
         raise SystemExit(f"[GenerateTemplate] {message}")
