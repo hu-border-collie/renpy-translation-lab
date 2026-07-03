@@ -645,6 +645,53 @@ class BatchRagRegressionTests(unittest.TestCase):
 
         self.assertEqual(args.command, 'generate-template')
 
+    def test_run_generate_template_prints_summary_when_prepare_raises(self):
+        buffer = io.StringIO()
+        with (
+            mock.patch.object(batch_mod.legacy, 'PREP_ENABLED', True),
+            mock.patch.object(batch_mod.legacy, 'PREP_GENERATE_TEMPLATE', True),
+            mock.patch.object(batch_mod.legacy, 'TL_DIR', 'C:/Games/Example/work/game/tl/schinese'),
+            mock.patch.object(batch_mod.legacy, 'PREP_LANGUAGE', 'schinese'),
+            mock.patch.object(batch_mod, 'collect_tl_doctor_counts', return_value={'rpy_files': 0}),
+            mock.patch.object(batch_mod.os.path, 'isdir', return_value=False),
+            mock.patch.object(batch_mod.sys, 'stdout', buffer),
+            mock.patch.object(
+                batch_mod.legacy,
+                'run_prepare_steps',
+                side_effect=SystemExit('[Prepare] Cannot generate translation template'),
+            ),
+        ):
+            with self.assertRaises(SystemExit):
+                batch_mod.run_generate_template()
+
+        self.assertIn('Template generation summary:', buffer.getvalue())
+        self.assertIn('status: failed', buffer.getvalue())
+
+    def test_run_generate_template_disabled_prepare_reports_existing_rpy_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'work' / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'script.rpy').write_text(
+                'translate schinese start_123:\n'
+                '    e "hello"\n',
+                encoding='utf-8',
+            )
+            buffer = io.StringIO()
+            with (
+                mock.patch.object(batch_mod.legacy, 'PREP_ENABLED', False),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod.legacy, 'PREP_LANGUAGE', 'schinese'),
+                mock.patch.object(batch_mod.sys, 'stdout', buffer),
+            ):
+                with self.assertRaises(SystemExit):
+                    batch_mod.run_generate_template()
+
+            output = buffer.getvalue()
+            self.assertIn('Template generation summary:', output)
+            self.assertIn('rpy_files: 1', output)
+            self.assertIn('tl_exists: True', output)
+
     def test_assess_doctor_layout_status_failed_without_work_or_original(self):
         report = {
             'base_dir': 'C:/Games/Example',

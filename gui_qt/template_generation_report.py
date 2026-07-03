@@ -87,6 +87,17 @@ def summarize_template_generation_output(
             rpy_files=rpy_files,
         )
 
+    if status != "ready":
+        return TemplateGenerationSummary(
+            status="blocked",
+            heading="翻译模板生成失败",
+            message=message or "翻译模板生成返回了未知状态，请查看诊断日志。",
+            facts=facts,
+            findings=[],
+            tl_dir=tl_dir,
+            rpy_files=rpy_files,
+        )
+
     ready_facts = list(facts)
     append_unique_fact(
         ready_facts,
@@ -106,9 +117,10 @@ def summarize_template_generation_output(
 def template_generation_to_doctor_summary(
     summary: TemplateGenerationSummary,
 ) -> DoctorSummary:
-    mode = ""
     if summary.status == "ready" and summary.rpy_files > 0:
         mode = "existing_tl_only"
+    else:
+        mode = "can_generate_template"
     return DoctorSummary(
         status=summary.status,
         heading=summary.heading,

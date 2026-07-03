@@ -26,14 +26,12 @@ QWidget {
     color: #4b5563;
     font-size: 14px;
     font-weight: 400;
-    line-height: 1.5;
 }
 
 QLabel#summary_body_label {
     color: #374151;
     font-size: 14px;
     font-weight: 400;
-    line-height: 1.5;
 }
 
 /* Dialogs are top-level windows */
@@ -184,7 +182,7 @@ QLabel#bootstrap_status_label {
     font-weight: 700;
     padding: 4px 12px;
     border-radius: 12px;
-    qproperty-alignment: 'AlignCenter';
+    qproperty-alignment: AlignCenter;
 }
 
 /* Success Badges */
@@ -709,7 +707,6 @@ QTextEdit#log_view QScrollBar:vertical {
     width: 8px;
 }
 
-QModelIndex QScrollBar::handle:vertical,
 QScrollBar::handle:vertical,
 QScrollBar::handle:horizontal {
     background-color: rgba(100, 116, 139, 0.2);

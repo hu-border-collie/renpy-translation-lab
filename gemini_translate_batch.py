@@ -7878,7 +7878,7 @@ def collect_doctor_recommendations(report):
     elif not has_tl and report.get('prepare_enabled') and mode == 'blocked_missing_template':
         recommendations.append(
             'Install Ren\'Py SDK or set prepare.renpy_sdk_dir, then run: '
-            'python gemini_translate_batch.py build.'
+            'python gemini_translate_batch.py generate-template.'
         )
     elif not has_tl and not report.get('prepare_enabled'):
         recommendations.append(
@@ -8408,34 +8408,49 @@ def print_template_generation_summary(result):
     print(f"- message: {result.get('message', '')}")
 
 
+def _build_template_generation_result(status, message):
+    counts = collect_tl_doctor_counts()
+    return {
+        'status': status,
+        'tl_dir': legacy.TL_DIR,
+        'tl_exists': os.path.isdir(legacy.TL_DIR),
+        'rpy_files': counts['rpy_files'],
+        'language': legacy.PREP_LANGUAGE,
+        'message': message,
+    }
+
+
+def _raise_generate_template_failure(result):
+    print_template_generation_summary(result)
+    raise SystemExit(f"[GenerateTemplate] {result['message']}")
+
+
 def run_generate_template():
     if not legacy.PREP_ENABLED:
-        result = {
-            'status': 'failed',
-            'tl_dir': legacy.TL_DIR,
-            'tl_exists': os.path.isdir(legacy.TL_DIR),
-            'rpy_files': 0,
-            'language': legacy.PREP_LANGUAGE,
-            'message': 'prepare is disabled in translator_config.json',
-        }
-        print_template_generation_summary(result)
-        raise SystemExit(f"[GenerateTemplate] {result['message']}")
+        _raise_generate_template_failure(
+            _build_template_generation_result(
+                'failed',
+                'prepare is disabled in translator_config.json',
+            )
+        )
 
     if not legacy.PREP_GENERATE_TEMPLATE:
-        result = {
-            'status': 'failed',
-            'tl_dir': legacy.TL_DIR,
-            'tl_exists': os.path.isdir(legacy.TL_DIR),
-            'rpy_files': 0,
-            'language': legacy.PREP_LANGUAGE,
-            'message': 'prepare.generate_template is disabled in translator_config.json',
-        }
-        print_template_generation_summary(result)
-        raise SystemExit(f"[GenerateTemplate] {result['message']}")
+        _raise_generate_template_failure(
+            _build_template_generation_result(
+                'failed',
+                'prepare.generate_template is disabled in translator_config.json',
+            )
+        )
 
-    legacy.run_prepare_steps()
+    try:
+        legacy.run_prepare_steps()
+    except SystemExit as exc:
+        message = str(exc.args[0]) if exc.args else 'Template generation failed during prepare.'
+        _raise_generate_template_failure(
+            _build_template_generation_result('failed', message)
+        )
+
     counts = collect_tl_doctor_counts()
-    tl_exists = os.path.isdir(legacy.TL_DIR)
     rpy_files = counts['rpy_files']
     if rpy_files > 0:
         status = 'ready'
@@ -8444,14 +8459,7 @@ def run_generate_template():
         status = 'failed'
         message = 'Template generation finished but no TL files were found.'
 
-    result = {
-        'status': status,
-        'tl_dir': legacy.TL_DIR,
-        'tl_exists': tl_exists,
-        'rpy_files': rpy_files,
-        'language': legacy.PREP_LANGUAGE,
-        'message': message,
-    }
+    result = _build_template_generation_result(status, message)
     print_template_generation_summary(result)
     if status != 'ready':
         raise SystemExit(f"[GenerateTemplate] {message}")

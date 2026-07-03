@@ -34,6 +34,29 @@ class GuiTemplateGenerationReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "blocked")
         self.assertEqual(summary.heading, "翻译模板生成失败")
 
+    def test_summarize_unknown_status_is_blocked(self):
+        output = """
+Template generation summary:
+- status: pending
+- tl_dir: C:\\Games\\Example\\work\\game\\tl\\schinese
+- tl_exists: True
+- rpy_files: 0
+- language: schinese
+- message:
+"""
+
+        summary = summarize_template_generation_output(output, exit_code=0)
+
+        self.assertEqual(summary.status, "blocked")
+        self.assertIn("未知状态", summary.message)
+
+    def test_template_generation_to_doctor_summary_keeps_generate_mode_on_failure(self):
+        output = TEMPLATE_OUTPUT.replace("status: ready", "status: failed")
+        summary = summarize_template_generation_output(output, exit_code=1)
+        doctor_summary = template_generation_to_doctor_summary(summary)
+
+        self.assertEqual(doctor_summary.mode, "can_generate_template")
+
     def test_template_generation_to_doctor_summary_switches_to_existing_tl_mode(self):
         summary = summarize_template_generation_output(TEMPLATE_OUTPUT, exit_code=0)
         doctor_summary = template_generation_to_doctor_summary(summary)

@@ -83,6 +83,24 @@ class GuiTranslateButtonLabelTests(unittest.TestCase):
 
         self.assertTrue(window.translate_btn.isEnabled())
 
+    def test_button_keeps_generate_template_after_generation_failure(self):
+        window = MainWindow()
+        window._work_mode = WorkMode.BATCH_TRANSLATION
+        window._doctor_check_completed = True
+        window._set_doctor_summary(
+            DoctorSummary(
+                status="blocked",
+                heading="翻译模板生成失败",
+                message="翻译模板生成没有正常完成，请查看诊断日志。",
+                facts=[],
+                findings=[],
+                mode="can_generate_template",
+            )
+        )
+
+        self.assertEqual(window.translate_btn.text(), "生成翻译模板")
+        self.assertTrue(window.translate_btn.isEnabled())
+
     def test_button_switches_to_start_translation_after_template_generated(self):
         window = MainWindow()
         window._work_mode = WorkMode.BATCH_TRANSLATION
