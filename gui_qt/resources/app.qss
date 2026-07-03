@@ -26,12 +26,14 @@ QWidget {
     color: #4b5563;
     font-size: 14px;
     font-weight: 400;
+    line-height: 1.5;
 }
 
 QLabel#summary_body_label {
     color: #374151;
     font-size: 14px;
     font-weight: 400;
+    line-height: 1.5;
 }
 
 /* Dialogs are top-level windows */
@@ -157,11 +159,13 @@ QTabWidget#diagnostics_inner_tabs QTabBar::tab {
 }
 
 QTabWidget#diagnostics_inner_tabs QTabBar::tab:selected {
+    background-color: transparent;
     color: #3b82f6;
     border-bottom: 2px solid #3b82f6;
 }
 
 QTabWidget#diagnostics_inner_tabs QTabBar::tab:hover:!selected {
+    background-color: transparent;
     color: #0f172a;
     border-bottom: 2px solid #cbd5e1;
 }
@@ -182,7 +186,7 @@ QLabel#bootstrap_status_label {
     font-weight: 700;
     padding: 4px 12px;
     border-radius: 12px;
-    qproperty-alignment: AlignCenter;
+    qproperty-alignment: 'AlignCenter';
 }
 
 /* Success Badges */
@@ -512,34 +516,39 @@ QPushButton#secondary_btn:disabled {
     color: #cbd5e1;
 }
 
-/* Compact table action buttons */
+/* Compact table action buttons (seamless with transparent backgrounds) */
 QPushButton#split_select_btn {
-    background-color: #f1f5f9;
-    border: 1px solid #cbd5e1;
-    border-radius: 6px;
-    color: #475569;
-    font-size: 11px;
-    font-weight: bold;
-    min-width: 64px;
-    min-height: 22px;
-    padding: 2px 10px;
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: #475569; /* Soft neutral slate gray */
+    font-size: 12px;
+    font-weight: 700;
+    min-width: 60px;
+    min-height: 20px;
+    padding: 3px 10px;
     text-align: center;
 }
 
 QPushButton#split_select_btn:hover {
-    background-color: #e2e8f0;
-    border-color: #3b82f6;
+    background-color: rgba(100, 116, 139, 0.10);
+    border-color: rgba(100, 116, 139, 0.25);
     color: #0f172a;
 }
 
 QPushButton#split_select_btn:pressed {
-    background-color: #cbd5e1;
+    background-color: rgba(100, 116, 139, 0.18);
+}
+
+QPushButton#split_select_btn:focus {
+    outline: none;
+    border: 1px solid transparent;
 }
 
 QPushButton#split_select_btn:disabled {
-    background-color: #f8fafc;
-    border-color: #e2e8f0;
-    color: #94a3b8;
+    background-color: transparent;
+    border-color: transparent;
+    color: #cbd5e1;
 }
 
 /* Danger Action Button */
@@ -611,10 +620,23 @@ QTableWidget#split_status_table {
     alternate-background-color: #f8fafc;
     color: #334155;
     gridline-color: #e2e8f0;
+    outline: none;
+    selection-background-color: transparent;
+    selection-color: inherit;
 }
 
 QTableWidget#split_status_table::item {
     padding: 6px 8px;
+    outline: none;
+}
+
+QTableWidget#split_status_table::item:hover {
+    background-color: rgba(148, 163, 184, 0.10);
+}
+
+QTableWidget#split_status_table::item:selected {
+    background-color: transparent;
+    color: inherit;
 }
 
 QTableWidget#split_status_table QHeaderView::section {
@@ -707,6 +729,7 @@ QTextEdit#log_view QScrollBar:vertical {
     width: 8px;
 }
 
+QModelIndex QScrollBar::handle:vertical,
 QScrollBar::handle:vertical,
 QScrollBar::handle:horizontal {
     background-color: rgba(100, 116, 139, 0.2);

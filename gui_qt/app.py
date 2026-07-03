@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QBrush, QColor, QGuiApplication
+from PySide6.QtGui import QBrush, QColor, QGuiApplication, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -130,12 +130,14 @@ from .work_bootstrap_report import (
     work_bootstrap_to_doctor_summary,
 )
 from .project_state import ProjectState
-from .theme import apply_theme
+from .theme import apply_theme, system_prefers_dark
 from .theme_helpers import (
     DEFAULT_THEME_PREFERENCE,
+    THEME_DARK,
     THEME_SYSTEM,
     normalize_theme_preference,
     read_gui_theme_from_config,
+    resolve_effective_theme,
     write_gui_theme_to_config,
 )
 from .translation_workflow import WorkflowUpdate
@@ -623,6 +625,7 @@ class MainWindow(QMainWindow):
         self.split_status_table.setMinimumHeight(260)
         self.split_status_table.setMaximumHeight(360)
         self.split_status_table.verticalHeader().setVisible(False)
+        self._configure_split_status_table_hover_palette()
         self.split_status_table.viewport().installEventFilter(self)
         self._split_status_action_delegate = SplitStatusActionDelegate(self.split_status_table)
         self._split_status_action_delegate.select_requested.connect(self._select_split_manifest)
@@ -1188,6 +1191,38 @@ class MainWindow(QMainWindow):
         self.split_status_table.setVisible(True)
         self._update_split_submit_btn(entries)
 
+    def _effective_theme_is_dark(self) -> bool:
+        system_is_dark = system_prefers_dark(self._qt_app) if self._qt_app is not None else None
+        return (
+            resolve_effective_theme(self._theme_preference, system_is_dark=system_is_dark)
+            == THEME_DARK
+        )
+
+    def _refresh_split_status_table_after_theme_change(self) -> None:
+        self._configure_split_status_table_hover_palette()
+        if not self._split_status_entries:
+            return
+        self._update_split_status_selection_ui(self._split_status_selected_manifest_path)
+
+    def _configure_split_status_table_hover_palette(self) -> None:
+        if not hasattr(self, "split_status_table"):
+            return
+        dark = self._effective_theme_is_dark()
+        table_palette = self.split_status_table.palette()
+        if dark:
+            table_palette.setColor(
+                QPalette.ColorGroup.All,
+                QPalette.ColorRole.Highlight,
+                QColor(148, 163, 184, 31),
+            )
+        else:
+            table_palette.setColor(
+                QPalette.ColorGroup.All,
+                QPalette.ColorRole.Highlight,
+                QColor(148, 163, 184, 26),
+            )
+        self.split_status_table.setPalette(table_palette)
+
     def _split_status_table_profile(self) -> dict[str, int]:
         table = getattr(self, "split_status_table", None)
         width = 0
@@ -1257,9 +1292,7 @@ class MainWindow(QMainWindow):
         delegate = getattr(self, "_split_status_action_delegate", None)
         if delegate is None:
             return
-        for column in range(self.split_status_table.columnCount()):
-            if is_split_action_column(column):
-                self.split_status_table.setItemDelegateForColumn(column, delegate)
+        pass
 
     def _sync_split_status_table_columns(self) -> None:
         if not hasattr(self, "split_status_table"):
@@ -1347,13 +1380,17 @@ class MainWindow(QMainWindow):
             if action_payload is not None:
                 action_item.setData(SPLIT_ACTION_DATA_ROLE, action_payload)
                 action_item.setToolTip(f"\u5207\u6362\u5230 {entry.part_label}")
+            if show_action_button:
+                btn = QPushButton("选择")
+                btn.setObjectName("split_select_btn")
+                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                btn.setToolTip(f"切换到 {entry.part_label}")
+                btn.clicked.connect(lambda checked=False, path=entry.manifest_path: self._select_split_manifest(path))
+                self.split_status_table.setCellWidget(row, base_column + 5, btn)
             else:
-                action_item.setData(SPLIT_ACTION_DATA_ROLE, None)
-                action_item.setToolTip("")
-            model_index = self.split_status_table.model().index(row, base_column + 5)
-            self.split_status_table.viewport().update(
-                self.split_status_table.visualRect(model_index)
-            )
+                self.split_status_table.removeCellWidget(row, base_column + 5)
+            
+            self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
 
     def _update_split_status_job_column_texts(self, profile: dict[str, int]) -> None:
         if not hasattr(self, "split_status_table"):
@@ -1400,20 +1437,24 @@ class MainWindow(QMainWindow):
             self._split_job_text(entry, profile["job_chars"]),
             tooltip=entry.job_name or entry.manifest_path,
         )
+        
         show_action_button = entry.selectable and not is_current
-        action_payload = split_action_item_payload(
-            selectable=show_action_button,
-            manifest_path=entry.manifest_path,
-            part_label=entry.part_label,
-        )
+        
+        # Always set an empty QTableWidgetItem to allow background styling on the cell
         action_item = QTableWidgetItem("")
         action_item.setFlags(action_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        action_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-        if action_payload is not None:
-            action_item.setData(SPLIT_ACTION_DATA_ROLE, action_payload)
-            action_item.setToolTip(f"\u5207\u6362\u5230 {entry.part_label}")
         self.split_status_table.setItem(row, base_column + 5, action_item)
         self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
+        
+        if show_action_button:
+            btn = QPushButton("选择")
+            btn.setObjectName("split_select_btn")
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setToolTip(f"切换到 {entry.part_label}")
+            btn.clicked.connect(lambda checked=False, path=entry.manifest_path: self._select_split_manifest(path))
+            self.split_status_table.setCellWidget(row, base_column + 5, btn)
+        else:
+            self.split_status_table.removeCellWidget(row, base_column + 5)
 
     def _split_job_text(self, entry: SplitManifestEntry, max_chars: int) -> str:
         text = entry.job_name if entry.job_name else entry.display_name
@@ -1452,14 +1493,14 @@ class MainWindow(QMainWindow):
         base_column: int = 0,
         is_current: bool,
     ) -> None:
-        dark = self.palette().window().color().lightness() < 128
+        dark = self._effective_theme_is_dark()
         bg_color, text_color, status_color = self._split_status_row_colors(entry.status_kind)
         
-        # Highlight the currently active/selected split manifest row
+        # Highlight the currently active/selected split manifest row with neutral colors.
         if is_current:
-            bg_color = "#1e293b" if dark else "#e0e7ff"
-            text_color = "#60a5fa" if dark else "#1d4ed8"
-            
+            bg_color = "#27272a" if dark else "#e4e4e7"
+            text_color = "#ffffff" if dark else "#0f172a"
+
         background = QBrush(QColor(bg_color)) if bg_color != "transparent" else None
         foreground = QBrush(QColor(text_color))
         status_foreground = QBrush(QColor(status_color))
@@ -1478,7 +1519,7 @@ class MainWindow(QMainWindow):
             item.setFont(font)
 
     def _split_status_row_colors(self, status_kind: str) -> tuple[str, str, str]:
-        dark = self.palette().window().color().lightness() < 128
+        dark = self._effective_theme_is_dark()
         if dark:
             colors = {
                 "applied": ("transparent", "#cbd5e1", "#34d399"),
@@ -4098,6 +4139,7 @@ class MainWindow(QMainWindow):
             return
         try:
             apply_theme(self._qt_app, self._resources_dir, self._theme_preference)
+            QTimer.singleShot(0, self._refresh_split_status_table_after_theme_change)
         except OSError as exc:
             self.statusBar().showMessage("主题样式加载失败，已保留当前样式。", 6000)
             self._append_log(f"加载主题样式失败：{exc}")
