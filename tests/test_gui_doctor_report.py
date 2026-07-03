@@ -143,7 +143,7 @@ class GuiDoctorReportTests(unittest.TestCase):
 
     def test_primary_recommendation_message_ignores_template_prep_suggestions(self):
         message = primary_recommendation_message(
-            ["建议：点击「开始翻译」生成翻译模板"],
+            ["建议：点击「生成翻译模板」"],
         )
 
         self.assertEqual(message, "")
@@ -171,7 +171,7 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "检查完成，但有需要处理的事项")
-        self.assertIn("已有翻译文件", summary.message)
+        self.assertIn("翻译模板已就绪", summary.message)
         self.assertTrue(any("API 密钥" in fact or fact.startswith("建议：") for fact in summary.facts))
         self.assertEqual(summary.findings, [])
 
@@ -199,6 +199,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "检查完成，但有需要处理的事项")
         self.assertEqual(summary.findings, [])
+        self.assertEqual(summary.mode, "can_generate_template")
         self.assertIn("翻译模板尚未生成", summary.message)
         self.assertTrue(any("翻译文件：0 个" in fact for fact in summary.facts))
 

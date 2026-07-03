@@ -640,6 +640,11 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertEqual(args.command, 'bootstrap-work')
         self.assertFalse(args.no_update_game_root)
 
+    def test_build_arg_parser_accepts_generate_template_command(self):
+        args = batch_mod.build_arg_parser().parse_args(['generate-template'])
+
+        self.assertEqual(args.command, 'generate-template')
+
     def test_assess_doctor_layout_status_failed_without_work_or_original(self):
         report = {
             'base_dir': 'C:/Games/Example',
@@ -701,6 +706,46 @@ class BatchRagRegressionTests(unittest.TestCase):
 
         joined = ' '.join(report.get('recommendations', []))
         self.assertIn('bootstrap-work', joined)
+
+    def test_doctor_report_prefers_existing_tl_when_files_and_sdk_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'script.rpy').write_text(
+                'translate schinese start_123:\n'
+                '    # e "Hello"\n'
+                '    e "\u4f60\u597d"\n',
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(base)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod.legacy, 'TL_SUBDIR', 'game/tl/schinese'),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LANGUAGE', 'schinese'),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', 'C:/RenPy'),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', 'C:/RenPy/renpy.exe'),
+                mock.patch.object(
+                    batch_mod.legacy,
+                    'get_prepare_template_command_info',
+                    return_value={
+                        'available': True,
+                        'kind': 'renpy-sdk',
+                        'command': ['C:/RenPy/renpy.exe', 'translate', 'schinese'],
+                        'cwd': str(base / 'game'),
+                        'reason': '',
+                    },
+                ),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        self.assertEqual(report['mode'], 'existing_tl_only')
+        self.assertTrue(report['can_generate_template'])
+        self.assertEqual(report['counts']['rpy_files'], 1)
 
     def test_doctor_report_classifies_existing_tl_without_sdk(self):
         with tempfile.TemporaryDirectory() as tmp:

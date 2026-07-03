@@ -24,7 +24,7 @@ class GuiUserCopyTests(unittest.TestCase):
 
     def test_doctor_mode_label_maps_known_values(self):
         self.assertEqual(doctor_mode_label("can_generate_template"), "可生成翻译模板")
-        self.assertEqual(doctor_mode_label("existing_tl_only"), "仅处理已有翻译文件")
+        self.assertEqual(doctor_mode_label("existing_tl_only"), "已有翻译模板")
         self.assertEqual(doctor_mode_label("blocked_missing_template"), "缺少模板且无法生成")
 
     def test_job_state_label_maps_known_values(self):

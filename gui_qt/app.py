@@ -118,6 +118,11 @@ from .manifest_resume_summary import (
     build_manifest_workflow_display,
     completed_manifest_entry_fact,
 )
+from .template_generation_report import (
+    running_template_generation_summary,
+    summarize_template_generation_output,
+    template_generation_to_doctor_summary,
+)
 from .work_bootstrap_report import (
     running_work_bootstrap_summary,
     summarize_work_bootstrap_output,
@@ -233,6 +238,9 @@ class MainWindow(QMainWindow):
             self._on_bootstrap_progress_eta_tick
         )
         self._work_bootstrap_output_lines: list[str] = []
+        self._template_generation_output_lines: list[str] = []
+        self._doctor_summary_mode = ""
+        self._doctor_check_completed = False
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
@@ -1444,15 +1452,26 @@ class MainWindow(QMainWindow):
         base_column: int = 0,
         is_current: bool,
     ) -> None:
+        dark = self.palette().window().color().lightness() < 128
         bg_color, text_color, status_color = self._split_status_row_colors(entry.status_kind)
-        background = QBrush(QColor(bg_color))
+        
+        # Highlight the currently active/selected split manifest row
+        if is_current:
+            bg_color = "#1e293b" if dark else "#e0e7ff"
+            text_color = "#60a5fa" if dark else "#1d4ed8"
+            
+        background = QBrush(QColor(bg_color)) if bg_color != "transparent" else None
         foreground = QBrush(QColor(text_color))
         status_foreground = QBrush(QColor(status_color))
+        
         for column in range(base_column, min(base_column + 6, self.split_status_table.columnCount())):
             item = self.split_status_table.item(row, column)
             if item is None:
                 continue
-            item.setBackground(background)
+            if background is not None:
+                item.setBackground(background)
+            else:
+                item.setData(Qt.ItemDataRole.BackgroundRole, None)
             item.setForeground(status_foreground if column == base_column + 1 else foreground)
             font = item.font()
             font.setBold(column == base_column + 1 or (is_current and column == base_column))
@@ -1462,31 +1481,31 @@ class MainWindow(QMainWindow):
         dark = self.palette().window().color().lightness() < 128
         if dark:
             colors = {
-                "applied": ("#052e2b", "#d1fae5", "#34d399"),
-                "checked_safe": ("#12351f", "#dcfce7", "#4ade80"),
-                "checked_warn": ("#422006", "#fef3c7", "#fbbf24"),
-                "checked_block": ("#450a0a", "#fee2e2", "#f87171"),
-                "failed": ("#450a0a", "#fee2e2", "#f87171"),
-                "downloaded": ("#172554", "#dbeafe", "#60a5fa"),
-                "running": ("#3b2505", "#fef3c7", "#f59e0b"),
-                "submitted": ("#1e293b", "#cbd5e1", "#93c5fd"),
-                "succeeded": ("#14345b", "#dbeafe", "#60a5fa"),
-                "unsubmitted": ("#111827", "#94a3b8", "#94a3b8"),
+                "applied": ("transparent", "#cbd5e1", "#34d399"),
+                "checked_safe": ("transparent", "#cbd5e1", "#4ade80"),
+                "checked_warn": ("transparent", "#cbd5e1", "#fbbf24"),
+                "checked_block": ("transparent", "#cbd5e1", "#f87171"),
+                "failed": ("transparent", "#cbd5e1", "#f87171"),
+                "downloaded": ("transparent", "#cbd5e1", "#60a5fa"),
+                "running": ("transparent", "#cbd5e1", "#fbbf24"),
+                "submitted": ("transparent", "#cbd5e1", "#93c5fd"),
+                "succeeded": ("transparent", "#cbd5e1", "#60a5fa"),
+                "unsubmitted": ("transparent", "#94a3b8", "#94a3b8"),
             }
-            return colors.get(status_kind, ("#0f172a", "#cbd5e1", "#cbd5e1"))
+            return colors.get(status_kind, ("transparent", "#cbd5e1", "#cbd5e1"))
         colors = {
-            "applied": ("#d1fae5", "#064e3b", "#047857"),
-            "checked_safe": ("#dcfce7", "#14532d", "#15803d"),
-            "checked_warn": ("#fef3c7", "#78350f", "#b45309"),
-            "checked_block": ("#fee2e2", "#7f1d1d", "#dc2626"),
-            "failed": ("#fee2e2", "#7f1d1d", "#dc2626"),
-            "downloaded": ("#dbeafe", "#1e3a8a", "#2563eb"),
-            "running": ("#fef3c7", "#78350f", "#d97706"),
-            "submitted": ("#e2e8f0", "#334155", "#2563eb"),
-            "succeeded": ("#e0f2fe", "#075985", "#0284c7"),
-            "unsubmitted": ("#f8fafc", "#64748b", "#64748b"),
+            "applied": ("transparent", "#334155", "#059669"),
+            "checked_safe": ("transparent", "#334155", "#15803d"),
+            "checked_warn": ("transparent", "#334155", "#b45309"),
+            "checked_block": ("transparent", "#334155", "#dc2626"),
+            "failed": ("transparent", "#334155", "#dc2626"),
+            "downloaded": ("transparent", "#334155", "#2563eb"),
+            "running": ("transparent", "#334155", "#d97706"),
+            "submitted": ("transparent", "#334155", "#2563eb"),
+            "succeeded": ("transparent", "#334155", "#0284c7"),
+            "unsubmitted": ("transparent", "#64748b", "#64748b"),
         }
-        return colors.get(status_kind, ("#f8fafc", "#334155", "#334155"))
+        return colors.get(status_kind, ("transparent", "#334155", "#334155"))
 
     def _short_job_name(self, job_name: str) -> str:
         if not job_name:
@@ -2155,6 +2174,37 @@ class MainWindow(QMainWindow):
     def _resume_button_is_query_mode(self) -> bool:
         return hasattr(self, "resume_btn") and self.resume_btn.text() == "查询云端状态"
 
+    def _should_generate_template_only(self) -> bool:
+        spec = work_mode_spec(self._current_work_mode())
+        if spec.mode not in {WorkMode.BATCH_TRANSLATION, WorkMode.SYNC_TRANSLATION}:
+            return False
+        return self._doctor_summary_mode == "can_generate_template"
+
+    def _translate_button_label(self) -> str:
+        spec = work_mode_spec(self._current_work_mode())
+        if self._should_generate_template_only():
+            return "生成翻译模板"
+        return spec.start_button_label
+
+    def _translation_requires_doctor_check(self, mode: WorkMode) -> bool:
+        return mode in {WorkMode.BATCH_TRANSLATION, WorkMode.SYNC_TRANSLATION}
+
+    def _translate_button_enabled(
+        self,
+        *,
+        spec,
+        bootstrap_ready: bool,
+        running: bool,
+    ) -> bool:
+        if running or not spec.implemented or not bootstrap_ready:
+            return False
+        if self._translation_requires_doctor_check(spec.mode):
+            return self._doctor_check_completed
+        return True
+
+    def _update_translate_button_label(self) -> None:
+        self.translate_btn.setText(self._translate_button_label())
+
     def _apply_work_mode_ui(
         self,
         *,
@@ -2166,7 +2216,7 @@ class MainWindow(QMainWindow):
         self.timeline.setVisible(False)
         self._sync_task_selectors_from_work_mode()
         self.translate_group_label.setText(spec.task_group_label)
-        self.translate_btn.setText(spec.start_button_label)
+        self._update_translate_button_label()
         if spec.resume_button_label:
             self.resume_btn.setText(spec.resume_button_label)
         self._update_resume_btn_text()
@@ -2190,7 +2240,13 @@ class MainWindow(QMainWindow):
             self._refresh_workflow_from_latest_manifest()
         running = self.kill_btn.isEnabled()
         bootstrap_ready = self._bootstrap_task_ready(spec)
-        self.translate_btn.setEnabled(spec.implemented and bootstrap_ready and not running)
+        self.translate_btn.setEnabled(
+            self._translate_button_enabled(
+                spec=spec,
+                bootstrap_ready=bootstrap_ready,
+                running=running,
+            )
+        )
         self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
         self._update_split_submit_btn(running=running)
 
@@ -2661,6 +2717,7 @@ class MainWindow(QMainWindow):
             self._workflow = None
             self._workflow_step_output_lines = []
             self._clear_completed_manifest_snapshot()
+            self._doctor_check_completed = False
             self._set_doctor_summary(stale_summary())
             spec = work_mode_spec(self._current_work_mode())
             if spec.is_bootstrap:
@@ -2878,6 +2935,32 @@ class MainWindow(QMainWindow):
         self._set_task_running(True)
         self.runner.run(self.state.get_batch_script_path(), ["bootstrap-work"])
 
+    def _on_generate_template(self):
+        if not self.state.get_game_root():
+            QMessageBox.information(
+                self,
+                "请先选择项目",
+                "请先选择游戏的 work 目录。",
+            )
+            return
+
+        self._clear_log_view()
+        self._active_command = "generate_template"
+        self._template_generation_output_lines = []
+        self._focus_workbench_status_tab(1)
+        running_summary = running_template_generation_summary()
+        doctor_summary = template_generation_to_doctor_summary(running_summary)
+        self._set_doctor_summary(doctor_summary)
+        self._set_workflow_summary(
+            "running",
+            running_summary.heading,
+            running_summary.message,
+            running_summary.facts,
+        )
+        self._append_log("=== 正在运行：gemini_translate_batch.py generate-template ===\n")
+        self._set_task_running(True)
+        self.runner.run(self.state.get_batch_script_path(), ["generate-template"])
+
     def _saved_batch_context_flags(self) -> dict[str, bool]:
         return read_batch_context_flags(self.state.load_translator_config())
 
@@ -2958,11 +3041,21 @@ class MainWindow(QMainWindow):
         if spec.is_bootstrap:
             self._start_bootstrap_task(spec.bootstrap_kind)
             return
+        if self._should_generate_template_only():
+            self._on_generate_template()
+            return
         if not self.state.get_game_root():
             QMessageBox.information(
                 self,
                 "请先选择项目",
                 "请先选择游戏的 work 目录。",
+            )
+            return
+        if self._translation_requires_doctor_check(spec.mode) and not self._doctor_check_completed:
+            QMessageBox.information(
+                self,
+                "请先运行环境检查",
+                "批量翻译与同步翻译需要先完成环境检查，确认项目状态后再开始。",
             )
             return
 
@@ -3319,6 +3412,8 @@ class MainWindow(QMainWindow):
                 self._workflow_progress,
             )
             self._schedule_progress_ui_flush()
+        elif self._active_command == "generate_template":
+            self._template_generation_output_lines.append(text)
         self._append_log(text)
 
     def _schedule_progress_ui_flush(self) -> None:
@@ -3387,7 +3482,13 @@ class MainWindow(QMainWindow):
         self.bootstrap_work_btn.setEnabled(not running)
         self.api_btn.setEnabled(not running)
         bootstrap_ready = self._bootstrap_task_ready(spec)
-        self.translate_btn.setEnabled(spec.implemented and bootstrap_ready and not running)
+        self.translate_btn.setEnabled(
+            self._translate_button_enabled(
+                spec=spec,
+                bootstrap_ready=bootstrap_ready,
+                running=running,
+            )
+        )
         self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
         self._update_split_submit_btn(running=running)
         self.save_config_btn.setEnabled(not running)
@@ -3529,6 +3630,7 @@ class MainWindow(QMainWindow):
             self._focus_workbench_status_tab(2)
 
     def _set_doctor_summary(self, summary: DoctorSummary):
+        self._doctor_summary_mode = summary.mode
         self.doctor_status_label.setText(summary.heading)
         self.doctor_status_label.setProperty("status", summary.status)
         self.doctor_status_label.style().unpolish(self.doctor_status_label)
@@ -3536,6 +3638,17 @@ class MainWindow(QMainWindow):
         self.doctor_message_label.setText(summary.message)
         self.doctor_facts_label.setText("\n".join(summary.facts))
         self._set_details_label(self.doctor_details_label, [])
+        self._update_translate_button_label()
+        spec = work_mode_spec(self._current_work_mode())
+        running = self.kill_btn.isEnabled()
+        bootstrap_ready = self._bootstrap_task_ready(spec)
+        self.translate_btn.setEnabled(
+            self._translate_button_enabled(
+                spec=spec,
+                bootstrap_ready=bootstrap_ready,
+                running=running,
+            )
+        )
         self._sync_layout_sizes()
 
     def _on_runner_error(self, message: str):
@@ -3552,6 +3665,8 @@ class MainWindow(QMainWindow):
             self._bootstrap_output_lines.append(message)
         elif self._active_command == "bootstrap_work":
             self._work_bootstrap_output_lines.append(message)
+        elif self._active_command == "generate_template":
+            self._template_generation_output_lines.append(message)
         self._focus_log_tab()
         self.statusBar().showMessage("任务运行失败，请查看诊断日志。", 6000)
 
@@ -3565,6 +3680,7 @@ class MainWindow(QMainWindow):
                 api_key_count=api_key_count,
                 api_key_source=api_key_source,
             )
+            self._doctor_check_completed = exit_code == 0
             self._set_doctor_summary(summary)
             self._active_command = ""
             self._set_task_running(False)
@@ -3707,6 +3823,31 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("准备工作目录已结束，请查看摘要。", 6000)
             else:
                 self.statusBar().showMessage("准备工作目录失败，请查看诊断日志。", 8000)
+            return
+
+        if self._active_command == "generate_template":
+            summary = summarize_template_generation_output(
+                "\n".join(self._template_generation_output_lines),
+                exit_code,
+            )
+            self._set_doctor_summary(template_generation_to_doctor_summary(summary))
+            self._set_workflow_summary(
+                summary.status,
+                summary.heading,
+                summary.message,
+                summary.facts,
+            )
+            self._active_command = ""
+            self._set_task_running(False)
+            if exit_code == 0 and summary.status == "ready":
+                self.statusBar().showMessage(
+                    "翻译模板已生成，可以开始翻译。",
+                    6000,
+                )
+            elif exit_code == 0:
+                self.statusBar().showMessage("翻译模板生成已结束，请查看摘要。", 6000)
+            else:
+                self.statusBar().showMessage("翻译模板生成失败，请查看诊断日志。", 8000)
             return
 
         self._set_task_running(False)

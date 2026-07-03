@@ -9,7 +9,7 @@ SAFETY_LEVEL_LABELS = {
 
 DOCTOR_MODE_LABELS = {
     "can_generate_template": "可生成翻译模板",
-    "existing_tl_only": "仅处理已有翻译文件",
+    "existing_tl_only": "已有翻译模板",
     "blocked_missing_template": "缺少模板且无法生成",
 }
 
@@ -53,8 +53,8 @@ DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS: tuple[tuple[str, str], ...] = (
         "建议：点击「准备工作目录」",
     ),
     (
-        "Missing translation files; run: python gemini_translate_batch.py build",
-        "建议：点击「开始翻译」生成翻译模板",
+        "Missing translation files; run: python gemini_translate_batch.py generate-template",
+        "建议：点击「生成翻译模板」",
     ),
     (
         "Install Ren'Py SDK or set prepare.renpy_sdk_dir, then run:",
