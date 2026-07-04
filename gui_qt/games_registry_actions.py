@@ -152,7 +152,7 @@ def record_apply_batch_for_game_root(
             project_id=project_id,
             manifest_path=Path(manifest_path),
         )
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         return RegistryActionResult(False, f"registry 批次记录失败：{exc}")
 
     if project is None:

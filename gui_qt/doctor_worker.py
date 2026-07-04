@@ -26,13 +26,14 @@ def run_doctor_check() -> DoctorWorkerResult:
         return DoctorWorkerResult(False, None, "", f"无法加载 doctor 模块：{exc}")
 
     try:
-        legacy.load_translator_settings()
-        legacy.load_glossary()
-        batch_mod.load_batch_settings()
-        report = batch_mod.collect_doctor_report()
-        buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            batch_mod.print_doctor_report(report)
+        with legacy.locked_runtime_state():
+            legacy.load_translator_settings()
+            legacy.load_glossary()
+            batch_mod.load_batch_settings()
+            report = batch_mod.collect_doctor_report()
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                batch_mod.print_doctor_report(report)
         return DoctorWorkerResult(True, report, buffer.getvalue())
     except Exception as exc:
         return DoctorWorkerResult(False, None, "", f"环境检查失败：{exc}")

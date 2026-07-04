@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import games_registry as registry
 
@@ -54,6 +55,32 @@ class GamesRegistryTests(unittest.TestCase):
             self.assertTrue(registry_path.is_file())
             loaded = registry.load_registry(registry_path)
             self.assertEqual(loaded["projects"][0]["id"], "game_gloryhounds")
+
+    def test_normalize_translation_status_maps_unknown_to_default(self):
+        self.assertEqual(registry.normalize_translation_status("  乱写状态  "), "待确认")
+        self.assertEqual(registry.normalize_translation_status("待翻译"), "待翻译")
+        self.assertEqual(registry.normalize_translation_status("已完成（6.7 增量）"), "已完成（6.7 增量）")
+
+    def test_render_games_md_escapes_pipe_characters(self):
+        payload = {
+            "updated_at": "2026-07-04T12:00:00+00:00",
+            "update_summary": "测试生成",
+            "projects": [
+                {
+                    "name": "Pipe | Game",
+                    "path": "Game_Pipe",
+                    "version": "1.0",
+                    "layout_status": "ready",
+                    "play_status": "待确认",
+                    "translation_status": "待翻译",
+                    "notes": "a | b",
+                    "auto": {},
+                }
+            ],
+        }
+        rendered = registry.render_games_md(payload)
+        self.assertIn("Pipe \\| Game", rendered)
+        self.assertIn("a \\| b", rendered)
 
     def test_render_games_md_contains_projects_and_marker(self):
         payload = {
@@ -161,6 +188,35 @@ class GamesRegistryTests(unittest.TestCase):
             self.assertEqual(project["auto"]["last_batch_id"], "job_001")
             self.assertIn("3 文件", project["auto"]["last_batch_summary"])
 
+    def test_record_batch_preserves_zero_file_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_dir = Path(tmp) / "job_zero"
+            manifest_dir.mkdir()
+            manifest = {
+                "status": "applied",
+                "apply_summary": {"files_changed": 0, "lines_changed": 0},
+            }
+            manifest_path = manifest_dir / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            payload = {
+                "projects": [
+                    {
+                        "id": "demo",
+                        "translation_status_source": "doctor",
+                        "auto": {},
+                    }
+                ]
+            }
+            project = registry.record_batch(
+                payload,
+                project_id="demo",
+                manifest_path=manifest_path,
+            )
+            self.assertIsNotNone(project)
+            self.assertIn("0 文件", project["auto"]["last_batch_summary"])
+            self.assertIn("0 行", project["auto"]["last_batch_summary"])
+
     def test_lite_scan_skips_doctor_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -173,7 +229,7 @@ class GamesRegistryTests(unittest.TestCase):
                 "engine": "renpy",
                 "in_renpy_pipeline": True,
             }
-            with unittest.mock.patch.object(
+            with mock.patch.object(
                 registry,
                 "_doctor_layout_snapshot",
                 return_value=("ready", "existing_tl_only"),
@@ -195,7 +251,7 @@ class GamesRegistryTests(unittest.TestCase):
                 "engine": "renpy",
                 "in_renpy_pipeline": True,
             }
-            with unittest.mock.patch.object(
+            with mock.patch.object(
                 registry,
                 "_doctor_layout_snapshot",
                 return_value=("ready", "existing_tl_only"),
@@ -220,7 +276,7 @@ class GamesRegistryTests(unittest.TestCase):
                 calls.append(project_id)
                 return registry["projects"][0]
 
-            with unittest.mock.patch.object(registry, "refresh_project", side_effect=fake_refresh):
+            with mock.patch.object(registry, "refresh_project", side_effect=fake_refresh):
                 count, cancelled = registry.refresh_all(
                     payload,
                     workspace_root=workspace,

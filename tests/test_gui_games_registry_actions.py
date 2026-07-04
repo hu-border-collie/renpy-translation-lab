@@ -99,6 +99,30 @@ class GuiGamesRegistryActionsTests(unittest.TestCase):
             data = registry.load_registry(workspace / registry.REGISTRY_FILENAME)
             self.assertEqual(data["projects"][0]["auto"]["last_batch_id"], "job_001")
 
+    def test_record_apply_batch_reports_manifest_io_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project_root = workspace / "Game_Example"
+            work_dir = project_root / "work"
+            work_dir.mkdir(parents=True)
+            (project_root / "original" / "game").mkdir(parents=True)
+            self._write_registry(
+                workspace,
+                [{"id": "demo", "name": "Example", "path": "Game_Example"}],
+            )
+
+            with mock.patch(
+                "gui_qt.games_registry_actions.record_batch",
+                side_effect=OSError("permission denied"),
+            ):
+                result = record_apply_batch_for_game_root(
+                    workspace,
+                    game_root=work_dir,
+                    manifest_path=work_dir / "manifest.json",
+                )
+            self.assertFalse(result.ok)
+            self.assertIn("registry 批次记录失败", result.message)
+
     def test_render_registry_games_md(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

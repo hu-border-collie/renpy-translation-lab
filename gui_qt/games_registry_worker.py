@@ -40,14 +40,17 @@ class RegistryRefreshWorker(QThread):
         self.progress.emit(current, total, name)
 
     def run(self) -> None:
-        result = refresh_registry_projects(
-            self._workspace_root,
-            project_id=self._project_id,
-            refresh_everything=self._refresh_everything,
-            mode=self._mode,
-            on_progress=self._emit_progress,
-            should_cancel=self._should_cancel,
-        )
+        try:
+            result = refresh_registry_projects(
+                self._workspace_root,
+                project_id=self._project_id,
+                refresh_everything=self._refresh_everything,
+                mode=self._mode,
+                on_progress=self._emit_progress,
+                should_cancel=self._should_cancel,
+            )
+        except Exception as exc:
+            result = RegistryActionResult(False, f"刷新失败：{exc}")
         if not isinstance(result, RegistryActionResult):
             result = RegistryActionResult(False, "刷新失败：未知结果。")
         self.completed.emit(result)

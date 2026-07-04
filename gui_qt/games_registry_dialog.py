@@ -207,8 +207,8 @@ class GamesRegistryDialog(QDialog):
     def _on_selection_changed(self) -> None:
         row = self._selected_row()
         can_use_row = row is not None and bool(row.project_id)
-        self._switch_btn.setEnabled(row is not None and bool(row.work_dir))
         if not self._is_refresh_running():
+            self._switch_btn.setEnabled(row is not None and bool(row.work_dir))
             self._refresh_current_btn.setEnabled(can_use_row)
 
     def _selected_refresh_mode(self) -> str:
@@ -306,7 +306,10 @@ class GamesRegistryDialog(QDialog):
     def closeEvent(self, event) -> None:
         if self._is_refresh_running() and self._refresh_worker is not None:
             self._refresh_worker.request_stop()
-            self._refresh_worker.wait(5000)
+            self._status_label.setText("正在停止…请稍候再关闭")
+            if not self._refresh_worker.wait(5000):
+                event.ignore()
+                return
         super().closeEvent(event)
 
     def _on_row_activated(self, row_index: int, _column: int) -> None:

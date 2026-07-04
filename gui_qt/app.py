@@ -2751,7 +2751,18 @@ class MainWindow(QMainWindow):
         if directory:
             self._switch_game_root(directory)
 
+    def _invalidate_doctor_worker(self) -> None:
+        worker = self._doctor_worker
+        if worker is None:
+            return
+        try:
+            worker.completed.disconnect(self._on_doctor_completed)
+        except (RuntimeError, TypeError):
+            pass
+        self._doctor_worker = None
+
     def _switch_game_root(self, directory: str) -> bool:
+        self._invalidate_doctor_worker()
         try:
             effective_root, adjusted = self.state.set_game_root(directory)
             if adjusted:
@@ -3605,6 +3616,7 @@ class MainWindow(QMainWindow):
     def _set_task_running(self, running: bool):
         spec = work_mode_spec(self._current_work_mode())
         self.select_btn.setEnabled(not running)
+        self.registry_btn.setEnabled(not running)
         self.task_category_combo.setEnabled(not running)
         self.work_task_combo.setEnabled(not running)
         self.doctor_btn.setEnabled(not running)

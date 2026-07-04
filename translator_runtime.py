@@ -13,8 +13,19 @@ import pickle
 import shutil
 import subprocess
 import zlib
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+
+_runtime_state_lock = threading.Lock()
+
+
+@contextmanager
+def locked_runtime_state():
+    """Serialize temporary BASE_DIR overrides across worker threads."""
+    with _runtime_state_lock:
+        yield
 
 from rag_memory import JsonRagStore, hash_text, truncate_text
 import prompt_context

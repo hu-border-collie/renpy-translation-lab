@@ -115,7 +115,7 @@ python games_registry.py show --project game_example
 这与 registry 深度刷新**共用同一 doctor 引擎**，但：
 
 - 环境检查只看当前 `translator_config.json` 的 `game_root`
-- 深度刷新按 registry 逐个项目切换路径，且只把 layout / mode 写入总表
+- 深度刷新按 registry 逐个项目切换路径，并会同步更新 layout / mode、版本探测结果，以及 `translation_status` / `translation_status_source`（非 manual 时）
 
 在总表里深度刷过，**不等于**可以跳过工作台环境检查。
 

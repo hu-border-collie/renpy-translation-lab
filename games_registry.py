@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+import warnings
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -135,9 +136,7 @@ def normalize_translation_status(raw: str) -> str:
     base = re.sub(r"（[^）]*）", "", text).strip()
     if base in TRANSLATION_STATUSES:
         return text
-    if base == "已完成":
-        return text
-    return text
+    return "待确认"
 
 
 def infer_engine(project_root: Path) -> tuple[str, bool]:
@@ -385,24 +384,33 @@ def scan_project_auto(
 def _temporary_game_root(work_dir: str) -> Iterator[None]:
     import translator_runtime as runtime
 
-    previous = runtime.BASE_DIR
-    runtime._apply_game_root(work_dir)
-    try:
-        yield
-    finally:
-        runtime._apply_game_root(previous)
+    with runtime.locked_runtime_state():
+        previous = runtime.BASE_DIR
+        runtime._apply_game_root(work_dir)
+        try:
+            yield
+        finally:
+            runtime._apply_game_root(previous)
 
 
 def _doctor_layout_snapshot(game_root: str, has_tl: bool) -> tuple[str, str]:
     try:
         import gemini_translate_batch as batch_mod
-    except Exception:
+    except Exception as exc:
+        warnings.warn(
+            f"doctor module import failed for {game_root}: {exc}",
+            stacklevel=2,
+        )
         return "", ""
 
     try:
         with _temporary_game_root(game_root):
             report = batch_mod.collect_doctor_report()
-    except Exception:
+    except Exception as exc:
+        warnings.warn(
+            f"doctor report collection failed for {game_root}: {exc}",
+            stacklevel=2,
+        )
         return "", ""
 
     return str(report.get("layout_status") or ""), str(report.get("mode") or "")
@@ -630,19 +638,23 @@ def render_notes(project: dict[str, Any]) -> str:
     return " ".join(part for part in notes.splitlines() if part.strip())
 
 
+def _escape_md_table_cell(text: str) -> str:
+    return str(text).replace("|", "\\|")
+
+
 def render_games_md(registry: dict[str, Any]) -> str:
     updated_line = format_updated_line(registry)
     lines = [GAMES_MD_HEADER.format(updated_line=updated_line).rstrip("\n")]
 
     projects = sorted(registry.get("projects", []), key=lambda item: item.get("name", "").lower())
     for project in projects:
-        name = project.get("name", "")
-        path = project.get("path", "")
-        version = project.get("version") or "待确认"
-        layout = project.get("layout_status", "")
-        play = project.get("play_status", "待确认")
-        translation = render_translation_status(project)
-        notes = render_notes(project)
+        name = _escape_md_table_cell(project.get("name", ""))
+        path = _escape_md_table_cell(project.get("path", ""))
+        version = _escape_md_table_cell(project.get("version") or "待确认")
+        layout = _escape_md_table_cell(project.get("layout_status", ""))
+        play = _escape_md_table_cell(project.get("play_status", "待确认"))
+        translation = _escape_md_table_cell(render_translation_status(project))
+        notes = _escape_md_table_cell(render_notes(project))
         lines.append(
             f"| {name} | `{path}` | {version} | {layout} | {play} | {translation} | {notes} |"
         )
@@ -672,8 +684,23 @@ def record_batch(
     auto = project.setdefault("auto", {})
     batch_id = manifest_path.parent.name
     applied = manifest.get("apply_summary") or manifest.get("check_summary") or {}
-    files = applied.get("files_changed") or applied.get("files") or manifest.get("file_count")
-    lines = applied.get("lines_changed") or applied.get("lines") or manifest.get("line_count")
+
+    def _first_present(*values: object) -> object | None:
+        for value in values:
+            if value is not None:
+                return value
+        return None
+
+    files = _first_present(
+        applied.get("files_changed"),
+        applied.get("files"),
+        manifest.get("file_count"),
+    )
+    lines = _first_present(
+        applied.get("lines_changed"),
+        applied.get("lines"),
+        manifest.get("line_count"),
+    )
 
     summary_parts = [f"Batch `{batch_id}`"]
     if files is not None:

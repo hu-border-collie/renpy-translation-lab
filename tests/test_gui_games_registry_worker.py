@@ -53,6 +53,25 @@ class GuiGamesRegistryWorkerTests(unittest.TestCase):
                 worker.run()
                 refresh_mock.assert_called_once()
 
+    def test_worker_emits_failure_when_refresh_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            worker = RegistryRefreshWorker(
+                workspace_root=workspace,
+                refresh_everything=True,
+                mode=registry.REFRESH_MODE_LITE,
+            )
+            with mock.patch(
+                "gui_qt.games_registry_worker.refresh_registry_projects",
+                side_effect=RuntimeError("boom"),
+            ):
+                results: list[RegistryActionResult] = []
+                worker.completed.connect(results.append)
+                worker.run()
+            self.assertEqual(len(results), 1)
+            self.assertFalse(results[0].ok)
+            self.assertIn("boom", results[0].message)
+
     def test_worker_cancel_flag_is_passed_through(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
