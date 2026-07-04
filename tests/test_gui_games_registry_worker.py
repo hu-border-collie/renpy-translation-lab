@@ -7,13 +7,21 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from PySide6.QtWidgets import QApplication
-
 import games_registry as registry
-from gui_qt.games_registry_actions import RegistryActionResult
-from gui_qt.games_registry_worker import RegistryRefreshWorker
+
+try:
+    from PySide6.QtWidgets import QApplication
+
+    from gui_qt.games_registry_actions import RegistryActionResult
+    from gui_qt.games_registry_worker import RegistryRefreshWorker
+except ImportError as exc:
+    RegistryRefreshWorker = None  # type: ignore[assignment,misc]
+    IMPORT_ERROR = exc
+else:
+    IMPORT_ERROR = None
 
 
+@unittest.skipIf(RegistryRefreshWorker is None, f"GUI dependencies are unavailable: {IMPORT_ERROR}")
 class GuiGamesRegistryWorkerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

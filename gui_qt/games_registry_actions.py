@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
-from PySide6.QtWidgets import QMessageBox, QWidget
+if TYPE_CHECKING:
+    from PySide6.QtWidgets import QWidget
 
 from games_registry import (
     REFRESH_MODE_DEEP,
@@ -171,7 +172,9 @@ def record_apply_batch_for_game_root(
     return RegistryActionResult(True, message)
 
 
-def prompt_render_games_md(parent: QWidget | None, workspace_root: Path) -> RegistryActionResult:
+def prompt_render_games_md(parent: "QWidget | None", workspace_root: Path) -> RegistryActionResult:
+    from PySide6.QtWidgets import QMessageBox
+
     reply = QMessageBox.question(
         parent,
         "同步 GAMES.md",
@@ -185,7 +188,7 @@ def prompt_render_games_md(parent: QWidget | None, workspace_root: Path) -> Regi
 
 
 def handle_post_apply_registry_update(
-    parent: QWidget | None,
+    parent: "QWidget | None",
     *,
     workspace_root: Path,
     game_root: Path | str | None,

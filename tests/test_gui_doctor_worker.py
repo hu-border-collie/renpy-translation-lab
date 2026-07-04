@@ -4,11 +4,18 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from PySide6.QtWidgets import QApplication
+try:
+    from PySide6.QtWidgets import QApplication
 
-from gui_qt.doctor_worker import DoctorWorker, DoctorWorkerResult, run_doctor_check
+    from gui_qt.doctor_worker import DoctorWorker, DoctorWorkerResult, run_doctor_check
+except ImportError as exc:
+    DoctorWorker = None  # type: ignore[assignment,misc]
+    IMPORT_ERROR = exc
+else:
+    IMPORT_ERROR = None
 
 
+@unittest.skipIf(DoctorWorker is None, f"GUI dependencies are unavailable: {IMPORT_ERROR}")
 class GuiDoctorWorkerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
