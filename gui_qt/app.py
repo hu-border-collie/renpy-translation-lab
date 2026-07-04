@@ -113,6 +113,14 @@ from .doctor_report import (
     stale_summary,
     summarize_doctor_output,
 )
+from .games_registry_view import (
+    REGISTRY_TABLE_COLUMNS,
+    format_registry_status_message,
+    load_registry_rows,
+    resolve_registry_path,
+    resolve_workspace_root,
+    row_matches_game_root,
+)
 from .manifest_resume_summary import (
     ManifestWorkflowDisplay,
     build_manifest_workflow_display,
@@ -249,6 +257,7 @@ class MainWindow(QMainWindow):
         self._config_ui_saved_snapshot: dict[str, object] = {}
         self._last_main_tab_index = 0
         self._handling_config_tab_leave = False
+        self._games_registry_rows = []
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -292,6 +301,7 @@ class MainWindow(QMainWindow):
         )
 
     def _deferred_startup_refresh(self) -> None:
+        self._reload_games_registry_table()
         self._apply_work_mode_ui(
             refresh_manifest_writeback=True,
             refresh_diagnostics=False,
@@ -439,6 +449,58 @@ class MainWindow(QMainWindow):
         proj_outer.addWidget(self.project_redirect_label)
 
         layout.addWidget(project_frame)
+
+        registry_frame = QFrame()
+        registry_frame.setObjectName("registry_frame")
+        registry_outer = QVBoxLayout(registry_frame)
+        registry_outer.setContentsMargins(12, 10, 12, 10)
+        registry_outer.setSpacing(6)
+
+        registry_header = QHBoxLayout()
+        registry_header.setSpacing(10)
+        self.games_registry_title = QLabel("工作区项目总览")
+        self.games_registry_title.setObjectName("diagnostics_section_label")
+        registry_header.addWidget(self.games_registry_title)
+        registry_header.addStretch(1)
+        self.games_registry_reload_btn = QPushButton("重新加载")
+        self.games_registry_reload_btn.setObjectName("secondary_btn")
+        self.games_registry_reload_btn.clicked.connect(self._reload_games_registry_table)
+        registry_header.addWidget(self.games_registry_reload_btn)
+        self.games_registry_switch_btn = QPushButton("切换到此项目")
+        self.games_registry_switch_btn.setObjectName("secondary_btn")
+        self.games_registry_switch_btn.clicked.connect(self._on_switch_registry_project)
+        self.games_registry_switch_btn.setEnabled(False)
+        registry_header.addWidget(self.games_registry_switch_btn)
+        registry_outer.addLayout(registry_header)
+
+        self.games_registry_status_label = QLabel()
+        self.games_registry_status_label.setWordWrap(True)
+        self.games_registry_status_label.setObjectName("config_hint_label")
+        registry_outer.addWidget(self.games_registry_status_label)
+
+        self.games_registry_table = QTableWidget(0, len(REGISTRY_TABLE_COLUMNS))
+        self.games_registry_table.setObjectName("games_registry_table")
+        self.games_registry_table.setHorizontalHeaderLabels(list(REGISTRY_TABLE_COLUMNS))
+        self.games_registry_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.games_registry_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.games_registry_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.games_registry_table.setAlternatingRowColors(True)
+        self.games_registry_table.setWordWrap(False)
+        self.games_registry_table.setMinimumHeight(180)
+        self.games_registry_table.setMaximumHeight(280)
+        self.games_registry_table.verticalHeader().setVisible(False)
+        registry_header_view = self.games_registry_table.horizontalHeader()
+        registry_header_view.setStretchLastSection(True)
+        registry_header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        registry_header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        registry_header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        registry_header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        registry_header_view.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.games_registry_table.itemSelectionChanged.connect(self._on_games_registry_selection_changed)
+        self.games_registry_table.cellDoubleClicked.connect(self._on_games_registry_row_activated)
+        registry_outer.addWidget(self.games_registry_table)
+
+        layout.addWidget(registry_frame)
 
         mode_frame = QFrame()
         mode_frame.setObjectName("mode_frame")
@@ -2738,45 +2800,51 @@ class MainWindow(QMainWindow):
             start_dir,
         )
         if directory:
-            try:
-                effective_root, adjusted = self.state.set_game_root(directory)
-                if adjusted:
-                    self._show_game_root_redirect_notice(
-                        Path(directory),
-                        effective_root,
-                    )
-                else:
-                    self._clear_game_root_redirect_notice()
-            except ValueError as exc:
-                QMessageBox.warning(self, "无法更新配置", str(exc))
-                self._append_log(f"更新 translator_config.json 失败：{exc}")
-                return
-            self._refresh_project_label()
-            self._load_config_to_ui()
-            self._active_command = ""
-            self._doctor_output_lines = []
-            self._workflow = None
-            self._workflow_step_output_lines = []
-            self._clear_completed_manifest_snapshot()
-            self._doctor_check_completed = False
-            self._set_doctor_summary(stale_summary())
-            spec = work_mode_spec(self._current_work_mode())
-            if spec.is_bootstrap:
-                self._set_workflow_from_bootstrap_summary(stale_bootstrap_summary())
-            else:
-                self._set_workflow_summary(
-                    "stale",
-                    "项目已切换",
-                    "任务状态已清空；请先针对新项目重新检查。",
+            self._switch_game_root(directory)
+
+    def _switch_game_root(self, directory: str) -> bool:
+        try:
+            effective_root, adjusted = self.state.set_game_root(directory)
+            if adjusted:
+                self._show_game_root_redirect_notice(
+                    Path(directory),
+                    effective_root,
                 )
-            self._writeback_manifest_path = ""
-            if spec.supports_translation_writeback:
-                self._set_writeback_summary(stale_writeback_summary())
             else:
-                self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
-            self._apply_work_mode_ui(refresh_manifest_writeback=False)
-            self._refresh_diagnostics_context()
-            self._append_log(f"项目目录已设置为：{directory}")
+                self._clear_game_root_redirect_notice()
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法更新配置", str(exc))
+            self._append_log(f"更新 translator_config.json 失败：{exc}")
+            return False
+
+        self._refresh_project_label()
+        self._load_config_to_ui()
+        self._active_command = ""
+        self._doctor_output_lines = []
+        self._workflow = None
+        self._workflow_step_output_lines = []
+        self._clear_completed_manifest_snapshot()
+        self._doctor_check_completed = False
+        self._set_doctor_summary(stale_summary())
+        spec = work_mode_spec(self._current_work_mode())
+        if spec.is_bootstrap:
+            self._set_workflow_from_bootstrap_summary(stale_bootstrap_summary())
+        else:
+            self._set_workflow_summary(
+                "stale",
+                "项目已切换",
+                "任务状态已清空；请先针对新项目重新检查。",
+            )
+        self._writeback_manifest_path = ""
+        if spec.supports_translation_writeback:
+            self._set_writeback_summary(stale_writeback_summary())
+        else:
+            self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+        self._apply_work_mode_ui(refresh_manifest_writeback=False)
+        self._refresh_diagnostics_context()
+        self._append_log(f"项目目录已设置为：{directory}")
+        self._highlight_games_registry_selection()
+        return True
 
     def _refresh_api_status(self) -> None:
         count, source = self.state.get_api_key_status()
@@ -2891,6 +2959,99 @@ class MainWindow(QMainWindow):
 
         self._refresh_api_status()
         self._append_log(f"API Key 已保存（当前数量：{len(new_keys)}）。")
+
+    def _reload_games_registry_table(self) -> None:
+        workspace = resolve_workspace_root(self.state.get_tool_root())
+        registry_path = resolve_registry_path(workspace)
+        rows, summary = load_registry_rows(
+            workspace_root=workspace,
+            registry_path=registry_path,
+        )
+        self._games_registry_rows = rows
+
+        self.games_registry_table.setRowCount(len(rows))
+        current_root = self.state.get_game_root()
+        selected_row = -1
+
+        for row_index, row in enumerate(rows):
+            values = (
+                row.name,
+                row.path,
+                row.version,
+                row.play_status,
+                row.translation_status,
+            )
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column_index == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, row.project_id)
+                if row.tooltip:
+                    item.setToolTip(row.tooltip)
+                if not row.in_renpy_pipeline:
+                    item.setForeground(QBrush(QColor("#64748b")))
+                self.games_registry_table.setItem(row_index, column_index, item)
+
+            if selected_row < 0 and row_matches_game_root(row, current_root):
+                selected_row = row_index
+
+        if rows:
+            status_message = format_registry_status_message(len(rows), summary)
+        else:
+            status_message = summary or format_registry_status_message(0, "")
+        self.games_registry_status_label.setText(status_message)
+        self.games_registry_table.clearSelection()
+        if selected_row >= 0:
+            self.games_registry_table.selectRow(selected_row)
+        self._on_games_registry_selection_changed()
+
+    def _selected_registry_row(self):
+        selected = self.games_registry_table.selectionModel().selectedRows()
+        if not selected:
+            return None
+        row_index = selected[0].row()
+        if row_index < 0 or row_index >= len(self._games_registry_rows):
+            return None
+        return self._games_registry_rows[row_index]
+
+    def _on_games_registry_selection_changed(self) -> None:
+        row = self._selected_registry_row()
+        can_switch = row is not None and bool(row.work_dir)
+        self.games_registry_switch_btn.setEnabled(can_switch)
+
+    def _on_games_registry_row_activated(self, row_index: int, _column: int) -> None:
+        if row_index < 0 or row_index >= len(self._games_registry_rows):
+            return
+        self.games_registry_table.selectRow(row_index)
+        self._on_switch_registry_project()
+
+    def _on_switch_registry_project(self) -> None:
+        row = self._selected_registry_row()
+        if row is None:
+            QMessageBox.information(self, "请选择项目", "请先在总览表中选择一个项目。")
+            return
+        if not row.work_dir:
+            QMessageBox.information(
+                self,
+                "无法切换",
+                f"{row.name} 没有可解析的工作目录。",
+            )
+            return
+        project_root = resolve_workspace_root(self.state.get_tool_root()) / row.path
+        target = str(project_root)
+        if self._switch_game_root(target):
+            self.statusBar().showMessage(f"已切换到 {row.name}", 5000)
+
+    def _highlight_games_registry_selection(self) -> None:
+        if not self._games_registry_rows:
+            return
+        current_root = self.state.get_game_root()
+        for row_index, row in enumerate(self._games_registry_rows):
+            if row_matches_game_root(row, current_root):
+                self.games_registry_table.selectRow(row_index)
+                self._on_games_registry_selection_changed()
+                return
+        self.games_registry_table.clearSelection()
+        self._on_games_registry_selection_changed()
 
     def _format_game_root_redirect_notice(self, original: Path, effective: Path) -> str:
         return (
