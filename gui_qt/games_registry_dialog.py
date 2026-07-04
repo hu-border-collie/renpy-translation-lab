@@ -4,22 +4,21 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QBrush, QColor
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QButtonGroup,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -35,12 +34,6 @@ from .games_registry_view import (
     resolve_registry_path,
     row_matches_game_root,
 )
-
-REGISTRY_HELP_TEXT = (
-    "列表来自 games_registry.json。"
-    "点「刷新」会扫描磁盘并写回；子菜单里的深度刷新会额外运行 doctor（较慢）。"
-)
-
 
 class GamesRegistryDialog(QDialog):
     """Browse all workspace projects and switch the active game root."""
@@ -73,22 +66,33 @@ class GamesRegistryDialog(QDialog):
         header.addWidget(title)
         header.addStretch(1)
 
-        self._refresh_btn = QToolButton()
-        self._refresh_btn.setObjectName("secondary_btn")
-        self._refresh_btn.setText("刷新")
-        self._refresh_btn.setToolTip("扫描磁盘并更新 games_registry.json")
-        self._refresh_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        default_action = QAction("快速刷新当前", self)
-        default_action.triggered.connect(self._refresh_current_project)
-        self._refresh_btn.setDefaultAction(default_action)
-        refresh_menu = QMenu(self)
-        refresh_menu.addAction("快速刷新当前", self._refresh_current_project)
-        refresh_menu.addAction("快速刷新全部", self._refresh_all_projects)
-        refresh_menu.addSeparator()
-        refresh_menu.addAction("深度刷新当前（含 doctor）", self._deep_refresh_current_project)
-        refresh_menu.addAction("深度刷新全部（含 doctor）", self._deep_refresh_all_projects)
-        self._refresh_btn.setMenu(refresh_menu)
-        header.addWidget(self._refresh_btn)
+        self._refresh_current_btn = QPushButton("刷新当前")
+        self._refresh_current_btn.setObjectName("secondary_btn")
+        self._refresh_current_btn.clicked.connect(self._refresh_current_project)
+        header.addWidget(self._refresh_current_btn)
+
+        self._refresh_all_btn = QPushButton("刷新全部")
+        self._refresh_all_btn.setObjectName("secondary_btn")
+        self._refresh_all_btn.clicked.connect(self._refresh_all_projects)
+        header.addWidget(self._refresh_all_btn)
+
+        self._mode_lite_btn = QPushButton("快速")
+        self._mode_lite_btn.setObjectName("secondary_btn")
+        self._mode_lite_btn.setCheckable(True)
+        self._mode_lite_btn.setChecked(True)
+        self._mode_lite_btn.setToolTip("只扫描磁盘与翻译文件，不运行 doctor")
+        header.addWidget(self._mode_lite_btn)
+
+        self._mode_deep_btn = QPushButton("深度")
+        self._mode_deep_btn.setObjectName("secondary_btn")
+        self._mode_deep_btn.setCheckable(True)
+        self._mode_deep_btn.setToolTip("运行完整 doctor，较慢，但状态更精确")
+        header.addWidget(self._mode_deep_btn)
+
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        self._mode_group.addButton(self._mode_lite_btn)
+        self._mode_group.addButton(self._mode_deep_btn)
 
         self._switch_btn = QPushButton("切换到此项目")
         self._switch_btn.setObjectName("secondary_btn")
@@ -96,11 +100,6 @@ class GamesRegistryDialog(QDialog):
         self._switch_btn.setEnabled(False)
         header.addWidget(self._switch_btn)
         layout.addLayout(header)
-
-        help_label = QLabel(REGISTRY_HELP_TEXT)
-        help_label.setWordWrap(True)
-        help_label.setObjectName("config_hint_label")
-        layout.addWidget(help_label)
 
         self._status_label = QLabel()
         self._status_label.setWordWrap(True)
@@ -204,10 +203,24 @@ class GamesRegistryDialog(QDialog):
 
     def _on_selection_changed(self) -> None:
         row = self._selected_row()
+        can_use_row = row is not None and bool(row.project_id)
         self._switch_btn.setEnabled(row is not None and bool(row.work_dir))
+        self._refresh_current_btn.setEnabled(can_use_row)
+
+    def _selected_refresh_mode(self) -> str:
+        if self._mode_deep_btn.isChecked():
+            return REFRESH_MODE_DEEP
+        return REFRESH_MODE_LITE
 
     def _set_refresh_busy(self, busy: bool) -> None:
-        for widget in (self._table, self._refresh_btn, self._switch_btn):
+        for widget in (
+            self._table,
+            self._refresh_current_btn,
+            self._refresh_all_btn,
+            self._mode_lite_btn,
+            self._mode_deep_btn,
+            self._switch_btn,
+        ):
             widget.setEnabled(not busy)
         self._progress_bar.setVisible(busy)
         if busy:
@@ -230,29 +243,21 @@ class GamesRegistryDialog(QDialog):
         if row is None or not row.project_id:
             QMessageBox.information(self, "请选择项目", "请先在表格里选中一个项目。")
             return
-        self._run_refresh(project_id=row.project_id, mode=REFRESH_MODE_LITE)
+        self._run_refresh(project_id=row.project_id, mode=self._selected_refresh_mode())
 
     def _refresh_all_projects(self) -> None:
-        self._run_refresh(refresh_everything=True, mode=REFRESH_MODE_LITE)
-
-    def _deep_refresh_current_project(self) -> None:
-        row = self._selected_row()
-        if row is None or not row.project_id:
-            QMessageBox.information(self, "请选择项目", "请先在表格里选中一个项目。")
-            return
-        self._run_refresh(project_id=row.project_id, mode=REFRESH_MODE_DEEP)
-
-    def _deep_refresh_all_projects(self) -> None:
-        reply = QMessageBox.question(
-            self,
-            "深度刷新全部",
-            f"将对全部 {len(self._rows)} 个项目运行完整 doctor，可能需要数分钟。\n确定继续？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        self._run_refresh(refresh_everything=True, mode=REFRESH_MODE_DEEP)
+        mode = self._selected_refresh_mode()
+        if mode == REFRESH_MODE_DEEP:
+            reply = QMessageBox.question(
+                self,
+                "深度刷新全部",
+                f"将对全部 {len(self._rows)} 个项目运行完整 doctor，可能需要数分钟。\n确定继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        self._run_refresh(refresh_everything=True, mode=mode)
 
     def _run_refresh(
         self,
