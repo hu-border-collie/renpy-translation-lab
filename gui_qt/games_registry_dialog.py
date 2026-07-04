@@ -219,7 +219,6 @@ class GamesRegistryDialog(QDialog):
 
     def _set_refresh_busy(self, busy: bool) -> None:
         for widget in (
-            self._table,
             self._refresh_current_btn,
             self._refresh_all_btn,
             self._refresh_mode_combo,
@@ -311,12 +310,16 @@ class GamesRegistryDialog(QDialog):
         super().closeEvent(event)
 
     def _on_row_activated(self, row_index: int, _column: int) -> None:
+        if self._is_refresh_running():
+            return
         if row_index < 0 or row_index >= len(self._rows):
             return
         self._table.selectRow(row_index)
         self._switch_to_selected()
 
     def _switch_to_selected(self) -> None:
+        if self._is_refresh_running():
+            return
         row = self._selected_row()
         if row is None:
             return

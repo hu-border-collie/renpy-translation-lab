@@ -79,6 +79,46 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             )
             self.assertIn("已快速刷新项目 Example", dialog._status_label.text())
 
+    def test_refresh_keeps_table_enabled_for_scrolling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            registry_path.write_text(json.dumps({"projects": []}), encoding="utf-8")
+
+            dialog = GamesRegistryDialog(None, workspace_root=workspace)
+            dialog._set_refresh_busy(True)
+
+            self.assertTrue(dialog._table.isEnabled())
+            self.assertFalse(dialog._refresh_all_btn.isEnabled())
+            self.assertTrue(dialog._stop_refresh_btn.isEnabled())
+
+    def test_switch_is_ignored_while_refresh_running(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            payload = {
+                "projects": [
+                    {
+                        "id": "demo",
+                        "name": "Example",
+                        "path": "Game_Example",
+                    }
+                ]
+            }
+            project_root = workspace / "Game_Example"
+            (project_root / "work").mkdir(parents=True)
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            registry_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            dialog = GamesRegistryDialog(None, workspace_root=workspace)
+            dialog._table.selectRow(0)
+            dialog._refresh_worker = mock.MagicMock()
+            dialog._refresh_worker.isRunning.return_value = True
+
+            with mock.patch.object(dialog, "accept") as accept_mock:
+                dialog._switch_to_selected()
+                dialog._on_row_activated(0, 0)
+                accept_mock.assert_not_called()
+
     def test_stop_refresh_requests_worker_cancel(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
