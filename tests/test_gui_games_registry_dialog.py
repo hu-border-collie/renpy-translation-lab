@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 import games_registry as registry
 from gui_qt.games_registry_dialog import GamesRegistryDialog
 from gui_qt.games_registry_actions import RegistryActionResult
+from gui_qt.games_registry_worker import RegistryRefreshWorker
 
 
 class GuiGamesRegistryDialogTests(unittest.TestCase):
@@ -70,19 +71,26 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
 
             dialog = GamesRegistryDialog(None, workspace_root=workspace)
             dialog._table.selectRow(0)
-            with mock.patch(
-                "gui_qt.games_registry_dialog.refresh_registry_projects",
-                return_value=RegistryActionResult(True, "已快速刷新项目 Example。"),
-            ) as refresh_mock:
+            with mock.patch.object(RegistryRefreshWorker, "start") as start_mock:
                 dialog._refresh_current_project()
-                refresh_mock.assert_called_once_with(
-                    workspace,
-                    project_id="demo",
-                    refresh_everything=False,
-                    mode="lite",
-                    on_progress=dialog._on_refresh_progress,
-                )
+                start_mock.assert_called_once()
+            dialog._on_refresh_completed(
+                RegistryActionResult(True, "已快速刷新项目 Example。")
+            )
             self.assertIn("已快速刷新项目 Example", dialog._status_label.text())
+
+    def test_stop_refresh_requests_worker_cancel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            registry_path.write_text(json.dumps({"projects": []}), encoding="utf-8")
+
+            dialog = GamesRegistryDialog(None, workspace_root=workspace)
+            worker = mock.MagicMock()
+            worker.isRunning.return_value = True
+            dialog._refresh_worker = worker
+            dialog._on_stop_refresh()
+            worker.request_stop.assert_called_once()
 
     def test_refresh_current_uses_deep_mode_when_selected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -104,18 +112,12 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             dialog = GamesRegistryDialog(None, workspace_root=workspace)
             dialog._table.selectRow(0)
             dialog._refresh_mode_combo.setCurrentIndex(1)
-            with mock.patch(
-                "gui_qt.games_registry_dialog.refresh_registry_projects",
-                return_value=RegistryActionResult(True, "已深度刷新项目 Example。"),
-            ) as refresh_mock:
+            with mock.patch.object(RegistryRefreshWorker, "start") as start_mock:
                 dialog._refresh_current_project()
-                refresh_mock.assert_called_once_with(
-                    workspace,
-                    project_id="demo",
-                    refresh_everything=False,
-                    mode="deep",
-                    on_progress=dialog._on_refresh_progress,
-                )
+                start_mock.assert_called_once()
+            worker = dialog._refresh_worker
+            self.assertIsNotNone(worker)
+            self.assertEqual(worker._mode, "deep")
 
     def test_manual_translation_status_shows_in_tooltip(self):
         with tempfile.TemporaryDirectory() as tmp:

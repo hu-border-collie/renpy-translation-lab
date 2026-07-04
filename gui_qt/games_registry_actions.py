@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QMessageBox, QWidget
 from games_registry import (
     REFRESH_MODE_DEEP,
     REFRESH_MODE_LITE,
+    CancelCheck,
     default_games_md_path,
     load_registry,
     record_batch,
@@ -29,6 +30,7 @@ class RegistryActionResult:
     ok: bool
     message: str
     rendered_games_md: bool = False
+    cancelled: bool = False
 
 
 def _registry_file(workspace_root: Path) -> Path:
@@ -46,22 +48,33 @@ def refresh_registry_projects(
     refresh_everything: bool = False,
     mode: str = REFRESH_MODE_LITE,
     on_progress: RegistryProgressCallback | None = None,
+    should_cancel: CancelCheck | None = None,
 ) -> RegistryActionResult:
     registry_path = _registry_file(workspace_root)
     if not registry_path.is_file():
         return RegistryActionResult(False, f"未找到 {registry_path.name}。")
 
+    if should_cancel and should_cancel():
+        return RegistryActionResult(False, "刷新已取消。", cancelled=True)
+
     data = load_registry(registry_path)
     label = _mode_label(mode)
 
     if refresh_everything:
-        count = refresh_all(
+        count, cancelled = refresh_all(
             data,
             workspace_root=workspace_root,
             mode=mode,
             on_progress=on_progress,
+            should_cancel=should_cancel,
         )
         save_registry(registry_path, data)
+        if cancelled:
+            return RegistryActionResult(
+                False,
+                f"已停止{label}刷新，已完成 {count} 个项目。",
+                cancelled=True,
+            )
         return RegistryActionResult(True, f"已{label}刷新全部 {count} 个项目。")
 
     if not project_id:
@@ -75,6 +88,9 @@ def refresh_registry_projects(
         name = str((project or {}).get("name") or project_id)
         on_progress(1, 1, name)
 
+    if should_cancel and should_cancel():
+        return RegistryActionResult(False, "刷新已取消。", cancelled=True)
+
     project = refresh_project(
         data,
         project_id,
@@ -84,6 +100,15 @@ def refresh_registry_projects(
     if project is None:
         return RegistryActionResult(False, f"未找到项目：{project_id}")
     save_registry(registry_path, data)
+
+    if should_cancel and should_cancel():
+        name = str(project.get("name") or project_id)
+        return RegistryActionResult(
+            False,
+            f"已停止{label}刷新；项目 {name} 的结果已保存。",
+            cancelled=True,
+        )
+
     name = str(project.get("name") or project_id)
     return RegistryActionResult(True, f"已{label}刷新项目 {name}。")
 

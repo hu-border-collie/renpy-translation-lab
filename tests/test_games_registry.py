@@ -205,6 +205,31 @@ class GamesRegistryTests(unittest.TestCase):
             self.assertEqual(auto["refresh_mode"], registry.REFRESH_MODE_DEEP)
             self.assertEqual(auto["doctor_layout"], "ready")
 
+    def test_refresh_all_stops_when_cancelled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            payload = {
+                "projects": [
+                    {"id": "a", "name": "Alpha", "path": "Game_Alpha"},
+                    {"id": "b", "name": "Beta", "path": "Game_Beta"},
+                ]
+            }
+            calls: list[str] = []
+
+            def fake_refresh(registry, project_id, **kwargs):
+                calls.append(project_id)
+                return registry["projects"][0]
+
+            with unittest.mock.patch.object(registry, "refresh_project", side_effect=fake_refresh):
+                count, cancelled = registry.refresh_all(
+                    payload,
+                    workspace_root=workspace,
+                    should_cancel=lambda: len(calls) >= 1,
+                )
+
+            self.assertEqual(count, 1)
+            self.assertTrue(cancelled)
+
     def test_refresh_project_updates_auto_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

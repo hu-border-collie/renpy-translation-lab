@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 ProgressCallback = Callable[[int, int, str], None]
+CancelCheck = Callable[[], bool]
 
 REFRESH_MODE_LITE = "lite"
 REFRESH_MODE_DEEP = "deep"
@@ -571,7 +572,8 @@ def refresh_all(
     workspace_root: Path,
     mode: str = REFRESH_MODE_LITE,
     on_progress: ProgressCallback | None = None,
-) -> int:
+    should_cancel: CancelCheck | None = None,
+) -> tuple[int, bool]:
     projects = [
         project
         for project in registry.get("projects", [])
@@ -579,15 +581,18 @@ def refresh_all(
     ]
     total = len(projects)
     count = 0
+    mode_label = "深度" if mode == REFRESH_MODE_DEEP else "快速"
     for index, project in enumerate(projects, start=1):
+        if should_cancel and should_cancel():
+            registry["update_summary"] = f"{mode_label}刷新已停止；已完成 {count}/{total} 个项目"
+            return count, True
         project_id = str(project["id"])
         if on_progress is not None:
             on_progress(index, total, str(project.get("name") or project_id))
         refresh_project(registry, project_id, workspace_root=workspace_root, mode=mode)
         count += 1
-    mode_label = "深度" if mode == REFRESH_MODE_DEEP else "快速"
     registry["update_summary"] = f"已{mode_label}刷新 {count} 个项目自动状态"
-    return count
+    return count, False
 
 
 def render_translation_status(project: dict[str, Any]) -> str:
@@ -768,7 +773,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[{current}/{total}] {name}", flush=True)
 
         if args.all:
-            count = refresh_all(
+            count, _cancelled = refresh_all(
                 registry,
                 workspace_root=workspace,
                 mode=mode,

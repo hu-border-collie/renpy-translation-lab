@@ -7,7 +7,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -24,7 +23,8 @@ from PySide6.QtWidgets import (
 
 from games_registry import REFRESH_MODE_DEEP, REFRESH_MODE_LITE
 
-from .games_registry_actions import refresh_registry_projects
+from .games_registry_actions import RegistryActionResult
+from .games_registry_worker import RegistryRefreshWorker
 from .widget_helpers import NoWheelComboBox
 from .games_registry_view import (
     REGISTRY_TABLE_COLUMNS,
@@ -55,6 +55,7 @@ class GamesRegistryDialog(QDialog):
         self._workspace_root = workspace_root
         self._rows: list[RegistryRow] = []
         self._selected_project_root = ""
+        self._refresh_worker: RegistryRefreshWorker | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -86,6 +87,12 @@ class GamesRegistryDialog(QDialog):
         self._refresh_mode_combo.addItem("深度", REFRESH_MODE_DEEP)
         self._refresh_mode_combo.setToolTip("快速：只扫磁盘与翻译文件；深度：额外运行 doctor（较慢）")
         header.addWidget(self._refresh_mode_combo)
+
+        self._stop_refresh_btn = QPushButton("停止")
+        self._stop_refresh_btn.setObjectName("kill_btn")
+        self._stop_refresh_btn.setEnabled(False)
+        self._stop_refresh_btn.clicked.connect(self._on_stop_refresh)
+        header.addWidget(self._stop_refresh_btn)
 
         self._switch_btn = QPushButton("切换到此项目")
         self._switch_btn.setObjectName("secondary_btn")
@@ -194,11 +201,15 @@ class GamesRegistryDialog(QDialog):
             return None
         return self._rows[row_index]
 
+    def _is_refresh_running(self) -> bool:
+        return self._refresh_worker is not None and self._refresh_worker.isRunning()
+
     def _on_selection_changed(self) -> None:
         row = self._selected_row()
         can_use_row = row is not None and bool(row.project_id)
         self._switch_btn.setEnabled(row is not None and bool(row.work_dir))
-        self._refresh_current_btn.setEnabled(can_use_row)
+        if not self._is_refresh_running():
+            self._refresh_current_btn.setEnabled(can_use_row)
 
     def _selected_refresh_mode(self) -> str:
         mode = self._refresh_mode_combo.currentData()
@@ -215,12 +226,11 @@ class GamesRegistryDialog(QDialog):
             self._switch_btn,
         ):
             widget.setEnabled(not busy)
+        self._stop_refresh_btn.setEnabled(busy)
         self._progress_bar.setVisible(busy)
         if busy:
             self._progress_bar.setValue(0)
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         else:
-            QApplication.restoreOverrideCursor()
             self._progress_bar.setFormat("准备刷新…")
             self._on_selection_changed()
 
@@ -229,7 +239,13 @@ class GamesRegistryDialog(QDialog):
         self._progress_bar.setValue(current)
         self._progress_bar.setFormat(f"{current}/{total} — {name}")
         self._status_label.setText(f"正在刷新：{name}（{current}/{total}）")
-        QApplication.processEvents()
+
+    def _on_stop_refresh(self) -> None:
+        if self._refresh_worker is None or not self._refresh_worker.isRunning():
+            return
+        self._refresh_worker.request_stop()
+        self._stop_refresh_btn.setEnabled(False)
+        self._status_label.setText("正在停止…（等待当前项目完成）")
 
     def _refresh_current_project(self) -> None:
         row = self._selected_row()
@@ -259,25 +275,40 @@ class GamesRegistryDialog(QDialog):
         refresh_everything: bool = False,
         mode: str = REFRESH_MODE_LITE,
     ) -> None:
-        self._set_refresh_busy(True)
-        try:
-            result = refresh_registry_projects(
-                self._workspace_root,
-                project_id=project_id,
-                refresh_everything=refresh_everything,
-                mode=mode,
-                on_progress=self._on_refresh_progress,
-            )
-        finally:
-            self._set_refresh_busy(False)
-
-        if not result.ok:
-            QMessageBox.warning(self, "刷新失败", result.message)
-            self._reload_table()
+        if self._is_refresh_running():
             return
+
+        self._refresh_worker = RegistryRefreshWorker(
+            workspace_root=self._workspace_root,
+            project_id=project_id,
+            refresh_everything=refresh_everything,
+            mode=mode,
+            parent=self,
+        )
+        self._refresh_worker.progress.connect(self._on_refresh_progress)
+        self._refresh_worker.completed.connect(self._on_refresh_completed)
+        self._set_refresh_busy(True)
+        self._refresh_worker.start()
+
+    def _on_refresh_completed(self, result: RegistryActionResult) -> None:
+        worker = self.sender()
+        if worker is self._refresh_worker:
+            self._refresh_worker = None
+        self._set_refresh_busy(False)
 
         self._reload_table()
         self._status_label.setText(result.message)
+
+        if result.cancelled:
+            return
+        if not result.ok:
+            QMessageBox.warning(self, "刷新失败", result.message)
+
+    def closeEvent(self, event) -> None:
+        if self._is_refresh_running() and self._refresh_worker is not None:
+            self._refresh_worker.request_stop()
+            self._refresh_worker.wait(5000)
+        super().closeEvent(event)
 
     def _on_row_activated(self, row_index: int, _column: int) -> None:
         if row_index < 0 or row_index >= len(self._rows):
