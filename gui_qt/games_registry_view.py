@@ -30,10 +30,14 @@ class RegistryRow:
     work_dir: str
 
     auto_summary: str = ""
+    translation_status_source: str = ""
 
     @property
     def tooltip(self) -> str:
         parts: list[str] = []
+        source_hint = _translation_status_source_label(self.translation_status_source)
+        if source_hint:
+            parts.append(source_hint)
         if self.auto_summary:
             parts.append(self.auto_summary)
         if self.notes:
@@ -86,10 +90,23 @@ def resolve_project_work_dir(workspace_root: Path, project_path: str) -> Path:
     return Path(canonical_abs_path(resolve_effective_game_root(str(project_root))))
 
 
+def _translation_status_source_label(source: str) -> str:
+    if source == "manual":
+        return "翻译状态：人工维护（快速/深度刷新均不会改写）"
+    if source == "doctor":
+        return "翻译状态：由深度刷新推断"
+    if source == "scan":
+        return "翻译状态：由快速刷新推断"
+    if source == "batch":
+        return "翻译状态：由最近批次更新"
+    return ""
+
+
 def registry_row_from_project(workspace_root: Path, project: dict[str, Any]) -> RegistryRow:
     path = str(project.get("path") or "").strip()
     auto = project.get("auto") if isinstance(project.get("auto"), dict) else {}
     engine = str(project.get("engine") or auto.get("engine") or "renpy")
+    status_source = str(project.get("translation_status_source") or "")
     return RegistryRow(
         project_id=str(project.get("id") or ""),
         name=str(project.get("name") or ""),
@@ -102,6 +119,7 @@ def registry_row_from_project(workspace_root: Path, project: dict[str, Any]) -> 
         in_renpy_pipeline=bool(project.get("in_renpy_pipeline", True)),
         work_dir=resolve_project_work_dir(workspace_root, path).as_posix() if path else "",
         auto_summary=format_auto_summary(auto),
+        translation_status_source=status_source,
     )
 
 

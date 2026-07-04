@@ -84,6 +84,27 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
                 )
             self.assertIn("已快速刷新项目 Example", dialog._status_label.text())
 
+    def test_manual_translation_status_shows_in_tooltip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            payload = {
+                "projects": [
+                    {
+                        "id": "demo",
+                        "name": "Example",
+                        "path": "Game_Example",
+                        "translation_status": "待反编译",
+                        "translation_status_source": "manual",
+                    }
+                ]
+            }
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            registry_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            dialog = GamesRegistryDialog(None, workspace_root=workspace)
+            tooltip = dialog._table.item(0, 0).toolTip()
+            self.assertIn("人工维护", tooltip)
+
 
 if __name__ == "__main__":
     unittest.main()
