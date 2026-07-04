@@ -8,7 +8,6 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QButtonGroup,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -26,6 +25,7 @@ from PySide6.QtWidgets import (
 from games_registry import REFRESH_MODE_DEEP, REFRESH_MODE_LITE
 
 from .games_registry_actions import refresh_registry_projects
+from .widget_helpers import NoWheelComboBox
 from .games_registry_view import (
     REGISTRY_TABLE_COLUMNS,
     RegistryRow,
@@ -76,23 +76,16 @@ class GamesRegistryDialog(QDialog):
         self._refresh_all_btn.clicked.connect(self._refresh_all_projects)
         header.addWidget(self._refresh_all_btn)
 
-        self._mode_lite_btn = QPushButton("快速")
-        self._mode_lite_btn.setObjectName("secondary_btn")
-        self._mode_lite_btn.setCheckable(True)
-        self._mode_lite_btn.setChecked(True)
-        self._mode_lite_btn.setToolTip("只扫描磁盘与翻译文件，不运行 doctor")
-        header.addWidget(self._mode_lite_btn)
+        mode_label = QLabel("扫描模式")
+        mode_label.setObjectName("config_hint_label")
+        header.addWidget(mode_label)
 
-        self._mode_deep_btn = QPushButton("深度")
-        self._mode_deep_btn.setObjectName("secondary_btn")
-        self._mode_deep_btn.setCheckable(True)
-        self._mode_deep_btn.setToolTip("运行完整 doctor，较慢，但状态更精确")
-        header.addWidget(self._mode_deep_btn)
-
-        self._mode_group = QButtonGroup(self)
-        self._mode_group.setExclusive(True)
-        self._mode_group.addButton(self._mode_lite_btn)
-        self._mode_group.addButton(self._mode_deep_btn)
+        self._refresh_mode_combo = NoWheelComboBox()
+        self._refresh_mode_combo.setObjectName("games_registry_refresh_mode_combo")
+        self._refresh_mode_combo.addItem("快速", REFRESH_MODE_LITE)
+        self._refresh_mode_combo.addItem("深度", REFRESH_MODE_DEEP)
+        self._refresh_mode_combo.setToolTip("快速：只扫磁盘与翻译文件；深度：额外运行 doctor（较慢）")
+        header.addWidget(self._refresh_mode_combo)
 
         self._switch_btn = QPushButton("切换到此项目")
         self._switch_btn.setObjectName("secondary_btn")
@@ -208,8 +201,9 @@ class GamesRegistryDialog(QDialog):
         self._refresh_current_btn.setEnabled(can_use_row)
 
     def _selected_refresh_mode(self) -> str:
-        if self._mode_deep_btn.isChecked():
-            return REFRESH_MODE_DEEP
+        mode = self._refresh_mode_combo.currentData()
+        if mode in {REFRESH_MODE_LITE, REFRESH_MODE_DEEP}:
+            return str(mode)
         return REFRESH_MODE_LITE
 
     def _set_refresh_busy(self, busy: bool) -> None:
@@ -217,8 +211,7 @@ class GamesRegistryDialog(QDialog):
             self._table,
             self._refresh_current_btn,
             self._refresh_all_btn,
-            self._mode_lite_btn,
-            self._mode_deep_btn,
+            self._refresh_mode_combo,
             self._switch_btn,
         ):
             widget.setEnabled(not busy)

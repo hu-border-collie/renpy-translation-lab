@@ -103,7 +103,7 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
 
             dialog = GamesRegistryDialog(None, workspace_root=workspace)
             dialog._table.selectRow(0)
-            dialog._mode_deep_btn.setChecked(True)
+            dialog._refresh_mode_combo.setCurrentIndex(1)
             with mock.patch(
                 "gui_qt.games_registry_dialog.refresh_registry_projects",
                 return_value=RegistryActionResult(True, "已深度刷新项目 Example。"),
