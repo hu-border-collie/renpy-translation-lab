@@ -58,6 +58,7 @@ class GuiGamesRegistryActionsTests(unittest.TestCase):
             )
             result = refresh_registry_projects(workspace, project_id="demo")
             self.assertTrue(result.ok)
+            self.assertIn("快速刷新", result.message)
 
             data = registry.load_registry(workspace / registry.REGISTRY_FILENAME)
             project = data["projects"][0]
@@ -87,7 +88,7 @@ class GuiGamesRegistryActionsTests(unittest.TestCase):
 
             with mock.patch(
                 "gui_qt.games_registry_actions.refresh_project",
-                side_effect=lambda data, project_id, workspace_root: data["projects"][0],
+                side_effect=lambda data, project_id, workspace_root, **kwargs: data["projects"][0],
             ):
                 result = record_apply_batch_for_game_root(
                     workspace,

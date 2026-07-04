@@ -21,7 +21,13 @@ import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
+
+ProgressCallback = Callable[[int, int, str], None]
+
+REFRESH_MODE_LITE = "lite"
+REFRESH_MODE_DEEP = "deep"
+REFRESH_MODES = frozenset({REFRESH_MODE_LITE, REFRESH_MODE_DEEP})
 
 SCHEMA_VERSION = 1
 REGISTRY_FILENAME = "games_registry.json"
@@ -256,7 +262,42 @@ def _has_active_batch_job(work_dir: Path) -> bool:
     return False
 
 
-def scan_project_auto(workspace_root: Path, project: dict[str, Any]) -> dict[str, Any]:
+def infer_layout_status_lite(auto: dict[str, Any]) -> tuple[str, str]:
+    """Approximate doctor layout/mode from filesystem scan only."""
+    if not auto.get("in_renpy_pipeline", True):
+        return "", ""
+
+    work_exists = bool(auto.get("work_exists"))
+    work_empty = bool(auto.get("work_empty"))
+    has_tl = int(auto.get("tl_rpy_files") or 0) > 0
+    has_original = bool(auto.get("original_game_exists"))
+
+    if not work_exists:
+        if has_original or has_tl:
+            return "switch_to_work", "existing_tl_only" if has_tl else "can_generate_template"
+        return "failed", "blocked_missing_template"
+
+    if has_tl:
+        return "ready", "existing_tl_only"
+
+    if work_empty:
+        if has_original or int(auto.get("original_editable_rpy_count") or 0) > 0:
+            return "attention", "can_generate_template"
+        if int(auto.get("original_rpa_count") or 0) > 0:
+            return "attention", "blocked_missing_template"
+        return "failed", "blocked_missing_template"
+
+    if has_original:
+        return "attention", "can_generate_template"
+    return "attention", "blocked_missing_template"
+
+
+def scan_project_auto(
+    workspace_root: Path,
+    project: dict[str, Any],
+    *,
+    deep: bool = False,
+) -> dict[str, Any]:
     project_path = project["path"]
     project_root = workspace_root / Path(project_path.replace("\\", "/"))
     work_dir = project_root / "work"
@@ -324,10 +365,16 @@ def scan_project_auto(workspace_root: Path, project: dict[str, Any]) -> dict[str
         "has_active_batch": _has_active_batch_job(work_dir if work_dir.is_dir() else game_root),
     }
 
+    refresh_mode = REFRESH_MODE_DEEP if deep else REFRESH_MODE_LITE
+    auto["refresh_mode"] = refresh_mode
+
     doctor_layout = ""
     doctor_mode = ""
     if in_renpy_pipeline and game_root.is_dir():
-        doctor_layout, doctor_mode = _doctor_layout_snapshot(str(game_root), counts["rpy_files"] > 0)
+        if deep:
+            doctor_layout, doctor_mode = _doctor_layout_snapshot(str(game_root), counts["rpy_files"] > 0)
+        else:
+            doctor_layout, doctor_mode = infer_layout_status_lite(auto)
     auto["doctor_layout"] = doctor_layout
     auto["doctor_mode"] = doctor_mode
     return auto
@@ -495,12 +542,14 @@ def refresh_project(
     project_id: str,
     *,
     workspace_root: Path,
+    mode: str = REFRESH_MODE_LITE,
 ) -> dict[str, Any] | None:
     project = find_project(registry, project_id)
     if project is None:
         return None
 
-    auto = scan_project_auto(workspace_root, project)
+    deep = mode == REFRESH_MODE_DEEP
+    auto = scan_project_auto(workspace_root, project, deep=deep)
     project["auto"] = auto
 
     if project.get("version_source") != "manual" or not project.get("version"):
@@ -511,20 +560,33 @@ def refresh_project(
 
     if project.get("translation_status_source") != "manual":
         project["translation_status"] = suggest_translation_status(project, auto)
-        project["translation_status_source"] = "doctor"
+        project["translation_status_source"] = "doctor" if deep else "scan"
 
     return project
 
 
-def refresh_all(registry: dict[str, Any], *, workspace_root: Path) -> int:
+def refresh_all(
+    registry: dict[str, Any],
+    *,
+    workspace_root: Path,
+    mode: str = REFRESH_MODE_LITE,
+    on_progress: ProgressCallback | None = None,
+) -> int:
+    projects = [
+        project
+        for project in registry.get("projects", [])
+        if isinstance(project, dict) and project.get("id")
+    ]
+    total = len(projects)
     count = 0
-    for project in registry.get("projects", []):
-        project_id = project.get("id")
-        if not project_id:
-            continue
-        refresh_project(registry, project_id, workspace_root=workspace_root)
+    for index, project in enumerate(projects, start=1):
+        project_id = str(project["id"])
+        if on_progress is not None:
+            on_progress(index, total, str(project.get("name") or project_id))
+        refresh_project(registry, project_id, workspace_root=workspace_root, mode=mode)
         count += 1
-    registry["update_summary"] = f"已刷新 {count} 个项目自动状态"
+    mode_label = "深度" if mode == REFRESH_MODE_DEEP else "快速"
+    registry["update_summary"] = f"已{mode_label}刷新 {count} 个项目自动状态"
     return count
 
 
@@ -655,6 +717,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     refresh_group = refresh_parser.add_mutually_exclusive_group(required=True)
     refresh_group.add_argument("--all", action="store_true", help="Refresh every project")
     refresh_group.add_argument("--project", dest="project_id", help="Refresh one project id")
+    refresh_parser.add_argument(
+        "--deep",
+        action="store_true",
+        help="Run full doctor scan per project (slow; default is lite filesystem scan)",
+    )
 
     subparsers.add_parser("render-md", help="Render GAMES.md from the registry")
 
@@ -695,17 +762,34 @@ def main(argv: list[str] | None = None) -> int:
         registry["workspace_root"] = workspace.as_posix()
 
     if args.command == "refresh":
+        mode = REFRESH_MODE_DEEP if getattr(args, "deep", False) else REFRESH_MODE_LITE
+
+        def _cli_progress(current: int, total: int, name: str) -> None:
+            print(f"[{current}/{total}] {name}", flush=True)
+
         if args.all:
-            count = refresh_all(registry, workspace_root=workspace)
+            count = refresh_all(
+                registry,
+                workspace_root=workspace,
+                mode=mode,
+                on_progress=_cli_progress,
+            )
             save_registry(registry_path, registry)
-            print(f"Refreshed {count} projects -> {registry_path}")
+            print(f"Refreshed {count} projects ({mode}) -> {registry_path}")
         else:
-            project = refresh_project(registry, args.project_id, workspace_root=workspace)
+            if mode == REFRESH_MODE_DEEP:
+                _cli_progress(1, 1, args.project_id)
+            project = refresh_project(
+                registry,
+                args.project_id,
+                workspace_root=workspace,
+                mode=mode,
+            )
             if project is None:
                 print(f"Unknown project id: {args.project_id}", file=sys.stderr)
                 return 1
             save_registry(registry_path, registry)
-            print(f"Refreshed project {args.project_id} -> {registry_path}")
+            print(f"Refreshed project {args.project_id} ({mode}) -> {registry_path}")
         return 0
 
     if args.command == "render-md":

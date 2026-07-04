@@ -161,6 +161,50 @@ class GamesRegistryTests(unittest.TestCase):
             self.assertEqual(project["auto"]["last_batch_id"], "job_001")
             self.assertIn("3 文件", project["auto"]["last_batch_summary"])
 
+    def test_lite_scan_skips_doctor_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project_root = workspace / "Game_Example"
+            (project_root / "work" / "game" / "tl" / "schinese").mkdir(parents=True)
+            (project_root / "original" / "game").mkdir(parents=True)
+            project = {
+                "id": "game_example",
+                "path": "Game_Example",
+                "engine": "renpy",
+                "in_renpy_pipeline": True,
+            }
+            with unittest.mock.patch.object(
+                registry,
+                "_doctor_layout_snapshot",
+                return_value=("ready", "existing_tl_only"),
+            ) as doctor_mock:
+                auto = registry.scan_project_auto(workspace, project, deep=False)
+                doctor_mock.assert_not_called()
+            self.assertEqual(auto["refresh_mode"], registry.REFRESH_MODE_LITE)
+            self.assertEqual(auto["doctor_layout"], "attention")
+
+    def test_deep_scan_uses_doctor_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project_root = workspace / "Game_Example"
+            (project_root / "work").mkdir(parents=True)
+            (project_root / "original" / "game").mkdir(parents=True)
+            project = {
+                "id": "game_example",
+                "path": "Game_Example",
+                "engine": "renpy",
+                "in_renpy_pipeline": True,
+            }
+            with unittest.mock.patch.object(
+                registry,
+                "_doctor_layout_snapshot",
+                return_value=("ready", "existing_tl_only"),
+            ) as doctor_mock:
+                auto = registry.scan_project_auto(workspace, project, deep=True)
+                doctor_mock.assert_called_once()
+            self.assertEqual(auto["refresh_mode"], registry.REFRESH_MODE_DEEP)
+            self.assertEqual(auto["doctor_layout"], "ready")
+
     def test_refresh_project_updates_auto_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -187,14 +231,16 @@ class GamesRegistryTests(unittest.TestCase):
                         "path": "Game_Example",
                         "engine": "renpy",
                         "in_renpy_pipeline": True,
-                        "translation_status_source": "doctor",
+                        "translation_status_source": "scan",
                         "translation_status": "",
                     }
                 ],
             }
             registry.refresh_project(payload, "game_example", workspace_root=workspace)
             auto = payload["projects"][0]["auto"]
+            self.assertEqual(auto["refresh_mode"], registry.REFRESH_MODE_LITE)
             self.assertEqual(auto["tl_rpy_files"], 1)
+            self.assertEqual(payload["projects"][0]["translation_status_source"], "scan")
             self.assertIn(
                 payload["projects"][0]["translation_status"],
                 {"待翻译", "待润色", "未开始", "待提取"},

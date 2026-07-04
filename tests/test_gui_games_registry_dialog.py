@@ -72,11 +72,17 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             dialog._table.selectRow(0)
             with mock.patch(
                 "gui_qt.games_registry_dialog.refresh_registry_projects",
-                return_value=RegistryActionResult(True, "已刷新项目 Example 的自动状态。"),
+                return_value=RegistryActionResult(True, "已快速刷新项目 Example。"),
             ) as refresh_mock:
                 dialog._refresh_current_project()
-                refresh_mock.assert_called_once_with(workspace, project_id="demo", refresh_everything=False)
-            self.assertIn("已刷新项目 Example", dialog._status_label.text())
+                refresh_mock.assert_called_once_with(
+                    workspace,
+                    project_id="demo",
+                    refresh_everything=False,
+                    mode="lite",
+                    on_progress=dialog._on_refresh_progress,
+                )
+            self.assertIn("已快速刷新项目 Example", dialog._status_label.text())
 
 
 if __name__ == "__main__":

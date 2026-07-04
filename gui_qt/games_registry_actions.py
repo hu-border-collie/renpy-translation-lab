@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtWidgets import QMessageBox, QWidget
 
 from games_registry import (
+    REFRESH_MODE_DEEP,
+    REFRESH_MODE_LITE,
     default_games_md_path,
     load_registry,
     record_batch,
@@ -17,6 +20,8 @@ from games_registry import (
 )
 
 from .games_registry_view import find_project_id_for_game_root, resolve_registry_path
+
+RegistryProgressCallback = Callable[[int, int, str], None]
 
 
 @dataclass(frozen=True)
@@ -30,31 +35,57 @@ def _registry_file(workspace_root: Path) -> Path:
     return resolve_registry_path(workspace_root)
 
 
+def _mode_label(mode: str) -> str:
+    return "深度" if mode == REFRESH_MODE_DEEP else "快速"
+
+
 def refresh_registry_projects(
     workspace_root: Path,
     *,
     project_id: str | None = None,
     refresh_everything: bool = False,
+    mode: str = REFRESH_MODE_LITE,
+    on_progress: RegistryProgressCallback | None = None,
 ) -> RegistryActionResult:
     registry_path = _registry_file(workspace_root)
     if not registry_path.is_file():
         return RegistryActionResult(False, f"未找到 {registry_path.name}。")
 
     data = load_registry(registry_path)
+    label = _mode_label(mode)
+
     if refresh_everything:
-        count = refresh_all(data, workspace_root=workspace_root)
+        count = refresh_all(
+            data,
+            workspace_root=workspace_root,
+            mode=mode,
+            on_progress=on_progress,
+        )
         save_registry(registry_path, data)
-        return RegistryActionResult(True, f"已刷新全部 {count} 个项目的自动状态。")
+        return RegistryActionResult(True, f"已{label}刷新全部 {count} 个项目。")
 
     if not project_id:
         return RegistryActionResult(False, "未指定要刷新的项目。")
 
-    project = refresh_project(data, project_id, workspace_root=workspace_root)
+    if on_progress is not None:
+        project = next(
+            (item for item in data.get("projects", []) if item.get("id") == project_id),
+            None,
+        )
+        name = str((project or {}).get("name") or project_id)
+        on_progress(1, 1, name)
+
+    project = refresh_project(
+        data,
+        project_id,
+        workspace_root=workspace_root,
+        mode=mode,
+    )
     if project is None:
         return RegistryActionResult(False, f"未找到项目：{project_id}")
     save_registry(registry_path, data)
     name = str(project.get("name") or project_id)
-    return RegistryActionResult(True, f"已刷新项目 {name} 的自动状态。")
+    return RegistryActionResult(True, f"已{label}刷新项目 {name}。")
 
 
 def render_registry_games_md(workspace_root: Path) -> RegistryActionResult:
@@ -101,7 +132,12 @@ def record_apply_batch_for_game_root(
     if project is None:
         return RegistryActionResult(False, f"registry 批次记录失败：未找到项目 {project_id}。")
 
-    refresh_project(data, project_id, workspace_root=workspace_root)
+    refresh_project(
+        data,
+        project_id,
+        workspace_root=workspace_root,
+        mode=REFRESH_MODE_LITE,
+    )
     save_registry(registry_path, data)
     summary = (project.get("auto") or {}).get("last_batch_summary") or ""
     message = "已记录写回批次到 games_registry.json。"

@@ -68,6 +68,11 @@ def format_auto_summary(auto: dict[str, Any]) -> str:
     pct = auto.get("dialogue_translated_pct")
     if isinstance(pct, (int, float)):
         parts.append(f"对话约 {pct}% 已译")
+    refresh_mode = auto.get("refresh_mode")
+    if refresh_mode == "deep":
+        parts.append("深度扫描（含 doctor）")
+    elif refresh_mode == "lite":
+        parts.append("快速扫描")
     if auto.get("glossary"):
         parts.append(f"术语：{auto['glossary']}")
     batch_summary = auto.get("last_batch_summary")
