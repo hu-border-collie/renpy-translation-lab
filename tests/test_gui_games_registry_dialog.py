@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 import games_registry as registry
 from gui_qt.games_registry_dialog import GamesRegistryDialog
+from gui_qt.games_registry_actions import RegistryActionResult
 
 
 class GuiGamesRegistryDialogTests(unittest.TestCase):
@@ -48,6 +49,34 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
                 dialog._switch_to_selected()
                 accept_mock.assert_called_once()
             self.assertTrue(dialog.selected_project_root().endswith("Game_Example"))
+
+    def test_refresh_current_project_updates_status_label(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            payload = {
+                "projects": [
+                    {
+                        "id": "demo",
+                        "name": "Example",
+                        "path": "Game_Example",
+                        "translation_status_source": "doctor",
+                    }
+                ]
+            }
+            project_root = workspace / "Game_Example"
+            (project_root / "work").mkdir(parents=True)
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            registry_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            dialog = GamesRegistryDialog(None, workspace_root=workspace)
+            dialog._table.selectRow(0)
+            with mock.patch(
+                "gui_qt.games_registry_dialog.refresh_registry_projects",
+                return_value=RegistryActionResult(True, "已刷新项目 Example 的自动状态。"),
+            ) as refresh_mock:
+                dialog._refresh_current_project()
+                refresh_mock.assert_called_once_with(workspace, project_id="demo", refresh_everything=False)
+            self.assertIn("已刷新项目 Example", dialog._status_label.text())
 
 
 if __name__ == "__main__":

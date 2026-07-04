@@ -7,11 +7,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .games_registry_actions import refresh_registry_projects
 from .games_registry_view import (
     REGISTRY_TABLE_COLUMNS,
     RegistryRow,
@@ -63,6 +66,14 @@ class GamesRegistryDialog(QDialog):
         reload_btn.setObjectName("secondary_btn")
         reload_btn.clicked.connect(self._reload_table)
         header.addWidget(reload_btn)
+        self._refresh_current_btn = QPushButton("刷新当前")
+        self._refresh_current_btn.setObjectName("secondary_btn")
+        self._refresh_current_btn.clicked.connect(self._refresh_current_project)
+        header.addWidget(self._refresh_current_btn)
+        self._refresh_all_btn = QPushButton("刷新全部")
+        self._refresh_all_btn.setObjectName("secondary_btn")
+        self._refresh_all_btn.clicked.connect(self._refresh_all_projects)
+        header.addWidget(self._refresh_all_btn)
         self._switch_btn = QPushButton("切换到此项目")
         self._switch_btn.setObjectName("secondary_btn")
         self._switch_btn.clicked.connect(self._switch_to_selected)
@@ -159,7 +170,71 @@ class GamesRegistryDialog(QDialog):
 
     def _on_selection_changed(self) -> None:
         row = self._selected_row()
+        can_use_row = row is not None and bool(row.project_id)
         self._switch_btn.setEnabled(row is not None and bool(row.work_dir))
+        self._refresh_current_btn.setEnabled(can_use_row)
+
+    def _set_refresh_busy(self, busy: bool) -> None:
+        for widget in (
+            self._table,
+            self._refresh_current_btn,
+            self._refresh_all_btn,
+            self._switch_btn,
+        ):
+            widget.setEnabled(not busy)
+        if busy:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        else:
+            QApplication.restoreOverrideCursor()
+            self._on_selection_changed()
+
+    def _refresh_current_project(self) -> None:
+        row = self._selected_row()
+        if row is None or not row.project_id:
+            QMessageBox.information(self, "请选择项目", "请先选择要刷新的项目。")
+            return
+        self._run_refresh(project_id=row.project_id)
+
+    def _refresh_all_projects(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "刷新全部项目",
+            "将扫描工作区全部项目并更新自动状态，可能需要几分钟。\n是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._run_refresh(refresh_everything=True)
+
+    def _run_refresh(
+        self,
+        *,
+        project_id: str | None = None,
+        refresh_everything: bool = False,
+    ) -> None:
+        self._set_refresh_busy(True)
+        try:
+            if refresh_everything:
+                self._status_label.setText("正在刷新全部项目，请稍候…")
+            else:
+                self._status_label.setText("正在刷新当前项目，请稍候…")
+            QApplication.processEvents()
+            result = refresh_registry_projects(
+                self._workspace_root,
+                project_id=project_id,
+                refresh_everything=refresh_everything,
+            )
+        finally:
+            self._set_refresh_busy(False)
+
+        if not result.ok:
+            QMessageBox.warning(self, "刷新失败", result.message)
+            self._reload_table()
+            return
+
+        self._reload_table()
+        self._status_label.setText(result.message)
 
     def _on_row_activated(self, row_index: int, _column: int) -> None:
         if row_index < 0 or row_index >= len(self._rows):

@@ -114,6 +114,7 @@ from .doctor_report import (
     stale_summary,
     summarize_doctor_output,
 )
+from .games_registry_actions import handle_post_apply_registry_update
 from .games_registry_dialog import GamesRegistryDialog
 from .games_registry_view import resolve_workspace_root
 from .manifest_resume_summary import (
@@ -2790,6 +2791,19 @@ class MainWindow(QMainWindow):
         self._append_log(f"项目目录已设置为：{directory}")
         return True
 
+    def _handle_post_apply_registry_sync(self) -> None:
+        manifest_path = self._writeback_manifest_path
+        if not manifest_path:
+            return
+        result = handle_post_apply_registry_update(
+            self,
+            workspace_root=resolve_workspace_root(self.state.get_tool_root()),
+            game_root=self.state.get_game_root(),
+            manifest_path=manifest_path,
+        )
+        if result.message:
+            self._append_log(result.message)
+
     def _open_games_registry_dialog(self) -> None:
         workspace = resolve_workspace_root(self.state.get_tool_root())
         dialog = GamesRegistryDialog(
@@ -3772,6 +3786,7 @@ class MainWindow(QMainWindow):
             self._refresh_diagnostics_context()
             if exit_code == 0:
                 self._refresh_workflow_from_latest_manifest()
+                self._handle_post_apply_registry_sync()
             self._active_command = ""
             self._set_task_running(False)
             if exit_code == 0:

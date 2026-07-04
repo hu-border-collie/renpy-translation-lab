@@ -29,9 +29,15 @@ class RegistryRow:
     in_renpy_pipeline: bool
     work_dir: str
 
+    auto_summary: str = ""
+
     @property
     def tooltip(self) -> str:
-        parts = [self.notes] if self.notes else []
+        parts: list[str] = []
+        if self.auto_summary:
+            parts.append(self.auto_summary)
+        if self.notes:
+            parts.append(self.notes)
         if self.engine and self.engine != "renpy":
             parts.append(f"引擎：{self.engine}")
         if not self.in_renpy_pipeline:
@@ -47,6 +53,27 @@ def resolve_workspace_root(tool_root: Path | None = None) -> Path:
 
 def resolve_registry_path(workspace_root: Path | None = None) -> Path:
     return default_registry_path(workspace_root)
+
+
+def format_auto_summary(auto: dict[str, Any]) -> str:
+    if not auto:
+        return ""
+    parts: list[str] = []
+    tl_files = auto.get("tl_rpy_files")
+    if isinstance(tl_files, int) and tl_files > 0:
+        parts.append(f"翻译文件 {tl_files} 个")
+    pending = auto.get("pending_tasks")
+    if isinstance(pending, int):
+        parts.append(f"待译 {pending} 条")
+    pct = auto.get("dialogue_translated_pct")
+    if isinstance(pct, (int, float)):
+        parts.append(f"对话约 {pct}% 已译")
+    if auto.get("glossary"):
+        parts.append(f"术语：{auto['glossary']}")
+    batch_summary = auto.get("last_batch_summary")
+    if isinstance(batch_summary, str) and batch_summary.strip():
+        parts.append(batch_summary.strip())
+    return "；".join(parts)
 
 
 def resolve_project_work_dir(workspace_root: Path, project_path: str) -> Path:
@@ -69,7 +96,32 @@ def registry_row_from_project(workspace_root: Path, project: dict[str, Any]) -> 
         engine=engine,
         in_renpy_pipeline=bool(project.get("in_renpy_pipeline", True)),
         work_dir=resolve_project_work_dir(workspace_root, path).as_posix() if path else "",
+        auto_summary=format_auto_summary(auto),
     )
+
+
+def find_project_id_for_game_root(
+    *,
+    workspace_root: Path,
+    game_root: Path | str | None,
+    registry_path: Path | None = None,
+) -> str | None:
+    if game_root is None:
+        return None
+    registry_file = registry_path or resolve_registry_path(workspace_root)
+    if not registry_file.is_file():
+        return None
+    registry_data = load_registry(registry_file)
+    projects = registry_data.get("projects")
+    if not isinstance(projects, list):
+        return None
+    for project in projects:
+        if not isinstance(project, dict) or not project.get("path"):
+            continue
+        row = registry_row_from_project(workspace_root, project)
+        if row_matches_game_root(row, game_root):
+            return row.project_id or None
+    return None
 
 
 def load_registry_rows(
