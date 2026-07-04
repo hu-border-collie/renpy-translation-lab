@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from .summary_helpers import append_unique_fact
 from .user_copy import (
@@ -335,13 +336,80 @@ def parse_doctor_output(output: str) -> dict[str, object]:
     return parsed
 
 
-def summarize_doctor_output(
-    output: str,
+def doctor_report_to_parsed(report: dict[str, Any]) -> dict[str, object]:
+    """Normalize ``collect_doctor_report()`` output for summary rendering."""
+    counts_value = report.get("counts")
+    counts = counts_value if isinstance(counts_value, dict) else {}
+    context_status = report.get("context_status")
+    context_status = context_status if isinstance(context_status, dict) else {}
+    original_game_dir = report.get("original_game_dir")
+    original_game_dir = original_game_dir if isinstance(original_game_dir, str) else ""
+    original_game_exists: bool | None
+    if "original_game_dir" in report:
+        original_game_exists = bool(original_game_dir)
+    else:
+        original_game_exists = None
+
+    parsed: dict[str, object] = {
+        "base_dir": str(report.get("base_dir") or ""),
+        "tl_dir": str(report.get("tl_dir") or ""),
+        "tl_exists": report.get("tl_exists"),
+        "language": str(report.get("language") or ""),
+        "mode": str(report.get("mode") or ""),
+        "layout_status": str(report.get("layout_status") or ""),
+        "is_work_root": report.get("is_work_root"),
+        "work_dir": str(report.get("work_dir") or ""),
+        "work_exists": report.get("work_exists"),
+        "work_empty": report.get("work_empty"),
+        "original_game_dir": original_game_dir,
+        "original_game_exists": original_game_exists,
+        "counts": counts,
+        "warnings": [
+            warning
+            for warning in (report.get("warnings") or [])
+            if isinstance(warning, str) and warning.strip()
+        ],
+        "recommendations": [
+            recommendation
+            for recommendation in (report.get("recommendations") or [])
+            if isinstance(recommendation, str) and recommendation.strip()
+        ],
+    }
+
+    if (
+        report.get("tl_exists")
+        and int(counts.get("rpy_files") or 0) > 0
+        and (
+            "pending_task_count" in report
+            or "pending_file_count" in report
+        )
+    ):
+        parsed["pending"] = {
+            "task_count": int(report.get("pending_task_count") or 0),
+            "file_count": int(report.get("pending_file_count") or 0),
+        }
+
+    rag_context = context_status.get("rag")
+    if isinstance(rag_context, dict):
+        parsed["rag_context"] = rag_context
+
+    source_index_context = context_status.get("source_index")
+    if isinstance(source_index_context, dict):
+        parsed["source_index_context"] = source_index_context
+
+    project_assets = report.get("project_assets")
+    if isinstance(project_assets, dict):
+        parsed["project_assets"] = project_assets
+
+    return parsed
+
+
+def _summarize_doctor_parsed(
+    parsed: dict[str, object],
     exit_code: int,
     api_key_count: int | None = None,
     api_key_source: str = "",
 ) -> DoctorSummary:
-    parsed = parse_doctor_output(output)
     warnings = [
         translate_doctor_warning(warning)
         for warning in parsed.get("warnings", [])
@@ -496,6 +564,35 @@ def summarize_doctor_output(
         facts=facts,
         findings=findings,
         mode=mode,
+    )
+
+
+def summarize_doctor_report(
+    report: dict[str, Any],
+    exit_code: int = 0,
+    api_key_count: int | None = None,
+    api_key_source: str = "",
+) -> DoctorSummary:
+    """Build a GUI summary directly from ``collect_doctor_report()`` output."""
+    return _summarize_doctor_parsed(
+        doctor_report_to_parsed(report),
+        exit_code,
+        api_key_count=api_key_count,
+        api_key_source=api_key_source,
+    )
+
+
+def summarize_doctor_output(
+    output: str,
+    exit_code: int,
+    api_key_count: int | None = None,
+    api_key_source: str = "",
+) -> DoctorSummary:
+    return _summarize_doctor_parsed(
+        parse_doctor_output(output),
+        exit_code,
+        api_key_count=api_key_count,
+        api_key_source=api_key_source,
     )
 
 

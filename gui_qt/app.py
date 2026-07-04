@@ -113,7 +113,9 @@ from .doctor_report import (
     running_summary,
     stale_summary,
     summarize_doctor_output,
+    summarize_doctor_report,
 )
+from .doctor_worker import DoctorWorker, DoctorWorkerResult
 from .games_registry_actions import handle_post_apply_registry_update
 from .games_registry_dialog import GamesRegistryDialog
 from .games_registry_view import resolve_workspace_root
@@ -247,6 +249,7 @@ class MainWindow(QMainWindow):
         self._template_generation_output_lines: list[str] = []
         self._doctor_summary_mode = ""
         self._doctor_check_completed = False
+        self._doctor_worker: DoctorWorker | None = None
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
@@ -2967,6 +2970,9 @@ class MainWindow(QMainWindow):
             self.project_path_edit.setText("（尚未选择项目）")
             self._clear_game_root_redirect_notice()
 
+    def _is_doctor_running(self) -> bool:
+        return self._doctor_worker is not None and self._doctor_worker.isRunning()
+
     def _on_run_doctor(self):
         if not self.state.get_game_root():
             QMessageBox.information(
@@ -2975,18 +2981,59 @@ class MainWindow(QMainWindow):
                 "环境检查会读取本地配置中的项目路径。"
             )
             return
+        if self._is_doctor_running():
+            return
 
         self._clear_log_view()
         self._active_command = "doctor"
         self._doctor_output_lines = []
         self._focus_workbench_status_tab(0)
         self._set_doctor_summary(running_summary())
-        self._append_log("=== 正在运行：gemini_translate_batch.py doctor ===\n")
+        self._append_log("=== 正在运行环境检查（collect_doctor_report）===\n")
         self._set_task_running(True)
 
-        script = self.state.get_batch_script_path()
-        # Run with no extra args — it will pick up translator_config.json
-        self.runner.run(script, ["doctor"])
+        self._doctor_worker = DoctorWorker(parent=self)
+        self._doctor_worker.completed.connect(self._on_doctor_completed)
+        self._doctor_worker.start()
+
+    def _on_doctor_completed(self, result: DoctorWorkerResult) -> None:
+        worker = self.sender()
+        if worker is self._doctor_worker:
+            self._doctor_worker = None
+        self._active_command = ""
+        self._set_task_running(False)
+
+        log_text = result.log_text.strip()
+        if log_text:
+            self._doctor_output_lines = log_text.splitlines()
+            self._append_log(log_text)
+        elif result.error:
+            self._doctor_output_lines = [result.error]
+            self._append_log(result.error)
+
+        self._append_log("\n[环境检查已结束]")
+
+        api_key_count, api_key_source = self.state.get_api_key_status()
+        if result.ok and result.report is not None:
+            summary = summarize_doctor_report(
+                result.report,
+                exit_code=0,
+                api_key_count=api_key_count,
+                api_key_source=api_key_source,
+            )
+            self._doctor_check_completed = True
+            self.statusBar().showMessage("项目检查完成。", 6000)
+        else:
+            summary = summarize_doctor_output(
+                result.error or log_text,
+                exit_code=-1,
+                api_key_count=api_key_count,
+                api_key_source=api_key_source,
+            )
+            self._doctor_check_completed = False
+            self.statusBar().showMessage("项目检查失败。", 6000)
+
+        self._set_doctor_summary(summary)
 
     def _on_bootstrap_work(self):
         if not self.state.get_game_root():
@@ -3754,24 +3801,6 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self, exit_code: int):
         self._append_log(f"\n[进程已结束，退出码：{exit_code}]")
-        if self._active_command == "doctor":
-            api_key_count, api_key_source = self.state.get_api_key_status()
-            summary = summarize_doctor_output(
-                "\n".join(self._doctor_output_lines),
-                exit_code,
-                api_key_count=api_key_count,
-                api_key_source=api_key_source,
-            )
-            self._doctor_check_completed = exit_code == 0
-            self._set_doctor_summary(summary)
-            self._active_command = ""
-            self._set_task_running(False)
-            if exit_code == 0:
-                self.statusBar().showMessage("项目检查完成。", 6000)
-            else:
-                self.statusBar().showMessage(f"项目检查失败（退出码：{exit_code}）", 6000)
-            return
-
         if self._active_command == "translation_workflow":
             self._on_workflow_step_finished(exit_code)
             return
