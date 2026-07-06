@@ -2,7 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gui_qt.theme_helpers import clear_stylesheet_cache, load_theme_stylesheet
+from gui_qt.theme_helpers import _render_template, clear_stylesheet_cache, load_theme_stylesheet
+
+_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "gui_qt" / "resources" / "app_template.qss"
 
 
 class GuiThemeCacheTests(unittest.TestCase):
@@ -21,6 +23,14 @@ class GuiThemeCacheTests(unittest.TestCase):
 
             self.assertIn("red", first)
             self.assertIn("blue", second)
+
+    def test_template_tokens_fully_resolved(self):
+        import re
+
+        unresolved = re.compile(r"\$\{[a-z_]+\}")
+        for theme in ("light", "dark"):
+            rendered = _render_template(_TEMPLATE_PATH, theme)
+            self.assertEqual([], unresolved.findall(rendered))
 
 
 if __name__ == "__main__":

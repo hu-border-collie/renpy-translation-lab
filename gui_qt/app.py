@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QBrush, QColor, QGuiApplication, QPalette
+from PySide6.QtGui import QBrush, QColor, QGuiApplication, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -175,6 +175,9 @@ from .workflow_progress import (
 )
 from .widget_helpers import NoWheelComboBox, NoWheelTabWidget
 from .wizard_timeline import WizardTimeline
+from .log_highlighter import LogHighlighter
+from .status_icons import StatusBadge
+from .toast_widget import ToastNotification
 
 # Diagnostics splitter: idle favors task context; running tasks expand the log.
 _DIAGNOSTICS_IDLE_CONTEXT_PX = 420
@@ -296,10 +299,56 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._deferred_startup_refresh)
         QTimer.singleShot(0, self._sync_work_mode_hint_height)
 
+        # Keyboard shortcuts
+        self._setup_shortcuts()
+
         # Status
         self.statusBar().showMessage(
             "图形界面是可选组件；核心命令行不受影响。"
         )
+
+    def _setup_shortcuts(self) -> None:
+        """Bind global keyboard shortcuts and update button tooltips."""
+        self._doctor_shortcut = QShortcut(QKeySequence("Ctrl+D"), self)
+        self._doctor_shortcut.activated.connect(self._on_run_doctor)
+
+        self._translate_shortcut = QShortcut(QKeySequence("Ctrl+T"), self)
+        self._translate_shortcut.activated.connect(self._on_start_translation)
+
+        self._kill_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
+        self._kill_shortcut.activated.connect(self._on_kill)
+
+        clear_log_shortcut = QShortcut(QKeySequence("Ctrl+L"), self)
+        clear_log_shortcut.activated.connect(self._on_clear_log)
+
+        # Config save — only active when config tab is shown
+        self._save_config_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
+        self._save_config_shortcut.activated.connect(self._shortcut_save_config)
+
+        # Tab switching
+        for i in range(min(3, self.tab_widget.count())):
+            sc = QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self)
+            sc.activated.connect(lambda idx=i: self.tab_widget.setCurrentIndex(idx))
+
+        # Button tooltips with shortcut hints
+        if hasattr(self, "doctor_btn"):
+            self.doctor_btn.setToolTip("环境检查 (Ctrl+D)")
+        if hasattr(self, "translate_btn"):
+            self.translate_btn.setToolTip("开始翻译 (Ctrl+T)")
+        if hasattr(self, "kill_btn"):
+            self.kill_btn.setToolTip("停止任务 (Ctrl+K)")
+        if hasattr(self, "clear_log_btn"):
+            self.clear_log_btn.setToolTip("清空日志 (Ctrl+L)")
+        if hasattr(self, "save_config_btn"):
+            self.save_config_btn.setToolTip("保存配置 (Ctrl+S)")
+
+    def _shortcut_save_config(self) -> None:
+        """Handle Ctrl+S: only save when the config tab is active."""
+        if hasattr(self, "save_config_btn") and not self.save_config_btn.isEnabled():
+            return
+        if hasattr(self, "tab_widget") and hasattr(self, "_config_tab"):
+            if self.tab_widget.currentWidget() is self._config_tab:
+                self._on_save_config()
 
     def _deferred_startup_refresh(self) -> None:
         self._apply_work_mode_ui(
@@ -537,8 +586,7 @@ class MainWindow(QMainWindow):
         doctor_layout = QVBoxLayout(doctor_tab)
         doctor_layout.setContentsMargins(12, 12, 12, 12)
         doctor_layout.setSpacing(6)
-        self.doctor_status_label = QLabel()
-        self.doctor_status_label.setObjectName("doctor_status_label")
+        self.doctor_status_label = StatusBadge("doctor_status_label")
         doctor_layout.addWidget(self.doctor_status_label)
         doctor_scroll = QScrollArea()
         doctor_scroll.setObjectName("doctor_summary_scroll")
@@ -592,8 +640,7 @@ class MainWindow(QMainWindow):
         workflow_layout = QVBoxLayout(workflow_content)
         workflow_layout.setContentsMargins(12, 12, 12, 12)
         workflow_layout.setSpacing(6)
-        self.workflow_status_label = QLabel()
-        self.workflow_status_label.setObjectName("workflow_status_label")
+        self.workflow_status_label = StatusBadge("workflow_status_label")
         workflow_layout.addWidget(self.workflow_status_label)
         self.workflow_message_label = QLabel()
         self.workflow_message_label.setWordWrap(True)
@@ -663,8 +710,7 @@ class MainWindow(QMainWindow):
         writeback_layout = QVBoxLayout(writeback_tab)
         writeback_layout.setContentsMargins(12, 12, 12, 12)
         writeback_layout.setSpacing(6)
-        self.writeback_status_label = QLabel()
-        self.writeback_status_label.setObjectName("writeback_status_label")
+        self.writeback_status_label = StatusBadge("writeback_status_label")
         writeback_layout.addWidget(self.writeback_status_label)
         writeback_scroll = QScrollArea()
         writeback_scroll.setWidgetResizable(True)
@@ -961,8 +1007,7 @@ class MainWindow(QMainWindow):
         context_layout.setContentsMargins(12, 12, 12, 12)
         context_layout.setSpacing(10)
 
-        self.diagnostics_status_label = QLabel()
-        self.diagnostics_status_label.setObjectName("diagnostics_status_label")
+        self.diagnostics_status_label = StatusBadge("diagnostics_status_label")
         context_layout.addWidget(self.diagnostics_status_label)
         self.diagnostics_message_label = QLabel()
         self.diagnostics_message_label.setWordWrap(True)
@@ -1051,6 +1096,10 @@ class MainWindow(QMainWindow):
         self.log_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.log_view.setObjectName("log_view")
         self.log_view.setMinimumHeight(120)
+        self._log_highlighter = LogHighlighter(
+            self.log_view.document(),
+            dark=self._effective_theme_is_dark(),
+        )
         log_panel_layout.addWidget(self.log_view, 1)
         splitter.addWidget(log_panel)
 
@@ -2067,10 +2116,7 @@ class MainWindow(QMainWindow):
             return
         self._diagnostics_context_fingerprint = fingerprint
 
-        self.diagnostics_status_label.setText(context.heading)
-        self.diagnostics_status_label.setProperty("status", context.status)
-        self.diagnostics_status_label.style().unpolish(self.diagnostics_status_label)
-        self.diagnostics_status_label.style().polish(self.diagnostics_status_label)
+        self.diagnostics_status_label.set_status(context.status, context.heading)
         self.diagnostics_message_label.setText(context.message)
         self.diagnostics_facts_label.setText("\n".join(context.facts))
 
@@ -2304,6 +2350,7 @@ class MainWindow(QMainWindow):
         )
         self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
         self._update_split_submit_btn(running=running)
+        self._sync_task_shortcuts()
 
     def _update_timeline_steps(self, mode: WorkMode) -> None:
         from .work_modes import WorkMode
@@ -3685,6 +3732,18 @@ class MainWindow(QMainWindow):
             )
         self._update_writeback_action_buttons(writeback_summary, running=running)
         self.kill_btn.setEnabled(running)
+        self._sync_task_shortcuts()
+
+    def _sync_task_shortcuts(self) -> None:
+        """Keep task shortcuts aligned with the corresponding action buttons."""
+        if hasattr(self, "_doctor_shortcut"):
+            self._doctor_shortcut.setEnabled(self.doctor_btn.isEnabled())
+        if hasattr(self, "_translate_shortcut"):
+            self._translate_shortcut.setEnabled(self.translate_btn.isEnabled())
+        if hasattr(self, "_kill_shortcut"):
+            self._kill_shortcut.setEnabled(self.kill_btn.isEnabled())
+        if hasattr(self, "_save_config_shortcut"):
+            self._save_config_shortcut.setEnabled(self.save_config_btn.isEnabled())
 
     def _set_workflow_summary(
         self,
@@ -3693,10 +3752,7 @@ class MainWindow(QMainWindow):
         message: str,
         facts: list[str] | None = None,
     ):
-        self.workflow_status_label.setText(heading)
-        self.workflow_status_label.setProperty("status", status)
-        self.workflow_status_label.style().unpolish(self.workflow_status_label)
-        self.workflow_status_label.style().polish(self.workflow_status_label)
+        self.workflow_status_label.set_status(status, heading)
         self.workflow_message_label.setText(message)
         self.workflow_facts_label.setText("\n".join(facts or []))
         self._update_resume_btn_text()
@@ -3763,10 +3819,7 @@ class MainWindow(QMainWindow):
     def _set_writeback_summary(self, summary: WritebackSummary) -> None:
         self._writeback_summary = summary
         self._writeback_manifest_path = summary.manifest_path
-        self.writeback_status_label.setText(summary.heading)
-        self.writeback_status_label.setProperty("status", summary.status)
-        self.writeback_status_label.style().unpolish(self.writeback_status_label)
-        self.writeback_status_label.style().polish(self.writeback_status_label)
+        self.writeback_status_label.set_status(summary.status, summary.heading)
         self.writeback_message_label.setText(summary.message)
         self.writeback_facts_label.setText("\n".join(summary.facts))
         self._set_details_label(self.writeback_details_label, summary.findings)
@@ -3810,10 +3863,7 @@ class MainWindow(QMainWindow):
 
     def _set_doctor_summary(self, summary: DoctorSummary):
         self._doctor_summary_mode = summary.mode
-        self.doctor_status_label.setText(summary.heading)
-        self.doctor_status_label.setProperty("status", summary.status)
-        self.doctor_status_label.style().unpolish(self.doctor_status_label)
-        self.doctor_status_label.style().polish(self.doctor_status_label)
+        self.doctor_status_label.set_status(summary.status, summary.heading)
         self.doctor_message_label.setText(summary.message)
         self.doctor_facts_label.setText("\n".join(summary.facts))
         self._set_details_label(self.doctor_details_label, [])
@@ -3828,6 +3878,7 @@ class MainWindow(QMainWindow):
                 running=running,
             )
         )
+        self._sync_task_shortcuts()
         self._sync_layout_sizes()
 
     def _on_runner_error(self, message: str):
@@ -4260,6 +4311,8 @@ class MainWindow(QMainWindow):
             return
         try:
             apply_theme(self._qt_app, self._resources_dir, self._theme_preference)
+            if hasattr(self, "_log_highlighter"):
+                self._log_highlighter.update_theme(self._effective_theme_is_dark())
             QTimer.singleShot(0, self._refresh_split_status_table_after_theme_change)
         except OSError as exc:
             self.statusBar().showMessage("主题样式加载失败，已保留当前样式。", 6000)
@@ -4425,7 +4478,11 @@ class MainWindow(QMainWindow):
             if work_mode_spec(self._current_work_mode()).is_bootstrap:
                 self._apply_work_mode_ui(refresh_manifest_writeback=False)
             self._append_log("配置已成功保存至 translator_config.json。")
-            self.statusBar().showMessage("配置已成功保存", 3000)
+            try:
+                ToastNotification.show_toast(self, "✓ 配置已成功保存")
+            except Exception as exc:
+                self._append_log(f"提示通知显示失败：{exc}")
+                self.statusBar().showMessage("配置已成功保存", 3000)
             self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
             return True
         except Exception as exc:

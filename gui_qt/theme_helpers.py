@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from string import Template
 from typing import Any
 
 THEME_SYSTEM = "system"
@@ -10,6 +11,8 @@ THEME_DARK = "dark"
 
 VALID_THEME_PREFERENCES = frozenset({THEME_SYSTEM, THEME_LIGHT, THEME_DARK})
 DEFAULT_THEME_PREFERENCE = THEME_SYSTEM
+
+_TEMPLATE_FILENAME = "app_template.qss"
 
 
 def normalize_theme_preference(value: Any) -> str:
@@ -61,18 +64,42 @@ def clear_stylesheet_cache() -> None:
 
 
 def load_theme_stylesheet(resources_dir: Path, effective_theme: str) -> str:
+    """Load and render the themed stylesheet.
+
+    Prefers the token-based template (``app_template.qss`` + ``theme_tokens``).
+    Falls back to legacy per-theme files (``app.qss`` / ``app_dark.qss``) if the
+    template does not exist, ensuring a safe migration path.
+    """
     cache_key = (str(resources_dir.resolve()), effective_theme)
     cached = _STYLESHEET_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
+    template_path = resources_dir / _TEMPLATE_FILENAME
+    if template_path.exists():
+        stylesheet = _render_template(template_path, effective_theme)
+    else:
+        stylesheet = _load_legacy_stylesheet(resources_dir, effective_theme)
+
+    _STYLESHEET_CACHE[cache_key] = stylesheet
+    return stylesheet
+
+
+def _render_template(template_path: Path, effective_theme: str) -> str:
+    """Read the QSS template and substitute theme tokens."""
+    from .theme_tokens import tokens_for_theme
+
+    raw = template_path.read_text(encoding="utf-8")
+    tokens = tokens_for_theme(effective_theme)
+    return Template(raw).safe_substitute(tokens)
+
+
+def _load_legacy_stylesheet(resources_dir: Path, effective_theme: str) -> str:
+    """Fallback: load a pre-baked per-theme QSS file."""
     filename = theme_stylesheet_filename(effective_theme)
     path = resources_dir / filename
     if not path.exists() and effective_theme == "dark":
         path = resources_dir / "app.qss"
     if not path.exists():
-        stylesheet = ""
-    else:
-        stylesheet = path.read_text(encoding="utf-8")
-    _STYLESHEET_CACHE[cache_key] = stylesheet
-    return stylesheet
+        return ""
+    return path.read_text(encoding="utf-8")
