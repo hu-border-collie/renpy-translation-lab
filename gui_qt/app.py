@@ -309,15 +309,17 @@ class MainWindow(QMainWindow):
 
     def _setup_shortcuts(self) -> None:
         """Bind global keyboard shortcuts and update button tooltips."""
-        shortcuts = [
-            ("Ctrl+D", self._on_run_doctor, "环境检查"),
-            ("Ctrl+T", self._on_start_translation, "开始翻译"),
-            ("Ctrl+K", self._on_kill, "停止任务"),
-            ("Ctrl+L", self._on_clear_log, "清空日志"),
-        ]
-        for key_seq, slot, _label in shortcuts:
-            shortcut = QShortcut(QKeySequence(key_seq), self)
-            shortcut.activated.connect(slot)
+        self._doctor_shortcut = QShortcut(QKeySequence("Ctrl+D"), self)
+        self._doctor_shortcut.activated.connect(self._on_run_doctor)
+
+        self._translate_shortcut = QShortcut(QKeySequence("Ctrl+T"), self)
+        self._translate_shortcut.activated.connect(self._on_start_translation)
+
+        self._kill_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
+        self._kill_shortcut.activated.connect(self._on_kill)
+
+        clear_log_shortcut = QShortcut(QKeySequence("Ctrl+L"), self)
+        clear_log_shortcut.activated.connect(self._on_clear_log)
 
         # Config save — only active when config tab is shown
         save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
@@ -3734,6 +3736,16 @@ class MainWindow(QMainWindow):
             )
         self._update_writeback_action_buttons(writeback_summary, running=running)
         self.kill_btn.setEnabled(running)
+        self._sync_task_shortcuts()
+
+    def _sync_task_shortcuts(self) -> None:
+        """Keep task shortcuts aligned with the corresponding action buttons."""
+        if hasattr(self, "_doctor_shortcut"):
+            self._doctor_shortcut.setEnabled(self.doctor_btn.isEnabled())
+        if hasattr(self, "_translate_shortcut"):
+            self._translate_shortcut.setEnabled(self.translate_btn.isEnabled())
+        if hasattr(self, "_kill_shortcut"):
+            self._kill_shortcut.setEnabled(self.kill_btn.isEnabled())
 
     def _set_workflow_summary(
         self,
