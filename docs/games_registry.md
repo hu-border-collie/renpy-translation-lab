@@ -146,6 +146,17 @@ python games_registry.py show --project game_example
 
 在总表里深度刷过，**不等于**可以跳过工作台环境检查。
 
+### 总表与环境检查的 layout 对比
+
+工作台 **环境检查** 完成后，若当前项目在 `games_registry.json` 中有记录，会自动对比：
+
+- 总表中的 `layout_status` / `auto.doctor_mode`（通常来自上次深度或快速刷新）
+- 本次 `collect_doctor_report()` 的 `layout_status` / `mode`
+
+结果会写入环境检查摘要与日志（`[总表对比]`）。若不一致，状态栏会提示，并建议在「工作区项目…」中刷新当前项。
+
+打开 **工作区项目…** 且当前项目刚跑过环境检查时，详情面板的「总表对比」行会显示两侧 layout / mode。这**不能替代**完整环境检查，只用于发现总表是否过期。
+
 ## 推荐工作流
 
 **首次接入已有 `GAMES.md`：**

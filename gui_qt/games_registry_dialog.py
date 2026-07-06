@@ -38,6 +38,10 @@ from .games_registry_actions import (
     save_registry_dialog_preference,
     save_registry_project_fields,
 )
+from .games_registry_doctor_compare import (
+    compare_registry_with_doctor_report,
+    format_registry_compare_hint,
+)
 from .games_registry_worker import RegistryRefreshWorker
 from .widget_helpers import NoWheelComboBox
 from .games_registry_view import (
@@ -67,6 +71,7 @@ class GamesRegistryDialog(QDialog):
         *,
         workspace_root: Path,
         current_game_root: Path | None = None,
+        current_doctor_report: dict | None = None,
     ):
         super().__init__(parent)
         self.setObjectName("games_registry_dialog")
@@ -84,6 +89,8 @@ class GamesRegistryDialog(QDialog):
         self._refresh_worker: RegistryRefreshWorker | None = None
         self._edit_loading = False
         self._preserved_project_id = ""
+        self._current_game_root = current_game_root
+        self._current_doctor_report = current_doctor_report
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -242,6 +249,16 @@ class GamesRegistryDialog(QDialog):
         self._last_refresh_label = QLabel("—")
         edit_layout.addRow("最近刷新", self._last_refresh_label)
 
+        self._doctor_check_layout_label = QLabel("—")
+        edit_layout.addRow("环境检查 layout", self._doctor_check_layout_label)
+
+        self._doctor_check_mode_label = QLabel("—")
+        edit_layout.addRow("环境检查 mode", self._doctor_check_mode_label)
+
+        self._registry_compare_label = QLabel("—")
+        self._registry_compare_label.setWordWrap(True)
+        edit_layout.addRow("总表对比", self._registry_compare_label)
+
         self._play_status_combo = NoWheelComboBox()
         self._play_status_combo.addItems(sorted(PLAY_STATUSES))
         edit_layout.addRow("游玩状态", self._play_status_combo)
@@ -277,7 +294,6 @@ class GamesRegistryDialog(QDialog):
             close_btn.setText("关闭")
         layout.addWidget(buttons)
 
-        self._current_game_root = current_game_root
         prefs = load_registry_preferences(workspace_root=self._workspace_root)
         self._auto_discover_checkbox.setChecked(bool(prefs.get(REGISTRY_PREF_AUTO_DISCOVER, False)))
         self._reload_table_from_disk()
@@ -405,6 +421,9 @@ class GamesRegistryDialog(QDialog):
                 self._layout_status_label.setText("—")
                 self._doctor_mode_label.setText("—")
                 self._last_refresh_label.setText("—")
+                self._doctor_check_layout_label.setText("—")
+                self._doctor_check_mode_label.setText("—")
+                self._registry_compare_label.setText("—")
                 self._play_status_combo.setCurrentText("待确认")
                 self._translation_status_combo.setCurrentText("待确认")
                 self._notes_edit.clear()
@@ -414,6 +433,40 @@ class GamesRegistryDialog(QDialog):
             self._layout_status_label.setText(row.layout_status or "—")
             self._doctor_mode_label.setText(row.doctor_mode or "—")
             self._last_refresh_label.setText(row.last_refresh_at or "—")
+
+            compare = None
+            show_doctor = (
+                self._current_doctor_report is not None
+                and row_matches_game_root(row, self._current_game_root)
+            )
+            if show_doctor:
+                doctor_layout = str(
+                    self._current_doctor_report.get("layout_status") or ""
+                ).strip()
+                doctor_mode = str(self._current_doctor_report.get("mode") or "").strip()
+                self._doctor_check_layout_label.setText(doctor_layout or "—")
+                self._doctor_check_mode_label.setText(doctor_mode or "—")
+                compare = compare_registry_with_doctor_report(
+                    self._workspace_root,
+                    game_root=self._current_game_root,
+                    report=self._current_doctor_report,
+                )
+            else:
+                self._doctor_check_layout_label.setText("—")
+                self._doctor_check_mode_label.setText("—")
+
+            self._registry_compare_label.setText(
+                format_registry_compare_hint(
+                    compare,
+                    for_registry_dialog=True,
+                )
+                if show_doctor
+                else (
+                    "选中当前工作台项目并运行环境检查后，可在此对比总表记录。"
+                    if row_matches_game_root(row, self._current_game_root)
+                    else "切换到该项目后运行环境检查，可对比总表 layout / mode。"
+                )
+            )
 
             play_status = row.play_status if row.play_status in PLAY_STATUSES else "待确认"
             translation_status = (

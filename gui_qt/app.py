@@ -118,6 +118,7 @@ from .doctor_report import (
 from .doctor_worker import DoctorWorker, DoctorWorkerResult
 from .games_registry_actions import handle_post_apply_registry_update
 from .games_registry_dialog import GamesRegistryDialog
+from .games_registry_doctor_compare import compare_registry_with_doctor_report
 from .games_registry_view import resolve_workspace_root
 from .manifest_resume_summary import (
     ManifestWorkflowDisplay,
@@ -250,6 +251,8 @@ class MainWindow(QMainWindow):
         self._doctor_summary_mode = ""
         self._doctor_check_completed = False
         self._doctor_worker: DoctorWorker | None = None
+        self._last_doctor_report: dict | None = None
+        self._last_doctor_report_game_root = ""
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
@@ -2785,6 +2788,8 @@ class MainWindow(QMainWindow):
         self._workflow_step_output_lines = []
         self._clear_completed_manifest_snapshot()
         self._doctor_check_completed = False
+        self._last_doctor_report = None
+        self._last_doctor_report_game_root = ""
         self._set_doctor_summary(stale_summary())
         spec = work_mode_spec(self._current_work_mode())
         if spec.is_bootstrap:
@@ -2820,10 +2825,19 @@ class MainWindow(QMainWindow):
 
     def _open_games_registry_dialog(self) -> None:
         workspace = resolve_workspace_root(self.state.get_tool_root())
+        current_game_root = self.state.get_game_root()
+        doctor_report = None
+        if (
+            self._last_doctor_report is not None
+            and current_game_root
+            and self._last_doctor_report_game_root == current_game_root
+        ):
+            doctor_report = self._last_doctor_report
         dialog = GamesRegistryDialog(
             self,
             workspace_root=workspace,
-            current_game_root=self.state.get_game_root(),
+            current_game_root=current_game_root,
+            current_doctor_report=doctor_report,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -3026,14 +3040,36 @@ class MainWindow(QMainWindow):
 
         api_key_count, api_key_source = self.state.get_api_key_status()
         if result.ok and result.report is not None:
+            self._last_doctor_report = result.report
+            self._last_doctor_report_game_root = self.state.get_game_root() or ""
             summary = summarize_doctor_report(
                 result.report,
                 exit_code=0,
                 api_key_count=api_key_count,
                 api_key_source=api_key_source,
             )
+            compare = compare_registry_with_doctor_report(
+                resolve_workspace_root(self.state.get_tool_root()),
+                game_root=self.state.get_game_root(),
+                report=result.report,
+            )
+            if compare is not None:
+                self._append_log(compare.log_line)
+                summary = DoctorSummary(
+                    status=summary.status,
+                    heading=summary.heading,
+                    message=summary.message,
+                    facts=[*summary.facts, compare.message],
+                    findings=summary.findings,
+                    mode=summary.mode,
+                )
             self._doctor_check_completed = True
-            self.statusBar().showMessage("项目检查完成。", 6000)
+            status_message = "项目检查完成。"
+            if compare is not None and compare.matched is False:
+                status_message = "项目检查完成；与工作区总表 layout 不一致。"
+            elif compare is not None and compare.matched is None:
+                status_message = "项目检查完成；当前项目未登记在总表。"
+            self.statusBar().showMessage(status_message, 8000)
         else:
             summary = summarize_doctor_output(
                 result.error or log_text,
