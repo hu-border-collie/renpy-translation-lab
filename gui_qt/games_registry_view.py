@@ -182,7 +182,7 @@ def load_registry_rows(
     registry_path: Path | None = None,
 ) -> tuple[list[RegistryRow], str]:
     workspace = workspace_root or default_workspace_root()
-    registry_file = registry_path or (workspace / REGISTRY_FILENAME)
+    registry_file = registry_path or resolve_registry_path(workspace)
     if not registry_file.is_file():
         games_md = workspace / GAMES_MD_FILENAME
         if games_md.is_file():
@@ -237,7 +237,7 @@ def load_registry_preferences(
     registry_path: Path | None = None,
 ) -> dict[str, Any]:
     workspace = workspace_root or default_workspace_root()
-    registry_file = registry_path or (workspace / REGISTRY_FILENAME)
+    registry_file = registry_path or resolve_registry_path(workspace)
     if not registry_file.is_file():
         return {}
     return get_registry_preferences(load_registry(registry_file))

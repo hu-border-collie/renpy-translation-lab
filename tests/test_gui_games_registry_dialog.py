@@ -213,6 +213,7 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             self.assertEqual(project["name"], "Example Renamed")
             self.assertEqual(project["play_status"], "进行中")
             self.assertEqual(project["translation_status"], "待润色")
+            self.assertEqual(project["notes"], "下一步：校对。")
             self.assertEqual(project["translation_status_source"], "manual")
 
     def test_search_filter_limits_visible_rows(self):

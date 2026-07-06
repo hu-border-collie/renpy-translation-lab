@@ -586,7 +586,7 @@ class GamesRegistryDialog(QDialog):
         result = discover_registry_projects(
             self._workspace_root,
             refresh_new=True,
-            mode=self._selected_refresh_mode(),
+            mode=REFRESH_MODE_LITE,
         )
         self._handle_action_result(result, title="扫描失败")
 
