@@ -2355,6 +2355,7 @@ class MainWindow(QMainWindow):
         )
         self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
         self._update_split_submit_btn(running=running)
+        self._sync_task_shortcuts()
 
     def _update_timeline_steps(self, mode: WorkMode) -> None:
         from .work_modes import WorkMode
@@ -3889,6 +3890,7 @@ class MainWindow(QMainWindow):
                 running=running,
             )
         )
+        self._sync_task_shortcuts()
         self._sync_layout_sizes()
 
     def _on_runner_error(self, message: str):
