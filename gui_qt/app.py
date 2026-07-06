@@ -16,6 +16,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QGuiApplication, QPalette
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QMainWindow,
     QWidget,
     QVBoxLayout,
@@ -112,7 +113,13 @@ from .doctor_report import (
     running_summary,
     stale_summary,
     summarize_doctor_output,
+    summarize_doctor_report,
 )
+from .doctor_worker import DoctorWorker, DoctorWorkerResult
+from .games_registry_actions import handle_post_apply_registry_update
+from .games_registry_dialog import GamesRegistryDialog
+from .games_registry_doctor_compare import compare_registry_with_doctor_report
+from .games_registry_view import resolve_workspace_root
 from .manifest_resume_summary import (
     ManifestWorkflowDisplay,
     build_manifest_workflow_display,
@@ -243,6 +250,9 @@ class MainWindow(QMainWindow):
         self._template_generation_output_lines: list[str] = []
         self._doctor_summary_mode = ""
         self._doctor_check_completed = False
+        self._doctor_worker: DoctorWorker | None = None
+        self._last_doctor_report: dict | None = None
+        self._last_doctor_report_game_root = ""
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
@@ -430,6 +440,10 @@ class MainWindow(QMainWindow):
         self.select_btn = QPushButton("选择游戏目录...")
         self.select_btn.clicked.connect(self._on_select_project)
         proj_layout.addWidget(self.select_btn)
+        self.registry_btn = QPushButton("工作区项目...")
+        self.registry_btn.setObjectName("secondary_btn")
+        self.registry_btn.clicked.connect(self._open_games_registry_dialog)
+        proj_layout.addWidget(self.registry_btn)
         proj_outer.addLayout(proj_layout)
 
         self.project_redirect_label = QLabel()
@@ -2738,45 +2752,100 @@ class MainWindow(QMainWindow):
             start_dir,
         )
         if directory:
-            try:
-                effective_root, adjusted = self.state.set_game_root(directory)
-                if adjusted:
-                    self._show_game_root_redirect_notice(
-                        Path(directory),
-                        effective_root,
-                    )
-                else:
-                    self._clear_game_root_redirect_notice()
-            except ValueError as exc:
-                QMessageBox.warning(self, "无法更新配置", str(exc))
-                self._append_log(f"更新 translator_config.json 失败：{exc}")
-                return
-            self._refresh_project_label()
-            self._load_config_to_ui()
-            self._active_command = ""
-            self._doctor_output_lines = []
-            self._workflow = None
-            self._workflow_step_output_lines = []
-            self._clear_completed_manifest_snapshot()
-            self._doctor_check_completed = False
-            self._set_doctor_summary(stale_summary())
-            spec = work_mode_spec(self._current_work_mode())
-            if spec.is_bootstrap:
-                self._set_workflow_from_bootstrap_summary(stale_bootstrap_summary())
-            else:
-                self._set_workflow_summary(
-                    "stale",
-                    "项目已切换",
-                    "任务状态已清空；请先针对新项目重新检查。",
+            self._switch_game_root(directory)
+
+    def _invalidate_doctor_worker(self) -> None:
+        worker = self._doctor_worker
+        if worker is None:
+            return
+        try:
+            worker.completed.disconnect(self._on_doctor_completed)
+        except (RuntimeError, TypeError):
+            pass
+        self._doctor_worker = None
+
+    def _switch_game_root(self, directory: str) -> bool:
+        self._invalidate_doctor_worker()
+        try:
+            effective_root, adjusted = self.state.set_game_root(directory)
+            if adjusted:
+                self._show_game_root_redirect_notice(
+                    Path(directory),
+                    effective_root,
                 )
-            self._writeback_manifest_path = ""
-            if spec.supports_translation_writeback:
-                self._set_writeback_summary(stale_writeback_summary())
             else:
-                self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
-            self._apply_work_mode_ui(refresh_manifest_writeback=False)
-            self._refresh_diagnostics_context()
-            self._append_log(f"项目目录已设置为：{directory}")
+                self._clear_game_root_redirect_notice()
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法更新配置", str(exc))
+            self._append_log(f"更新 translator_config.json 失败：{exc}")
+            return False
+
+        self._refresh_project_label()
+        self._load_config_to_ui()
+        self._active_command = ""
+        self._doctor_output_lines = []
+        self._workflow = None
+        self._workflow_step_output_lines = []
+        self._clear_completed_manifest_snapshot()
+        self._doctor_check_completed = False
+        self._last_doctor_report = None
+        self._last_doctor_report_game_root = ""
+        self._set_doctor_summary(stale_summary())
+        spec = work_mode_spec(self._current_work_mode())
+        if spec.is_bootstrap:
+            self._set_workflow_from_bootstrap_summary(stale_bootstrap_summary())
+        else:
+            self._set_workflow_summary(
+                "stale",
+                "项目已切换",
+                "任务状态已清空；请先针对新项目重新检查。",
+            )
+        self._writeback_manifest_path = ""
+        if spec.supports_translation_writeback:
+            self._set_writeback_summary(stale_writeback_summary())
+        else:
+            self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+        self._apply_work_mode_ui(refresh_manifest_writeback=False)
+        self._refresh_diagnostics_context()
+        self._append_log(f"项目目录已设置为：{directory}")
+        return True
+
+    def _handle_post_apply_registry_sync(self) -> None:
+        manifest_path = self._writeback_manifest_path
+        if not manifest_path:
+            return
+        result = handle_post_apply_registry_update(
+            self,
+            workspace_root=resolve_workspace_root(self.state.get_tool_root()),
+            game_root=self.state.get_game_root(),
+            manifest_path=manifest_path,
+        )
+        if result.message:
+            self._append_log(result.message)
+
+    def _open_games_registry_dialog(self) -> None:
+        workspace = resolve_workspace_root(self.state.get_tool_root())
+        current_game_root = self.state.get_game_root()
+        doctor_report = None
+        if (
+            self._last_doctor_report is not None
+            and current_game_root
+            and self._last_doctor_report_game_root == current_game_root
+        ):
+            doctor_report = self._last_doctor_report
+        dialog = GamesRegistryDialog(
+            self,
+            workspace_root=workspace,
+            current_game_root=current_game_root,
+            current_doctor_report=doctor_report,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        target = dialog.selected_project_root()
+        if not target:
+            return
+        if self._switch_game_root(target):
+            self.statusBar().showMessage("已从工作区项目总览切换项目", 5000)
 
     def _refresh_api_status(self) -> None:
         count, source = self.state.get_api_key_status()
@@ -2926,6 +2995,9 @@ class MainWindow(QMainWindow):
             self.project_path_edit.setText("（尚未选择项目）")
             self._clear_game_root_redirect_notice()
 
+    def _is_doctor_running(self) -> bool:
+        return self._doctor_worker is not None and self._doctor_worker.isRunning()
+
     def _on_run_doctor(self):
         if not self.state.get_game_root():
             QMessageBox.information(
@@ -2934,18 +3006,83 @@ class MainWindow(QMainWindow):
                 "环境检查会读取本地配置中的项目路径。"
             )
             return
+        if self._is_doctor_running():
+            return
 
         self._clear_log_view()
         self._active_command = "doctor"
         self._doctor_output_lines = []
         self._focus_workbench_status_tab(0)
         self._set_doctor_summary(running_summary())
-        self._append_log("=== 正在运行：gemini_translate_batch.py doctor ===\n")
+        self._append_log("=== 正在运行环境检查（collect_doctor_report）===\n")
         self._set_task_running(True)
 
-        script = self.state.get_batch_script_path()
-        # Run with no extra args — it will pick up translator_config.json
-        self.runner.run(script, ["doctor"])
+        self._doctor_worker = DoctorWorker(parent=self)
+        self._doctor_worker.completed.connect(self._on_doctor_completed)
+        self._doctor_worker.start()
+
+    def _on_doctor_completed(self, result: DoctorWorkerResult) -> None:
+        worker = self.sender()
+        if worker is self._doctor_worker:
+            self._doctor_worker = None
+        self._active_command = ""
+        self._set_task_running(False)
+
+        log_text = result.log_text.strip()
+        if log_text:
+            self._doctor_output_lines = log_text.splitlines()
+            self._append_log(log_text)
+        elif result.error:
+            self._doctor_output_lines = [result.error]
+            self._append_log(result.error)
+
+        self._append_log("\n[环境检查已结束]")
+
+        api_key_count, api_key_source = self.state.get_api_key_status()
+        if result.ok and result.report is not None:
+            self._last_doctor_report = result.report
+            self._last_doctor_report_game_root = self.state.get_game_root() or ""
+            summary = summarize_doctor_report(
+                result.report,
+                exit_code=0,
+                api_key_count=api_key_count,
+                api_key_source=api_key_source,
+            )
+            compare = compare_registry_with_doctor_report(
+                resolve_workspace_root(self.state.get_tool_root()),
+                game_root=self.state.get_game_root(),
+                report=result.report,
+            )
+            if compare is not None:
+                self._append_log(compare.log_line)
+                summary = DoctorSummary(
+                    status=summary.status,
+                    heading=summary.heading,
+                    message=summary.message,
+                    facts=[*summary.facts, compare.message],
+                    findings=summary.findings,
+                    mode=summary.mode,
+                )
+            self._doctor_check_completed = True
+            status_message = "项目检查完成。"
+            if compare is not None and compare.matched is False:
+                status_message = "项目检查完成；与工作区总表 layout 不一致。"
+            elif compare is not None and compare.matched is None:
+                status_message = "项目检查完成；当前项目未登记在总表。"
+            self.statusBar().showMessage(status_message, 8000)
+        else:
+            summary = summarize_doctor_output(
+                result.error or log_text,
+                exit_code=-1,
+                api_key_count=api_key_count,
+                api_key_source=api_key_source,
+            )
+            self._doctor_check_completed = False
+            self._last_doctor_report = None
+            self._last_doctor_report_game_root = ""
+            self.statusBar().showMessage("项目检查失败。", 6000)
+
+        self._set_doctor_summary(summary)
 
     def _on_bootstrap_work(self):
         if not self.state.get_game_root():
@@ -3517,6 +3654,7 @@ class MainWindow(QMainWindow):
     def _set_task_running(self, running: bool):
         spec = work_mode_spec(self._current_work_mode())
         self.select_btn.setEnabled(not running)
+        self.registry_btn.setEnabled(not running)
         self.task_category_combo.setEnabled(not running)
         self.work_task_combo.setEnabled(not running)
         self.doctor_btn.setEnabled(not running)
@@ -3713,24 +3851,6 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self, exit_code: int):
         self._append_log(f"\n[进程已结束，退出码：{exit_code}]")
-        if self._active_command == "doctor":
-            api_key_count, api_key_source = self.state.get_api_key_status()
-            summary = summarize_doctor_output(
-                "\n".join(self._doctor_output_lines),
-                exit_code,
-                api_key_count=api_key_count,
-                api_key_source=api_key_source,
-            )
-            self._doctor_check_completed = exit_code == 0
-            self._set_doctor_summary(summary)
-            self._active_command = ""
-            self._set_task_running(False)
-            if exit_code == 0:
-                self.statusBar().showMessage("项目检查完成。", 6000)
-            else:
-                self.statusBar().showMessage(f"项目检查失败（退出码：{exit_code}）", 6000)
-            return
-
         if self._active_command == "translation_workflow":
             self._on_workflow_step_finished(exit_code)
             return
@@ -3745,6 +3865,7 @@ class MainWindow(QMainWindow):
             self._refresh_diagnostics_context()
             if exit_code == 0:
                 self._refresh_workflow_from_latest_manifest()
+                self._handle_post_apply_registry_sync()
             self._active_command = ""
             self._set_task_running(False)
             if exit_code == 0:

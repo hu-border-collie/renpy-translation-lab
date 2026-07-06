@@ -1,11 +1,13 @@
 import unittest
 
 from gui_qt.doctor_report import (
+    doctor_report_to_parsed,
     format_project_assets_facts,
     format_tl_scan_facts,
     parse_doctor_output,
     stale_summary,
     summarize_doctor_output,
+    summarize_doctor_report,
 )
 from gui_qt.user_copy import format_doctor_recommendation_fact, primary_recommendation_message
 
@@ -102,7 +104,73 @@ Recommendations:
 """
 
 
+def _report_from_parsed(parsed: dict) -> dict:
+    counts = parsed.get("counts") if isinstance(parsed.get("counts"), dict) else {}
+    context_status: dict = {}
+    rag_context = parsed.get("rag_context")
+    if isinstance(rag_context, dict):
+        context_status["rag"] = rag_context
+    source_index_context = parsed.get("source_index_context")
+    if isinstance(source_index_context, dict):
+        context_status["source_index"] = source_index_context
+    pending = parsed.get("pending") if isinstance(parsed.get("pending"), dict) else {}
+    report = {
+        "base_dir": parsed.get("base_dir", ""),
+        "tl_dir": parsed.get("tl_dir", ""),
+        "tl_exists": parsed.get("tl_exists"),
+        "language": parsed.get("language", ""),
+        "mode": parsed.get("mode", ""),
+        "layout_status": parsed.get("layout_status", ""),
+        "is_work_root": parsed.get("is_work_root"),
+        "work_dir": parsed.get("work_dir", ""),
+        "work_exists": parsed.get("work_exists"),
+        "work_empty": parsed.get("work_empty"),
+        "counts": counts,
+        "warnings": parsed.get("warnings", []),
+        "recommendations": parsed.get("recommendations", []),
+        "context_status": context_status,
+        "project_assets": parsed.get("project_assets"),
+    }
+    if pending:
+        report["pending_task_count"] = pending.get("task_count", 0)
+        report["pending_file_count"] = pending.get("file_count", 0)
+    if "original_game_dir" in parsed:
+        report["original_game_dir"] = parsed.get("original_game_dir", "")
+    return report
+
+
 class GuiDoctorReportTests(unittest.TestCase):
+    def test_summarize_doctor_report_matches_stdout_parser(self):
+        for output, api_key_count, api_key_source in (
+            (DOCTOR_OUTPUT, 2, ""),
+            (CONTEXT_OUTPUT, 1, ""),
+            (READY_OUTPUT, 2, ""),
+            (FAILED_OUTPUT, 1, ""),
+        ):
+            parsed = parse_doctor_output(output)
+            report = _report_from_parsed(parsed)
+            from_output = summarize_doctor_output(
+                output,
+                exit_code=0,
+                api_key_count=api_key_count,
+                api_key_source=api_key_source,
+            )
+            from_report = summarize_doctor_report(
+                report,
+                exit_code=0,
+                api_key_count=api_key_count,
+                api_key_source=api_key_source,
+            )
+            self.assertEqual(from_report, from_output, msg=output[:40])
+
+    def test_doctor_report_to_parsed_preserves_pending_counts(self):
+        parsed = parse_doctor_output(DOCTOR_OUTPUT)
+        report = doctor_report_to_parsed(_report_from_parsed(parsed))
+        pending = report.get("pending")
+        self.assertIsInstance(pending, dict)
+        self.assertEqual(pending.get("task_count"), 5)
+        self.assertEqual(pending.get("file_count"), 2)
+
     def test_parse_doctor_output_extracts_mode_and_counts(self):
         parsed = parse_doctor_output(DOCTOR_OUTPUT)
 

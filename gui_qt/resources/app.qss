@@ -650,6 +650,41 @@ QTableWidget#split_status_table QHeaderView::section {
     font-weight: 700;
 }
 
+QTableWidget#games_registry_table {
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #ffffff;
+    alternate-background-color: #f8fafc;
+    color: #334155;
+    gridline-color: #e2e8f0;
+    outline: none;
+}
+
+QTableWidget#games_registry_table::item {
+    padding: 6px 8px;
+    outline: none;
+}
+
+QTableWidget#games_registry_table::item:hover {
+    background-color: rgba(148, 163, 184, 0.10);
+}
+
+QTableWidget#games_registry_table::item:selected {
+    background-color: rgba(59, 130, 246, 0.14);
+    color: #0f172a;
+}
+
+QTableWidget#games_registry_table QHeaderView::section {
+    background-color: #f1f5f9;
+    color: #64748b;
+    border: none;
+    border-right: 1px solid #cbd5e1;
+    border-bottom: 1px solid #cbd5e1;
+    padding: 6px 8px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
 QFrame#workflow_separator {
     color: #e2e8f0;
     margin-top: 6px;

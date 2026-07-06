@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "workspace_root": "C:/RenPy_Workspace",
+  "updated_at": "2026-07-04T00:00:00+00:00",
+  "update_summary": "示例 registry；请用 import-md 从 GAMES.md 初始化",
+  "projects": [
+    {
+      "id": "game_example",
+      "name": "Example Game",
+      "path": "Game_Example",
+      "engine": "renpy",
+      "in_renpy_pipeline": true,
+      "version": "1.0.0",
+      "version_source": "manual",
+      "layout_status": "已建 original/work/build",
+      "play_status": "待确认",
+      "translation_status": "待翻译",
+      "translation_status_source": "manual",
+      "notes": "示例项目。术语未提取。下一步：提取术语 → 初译。",
+      "auto": {}
+    }
+  ]
+}
