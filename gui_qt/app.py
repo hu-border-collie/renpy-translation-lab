@@ -3078,6 +3078,8 @@ class MainWindow(QMainWindow):
                 api_key_source=api_key_source,
             )
             self._doctor_check_completed = False
+            self._last_doctor_report = None
+            self._last_doctor_report_game_root = ""
             self.statusBar().showMessage("项目检查失败。", 6000)
 
         self._set_doctor_summary(summary)

@@ -1,6 +1,7 @@
 """Compare workbench doctor results with games registry snapshots."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -45,39 +46,64 @@ def compare_registry_with_doctor_report(
     if not registry_path.is_file():
         return None
 
-    project_id = find_project_id_for_game_root(
-        workspace_root=workspace_root,
-        game_root=game_root,
-        registry_path=registry_path,
-    )
+    doctor_layout = _normalize_field(report.get("layout_status"))
+    doctor_mode = _normalize_field(report.get("mode"))
+
+    try:
+        project_id = find_project_id_for_game_root(
+            workspace_root=workspace_root,
+            game_root=game_root,
+            registry_path=registry_path,
+        )
+        registry = load_registry(registry_path)
+    except (json.JSONDecodeError, ValueError, OSError) as exc:
+        return RegistryDoctorCompareResult(
+            matched=None,
+            registry_layout="",
+            registry_mode="",
+            doctor_layout=doctor_layout,
+            doctor_mode=doctor_mode,
+            last_refresh_at="",
+            project_name="",
+            message="无法读取工作区总表（games_registry.json 格式无效），无法对比 layout。",
+            log_line=f"[总表对比] games_registry.json 解析失败：{exc}",
+        )
+
     if not project_id:
         return RegistryDoctorCompareResult(
             matched=None,
             registry_layout="",
             registry_mode="",
-            doctor_layout=_normalize_field(report.get("layout_status")),
-            doctor_mode=_normalize_field(report.get("mode")),
+            doctor_layout=doctor_layout,
+            doctor_mode=doctor_mode,
             last_refresh_at="",
             project_name="",
             message="当前项目不在工作区总表中，无法与 registry 对比 layout。",
             log_line="[总表对比] 当前项目未登记在 games_registry.json。",
         )
 
-    registry = load_registry(registry_path)
     project = find_project(registry, project_id)
     if project is None:
-        return None
+        return RegistryDoctorCompareResult(
+            matched=None,
+            registry_layout="",
+            registry_mode="",
+            doctor_layout=doctor_layout,
+            doctor_mode=doctor_mode,
+            last_refresh_at="",
+            project_name=project_id,
+            message=f"总表中未找到项目记录（id={project_id}），无法对比 layout。",
+            log_line=f"[总表对比] 项目 id={project_id} 未在 games_registry.json 中找到。",
+        )
 
     registry_layout = resolve_layout_status(project)
     registry_mode = resolve_doctor_mode(project)
-    doctor_layout = _normalize_field(report.get("layout_status"))
-    doctor_mode = _normalize_field(report.get("mode"))
     auto = project.get("auto") if isinstance(project.get("auto"), dict) else {}
     last_refresh_at = _normalize_field(auto.get("last_refresh_at"))
     project_name = _normalize_field(project.get("name")) or project_id
 
     layout_match = registry_layout == doctor_layout
-    mode_match = registry_mode == doctor_mode or (not registry_mode and not doctor_mode)
+    mode_match = registry_mode == doctor_mode
     matched = layout_match and mode_match
 
     if matched:
