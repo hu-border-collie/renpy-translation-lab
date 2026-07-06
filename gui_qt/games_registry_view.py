@@ -6,17 +6,37 @@ from pathlib import Path
 from typing import Any
 
 from games_registry import (
+    ENGINES,
     GAMES_MD_FILENAME,
     REGISTRY_FILENAME,
+    TRANSLATION_STATUSES,
     default_registry_path,
     default_workspace_root,
     discover_new_project_paths,
+    get_registry_preferences,
     load_registry,
+    resolve_doctor_mode,
     resolve_layout_status,
 )
 from translator_runtime import canonical_abs_path, resolve_effective_game_root
 
 REGISTRY_TABLE_COLUMNS = ("项目", "路径", "版本", "目录状态", "游玩", "翻译")
+
+REGISTRY_SORT_NAME_ASC = "name_asc"
+REGISTRY_SORT_NAME_DESC = "name_desc"
+REGISTRY_SORT_PATH_ASC = "path_asc"
+REGISTRY_SORT_TRANSLATION = "translation"
+REGISTRY_SORT_LAST_REFRESH = "last_refresh"
+
+REGISTRY_SORT_OPTIONS: tuple[tuple[str, str], ...] = (
+    (REGISTRY_SORT_NAME_ASC, "名称 A→Z"),
+    (REGISTRY_SORT_NAME_DESC, "名称 Z→A"),
+    (REGISTRY_SORT_PATH_ASC, "路径"),
+    (REGISTRY_SORT_TRANSLATION, "翻译状态"),
+    (REGISTRY_SORT_LAST_REFRESH, "最近刷新"),
+)
+
+REGISTRY_PREF_AUTO_DISCOVER = "auto_discover_on_open"
 
 
 @dataclass(frozen=True)
@@ -35,6 +55,8 @@ class RegistryRow:
 
     auto_summary: str = ""
     translation_status_source: str = ""
+    doctor_mode: str = ""
+    last_refresh_at: str = ""
 
     @property
     def tooltip(self) -> str:
@@ -125,6 +147,8 @@ def registry_row_from_project(workspace_root: Path, project: dict[str, Any]) -> 
         work_dir=resolve_project_work_dir(workspace_root, path).as_posix() if path else "",
         auto_summary=format_auto_summary(auto),
         translation_status_source=status_source,
+        doctor_mode=resolve_doctor_mode(project),
+        last_refresh_at=str(auto.get("last_refresh_at") or ""),
     )
 
 
@@ -205,6 +229,79 @@ def count_undiscovered_projects(
     else:
         registry_data = load_registry(registry_file)
     return len(discover_new_project_paths(workspace_root, registry_data))
+
+
+def load_registry_preferences(
+    *,
+    workspace_root: Path | None = None,
+    registry_path: Path | None = None,
+) -> dict[str, Any]:
+    workspace = workspace_root or default_workspace_root()
+    registry_file = registry_path or (workspace / REGISTRY_FILENAME)
+    if not registry_file.is_file():
+        return {}
+    return get_registry_preferences(load_registry(registry_file))
+
+
+def _row_search_blob(row: RegistryRow) -> str:
+    return " ".join(
+        (
+            row.name,
+            row.path,
+            row.version,
+            row.layout_status,
+            row.play_status,
+            row.translation_status,
+            row.notes,
+            row.engine,
+            row.doctor_mode,
+            row.auto_summary,
+        )
+    ).lower()
+
+
+def filter_and_sort_registry_rows(
+    rows: list[RegistryRow],
+    *,
+    search_text: str = "",
+    engine_filter: str = "",
+    translation_filter: str = "",
+    sort_key: str = REGISTRY_SORT_NAME_ASC,
+) -> list[RegistryRow]:
+    filtered = list(rows)
+    query = search_text.strip().lower()
+    if query:
+        filtered = [row for row in filtered if query in _row_search_blob(row)]
+
+    engine_value = engine_filter.strip().lower()
+    if engine_value and engine_value != "all":
+        filtered = [row for row in filtered if row.engine.lower() == engine_value]
+
+    translation_value = translation_filter.strip()
+    if translation_value and translation_value != "全部":
+        filtered = [
+            row for row in filtered if row.translation_status == translation_value
+        ]
+
+    if sort_key == REGISTRY_SORT_NAME_DESC:
+        filtered.sort(key=lambda row: row.name.lower(), reverse=True)
+    elif sort_key == REGISTRY_SORT_PATH_ASC:
+        filtered.sort(key=lambda row: row.path.lower())
+    elif sort_key == REGISTRY_SORT_TRANSLATION:
+        filtered.sort(key=lambda row: row.translation_status)
+    elif sort_key == REGISTRY_SORT_LAST_REFRESH:
+        filtered.sort(key=lambda row: row.last_refresh_at, reverse=True)
+    else:
+        filtered.sort(key=lambda row: row.name.lower())
+    return filtered
+
+
+def registry_engine_filter_options() -> list[tuple[str, str]]:
+    return [("all", "全部引擎"), *[(engine, engine) for engine in sorted(ENGINES)]]
+
+
+def registry_translation_filter_options() -> list[str]:
+    return ["全部", *sorted(TRANSLATION_STATUSES)]
 
 
 def format_registry_status_message(row_count: int, summary: str, *, missing_message: str = "") -> str:

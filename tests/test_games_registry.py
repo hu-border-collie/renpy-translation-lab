@@ -446,6 +446,24 @@ class GamesRegistryTests(unittest.TestCase):
             self.assertEqual(by_path["Game_GloryHounds"]["name"], "Glory Hounds")
             self.assertEqual(by_path["Game_GloryHounds"]["auto"]["last_refresh_at"], "2026-01-01T00:00:00+00:00")
 
+    def test_remove_project_and_manual_name_update(self):
+        payload = {
+            "projects": [
+                {"id": "demo", "name": "Old", "path": "Game_Example"},
+                {"id": "other", "name": "Other", "path": "Game_Other"},
+            ]
+        }
+        removed = registry.remove_project(payload, "demo")
+        self.assertEqual(removed["name"], "Old")
+        self.assertEqual(len(payload["projects"]), 1)
+
+        project = registry.update_project_manual_fields(
+            payload,
+            "other",
+            name="Renamed",
+        )
+        self.assertEqual(project["name"], "Renamed")
+
 
 if __name__ == "__main__":
     unittest.main()

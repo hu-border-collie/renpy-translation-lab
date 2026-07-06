@@ -46,7 +46,19 @@ RenPy_Workspace/
   - `doctor`：深度刷新结合 `collect_doctor_report` 的 layout / mode 推断
   - `batch`：写回后 `record-batch` 更新
 
-游玩状态（`play_status`）目前仅通过编辑 JSON 或从 `GAMES.md` 导入维护；刷新不会改写。
+游玩状态（`play_status`）可在 GUI「项目详情」或 JSON 中维护；刷新不会改写。
+
+## GAMES.md 与 JSON 的同步策略
+
+| 方向 | 操作 | 结果 |
+| --- | --- | --- |
+| **JSON → MD** | GUI「同步 GAMES.md」或 `render-md` | 用 `games_registry.json` **覆盖** `GAMES.md` 表格区（含生成标记） |
+| **MD → JSON** | GUI「从 GAMES.md 导入」或 `import-md` | 解析 MD 表格写入 JSON；已有 registry 时可用 `--merge` **按路径合并** |
+| **日常真源** | 刷新、写回 `record-batch`、GUI 编辑 | 一律写入 `games_registry.json` |
+
+合并导入时：同路径项目的 `name` / 版本 / 状态 / 备注等以 GAMES.md 为准；**未出现在 MD 中的 JSON 项目会保留**。合并后若要让 Markdown 与 JSON 一致，请再执行「同步 GAMES.md」。
+
+手改 `GAMES.md` 后不要用「同步 GAMES.md」（会覆盖你的修改）；应使用「从 GAMES.md 导入」拉回 JSON。
 
 ## CLI 用法
 
@@ -105,7 +117,11 @@ python games_registry.py show --project game_example
 - **刷新当前 / 刷新全部** + **扫描模式**（快速 / 深度）
 - **停止**：刷新进行中可用；会等待当前项目的 doctor 完成后再停
 - **切换到此项目**：将工作台 `game_root` 切到选中行（存在 `work/` 时自动解析）
-- **项目详情**：可在对话框底部编辑游玩 / 翻译 / 备注并保存（翻译状态保存后标记为 `manual`）
+- **项目详情**：可改显示名称、游玩 / 翻译 / 备注；只读展示目录状态、Doctor 模式、最近刷新时间
+- **删除项目**：仅从总表移除记录，不删除磁盘上的 `Game_*` 目录
+- **搜索 / 筛选 / 排序**：按关键词、引擎、翻译状态过滤，并按名称 / 路径 / 翻译状态 / 最近刷新排序
+- **打开时自动扫描新项目**：可勾选；偏好写入 `games_registry.json` 的 `preferences`
+- **刷新成功后**会询问是否同步 `GAMES.md`（与写回后行为一致）
 - 刷新时表格**仍可滚动**；切换与刷新按钮会暂时禁用
 - 若存在未登记的 `Game_*` 目录，状态栏会提示可点击「扫描新项目」
 
@@ -165,4 +181,5 @@ python -m pytest tests/test_games_registry.py tests/test_gui_games_registry*.py 
 - 停止刷新只能在**项目之间**生效，无法打断单个项目正在进行的 doctor
 - 快速刷新对 layout 的判断是启发式的，不如深度模式准确
 - 「扫描新项目」只识别顶层 `Game_*` 与 `Game_Adastra_Universe/` 下已整理子目录，不会自动登记压缩包或未纳入 `Game_*` 结构的目录
-- 打开对话框时不会自动写入新发现的项目；需点击「扫描新项目」或运行 `discover`
+- 未勾选「打开时自动扫描」时，不会自动写入新发现的项目；需手动点「扫描新项目」或运行 `discover`
+- GUI 可改显示名称，但**不能**通过对话框变更项目路径（`path`）或移动磁盘目录

@@ -9,11 +9,13 @@ from unittest import mock
 
 import games_registry as registry
 from gui_qt.games_registry_actions import (
+    delete_registry_project,
     discover_registry_projects,
     import_registry_from_games_md,
     record_apply_batch_for_game_root,
     refresh_registry_projects,
     render_registry_games_md,
+    save_registry_dialog_preference,
     save_registry_project_fields,
 )
 from gui_qt.games_registry_view import find_project_id_for_game_root
@@ -184,6 +186,7 @@ class GuiGamesRegistryActionsTests(unittest.TestCase):
             result = save_registry_project_fields(
                 workspace,
                 project_id="demo",
+                name="Example Renamed",
                 play_status="进行中",
                 translation_status="待润色",
                 notes="校对术语。",
@@ -191,7 +194,33 @@ class GuiGamesRegistryActionsTests(unittest.TestCase):
             self.assertTrue(result.ok)
             project = registry.load_registry(workspace / registry.REGISTRY_FILENAME)["projects"][0]
             self.assertEqual(project["play_status"], "进行中")
+            self.assertEqual(project["name"], "Example Renamed")
             self.assertEqual(project["translation_status_source"], "manual")
+
+    def test_delete_registry_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            self._write_registry(
+                workspace,
+                [{"id": "demo", "name": "Example", "path": "Game_Example"}],
+            )
+            result = delete_registry_project(workspace, project_id="demo")
+            self.assertTrue(result.ok)
+            data = registry.load_registry(workspace / registry.REGISTRY_FILENAME)
+            self.assertEqual(data["projects"], [])
+
+    def test_save_registry_dialog_preference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            self._write_registry(workspace, [])
+            result = save_registry_dialog_preference(
+                workspace,
+                key="auto_discover_on_open",
+                value=True,
+            )
+            self.assertTrue(result.ok)
+            data = registry.load_registry(workspace / registry.REGISTRY_FILENAME)
+            self.assertTrue(data["preferences"]["auto_discover_on_open"])
 
 
 if __name__ == "__main__":

@@ -82,9 +82,13 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             with mock.patch.object(RegistryRefreshWorker, "start") as start_mock:
                 dialog._refresh_current_project()
                 start_mock.assert_called_once()
-            dialog._on_refresh_completed(
-                RegistryActionResult(True, "已快速刷新项目 Example。")
-            )
+            with mock.patch(
+                "gui_qt.games_registry_dialog.prompt_render_games_md_after_refresh",
+                return_value=RegistryActionResult(True, "已跳过 GAMES.md 同步。"),
+            ):
+                dialog._on_refresh_completed(
+                    RegistryActionResult(True, "已快速刷新项目 Example。")
+                )
             self.assertIn("已快速刷新项目 Example", dialog._status_label.text())
 
     def test_refresh_keeps_table_enabled_for_scrolling(self):
@@ -201,13 +205,33 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             dialog._play_status_combo.setCurrentText("进行中")
             dialog._translation_status_combo.setCurrentText("待润色")
             dialog._notes_edit.setPlainText("下一步：校对。")
+            dialog._name_edit.setText("Example Renamed")
             dialog._save_selected_project_fields()
 
             data = registry.load_registry(registry_path)
             project = data["projects"][0]
+            self.assertEqual(project["name"], "Example Renamed")
             self.assertEqual(project["play_status"], "进行中")
             self.assertEqual(project["translation_status"], "待润色")
             self.assertEqual(project["translation_status_source"], "manual")
+
+    def test_search_filter_limits_visible_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            payload = {
+                "projects": [
+                    {"id": "a", "name": "Alpha", "path": "Game_Alpha"},
+                    {"id": "b", "name": "Beta", "path": "Game_Beta"},
+                ]
+            }
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            registry_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            dialog = GamesRegistryDialog(None, workspace_root=workspace)
+            dialog._search_edit.setText("Beta")
+            dialog._apply_filters()
+            self.assertEqual(dialog._table.rowCount(), 1)
+            self.assertEqual(dialog._table.item(0, 0).text(), "Beta")
 
     def test_manual_translation_status_shows_in_tooltip(self):
         with tempfile.TemporaryDirectory() as tmp:

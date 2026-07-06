@@ -244,6 +244,11 @@ def resolve_layout_status(project: dict[str, Any]) -> str:
     return str(auto.get("doctor_layout") or "").strip()
 
 
+def resolve_doctor_mode(project: dict[str, Any]) -> str:
+    auto = project.get("auto") if isinstance(project.get("auto"), dict) else {}
+    return str(auto.get("doctor_mode") or "").strip()
+
+
 def sync_layout_status_from_auto(project: dict[str, Any]) -> None:
     auto = project.get("auto") if isinstance(project.get("auto"), dict) else {}
     doctor_layout = str(auto.get("doctor_layout") or "").strip()
@@ -737,10 +742,34 @@ def merge_discovered_projects(
     return len(added_paths), added_paths
 
 
+def get_registry_preferences(registry: dict[str, Any]) -> dict[str, Any]:
+    preferences = registry.get("preferences")
+    return dict(preferences) if isinstance(preferences, dict) else {}
+
+
+def set_registry_preference(registry: dict[str, Any], key: str, value: Any) -> None:
+    preferences = registry.setdefault("preferences", {})
+    if not isinstance(preferences, dict):
+        preferences = {}
+        registry["preferences"] = preferences
+    preferences[key] = value
+
+
+def remove_project(registry: dict[str, Any], project_id: str) -> dict[str, Any] | None:
+    projects = registry.get("projects")
+    if not isinstance(projects, list):
+        return None
+    for index, project in enumerate(projects):
+        if isinstance(project, dict) and project.get("id") == project_id:
+            return projects.pop(index)
+    return None
+
+
 def update_project_manual_fields(
     registry: dict[str, Any],
     project_id: str,
     *,
+    name: str | None = None,
     play_status: str | None = None,
     translation_status: str | None = None,
     notes: str | None = None,
@@ -749,6 +778,10 @@ def update_project_manual_fields(
     if project is None:
         return None
 
+    if name is not None:
+        text = name.strip()
+        if text:
+            project["name"] = text
     if play_status is not None:
         project["play_status"] = normalize_play_status(play_status)
     if translation_status is not None:

@@ -21,7 +21,9 @@ from games_registry import (
     record_batch,
     refresh_all,
     refresh_project,
+    remove_project,
     save_registry,
+    set_registry_preference,
     update_project_manual_fields,
     write_games_md,
 )
@@ -182,10 +184,48 @@ def discover_registry_projects(
     return RegistryActionResult(True, message)
 
 
+def save_registry_dialog_preference(
+    workspace_root: Path,
+    *,
+    key: str,
+    value: object,
+) -> RegistryActionResult:
+    registry_path = _registry_file(workspace_root)
+    if registry_path.is_file():
+        data = load_registry(registry_path)
+    else:
+        data = empty_registry(workspace_root)
+        data["workspace_root"] = workspace_root.as_posix()
+    set_registry_preference(data, key, value)
+    save_registry(registry_path, data)
+    return RegistryActionResult(True, "")
+
+
+def delete_registry_project(
+    workspace_root: Path,
+    *,
+    project_id: str,
+) -> RegistryActionResult:
+    registry_path = _registry_file(workspace_root)
+    if not registry_path.is_file():
+        return RegistryActionResult(False, f"未找到 {registry_path.name}。")
+
+    data = load_registry(registry_path)
+    removed = remove_project(data, project_id)
+    if removed is None:
+        return RegistryActionResult(False, f"未找到项目：{project_id}")
+
+    name = str(removed.get("name") or project_id)
+    data["update_summary"] = f"已从总表移除项目 {name}"
+    save_registry(registry_path, data)
+    return RegistryActionResult(True, f"已删除项目 {name}。")
+
+
 def save_registry_project_fields(
     workspace_root: Path,
     *,
     project_id: str,
+    name: str,
     play_status: str,
     translation_status: str,
     notes: str,
@@ -198,6 +238,7 @@ def save_registry_project_fields(
     project = update_project_manual_fields(
         data,
         project_id,
+        name=name,
         play_status=play_status,
         translation_status=translation_status,
         notes=notes,
@@ -268,19 +309,37 @@ def record_apply_batch_for_game_root(
     return RegistryActionResult(True, message)
 
 
-def prompt_render_games_md(parent: "QWidget | None", workspace_root: Path) -> RegistryActionResult:
+def prompt_render_games_md(
+    parent: "QWidget | None",
+    workspace_root: Path,
+    *,
+    reason: str = "已将写回结果记录到 games_registry.json。",
+) -> RegistryActionResult:
     from PySide6.QtWidgets import QMessageBox
 
     reply = QMessageBox.question(
         parent,
         "同步 GAMES.md",
-        "已将写回结果记录到 games_registry.json。\n是否据此更新 GAMES.md？",
+        f"{reason}\n是否据此更新 GAMES.md？\n\n"
+        "说明：games_registry.json 是真源；同步会用 JSON 覆盖 GAMES.md 的表格区。",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         QMessageBox.StandardButton.Yes,
     )
     if reply != QMessageBox.StandardButton.Yes:
         return RegistryActionResult(True, "已跳过 GAMES.md 同步。")
     return render_registry_games_md(workspace_root)
+
+
+def prompt_render_games_md_after_refresh(
+    parent: "QWidget | None",
+    workspace_root: Path,
+    refresh_message: str,
+) -> RegistryActionResult:
+    return prompt_render_games_md(
+        parent,
+        workspace_root,
+        reason=f"{refresh_message}\n\n刷新结果已写入 games_registry.json。",
+    )
 
 
 def handle_post_apply_registry_update(

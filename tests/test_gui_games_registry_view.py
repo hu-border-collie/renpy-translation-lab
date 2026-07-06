@@ -7,7 +7,9 @@ import unittest
 from pathlib import Path
 
 from gui_qt.games_registry_view import (
+    REGISTRY_SORT_NAME_DESC,
     RegistryRow,
+    filter_and_sort_registry_rows,
     load_registry_rows,
     registry_row_from_project,
     row_matches_game_root,
@@ -84,6 +86,44 @@ class GuiGamesRegistryViewTests(unittest.TestCase):
                 work_dir=str(work_dir),
             )
             self.assertTrue(row_matches_game_root(row, work_dir))
+
+    def test_filter_and_sort_registry_rows(self):
+        rows = [
+            RegistryRow(
+                project_id="b",
+                name="Beta",
+                path="Game_Beta",
+                version="1.0",
+                layout_status="ready",
+                play_status="待确认",
+                translation_status="待翻译",
+                notes="",
+                engine="renpy",
+                in_renpy_pipeline=True,
+                work_dir="",
+            ),
+            RegistryRow(
+                project_id="a",
+                name="Alpha",
+                path="Game_Alpha",
+                version="1.0",
+                layout_status="ready",
+                play_status="待确认",
+                translation_status="已完成",
+                notes="术语",
+                engine="unity",
+                in_renpy_pipeline=False,
+                work_dir="",
+            ),
+        ]
+        filtered = filter_and_sort_registry_rows(
+            rows,
+            search_text="术语",
+            engine_filter="unity",
+            sort_key=REGISTRY_SORT_NAME_DESC,
+        )
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].name, "Alpha")
 
 
 if __name__ == "__main__":
