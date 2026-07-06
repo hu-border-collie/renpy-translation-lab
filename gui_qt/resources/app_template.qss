@@ -118,9 +118,48 @@ QTabWidget#main_tabs::pane {
 QWidget#config_tab,
 QScrollArea#config_scroll,
 QWidget#config_scroll_viewport,
-QWidget#config_scroll_content {
+QWidget#config_scroll_content,
+QWidget#settings_right_panel,
+QStackedWidget#settings_stack,
+QFrame#settings_action_bar {
     background-color: ${bg_surface};
     border: none;
+}
+
+QListWidget#settings_nav {
+    background-color: ${bg_surface_alt};
+    border: none;
+    border-right: 1px solid ${border_default};
+    padding: 10px 8px;
+    outline: none;
+}
+
+QListWidget#settings_nav::item {
+    color: ${fg_body};
+    padding: 9px 10px;
+    margin: 2px 0;
+    border-radius: 6px;
+}
+
+QListWidget#settings_nav::item:selected {
+    background-color: ${bg_secondary};
+    color: ${fg_secondary_btn};
+    font-weight: 700;
+}
+
+QListWidget#settings_nav::item:hover:!selected {
+    background-color: ${bg_secondary_hover};
+}
+
+QLabel#settings_description_label {
+    color: ${fg_muted};
+    font-size: 12px;
+}
+
+QLabel#settings_error_label {
+    color: ${badge_danger_fg};
+    font-size: 12px;
+    font-weight: 600;
 }
 
 QWidget#diagnostics_tab,

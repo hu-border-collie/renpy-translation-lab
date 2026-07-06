@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import re
+import json
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,10 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QAbstractItemView,
     QSizePolicy,
+    QListWidget,
+    QStackedWidget,
+    QSpinBox,
+    QDoubleSpinBox,
 )
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
@@ -146,6 +151,16 @@ from .theme_helpers import (
     read_gui_theme_from_config,
     resolve_effective_theme,
     write_gui_theme_to_config,
+)
+from .settings_schema import (
+    ADVANCED_SETTING_FIELDS,
+    BASIC_RECOMMENDED_VALUES,
+    SettingField,
+    apply_advanced_settings,
+    grouped_advanced_fields,
+    read_advanced_settings,
+    recommended_advanced_settings,
+    validate_advanced_settings,
 )
 from .translation_workflow import WorkflowUpdate
 from .user_copy import (
@@ -260,6 +275,9 @@ class MainWindow(QMainWindow):
         self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
         self._config_ui_saved_snapshot: dict[str, object] = {}
+        self._advanced_setting_widgets: dict[str, QWidget] = {}
+        self._advanced_setting_error_labels: dict[str, QLabel] = {}
+        self._settings_nav_rows: dict[str, int] = {}
         self._last_main_tab_index = 0
         self._handling_config_tab_leave = False
 
@@ -340,7 +358,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "clear_log_btn"):
             self.clear_log_btn.setToolTip("清空日志 (Ctrl+L)")
         if hasattr(self, "save_config_btn"):
-            self.save_config_btn.setToolTip("保存配置 (Ctrl+S)")
+            self.save_config_btn.setToolTip("保存设置 (Ctrl+S)")
 
     def _shortcut_save_config(self) -> None:
         """Handle Ctrl+S: only save when the config tab is active."""
@@ -790,29 +808,99 @@ class MainWindow(QMainWindow):
         tab.setObjectName("config_tab")
         self._style_themed_surface(tab)
         self._config_tab = tab
-        outer_layout = QVBoxLayout(tab)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
+        self._advanced_setting_widgets = {}
+        self._advanced_setting_error_labels = {}
+        self._settings_nav_rows = {}
 
+        outer_layout = QHBoxLayout(tab)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        self.settings_nav = QListWidget()
+        self.settings_nav.setObjectName("settings_nav")
+        self.settings_nav.setFixedWidth(150)
+        self.settings_nav.setSpacing(2)
+        self.settings_nav.setFrameShape(QFrame.Shape.NoFrame)
+        outer_layout.addWidget(self.settings_nav)
+
+        right_panel = QWidget()
+        right_panel.setObjectName("settings_right_panel")
+        self._style_themed_surface(right_panel)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        outer_layout.addWidget(right_panel, 1)
+
+        self.settings_stack = QStackedWidget()
+        self.settings_stack.setObjectName("settings_stack")
+        right_layout.addWidget(self.settings_stack, 1)
+
+        pages = [
+            ("account", "账户", self._build_settings_account_page()),
+            ("project", "项目", self._build_settings_project_page()),
+            ("models", "模型", self._build_settings_models_page()),
+            ("context", "上下文", self._build_settings_context_page()),
+            ("appearance", "外观", self._build_settings_appearance_page()),
+            ("advanced", "高级", self._build_settings_advanced_page()),
+        ]
+        for index, (key, label, page) in enumerate(pages):
+            self._settings_nav_rows[key] = index
+            self.settings_nav.addItem(label)
+            self.settings_stack.addWidget(page)
+        self.settings_nav.currentRowChanged.connect(self.settings_stack.setCurrentIndex)
+        self.settings_nav.setCurrentRow(0)
+
+        action_bar = QFrame()
+        action_bar.setObjectName("settings_action_bar")
+        action_layout = QHBoxLayout(action_bar)
+        action_layout.setContentsMargins(12, 10, 12, 10)
+        action_layout.setSpacing(8)
+        action_layout.addStretch()
+        self.reload_config_btn = QPushButton("重新加载")
+        self.reload_config_btn.setObjectName("secondary_btn")
+        self.reload_config_btn.clicked.connect(self._on_reload_config)
+        action_layout.addWidget(self.reload_config_btn)
+        self.restore_defaults_btn = QPushButton("恢复推荐值")
+        self.restore_defaults_btn.setObjectName("secondary_btn")
+        self.restore_defaults_btn.clicked.connect(self._on_restore_recommended_config)
+        action_layout.addWidget(self.restore_defaults_btn)
+        self.save_config_btn = QPushButton("保存设置")
+        self.save_config_btn.setObjectName("save_config_btn")
+        self.save_config_btn.clicked.connect(self._on_save_config)
+        action_layout.addWidget(self.save_config_btn)
+        right_layout.addWidget(action_bar)
+
+        self.tab_widget.addTab(tab, "设置")
+
+    def _settings_page(self, object_name: str) -> tuple[QScrollArea, QVBoxLayout]:
         scroll = QScrollArea()
-        scroll.setObjectName("config_scroll")
+        scroll.setObjectName(f"{object_name}_scroll")
         self._style_themed_surface(scroll)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         viewport = scroll.viewport()
-        viewport.setObjectName("config_scroll_viewport")
+        viewport.setObjectName(f"{object_name}_viewport")
         self._style_themed_surface(viewport)
 
         content = QWidget()
-        content.setObjectName("config_scroll_content")
+        content.setObjectName(f"{object_name}_content")
         self._style_themed_surface(content)
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
+        scroll.setWidget(content)
+        return scroll, layout
 
-        api_box = QGroupBox("API Key")
-        api_layout = QVBoxLayout(api_box)
-        api_layout.setSpacing(10)
-        api_layout.setContentsMargins(12, 16, 12, 12)
+    def _settings_group(self, title: str) -> tuple[QGroupBox, QVBoxLayout]:
+        group = QGroupBox(title)
+        layout = QVBoxLayout(group)
+        layout.setSpacing(10)
+        layout.setContentsMargins(12, 16, 12, 12)
+        return group, layout
+
+    def _build_settings_account_page(self) -> QWidget:
+        page, layout = self._settings_page("settings_account")
+        api_box, api_layout = self._settings_group("API Key")
 
         api_hint = QLabel(
             "翻译任务需要 Gemini API 密钥。密钥保存在本地配置文件中，"
@@ -836,14 +924,40 @@ class MainWindow(QMainWindow):
         api_layout.addLayout(api_actions)
 
         layout.addWidget(api_box)
+        layout.addStretch(1)
+        return page
 
-        context_box = QGroupBox("批量上下文")
-        context_layout = QVBoxLayout(context_box)
-        context_layout.setSpacing(8)
-        context_layout.setContentsMargins(12, 16, 12, 12)
+    def _build_settings_project_page(self) -> QWidget:
+        page, layout = self._settings_page("settings_project")
+        hint = QLabel(
+            "项目路径、术语表、翻译目录和准备流程都写入 translator_config.json。"
+            "通常建议通过工作台选择项目，再在这里微调其余路径。"
+        )
+        hint.setWordWrap(True)
+        hint.setObjectName("config_hint_label")
+        layout.addWidget(hint)
+
+        for group_title in ("项目与资源", "准备流程"):
+            group = QGroupBox(group_title)
+            form = QFormLayout(group)
+            form.setSpacing(8)
+            form.setContentsMargins(12, 16, 12, 12)
+            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            for field in [item for item in ADVANCED_SETTING_FIELDS if item.category == group_title]:
+                widget = self._create_advanced_setting_widget(field)
+                self._advanced_setting_widgets[field.key] = widget
+                row = self._advanced_setting_row(field, widget)
+                form.addRow(f"{field.label}：", row)
+            layout.addWidget(group)
+        layout.addStretch(1)
+        return page
+
+    def _build_settings_context_page(self) -> QWidget:
+        page, layout = self._settings_page("settings_context")
+        context_box, context_layout = self._settings_group("批量上下文")
 
         context_hint = QLabel(
-            "启用后先保存配置，再到工作台「分析与准备」下运行预建子任务。"
+            "启用后先保存设置，再到工作台「分析与准备」下运行预建子任务。"
             "记忆库使用已有译文；原文索引只使用翻译模板里的原文；均不修改游戏脚本。"
         )
         context_hint.setWordWrap(True)
@@ -866,7 +980,11 @@ class MainWindow(QMainWindow):
         context_layout.addWidget(self.context_storage_game_cb)
 
         layout.addWidget(context_box)
+        layout.addStretch(1)
+        return page
 
+    def _build_settings_models_page(self) -> QWidget:
+        page, layout = self._settings_page("settings_models")
         config_row = QHBoxLayout()
         config_row.setSpacing(16)
 
@@ -929,8 +1047,12 @@ class MainWindow(QMainWindow):
         batch_layout.addRow("思考程度：", self.batch_thinking_combo)
 
         config_row.addWidget(batch_box, 1)
-        layout.addLayout(config_row, 1)
+        layout.addLayout(config_row)
+        layout.addStretch(1)
+        return page
 
+    def _build_settings_appearance_page(self) -> QWidget:
+        page, layout = self._settings_page("settings_appearance")
         appearance_box = QGroupBox("外观")
         appearance_layout = QFormLayout(appearance_box)
         appearance_layout.setSpacing(8)
@@ -941,19 +1063,98 @@ class MainWindow(QMainWindow):
         self.theme_combo.addItem("深色", "dark")
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         appearance_layout.addRow("主题：", self.theme_combo)
+        hint = QLabel("切换主题会立即预览；点击保存设置后才会写入 translator_config.json。")
+        hint.setWordWrap(True)
+        hint.setObjectName("config_hint_label")
+        appearance_layout.addRow("", hint)
         layout.addWidget(appearance_box)
+        layout.addStretch(1)
+        return page
 
-        save_layout = QHBoxLayout()
-        save_layout.addStretch()
-        self.save_config_btn = QPushButton("保存参数配置")
-        self.save_config_btn.setObjectName("save_config_btn")
-        self.save_config_btn.clicked.connect(self._on_save_config)
-        save_layout.addWidget(self.save_config_btn)
-        layout.addLayout(save_layout)
+    def _build_settings_advanced_page(self) -> QWidget:
+        page, layout = self._settings_page("settings_advanced")
+        hint = QLabel(
+            "高级设置会直接影响请求大小、上下文注入和本地上下文路径。"
+            "无效字段会在本页标出，并阻止保存。"
+        )
+        hint.setWordWrap(True)
+        hint.setObjectName("config_hint_label")
+        layout.addWidget(hint)
 
-        scroll.setWidget(content)
-        outer_layout.addWidget(scroll)
-        self.tab_widget.addTab(tab, "配置")
+        skipped_categories = {"项目与资源", "准备流程"}
+        for group_title, fields in grouped_advanced_fields():
+            if group_title in skipped_categories:
+                continue
+            group = QGroupBox(group_title)
+            form = QFormLayout(group)
+            form.setSpacing(8)
+            form.setContentsMargins(12, 16, 12, 12)
+            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            for field in fields:
+                widget = self._create_advanced_setting_widget(field)
+                self._advanced_setting_widgets[field.key] = widget
+                row = self._advanced_setting_row(field, widget)
+                form.addRow(f"{field.label}：", row)
+            layout.addWidget(group)
+        layout.addStretch(1)
+        return page
+
+    def _advanced_setting_row(self, field: SettingField, widget: QWidget) -> QWidget:
+        row = QWidget()
+        row_layout = QVBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(4)
+        row_layout.addWidget(widget)
+
+        desc = QLabel(field.description)
+        desc.setWordWrap(True)
+        desc.setObjectName("settings_description_label")
+        row_layout.addWidget(desc)
+
+        error = QLabel()
+        error.setWordWrap(True)
+        error.setObjectName("settings_error_label")
+        self._advanced_setting_error_labels[field.key] = error
+        row_layout.addWidget(error)
+        return row
+
+    def _create_advanced_setting_widget(self, field: SettingField) -> QWidget:
+        if field.kind == "bool":
+            widget = QCheckBox()
+        elif field.kind == "int":
+            widget = QSpinBox()
+            widget.setAccelerated(True)
+            minimum = int(field.minimum if field.minimum is not None else 0)
+            maximum = int(field.maximum if field.maximum is not None else 9999999)
+            widget.setRange(minimum, maximum)
+        elif field.kind == "float":
+            widget = QDoubleSpinBox()
+            widget.setDecimals(3)
+            widget.setSingleStep(0.01 if field.maximum == 1.0 else 0.1)
+            minimum = float(field.minimum if field.minimum is not None else -999999.0)
+            maximum = float(field.maximum if field.maximum is not None else 999999.0)
+            widget.setRange(minimum, maximum)
+        elif field.kind in {"text", "list", "json"}:
+            widget = QTextEdit()
+            widget.setAcceptRichText(False)
+            widget.setMinimumHeight(72 if field.kind != "text" else 96)
+            widget.setPlaceholderText(self._advanced_setting_placeholder(field))
+        else:
+            widget = QLineEdit()
+            widget.setClearButtonEnabled(True)
+            if field.allow_empty:
+                widget.setPlaceholderText("留空使用默认路径" if "路径" in field.label else "可留空")
+        widget.setToolTip(field.description)
+        return widget
+
+    def _advanced_setting_placeholder(self, field: SettingField) -> str:
+        if field.kind == "list":
+            return "每行一个值，或填写 JSON 数组"
+        if field.kind == "json":
+            return "留空使用默认；可填写字符串预设或 JSON"
+        if field.kind == "text":
+            return "可留空"
+        return ""
 
     def _build_log_tab(self) -> None:
         tab = QWidget()
@@ -2912,10 +3113,101 @@ class MainWindow(QMainWindow):
 
         self.api_status_label.setText(message)
 
+    def _current_theme_preference_from_ui(self) -> str:
+        combo = getattr(self, "theme_combo", None)
+        if combo is not None:
+            try:
+                preference = combo.currentData()
+            except Exception:
+                preference = None
+            if isinstance(preference, str):
+                return normalize_theme_preference(preference)
+        return normalize_theme_preference(getattr(self, "_theme_preference", DEFAULT_THEME_PREFERENCE))
+
+    def _advanced_settings_values_from_ui(self) -> dict[str, object]:
+        widgets = getattr(self, "_advanced_setting_widgets", {})
+        if not widgets:
+            return {}
+        values: dict[str, object] = {}
+        for field in ADVANCED_SETTING_FIELDS:
+            widget = widgets.get(field.key)
+            if widget is None:
+                continue
+            if field.kind == "bool":
+                values[field.key] = widget.isChecked()
+            elif field.kind in {"int", "float"}:
+                values[field.key] = widget.value()
+            elif hasattr(widget, "toPlainText"):
+                values[field.key] = widget.toPlainText().strip()
+            else:
+                values[field.key] = widget.text().strip()
+        return values
+
+    def _load_advanced_settings_to_ui(self, values: dict[str, object]) -> None:
+        widgets = getattr(self, "_advanced_setting_widgets", {})
+        if not widgets:
+            return
+        for field in ADVANCED_SETTING_FIELDS:
+            widget = widgets.get(field.key)
+            if widget is None:
+                continue
+            value = values.get(field.key, field.default)
+            if field.kind == "bool":
+                widget.setChecked(bool(value))
+            elif field.kind == "int":
+                widget.setValue(int(value))
+            elif field.kind == "float":
+                widget.setValue(float(value))
+            elif hasattr(widget, "setPlainText"):
+                widget.setPlainText(self._format_advanced_setting_text(field, value))
+            else:
+                widget.setText(str(value))
+
+    def _format_advanced_setting_text(self, field: SettingField, value: object) -> str:
+        if field.kind == "list":
+            if isinstance(value, (list, tuple, set)):
+                return "\n".join(str(item) for item in value)
+            return str(value or "")
+        if field.kind == "json":
+            if value in (None, ""):
+                return ""
+            if isinstance(value, str):
+                return value
+            try:
+                return json.dumps(value, ensure_ascii=False, indent=2)
+            except TypeError:
+                return str(value)
+        return str(value or "")
+
+    def _show_advanced_setting_errors(self, errors: dict[str, str]) -> None:
+        labels = getattr(self, "_advanced_setting_error_labels", {})
+        for key, label in labels.items():
+            label.setText(errors.get(key, ""))
+        if errors:
+            self._focus_advanced_setting(next(iter(errors)))
+
+    def _clear_advanced_setting_errors(self) -> None:
+        self._show_advanced_setting_errors({})
+
+    def _focus_advanced_setting(self, key: str) -> None:
+        row = getattr(self, "_settings_nav_rows", {}).get("advanced")
+        nav = getattr(self, "settings_nav", None)
+        if nav is not None and row is not None:
+            nav.setCurrentRow(row)
+        widget = getattr(self, "_advanced_setting_widgets", {}).get(key)
+        if widget is not None:
+            widget.setFocus()
+
+    def _show_settings_status(self, message: str, timeout: int = 4000) -> None:
+        try:
+            self.statusBar().showMessage(message, timeout)
+        except Exception:
+            return
+
     def _current_config_ui_snapshot(self) -> dict[str, object]:
         thinking_val = self.batch_thinking_combo.currentData()
         thinking_level = thinking_val if isinstance(thinking_val, str) else ""
-        return {
+        snapshot: dict[str, object] = {
             "rag_enabled": self.rag_enabled_cb.isChecked(),
             "source_index_enabled": self.source_index_enabled_cb.isChecked(),
             "bootstrap_on_build": self.bootstrap_on_build_cb.isChecked(),
@@ -2925,7 +3217,10 @@ class MainWindow(QMainWindow):
             "sync_embedding_model": self.sync_embedding_combo.currentText().strip(),
             "batch_embedding_model": self.batch_embedding_combo.currentText().strip(),
             "batch_thinking_level": thinking_level,
+            "theme": self._current_theme_preference_from_ui(),
         }
+        snapshot.update(self._advanced_settings_values_from_ui())
+        return snapshot
 
     def _config_tab_has_unsaved_changes(self) -> bool:
         if self._loading_config_to_ui:
@@ -2937,12 +3232,12 @@ class MainWindow(QMainWindow):
     def _confirm_leave_config_tab(self, previous_index: int) -> bool:
         message = QMessageBox(self)
         message.setIcon(QMessageBox.Icon.Warning)
-        message.setWindowTitle("配置尚未保存")
-        message.setText("配置页有未保存的更改。")
-        message.setInformativeText("离开前可以保存配置，或留在配置页继续检查。")
+        message.setWindowTitle("设置尚未保存")
+        message.setText("设置页有未保存的更改。")
+        message.setInformativeText("离开前可以保存设置，或留在设置页继续检查。")
         save_btn = message.addButton("保存并离开", QMessageBox.ButtonRole.AcceptRole)
         discard_btn = message.addButton("不保存离开", QMessageBox.ButtonRole.DestructiveRole)
-        stay_btn = message.addButton("留在配置页", QMessageBox.ButtonRole.RejectRole)
+        stay_btn = message.addButton("留在设置页", QMessageBox.ButtonRole.RejectRole)
         message.setDefaultButton(save_btn)
         message.exec()
         clicked = message.clickedButton()
@@ -2983,6 +3278,36 @@ class MainWindow(QMainWindow):
         if current_widget is getattr(self, "_diagnostics_tab", None):
             self._refresh_diagnostics_context()
         self._last_main_tab_index = index
+
+
+    def _on_reload_config(self) -> None:
+        self._load_config_to_ui()
+        self._refresh_api_status()
+        self._show_settings_status("已重新加载已保存设置。")
+
+    def _on_restore_recommended_config(self) -> None:
+        values = BASIC_RECOMMENDED_VALUES
+        self.rag_enabled_cb.setChecked(bool(values["rag_enabled"]))
+        self.source_index_enabled_cb.setChecked(bool(values["source_index_enabled"]))
+        self.bootstrap_on_build_cb.setChecked(bool(values["bootstrap_on_build"]))
+        self.context_storage_game_cb.setChecked(values["context_storage_location"] == "game")
+        self._set_combo_value(self.sync_model_combo, values["sync_model"])
+        self._set_combo_value(self.batch_model_combo, values["batch_model"])
+        self._set_combo_value(self.sync_embedding_combo, values["sync_embedding_model"])
+        self._set_combo_value(self.batch_embedding_combo, values["batch_embedding_model"])
+        self._set_batch_thinking_value(str(values["batch_thinking_level"]))
+        self._set_theme_combo_value(str(values["theme"]))
+        self._set_theme_preference(str(values["theme"]), persist=False)
+        advanced_defaults = recommended_advanced_settings()
+        state = getattr(self, "state", None)
+        get_game_root = getattr(state, "get_game_root", None)
+        current_game_root = get_game_root() if callable(get_game_root) else None
+        if current_game_root:
+            advanced_defaults["game_root"] = str(current_game_root)
+        self._load_advanced_settings_to_ui(advanced_defaults)
+        self._clear_advanced_setting_errors()
+        self._batch_thinking_user_changed = True
+        self._show_settings_status("已恢复推荐值，保存后生效。")
 
 
     def _on_manage_api_keys(self):
@@ -3290,7 +3615,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(
                     self,
                     "请先配置 API Key",
-                    "同步模式需要 Gemini API 密钥；请在配置页管理 API Key 或设置环境变量。",
+                    "同步模式需要 Gemini API 密钥；请在设置页管理 API Key 或设置环境变量。",
                 )
                 return
 
@@ -3718,6 +4043,10 @@ class MainWindow(QMainWindow):
         self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
         self._update_split_submit_btn(running=running)
         self.save_config_btn.setEnabled(not running)
+        if hasattr(self, "reload_config_btn"):
+            self.reload_config_btn.setEnabled(not running)
+        if hasattr(self, "restore_defaults_btn"):
+            self.restore_defaults_btn.setEnabled(not running)
         writeback_summary = self._current_writeback_summary()
         self.apply_btn.setEnabled(
             not running
@@ -4281,6 +4610,15 @@ class MainWindow(QMainWindow):
             combo.addItem(value)
             combo.setCurrentIndex(combo.count() - 1)
 
+    def _set_theme_combo_value(self, value: str) -> None:
+        combo = getattr(self, "theme_combo", None)
+        if combo is None:
+            return
+        theme = normalize_theme_preference(value)
+        idx = combo.findData(theme)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
     def _set_batch_thinking_value(self, value: str):
         idx = self.batch_thinking_combo.findData(value)
         self._updating_batch_thinking_combo = True
@@ -4300,17 +4638,18 @@ class MainWindow(QMainWindow):
         self._theme_preference = theme
         self._loading_theme_to_ui = True
         try:
-            idx = self.theme_combo.findData(theme)
-            if idx >= 0:
-                self.theme_combo.setCurrentIndex(idx)
+            self._set_theme_combo_value(theme)
         finally:
             self._loading_theme_to_ui = False
+        self._apply_theme()
 
     def _apply_theme(self) -> None:
-        if self._qt_app is None:
+        qt_app = getattr(self, "_qt_app", None)
+        if qt_app is None:
             return
         try:
-            apply_theme(self._qt_app, self._resources_dir, self._theme_preference)
+            resources_dir = getattr(self, "_resources_dir", Path(__file__).resolve().parent / "resources")
+            apply_theme(qt_app, resources_dir, self._theme_preference)
             if hasattr(self, "_log_highlighter"):
                 self._log_highlighter.update_theme(self._effective_theme_is_dark())
             QTimer.singleShot(0, self._refresh_split_status_table_after_theme_change)
@@ -4338,7 +4677,7 @@ class MainWindow(QMainWindow):
         preference = self.theme_combo.currentData()
         if not isinstance(preference, str):
             return
-        self._set_theme_preference(preference, persist=True)
+        self._set_theme_preference(preference, persist=False)
 
     def _on_system_color_scheme_changed(self, _scheme: object) -> None:
         if self._theme_preference != THEME_SYSTEM:
@@ -4365,7 +4704,6 @@ class MainWindow(QMainWindow):
             self.context_storage_game_cb.setChecked(storage_location == "game")
             self._batch_thinking_config_has_key = "thinking_level" in batch_config
 
-            # Populate sync model
             sync_models = sync_config.get("models")
             sync_val = ""
             if isinstance(sync_models, list):
@@ -4376,26 +4714,36 @@ class MainWindow(QMainWindow):
             elif isinstance(sync_models, str):
                 sync_val = self._config_string(sync_models)
             if not sync_val:
-                sync_val = sync_config.get("model", "")
+                sync_val = self._config_string(sync_config.get("model", ""))
+            if not sync_val:
+                sync_val = str(BASIC_RECOMMENDED_VALUES["sync_model"])
             self._set_combo_value(self.sync_model_combo, sync_val)
 
-            # Populate batch model
-            batch_val = batch_config.get("model", "")
+            batch_val = self._config_string(batch_config.get("model", "")) or str(
+                BASIC_RECOMMENDED_VALUES["batch_model"]
+            )
             self._set_combo_value(self.batch_model_combo, batch_val)
 
-            # Populate sync embedding
-            sync_emb_val = sync_rag_config.get("embedding_model", "")
+            sync_emb_val = self._config_string(sync_rag_config.get("embedding_model", "")) or str(
+                BASIC_RECOMMENDED_VALUES["sync_embedding_model"]
+            )
             self._set_combo_value(self.sync_embedding_combo, sync_emb_val)
 
-            # Populate batch embedding
-            batch_emb_val = batch_rag_config.get("embedding_model", "")
+            batch_emb_val = self._config_string(batch_rag_config.get("embedding_model", "")) or str(
+                BASIC_RECOMMENDED_VALUES["batch_embedding_model"]
+            )
             self._set_combo_value(self.batch_embedding_combo, batch_emb_val)
 
             self._on_batch_model_changed(batch_val)
-            # Populate thinking level. Missing config keeps the CLI's supported-model
-            # default visible; choosing "not enabled" then saves an explicit empty value.
             thinking_val = self._batch_thinking_value_for_load(batch_config, batch_val)
             self._set_batch_thinking_value(thinking_val)
+            advanced_values = read_advanced_settings(config)
+            get_game_root = getattr(self.state, "get_game_root", None)
+            current_game_root = get_game_root() if callable(get_game_root) else None
+            if current_game_root and not self._config_string(advanced_values.get("game_root")):
+                advanced_values["game_root"] = str(current_game_root)
+            self._load_advanced_settings_to_ui(advanced_values)
+            self._clear_advanced_setting_errors()
         finally:
             self._batch_thinking_user_changed = False
             self._loading_config_to_ui = False
@@ -4474,21 +4822,56 @@ class MainWindow(QMainWindow):
             ):
                 batch_config["thinking_level"] = thinking_level
 
+            write_gui_theme_to_config(config, self._current_theme_preference_from_ui())
+
+            advanced_values = self._advanced_settings_values_from_ui()
+            if advanced_values:
+                complete_advanced_values = read_advanced_settings(config)
+                complete_advanced_values.update(advanced_values)
+                if not self._config_string(complete_advanced_values.get("game_root")):
+                    get_game_root = getattr(self.state, "get_game_root", None)
+                    current_game_root = get_game_root() if callable(get_game_root) else None
+                    if current_game_root:
+                        complete_advanced_values["game_root"] = str(current_game_root)
+                        game_root_widget = getattr(self, "_advanced_setting_widgets", {}).get("game_root")
+                        if game_root_widget is not None and hasattr(game_root_widget, "setText"):
+                            game_root_widget.setText(str(current_game_root))
+                errors = validate_advanced_settings(complete_advanced_values)
+                if errors:
+                    self._show_advanced_setting_errors(errors)
+                    self._show_settings_status("高级设置有无效字段，未保存。", 6000)
+                    return False
+                self._clear_advanced_setting_errors()
+                apply_advanced_settings(config, complete_advanced_values)
+
             self.state.save_translator_config(config)
+            self._sync_state_game_root_from_settings(config.get("game_root"))
             if work_mode_spec(self._current_work_mode()).is_bootstrap:
                 self._apply_work_mode_ui(refresh_manifest_writeback=False)
-            self._append_log("配置已成功保存至 translator_config.json。")
+            self._append_log("设置已成功保存至 translator_config.json。")
             try:
-                ToastNotification.show_toast(self, "✓ 配置已成功保存")
+                ToastNotification.show_toast(self, "✓ 设置已成功保存")
             except Exception as exc:
                 self._append_log(f"提示通知显示失败：{exc}")
-                self.statusBar().showMessage("配置已成功保存", 3000)
+                self.statusBar().showMessage("设置已成功保存", 3000)
             self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
             return True
         except Exception as exc:
-            QMessageBox.warning(self, "保存配置失败", str(exc))
-            self._append_log(f"保存配置失败：{exc}")
+            QMessageBox.warning(self, "保存设置失败", str(exc))
+            self._append_log(f"保存设置失败：{exc}")
             return False
+
+
+    def _sync_state_game_root_from_settings(self, value: object) -> None:
+        if not isinstance(value, str) or not value.strip():
+            return
+        try:
+            normalized, _adjusted = self.state.normalize_game_root(value)
+            self.state._game_root = normalized
+            self.state._game_root_redirect_from = None
+            self._refresh_project_label()
+        except Exception as exc:
+            self._append_log(f"同步设置页 game_root 到当前窗口状态失败：{exc}")
 
 
 def run_app(argv: list[str] | None = None) -> int:
