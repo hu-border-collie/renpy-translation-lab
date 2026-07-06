@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QPalette
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -12,15 +13,28 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .theme import system_prefers_dark
+from .theme_helpers import DEFAULT_THEME_PREFERENCE, THEME_DARK, THEME_LIGHT, resolve_effective_theme
+from .theme_tokens import tokens_for_theme
 
-def _is_dark_palette(widget: QWidget) -> bool:
-    """Return *True* when the widget's palette looks like a dark theme.
 
-    Heuristic: if the window-background lightness is below 50 % the
-    palette is considered "dark".
-    """
-    bg = widget.palette().color(QPalette.ColorRole.Window)
-    return bg.lightnessF() < 0.5
+def _effective_theme_name(widget: QWidget) -> str:
+    """Resolve the app's effective theme instead of inferring from QPalette."""
+    current: QWidget | None = widget
+    while current is not None:
+        is_dark = getattr(current, "_effective_theme_is_dark", None)
+        if callable(is_dark):
+            return THEME_DARK if is_dark() else THEME_LIGHT
+        preference = getattr(current, "_theme_preference", None)
+        if preference is not None:
+            qt_app = getattr(current, "_qt_app", None)
+            system_is_dark = system_prefers_dark(qt_app) if qt_app is not None else None
+            return resolve_effective_theme(preference, system_is_dark=system_is_dark)
+        current = current.parentWidget()
+
+    app = QApplication.instance()
+    system_is_dark = system_prefers_dark(app) if app is not None else None
+    return resolve_effective_theme(DEFAULT_THEME_PREFERENCE, system_is_dark=system_is_dark)
 
 
 class EmptyStateWidget(QWidget):
@@ -114,11 +128,11 @@ class EmptyStateWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _apply_theme_colors(self) -> None:
-        """Set foreground colours based on the current palette brightness."""
-        dark = _is_dark_palette(self)
-        icon_color = "#9ca3af" if dark else "#64748b"
-        title_color = "#d1d5db" if dark else "#475569"
-        desc_color = "#9ca3af" if dark else "#64748b"
+        """Set foreground colours from the app's effective theme tokens."""
+        tokens = tokens_for_theme(_effective_theme_name(self))
+        icon_color = tokens["fg_muted"]
+        title_color = tokens["fg_secondary"]
+        desc_color = tokens["fg_muted"]
 
         self._icon_label.setStyleSheet(f"color: {icon_color}; background: transparent;")
         self._title_label.setStyleSheet(f"color: {title_color}; background: transparent;")

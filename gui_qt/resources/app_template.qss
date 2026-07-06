@@ -1,7 +1,7 @@
 /* Premium Slate Theme for the GUI Workbench — Token-based Template
  *
  * This file is a template processed by theme_helpers.load_theme_stylesheet().
- * Colour placeholders use Python string.Template syntax: ${token_name}
+ * Colour placeholders use Python string.Template syntax (e.g. bg_window).
  * Token definitions live in theme_tokens.py.
  */
 

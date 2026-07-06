@@ -122,6 +122,7 @@ class ToastNotification(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self._setup_ui(message)
         self._apply_style()

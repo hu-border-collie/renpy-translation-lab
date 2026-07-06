@@ -176,7 +176,7 @@ from .workflow_progress import (
 from .widget_helpers import NoWheelComboBox, NoWheelTabWidget
 from .wizard_timeline import WizardTimeline
 from .log_highlighter import LogHighlighter
-from .status_icons import format_status_text
+from .status_icons import StatusBadge
 from .toast_widget import ToastNotification
 
 # Diagnostics splitter: idle favors task context; running tasks expand the log.
@@ -322,8 +322,8 @@ class MainWindow(QMainWindow):
         clear_log_shortcut.activated.connect(self._on_clear_log)
 
         # Config save — only active when config tab is shown
-        save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
-        save_shortcut.activated.connect(self._shortcut_save_config)
+        self._save_config_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
+        self._save_config_shortcut.activated.connect(self._shortcut_save_config)
 
         # Tab switching
         for i in range(min(3, self.tab_widget.count())):
@@ -344,6 +344,8 @@ class MainWindow(QMainWindow):
 
     def _shortcut_save_config(self) -> None:
         """Handle Ctrl+S: only save when the config tab is active."""
+        if hasattr(self, "save_config_btn") and not self.save_config_btn.isEnabled():
+            return
         if hasattr(self, "tab_widget") and hasattr(self, "_config_tab"):
             if self.tab_widget.currentWidget() is self._config_tab:
                 self._on_save_config()
@@ -584,8 +586,7 @@ class MainWindow(QMainWindow):
         doctor_layout = QVBoxLayout(doctor_tab)
         doctor_layout.setContentsMargins(12, 12, 12, 12)
         doctor_layout.setSpacing(6)
-        self.doctor_status_label = QLabel()
-        self.doctor_status_label.setObjectName("doctor_status_label")
+        self.doctor_status_label = StatusBadge("doctor_status_label")
         doctor_layout.addWidget(self.doctor_status_label)
         doctor_scroll = QScrollArea()
         doctor_scroll.setObjectName("doctor_summary_scroll")
@@ -639,8 +640,7 @@ class MainWindow(QMainWindow):
         workflow_layout = QVBoxLayout(workflow_content)
         workflow_layout.setContentsMargins(12, 12, 12, 12)
         workflow_layout.setSpacing(6)
-        self.workflow_status_label = QLabel()
-        self.workflow_status_label.setObjectName("workflow_status_label")
+        self.workflow_status_label = StatusBadge("workflow_status_label")
         workflow_layout.addWidget(self.workflow_status_label)
         self.workflow_message_label = QLabel()
         self.workflow_message_label.setWordWrap(True)
@@ -710,8 +710,7 @@ class MainWindow(QMainWindow):
         writeback_layout = QVBoxLayout(writeback_tab)
         writeback_layout.setContentsMargins(12, 12, 12, 12)
         writeback_layout.setSpacing(6)
-        self.writeback_status_label = QLabel()
-        self.writeback_status_label.setObjectName("writeback_status_label")
+        self.writeback_status_label = StatusBadge("writeback_status_label")
         writeback_layout.addWidget(self.writeback_status_label)
         writeback_scroll = QScrollArea()
         writeback_scroll.setWidgetResizable(True)
@@ -1008,8 +1007,7 @@ class MainWindow(QMainWindow):
         context_layout.setContentsMargins(12, 12, 12, 12)
         context_layout.setSpacing(10)
 
-        self.diagnostics_status_label = QLabel()
-        self.diagnostics_status_label.setObjectName("diagnostics_status_label")
+        self.diagnostics_status_label = StatusBadge("diagnostics_status_label")
         context_layout.addWidget(self.diagnostics_status_label)
         self.diagnostics_message_label = QLabel()
         self.diagnostics_message_label.setWordWrap(True)
@@ -2118,10 +2116,7 @@ class MainWindow(QMainWindow):
             return
         self._diagnostics_context_fingerprint = fingerprint
 
-        self.diagnostics_status_label.setText(format_status_text(context.status, context.heading))
-        self.diagnostics_status_label.setProperty("status", context.status)
-        self.diagnostics_status_label.style().unpolish(self.diagnostics_status_label)
-        self.diagnostics_status_label.style().polish(self.diagnostics_status_label)
+        self.diagnostics_status_label.set_status(context.status, context.heading)
         self.diagnostics_message_label.setText(context.message)
         self.diagnostics_facts_label.setText("\n".join(context.facts))
 
@@ -3747,6 +3742,8 @@ class MainWindow(QMainWindow):
             self._translate_shortcut.setEnabled(self.translate_btn.isEnabled())
         if hasattr(self, "_kill_shortcut"):
             self._kill_shortcut.setEnabled(self.kill_btn.isEnabled())
+        if hasattr(self, "_save_config_shortcut"):
+            self._save_config_shortcut.setEnabled(self.save_config_btn.isEnabled())
 
     def _set_workflow_summary(
         self,
@@ -3755,10 +3752,7 @@ class MainWindow(QMainWindow):
         message: str,
         facts: list[str] | None = None,
     ):
-        self.workflow_status_label.setText(format_status_text(status, heading))
-        self.workflow_status_label.setProperty("status", status)
-        self.workflow_status_label.style().unpolish(self.workflow_status_label)
-        self.workflow_status_label.style().polish(self.workflow_status_label)
+        self.workflow_status_label.set_status(status, heading)
         self.workflow_message_label.setText(message)
         self.workflow_facts_label.setText("\n".join(facts or []))
         self._update_resume_btn_text()
@@ -3825,10 +3819,7 @@ class MainWindow(QMainWindow):
     def _set_writeback_summary(self, summary: WritebackSummary) -> None:
         self._writeback_summary = summary
         self._writeback_manifest_path = summary.manifest_path
-        self.writeback_status_label.setText(format_status_text(summary.status, summary.heading))
-        self.writeback_status_label.setProperty("status", summary.status)
-        self.writeback_status_label.style().unpolish(self.writeback_status_label)
-        self.writeback_status_label.style().polish(self.writeback_status_label)
+        self.writeback_status_label.set_status(summary.status, summary.heading)
         self.writeback_message_label.setText(summary.message)
         self.writeback_facts_label.setText("\n".join(summary.facts))
         self._set_details_label(self.writeback_details_label, summary.findings)
@@ -3872,10 +3863,7 @@ class MainWindow(QMainWindow):
 
     def _set_doctor_summary(self, summary: DoctorSummary):
         self._doctor_summary_mode = summary.mode
-        self.doctor_status_label.setText(format_status_text(summary.status, summary.heading))
-        self.doctor_status_label.setProperty("status", summary.status)
-        self.doctor_status_label.style().unpolish(self.doctor_status_label)
-        self.doctor_status_label.style().polish(self.doctor_status_label)
+        self.doctor_status_label.set_status(summary.status, summary.heading)
         self.doctor_message_label.setText(summary.message)
         self.doctor_facts_label.setText("\n".join(summary.facts))
         self._set_details_label(self.doctor_details_label, [])
@@ -4492,7 +4480,8 @@ class MainWindow(QMainWindow):
             self._append_log("配置已成功保存至 translator_config.json。")
             try:
                 ToastNotification.show_toast(self, "✓ 配置已成功保存")
-            except Exception:
+            except Exception as exc:
+                self._append_log(f"提示通知显示失败：{exc}")
                 self.statusBar().showMessage("配置已成功保存", 3000)
             self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
             return True

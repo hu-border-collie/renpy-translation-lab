@@ -74,7 +74,7 @@ _SUCCESS_PATTERN = re.compile(
 )
 _SEPARATOR_PATTERN = re.compile(r"^={3,}.*", re.MULTILINE)
 _FILE_PATH_PATTERN = re.compile(
-    r"(?:[A-Za-z]:\\[^\s:*?\"<>|]+)|(?:/[\w./-]+)",
+    r"(?:[A-Za-z]:\\[^\s:*?\"<>|]+)|(?:(?<!\d)/[\w.-]+(?:/[\w.-]+)+)",
 )
 _JSON_KEY_PATTERN = re.compile(r'"[^"]+"\s*:')
 
