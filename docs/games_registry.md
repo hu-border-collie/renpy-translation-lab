@@ -56,6 +56,12 @@ RenPy_Workspace/
 # 从现有 GAMES.md 初始化 / 合并导入（首次迁移时常用）
 python games_registry.py import-md
 
+# 按路径合并到已有 registry（不覆盖未出现在 GAMES.md 中的项目）
+python games_registry.py import-md --merge
+
+# 扫描工作区 Game_* 目录，登记尚未出现在 registry 中的项目
+python games_registry.py discover
+
 # 快速刷新全部项目（默认：扫磁盘 + TL 行数，不跑 doctor）
 python games_registry.py refresh --all
 
@@ -91,12 +97,17 @@ python games_registry.py show --project game_example
 
 安装 GUI 依赖后，在工作台项目区点击 **「工作区项目…」** 打开对话框：
 
-- 表格列：项目、路径、版本、游玩、翻译
+- 表格列：项目、路径、版本、**目录状态**、游玩、翻译
 - 悬停 tooltip：自动扫描摘要、翻译状态来源、备注等
+- **从 GAMES.md 导入**：首次接入或按路径合并更新总表（无需先跑 CLI）
+- **扫描新项目**：发现工作区里尚未登记的 `Game_*` 目录并加入总表（默认快速刷新）
+- **同步 GAMES.md**：由当前 `games_registry.json` 重新生成 Markdown 总表
 - **刷新当前 / 刷新全部** + **扫描模式**（快速 / 深度）
 - **停止**：刷新进行中可用；会等待当前项目的 doctor 完成后再停
 - **切换到此项目**：将工作台 `game_root` 切到选中行（存在 `work/` 时自动解析）
+- **项目详情**：可在对话框底部编辑游玩 / 翻译 / 备注并保存（翻译状态保存后标记为 `manual`）
 - 刷新时表格**仍可滚动**；切换与刷新按钮会暂时禁用
+- 若存在未登记的 `Game_*` 目录，状态栏会提示可点击「扫描新项目」
 
 ### 与写回流程的联动
 
@@ -124,20 +135,22 @@ python games_registry.py show --project game_example
 **首次接入已有 `GAMES.md`：**
 
 ```text
-import-md → 检查 games_registry.json → （可选）refresh --all → render-md
+GUI「工作区项目…」→ 从 GAMES.md 导入 → （可选）扫描新项目 / 刷新全部 → 同步 GAMES.md
 ```
+
+也可使用 CLI：`import-md` → 检查 `games_registry.json` → （可选）`discover` / `refresh --all` → `render-md`
 
 **日常维护：**
 
 ```text
 GUI 切换项目 → 环境检查 → 翻译 / 写回
                 ↓ 写回后可选同步 GAMES.md
-偶尔：工作区项目… → 快速刷新全部 或 深度刷新单个疑难项
+偶尔：工作区项目… → 扫描新项目 / 快速刷新全部 / 深度刷新单个疑难项
 ```
 
 **编辑游玩 / 备注 / 人工翻译状态：**
 
-直接改 `games_registry.json`（或将 `translation_status_source` 设为 `manual` 后刷新不会覆盖翻译列），再 `render-md`。
+在 GUI「项目详情」面板保存，或直接改 `games_registry.json`，再「同步 GAMES.md」或 `render-md`。
 
 ## 测试
 
@@ -151,5 +164,5 @@ python -m pytest tests/test_games_registry.py tests/test_gui_games_registry*.py 
 
 - 停止刷新只能在**项目之间**生效，无法打断单个项目正在进行的 doctor
 - 快速刷新对 layout 的判断是启发式的，不如深度模式准确
-- 不会自动发现工作区新建文件夹；需 `import-md` 或手动添加 JSON 条目
-- GUI 暂不支持在对话框内编辑游玩 / 翻译 / 备注字段
+- 「扫描新项目」只识别顶层 `Game_*` 与 `Game_Adastra_Universe/` 下已整理子目录，不会自动登记压缩包或未纳入 `Game_*` 结构的目录
+- 打开对话框时不会自动写入新发现的项目；需点击「扫描新项目」或运行 `discover`

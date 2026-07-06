@@ -9,10 +9,13 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QDialogButtonBox,
+    QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QTableWidget,
@@ -21,19 +24,27 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from games_registry import REFRESH_MODE_DEEP, REFRESH_MODE_LITE
+from games_registry import PLAY_STATUSES, REFRESH_MODE_DEEP, REFRESH_MODE_LITE, TRANSLATION_STATUSES
 
-from .games_registry_actions import RegistryActionResult
+from .games_registry_actions import (
+    RegistryActionResult,
+    discover_registry_projects,
+    import_registry_from_games_md,
+    render_registry_games_md,
+    save_registry_project_fields,
+)
 from .games_registry_worker import RegistryRefreshWorker
 from .widget_helpers import NoWheelComboBox
 from .games_registry_view import (
     REGISTRY_TABLE_COLUMNS,
     RegistryRow,
+    count_undiscovered_projects,
     format_registry_status_message,
     load_registry_rows,
     resolve_registry_path,
     row_matches_game_root,
 )
+
 
 class GamesRegistryDialog(QDialog):
     """Browse all workspace projects and switch the active game root."""
@@ -50,12 +61,13 @@ class GamesRegistryDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setWindowTitle("工作区项目总览")
         self.setModal(True)
-        self.resize(920, 580)
+        self.resize(980, 680)
 
         self._workspace_root = workspace_root
         self._rows: list[RegistryRow] = []
         self._selected_project_root = ""
         self._refresh_worker: RegistryRefreshWorker | None = None
+        self._edit_loading = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -66,6 +78,22 @@ class GamesRegistryDialog(QDialog):
         title.setObjectName("diagnostics_section_label")
         header.addWidget(title)
         header.addStretch(1)
+
+        self._import_md_btn = QPushButton("从 GAMES.md 导入")
+        self._import_md_btn.setObjectName("secondary_btn")
+        self._import_md_btn.clicked.connect(self._import_from_games_md)
+        header.addWidget(self._import_md_btn)
+
+        self._discover_btn = QPushButton("扫描新项目")
+        self._discover_btn.setObjectName("secondary_btn")
+        self._discover_btn.setToolTip("扫描工作区中的 Game_* 目录，并把未登记的项目加入总表")
+        self._discover_btn.clicked.connect(self._discover_new_projects)
+        header.addWidget(self._discover_btn)
+
+        self._sync_md_btn = QPushButton("同步 GAMES.md")
+        self._sync_md_btn.setObjectName("secondary_btn")
+        self._sync_md_btn.clicked.connect(self._sync_games_md)
+        header.addWidget(self._sync_md_btn)
 
         self._refresh_current_btn = QPushButton("刷新当前")
         self._refresh_current_btn.setObjectName("secondary_btn")
@@ -126,12 +154,39 @@ class GamesRegistryDialog(QDialog):
         table_header.setStretchLastSection(True)
         table_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         table_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        table_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        table_header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        table_header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        for column_index in range(2, len(REGISTRY_TABLE_COLUMNS)):
+            table_header.setSectionResizeMode(column_index, QHeaderView.ResizeMode.ResizeToContents)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.cellDoubleClicked.connect(self._on_row_activated)
         layout.addWidget(self._table, 1)
+
+        self._edit_group = QGroupBox("项目详情")
+        self._edit_group.setObjectName("games_registry_edit_group")
+        edit_layout = QFormLayout(self._edit_group)
+        edit_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        self._play_status_combo = NoWheelComboBox()
+        self._play_status_combo.addItems(sorted(PLAY_STATUSES))
+        edit_layout.addRow("游玩状态", self._play_status_combo)
+
+        self._translation_status_combo = NoWheelComboBox()
+        self._translation_status_combo.addItems(sorted(TRANSLATION_STATUSES))
+        edit_layout.addRow("翻译状态", self._translation_status_combo)
+
+        self._notes_edit = QPlainTextEdit()
+        self._notes_edit.setPlaceholderText("备注 / 下一步")
+        self._notes_edit.setFixedHeight(72)
+        edit_layout.addRow("备注", self._notes_edit)
+
+        edit_actions = QHBoxLayout()
+        edit_actions.addStretch(1)
+        self._save_fields_btn = QPushButton("保存修改")
+        self._save_fields_btn.setObjectName("secondary_btn")
+        self._save_fields_btn.clicked.connect(self._save_selected_project_fields)
+        self._save_fields_btn.setEnabled(False)
+        edit_actions.addWidget(self._save_fields_btn)
+        edit_layout.addRow("", edit_actions)
+        layout.addWidget(self._edit_group)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
@@ -164,6 +219,7 @@ class GamesRegistryDialog(QDialog):
                 row.name,
                 row.path,
                 row.version,
+                row.layout_status,
                 row.play_status,
                 row.translation_status,
             )
@@ -184,6 +240,12 @@ class GamesRegistryDialog(QDialog):
             status_message = format_registry_status_message(len(rows), summary)
         else:
             status_message = summary or format_registry_status_message(0, "")
+        undiscovered = count_undiscovered_projects(
+            workspace_root=self._workspace_root,
+            registry_path=registry_path,
+        )
+        if undiscovered > 0:
+            status_message = f"{status_message} 发现 {undiscovered} 个未登记的 Game_* 目录，可点击「扫描新项目」。"
         if not self._progress_bar.isVisible():
             self._status_label.setText(status_message)
 
@@ -204,18 +266,53 @@ class GamesRegistryDialog(QDialog):
     def _is_refresh_running(self) -> bool:
         return self._refresh_worker is not None and self._refresh_worker.isRunning()
 
+    def _populate_edit_panel(self, row: RegistryRow | None) -> None:
+        self._edit_loading = True
+        try:
+            if row is None:
+                self._play_status_combo.setCurrentText("待确认")
+                self._translation_status_combo.setCurrentText("待确认")
+                self._notes_edit.clear()
+                return
+
+            play_status = row.play_status if row.play_status in PLAY_STATUSES else "待确认"
+            translation_status = (
+                row.translation_status
+                if row.translation_status in TRANSLATION_STATUSES
+                else "待确认"
+            )
+            self._play_status_combo.setCurrentText(play_status)
+            self._translation_status_combo.setCurrentText(translation_status)
+            self._notes_edit.setPlainText(row.notes)
+        finally:
+            self._edit_loading = False
+
     def _on_selection_changed(self) -> None:
         row = self._selected_row()
         can_use_row = row is not None and bool(row.project_id)
+        self._populate_edit_panel(row)
         if not self._is_refresh_running():
             self._switch_btn.setEnabled(row is not None and bool(row.work_dir))
             self._refresh_current_btn.setEnabled(can_use_row)
+            self._save_fields_btn.setEnabled(can_use_row)
 
     def _selected_refresh_mode(self) -> str:
         mode = self._refresh_mode_combo.currentData()
         if mode in {REFRESH_MODE_LITE, REFRESH_MODE_DEEP}:
             return str(mode)
         return REFRESH_MODE_LITE
+
+    def _set_maintenance_busy(self, busy: bool) -> None:
+        for widget in (
+            self._import_md_btn,
+            self._discover_btn,
+            self._sync_md_btn,
+            self._save_fields_btn,
+            self._play_status_combo,
+            self._translation_status_combo,
+            self._notes_edit,
+        ):
+            widget.setEnabled(not busy)
 
     def _set_refresh_busy(self, busy: bool) -> None:
         for widget in (
@@ -225,6 +322,7 @@ class GamesRegistryDialog(QDialog):
             self._switch_btn,
         ):
             widget.setEnabled(not busy)
+        self._set_maintenance_busy(busy)
         self._stop_refresh_btn.setEnabled(busy)
         self._progress_bar.setVisible(busy)
         if busy:
@@ -232,6 +330,65 @@ class GamesRegistryDialog(QDialog):
         else:
             self._progress_bar.setFormat("准备刷新…")
             self._on_selection_changed()
+
+    def _import_from_games_md(self) -> None:
+        if self._is_refresh_running():
+            return
+        registry_path = resolve_registry_path(self._workspace_root)
+        merge = registry_path.is_file()
+        if merge:
+            reply = QMessageBox.question(
+                self,
+                "从 GAMES.md 导入",
+                "已存在 games_registry.json。\n选择「是」按路径合并更新；选择「否」将覆盖现有总表。",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Cancel:
+                return
+            merge = reply == QMessageBox.StandardButton.Yes
+
+        result = import_registry_from_games_md(self._workspace_root, merge=merge)
+        self._handle_action_result(result, title="导入失败")
+
+    def _discover_new_projects(self) -> None:
+        if self._is_refresh_running():
+            return
+        result = discover_registry_projects(
+            self._workspace_root,
+            refresh_new=True,
+            mode=self._selected_refresh_mode(),
+        )
+        self._handle_action_result(result, title="扫描失败")
+
+    def _sync_games_md(self) -> None:
+        if self._is_refresh_running():
+            return
+        result = render_registry_games_md(self._workspace_root)
+        self._handle_action_result(result, title="同步失败")
+
+    def _save_selected_project_fields(self) -> None:
+        if self._is_refresh_running():
+            return
+        row = self._selected_row()
+        if row is None or not row.project_id:
+            return
+        result = save_registry_project_fields(
+            self._workspace_root,
+            project_id=row.project_id,
+            play_status=self._play_status_combo.currentText(),
+            translation_status=self._translation_status_combo.currentText(),
+            notes=self._notes_edit.toPlainText(),
+        )
+        self._handle_action_result(result, title="保存失败")
+
+    def _handle_action_result(self, result: RegistryActionResult, *, title: str) -> None:
+        self._reload_table()
+        self._status_label.setText(result.message)
+        if not result.ok:
+            QMessageBox.warning(self, title, result.message)
 
     def _on_refresh_progress(self, current: int, total: int, name: str) -> None:
         self._progress_bar.setMaximum(max(total, 1))

@@ -9,9 +9,12 @@ from unittest import mock
 
 import games_registry as registry
 from gui_qt.games_registry_actions import (
+    discover_registry_projects,
+    import_registry_from_games_md,
     record_apply_batch_for_game_root,
     refresh_registry_projects,
     render_registry_games_md,
+    save_registry_project_fields,
 )
 from gui_qt.games_registry_view import find_project_id_for_game_root
 
@@ -133,6 +136,62 @@ class GuiGamesRegistryActionsTests(unittest.TestCase):
             result = render_registry_games_md(workspace)
             self.assertTrue(result.ok)
             self.assertTrue((workspace / registry.GAMES_MD_FILENAME).is_file())
+
+    def test_import_registry_from_games_md(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / registry.GAMES_MD_FILENAME).write_text(
+                "\n".join(
+                    [
+                        "| Alpha | `Game_Alpha` | 1.0 | ready | 待确认 | 待翻译 | 下一步。 |",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            result = import_registry_from_games_md(workspace)
+            self.assertTrue(result.ok)
+            data = registry.load_registry(workspace / registry.REGISTRY_FILENAME)
+            self.assertEqual(data["projects"][0]["path"], "Game_Alpha")
+
+    def test_discover_registry_projects_adds_new_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "Game_New").mkdir()
+            with mock.patch(
+                "gui_qt.games_registry_actions.refresh_project",
+                side_effect=lambda data, project_id, workspace_root, **kwargs: data["projects"][-1],
+            ):
+                result = discover_registry_projects(workspace)
+            self.assertTrue(result.ok)
+            self.assertIn("Game_New", result.message)
+            data = registry.load_registry(workspace / registry.REGISTRY_FILENAME)
+            self.assertEqual(data["projects"][0]["path"], "Game_New")
+
+    def test_save_registry_project_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            self._write_registry(
+                workspace,
+                [
+                    {
+                        "id": "demo",
+                        "name": "Example",
+                        "path": "Game_Example",
+                        "translation_status_source": "scan",
+                    }
+                ],
+            )
+            result = save_registry_project_fields(
+                workspace,
+                project_id="demo",
+                play_status="进行中",
+                translation_status="待润色",
+                notes="校对术语。",
+            )
+            self.assertTrue(result.ok)
+            project = registry.load_registry(workspace / registry.REGISTRY_FILENAME)["projects"][0]
+            self.assertEqual(project["play_status"], "进行中")
+            self.assertEqual(project["translation_status_source"], "manual")
 
 
 if __name__ == "__main__":

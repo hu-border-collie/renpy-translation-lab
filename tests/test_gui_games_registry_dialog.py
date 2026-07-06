@@ -167,6 +167,48 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             self.assertIsNotNone(worker)
             self.assertEqual(worker._mode, "deep")
 
+    def test_dialog_exposes_setup_and_edit_controls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            registry_path.write_text(json.dumps({"projects": []}), encoding="utf-8")
+
+            dialog = GamesRegistryDialog(None, workspace_root=workspace)
+            self.assertEqual(dialog._table.columnCount(), 6)
+            self.assertTrue(hasattr(dialog, "_import_md_btn"))
+            self.assertTrue(hasattr(dialog, "_discover_btn"))
+            self.assertTrue(hasattr(dialog, "_sync_md_btn"))
+            self.assertTrue(hasattr(dialog, "_save_fields_btn"))
+
+    def test_save_selected_project_fields_updates_registry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            payload = {
+                "projects": [
+                    {
+                        "id": "demo",
+                        "name": "Example",
+                        "path": "Game_Example",
+                        "translation_status_source": "scan",
+                    }
+                ]
+            }
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            registry_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            dialog = GamesRegistryDialog(None, workspace_root=workspace)
+            dialog._table.selectRow(0)
+            dialog._play_status_combo.setCurrentText("进行中")
+            dialog._translation_status_combo.setCurrentText("待润色")
+            dialog._notes_edit.setPlainText("下一步：校对。")
+            dialog._save_selected_project_fields()
+
+            data = registry.load_registry(registry_path)
+            project = data["projects"][0]
+            self.assertEqual(project["play_status"], "进行中")
+            self.assertEqual(project["translation_status"], "待润色")
+            self.assertEqual(project["translation_status_source"], "manual")
+
     def test_manual_translation_status_shows_in_tooltip(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

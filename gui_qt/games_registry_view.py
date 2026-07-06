@@ -6,14 +6,17 @@ from pathlib import Path
 from typing import Any
 
 from games_registry import (
+    GAMES_MD_FILENAME,
     REGISTRY_FILENAME,
     default_registry_path,
     default_workspace_root,
+    discover_new_project_paths,
     load_registry,
+    resolve_layout_status,
 )
 from translator_runtime import canonical_abs_path, resolve_effective_game_root
 
-REGISTRY_TABLE_COLUMNS = ("项目", "路径", "版本", "游玩", "翻译")
+REGISTRY_TABLE_COLUMNS = ("项目", "路径", "版本", "目录状态", "游玩", "翻译")
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,7 @@ class RegistryRow:
     name: str
     path: str
     version: str
+    layout_status: str
     play_status: str
     translation_status: str
     notes: str
@@ -112,6 +116,7 @@ def registry_row_from_project(workspace_root: Path, project: dict[str, Any]) -> 
         name=str(project.get("name") or ""),
         path=path,
         version=str(project.get("version") or "待确认"),
+        layout_status=resolve_layout_status(project) or "待确认",
         play_status=str(project.get("play_status") or "待确认"),
         translation_status=str(project.get("translation_status") or "待确认"),
         notes=str(project.get("notes") or ""),
@@ -155,12 +160,21 @@ def load_registry_rows(
     workspace = workspace_root or default_workspace_root()
     registry_file = registry_path or (workspace / REGISTRY_FILENAME)
     if not registry_file.is_file():
-        return [], f"未找到 {registry_file.name}，请在工作区根目录运行 import-md。"
+        games_md = workspace / GAMES_MD_FILENAME
+        if games_md.is_file():
+            return [], (
+                f"未找到 {registry_file.name}。"
+                f"可点击「从 GAMES.md 导入」，或「扫描新项目」从 Game_* 目录创建总表。"
+            )
+        return [], (
+            f"未找到 {registry_file.name}。"
+            f"可点击「扫描新项目」发现 Game_* 目录，或先准备 {GAMES_MD_FILENAME} 后导入。"
+        )
 
     registry = load_registry(registry_file)
     projects = registry.get("projects")
     if not isinstance(projects, list) or not projects:
-        return [], f"{registry_file.name} 中没有项目记录。"
+        return [], f"{registry_file.name} 中没有项目记录。可点击「扫描新项目」或「从 GAMES.md 导入」。"
 
     rows = [
         registry_row_from_project(workspace, project)
@@ -178,6 +192,19 @@ def row_matches_game_root(row: RegistryRow, game_root: Path | str | None) -> boo
     current = canonical_abs_path(str(game_root))
     target = canonical_abs_path(row.work_dir)
     return current == target
+
+
+def count_undiscovered_projects(
+    *,
+    workspace_root: Path,
+    registry_path: Path | None = None,
+) -> int:
+    registry_file = registry_path or resolve_registry_path(workspace_root)
+    if not registry_file.is_file():
+        registry_data: dict[str, Any] = {"projects": []}
+    else:
+        registry_data = load_registry(registry_file)
+    return len(discover_new_project_paths(workspace_root, registry_data))
 
 
 def format_registry_status_message(row_count: int, summary: str, *, missing_message: str = "") -> str:

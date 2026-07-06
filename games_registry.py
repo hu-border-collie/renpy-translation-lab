@@ -6,6 +6,7 @@ The registry file (``games_registry.json``) lives at the RenPy workspace root.
 Commands::
 
     python games_registry.py import-md
+    python games_registry.py discover
     python games_registry.py refresh --all
     python games_registry.py refresh --project glory_hounds
     python games_registry.py render-md
@@ -49,7 +50,18 @@ TRANSLATION_STATUSES = frozenset(
     }
 )
 ENGINES = frozenset({"renpy", "unity", "tyrano", "other"})
-STATUS_SOURCES = frozenset({"manual", "doctor", "batch"})
+STATUS_SOURCES = frozenset({"manual", "doctor", "batch", "scan"})
+WORKSPACE_SKIP_DIR_NAMES = frozenset(
+    {
+        "renpy-translation-lab",
+        ".git",
+        ".github",
+        ".venv",
+        "venv",
+        "__pycache__",
+    }
+)
+ADASTRA_UNIVERSE_DIR = "Game_Adastra_Universe"
 
 GAMES_MD_HEADER = """# 游戏状态总表
 
@@ -137,6 +149,106 @@ def normalize_translation_status(raw: str) -> str:
     if base in TRANSLATION_STATUSES:
         return text
     return "待确认"
+
+
+def normalize_play_status(raw: str) -> str:
+    text = raw.strip()
+    if text in PLAY_STATUSES:
+        return text
+    return "待确认"
+
+
+def humanize_project_name(rel_path: str) -> str:
+    leaf = Path(rel_path.replace("\\", "/")).name
+    if leaf.startswith("Game_"):
+        leaf = leaf[5:]
+    return leaf.replace("_", " ").strip() or rel_path
+
+
+def iter_workspace_project_paths(workspace_root: Path) -> list[str]:
+    """Return relative paths for workspace folders that look like game projects."""
+    paths: list[str] = []
+    if not workspace_root.is_dir():
+        return paths
+
+    for child in sorted(workspace_root.iterdir(), key=lambda item: item.name.lower()):
+        if not child.is_dir() or child.name in WORKSPACE_SKIP_DIR_NAMES:
+            continue
+        if child.name.startswith("Game_") and child.name != ADASTRA_UNIVERSE_DIR:
+            paths.append(child.name)
+
+    adastra_root = workspace_root / ADASTRA_UNIVERSE_DIR
+    if adastra_root.is_dir():
+        for child in sorted(adastra_root.iterdir(), key=lambda item: item.name.lower()):
+            if child.is_dir() and not child.name.startswith("."):
+                paths.append(f"{ADASTRA_UNIVERSE_DIR}/{child.name}")
+    return paths
+
+
+def ensure_unique_project_id(registry: dict[str, Any], base_id: str) -> str:
+    existing = {
+        str(project.get("id") or "")
+        for project in registry.get("projects", [])
+        if isinstance(project, dict)
+    }
+    candidate = base_id or "project"
+    if candidate not in existing:
+        return candidate
+    suffix = 2
+    while f"{candidate}_{suffix}" in existing:
+        suffix += 1
+    return f"{candidate}_{suffix}"
+
+
+def make_project_from_discovered_path(workspace_root: Path, rel_path: str) -> dict[str, Any]:
+    normalized_path = rel_path.replace("\\", "/").strip("/")
+    project_root = workspace_root / Path(normalized_path)
+    engine, in_pipeline = infer_engine(project_root)
+    version, version_source = detect_game_version(project_root)
+    base_id = slugify_project_id(normalized_path)
+    return {
+        "id": base_id,
+        "name": humanize_project_name(normalized_path),
+        "path": normalized_path,
+        "version": version or "待确认",
+        "version_source": version_source,
+        "layout_status": "",
+        "play_status": "待确认",
+        "translation_status": "待确认",
+        "translation_status_source": "manual",
+        "notes": "",
+        "engine": engine,
+        "in_renpy_pipeline": in_pipeline,
+        "auto": {},
+    }
+
+
+def discover_new_project_paths(workspace_root: Path, registry: dict[str, Any]) -> list[str]:
+    existing = {
+        str(project.get("path") or "").replace("\\", "/").strip("/")
+        for project in registry.get("projects", [])
+        if isinstance(project, dict) and project.get("path")
+    }
+    return [
+        rel_path
+        for rel_path in iter_workspace_project_paths(workspace_root)
+        if rel_path.replace("\\", "/").strip("/") not in existing
+    ]
+
+
+def resolve_layout_status(project: dict[str, Any]) -> str:
+    layout = str(project.get("layout_status") or "").strip()
+    if layout:
+        return layout
+    auto = project.get("auto") if isinstance(project.get("auto"), dict) else {}
+    return str(auto.get("doctor_layout") or "").strip()
+
+
+def sync_layout_status_from_auto(project: dict[str, Any]) -> None:
+    auto = project.get("auto") if isinstance(project.get("auto"), dict) else {}
+    doctor_layout = str(auto.get("doctor_layout") or "").strip()
+    if doctor_layout:
+        project["layout_status"] = doctor_layout
 
 
 def infer_engine(project_root: Path) -> tuple[str, bool]:
@@ -528,6 +640,7 @@ def import_from_games_md(
     md_path: Path,
     registry_path: Path,
     workspace_root: Path | None = None,
+    merge: bool = False,
 ) -> dict[str, Any]:
     workspace = workspace_root or md_path.parent
     content = md_path.read_text(encoding="utf-8-sig")
@@ -539,11 +652,111 @@ def import_from_games_md(
         project["engine"] = engine
         project["in_renpy_pipeline"] = in_pipeline
 
-    registry = empty_registry(workspace)
-    registry["projects"] = projects
-    registry["update_summary"] = f"从 {md_path.name} 导入 {len(projects)} 个项目"
+    if merge and registry_path.is_file():
+        registry = load_registry(registry_path)
+        registry["workspace_root"] = workspace.as_posix()
+        added, updated = _merge_projects_by_path(registry, projects)
+        registry["update_summary"] = (
+            f"从 {md_path.name} 合并导入：新增 {added} 个，更新 {updated} 个"
+        )
+    else:
+        registry = empty_registry(workspace)
+        registry["projects"] = projects
+        registry["update_summary"] = f"从 {md_path.name} 导入 {len(projects)} 个项目"
+
     save_registry(registry_path, registry)
     return registry
+
+
+def _merge_projects_by_path(
+    registry: dict[str, Any],
+    incoming_projects: list[dict[str, Any]],
+) -> tuple[int, int]:
+    existing_by_path: dict[str, dict[str, Any]] = {}
+    for project in registry.get("projects", []):
+        if isinstance(project, dict) and project.get("path"):
+            existing_by_path[str(project["path"]).replace("\\", "/").strip("/")] = project
+
+    added = 0
+    updated = 0
+    for project in incoming_projects:
+        path_key = str(project["path"]).replace("\\", "/").strip("/")
+        current = existing_by_path.get(path_key)
+        if current is None:
+            project["id"] = ensure_unique_project_id(registry, str(project.get("id") or ""))
+            registry.setdefault("projects", []).append(project)
+            existing_by_path[path_key] = project
+            added += 1
+            continue
+
+        for field in (
+            "name",
+            "version",
+            "version_source",
+            "layout_status",
+            "play_status",
+            "translation_status",
+            "translation_status_source",
+            "notes",
+            "engine",
+            "in_renpy_pipeline",
+        ):
+            value = project.get(field)
+            if value not in (None, ""):
+                current[field] = value
+        updated += 1
+    return added, updated
+
+
+def merge_discovered_projects(
+    registry: dict[str, Any],
+    *,
+    workspace_root: Path,
+    refresh_new: bool = True,
+    mode: str = REFRESH_MODE_LITE,
+) -> tuple[int, list[str]]:
+    new_paths = discover_new_project_paths(workspace_root, registry)
+    if not new_paths:
+        return 0, []
+
+    added_paths: list[str] = []
+    for rel_path in new_paths:
+        project = make_project_from_discovered_path(workspace_root, rel_path)
+        project["id"] = ensure_unique_project_id(registry, str(project.get("id") or ""))
+        registry.setdefault("projects", []).append(project)
+        added_paths.append(rel_path)
+        if refresh_new:
+            refresh_project(
+                registry,
+                str(project["id"]),
+                workspace_root=workspace_root,
+                mode=mode,
+            )
+
+    registry["update_summary"] = f"扫描工作区新增 {len(added_paths)} 个项目"
+    return len(added_paths), added_paths
+
+
+def update_project_manual_fields(
+    registry: dict[str, Any],
+    project_id: str,
+    *,
+    play_status: str | None = None,
+    translation_status: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any] | None:
+    project = find_project(registry, project_id)
+    if project is None:
+        return None
+
+    if play_status is not None:
+        project["play_status"] = normalize_play_status(play_status)
+    if translation_status is not None:
+        project["translation_status"] = normalize_translation_status(translation_status)
+        project["translation_status_source"] = "manual"
+    if notes is not None:
+        project["notes"] = notes.strip()
+    return project
 
 
 def refresh_project(
@@ -571,6 +784,7 @@ def refresh_project(
         project["translation_status"] = suggest_translation_status(project, auto)
         project["translation_status_source"] = "doctor" if deep else "scan"
 
+    sync_layout_status_from_auto(project)
     return project
 
 
@@ -651,7 +865,7 @@ def render_games_md(registry: dict[str, Any]) -> str:
         name = _escape_md_table_cell(project.get("name", ""))
         path = _escape_md_table_cell(project.get("path", ""))
         version = _escape_md_table_cell(project.get("version") or "待确认")
-        layout = _escape_md_table_cell(project.get("layout_status", ""))
+        layout = _escape_md_table_cell(resolve_layout_status(project))
         play = _escape_md_table_cell(project.get("play_status", "待确认"))
         translation = _escape_md_table_cell(render_translation_status(project))
         notes = _escape_md_table_cell(render_notes(project))
@@ -744,6 +958,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     import_parser = subparsers.add_parser("import-md", help="Import projects from GAMES.md into the registry")
     import_parser.add_argument("--md", type=Path, default=None, help="Source GAMES.md path")
+    import_parser.add_argument(
+        "--merge",
+        action="store_true",
+        help="Merge into an existing registry by project path instead of replacing it",
+    )
+
+    discover_parser = subparsers.add_parser(
+        "discover",
+        help="Scan workspace for Game_* folders and add any missing projects",
+    )
+    discover_parser.add_argument(
+        "--deep",
+        action="store_true",
+        help="Run a refresh on each newly discovered project",
+    )
 
     refresh_parser = subparsers.add_parser("refresh", help="Refresh auto-detected project fields")
     refresh_group = refresh_parser.add_mutually_exclusive_group(required=True)
@@ -781,12 +1010,35 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "import-md":
         source_md = args.md or md_path
+        if not source_md.is_file():
+            print(f"GAMES.md not found: {source_md}", file=sys.stderr)
+            return 1
         registry = import_from_games_md(
             md_path=source_md,
             registry_path=registry_path,
             workspace_root=workspace,
+            merge=getattr(args, "merge", False),
         )
         print(f"Imported {len(registry.get('projects', []))} projects -> {registry_path}")
+        return 0
+
+    if args.command == "discover":
+        registry = load_registry(registry_path) if registry_path.is_file() else empty_registry(workspace)
+        registry["workspace_root"] = workspace.as_posix()
+        mode = REFRESH_MODE_DEEP if getattr(args, "deep", False) else REFRESH_MODE_LITE
+        added_count, added_paths = merge_discovered_projects(
+            registry,
+            workspace_root=workspace,
+            refresh_new=True,
+            mode=mode,
+        )
+        save_registry(registry_path, registry)
+        if added_count:
+            print(f"Discovered {added_count} project(s) -> {registry_path}")
+            for rel_path in added_paths:
+                print(f"  + {rel_path}")
+        else:
+            print("No new workspace projects discovered.")
         return 0
 
     registry = load_registry(registry_path)

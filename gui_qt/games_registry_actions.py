@@ -13,11 +13,16 @@ from games_registry import (
     REFRESH_MODE_LITE,
     CancelCheck,
     default_games_md_path,
+    discover_new_project_paths,
+    empty_registry,
+    import_from_games_md,
     load_registry,
+    merge_discovered_projects,
     record_batch,
     refresh_all,
     refresh_project,
     save_registry,
+    update_project_manual_fields,
     write_games_md,
 )
 
@@ -112,6 +117,97 @@ def refresh_registry_projects(
 
     name = str(project.get("name") or project_id)
     return RegistryActionResult(True, f"已{label}刷新项目 {name}。")
+
+
+def import_registry_from_games_md(
+    workspace_root: Path,
+    *,
+    merge: bool = False,
+) -> RegistryActionResult:
+    md_path = default_games_md_path(workspace_root)
+    if not md_path.is_file():
+        return RegistryActionResult(False, f"未找到 {md_path.name}。")
+
+    registry_path = _registry_file(workspace_root)
+    try:
+        registry = import_from_games_md(
+            md_path=md_path,
+            registry_path=registry_path,
+            workspace_root=workspace_root,
+            merge=merge and registry_path.is_file(),
+        )
+    except (OSError, ValueError) as exc:
+        return RegistryActionResult(False, f"从 GAMES.md 导入失败：{exc}")
+
+    summary = str(registry.get("update_summary") or "").strip()
+    count = len(registry.get("projects") or [])
+    message = f"已从 GAMES.md 导入 {count} 个项目。"
+    if summary:
+        message = f"{message} {summary}"
+    return RegistryActionResult(True, message)
+
+
+def discover_registry_projects(
+    workspace_root: Path,
+    *,
+    refresh_new: bool = True,
+    mode: str = REFRESH_MODE_LITE,
+) -> RegistryActionResult:
+    registry_path = _registry_file(workspace_root)
+    if registry_path.is_file():
+        data = load_registry(registry_path)
+    else:
+        data = empty_registry(workspace_root)
+        data["workspace_root"] = workspace_root.as_posix()
+
+    pending_before = len(discover_new_project_paths(workspace_root, data))
+    if pending_before <= 0:
+        return RegistryActionResult(True, "未发现新的 Game_* 项目。")
+
+    added_count, added_paths = merge_discovered_projects(
+        data,
+        workspace_root=workspace_root,
+        refresh_new=refresh_new,
+        mode=mode,
+    )
+    save_registry(registry_path, data)
+    names = "、".join(added_paths[:5])
+    if len(added_paths) > 5:
+        names = f"{names} 等"
+    label = _mode_label(mode)
+    message = f"已扫描并登记 {added_count} 个新项目"
+    if refresh_new:
+        message = f"{message}（已{label}刷新）"
+    message = f"{message}：{names}。"
+    return RegistryActionResult(True, message)
+
+
+def save_registry_project_fields(
+    workspace_root: Path,
+    *,
+    project_id: str,
+    play_status: str,
+    translation_status: str,
+    notes: str,
+) -> RegistryActionResult:
+    registry_path = _registry_file(workspace_root)
+    if not registry_path.is_file():
+        return RegistryActionResult(False, f"未找到 {registry_path.name}。")
+
+    data = load_registry(registry_path)
+    project = update_project_manual_fields(
+        data,
+        project_id,
+        play_status=play_status,
+        translation_status=translation_status,
+        notes=notes,
+    )
+    if project is None:
+        return RegistryActionResult(False, f"未找到项目：{project_id}")
+
+    data["update_summary"] = f"已更新项目 {project.get('name') or project_id} 的人工字段"
+    save_registry(registry_path, data)
+    return RegistryActionResult(True, f"已保存项目 {project.get('name') or project_id} 的修改。")
 
 
 def render_registry_games_md(workspace_root: Path) -> RegistryActionResult:

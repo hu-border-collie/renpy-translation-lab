@@ -327,6 +327,125 @@ class GamesRegistryTests(unittest.TestCase):
                 {"待翻译", "待润色", "未开始", "待提取"},
             )
 
+    def test_iter_workspace_project_paths_finds_game_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "Game_Alpha").mkdir()
+            (workspace / "Game_Beta").mkdir()
+            (workspace / "renpy-translation-lab").mkdir()
+            adastra = workspace / "Game_Adastra_Universe" / "Adastra"
+            adastra.mkdir(parents=True)
+
+            paths = registry.iter_workspace_project_paths(workspace)
+            self.assertEqual(
+                paths,
+                ["Game_Alpha", "Game_Beta", "Game_Adastra_Universe/Adastra"],
+            )
+
+    def test_merge_discovered_projects_adds_new_game_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "Game_New").mkdir()
+            payload = registry.empty_registry(workspace)
+            with mock.patch.object(
+                registry,
+                "refresh_project",
+                side_effect=lambda data, project_id, **kwargs: registry.find_project(data, project_id),
+            ):
+                added_count, added_paths = registry.merge_discovered_projects(
+                    payload,
+                    workspace_root=workspace,
+                    refresh_new=True,
+                )
+            self.assertEqual(added_count, 1)
+            self.assertEqual(added_paths, ["Game_New"])
+            self.assertEqual(payload["projects"][0]["path"], "Game_New")
+            self.assertEqual(payload["projects"][0]["name"], "New")
+
+    def test_refresh_project_syncs_layout_status_from_auto(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project_root = workspace / "Game_Example"
+            (project_root / "work").mkdir(parents=True)
+            (project_root / "original" / "game").mkdir(parents=True)
+            payload = {
+                "projects": [
+                    {
+                        "id": "game_example",
+                        "path": "Game_Example",
+                        "layout_status": "旧状态",
+                        "engine": "renpy",
+                        "in_renpy_pipeline": True,
+                    }
+                ]
+            }
+            with mock.patch.object(
+                registry,
+                "scan_project_auto",
+                return_value={
+                    "doctor_layout": "ready",
+                    "doctor_mode": "existing_tl_only",
+                    "refresh_mode": registry.REFRESH_MODE_LITE,
+                },
+            ):
+                registry.refresh_project(payload, "game_example", workspace_root=workspace)
+            self.assertEqual(payload["projects"][0]["layout_status"], "ready")
+
+    def test_update_project_manual_fields_marks_translation_manual(self):
+        payload = {
+            "projects": [
+                {
+                    "id": "demo",
+                    "play_status": "待确认",
+                    "translation_status": "待翻译",
+                    "translation_status_source": "scan",
+                    "notes": "",
+                }
+            ]
+        }
+        project = registry.update_project_manual_fields(
+            payload,
+            "demo",
+            play_status="进行中",
+            translation_status="待润色",
+            notes="下一步：校对。",
+        )
+        self.assertEqual(project["play_status"], "进行中")
+        self.assertEqual(project["translation_status"], "待润色")
+        self.assertEqual(project["translation_status_source"], "manual")
+        self.assertEqual(project["notes"], "下一步：校对。")
+
+    def test_import_from_games_md_merge_updates_existing_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            md_path = workspace / "GAMES.md"
+            md_path.write_text(SAMPLE_MD, encoding="utf-8")
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            registry.save_registry(
+                registry_path,
+                {
+                    "projects": [
+                        {
+                            "id": "game_gloryhounds",
+                            "name": "Old Name",
+                            "path": "Game_GloryHounds",
+                            "notes": "保留",
+                            "auto": {"last_refresh_at": "2026-01-01T00:00:00+00:00"},
+                        }
+                    ]
+                },
+            )
+
+            data = registry.import_from_games_md(
+                md_path=md_path,
+                registry_path=registry_path,
+                workspace_root=workspace,
+                merge=True,
+            )
+            by_path = {project["path"]: project for project in data["projects"]}
+            self.assertEqual(by_path["Game_GloryHounds"]["name"], "Glory Hounds")
+            self.assertEqual(by_path["Game_GloryHounds"]["auto"]["last_refresh_at"], "2026-01-01T00:00:00+00:00")
+
 
 if __name__ == "__main__":
     unittest.main()

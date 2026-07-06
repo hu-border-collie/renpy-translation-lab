@@ -37,6 +37,21 @@ class GuiGamesRegistryViewTests(unittest.TestCase):
             rows, message = load_registry_rows(workspace_root=workspace)
             self.assertEqual(rows, [])
             self.assertIn("未找到", message)
+            self.assertIn("扫描新项目", message)
+
+    def test_registry_row_uses_layout_status_or_auto_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            row = registry_row_from_project(
+                workspace,
+                {
+                    "id": "demo",
+                    "name": "Example",
+                    "path": "Game_Example",
+                    "auto": {"doctor_layout": "ready"},
+                },
+            )
+            self.assertEqual(row.layout_status, "ready")
 
     def test_registry_row_resolves_nested_work_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -60,6 +75,7 @@ class GuiGamesRegistryViewTests(unittest.TestCase):
                 name="Example",
                 path="Game_Example",
                 version="1.0",
+                layout_status="ready",
                 play_status="待确认",
                 translation_status="待翻译",
                 notes="",
