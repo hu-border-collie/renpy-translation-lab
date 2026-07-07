@@ -918,7 +918,6 @@ class MainWindow(QMainWindow):
             current_game_root=self.state.get_game_root(),
             get_doctor_report=self._current_registry_doctor_report,
             on_switch_project=self._on_registry_switch_project,
-            auto_discover_on_show=False,
         )
         layout.addWidget(self._games_registry_panel, 1)
         return page
@@ -3128,6 +3127,8 @@ class MainWindow(QMainWindow):
         return None
 
     def _on_registry_switch_project(self, target: str) -> bool:
+        if not self._confirm_unsaved_config_before_registry_switch():
+            return False
         if not self._switch_game_root(target):
             return False
         panel = getattr(self, "_games_registry_panel", None)
@@ -3327,6 +3328,30 @@ class MainWindow(QMainWindow):
         if not self._config_ui_saved_snapshot:
             return False
         return self._current_config_ui_snapshot() != self._config_ui_saved_snapshot
+
+    def _confirm_unsaved_config_before_registry_switch(self) -> bool:
+        if not self._config_tab_has_unsaved_changes():
+            return True
+
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Icon.Warning)
+        message.setWindowTitle("设置尚未保存")
+        message.setText("设置页有未保存的更改。")
+        message.setInformativeText(
+            "切换工作区项目会重新加载设置，未保存的更改将丢失。"
+        )
+        save_btn = message.addButton("保存并切换", QMessageBox.ButtonRole.AcceptRole)
+        discard_btn = message.addButton("不保存切换", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = message.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        message.setDefaultButton(save_btn)
+        message.exec()
+        clicked = message.clickedButton()
+
+        if clicked is save_btn:
+            return self._on_save_config()
+        if clicked is discard_btn:
+            return True
+        return False
 
     def _confirm_leave_config_tab(self, previous_index: int) -> bool:
         message = QMessageBox(self)

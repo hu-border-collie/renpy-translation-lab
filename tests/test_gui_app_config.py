@@ -830,6 +830,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._switch_game_root = lambda target: switched.append(target) or True
         self.window._focus_settings_section = lambda key: focused.append(key)
         self.window._show_settings_status = lambda *_args, **_kwargs: None
+        self.window._confirm_unsaved_config_before_registry_switch = lambda: True
         self.window._games_registry_panel = FakePanel()
         self.window.state = type("FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")})()
 
@@ -838,6 +839,216 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(switched, ["C:/Game/work"])
         self.assertEqual(focused, ["project"])
+
+    def test_on_registry_switch_project_blocked_when_unsaved_changes_cancelled(self):
+        from unittest.mock import patch
+
+        switched = []
+
+        class FakeMessageBox:
+            class Icon:
+                Warning = object()
+
+            class ButtonRole:
+                AcceptRole = object()
+                DestructiveRole = object()
+                RejectRole = object()
+
+            shown = False
+
+            def __init__(self, *_args, **_kwargs):
+                self._cancel_btn = object()
+
+            def setIcon(self, _icon):
+                pass
+
+            def setWindowTitle(self, _title):
+                pass
+
+            def setText(self, _text):
+                pass
+
+            def setInformativeText(self, _text):
+                pass
+
+            def addButton(self, text, _role):
+                return self._cancel_btn if text == "取消" else object()
+
+            def setDefaultButton(self, _button):
+                pass
+
+            def exec(self):
+                FakeMessageBox.shown = True
+
+            def clickedButton(self):
+                return self._cancel_btn
+
+        self.window._loading_config_to_ui = False
+        self.window._config_ui_saved_snapshot = {"dirty": False}
+        self.window._current_config_ui_snapshot = lambda: {"dirty": True}
+        self.window._switch_game_root = lambda target: switched.append(target) or True
+
+        with patch("gui_qt.app.QMessageBox", FakeMessageBox):
+            result = self.window._on_registry_switch_project("C:/Game/work")
+
+        self.assertFalse(result)
+        self.assertEqual(switched, [])
+        self.assertTrue(FakeMessageBox.shown)
+
+    def test_on_registry_switch_project_discards_unsaved_changes_when_confirmed(self):
+        from unittest.mock import patch
+
+        switched = []
+
+        class FakeMessageBox:
+            class Icon:
+                Warning = object()
+
+            class ButtonRole:
+                AcceptRole = object()
+                DestructiveRole = object()
+                RejectRole = object()
+
+            shown = False
+
+            def __init__(self, *_args, **_kwargs):
+                self._discard_btn = object()
+
+            def setIcon(self, _icon):
+                pass
+
+            def setWindowTitle(self, _title):
+                pass
+
+            def setText(self, _text):
+                pass
+
+            def setInformativeText(self, _text):
+                pass
+
+            def addButton(self, text, _role):
+                return self._discard_btn if text == "不保存切换" else object()
+
+            def setDefaultButton(self, _button):
+                pass
+
+            def exec(self):
+                FakeMessageBox.shown = True
+
+            def clickedButton(self):
+                return self._discard_btn
+
+        self.window._loading_config_to_ui = False
+        self.window._config_ui_saved_snapshot = {"dirty": False}
+        self.window._current_config_ui_snapshot = lambda: {"dirty": True}
+        self.window._switch_game_root = lambda target: switched.append(target) or True
+        self.window._focus_settings_section = lambda _key: None
+        self.window._show_settings_status = lambda *_args, **_kwargs: None
+        self.window._games_registry_panel = type(
+            "FakePanel",
+            (),
+            {"set_current_game_root": lambda self, _root: None},
+        )()
+        self.window.state = type("FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")})()
+
+        with patch("gui_qt.app.QMessageBox", FakeMessageBox):
+            result = self.window._on_registry_switch_project("C:/Game/work")
+
+        self.assertTrue(result)
+        self.assertEqual(switched, ["C:/Game/work"])
+        self.assertTrue(FakeMessageBox.shown)
+
+    def test_on_registry_switch_project_saves_before_switch_when_requested(self):
+        from unittest.mock import patch
+
+        switched = []
+        saved = []
+
+        class FakeMessageBox:
+            class Icon:
+                Warning = object()
+
+            class ButtonRole:
+                AcceptRole = object()
+                DestructiveRole = object()
+                RejectRole = object()
+
+            def __init__(self, *_args, **_kwargs):
+                self._save_btn = object()
+
+            def setIcon(self, _icon):
+                pass
+
+            def setWindowTitle(self, _title):
+                pass
+
+            def setText(self, _text):
+                pass
+
+            def setInformativeText(self, _text):
+                pass
+
+            def addButton(self, text, _role):
+                return self._save_btn if text == "保存并切换" else object()
+
+            def setDefaultButton(self, _button):
+                pass
+
+            def exec(self):
+                pass
+
+            def clickedButton(self):
+                return self._save_btn
+
+        self.window._loading_config_to_ui = False
+        self.window._config_ui_saved_snapshot = {"dirty": False}
+        self.window._current_config_ui_snapshot = lambda: {"dirty": True}
+        self.window._on_save_config = lambda: saved.append(True) or True
+        self.window._switch_game_root = lambda target: switched.append(target) or True
+        self.window._focus_settings_section = lambda _key: None
+        self.window._show_settings_status = lambda *_args, **_kwargs: None
+        self.window._games_registry_panel = type(
+            "FakePanel",
+            (),
+            {"set_current_game_root": lambda self, _root: None},
+        )()
+        self.window.state = type("FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")})()
+
+        with patch("gui_qt.app.QMessageBox", FakeMessageBox):
+            result = self.window._on_registry_switch_project("C:/Game/work")
+
+        self.assertTrue(result)
+        self.assertEqual(saved, [True])
+        self.assertEqual(switched, ["C:/Game/work"])
+
+    def test_settings_workspace_panel_enables_auto_discover_on_show(self):
+        from unittest.mock import MagicMock, patch
+
+        fake_page = MagicMock()
+        fake_layout = MagicMock()
+        with patch.object(MainWindow, "_settings_page", return_value=(fake_page, fake_layout)):
+            with patch("gui_qt.app.GamesRegistryPanel") as panel_cls:
+                with patch("gui_qt.app.resolve_workspace_root", return_value=Path("C:/workspace")):
+                    with patch("gui_qt.app.QLabel", return_value=MagicMock()):
+                        self.window.state = type(
+                            "FakeState",
+                            (),
+                            {
+                                "get_tool_root": lambda self: Path("C:/tool"),
+                                "get_game_root": lambda self: Path("C:/Game/work"),
+                            },
+                        )()
+                        self.window._current_registry_doctor_report = lambda: None
+                        self.window._on_registry_switch_project = lambda _target: True
+
+                        self.window._build_settings_workspace_page()
+
+        panel_cls.assert_called_once()
+        self.assertNotIn(
+            "auto_discover_on_show",
+            panel_cls.call_args.kwargs,
+            "workspace panel should use default auto_discover_on_show=True",
+        )
 
     def test_focus_advanced_setting_navigates_to_workspace_for_game_root(self):
         class FakeNav:
