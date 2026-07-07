@@ -851,8 +851,6 @@ class MainWindow(QMainWindow):
             self.settings_nav.addItem(label)
             self.settings_stack.addWidget(page)
         self.settings_nav.currentRowChanged.connect(self._on_settings_nav_row_changed)
-        self.settings_nav.setCurrentRow(0)
-        self._sync_settings_action_bar_enabled(task_running=False)
 
         action_bar = QFrame()
         action_bar.setObjectName("settings_action_bar")
@@ -873,6 +871,8 @@ class MainWindow(QMainWindow):
         self.save_config_btn.clicked.connect(self._on_save_config)
         action_layout.addWidget(self.save_config_btn)
         right_layout.addWidget(action_bar)
+
+        self.settings_nav.setCurrentRow(0)
 
         self.tab_widget.addTab(tab, "设置")
 
