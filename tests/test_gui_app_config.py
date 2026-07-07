@@ -819,6 +819,131 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(save_btn.enabled)
         self.assertTrue(restore_btn.enabled)
 
+    def test_settings_workspace_nav_skips_registry_activate_before_config_tab_open(self):
+        activated = []
+
+        class FakeNav:
+            def currentRow(self):
+                return 0
+
+        class FakeStack:
+            def setCurrentIndex(self, _index):
+                pass
+
+        class FakePanel:
+            def set_current_game_root(self, _root):
+                pass
+
+            def activate_section(self):
+                activated.append(True)
+
+        config_tab = object()
+        other_tab = object()
+        self.window._config_tab = config_tab
+        self.window.tab_widget = type(
+            "FakeTabs",
+            (),
+            {"currentWidget": lambda self: other_tab},
+        )()
+        self.window.settings_nav = FakeNav()
+        self.window.settings_stack = FakeStack()
+        self.window._settings_nav_rows = {"workspace": 0, "project": 1}
+        self.window._games_registry_panel = FakePanel()
+        self.window._task_running = False
+        self.window._sync_settings_action_bar_enabled = lambda **_kwargs: None
+
+        self.window._on_settings_nav_row_changed(0)
+
+        self.assertEqual(activated, [])
+
+    def test_settings_workspace_nav_activates_registry_when_config_tab_open(self):
+        activated = []
+
+        class FakeNav:
+            def currentRow(self):
+                return 0
+
+        class FakeStack:
+            def setCurrentIndex(self, _index):
+                pass
+
+        class FakePanel:
+            def set_current_game_root(self, _root):
+                pass
+
+            def activate_section(self):
+                activated.append(True)
+
+        config_tab = object()
+        self.window._config_tab = config_tab
+        self.window.tab_widget = type(
+            "FakeTabs",
+            (),
+            {"currentWidget": lambda self: config_tab},
+        )()
+        self.window.settings_nav = FakeNav()
+        self.window.settings_stack = FakeStack()
+        self.window._settings_nav_rows = {"workspace": 0, "project": 1}
+        self.window._games_registry_panel = FakePanel()
+        self.window.state = type("FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")})()
+        self.window._task_running = False
+        self.window._sync_settings_action_bar_enabled = lambda **_kwargs: None
+
+        self.window._on_settings_nav_row_changed(0)
+
+        self.assertEqual(activated, [True])
+
+    def test_opening_config_tab_activates_workspace_registry_section(self):
+        activated = []
+
+        class FakeNav:
+            def __init__(self):
+                self.row = 0
+
+            def currentRow(self):
+                return self.row
+
+        class FakePanel:
+            def set_current_game_root(self, _root):
+                pass
+
+            def activate_section(self):
+                activated.append(True)
+
+        config_tab = object()
+        other_tab = object()
+
+        class FakeTabs:
+            def __init__(self):
+                self.widgets = {0: other_tab, 1: config_tab}
+                self.current_index = 0
+
+            def widget(self, index):
+                return self.widgets[index]
+
+            def setCurrentIndex(self, index):
+                self.current_index = index
+
+            def currentWidget(self):
+                return self.widgets[self.current_index]
+
+        self.window._config_tab = config_tab
+        self.window._diagnostics_tab = object()
+        self.window.tab_widget = FakeTabs()
+        self.window.settings_nav = FakeNav()
+        self.window._settings_nav_rows = {"workspace": 0, "project": 1}
+        self.window._games_registry_panel = FakePanel()
+        self.window.state = type("FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")})()
+        self.window._handling_config_tab_leave = False
+        self.window._last_main_tab_index = 0
+        self.window._refresh_api_status = lambda: None
+        self.window._refresh_diagnostics_context = lambda: None
+
+        self.window._on_tab_changed(1)
+
+        self.assertEqual(activated, [True])
+        self.assertEqual(self.window._last_main_tab_index, 1)
+
     def test_on_registry_switch_project_focuses_project_section(self):
         switched = []
         focused = []

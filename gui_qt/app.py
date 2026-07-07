@@ -3151,16 +3151,27 @@ class MainWindow(QMainWindow):
     def _on_go_to_workspace_for_project_switch(self) -> None:
         self._focus_settings_section("workspace")
 
+    def _is_config_tab_active(self) -> bool:
+        tab_widget = getattr(self, "tab_widget", None)
+        config_tab = getattr(self, "_config_tab", None)
+        if tab_widget is None or config_tab is None:
+            return False
+        return tab_widget.currentWidget() is config_tab
+
+    def _activate_workspace_registry_section(self) -> None:
+        panel = getattr(self, "_games_registry_panel", None)
+        if panel is None:
+            return
+        panel.set_current_game_root(self.state.get_game_root())
+        panel.activate_section()
+
     def _on_settings_nav_row_changed(self, row: int) -> None:
         if row < 0:
             return
         self.settings_stack.setCurrentIndex(row)
         self._sync_settings_action_bar_enabled(task_running=self._task_running, nav_row=row)
-        if self._settings_nav_rows.get("workspace") == row:
-            panel = getattr(self, "_games_registry_panel", None)
-            if panel is not None:
-                panel.set_current_game_root(self.state.get_game_root())
-                panel.activate_section()
+        if self._settings_nav_rows.get("workspace") == row and self._is_config_tab_active():
+            self._activate_workspace_registry_section()
 
     def _sync_settings_action_bar_enabled(
         self,
@@ -3399,6 +3410,12 @@ class MainWindow(QMainWindow):
 
         if current_widget is self._config_tab:
             self._refresh_api_status()
+            nav = getattr(self, "settings_nav", None)
+            if (
+                nav is not None
+                and self._settings_nav_rows.get("workspace") == nav.currentRow()
+            ):
+                self._activate_workspace_registry_section()
         if current_widget is getattr(self, "_diagnostics_tab", None):
             self._refresh_diagnostics_context()
         self._last_main_tab_index = index
