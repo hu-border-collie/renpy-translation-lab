@@ -8824,7 +8824,7 @@ def print_banner():
     print(f'Max output tokens: {BATCH_MAX_OUTPUT_TOKENS}')
     print(f'Thinking level: {format_thinking_level_for_display()}')
     print(
-        f'Prepare: enabled={legacy.PREP_ENABLED}, language={legacy.PREP_LANGUAGE}, '
+        f'Prepare: enabled={legacy.PREP_ENABLED}, '
         f'generate_template={legacy.PREP_GENERATE_TEMPLATE}, '
         f'refresh_existing_template={legacy.PREP_REFRESH_EXISTING_TEMPLATE}'
     )
