@@ -271,6 +271,34 @@ def build_cli_commands(
                 ),
             )
         )
+        keyword_export = manifest.get("keyword_export")
+        if isinstance(keyword_export, dict):
+            jsonl_path = keyword_export.get("jsonl_path")
+            if isinstance(jsonl_path, str) and jsonl_path.strip():
+                commands.append(
+                    DiagnosticsCommand(
+                        label="合并候选到 glossary（预览）",
+                        command=format_cli_command(
+                            python_exe,
+                            batch_script_path,
+                            [
+                                "merge-keywords-to-glossary",
+                                manifest_path,
+                                "--dry-run",
+                            ],
+                        ),
+                    )
+                )
+                commands.append(
+                    DiagnosticsCommand(
+                        label="合并候选到 glossary",
+                        command=format_cli_command(
+                            python_exe,
+                            batch_script_path,
+                            ["merge-keywords-to-glossary", manifest_path],
+                        ),
+                    )
+                )
         return commands
 
     retry_parent = manifest.get("retry_of_manifest")

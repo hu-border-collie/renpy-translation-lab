@@ -271,6 +271,28 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("export-keywords", by_label["导出关键词报告"])
         self.assertIn(manifest_path, by_label["导出关键词报告"])
 
+    def test_keyword_manifest_with_export_includes_merge_glossary_commands(self):
+        manifest_path = r"C:\logs\batch_jobs\kw1\manifest.json"
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=manifest_path,
+            manifest={
+                "mode": "keyword_extraction",
+                "job_name": "batches/kw",
+                "keyword_export": {
+                    "jsonl_path": r"C:\logs\batch_jobs\kw1\keyword_candidates.jsonl",
+                },
+            },
+        )
+
+        by_label = {command.label: command.command for command in commands}
+        self.assertIn("合并候选到 glossary（预览）", by_label)
+        self.assertIn("合并候选到 glossary", by_label)
+        self.assertIn("merge-keywords-to-glossary", by_label["合并候选到 glossary（预览）"])
+        self.assertIn("--dry-run", by_label["合并候选到 glossary（预览）"])
+        self.assertIn(manifest_path, by_label["合并候选到 glossary"])
+
     def test_build_diagnostics_context_idle_without_manifest(self):
         context = build_diagnostics_context(
             latest_manifest_path=None,
