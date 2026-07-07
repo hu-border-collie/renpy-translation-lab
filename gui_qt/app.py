@@ -4481,10 +4481,10 @@ class MainWindow(QMainWindow):
                 exit_code,
                 manifest_path,
             )
-            if exit_code == 0:
-                self._refresh_workflow_from_latest_manifest()
             self._active_command = ""
             self._set_task_running(False)
+            if exit_code == 0:
+                self._refresh_workflow_from_latest_manifest()
             if exit_code != 0:
                 self.statusBar().showMessage("重新检查失败，请查看诊断日志。", 8000)
             else:
