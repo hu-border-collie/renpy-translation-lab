@@ -11,29 +11,48 @@ import translator_runtime as runtime
 from gui_qt.batch_workflow_support import load_target_language_facts_from_manifest
 
 
+def _snapshot_runtime_path_settings():
+    return {
+        'TL_SUBDIR': runtime.TL_SUBDIR,
+        'TL_DIR': runtime.TL_DIR,
+        'BASE_DIR': runtime.BASE_DIR,
+        'WORK_GAME_DIR': runtime.WORK_GAME_DIR,
+        'PREP_LANGUAGE': runtime.PREP_LANGUAGE,
+    }
+
+
+def _restore_runtime_path_settings(snapshot):
+    for key, value in snapshot.items():
+        setattr(runtime, key, value)
+
+
 class TargetLanguageConfigTests(unittest.TestCase):
     def test_load_translator_settings_resolves_japanese_tl_paths(self):
+        snapshot = _snapshot_runtime_path_settings()
         fixture_path = Path(__file__).resolve().parent / 'fixtures' / 'translator_config_japanese.json'
-        with tempfile.TemporaryDirectory() as tmp:
-            workspace = Path(tmp)
-            work_dir = workspace / 'work'
-            work_dir.mkdir()
-            config = json.loads(fixture_path.read_text(encoding='utf-8'))
-            config['game_root'] = str(work_dir)
-            config_path = workspace / 'translator_config.json'
-            config_path.write_text(json.dumps(config, ensure_ascii=False), encoding='utf-8')
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                workspace = Path(tmp)
+                work_dir = workspace / 'work'
+                work_dir.mkdir()
+                config = json.loads(fixture_path.read_text(encoding='utf-8'))
+                config['game_root'] = str(work_dir)
+                config_path = workspace / 'translator_config.json'
+                config_path.write_text(json.dumps(config, ensure_ascii=False), encoding='utf-8')
 
-            with (
-                mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
-                mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'renpy-translation-lab')),
-                mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'renpy-translation-lab')),
-                mock.patch.dict(os.environ, {}, clear=True),
-            ):
-                runtime.load_translator_settings()
+                with (
+                    mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                    mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'renpy-translation-lab')),
+                    mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'renpy-translation-lab')),
+                    mock.patch.dict(os.environ, {}, clear=True),
+                ):
+                    runtime.load_translator_settings()
 
-            self.assertEqual(runtime.TL_SUBDIR, 'game/tl/japanese')
-            self.assertEqual(runtime.PREP_LANGUAGE, 'japanese')
-            self.assertTrue(runtime.TL_DIR.replace('\\', '/').endswith('work/game/tl/japanese'))
+                self.assertEqual(runtime.TL_SUBDIR, 'game/tl/japanese')
+                self.assertEqual(runtime.PREP_LANGUAGE, 'japanese')
+                self.assertTrue(runtime.TL_DIR.replace('\\', '/').endswith('work/game/tl/japanese'))
+        finally:
+            _restore_runtime_path_settings(snapshot)
 
     def test_manifest_target_language_fields_follow_runtime(self):
         with (
