@@ -8,7 +8,7 @@
 
 图形工作台是现有 CLI 和 JSON 配置之上的**可选外壳**：
 
-- 普通用户走「选项目 → 配置 → 检查 → 翻译 → 写回」；高级信息集中在诊断页。
+- 普通用户走「选项目 → 设置 → 检查 → 翻译 → 写回」；运行细节集中在诊断页，完整 `translator_config.json` 配置集中在设置页。
 - 底层仍调用现有 CLI 脚本，不重写翻译核心：**批量翻译**走 `gemini_translate_batch.py`；**同步翻译**走 `gemini_translate.py`。
 - 配置仍用 `api_keys.json`、`translator_config.json`；批量写回以 CLI 的 `check -> apply` 安全合约为准，同步模式按脚本规则直接写回。
 - GUI 依赖在 `requirements-gui.txt`，不进入主 `requirements.txt`。**不装图形界面时，命令行工具可照常使用。**
@@ -57,7 +57,7 @@ git lfs pull
 GUI 的普通主流程是：
 
 ```text
-选择项目 -> 配置 API / 模型 -> 检查项目 -> 开始翻译 -> 检查结果 -> 写回翻译
+选择项目 -> 设置 API / 模型 -> 检查项目 -> 开始翻译 -> 检查结果 -> 写回翻译
 ```
 
 对应的底层 CLI 仍是：
@@ -66,7 +66,7 @@ GUI 的普通主流程是：
 doctor -> build -> submit -> status -> download -> check -> apply
 ```
 
-主界面分为三个顶层 Tab：**工作台**、**配置**、**诊断日志**。
+主界面分为三个顶层 Tab：**工作台**、**设置**、**诊断日志**。
 
 界面上的**灰色说明、状态段落和检查摘要**字号略大于普通正文，便于阅读；按钮、页眉和底部原始日志仍保持紧凑字号。
 
@@ -89,15 +89,16 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 普通用户不需要在这一页理解任务记录（manifest）的内部结构；批量写回风险仍以 CLI 的 `check -> apply` 合约为准。
 
-### 配置
+### 设置
 
-配置页采用可滚动布局，自上而下为：
+设置页采用左侧分区导航，右侧显示当前分区内容；底部固定提供 **重新加载**、**恢复推荐值**、**保存设置**。
 
-- **API Key**：读取 / 保存 `api_keys.json`；环境变量 Key 只读提示。
-- **批量上下文**：记忆库、原文索引、build 时自动补建等开关。启用后需先保存配置，再到工作台「分析与准备」运行预建子任务。
+- **账户**：读取 / 保存 `api_keys.json`；环境变量 Key 只读提示。
+- **项目**：`game_root`、术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。通常仍建议先在工作台选择项目，再在这里微调路径。
 - **模型**：同步 / 批量翻译模型、embedding model、批量 thinking level。
-- **外观**：浅色 / 深色 / 跟随系统。
-- **保存参数配置**：写回 `translator_config.json` 并保留未知字段。
+- **上下文**：批量 RAG 记忆库、原文索引、build 时自动补建、上下文库保存位置等开关。启用后需先保存设置，再到工作台「分析与准备」运行预建子任务。
+- **外观**：浅色 / 深色 / 跟随系统。切换主题会立即预览，保存设置后才写入 `translator_config.json`。
+- **高级**：翻译吞吐、retry、Batch safety settings、术语/风格、关键词提取、订正、RAG / 原文索引 / 剧情记忆的检索参数和 store 路径。数值字段会按 CLI 语义校验，路径类字段可留空表示使用默认路径；列表字段支持逐行填写，命令和 safety settings 支持 JSON。
 
 预建库不会修改游戏源文件；若记忆库未启用就点预建记忆库，界面会提示先打开开关并保存。
 
@@ -123,8 +124,8 @@ doctor -> build -> submit -> status -> download -> check -> apply
 GUI 不引入新的主配置系统。
 
 - API Key 仍保存到 `api_keys.json` 的 `api_keys` 列表。
-- 模型、embedding model、批量 thinking level、GUI 主题等写入 `translator_config.json`。
-- 保存配置时应保留未知字段，避免破坏高级配置。
+- 项目路径、准备流程、过滤器、模型、embedding model、批量 thinking level、GUI 主题、任务专用参数和上下文参数等写入 `translator_config.json`。
+- 保存设置时应保留未知字段，避免破坏手写配置。
 - 如果 API Key 来自 `GEMINI_API_KEY` 等环境变量，GUI 只提示只读状态，不强行写回文件。
 
 ## 翻译流程
@@ -196,9 +197,9 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 ## 批量上下文预建
 
-若项目已有一部分译文，或希望在 build 时检索相关剧情原文，可在配置页启用批量上下文并预建本地库。
+若项目已有一部分译文，或希望在 build 时检索相关剧情原文，可在设置页启用批量上下文并预建本地库。
 
-配置页的「上下文库保存到游戏目录」会把默认 RAG / 原文索引 / 剧情图谱路径切到当前 `work` 同级的 `translation_context/`；关闭时仍使用工具项目内的 `logs/`。Batch manifest、检查失败报告、补译包等运行记录仍保存在工具日志目录。
+设置页「上下文」里的「上下文库保存到游戏目录」会把默认 RAG / 原文索引 / 剧情图谱路径切到当前 `work` 同级的 `translation_context/`；关闭时仍使用工具项目内的 `logs/`。高级分区可显式覆盖 store 路径；Batch manifest、检查失败报告、补译包等运行记录仍保存在工具日志目录。
 
 预建流程：
 

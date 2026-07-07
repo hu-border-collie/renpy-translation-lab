@@ -462,6 +462,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeState:
             def get_game_root(self):
                 return Path("C:/Game/work")
+            def normalize_game_root(self, path):
+                return Path("C:/Game/work"), False
             def load_translator_config(self):
                 return config
             def save_translator_config(self, saved_config):
@@ -499,6 +501,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._batch_thinking_user_changed = False
         self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
         self.window._append_log = lambda _text: None
+        self.window._refresh_project_label = lambda: None
         self.window.statusBar = lambda: FakeStatusBar()
 
         saved = self.window._on_save_config()
@@ -523,6 +526,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeState:
             def get_game_root(self):
                 return Path("C:/Game/work")
+            def normalize_game_root(self, path):
+                return Path("C:/Game/work"), False
             def load_translator_config(self):
                 return config
             def save_translator_config(self, saved_config):
@@ -560,12 +565,411 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._batch_thinking_user_changed = False
         self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
         self.window._append_log = lambda _text: None
+        self.window._refresh_project_label = lambda: None
         self.window.statusBar = lambda: FakeStatusBar()
 
         saved = self.window._on_save_config()
 
         self.assertTrue(saved)
         self.assertEqual(saved_configs[0]["context_storage"]["game_dir_name"], "my_context")
+
+    def test_save_config_persists_advanced_settings_and_theme(self):
+        from gui_qt.work_modes import WorkMode
+
+        saved_configs = []
+        config = {
+            "sync": {"rag": {}, "custom": 1},
+            "batch": {
+                "rag": {},
+                "source_index": {},
+                "model": "gemini-3.1-flash-lite",
+                "custom": "keep",
+            },
+        }
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/Game/work")
+            def normalize_game_root(self, path):
+                return Path("C:/Game/work"), False
+            def load_translator_config(self):
+                return config
+            def save_translator_config(self, saved_config):
+                saved_configs.append(saved_config)
+
+        class FakeCheckBox:
+            def __init__(self, checked):
+                self._checked = checked
+            def isChecked(self):
+                return self._checked
+
+        class FakeCombo:
+            def __init__(self, text="", data=""):
+                self._text = text
+                self._data = data
+            def currentText(self):
+                return self._text
+            def currentData(self):
+                return self._data
+
+        class FakeText:
+            def __init__(self, text):
+                self._text = text
+                self.focused = False
+            def text(self):
+                return self._text
+            def setFocus(self):
+                self.focused = True
+
+        class FakeValue:
+            def __init__(self, value):
+                self._value = value
+            def value(self):
+                return self._value
+            def setFocus(self):
+                pass
+
+        class FakeStatusBar:
+            def showMessage(self, text, timeout):
+                pass
+
+        self.window.state = FakeState()
+        self.window.rag_enabled_cb = FakeCheckBox(True)
+        self.window.source_index_enabled_cb = FakeCheckBox(True)
+        self.window.bootstrap_on_build_cb = FakeCheckBox(False)
+        self.window.context_storage_game_cb = FakeCheckBox(True)
+        self.window.sync_model_combo = FakeCombo("gemini-sync")
+        self.window.batch_model_combo = FakeCombo("gemini-3.1-flash-lite")
+        self.window.sync_embedding_combo = FakeCombo("gemini-embedding-001")
+        self.window.batch_embedding_combo = FakeCombo("gemini-embedding-001")
+        self.window.batch_thinking_combo = FakeCombo(data="minimal")
+        self.window.theme_combo = FakeCombo(data="dark")
+        self.window._refresh_project_label = lambda: None
+        self.window._advanced_setting_widgets = {
+            "game_root": FakeText("C:/Game/work"),
+            "batch_chunk_size": FakeValue(12),
+            "batch_temperature": FakeValue(0.4),
+            "context_storage_game_dir_name": FakeText("custom_context"),
+            "include_files": FakeText("chapter01.rpy\nchapter02.rpy"),
+            "prepare_unpack_command": FakeText("[\"python\", \"unpack.py\"]"),
+            "batch_safety_settings": FakeText("relaxed_adult"),
+            "batch_macro_setting": FakeText("Use a concise voice.\nKeep honorifics."),
+            "batch_source_index_store_dir": FakeText("C:/ctx/source"),
+        }
+        self.window._advanced_setting_error_labels = {}
+        self.window._settings_nav_rows = {}
+        self.window._batch_thinking_user_changed = False
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window._append_log = lambda _text: None
+        self.window.statusBar = lambda: FakeStatusBar()
+
+        saved = self.window._on_save_config()
+
+        self.assertTrue(saved)
+        self.assertEqual(len(saved_configs), 1)
+        saved_config = saved_configs[0]
+        self.assertEqual(saved_config["gui"]["theme"], "dark")
+        self.assertEqual(saved_config["sync"]["custom"], 1)
+        self.assertEqual(saved_config["batch"]["custom"], "keep")
+        self.assertEqual(saved_config["game_root"], "C:/Game/work")
+        self.assertEqual(saved_config["batch"]["chunk_size"], 12)
+        self.assertEqual(saved_config["batch"]["temperature"], 0.4)
+        self.assertEqual(saved_config["context_storage"]["game_dir_name"], "custom_context")
+        self.assertEqual(saved_config["include_files"], ["chapter01.rpy", "chapter02.rpy"])
+        self.assertEqual(saved_config["prepare"]["unpack_command"], ["python", "unpack.py"])
+        self.assertEqual(saved_config["batch"]["safety_settings"], "relaxed_adult")
+        self.assertEqual(saved_config["batch"]["macro_setting"], "Use a concise voice.\nKeep honorifics.")
+        self.assertEqual(saved_config["batch"]["source_index"]["store_dir"], "C:/ctx/source")
+
+    def test_save_config_validation_error_blocks_write(self):
+        from gui_qt.work_modes import WorkMode
+
+        saved_configs = []
+        config = {
+            "sync": {"rag": {}},
+            "batch": {"rag": {}, "source_index": {}, "model": "gemini-3.1-flash-lite"},
+        }
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/Game/work")
+            def load_translator_config(self):
+                return config
+            def save_translator_config(self, saved_config):
+                saved_configs.append(saved_config)
+
+        class FakeCheckBox:
+            def __init__(self, checked):
+                self._checked = checked
+            def isChecked(self):
+                return self._checked
+
+        class FakeCombo:
+            def __init__(self, text="", data=""):
+                self._text = text
+                self._data = data
+            def currentText(self):
+                return self._text
+            def currentData(self):
+                return self._data
+
+        class FakeText:
+            def __init__(self, text):
+                self._text = text
+                self.focused = False
+            def text(self):
+                return self._text
+            def setFocus(self):
+                self.focused = True
+
+        class FakeLabel:
+            def __init__(self):
+                self.text = ""
+            def setText(self, value):
+                self.text = value
+
+        class FakeNav:
+            def __init__(self):
+                self.row = None
+            def setCurrentRow(self, row):
+                self.row = row
+
+        class FakeStatusBar:
+            def __init__(self):
+                self.messages = []
+            def showMessage(self, text, timeout):
+                self.messages.append((text, timeout))
+
+        invalid_widget = FakeText("")
+        error_label = FakeLabel()
+        nav = FakeNav()
+        status_bar = FakeStatusBar()
+        self.window.state = FakeState()
+        self.window.rag_enabled_cb = FakeCheckBox(True)
+        self.window.source_index_enabled_cb = FakeCheckBox(False)
+        self.window.bootstrap_on_build_cb = FakeCheckBox(True)
+        self.window.context_storage_game_cb = FakeCheckBox(True)
+        self.window.sync_model_combo = FakeCombo("gemini-sync")
+        self.window.batch_model_combo = FakeCombo("gemini-3.1-flash-lite")
+        self.window.sync_embedding_combo = FakeCombo("gemini-embedding-001")
+        self.window.batch_embedding_combo = FakeCombo("gemini-embedding-001")
+        self.window.batch_thinking_combo = FakeCombo(data="minimal")
+        self.window.theme_combo = FakeCombo(data="system")
+        self.window._advanced_setting_widgets = {
+            "context_storage_game_dir_name": invalid_widget,
+        }
+        self.window._advanced_setting_error_labels = {
+            "context_storage_game_dir_name": error_label,
+        }
+        self.window._settings_nav_rows = {"advanced": 4}
+        self.window.settings_nav = nav
+        self.window._batch_thinking_user_changed = False
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window._append_log = lambda _text: None
+        self.window.statusBar = lambda: status_bar
+
+        saved = self.window._on_save_config()
+
+        self.assertFalse(saved)
+        self.assertEqual(saved_configs, [])
+        self.assertIn("不能为空", error_label.text)
+        self.assertEqual(nav.row, 4)
+        self.assertTrue(invalid_widget.focused)
+        self.assertEqual(status_bar.messages[-1][0], "高级设置有无效字段，未保存。")
+
+    def test_focus_advanced_setting_navigates_to_project_page_for_project_fields(self):
+        class FakeNav:
+            def __init__(self):
+                self.row = None
+
+            def setCurrentRow(self, row):
+                self.row = row
+
+        class FakeText:
+            def __init__(self):
+                self.focused = False
+
+            def setFocus(self):
+                self.focused = True
+
+        nav = FakeNav()
+        widget = FakeText()
+        self.window.settings_nav = nav
+        self.window._settings_nav_rows = {"project": 1, "advanced": 5}
+        self.window._advanced_setting_widgets = {"game_root": widget}
+
+        self.window._focus_advanced_setting("game_root")
+
+        self.assertEqual(nav.row, 1)
+        self.assertTrue(widget.focused)
+
+    def test_sync_state_game_root_from_settings_switches_root_when_changed(self):
+        class FakeState:
+            def __init__(self):
+                self._game_root = Path("C:/Game/old_work")
+
+            def get_game_root(self):
+                return self._game_root
+
+            def normalize_game_root(self, path):
+                return Path(str(path).replace("\\", "/")), False
+
+        switched = []
+        self.window.state = FakeState()
+        self.window._switch_game_root = lambda directory: switched.append(directory) or True
+
+        result = self.window._sync_state_game_root_from_settings("C:/Game/new_work")
+
+        self.assertTrue(result)
+        self.assertEqual(switched, ["C:/Game/new_work"])
+
+    def test_sync_state_game_root_from_settings_skips_switch_when_unchanged(self):
+        class FakeState:
+            def __init__(self):
+                self._game_root = Path("C:/Game/work")
+
+            def get_game_root(self):
+                return self._game_root
+
+            def normalize_game_root(self, path):
+                return Path("C:/Game/work"), False
+
+        switched = []
+        refreshed = []
+        self.window.state = FakeState()
+        self.window._switch_game_root = lambda directory: switched.append(directory) or True
+        self.window._refresh_project_label = lambda: refreshed.append(True)
+
+        result = self.window._sync_state_game_root_from_settings("C:/Game/work")
+
+        self.assertTrue(result)
+        self.assertEqual(switched, [])
+        self.assertEqual(refreshed, [True])
+
+    def test_restore_recommended_config_updates_basic_and_advanced_widgets(self):
+        class FakeCheckBox:
+            def __init__(self):
+                self.checked = None
+            def setChecked(self, value):
+                self.checked = value
+            def isChecked(self):
+                return bool(self.checked)
+
+        class FakeCombo:
+            def __init__(self):
+                self.items = []
+                self.current_index = -1
+                self.current_data = ""
+            def findText(self, text):
+                try:
+                    return self.items.index((text, text))
+                except ValueError:
+                    return -1
+            def addItem(self, text, data=None):
+                self.items.append((text, text if data is None else data))
+            def count(self):
+                return len(self.items)
+            def setCurrentIndex(self, index):
+                self.current_index = index
+                if 0 <= index < len(self.items):
+                    self.current_data = self.items[index][1]
+            def findData(self, data):
+                for index, (_text, item_data) in enumerate(self.items):
+                    if item_data == data:
+                        return index
+                return -1
+            def currentText(self):
+                if 0 <= self.current_index < len(self.items):
+                    return self.items[self.current_index][0]
+                return ""
+            def currentData(self):
+                return self.current_data
+
+        class FakeValue:
+            def __init__(self):
+                self.saved = None
+            def setValue(self, value):
+                self.saved = value
+            def value(self):
+                return self.saved
+
+        class FakeText:
+            def __init__(self):
+                self.saved = None
+            def setText(self, value):
+                self.saved = value
+            def text(self):
+                return self.saved or ""
+
+        class FakeLabel:
+            def __init__(self):
+                self.text = "stale"
+            def setText(self, value):
+                self.text = value
+
+        class FakeStatusBar:
+            def __init__(self):
+                self.messages = []
+            def showMessage(self, text, timeout):
+                self.messages.append((text, timeout))
+
+        self.window.rag_enabled_cb = FakeCheckBox()
+        self.window.source_index_enabled_cb = FakeCheckBox()
+        self.window.bootstrap_on_build_cb = FakeCheckBox()
+        self.window.context_storage_game_cb = FakeCheckBox()
+        self.window.sync_model_combo = FakeCombo()
+        self.window.batch_model_combo = FakeCombo()
+        self.window.sync_embedding_combo = FakeCombo()
+        self.window.batch_embedding_combo = FakeCombo()
+        self.window.batch_thinking_combo = FakeCombo()
+        for text, data in (("（不启用）", ""), ("最小", "minimal")):
+            self.window.batch_thinking_combo.addItem(text, data)
+        self.window.theme_combo = FakeCombo()
+        for text, data in (("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")):
+            self.window.theme_combo.addItem(text, data)
+        batch_chunk = FakeValue()
+        context_dir = FakeText()
+        error_label = FakeLabel()
+        self.window._advanced_setting_widgets = {
+            "batch_chunk_size": batch_chunk,
+            "context_storage_game_dir_name": context_dir,
+        }
+        self.window._advanced_setting_error_labels = {
+            "batch_chunk_size": error_label,
+        }
+        self.window._qt_app = None
+        status_bar = FakeStatusBar()
+        self.window.statusBar = lambda: status_bar
+
+        self.window._on_restore_recommended_config()
+
+        self.assertTrue(self.window.rag_enabled_cb.checked)
+        self.assertFalse(self.window.source_index_enabled_cb.checked)
+        self.assertEqual(self.window.sync_model_combo.currentText(), "gemini-3.1-flash-lite")
+        self.assertEqual(self.window.batch_embedding_combo.currentText(), "gemini-embedding-001")
+        self.assertEqual(self.window.batch_thinking_combo.currentData(), "minimal")
+        self.assertEqual(self.window.theme_combo.currentData(), "system")
+        self.assertEqual(batch_chunk.saved, 60)
+        self.assertEqual(context_dir.saved, "translation_context")
+        self.assertEqual(error_label.text, "")
+        self.assertEqual(status_bar.messages[-1][0], "已恢复推荐值，保存后生效。")
+
+    def test_theme_change_previews_without_persisting(self):
+        class FakeCombo:
+            def currentData(self):
+                return "dark"
+
+        calls = []
+        self.window._loading_config_to_ui = False
+        self.window._loading_theme_to_ui = False
+        self.window.theme_combo = FakeCombo()
+        self.window._set_theme_preference = lambda preference, persist: calls.append(
+            (preference, persist)
+        )
+
+        self.window._on_theme_changed(0)
+
+        self.assertEqual(calls, [("dark", False)])
 
     def test_load_config_reads_legacy_context_storage_location(self):
         config = {
@@ -1174,7 +1578,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def setInformativeText(self, text):
                 pass
             def addButton(self, text, role):
-                button = self._stay_btn if text == "留在配置页" else object()
+                button = self._stay_btn if text == "留在设置页" else object()
                 self._buttons.append((text, button))
                 return button
             def setDefaultButton(self, button):
