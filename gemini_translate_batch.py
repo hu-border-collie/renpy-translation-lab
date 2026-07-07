@@ -19,6 +19,7 @@ if SCRIPT_DIR not in sys.path:
 
 from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
 import batch_cost_estimate
+import batch_submit_recovery
 import prompt_context
 import story_memory
 import translation_core
@@ -3811,7 +3812,79 @@ def ensure_manifest_cost_estimate(manifest):
         ) from exc
 
 
-def submit_manifest(target=None, display_name_override='', model_override='', max_cost=None):
+def _manifest_package_dir(manifest):
+    package_dir = manifest.get('_package_dir')
+    if package_dir:
+        return package_dir
+    manifest_path = manifest.get('_manifest_path')
+    if manifest_path:
+        return os.path.dirname(manifest_path)
+    raise SystemExit('Manifest package directory is missing.')
+
+
+def _raise_uncertain_submit_blocked(uncertain_state):
+    message = uncertain_state.get('message') or batch_submit_recovery.BLOCKED_MESSAGE_PREFIX
+    recovery_hint = uncertain_state.get('recovery_hint') or batch_submit_recovery.RECOVER_HINT
+    raise SystemExit(f'{message}\n{recovery_hint}')
+
+
+def recover_submit_manifest(target=None, verify_remote=True):
+    manifest = load_manifest(target)
+    if manifest.get('job_name'):
+        print(f"Manifest already submitted: {manifest['job_name']}")
+        print(f"Manifest: {manifest['_manifest_path']}")
+        return manifest['_manifest_path']
+
+    package_dir = _manifest_package_dir(manifest)
+    entries = batch_submit_recovery.read_submit_journal_entries(package_dir)
+    pending_job = batch_submit_recovery.find_uncommitted_job_created(entries, manifest)
+    if pending_job is None:
+        uncertain_state = batch_submit_recovery.get_uncertain_submit_state(
+            manifest,
+            package_dir=package_dir,
+        )
+        if uncertain_state and uncertain_state.get('kind') == 'upload_pending_job_create':
+            for hint in batch_submit_recovery.format_uncertain_submit_hints(uncertain_state):
+                print(hint)
+            raise SystemExit(
+                'No recoverable remote job found. Re-run submit with --resume to continue job creation.'
+            )
+        raise SystemExit('No recoverable submit state found for this manifest.')
+
+    job_name = pending_job.get('job_name', '')
+    if verify_remote:
+        client = create_batch_client()
+        try:
+            batch_job = client.batches.get(name=job_name)
+            remote_state = get_state_name(getattr(batch_job, 'state', None))
+            if remote_state:
+                pending_job['job_state'] = remote_state
+            print(f'Verified remote batch job: {job_name}')
+            if remote_state:
+                print(f'Remote state: {remote_state}')
+        except Exception as exc:
+            print(f'Warning: Could not verify remote job {job_name}: {exc}')
+
+    batch_submit_recovery.apply_recovered_job_to_manifest(
+        manifest,
+        pending_job,
+        package_dir=package_dir,
+        submitted_api_key_index=getattr(legacy, 'CURRENT_KEY_INDEX', 0),
+    )
+    save_manifest(manifest)
+    print(f'Recovered batch job: {manifest["job_name"]}')
+    print(f"Manifest: {manifest['_manifest_path']}")
+    return manifest['_manifest_path']
+
+
+def submit_manifest(
+    target=None,
+    display_name_override='',
+    model_override='',
+    max_cost=None,
+    force_resubmit=False,
+    resume_upload=False,
+):
     manifest = load_manifest(target) if target else None
     if manifest is None:
         manifest_path = create_batch_package(display_name_override=display_name_override)
@@ -3821,6 +3894,29 @@ def submit_manifest(target=None, display_name_override='', model_override='', ma
 
     if manifest.get('job_name'):
         raise SystemExit(f"Manifest already submitted: {manifest['job_name']}")
+
+    package_dir = _manifest_package_dir(manifest)
+    uncertain_state = batch_submit_recovery.get_uncertain_submit_state(
+        manifest,
+        package_dir=package_dir,
+    )
+    if uncertain_state:
+        if uncertain_state.get('kind') == 'job_created_uncommitted':
+            _raise_uncertain_submit_blocked(uncertain_state)
+        if uncertain_state.get('kind') == 'upload_pending_job_create':
+            if resume_upload:
+                current_checksum = batch_submit_recovery.compute_request_checksum(manifest)
+                saved_checksum = manifest.get('request_checksum')
+                if saved_checksum and saved_checksum != current_checksum:
+                    raise SystemExit(
+                        'Submit blocked: input JSONL changed since upload. '
+                        'Re-run submit with --force to start over.'
+                    )
+            elif force_resubmit:
+                batch_submit_recovery.clear_incomplete_submit_state(manifest)
+                uncertain_state = None
+            else:
+                _raise_uncertain_submit_blocked(uncertain_state)
 
     if display_name_override:
         manifest['display_name'] = display_name_override.strip()
@@ -3839,44 +3935,72 @@ def submit_manifest(target=None, display_name_override='', model_override='', ma
                 f'exceeds limit {float(max_cost):.4f} {currency}.'
             )
 
+    resume_existing_upload = (
+        resume_upload
+        and uncertain_state is not None
+        and uncertain_state.get('kind') == 'upload_pending_job_create'
+        and manifest.get('uploaded_file_name')
+    )
+    if not resume_existing_upload:
+        batch_submit_recovery.begin_submit_attempt(manifest, package_dir=package_dir)
+        save_manifest(manifest)
+
     attempts = max(1, len(getattr(legacy, 'API_KEYS', [])))
     last_error = None
 
     for attempt in range(1, attempts + 1):
         client = create_batch_client()
-        uploaded_file = None
+        uploaded_file_name = ''
         try:
-            print(f"Uploading JSONL: {manifest['input_jsonl_path']}")
-            uploaded_file = client.files.upload(
-                file=manifest['input_jsonl_path'],
-                config=genai_types.UploadFileConfig(
-                    display_name=manifest['display_name'],
-                    mime_type='jsonl',
-                ),
-            )
-            manifest['uploaded_file_name'] = getattr(uploaded_file, 'name', '')
-            manifest.setdefault('uploaded_file_names', [])
-            if manifest['uploaded_file_name'] and manifest['uploaded_file_name'] not in manifest['uploaded_file_names']:
-                manifest['uploaded_file_names'].append(manifest['uploaded_file_name'])
-            _clear_submit_failure_metadata(manifest)
-            save_manifest(manifest)
-            print(f'Uploaded file: {uploaded_file.name}')
+            if resume_existing_upload:
+                uploaded_file_name = manifest['uploaded_file_name']
+                print(f"Reusing uploaded JSONL: {uploaded_file_name}")
+            else:
+                print(f"Uploading JSONL: {manifest['input_jsonl_path']}")
+                uploaded_file = client.files.upload(
+                    file=manifest['input_jsonl_path'],
+                    config=genai_types.UploadFileConfig(
+                        display_name=manifest['display_name'],
+                        mime_type='jsonl',
+                    ),
+                )
+                uploaded_file_name = getattr(uploaded_file, 'name', '')
+                batch_submit_recovery.record_upload_completed(
+                    manifest,
+                    package_dir=package_dir,
+                    uploaded_file_name=uploaded_file_name,
+                )
+                _clear_submit_failure_metadata(manifest)
+                save_manifest(manifest)
+                print(f'Uploaded file: {uploaded_file_name}')
 
             print(f"Creating batch job with model: {manifest['batch_model']}")
             batch_job = client.batches.create(
                 model=manifest['batch_model'],
-                src=uploaded_file.name,
+                src=uploaded_file_name,
                 config={'display_name': manifest['display_name']},
             )
 
-            manifest['job_name'] = getattr(batch_job, 'name', '')
-            manifest['job_state'] = get_state_name(getattr(batch_job, 'state', None))
+            job_name = getattr(batch_job, 'name', '')
+            job_state = get_state_name(getattr(batch_job, 'state', None))
+            batch_submit_recovery.record_job_created(
+                manifest,
+                package_dir=package_dir,
+                job_name=job_name,
+                job_state=job_state,
+                uploaded_file_name=uploaded_file_name,
+            )
+
+            manifest['job_name'] = job_name
+            manifest['job_state'] = job_state
             manifest['submitted_at'] = datetime.now().isoformat(timespec='seconds')
             manifest['last_status_checked_at'] = manifest['submitted_at']
             manifest['submitted_api_key_index'] = getattr(legacy, 'CURRENT_KEY_INDEX', 0)
             manifest['submitted_api_key_number'] = manifest['submitted_api_key_index'] + 1
             manifest['last_status_api_key_index'] = manifest['submitted_api_key_index']
             _clear_submit_failure_metadata(manifest)
+            save_manifest(manifest)
+            batch_submit_recovery.record_manifest_committed(manifest, package_dir=package_dir)
             save_manifest(manifest)
 
             print(f"Batch job created: {manifest['job_name']}")
@@ -3894,20 +4018,22 @@ def submit_manifest(target=None, display_name_override='', model_override='', ma
             if not quota_error:
                 manifest.pop('split_recommended', None)
                 manifest.pop('last_submit_quota_recommendation', None)
-            if uploaded_file is not None:
-                manifest['uploaded_file_name'] = getattr(uploaded_file, 'name', '')
+            if uploaded_file_name:
+                manifest['uploaded_file_name'] = uploaded_file_name
                 manifest.setdefault('uploaded_file_names', [])
-                if manifest['uploaded_file_name'] and manifest['uploaded_file_name'] not in manifest['uploaded_file_names']:
-                    manifest['uploaded_file_names'].append(manifest['uploaded_file_name'])
+                if uploaded_file_name not in manifest['uploaded_file_names']:
+                    manifest['uploaded_file_names'].append(uploaded_file_name)
+                if manifest.get('submit_state') != batch_submit_recovery.SUBMIT_STATE_JOB_CREATED:
+                    manifest['submit_state'] = batch_submit_recovery.SUBMIT_STATE_UPLOADED
             save_manifest(manifest)
 
             if quota_error and attempt < attempts and legacy.rotate_api_key():
                 print(f'Quota hit during batch submit. Retrying with next API key ({attempt}/{attempts})...')
+                resume_existing_upload = False
                 continue
             if quota_error:
                 print_submit_split_recommendation(recommendation)
             raise
-
 
     if last_error is not None:
         raise last_error
@@ -3935,7 +4061,13 @@ def refresh_manifest_status(manifest):
 
 def show_status(target=None):
     manifest = load_manifest(target)
-    manifest = refresh_manifest_status(manifest)
+    uncertain_state = batch_submit_recovery.get_uncertain_submit_state(manifest)
+    if uncertain_state:
+        print('Submit recovery required before re-submitting this package.')
+        for hint in batch_submit_recovery.format_uncertain_submit_hints(uncertain_state):
+            print(hint)
+    if manifest.get('job_name'):
+        manifest = refresh_manifest_status(manifest)
     print(f"Manifest: {manifest['_manifest_path']}")
     print(f"Job: {manifest.get('job_name')}")
     print(f"State: {manifest.get('job_state')}")
@@ -8793,6 +8925,32 @@ def build_arg_parser():
         default=None,
         help='Reject submit when estimated max cost exceeds this value (same currency as batch.pricing).',
     )
+    submit_parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Start a fresh submit attempt after an incomplete upload-only state.',
+    )
+    submit_parser.add_argument(
+        '--resume',
+        action='store_true',
+        help='Continue job creation using a previously uploaded input file.',
+    )
+
+    recover_submit_parser = subparsers.add_parser(
+        'recover-submit',
+        help='Recover a batch job from submit journal when manifest was not updated.',
+    )
+    recover_submit_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Manifest path or package dir. Defaults to latest package.',
+    )
+    recover_submit_parser.add_argument(
+        '--no-verify',
+        action='store_true',
+        help='Skip remote job verification before writing manifest.',
+    )
 
     estimate_cost_parser = subparsers.add_parser(
         'estimate-cost',
@@ -9126,6 +9284,15 @@ def main(argv=None):
             display_name_override=args.display_name,
             model_override=args.model,
             max_cost=args.max_cost,
+            force_resubmit=args.force,
+            resume_upload=args.resume,
+        )
+        return
+
+    if command == 'recover-submit':
+        recover_submit_manifest(
+            target=args.target or None,
+            verify_remote=not args.no_verify,
         )
         return
 

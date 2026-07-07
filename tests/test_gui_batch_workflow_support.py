@@ -3,10 +3,15 @@ import os
 import tempfile
 import unittest
 
+import batch_submit_recovery
+
 from gui_qt.batch_workflow_support import (
+    build_recover_submit_cli_args,
     build_submit_cli_args,
     format_cost_estimate_facts,
+    get_uncertain_submit_kind,
     load_cost_estimate_facts_from_manifest,
+    plan_unsubmitted_workflow_steps,
     resolve_submit_max_cost,
 )
 from gui_qt.doctor_report import doctor_report_to_parsed, summarize_doctor_report
@@ -64,6 +69,66 @@ class GuiBatchWorkflowSupportTests(unittest.TestCase):
                 )
             facts = load_cost_estimate_facts_from_manifest(manifest_path)
             self.assertIn("估算输入 token：10", facts)
+
+    def test_build_submit_cli_args_appends_resume_for_upload_pending_state(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            package_dir = os.path.join(tmp_dir, "package")
+            os.makedirs(package_dir)
+            jsonl_path = os.path.join(package_dir, "requests.jsonl")
+            manifest_path = os.path.join(package_dir, "manifest.json")
+            with open(jsonl_path, "w", encoding="utf-8") as handle:
+                handle.write("{}\n")
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "job_name": "",
+                        "submit_state": batch_submit_recovery.SUBMIT_STATE_UPLOADED,
+                        "uploaded_file_name": "files/uploaded-1",
+                        "submit_attempt_id": "attempt-1",
+                        "request_checksum": "abc",
+                    },
+                    handle,
+                )
+            batch_submit_recovery.append_submit_journal_entry(
+                package_dir,
+                {
+                    "event": batch_submit_recovery.EVENT_UPLOAD_COMPLETED,
+                    "submit_attempt_id": "attempt-1",
+                    "uploaded_file_name": "files/uploaded-1",
+                },
+            )
+            self.assertEqual(
+                build_submit_cli_args(manifest_path),
+                ["submit", manifest_path, "--resume"],
+            )
+
+    def test_plan_unsubmitted_workflow_steps_prefers_recover_submit(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            package_dir = os.path.join(tmp_dir, "package")
+            os.makedirs(package_dir)
+            manifest_path = os.path.join(package_dir, "manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump({"job_name": ""}, handle)
+            batch_submit_recovery.append_submit_journal_entry(
+                package_dir,
+                {
+                    "event": batch_submit_recovery.EVENT_JOB_CREATED,
+                    "submit_attempt_id": "attempt-2",
+                    "job_name": "batches/job-2",
+                },
+            )
+            self.assertEqual(
+                plan_unsubmitted_workflow_steps(manifest_path),
+                ["recover-submit", "status"],
+            )
+            self.assertEqual(
+                get_uncertain_submit_kind(manifest_path),
+                "job_created_uncommitted",
+            )
+            self.assertEqual(
+                build_recover_submit_cli_args(manifest_path),
+                ["recover-submit", manifest_path],
+            )
 
     def test_translation_workflow_submit_uses_max_cost(self):
         workflow = TranslationWorkflow.start_new(submit_max_cost=3.5)

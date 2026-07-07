@@ -9,9 +9,13 @@ import re
 from dataclasses import dataclass
 
 from .batch_workflow_support import (
+    build_recover_submit_cli_args,
     build_submit_cli_args,
     load_cost_estimate_facts_from_manifest,
     output_blocked_by_max_cost,
+    output_blocked_by_uncertain_submit,
+    plan_unsubmitted_workflow_steps,
+    uncertain_submit_failure_message,
 )
 from .user_copy import (
     format_job_state_fact,
@@ -52,6 +56,7 @@ class WorkflowUpdate:
 STEP_TEXT = {
     "build": ("正在准备翻译内容", "正在扫描待翻译文本并准备待提交内容。"),
     "submit": ("正在提交翻译任务", "正在上传请求文件并创建云端批量任务。"),
+    "recover-submit": ("正在恢复提交状态", "正在从提交日志恢复远端批量任务信息。"),
     "status": ("正在刷新任务状态", "正在查询云端任务处理状态。"),
     "download": ("正在获取翻译结果", "任务已完成，正在下载结果文件。"),
     "check": ("正在检查翻译结果", "正在校验结果是否可以进入写回前预览。"),
@@ -152,7 +157,7 @@ class TranslationWorkflow:
             )
         if not manifest.get("job_name"):
             return cls(
-                ["submit", "status"],
+                plan_unsubmitted_workflow_steps(manifest_path),
                 manifest_path=manifest_path,
                 submit_max_cost=submit_max_cost,
             )
@@ -194,7 +199,7 @@ class TranslationWorkflow:
             )
         if not manifest.get("job_name"):
             return cls(
-                ["submit", "status"],
+                plan_unsubmitted_workflow_steps(manifest_path),
                 manifest_path=manifest_path,
                 submit_max_cost=submit_max_cost,
                 retry_parent_manifest_path=retry_parent_manifest_path,
@@ -234,7 +239,7 @@ class TranslationWorkflow:
 
         if key == "build":
             return self._finish_build(output)
-        if key == "submit":
+        if key in {"submit", "recover-submit"}:
             manifest_path = extract_manifest_path(output)
             if manifest_path:
                 self.manifest_path = manifest_path
@@ -267,12 +272,15 @@ class TranslationWorkflow:
     def _finish_failed_step(self, key: str, output: str) -> WorkflowUpdate:
         message = f"{STEP_TEXT[key][0]}没有正常完成，请查看下方原始输出。"
         extra_facts: list[str] = []
-        if key == "submit" and output_blocked_by_max_cost(output):
+        if key in {"submit", "recover-submit"} and output_blocked_by_max_cost(output):
             message = (
                 "提交被成本上限拦截。请在高级设置中提高「提交成本上限」，"
                 "或先拆分任务包以降低单次提交成本。"
             )
             extra_facts.append("建议：检查高级设置中的提交成本上限，或先运行 split 拆包。")
+        elif key in {"submit", "recover-submit"} and output_blocked_by_uncertain_submit(output):
+            message = uncertain_submit_failure_message(output)
+            extra_facts.append("建议：在诊断页运行 recover-submit，或按提示使用 --resume / --force。")
         elif key == "submit" and output_has_quota_error(output):
             message = (
                 "提交云端任务时命中配额或资源限制。当前批量包可能过大，"
@@ -395,6 +403,8 @@ class TranslationWorkflow:
             return [key]
         if key == "submit":
             return build_submit_cli_args(self.manifest_path, self.submit_max_cost)
+        if key == "recover-submit":
+            return build_recover_submit_cli_args(self.manifest_path)
         return [key, self.manifest_path]
 
     def _facts(self, extra_facts: list[str] | None = None) -> list[str]:

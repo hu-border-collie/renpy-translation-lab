@@ -1,4 +1,9 @@
+import json
+import os
+import tempfile
 import unittest
+
+import batch_submit_recovery
 
 from gui_qt.diagnostics_context import (
     build_cli_commands,
@@ -75,6 +80,34 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         labels = [command.label for command in commands]
         self.assertIn("提交批量任务", labels)
         self.assertIn("查询任务状态", labels)
+
+    def test_build_cli_commands_includes_recover_submit_when_journal_has_job(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            package_dir = os.path.join(tmp_dir, "package")
+            os.makedirs(package_dir)
+            manifest_path = os.path.join(package_dir, "manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump({"job_name": "", "mode": "translation"}, handle)
+            batch_submit_recovery.append_submit_journal_entry(
+                package_dir,
+                {
+                    "event": batch_submit_recovery.EVENT_JOB_CREATED,
+                    "submit_attempt_id": "attempt-1",
+                    "job_name": "batches/job-1",
+                },
+            )
+            commands = build_cli_commands(
+                python_exe="python",
+                batch_script_path="gemini_translate_batch.py",
+                manifest_path=manifest_path,
+                manifest={"job_name": "", "mode": "translation"},
+            )
+            labels = [command.label for command in commands]
+            self.assertIn("恢复提交状态", labels)
+            recover_command = next(
+                command.command for command in commands if command.label == "恢复提交状态"
+            )
+            self.assertIn("recover-submit", recover_command)
 
     def test_build_cli_commands_omits_apply_after_applied(self):
         commands = build_cli_commands(

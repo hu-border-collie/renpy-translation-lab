@@ -4,7 +4,14 @@ from __future__ import annotations
 import re
 
 from .revision_report import summarize_revision_preview_output
-from .batch_workflow_support import build_submit_cli_args, output_blocked_by_max_cost
+from .batch_workflow_support import (
+    build_recover_submit_cli_args,
+    build_submit_cli_args,
+    output_blocked_by_max_cost,
+    output_blocked_by_uncertain_submit,
+    plan_unsubmitted_workflow_steps,
+    uncertain_submit_failure_message,
+)
 from .translation_workflow import (
     TERMINAL_FAILURE_STATES,
     WorkflowStep,
@@ -29,6 +36,7 @@ def _extract_line_value(output: str, prefix: str) -> str:
 STEP_TEXT = {
     "build-revisions": ("正在准备订正内容", "正在扫描已有译文并准备待提交内容。"),
     "submit": ("正在提交订正任务", "正在上传请求文件并创建云端批量任务。"),
+    "recover-submit": ("正在恢复提交状态", "正在从提交日志恢复远端批量任务信息。"),
     "status": ("正在刷新订正任务状态", "正在查询云端任务处理状态。"),
     "download": ("正在获取订正结果", "任务已完成，正在下载结果文件。"),
     "preview-revisions": ("正在预览订正结果", "正在校验结果并生成订正预览报告。"),
@@ -78,7 +86,7 @@ class RevisionBatchWorkflow:
             )
         if not manifest.get("job_name"):
             return cls(
-                ["submit", "status"],
+                plan_unsubmitted_workflow_steps(manifest_path),
                 manifest_path=manifest_path,
                 submit_max_cost=submit_max_cost,
             )
@@ -109,11 +117,13 @@ class RevisionBatchWorkflow:
         if exit_code != 0:
             self._pending_steps.clear()
             message = f"{STEP_TEXT[key][0]}没有正常完成，请查看下方原始输出。"
-            if key == "submit" and output_blocked_by_max_cost(output):
+            if key in {"submit", "recover-submit"} and output_blocked_by_max_cost(output):
                 message = (
                     "提交被成本上限拦截。请在高级设置中提高「提交成本上限」，"
                     "或先拆分任务包以降低单次提交成本。"
                 )
+            elif key in {"submit", "recover-submit"} and output_blocked_by_uncertain_submit(output):
+                message = uncertain_submit_failure_message(output)
             return WorkflowUpdate(
                 status="failed",
                 heading="订正流程中断",
@@ -123,7 +133,7 @@ class RevisionBatchWorkflow:
 
         if key == "build-revisions":
             return self._finish_build(output)
-        if key == "submit":
+        if key in {"submit", "recover-submit"}:
             manifest_path = extract_manifest_path(output)
             if manifest_path:
                 self.manifest_path = manifest_path
@@ -230,6 +240,8 @@ class RevisionBatchWorkflow:
             return [key]
         if key == "submit":
             return build_submit_cli_args(self.manifest_path, self.submit_max_cost)
+        if key == "recover-submit":
+            return build_recover_submit_cli_args(self.manifest_path)
         return [key, self.manifest_path]
 
     def _facts(self, extra_facts: list[str] | None = None) -> list[str]:

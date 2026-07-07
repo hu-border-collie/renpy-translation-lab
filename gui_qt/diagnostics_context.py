@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
-from .batch_workflow_support import build_submit_cli_args, format_cost_estimate_facts
+from .batch_workflow_support import (
+    build_recover_submit_cli_args,
+    build_submit_cli_args,
+    format_cost_estimate_facts,
+    get_uncertain_submit_kind,
+    load_uncertain_submit_facts_from_manifest,
+)
 from .user_copy import (
     format_job_fact,
     format_job_state_fact,
@@ -410,6 +416,18 @@ def build_cloud_job_commands(
 ) -> list[DiagnosticsCommand]:
     commands: list[DiagnosticsCommand] = []
     if not manifest.get("job_name"):
+        uncertain_kind = get_uncertain_submit_kind(manifest_path)
+        if uncertain_kind == "job_created_uncommitted":
+            commands.append(
+                DiagnosticsCommand(
+                    label="恢复提交状态",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        build_recover_submit_cli_args(manifest_path),
+                    ),
+                )
+            )
         commands.append(
             DiagnosticsCommand(
                 label=submit_label,
@@ -566,6 +584,9 @@ def build_manifest_facts(manifest: dict[str, object], manifest_path: str) -> lis
     cost_estimate = manifest.get("cost_estimate")
     if isinstance(cost_estimate, dict):
         facts.extend(format_cost_estimate_facts(cost_estimate))
+
+    if manifest_path and not (isinstance(job_name, str) and job_name.strip()):
+        facts.extend(load_uncertain_submit_facts_from_manifest(manifest_path))
 
     mode = manifest.get("mode")
     if isinstance(mode, str) and mode.strip():
