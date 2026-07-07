@@ -3692,6 +3692,7 @@ def run_translation():
     print(f"Models: {MODELS}")
     print(f"API Keys Loaded: {len(API_KEYS)}")
     print(f"Base dir: {BASE_DIR}")
+    print(f"TL subdir: {TL_SUBDIR}")
     print(f"TL dir: {TL_DIR} (exists: {os.path.isdir(TL_DIR)})")
     print(f"Progress log: {PROGRESS_LOG}")
     print(f"Translator config: {TRANSLATOR_CONFIG} (exists: {os.path.isfile(TRANSLATOR_CONFIG)})")

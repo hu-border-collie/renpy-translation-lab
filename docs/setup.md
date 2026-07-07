@@ -36,13 +36,15 @@ Game_Example/
 ├─ work/
 │  └─ game/
 │     └─ tl/
-│        └─ schinese/
+│        └─ <language>/   # 默认 schinese
 └─ build/
 ```
 
-默认目标语言是 `schinese`，可以通过 `translator_config.json` 里的 `tl_subdir` 和 `prepare.language` 调整。
+默认目标语言是 `schinese`，可以通过 `translator_config.json` 里的 `tl_subdir` 和 `prepare.language` 调整。例如日语本地化可设为 `game/tl/japanese` 与 `prepare.language: "japanese"`；两者末段应保持一致。
 
-推荐先使用 Ren'Py SDK 生成标准 `tl/<language>` 模板；如果启用了 `prepare`，脚本会尝试从 `original/game` 提取脚本并自动调用 Ren'Py 生成或刷新 `tl/schinese` 模板。自动模板生成需要 Ren'Py SDK 或目标游戏自带的 Ren'Py launcher；如果已经有可用 TL 文件，缺少 SDK 时仍可直接处理现有 TL。
+`doctor`、`build` 与 `generate-template` 会在输出中显示当前 TL 路径与目标语言，便于确认配置是否生效。
+
+推荐先使用 Ren'Py SDK 生成标准 `tl/<language>` 模板；如果启用了 `prepare`，脚本会尝试从 `original/game` 提取脚本并自动调用 Ren'Py 生成或刷新对应语言模板。自动模板生成需要 Ren'Py SDK 或目标游戏自带的 Ren'Py launcher；如果已经有可用 TL 文件，缺少 SDK 时仍可直接处理现有 TL。
 
 不要用 Ren'Py 的 `--empty` 生成空模板。本工具的初译流程需要目标行保留原文，之后再把目标行或 `new` 行替换成中文。
 

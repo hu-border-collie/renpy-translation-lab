@@ -32,8 +32,8 @@ python -m gui_qt
 
 ## 核心能力
 
-- 扫描 Ren'Py `game/tl/schinese` 下的 `.rpy` 文件，抽取待翻译条目并跳过 `old`。
-- 自动预处理项目，包括提取脚本和生成 `tl/schinese` 模板。
+- 扫描 Ren'Py `game/tl/<language>/` 下的 `.rpy` 文件（默认 `schinese`），抽取待翻译条目并跳过 `old`。
+- 自动预处理项目，包括提取脚本和生成 `tl/<language>` 模板（由 `translator_config.json` 的 `tl_subdir` 与 `prepare.language` 决定）。
 - 构造带 glossary、macro setting、RAG 和可选 Story Memory 的 Gemini 请求。
 - 生成 Batch 请求包并执行完整异步流程。
 - 用 `check/apply/repair` 对写回做快照校验和安全分级；`apply` 默认只接受最近一次 `safe` check 对应的结果。
@@ -81,9 +81,11 @@ Game_Example/
 ├─ work/
 │  └─ game/
 │     └─ tl/
-│        └─ schinese/
+│        └─ <language>/   # 默认 schinese；可配置为 japanese、korean 等
 └─ build/
 ```
+
+目标语言与 TL 路径由 `translator_config.json` 配置；`doctor` 与 `build` 会打印当前 `tl_subdir` 和 `prepare.language`。详见 [安装与本地配置](docs/setup.md)。
 
 如果已有第三方汉化或非标准 TL 文件，先跑诊断：
 

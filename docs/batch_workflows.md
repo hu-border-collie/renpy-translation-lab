@@ -4,6 +4,22 @@
 
 本文档记录 Batch 流程中偏内部或高级的部分。日常入口见根目录 `README.md`。
 
+## 目标语言与 TL 路径
+
+- 默认目标语言为 `schinese`，对应 TL 路径 `game/tl/schinese`。
+- 通过 `translator_config.json` 的 `tl_subdir` 与 `prepare.language` 可改为 `japanese`、`korean` 等 Ren'Py 支持的语言目录。
+- `doctor`、`build`、`generate-template` 与 Batch 启动 banner 会打印当前 `tl_subdir` 与目标语言；manifest 也会记录 `tl_subdir` / `target_language` 便于追溯。
+- `prepare.language` 传给 Ren'Py 的 `translate` 命令；`tl_subdir` 决定脚本扫描与写回路径。两者末段应一致。
+
+### 校验边界（当前版本）
+
+`check` 默认要求译文包含中文（CJK）字符，适用于以简体中文为目标的批次。以下情况允许保留非中文译文（无需改配置）：
+
+- 术语表中的固定译法、保留英文名/缩写、玩家名比较行等启发式规则
+- 特定 UI/制作人员名单文件路径上的静态文本（当前为内置白名单，见 #140 PR2 可配置化）
+
+若目标语言不是中文，部分校验规则仍可能偏「中文目标」假设；换语言前请先跑 `doctor` 确认 TL 路径，并在 `check` 结果中关注 `No Chinese characters` 类失败。非中文白名单与性能优化将在 #140 后续 PR 中继续完善。
+
 ## 命令说明
 
 - `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出。

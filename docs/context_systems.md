@@ -51,7 +51,7 @@ logs/story_memory/story_graph.json
 python gemini_translate_batch.py bootstrap-rag
 ```
 
-这个命令只刷新本地 RAG history store，不会创建 Batch package，也不会修改 `.rpy`。它会复用 `batch.rag` 配置，扫描 `game/tl/schinese` 下当前允许处理的 `.rpy` 文件，提取已有 `old/new` 译文记录并生成 source embedding。
+这个命令只刷新本地 RAG history store，不会创建 Batch package，也不会修改 `.rpy`。它会复用 `batch.rag` 配置，扫描当前配置的 TL 目录（默认 `game/tl/schinese`）下允许处理的 `.rpy` 文件，提取已有 `old/new` 译文记录并生成 source embedding。
 
 典型流程：
 
@@ -67,7 +67,7 @@ python gemini_translate_batch.py submit
 python gemini_translate_batch.py bootstrap-rag --seed-jsonl parallel_corpus.jsonl
 ```
 
-如果只想导入外部 seed，`game/tl/schinese` 目录可以暂时不存在；此时 TL 扫描数量会是 0，只导入 JSONL 中的有效记录。
+如果只想导入外部 seed，TL 目录可以暂时不存在；此时 TL 扫描数量会是 0，只导入 JSONL 中的有效记录。
 
 JSONL 每行是一个对象，支持以下字段：
 
@@ -246,7 +246,7 @@ Batch `build` 生成的 `manifest.json` 会在 `story_memory_summary` 中记录 
 `relation_analyzer` 可以额外导出 `story_graph.seed.json` 候选数据，帮助从 Ren'Py 剧本里半自动整理 `speaker_ids`、候选角色和候选关系：
 
 ```bash
-python extract_relations.py /path/to/game/tl/schinese --mode relation --story-seed-output <GameProject>/translation_context/story_memory/story_graph.seed.json
+python extract_relations.py /path/to/game/tl/<language> --mode relation --story-seed-output <GameProject>/translation_context/story_memory/story_graph.seed.json
 ```
 
 seed 中的关系统一标记为 `candidate`，只包含共场景、对话往来、相互提及、来源文件和 speaker 统计等可审查信息；如果同一输入目录里存在 `define e = Character("Eileen")` 这类 Ren'Py 角色定义，seed 会优先用定义名作为 speaker 名称候选。它不会自动断言恋人、敌人、上下级等强语义关系。建议人工确认并编辑后，再作为正式 `story_graph.json` 使用。
