@@ -1,0 +1,22 @@
+[
+  {
+    "name": "baseline",
+    "overrides": {
+      "batch": {
+        "story_memory": {
+          "enabled": false
+        }
+      }
+    }
+  },
+  {
+    "name": "story_memory",
+    "overrides": {
+      "batch": {
+        "story_memory": {
+          "enabled": true
+        }
+      }
+    }
+  }
+]

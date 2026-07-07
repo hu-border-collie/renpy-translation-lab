@@ -23,6 +23,7 @@ import batch_non_chinese_rules
 import batch_submit_recovery
 import keyword_glossary_merge
 import prompt_context
+import translation_ab_experiment
 import story_memory
 import translation_core
 import translator_runtime as runtime
@@ -9253,6 +9254,36 @@ def build_arg_parser():
         help='Skip creating a timestamped glossary backup before writing.',
     )
 
+    compare_variants_parser = subparsers.add_parser(
+        'compare-variants',
+        help='Run a synchronous translation A/B experiment from a batch manifest without writing game files.',
+    )
+    compare_variants_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Translation manifest path or package dir. Defaults to latest package.',
+    )
+    compare_variants_parser.add_argument(
+        '--variants-file',
+        required=True,
+        help='JSON file describing experiment variants and config overrides.',
+    )
+    compare_variants_parser.add_argument('--limit', type=int, default=3, help='Number of manifest chunks to sample.')
+    compare_variants_parser.add_argument('--offset', type=int, default=0, help='Chunk offset within the manifest.')
+    compare_variants_parser.add_argument(
+        '--output-dir',
+        default='',
+        help='Directory for ab_report.md and ab_results.jsonl. Defaults to logs/experiments/<timestamp>_ab/.',
+    )
+    compare_variants_parser.add_argument('--model', default='', help='Optional model override for all variants.')
+    compare_variants_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
+    compare_variants_parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Build per-variant prompts and reports without calling the API.',
+    )
+
     revision_preview_parser = subparsers.add_parser(
         'preview-revisions',
         help='Dry-run downloaded revision results and export JSONL/Markdown preview reports.',
@@ -9563,6 +9594,28 @@ def main(argv=None):
             interactive=not args.yes and not dry_run,
             backup=not args.no_backup,
         )
+        return
+
+    if command == 'compare-variants':
+        manifest = load_manifest(args.target or None)
+        variants = translation_ab_experiment.load_variants_file(args.variants_file)
+        summary = translation_ab_experiment.run_translation_ab_experiment(
+            manifest,
+            variants,
+            limit=args.limit,
+            offset=args.offset,
+            output_dir=args.output_dir.strip(),
+            model_override=args.model,
+            api_key_index=args.api_key_index,
+            dry_run=args.dry_run,
+        )
+        print('Translation A/B experiment:')
+        print(f"- output_dir: {summary['output_dir']}")
+        print(f"- chunks: {summary['chunk_count']}")
+        print(f"- variants: {summary['variant_count']}")
+        print(f"- dry_run: {summary['dry_run']}")
+        print(f"- report: {summary['report_path']}")
+        print(f"- results: {summary['results_path']}")
         return
 
     if command == 'preview-revisions':
