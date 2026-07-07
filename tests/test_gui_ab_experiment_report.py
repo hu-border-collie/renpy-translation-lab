@@ -5,10 +5,12 @@ import unittest
 from gui_qt.ab_experiment_report import (
     ab_experiment_summary_to_diagnostics_context,
     build_compare_variants_cli_args,
+    build_variants_from_gui_selection,
     manifest_chunk_count,
     parse_compare_variants_output,
     summarize_compare_variants_output,
     translation_ab_experiment_ready,
+    validate_ab_experiment_variants,
 )
 from gui_qt.diagnostics_context import DiagnosticsContext
 
@@ -54,7 +56,7 @@ class GuiAbExperimentReportTests(unittest.TestCase):
                 output,
                 0,
                 manifest_path=r"C:\pkg\manifest.json",
-                variants_file=r"C:\pkg\variants.json",
+                variant_names="baseline, story_memory_on",
             )
         self.assertEqual(summary.status, "ok")
         self.assertEqual(summary.chunk_count, 1)
@@ -106,6 +108,22 @@ class GuiAbExperimentReportTests(unittest.TestCase):
         )
         self.assertTrue(ready)
         self.assertEqual(message, "")
+
+    def test_build_variants_from_gui_selection_includes_baseline_and_selected(self):
+        variants = build_variants_from_gui_selection({"story_memory_on", "rag_off"})
+        self.assertEqual(variants[0]["name"], "baseline")
+        names = [entry["name"] for entry in variants]
+        self.assertEqual(names, ["baseline", "story_memory_on", "rag_off"])
+        valid, message = validate_ab_experiment_variants(variants)
+        self.assertTrue(valid)
+        self.assertEqual(message, "")
+
+    def test_validate_ab_experiment_variants_requires_second_variant(self):
+        valid, message = validate_ab_experiment_variants(
+            build_variants_from_gui_selection(set()),
+        )
+        self.assertFalse(valid)
+        self.assertIn("至少勾选", message)
 
     def test_ab_experiment_summary_to_diagnostics_context_adds_report_paths(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -100,11 +100,16 @@ from .probe_report import (
     translation_probe_ready,
 )
 from .ab_experiment_report import (
+    AB_VARIANT_OPTION_SPECS,
     ab_experiment_summary_to_diagnostics_context,
     build_compare_variants_cli_args,
+    build_variants_from_gui_selection,
+    format_variant_names,
     running_ab_experiment_summary,
     summarize_compare_variants_output,
     translation_ab_experiment_ready,
+    validate_ab_experiment_variants,
+    write_variants_to_temp_file,
 )
 from .keyword_report import summarize_keyword_result_from_manifest
 from .revision_report import summarize_revision_apply_output
@@ -301,7 +306,7 @@ class MainWindow(QMainWindow):
         self._recheck_output_lines: list[str] = []
         self._probe_output_lines: list[str] = []
         self._compare_variants_output_lines: list[str] = []
-        self._compare_variants_file = ""
+        self._compare_variants_names = ""
         self._split_output_lines: list[str] = []
         self._repair_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
@@ -4289,34 +4294,26 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dialog)
 
         hint = QLabel(
-            "将对当前翻译包采样若干 chunk，按变体文件中的配置并排生成译文报告。"
-            "不会写回 .rpy 或 glossary.json。"
+            "将对当前翻译包采样若干 chunk，用勾选配置与 baseline（当前 translator_config）"
+            "并排生成译文报告；不会写回 .rpy 或 glossary.json。"
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
         form = QFormLayout()
-        variants_edit = QLineEdit()
-        variants_edit.setPlaceholderText("选择至少包含 2 个变体的 JSON 文件")
-        browse_btn = QPushButton("浏览…")
-        variants_row = QHBoxLayout()
-        variants_row.addWidget(variants_edit, stretch=1)
-        variants_row.addWidget(browse_btn)
-        variants_host = QWidget()
-        variants_host.setLayout(variants_row)
-        form.addRow("变体文件 (--variants-file)", variants_host)
-
-        def browse_variants_file() -> None:
-            path, _filter = QFileDialog.getOpenFileName(
-                dialog,
-                "选择变体 JSON 文件",
-                "",
-                "JSON 文件 (*.json);;所有文件 (*)",
-            )
-            if path:
-                variants_edit.setText(path)
-
-        browse_btn.clicked.connect(browse_variants_file)
+        variants_group = QGroupBox("对比变体")
+        variants_layout = QVBoxLayout(variants_group)
+        baseline_check = QCheckBox("baseline（当前配置，始终包含）")
+        baseline_check.setChecked(True)
+        baseline_check.setEnabled(False)
+        variants_layout.addWidget(baseline_check)
+        option_checks: dict[str, QCheckBox] = {}
+        for spec in AB_VARIANT_OPTION_SPECS:
+            option_id = str(spec["id"])
+            checkbox = QCheckBox(str(spec["label"]))
+            option_checks[option_id] = checkbox
+            variants_layout.addWidget(checkbox)
+        form.addRow(variants_group)
 
         limit_spin = QSpinBox()
         limit_spin.setRange(1, 50)
@@ -4357,17 +4354,20 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
 
-        variants_file = variants_edit.text().strip()
-        if not variants_file:
-            QMessageBox.warning(dialog, "缺少变体文件", "请选择变体 JSON 文件。")
-            return None
-        if not Path(variants_file).is_file():
-            QMessageBox.warning(dialog, "变体文件无效", f"找不到文件：{variants_file}")
+        selected_option_ids = {
+            option_id
+            for option_id, checkbox in option_checks.items()
+            if checkbox.isChecked()
+        }
+        variants = build_variants_from_gui_selection(selected_option_ids)
+        valid, validation_message = validate_ab_experiment_variants(variants)
+        if not valid:
+            QMessageBox.warning(dialog, "对比项不足", validation_message)
             return None
 
         api_key_index = None if api_key_spin.value() < 0 else api_key_spin.value()
         return {
-            "variants_file": variants_file,
+            "variants": variants,
             "limit": limit_spin.value(),
             "offset": offset_spin.value(),
             "output_dir": output_dir_edit.text().strip(),
@@ -4480,8 +4480,10 @@ class MainWindow(QMainWindow):
         self._focus_log_tab()
         self._active_command = "compare_variants"
         self._compare_variants_output_lines = []
-        variants_file = str(options["variants_file"])
-        self._compare_variants_file = variants_file
+        variants = list(options["variants"])
+        variant_names = format_variant_names(variants)
+        self._compare_variants_names = variant_names
+        variants_file = write_variants_to_temp_file(variants)
         dry_run = bool(options["dry_run"])
         base_context = build_diagnostics_context(
             latest_manifest_path=manifest_path,
@@ -4495,7 +4497,7 @@ class MainWindow(QMainWindow):
             ab_experiment_summary_to_diagnostics_context(
                 running_ab_experiment_summary(
                     manifest_path=manifest_path,
-                    variants_file=variants_file,
+                    variant_names=variant_names,
                     dry_run=dry_run,
                 ),
                 base_context,
@@ -5396,7 +5398,7 @@ class MainWindow(QMainWindow):
                 "\n".join(self._compare_variants_output_lines),
                 exit_code,
                 manifest_path=manifest_path,
-                variants_file=self._compare_variants_file,
+                variant_names=self._compare_variants_names,
             )
             base_context = build_diagnostics_context(
                 latest_manifest_path=manifest_path or None,

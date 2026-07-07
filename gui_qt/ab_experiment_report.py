@@ -1,8 +1,10 @@
 """Translation A/B experiment summaries and CLI helpers for the diagnostics tab."""
 from __future__ import annotations
 
+import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 
 from .diagnostics_context import DiagnosticsContext, DiagnosticsPathEntry
@@ -13,6 +15,88 @@ _COMPARE_VARIANTS_LINE_RE = re.compile(
     r"^\s*-\s*(output_dir|chunks|variants|dry_run|report|results|settings):\s*(.+?)\s*$",
     re.MULTILINE,
 )
+
+BASELINE_VARIANT = {"name": "baseline", "overrides": {}}
+
+AB_VARIANT_OPTION_SPECS: tuple[dict[str, object], ...] = (
+    {
+        "id": "story_memory_on",
+        "label": "Story Memory 开启",
+        "name": "story_memory_on",
+        "overrides": {"batch": {"story_memory": {"enabled": True}}},
+    },
+    {
+        "id": "story_memory_off",
+        "label": "Story Memory 关闭",
+        "name": "story_memory_off",
+        "overrides": {"batch": {"story_memory": {"enabled": False}}},
+    },
+    {
+        "id": "rag_on",
+        "label": "RAG 开启",
+        "name": "rag_on",
+        "overrides": {"batch": {"rag": {"enabled": True}}},
+    },
+    {
+        "id": "rag_off",
+        "label": "RAG 关闭",
+        "name": "rag_off",
+        "overrides": {"batch": {"rag": {"enabled": False}}},
+    },
+    {
+        "id": "source_index_on",
+        "label": "原文索引 开启",
+        "name": "source_index_on",
+        "overrides": {"batch": {"source_index": {"enabled": True}}},
+    },
+    {
+        "id": "source_index_off",
+        "label": "原文索引 关闭",
+        "name": "source_index_off",
+        "overrides": {"batch": {"source_index": {"enabled": False}}},
+    },
+)
+
+
+def build_variants_from_gui_selection(selected_option_ids: set[str]) -> list[dict]:
+    variants = [dict(BASELINE_VARIANT)]
+    for spec in AB_VARIANT_OPTION_SPECS:
+        option_id = str(spec["id"])
+        if option_id not in selected_option_ids:
+            continue
+        variants.append(
+            {
+                "name": str(spec["name"]),
+                "overrides": spec["overrides"],
+            },
+        )
+    return variants
+
+
+def validate_ab_experiment_variants(variants: list[dict]) -> tuple[bool, str]:
+    if len(variants) < 2:
+        return False, "请至少勾选一个对比项；baseline（当前配置）会自动包含。"
+    names = [str(entry.get("name") or "") for entry in variants]
+    if len(set(names)) != len(names):
+        return False, "变体名称重复，请调整勾选项。"
+    return True, ""
+
+
+def write_variants_to_temp_file(variants: list[dict]) -> str:
+    handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        suffix=".json",
+        prefix="ab_variants_",
+        delete=False,
+    )
+    with handle:
+        json.dump(variants, handle, ensure_ascii=False, indent=2)
+        return handle.name
+
+
+def format_variant_names(variants: list[dict]) -> str:
+    return ", ".join(str(entry.get("name") or "") for entry in variants if entry.get("name"))
 
 
 @dataclass(frozen=True)
@@ -112,13 +196,13 @@ def summarize_compare_variants_output(
     exit_code: int,
     *,
     manifest_path: str = "",
-    variants_file: str = "",
+    variant_names: str = "",
 ) -> AbExperimentSummary:
     facts: list[str] = []
     if manifest_path:
         facts.append(format_manifest_path_fact(manifest_path))
-    if variants_file:
-        facts.append(f"变体文件：{variants_file}")
+    if variant_names:
+        facts.append(f"对比变体：{variant_names}")
 
     if exit_code != 0:
         return AbExperimentSummary(
@@ -195,14 +279,14 @@ def summarize_compare_variants_output(
 def running_ab_experiment_summary(
     *,
     manifest_path: str = "",
-    variants_file: str = "",
+    variant_names: str = "",
     dry_run: bool = False,
 ) -> AbExperimentSummary:
     facts: list[str] = []
     if manifest_path:
         facts.append(format_manifest_path_fact(manifest_path))
-    if variants_file:
-        facts.append(f"变体文件：{variants_file}")
+    if variant_names:
+        facts.append(f"对比变体：{variant_names}")
     if dry_run:
         facts.append("试跑模式：是")
 
