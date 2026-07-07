@@ -18,6 +18,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
+import batch_cost_estimate
 import prompt_context
 import story_memory
 import translation_core
@@ -2524,6 +2525,17 @@ def create_batch_package(display_name_override='', skip_prepare=False):
     }
 
     manifest_path = os.path.join(package_dir, 'manifest.json')
+    manifest['_manifest_path'] = manifest_path
+    try:
+        cost_estimate = batch_cost_estimate.attach_cost_estimate_to_manifest(
+            manifest,
+            translator_config=load_json_file(legacy.TRANSLATOR_CONFIG),
+        )
+    except Exception as exc:
+        cost_estimate = None
+        build_warnings.append(f'Cost estimate unavailable: {exc}')
+        manifest['build_warnings'] = build_warnings
+
     with open(manifest_path, 'w', encoding='utf-8') as handle:
         json.dump(manifest, handle, ensure_ascii=False, indent=2)
     remember_latest_manifest(manifest_path)
@@ -2532,6 +2544,9 @@ def create_batch_package(display_name_override='', skip_prepare=False):
     print(f"Pending files: {manifest['summary']['file_count']}")
     print(f"Chunks: {manifest['summary']['chunk_count']}")
     print(f"Items: {manifest['summary']['item_count']}")
+    if cost_estimate:
+        for line in batch_cost_estimate.format_cost_estimate_lines(cost_estimate):
+            print(line)
     if build_warnings:
         print('Warnings:')
         for warning_text in build_warnings:
@@ -3775,7 +3790,28 @@ def merge_retry_results(parent_target, retry_target):
     print('Run check on the parent manifest before apply.')
     return parent_manifest['_manifest_path']
 
-def submit_manifest(target=None, display_name_override='', model_override=''):
+def ensure_manifest_cost_estimate(manifest):
+    estimate = manifest.get('cost_estimate')
+    if isinstance(estimate, dict) and estimate.get('estimated_cost_max') is not None:
+        return estimate
+    try:
+        return batch_cost_estimate.attach_cost_estimate_to_manifest(
+            manifest,
+            translator_config=load_json_file(legacy.TRANSLATOR_CONFIG),
+        )
+    except FileNotFoundError as exc:
+        jsonl_path = manifest.get('input_jsonl_path') or ''
+        raise SystemExit(
+            f'Batch input JSONL not found: {jsonl_path or exc}'
+        ) from exc
+    except json.JSONDecodeError as exc:
+        jsonl_path = manifest.get('input_jsonl_path') or ''
+        raise SystemExit(
+            f'Batch input JSONL is not valid JSON: {jsonl_path} ({exc})'
+        ) from exc
+
+
+def submit_manifest(target=None, display_name_override='', model_override='', max_cost=None):
     manifest = load_manifest(target) if target else None
     if manifest is None:
         manifest_path = create_batch_package(display_name_override=display_name_override)
@@ -3790,6 +3826,18 @@ def submit_manifest(target=None, display_name_override='', model_override=''):
         manifest['display_name'] = display_name_override.strip()
     if model_override:
         manifest['batch_model'] = model_override.strip()
+
+    if max_cost is not None:
+        cost_estimate = ensure_manifest_cost_estimate(manifest)
+        for line in batch_cost_estimate.format_cost_estimate_lines(cost_estimate):
+            print(line)
+        if batch_cost_estimate.cost_estimate_exceeds_max(cost_estimate, max_cost):
+            currency = cost_estimate.get('currency') or 'USD'
+            raise SystemExit(
+                'Submit blocked by --max-cost: '
+                f"estimated max {cost_estimate.get('estimated_cost_max', 0):.4f} {currency} "
+                f'exceeds limit {float(max_cost):.4f} {currency}.'
+            )
 
     attempts = max(1, len(getattr(legacy, 'API_KEYS', [])))
     last_error = None
@@ -8077,6 +8125,129 @@ def _read_translator_config_object():
         return {}
 
 
+def _normalize_translation_match_key(text):
+    return re.sub(r'\s+', ' ', str(text or '').strip()).casefold()
+
+
+def _normalize_translation_value(text):
+    return re.sub(r'\s+', ' ', str(text or '').strip())
+
+
+def _load_glossary_normalize_map(glossary_path):
+    if not glossary_path or not os.path.isfile(glossary_path):
+        return {}
+    try:
+        with open(glossary_path, 'r', encoding='utf-8-sig') as handle:
+            data = json.load(handle) or {}
+    except Exception:
+        return {}
+    normalize_map = data.get('normalize_map')
+    if not isinstance(normalize_map, dict):
+        return {}
+    loaded = {}
+    for source, target in normalize_map.items():
+        key = _normalize_translation_match_key(source)
+        value = _normalize_translation_value(target)
+        if key and value:
+            loaded[key] = value
+    return loaded
+
+
+def _collect_story_graph_translation_entries(graph):
+    entries = []
+    if not isinstance(graph, dict):
+        return entries
+
+    for term in graph.get('terms') or []:
+        if not isinstance(term, dict):
+            continue
+        target = _normalize_translation_value(term.get('target') or term.get('translation'))
+        if not target:
+            continue
+        source = _normalize_translation_value(term.get('source') or term.get('term'))
+        if source:
+            entries.append(('story_graph.terms', source, target))
+        for alias in term.get('aliases') or []:
+            alias_text = _normalize_translation_value(alias)
+            if alias_text:
+                entries.append(('story_graph.terms', alias_text, target))
+
+    characters = graph.get('characters') or {}
+    if isinstance(characters, dict):
+        char_items = characters.items()
+    elif isinstance(characters, list):
+        char_items = []
+        for item in characters:
+            if isinstance(item, dict):
+                char_id = item.get('id') or item.get('key') or item.get('name')
+                char_items.append((char_id, item))
+    else:
+        char_items = []
+
+    for char_id, raw_data in char_items:
+        if not isinstance(raw_data, dict):
+            continue
+        target = _normalize_translation_value(
+            raw_data.get('zh_name') or raw_data.get('target') or ''
+        )
+        if not target:
+            continue
+        label = _normalize_translation_value(char_id) or _normalize_translation_value(raw_data.get('name'))
+        source_keys = [
+            _normalize_translation_value(raw_data.get('name')),
+            _normalize_translation_value(char_id),
+        ]
+        source_keys.extend(
+            _normalize_translation_value(alias)
+            for alias in (raw_data.get('aliases') or [])
+        )
+        for source in source_keys:
+            if source:
+                entries.append((f'story_graph.characters.{label or char_id}', source, target))
+    return entries
+
+
+def _resolve_doctor_story_graph_path():
+    config = _read_translator_config_object()
+    batch = config.get('batch') if isinstance(config.get('batch'), dict) else {}
+    story_cfg = batch.get('story_memory') if isinstance(batch.get('story_memory'), dict) else {}
+    graph_file = story_cfg.get('graph_file') or ''
+    if isinstance(graph_file, str) and graph_file.strip():
+        return legacy.resolve_story_memory_graph_path(graph_file.strip())
+    return legacy.get_default_story_memory_graph_path()
+
+
+def collect_glossary_story_graph_conflicts(glossary_path='', story_graph_path=''):
+    glossary_map = _load_glossary_normalize_map(glossary_path)
+    if not glossary_map:
+        return []
+    if not story_graph_path or not os.path.isfile(story_graph_path):
+        return []
+
+    graph = story_memory.load_story_graph(story_graph_path)
+    conflicts = []
+    seen = set()
+    for source_label, source_text, story_target in _collect_story_graph_translation_entries(graph):
+        glossary_target = glossary_map.get(_normalize_translation_match_key(source_text))
+        if not glossary_target:
+            continue
+        if _normalize_translation_value(glossary_target) == _normalize_translation_value(story_target):
+            continue
+        dedupe_key = (
+            _normalize_translation_match_key(source_text),
+            glossary_target,
+            story_target,
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        conflicts.append(
+            f'Translation conflict for "{source_text}": glossary.json -> "{glossary_target}", '
+            f'{source_label} -> "{story_target}".'
+        )
+    return conflicts
+
+
 def collect_doctor_project_assets_status(base_dir):
     from project_asset_paths import expected_project_asset_paths, paths_match_project
 
@@ -8246,6 +8417,14 @@ def collect_doctor_report():
     context_status = collect_doctor_context_status()
     project_assets = collect_doctor_project_assets_status(legacy.BASE_DIR)
     warnings.extend(collect_doctor_project_assets_warnings(project_assets))
+    glossary_path = project_assets.get('glossary_file') or ''
+    if project_assets.get('glossary_exists'):
+        warnings.extend(
+            collect_glossary_story_graph_conflicts(
+                glossary_path=glossary_path,
+                story_graph_path=_resolve_doctor_story_graph_path(),
+            )
+        )
 
     report = {
         'base_dir': legacy.BASE_DIR,
@@ -8290,6 +8469,7 @@ def print_doctor_report(report):
     print('Doctor report:')
     print(f"- Base dir: {report['base_dir']}")
     print(f"- TL dir: {report['tl_dir']} (exists: {report['tl_exists']})")
+    print(f"- TL subdir: {report.get('tl_subdir') or ''}")
     print(f"- Language: {report['language']}")
     print(
         f"- Prepare: enabled={report['prepare_enabled']}, "
@@ -8607,6 +8787,23 @@ def build_arg_parser():
     )
     submit_parser.add_argument('--display-name', default='', help='Override Batch display name.')
     submit_parser.add_argument('--model', default='', help='Override batch model.')
+    submit_parser.add_argument(
+        '--max-cost',
+        type=float,
+        default=None,
+        help='Reject submit when estimated max cost exceeds this value (same currency as batch.pricing).',
+    )
+
+    estimate_cost_parser = subparsers.add_parser(
+        'estimate-cost',
+        help='Estimate token usage and cost for an existing batch package.',
+    )
+    estimate_cost_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Manifest path or package dir. Defaults to latest package.',
+    )
 
     status_parser = subparsers.add_parser('status', help='Refresh and show batch job status.')
     status_parser.add_argument(
@@ -8916,11 +9113,19 @@ def main(argv=None):
         print_source_index_bootstrap_summary(summary)
         return
 
+    if command == 'estimate-cost':
+        manifest = load_manifest(args.target or None)
+        estimate = ensure_manifest_cost_estimate(manifest)
+        for line in batch_cost_estimate.format_cost_estimate_lines(estimate):
+            print(line)
+        return
+
     if command == 'submit':
         submit_manifest(
             target=args.target or None,
             display_name_override=args.display_name,
             model_override=args.model,
+            max_cost=args.max_cost,
         )
         return
 

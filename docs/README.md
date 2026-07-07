@@ -10,6 +10,7 @@
 - 想启用 RAG、原文索引或剧情图谱：读 [上下文系统](context_systems.md)。
 - 想做角色关系或语义分析：读 [关系与语义分析](relation_analysis.md)，内部模块见 [`relation_analyzer/README.md`](../relation_analyzer/README.md)。
 - 想确认项目成熟度、边界和安全注意事项：读 [项目说明](project_notes.md)。
+- 想参与改动或让 AI 按仓库规则开发：读根目录 [CONTRIBUTING.md](../CONTRIBUTING.md)（含 **CLI / GUI 同步** 约定）。
 
 ## 文档分组
 
@@ -28,6 +29,7 @@
 
 - [关系与语义分析](relation_analysis.md)：`extract_relations.py` 的 relation / semantic 模式和 Story Memory seed 导出。
 - [项目说明](project_notes.md)：环境要求、当前边界、项目状态、安全说明和适用人群。
+- [CONTRIBUTING.md](../CONTRIBUTING.md)：贡献与开发约定（CLI / GUI 同步、完成定义、测试要求）。
 
 ### 相邻参考
 

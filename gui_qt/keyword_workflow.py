@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from .keyword_report import summarize_keyword_export_output
+from .batch_workflow_support import build_submit_cli_args, output_blocked_by_max_cost
 from .translation_workflow import (
     TERMINAL_FAILURE_STATES,
     WorkflowStep,
@@ -35,27 +36,53 @@ STEP_TEXT = {
 
 
 class KeywordBatchWorkflow:
-    def __init__(self, pending_steps: list[str], manifest_path: str = ""):
+    def __init__(
+        self,
+        pending_steps: list[str],
+        manifest_path: str = "",
+        *,
+        submit_max_cost: float | None = None,
+    ):
         self._pending_steps = list(pending_steps)
         self.manifest_path = manifest_path
+        self.submit_max_cost = submit_max_cost
 
     @classmethod
-    def start_new(cls) -> "KeywordBatchWorkflow":
-        return cls(["build-keywords", "submit", "status"])
+    def start_new(cls, *, submit_max_cost: float | None = None) -> "KeywordBatchWorkflow":
+        return cls(["build-keywords", "submit", "status"], submit_max_cost=submit_max_cost)
 
     @classmethod
-    def resume_latest(cls, manifest_path: str) -> "KeywordBatchWorkflow":
-        return cls(["status"], manifest_path=manifest_path)
+    def resume_latest(
+        cls,
+        manifest_path: str,
+        *,
+        submit_max_cost: float | None = None,
+    ) -> "KeywordBatchWorkflow":
+        return cls(["status"], manifest_path=manifest_path, submit_max_cost=submit_max_cost)
 
     @classmethod
-    def resume_manifest(cls, manifest_path: str, manifest: dict[str, object]) -> "KeywordBatchWorkflow":
+    def resume_manifest(
+        cls,
+        manifest_path: str,
+        manifest: dict[str, object],
+        *,
+        submit_max_cost: float | None = None,
+    ) -> "KeywordBatchWorkflow":
         if manifest.get("keyword_export"):
-            return cls([], manifest_path=manifest_path)
+            return cls([], manifest_path=manifest_path, submit_max_cost=submit_max_cost)
         if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
-            return cls(["download", "export-keywords"], manifest_path=manifest_path)
+            return cls(
+                ["download", "export-keywords"],
+                manifest_path=manifest_path,
+                submit_max_cost=submit_max_cost,
+            )
         if not manifest.get("job_name"):
-            return cls(["submit", "status"], manifest_path=manifest_path)
-        return cls.resume_latest(manifest_path)
+            return cls(
+                ["submit", "status"],
+                manifest_path=manifest_path,
+                submit_max_cost=submit_max_cost,
+            )
+        return cls.resume_latest(manifest_path, submit_max_cost=submit_max_cost)
 
     def current_step(self) -> WorkflowStep | None:
         if not self._pending_steps:
@@ -81,10 +108,16 @@ class KeywordBatchWorkflow:
         key = self._pending_steps.pop(0)
         if exit_code != 0:
             self._pending_steps.clear()
+            message = f"{STEP_TEXT[key][0]}没有正常完成，请查看下方原始输出。"
+            if key == "submit" and output_blocked_by_max_cost(output):
+                message = (
+                    "提交被成本上限拦截。请在高级设置中提高「提交成本上限」，"
+                    "或先拆分任务包以降低单次提交成本。"
+                )
             return WorkflowUpdate(
                 status="failed",
                 heading="关键词提取流程中断",
-                message=f"{STEP_TEXT[key][0]}没有正常完成，请查看下方原始输出。",
+                message=message,
                 facts=self._facts(),
             )
 
@@ -192,6 +225,8 @@ class KeywordBatchWorkflow:
     def _args_for_step(self, key: str) -> list[str]:
         if key == "build-keywords" or not self.manifest_path:
             return [key]
+        if key == "submit":
+            return build_submit_cli_args(self.manifest_path, self.submit_max_cost)
         return [key, self.manifest_path]
 
     def _facts(self, extra_facts: list[str] | None = None) -> list[str]:

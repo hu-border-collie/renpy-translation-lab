@@ -1,6 +1,7 @@
 """GUI workflows for split batch package operations."""
 from __future__ import annotations
 
+from .batch_workflow_support import build_submit_cli_args
 from .split_batch import SplitManifestEntry
 from .translation_workflow import WorkflowStep, WorkflowUpdate
 from .user_copy import format_manifest_path_fact
@@ -14,10 +15,12 @@ class SplitBatchQueueWorkflow:
         manifest_paths: list[str],
         anchor_manifest_path: str,
         total_count: int,
+        submit_max_cost: float | None = None,
     ):
         self.action = action
         self.manifest_path = anchor_manifest_path
         self.restore_latest_manifest_path = anchor_manifest_path
+        self.submit_max_cost = submit_max_cost
         self._pending_paths = list(manifest_paths)
         self._current_path = ""
         self._done_count = 0
@@ -29,12 +32,14 @@ class SplitBatchQueueWorkflow:
         entries: list[SplitManifestEntry],
         *,
         anchor_manifest_path: str,
+        submit_max_cost: float | None = None,
     ) -> "SplitBatchQueueWorkflow":
         return cls(
             action="submit",
             manifest_paths=[entry.manifest_path for entry in entries if entry.needs_submit],
             anchor_manifest_path=anchor_manifest_path,
             total_count=len([entry for entry in entries if entry.needs_submit]),
+            submit_max_cost=submit_max_cost,
         )
 
     @classmethod
@@ -66,9 +71,13 @@ class SplitBatchQueueWorkflow:
             self._current_path = self._pending_paths.pop(0)
 
         heading, message = self._step_text()
+        if self.action == "submit":
+            args = build_submit_cli_args(self._current_path, self.submit_max_cost)
+        else:
+            args = [self.action, self._current_path]
         return WorkflowStep(
             key=self.action,
-            args=[self.action, self._current_path],
+            args=args,
             heading=heading,
             message=message,
         )

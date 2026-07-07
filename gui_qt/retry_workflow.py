@@ -19,11 +19,14 @@ def create_retry_followup_workflow(
     retry_manifest_path: str,
     retry_manifest: dict[str, object],
     parent_manifest_path: str,
+    *,
+    submit_max_cost: float | None = None,
 ) -> TranslationWorkflow:
     workflow = TranslationWorkflow.resume_retry_manifest(
         retry_manifest_path,
         retry_manifest,
         parent_manifest_path,
+        submit_max_cost=submit_max_cost,
     )
     workflow.restore_latest_manifest_path = parent_manifest_path
     return workflow

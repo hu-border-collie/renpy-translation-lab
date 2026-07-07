@@ -151,6 +151,17 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         allow_empty=True,
     ),
     SettingField(
+        "batch_submit_max_cost",
+        ("batch", "submit_max_cost"),
+        "提交成本上限",
+        "提交 Batch 任务前的估算成本上限（与 batch.pricing 货币一致）；留空或 0 表示不限制。",
+        "float",
+        0.0,
+        "翻译吞吐",
+        minimum=0.0,
+        allow_empty=True,
+    ),
+    SettingField(
         "context_storage_game_dir_name",
         ("context_storage", "game_dir_name"),
         "游戏目录上下文文件夹",

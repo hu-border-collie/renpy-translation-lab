@@ -156,6 +156,26 @@ Source Index bootstrap final summary:
         self.assertEqual(format_remaining_duration_zh(125), "约剩 2 分 5 秒")
         self.assertEqual(format_remaining_duration_zh(3720), "约剩 1 小时 2 分")
 
+    def test_bootstrap_progress_tracker_waits_for_second_sample_before_rate(self):
+        tracker = create_bootstrap_progress_tracker()
+        state = BootstrapProgressState(
+            kind="source_index",
+            total_segments=100,
+            stored_segments=20,
+        )
+        tracker.observe(state, now=10.0)
+        self.assertIsNone(tracker.seconds_per_segment)
+        # Before a second sample, ETA may still use the elapsed/stored fallback rate.
+        self.assertEqual(tracker.estimate_remaining_seconds(state, now=15.0), 20)
+
+        state = BootstrapProgressState(
+            kind="source_index",
+            total_segments=100,
+            stored_segments=36,
+        )
+        tracker.observe(state, now=20.0)
+        self.assertIsNotNone(tracker.seconds_per_segment)
+
     def test_bootstrap_progress_tracker_estimates_remaining_seconds(self):
         tracker = create_bootstrap_progress_tracker()
         state = BootstrapProgressState(

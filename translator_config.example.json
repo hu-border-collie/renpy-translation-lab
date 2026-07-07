@@ -85,6 +85,18 @@
       "top_k_relations": 6,
       "top_k_terms": 12,
       "include_scene_summary": true
+    },
+    "submit_max_cost": 0,
+    "pricing": {
+      "version": 1,
+      "currency": "USD",
+      "chars_per_input_token": 4.0,
+      "models": {
+        "gemini-3.1-flash-lite": {
+          "input_per_million": 0.10,
+          "output_per_million": 0.40
+        }
+      }
     }
   }
 }

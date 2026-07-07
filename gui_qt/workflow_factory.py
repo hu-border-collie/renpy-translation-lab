@@ -20,20 +20,24 @@ class GuiWorkflow(Protocol):
     def complete_current_step(self, exit_code: int, output: str) -> WorkflowUpdate: ...
 
 
-def create_workflow(mode: WorkMode | str) -> GuiWorkflow | None:
+def create_workflow(
+    mode: WorkMode | str,
+    *,
+    submit_max_cost: float | None = None,
+) -> GuiWorkflow | None:
     spec = work_mode_spec(mode)
     if not spec.implemented:
         return None
     if spec.mode == WorkMode.BATCH_TRANSLATION:
-        return TranslationWorkflow.start_new()
+        return TranslationWorkflow.start_new(submit_max_cost=submit_max_cost)
     if spec.mode == WorkMode.SYNC_TRANSLATION:
         return SyncTranslationWorkflow.start_new()
     if spec.mode == WorkMode.KEYWORD_EXTRACTION:
-        return KeywordBatchWorkflow.start_new()
+        return KeywordBatchWorkflow.start_new(submit_max_cost=submit_max_cost)
     if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
         return SyncKeywordWorkflow.start_new()
     if spec.mode == WorkMode.REVISION:
-        return RevisionBatchWorkflow.start_new()
+        return RevisionBatchWorkflow.start_new(submit_max_cost=submit_max_cost)
     if spec.mode == WorkMode.SYNC_REVISION:
         return SyncRevisionWorkflow.start_new()
     return None
@@ -43,16 +47,30 @@ def resume_workflow(
     mode: WorkMode | str,
     manifest_path: str,
     manifest: dict[str, Any],
+    *,
+    submit_max_cost: float | None = None,
 ) -> GuiWorkflow | None:
     spec = work_mode_spec(mode)
     if not spec.implemented or not spec.supports_resume:
         return None
     if spec.mode == WorkMode.BATCH_TRANSLATION:
-        return TranslationWorkflow.resume_manifest(manifest_path, manifest)
+        return TranslationWorkflow.resume_manifest(
+            manifest_path,
+            manifest,
+            submit_max_cost=submit_max_cost,
+        )
     if spec.mode == WorkMode.KEYWORD_EXTRACTION:
-        return KeywordBatchWorkflow.resume_manifest(manifest_path, manifest)
+        return KeywordBatchWorkflow.resume_manifest(
+            manifest_path,
+            manifest,
+            submit_max_cost=submit_max_cost,
+        )
     if spec.mode == WorkMode.REVISION:
-        return RevisionBatchWorkflow.resume_manifest(manifest_path, manifest)
+        return RevisionBatchWorkflow.resume_manifest(
+            manifest_path,
+            manifest,
+            submit_max_cost=submit_max_cost,
+        )
     return None
 
 

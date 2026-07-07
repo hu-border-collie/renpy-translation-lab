@@ -10,6 +10,7 @@
 
 - 普通用户走「选项目 → 设置 → 检查 → 翻译 → 写回」；运行细节集中在诊断页，完整 `translator_config.json` 配置集中在设置页。
 - 底层仍调用现有 CLI 脚本，不重写翻译核心：**批量翻译**走 `gemini_translate_batch.py`；**同步翻译**走 `gemini_translate.py`。
+- **开发与功能约定**：新能力须 CLI / GUI 同步交付，见根目录 [CONTRIBUTING.md](../CONTRIBUTING.md)。
 - 配置仍用 `api_keys.json`、`translator_config.json`；批量写回以 CLI 的 `check -> apply` 安全合约为准，同步模式按脚本规则直接写回。
 - GUI 依赖在 `requirements-gui.txt`，不进入主 `requirements.txt`。**不装图形界面时，命令行工具可照常使用。**
 

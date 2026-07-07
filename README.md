@@ -26,7 +26,7 @@ pip install -r requirements-gui.txt
 python -m gui_qt
 ```
 
-三个 Tab：**工作台**（任务选择、环境检查、进度与写回/结果说明）、**配置**（API、模型、批量上下文开关、主题）、**诊断日志**（任务上下文、命令参考、任务记录、原始输出）。批量翻译写回仅在检查显示**可写回**（CLI 的 `safe`）时启用；同步翻译、关键词与订正各有独立流程与写回规则。安装步骤、各模式说明与安全边界见 [GUI 工作台](docs/gui_workbench.md)。
+三个 Tab：**工作台**（任务选择、环境检查、进度与写回/结果说明）、**配置**（API、模型、批量上下文开关、主题）、**诊断日志**（任务上下文、命令参考、任务记录、原始输出）。批量翻译写回仅在检查显示**可写回**（CLI 的 `safe`）时启用；同步翻译、关键词与订正各有独立流程与写回规则。安装步骤、各模式说明与安全边界见 [GUI 工作台](docs/gui_workbench.md)。参与开发或让自动化工具改代码时，请遵守 [CONTRIBUTING.md](CONTRIBUTING.md)（含 CLI / GUI 同步约定）。
 
 工作区根目录可用 **`games_registry.json`** 维护多项目总表并生成 `GAMES.md`；GUI 在 **设置 → 工作区** 浏览与切换。说明见 [工作区项目总表](docs/games_registry.md)。
 
@@ -140,6 +140,7 @@ python gemini_translate_batch.py apply
 - 分析与项目状态
   - [关系与语义分析](docs/relation_analysis.md)：`extract_relations.py`、relation / semantic 模式和 Story Memory seed 导出。
   - [项目说明](docs/project_notes.md)：环境要求、当前边界、项目状态、安全说明和适用人群。
+  - [CONTRIBUTING.md](CONTRIBUTING.md)：贡献与开发约定（CLI / GUI 同步、完成定义、测试要求）。
 
 ## 当前状态
 

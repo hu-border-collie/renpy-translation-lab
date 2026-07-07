@@ -353,6 +353,7 @@ def doctor_report_to_parsed(report: dict[str, Any]) -> dict[str, object]:
     parsed: dict[str, object] = {
         "base_dir": str(report.get("base_dir") or ""),
         "tl_dir": str(report.get("tl_dir") or ""),
+        "tl_subdir": str(report.get("tl_subdir") or ""),
         "tl_exists": report.get("tl_exists"),
         "language": str(report.get("language") or ""),
         "mode": str(report.get("mode") or ""),
@@ -466,6 +467,8 @@ def _summarize_doctor_parsed(
     if parsed.get("tl_dir"):
         exists_text = "存在" if parsed.get("tl_exists") is True else "不存在"
         append_unique_fact(facts, f"翻译目录：{exists_text}")
+    if parsed.get("tl_subdir"):
+        append_unique_fact(facts, f"TL 路径：{parsed['tl_subdir']}")
     if parsed.get("language"):
         append_unique_fact(facts, f"目标语言：{parsed['language']}")
     if mode:
