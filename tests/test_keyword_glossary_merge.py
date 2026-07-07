@@ -184,6 +184,96 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
             resolved = merge_mod.resolve_keyword_candidates_path(str(manifest_path))
             self.assertEqual(Path(resolved).resolve(), jsonl_path.resolve())
 
+    def test_resolve_missing_jsonl_reports_not_found(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = Path(tmpdir).resolve() / 'missing.jsonl'
+            with self.assertRaises(SystemExit) as ctx:
+                merge_mod.resolve_keyword_candidates_path(str(missing))
+        self.assertIn('Keyword candidates JSONL not found', str(ctx.exception))
+
+    def test_overwrite_moves_entry_across_sections(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            candidates_path = root / 'keyword_candidates.jsonl'
+            glossary_path = root / 'glossary.json'
+            glossary_path.write_text(
+                json.dumps(
+                    {'preserve_terms': [], 'normalize_map': {'AR': '旧译名'}},
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+            self._write_jsonl(
+                candidates_path,
+                [
+                    {
+                        'source': 'AR',
+                        'suggested_target': 'AR',
+                        'category': 'term',
+                        'confidence': 0.95,
+                        'evidence': 'Abbreviation kept unchanged.',
+                    }
+                ],
+            )
+
+            summary = merge_mod.merge_keywords_to_glossary(
+                str(candidates_path),
+                str(glossary_path),
+                overwrite=True,
+                interactive=False,
+                backup=False,
+            )
+
+            self.assertEqual(summary.accepted, 1)
+            data = json.loads(glossary_path.read_text(encoding='utf-8'))
+            self.assertIn('AR', data['preserve_terms'])
+            self.assertNotIn('AR', data['normalize_map'])
+
+    def test_quit_keeps_already_accepted_entries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            candidates_path = root / 'keyword_candidates.jsonl'
+            glossary_path = root / 'glossary.json'
+            glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')
+            self._write_jsonl(candidates_path, self._sample_candidates()[:2])
+
+            responses = iter(['y', 'q'])
+
+            summary = merge_mod.merge_keywords_to_glossary(
+                str(candidates_path),
+                str(glossary_path),
+                input_func=lambda _prompt: next(responses),
+                backup=False,
+            )
+
+            self.assertEqual(summary.accepted, 1)
+            self.assertTrue(summary.wrote_glossary)
+            data = json.loads(glossary_path.read_text(encoding='utf-8'))
+            self.assertEqual(data['normalize_map']['Void Gate'], '虚空门')
+            self.assertNotIn('Crystal Key', data['normalize_map'])
+
+    def test_dry_run_auto_accepts_without_prompts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            candidates_path = root / 'keyword_candidates.jsonl'
+            glossary_path = root / 'glossary.json'
+            glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')
+            self._write_jsonl(candidates_path, self._sample_candidates()[:1])
+
+            def fail_if_prompt(_prompt):
+                raise AssertionError('dry-run should not prompt for input')
+
+            summary = merge_mod.merge_keywords_to_glossary(
+                str(candidates_path),
+                str(glossary_path),
+                dry_run=True,
+                input_func=fail_if_prompt,
+                backup=False,
+            )
+
+            self.assertEqual(summary.accepted, 1)
+            self.assertFalse(summary.wrote_glossary)
+
     def test_interactive_skip_counts_user_rejection(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir).resolve()

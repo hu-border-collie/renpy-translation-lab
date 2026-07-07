@@ -24,8 +24,8 @@ class BatchNonChineseFileCacheTests(unittest.TestCase):
         return manifest, chunk, item
 
     def test_old_new_static_item_reuses_tl_line_read_within_call(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir).resolve())
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmpdir:
+            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir))
             cache = batch_mod.NonChineseFileReadCache()
             open_paths = []
             real_open = open
@@ -48,8 +48,8 @@ class BatchNonChineseFileCacheTests(unittest.TestCase):
             self.assertEqual(len(open_paths), 1)
 
     def test_allow_non_chinese_reuses_single_tl_open_end_to_end(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir).resolve())
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmpdir:
+            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir))
             open_paths = []
             real_open = open
 
@@ -70,8 +70,8 @@ class BatchNonChineseFileCacheTests(unittest.TestCase):
             self.assertEqual(len(open_paths), 1)
 
     def test_allow_non_chinese_matches_results_with_and_without_cache(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir).resolve())
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmpdir:
+            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir))
             kwargs = {
                 'manifest': manifest,
                 'chunk': chunk,
@@ -97,8 +97,8 @@ class BatchNonChineseFileCacheTests(unittest.TestCase):
             self.assertEqual(via_allow, without_cache)
 
     def test_player_name_comparison_uses_cached_reads_without_extra_tl_opens(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            base_dir = Path(tmpdir).resolve()
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmpdir:
+            base_dir = Path(tmpdir)
             source_path = base_dir / 'game' / 'script.rpy'
             source_path.parent.mkdir(parents=True)
             source_path.write_text('if Main == _("Herbert"):\n    pass\n', encoding='utf-8')
@@ -138,8 +138,8 @@ class BatchNonChineseFileCacheTests(unittest.TestCase):
             self.assertIn('Main', cached_source_reads)
 
     def test_read_line_and_read_lines_share_same_path_cache(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tl_path = Path(tmpdir).resolve() / 'shared.rpy'
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmpdir:
+            tl_path = Path(tmpdir) / 'shared.rpy'
             tl_path.write_text('line one\nline two\n', encoding='utf-8')
             cache = batch_mod.NonChineseFileReadCache()
             open_paths = []

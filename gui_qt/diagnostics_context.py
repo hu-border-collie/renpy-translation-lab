@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
+from keyword_glossary_merge import build_merge_keywords_cli_command
+
 from .batch_workflow_support import (
     build_recover_submit_cli_args,
     build_submit_cli_args,
@@ -281,11 +283,10 @@ def build_cli_commands(
                         command=format_cli_command(
                             python_exe,
                             batch_script_path,
-                            [
-                                "merge-keywords-to-glossary",
+                            build_merge_keywords_cli_command(
                                 manifest_path,
-                                "--dry-run",
-                            ],
+                                dry_run=True,
+                            ),
                         ),
                     )
                 )
@@ -295,7 +296,7 @@ def build_cli_commands(
                         command=format_cli_command(
                             python_exe,
                             batch_script_path,
-                            ["merge-keywords-to-glossary", manifest_path],
+                            build_merge_keywords_cli_command(manifest_path),
                         ),
                     )
                 )

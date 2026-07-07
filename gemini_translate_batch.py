@@ -9552,14 +9552,15 @@ def main(argv=None):
     if command == 'merge-keywords-to-glossary':
         candidates_path = keyword_glossary_merge.resolve_keyword_candidates_path(args.target)
         glossary_path = args.glossary.strip() if args.glossary else legacy.GLOSSARY_FILE
+        dry_run = args.dry_run or args.preview
         keyword_glossary_merge.merge_keywords_to_glossary(
             candidates_path,
             glossary_path,
-            dry_run=args.dry_run or args.preview,
+            dry_run=dry_run,
             min_confidence=max(0.0, float(args.min_confidence or 0.0)),
             accept_confidence=args.accept_confidence,
             overwrite=args.overwrite,
-            interactive=not args.yes,
+            interactive=not args.yes and not dry_run,
             backup=not args.no_backup,
         )
         return

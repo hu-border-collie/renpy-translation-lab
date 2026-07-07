@@ -367,7 +367,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             'Theodore',
             'Theodore',
         ))
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmpdir:
             base_dir = Path(tmpdir)
             source_path = base_dir / 'game' / 'script.rpy'
             source_path.parent.mkdir(parents=True)

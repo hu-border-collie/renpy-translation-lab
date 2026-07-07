@@ -24,6 +24,7 @@ class MergeAction:
     status: str
     reason: str = ''
     existing_target: str = ''
+    existing_section: str = ''
 
 
 @dataclass
@@ -120,9 +121,18 @@ def dump_glossary_file(glossary_path: str, data: dict) -> None:
     parent = os.path.dirname(glossary_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    with open(glossary_path, 'w', encoding='utf-8', newline='\n') as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=2)
-        handle.write('\n')
+    tmp_path = f'{glossary_path}.tmp-{os.getpid()}'
+    try:
+        with open(tmp_path, 'w', encoding='utf-8', newline='\n') as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.write('\n')
+        os.replace(tmp_path, glossary_path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 def load_keyword_candidates_jsonl(candidates_path: str) -> list[dict]:
@@ -151,7 +161,9 @@ def resolve_keyword_candidates_path(target: str) -> str:
         raise SystemExit('Keyword candidates JSONL path is required.')
 
     candidate_path = os.path.abspath(str(target).strip())
-    if candidate_path.lower().endswith('.jsonl') and os.path.isfile(candidate_path):
+    if candidate_path.lower().endswith('.jsonl'):
+        if not os.path.isfile(candidate_path):
+            raise SystemExit(f'Keyword candidates JSONL not found: {candidate_path}')
         return candidate_path
 
     manifest_path = candidate_path
@@ -295,6 +307,7 @@ def plan_merge_action(
             status='overwrite',
             reason=f'overwrite {existing_section} entry',
             existing_target=existing_target,
+            existing_section=existing_section,
         )
 
     return MergeAction(
@@ -339,17 +352,31 @@ def _preview_line_for_action(action: MergeAction) -> str:
     return f'= skip ({action.status}): {action.source} ({action.reason})'
 
 
+def _remove_from_section(glossary: dict, section: str, source: str) -> None:
+    if section == GLOSSARY_SECTION_NORMALIZE:
+        normalize_map = dict(glossary.get(GLOSSARY_SECTION_NORMALIZE) or {})
+        for existing_source in list(normalize_map.keys()):
+            if _match_key(existing_source) == _match_key(source):
+                normalize_map.pop(existing_source, None)
+        glossary[GLOSSARY_SECTION_NORMALIZE] = normalize_map
+        return
+
+    if section in (GLOSSARY_SECTION_PRESERVE, GLOSSARY_SECTION_NON_TRANSLATABLE):
+        glossary[section] = [
+            term for term in glossary.get(section) or []
+            if _match_key(term) != _match_key(source)
+        ]
+
+
 def apply_merge_action(glossary: dict, action: MergeAction) -> None:
     if action.status not in {'accept', 'overwrite'}:
         return
 
+    if action.status == 'overwrite' and action.existing_section:
+        _remove_from_section(glossary, action.existing_section, action.source)
+
     if action.section == GLOSSARY_SECTION_PRESERVE:
         terms = list(glossary.get(GLOSSARY_SECTION_PRESERVE) or [])
-        if action.status == 'overwrite':
-            terms = [
-                term for term in terms
-                if _match_key(term) != _match_key(action.source)
-            ]
         if not any(_match_key(term) == _match_key(action.source) for term in terms):
             terms.append(action.source)
         glossary[GLOSSARY_SECTION_PRESERVE] = terms
@@ -357,10 +384,6 @@ def apply_merge_action(glossary: dict, action: MergeAction) -> None:
 
     if action.section == GLOSSARY_SECTION_NORMALIZE:
         normalize_map = dict(glossary.get(GLOSSARY_SECTION_NORMALIZE) or {})
-        if action.status == 'overwrite':
-            for existing_source in list(normalize_map.keys()):
-                if _match_key(existing_source) == _match_key(action.source):
-                    normalize_map.pop(existing_source, None)
         normalize_map[action.source] = action.target
         glossary[GLOSSARY_SECTION_NORMALIZE] = normalize_map
 
@@ -384,6 +407,9 @@ def merge_keywords_to_glossary(
     backup: bool = True,
     input_func: Callable[[str], str] = input,
 ) -> MergeSummary:
+    if dry_run:
+        interactive = False
+
     candidates = load_keyword_candidates_jsonl(candidates_path)
     glossary_before = load_glossary_file(glossary_path)
     glossary_after = json.loads(json.dumps(glossary_before, ensure_ascii=False))
@@ -395,7 +421,11 @@ def merge_keywords_to_glossary(
         dry_run=dry_run,
     )
 
+    quit_requested = False
     for candidate in candidates:
+        if quit_requested:
+            break
+
         action = plan_merge_action(
             candidate,
             glossary_after,
@@ -437,10 +467,13 @@ def merge_keywords_to_glossary(
                     should_apply = False
                     break
                 if choice in {'q', 'quit'}:
-                    print('Merge aborted by user.')
-                    summary.preview_lines.append('= aborted by user')
-                    return summary
+                    print('Stopping review; keeping already accepted entries.')
+                    summary.preview_lines.append('= stopped review early by user')
+                    quit_requested = True
+                    break
                 print('Please answer y, n, or q.')
+            if quit_requested:
+                break
         else:
             should_apply = True
 
