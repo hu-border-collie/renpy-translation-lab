@@ -646,7 +646,6 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.theme_combo = FakeCombo(data="dark")
         self.window._refresh_project_label = lambda: None
         self.window._advanced_setting_widgets = {
-            "game_root": FakeText("C:/Game/work"),
             "batch_chunk_size": FakeValue(12),
             "batch_temperature": FakeValue(0.4),
             "context_storage_game_dir_name": FakeText("custom_context"),
@@ -671,7 +670,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(saved_config["gui"]["theme"], "dark")
         self.assertEqual(saved_config["sync"]["custom"], 1)
         self.assertEqual(saved_config["batch"]["custom"], "keep")
-        self.assertEqual(saved_config["game_root"], "C:/Game/work")
+        self.assertEqual(saved_config["game_root"], str(Path("C:/Game/work")))
         self.assertEqual(saved_config["batch"]["chunk_size"], 12)
         self.assertEqual(saved_config["batch"]["temperature"], 0.4)
         self.assertEqual(saved_config["context_storage"]["game_dir_name"], "custom_context")
@@ -840,6 +839,22 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(switched, ["C:/Game/work"])
         self.assertEqual(focused, ["project"])
 
+    def test_focus_advanced_setting_navigates_to_workspace_for_game_root(self):
+        class FakeNav:
+            def __init__(self):
+                self.row = None
+
+            def setCurrentRow(self, row):
+                self.row = row
+
+        nav = FakeNav()
+        self.window.settings_nav = nav
+        self.window._settings_nav_rows = {"workspace": 0, "project": 1, "advanced": 6}
+
+        self.window._focus_advanced_setting("game_root")
+
+        self.assertEqual(nav.row, 0)
+
     def test_focus_advanced_setting_navigates_to_project_page_for_project_fields(self):
         class FakeNav:
             def __init__(self):
@@ -859,9 +874,9 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         widget = FakeText()
         self.window.settings_nav = nav
         self.window._settings_nav_rows = {"workspace": 0, "project": 1, "advanced": 6}
-        self.window._advanced_setting_widgets = {"game_root": widget}
+        self.window._advanced_setting_widgets = {"glossary_file": widget}
 
-        self.window._focus_advanced_setting("game_root")
+        self.window._focus_advanced_setting("glossary_file")
 
         self.assertEqual(nav.row, 1)
         self.assertTrue(widget.focused)
