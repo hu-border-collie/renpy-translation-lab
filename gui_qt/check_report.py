@@ -398,6 +398,22 @@ def stale_writeback_summary() -> WritebackSummary:
     )
 
 
+def recheck_writeback_ready(
+    summary: WritebackSummary,
+    *,
+    supports_translation_writeback: bool,
+) -> bool:
+    if not supports_translation_writeback:
+        return False
+    if not summary.manifest_path:
+        return False
+    return summary.status not in {"idle", "running"}
+
+
+def build_recheck_cli_args(manifest_path: str) -> list[str]:
+    return ["check", manifest_path]
+
+
 def running_writeback_summary(
     *,
     manifest_path: str = "",

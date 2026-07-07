@@ -2144,6 +2144,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         button_names = [
             "apply_btn",
             "apply_revision_btn",
+            "recheck_btn",
             "check_issues_btn",
             "retry_btn",
             "apply_failure_btn",
@@ -2169,6 +2170,98 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             button = getattr(self.window, name)
             self.assertFalse(button.visible, name)
             self.assertFalse(button.enabled, name)
+
+    def test_recheck_button_enabled_for_batch_translation_with_manifest(self):
+        from gui_qt.check_report import WritebackSummary
+        from gui_qt.work_modes import WorkMode
+
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window._uses_revision_writeback = lambda *_args, **_kwargs: False
+        self.window._writeback_manifest_path = "C:/dummy/manifest.json"
+        self.window._load_writeback_manifest = lambda: None
+
+        class FakeButton:
+            def __init__(self):
+                self.visible = False
+                self.enabled = False
+
+            def setVisible(self, visible):
+                self.visible = visible
+
+            def setEnabled(self, enabled):
+                self.enabled = enabled
+
+        for name in (
+            "apply_btn",
+            "apply_revision_btn",
+            "recheck_btn",
+            "check_issues_btn",
+            "retry_btn",
+            "apply_failure_btn",
+            "remediation_btn",
+        ):
+            setattr(self.window, name, FakeButton())
+
+        self.window._update_writeback_action_buttons(
+            WritebackSummary(
+                status="warn",
+                heading="需要先处理问题",
+                message="warn",
+                facts=[],
+                findings=[],
+                can_apply=False,
+                manifest_path="C:/dummy/manifest.json",
+            ),
+            running=False,
+        )
+
+        self.assertTrue(self.window.recheck_btn.visible)
+        self.assertTrue(self.window.recheck_btn.enabled)
+        self.assertTrue(self.window.check_issues_btn.enabled)
+
+    def test_recheck_button_disabled_while_running(self):
+        from gui_qt.check_report import WritebackSummary
+        from gui_qt.work_modes import WorkMode
+
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window._uses_revision_writeback = lambda *_args, **_kwargs: False
+        self.window._writeback_manifest_path = "C:/dummy/manifest.json"
+        self.window._load_writeback_manifest = lambda: None
+
+        class FakeButton:
+            def __init__(self):
+                self.visible = False
+                self.enabled = False
+
+            def setVisible(self, visible):
+                self.visible = visible
+
+            def setEnabled(self, enabled):
+                self.enabled = enabled
+
+        self.window.recheck_btn = FakeButton()
+        self.window.apply_btn = FakeButton()
+        self.window.apply_revision_btn = FakeButton()
+        self.window.check_issues_btn = FakeButton()
+        self.window.retry_btn = FakeButton()
+        self.window.apply_failure_btn = FakeButton()
+        self.window.remediation_btn = FakeButton()
+
+        self.window._update_writeback_action_buttons(
+            WritebackSummary(
+                status="safe",
+                heading="可以写回翻译",
+                message="safe",
+                facts=[],
+                findings=[],
+                can_apply=True,
+                manifest_path="C:/dummy/manifest.json",
+            ),
+            running=True,
+        )
+
+        self.assertTrue(self.window.recheck_btn.visible)
+        self.assertFalse(self.window.recheck_btn.enabled)
 
     def test_copy_keyword_reports_to_game_parent_copies_successfully(self):
         import shutil
