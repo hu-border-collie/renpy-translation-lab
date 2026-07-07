@@ -100,6 +100,45 @@ python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<pac
 
 订正 manifest 的 `mode=revision`，关键词 manifest 的 `mode=keyword_extraction`，普通 `check/apply` 会拒绝处理，避免把非翻译结果误写回 `.rpy`。
 
+## 翻译质量 A/B 实验
+
+`compare-variants` 用同一批 manifest chunk 在**同步模式**下跑多个配置变体，生成并排 Markdown 报告，**不会写回** `.rpy` 或 `glossary.json`。适合比较 Story Memory、RAG、macro setting 等上下文层对译文的影响。
+
+```bash
+python gemini_translate_batch.py compare-variants logs/batch_jobs/<package>/manifest.json \
+  --variants-file experiment_variants.json \
+  --limit 3 \
+  --offset 0
+```
+
+`experiment_variants.json` 示例：
+
+```json
+[
+  {
+    "name": "baseline",
+    "overrides": {
+      "batch": {
+        "story_memory": { "enabled": false }
+      }
+    }
+  },
+  {
+    "name": "story_memory",
+    "overrides": {
+      "batch": {
+        "story_memory": { "enabled": true }
+      }
+    }
+  }
+]
+```
+
+- 变体文件至少需要 **2 个**命名变体，以便并排比较。
+- `--dry-run` 只重建各变体 prompt 并写报告，不调用翻译 API，也不会触发 RAG / source index / story memory 检索。
+- 默认输出到 `logs/experiments/<timestamp>_ab/`，包含 `ab_report.md`、`ab_results.jsonl`、`ab_settings.json`。
+- API 用量约为 `chunks × variants` 次同步请求；先用小 `--limit` 试跑。
+
 ## Manifest 与 identity v2
 
 Batch `build` 会生成：
