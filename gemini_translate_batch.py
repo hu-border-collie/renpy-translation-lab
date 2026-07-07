@@ -782,7 +782,11 @@ class NonChineseFileReadCache:
         cache_key = (path, line_number)
         if cache_key in self._line_by_path_and_number:
             return self._line_by_path_and_number[cache_key]
-        line = self._read_line_uncached(path, line_number)
+        lines = self.read_lines(path)
+        if line_number <= len(lines):
+            line = lines[line_number - 1]
+        else:
+            line = ''
         self._line_by_path_and_number[cache_key] = line
         return line
 
@@ -792,9 +796,12 @@ class NonChineseFileReadCache:
         if path not in self._lines_by_path:
             try:
                 with open(path, 'r', encoding='utf-8-sig') as handle:
-                    self._lines_by_path[path] = handle.readlines()
+                    lines = handle.readlines()
             except OSError:
-                self._lines_by_path[path] = []
+                lines = []
+            self._lines_by_path[path] = lines
+            for index, line in enumerate(lines, 1):
+                self._line_by_path_and_number.setdefault((path, index), line)
         return self._lines_by_path[path]
 
     @staticmethod

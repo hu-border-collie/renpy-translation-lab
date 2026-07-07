@@ -47,6 +47,28 @@ class BatchNonChineseFileCacheTests(unittest.TestCase):
             self.assertTrue(allowed)
             self.assertEqual(len(open_paths), 1)
 
+    def test_allow_non_chinese_reuses_single_tl_open_end_to_end(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmpdir:
+            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir))
+            open_paths = []
+            real_open = open
+
+            def counting_open(path, *args, **kwargs):
+                open_paths.append(str(path))
+                return real_open(path, *args, **kwargs)
+
+            with mock.patch('builtins.open', side_effect=counting_open):
+                allowed = batch_mod.allow_non_chinese_batch_translation(
+                    manifest,
+                    chunk,
+                    'Avi',
+                    'Avi',
+                    item=item,
+                )
+
+            self.assertTrue(allowed)
+            self.assertEqual(len(open_paths), 1)
+
     def test_allow_non_chinese_matches_results_with_and_without_cache(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmpdir:
             manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir))
@@ -114,6 +136,24 @@ class BatchNonChineseFileCacheTests(unittest.TestCase):
             self.assertEqual(len(open_paths), 2)
             self.assertEqual(len(cached_tl_reads), 2)
             self.assertIn('Main', cached_source_reads)
+
+    def test_read_line_and_read_lines_share_same_path_cache(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmpdir:
+            tl_path = Path(tmpdir) / 'shared.rpy'
+            tl_path.write_text('line one\nline two\n', encoding='utf-8')
+            cache = batch_mod.NonChineseFileReadCache()
+            open_paths = []
+            real_open = open
+
+            def counting_open(path, *args, **kwargs):
+                open_paths.append(str(path))
+                return real_open(path, *args, **kwargs)
+
+            with mock.patch('builtins.open', side_effect=counting_open):
+                self.assertEqual(cache.read_line(str(tl_path), 1), 'line one\n')
+                self.assertEqual(cache.read_lines(str(tl_path))[1], 'line two\n')
+
+            self.assertEqual(len(open_paths), 1)
 
 
 if __name__ == '__main__':
