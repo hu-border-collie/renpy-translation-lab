@@ -1628,7 +1628,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         status, heading, message, _facts = summary_calls[0]
         self.assertEqual(status, "ready")
         self.assertIn("补译后续处理", heading)
-        self.assertIn("继续翻译", message)
+        self.assertIn("继续补译", message)
         self.assertEqual(self.window.timeline.current_step_key, "merge-retry")
 
     def test_refresh_workflow_from_latest_manifest_failed_job_state(self):
@@ -2179,6 +2179,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
         self.window._uses_revision_writeback = lambda *_args, **_kwargs: False
         self.window._writeback_manifest_path = "C:/dummy/manifest.json"
+        self.window._retry_followup_confirmed = set()
         self.window._load_writeback_manifest = lambda: None
 
         class FakeButton:
@@ -2192,12 +2193,19 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def setEnabled(self, enabled):
                 self.enabled = enabled
 
+            def setText(self, text):
+                pass
+
+            def setToolTip(self, text):
+                pass
+
         for name in (
             "apply_btn",
             "apply_revision_btn",
             "recheck_btn",
             "check_issues_btn",
             "retry_btn",
+            "retry_followup_btn",
             "apply_failure_btn",
             "remediation_btn",
         ):
@@ -2302,6 +2310,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
         self.window._uses_revision_writeback = lambda *_args, **_kwargs: False
         self.window._writeback_manifest_path = "C:/dummy/manifest.json"
+        self.window._retry_followup_confirmed = set()
         self.window._load_writeback_manifest = lambda: None
 
         class FakeButton:
@@ -2315,11 +2324,18 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def setEnabled(self, enabled):
                 self.enabled = enabled
 
+            def setText(self, text):
+                pass
+
+            def setToolTip(self, text):
+                pass
+
         self.window.recheck_btn = FakeButton()
         self.window.apply_btn = FakeButton()
         self.window.apply_revision_btn = FakeButton()
         self.window.check_issues_btn = FakeButton()
         self.window.retry_btn = FakeButton()
+        self.window.retry_followup_btn = FakeButton()
         self.window.apply_failure_btn = FakeButton()
         self.window.remediation_btn = FakeButton()
 
