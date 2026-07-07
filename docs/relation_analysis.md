@@ -5,13 +5,13 @@
 仓库提供一个独立的剧本分析入口：
 
 - `extract_relations.py`
-  - 用于分析 `game/tl/schinese` 下的角色关系或语义接近度。
+  - 用于分析 Ren'Py TL 目录（如 `game/tl/<language>/`，默认 `schinese`）下的角色关系或语义接近度。
   - 内部实现位于 `relation_analyzer/`。
 
 常见命令：
 
 ```bash
-python extract_relations.py /path/to/game/tl/schinese
+python extract_relations.py /path/to/game/tl/<language>
 python extract_relations.py /path/to/game/tl/schinese --mode semantic
 ```
 

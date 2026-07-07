@@ -12,6 +12,7 @@ from .batch_workflow_support import (
     build_recover_submit_cli_args,
     build_submit_cli_args,
     load_cost_estimate_facts_from_manifest,
+    load_target_language_facts_from_manifest,
     output_blocked_by_max_cost,
     output_blocked_by_uncertain_submit,
     plan_unsubmitted_workflow_steps,
@@ -318,9 +319,9 @@ class TranslationWorkflow:
             )
 
         self.manifest_path = manifest_path_for_package(package_path)
-        return self._continue_or_finish(
-            extra_facts=load_cost_estimate_facts_from_manifest(self.manifest_path),
-        )
+        extra_facts = load_target_language_facts_from_manifest(self.manifest_path)
+        extra_facts.extend(load_cost_estimate_facts_from_manifest(self.manifest_path))
+        return self._continue_or_finish(extra_facts=extra_facts)
 
     def _finish_status(self, output: str) -> WorkflowUpdate | None:
         state = extract_job_state(output)

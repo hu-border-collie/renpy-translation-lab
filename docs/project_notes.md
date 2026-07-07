@@ -9,7 +9,7 @@
 - Python 3.11+
 - `google-genai`，供同步脚本和 Batch 脚本使用
 - 有效的 Gemini API Key
-- Ren'Py 项目中的 `game/tl/schinese` 翻译目录
+- Ren'Py 项目中的 `game/tl/<language>/` 翻译目录（默认 `schinese`，可通过配置修改）
 
 ## 当前边界
 
@@ -66,6 +66,6 @@
 这个仓库更适合下面这类使用者：
 
 - 已经熟悉 Ren'Py 项目目录结构
-- 能自行准备 `work/game/tl/schinese`、安装 Ren'Py SDK，或理解 `prepare` 行为
+- 能自行准备 `work/game/tl/<language>`（默认 `schinese`）、安装 Ren'Py SDK，或理解 `prepare` 行为
 - 能阅读 Python 脚本并按需修改本地配置
 - 接受这是高级用户工具，而不是稳定打包好的最终产品

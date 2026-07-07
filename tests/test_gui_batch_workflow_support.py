@@ -11,6 +11,7 @@ from gui_qt.batch_workflow_support import (
     format_cost_estimate_facts,
     get_uncertain_submit_kind,
     load_cost_estimate_facts_from_manifest,
+    load_target_language_facts_from_manifest,
     plan_unsubmitted_workflow_steps,
     resolve_submit_max_cost,
 )
@@ -139,6 +140,21 @@ class GuiBatchWorkflowSupportTests(unittest.TestCase):
             workflow.current_step().args,
             ["submit", r"C:\package\manifest.json", "--max-cost", "3.5"],
         )
+
+    def test_load_target_language_facts_from_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest_path = os.path.join(tmp_dir, "manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "tl_subdir": "game/tl/korean",
+                        "target_language": "korean",
+                    },
+                    handle,
+                )
+            facts = load_target_language_facts_from_manifest(manifest_path)
+            self.assertIn("TL 路径：game/tl/korean", facts)
+            self.assertIn("目标语言：korean", facts)
 
     def test_doctor_report_shows_tl_subdir(self):
         parsed = doctor_report_to_parsed(

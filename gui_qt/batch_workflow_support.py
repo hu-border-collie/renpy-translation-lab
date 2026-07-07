@@ -107,6 +107,21 @@ def format_cost_estimate_facts(estimate: dict[str, Any] | None) -> list[str]:
     return facts
 
 
+def load_target_language_facts_from_manifest(manifest_path: str) -> list[str]:
+    manifest = load_manifest_dict(manifest_path)
+    if not manifest:
+        return []
+
+    facts: list[str] = []
+    tl_subdir = manifest.get("tl_subdir")
+    if isinstance(tl_subdir, str) and tl_subdir.strip():
+        facts.append(f"TL 路径：{tl_subdir.strip()}")
+    target_language = manifest.get("target_language")
+    if isinstance(target_language, str) and target_language.strip():
+        facts.append(f"目标语言：{target_language.strip()}")
+    return facts
+
+
 def load_cost_estimate_facts_from_manifest(manifest_path: str) -> list[str]:
     manifest = load_manifest_dict(manifest_path)
     if not manifest:

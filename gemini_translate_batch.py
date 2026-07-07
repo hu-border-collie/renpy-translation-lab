@@ -2461,6 +2461,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
         'batch_model': BATCH_MODEL,
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
+        **_manifest_target_language_fields(),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': '',
         'job_name': '',
@@ -2542,6 +2543,8 @@ def create_batch_package(display_name_override='', skip_prepare=False):
     remember_latest_manifest(manifest_path)
 
     print(f'Created batch package: {package_dir}')
+    print(f"TL subdir: {manifest['tl_subdir']}")
+    print(f"Target language: {manifest['target_language']}")
     print(f"Pending files: {manifest['summary']['file_count']}")
     print(f"Chunks: {manifest['summary']['chunk_count']}")
     print(f"Items: {manifest['summary']['item_count']}")
@@ -2790,6 +2793,7 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
         'batch_model': BATCH_MODEL,
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
+        **_manifest_target_language_fields(),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': '',
         'job_name': '',
@@ -3052,6 +3056,7 @@ def create_keyword_package(display_name_override='', skip_prepare=True, chunk_si
         'batch_model': BATCH_MODEL,
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
+        **_manifest_target_language_fields(),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': '',
         'job_name': '',
@@ -3169,6 +3174,7 @@ def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix
             'batch_model': manifest.get('batch_model', BATCH_MODEL),
             'base_dir': manifest.get('base_dir', legacy.BASE_DIR),
             'tl_dir': manifest.get('tl_dir', legacy.TL_DIR),
+            **_manifest_target_language_fields(manifest),
             'input_jsonl_path': part_input_jsonl_path,
             'result_jsonl_path': '',
             'job_name': '',
@@ -3508,6 +3514,7 @@ def build_retry_package(target=None, display_name_override=''):
         'batch_model': BATCH_MODEL,
         'base_dir': manifest.get('base_dir', legacy.BASE_DIR),
         'tl_dir': manifest.get('tl_dir', legacy.TL_DIR),
+        **_manifest_target_language_fields(manifest),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': '',
         'job_name': '',
@@ -7403,6 +7410,7 @@ def make_sync_manifest(
         'batch_model': BATCH_MODEL,
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
+        **_manifest_target_language_fields(),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': result_jsonl_path,
         'job_name': '',
@@ -8713,6 +8721,7 @@ def run_bootstrap_work(*, save_game_root=True, refresh_runtime_paths=True):
 def print_template_generation_summary(result):
     print('Template generation summary:')
     print(f"- status: {result.get('status', '')}")
+    print(f"- tl_subdir: {result.get('tl_subdir', '')}")
     print(f"- tl_dir: {result.get('tl_dir', '')}")
     print(f"- tl_exists: {result.get('tl_exists', False)}")
     print(f"- rpy_files: {result.get('rpy_files', 0)}")
@@ -8725,6 +8734,7 @@ def _build_template_generation_result(status, message, counts=None):
         counts = collect_tl_doctor_counts()
     return {
         'status': status,
+        'tl_subdir': legacy.TL_SUBDIR,
         'tl_dir': legacy.TL_DIR,
         'tl_exists': os.path.isdir(legacy.TL_DIR),
         'rpy_files': counts['rpy_files'],
@@ -8779,11 +8789,29 @@ def run_generate_template():
     return result
 
 
+def _manifest_target_language_fields(source_manifest=None):
+    fields = {
+        'tl_subdir': legacy.TL_SUBDIR,
+        'target_language': legacy.PREP_LANGUAGE,
+    }
+    if not isinstance(source_manifest, dict):
+        return fields
+    tl_subdir = source_manifest.get('tl_subdir')
+    if isinstance(tl_subdir, str) and tl_subdir.strip():
+        fields['tl_subdir'] = tl_subdir.strip()
+    target_language = source_manifest.get('target_language')
+    if isinstance(target_language, str) and target_language.strip():
+        fields['target_language'] = target_language.strip()
+    return fields
+
+
 def print_banner():
     print('=' * 60)
     print('Gemini Batch Translator (Ren\'Py)')
     print(f'Base dir: {legacy.BASE_DIR}')
+    print(f'TL subdir: {legacy.TL_SUBDIR}')
     print(f'TL dir: {legacy.TL_DIR} (exists: {os.path.isdir(legacy.TL_DIR)})')
+    print(f'Target language: {legacy.PREP_LANGUAGE}')
     print(f'Batch jobs dir: {BATCH_JOBS_DIR}')
     print(f'Translator config: {legacy.TRANSLATOR_CONFIG} (exists: {os.path.isfile(legacy.TRANSLATOR_CONFIG)})')
     print(f'Glossary: {legacy.GLOSSARY_FILE} (exists: {os.path.isfile(legacy.GLOSSARY_FILE)})')
@@ -8796,7 +8824,7 @@ def print_banner():
     print(f'Max output tokens: {BATCH_MAX_OUTPUT_TOKENS}')
     print(f'Thinking level: {format_thinking_level_for_display()}')
     print(
-        f'Prepare: enabled={legacy.PREP_ENABLED}, language={legacy.PREP_LANGUAGE}, '
+        f'Prepare: enabled={legacy.PREP_ENABLED}, '
         f'generate_template={legacy.PREP_GENERATE_TEMPLATE}, '
         f'refresh_existing_template={legacy.PREP_REFRESH_EXISTING_TEMPLATE}'
     )

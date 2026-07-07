@@ -1,0 +1,10 @@
+{
+  "game_root": "C:/games/Game_Example/work",
+  "tl_subdir": "game/tl/japanese",
+  "prepare": {
+    "enabled": true,
+    "language": "japanese",
+    "generate_template": true,
+    "refresh_existing_template": true
+  }
+}
