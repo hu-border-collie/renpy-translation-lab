@@ -139,7 +139,11 @@ QWidget#settings_appearance_viewport,
 QWidget#settings_appearance_content,
 QScrollArea#settings_advanced_scroll,
 QWidget#settings_advanced_viewport,
-QWidget#settings_advanced_content {
+QWidget#settings_advanced_content,
+QScrollArea#settings_workspace_scroll,
+QWidget#settings_workspace_viewport,
+QWidget#settings_workspace_content,
+QWidget#games_registry_panel {
     background-color: ${bg_surface};
     border: none;
 }

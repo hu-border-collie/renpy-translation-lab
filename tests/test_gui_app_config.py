@@ -761,7 +761,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._advanced_setting_error_labels = {
             "context_storage_game_dir_name": error_label,
         }
-        self.window._settings_nav_rows = {"advanced": 4}
+        self.window._settings_nav_rows = {"workspace": 0, "project": 1, "advanced": 6}
         self.window.settings_nav = nav
         self.window._batch_thinking_user_changed = False
         self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
@@ -773,9 +773,72 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertFalse(saved)
         self.assertEqual(saved_configs, [])
         self.assertIn("不能为空", error_label.text)
-        self.assertEqual(nav.row, 4)
+        self.assertEqual(nav.row, 6)
         self.assertTrue(invalid_widget.focused)
         self.assertEqual(status_bar.messages[-1][0], "高级设置有无效字段，未保存。")
+
+    def test_settings_workspace_nav_disables_save_buttons(self):
+        class FakeNav:
+            def __init__(self):
+                self.row = None
+
+            def currentRow(self):
+                return self.row
+
+            def setCurrentRow(self, row):
+                self.row = row
+
+        class FakeBtn:
+            def __init__(self):
+                self.enabled = None
+
+            def setEnabled(self, value):
+                self.enabled = value
+
+        class FakeStack:
+            def setCurrentIndex(self, _index):
+                pass
+
+        nav = FakeNav()
+        save_btn = FakeBtn()
+        restore_btn = FakeBtn()
+        reload_btn = FakeBtn()
+        self.window.settings_nav = nav
+        self.window.settings_stack = FakeStack()
+        self.window._settings_nav_rows = {"workspace": 0, "project": 1}
+        self.window.save_config_btn = save_btn
+        self.window.restore_defaults_btn = restore_btn
+        self.window.reload_config_btn = reload_btn
+        self.window._task_running = False
+
+        self.window._on_settings_nav_row_changed(0)
+        self.assertFalse(save_btn.enabled)
+        self.assertFalse(restore_btn.enabled)
+        self.assertTrue(reload_btn.enabled)
+
+        self.window._on_settings_nav_row_changed(1)
+        self.assertTrue(save_btn.enabled)
+        self.assertTrue(restore_btn.enabled)
+
+    def test_on_registry_switch_project_focuses_project_section(self):
+        switched = []
+        focused = []
+
+        class FakePanel:
+            def set_current_game_root(self, _root):
+                pass
+
+        self.window._switch_game_root = lambda target: switched.append(target) or True
+        self.window._focus_settings_section = lambda key: focused.append(key)
+        self.window._show_settings_status = lambda *_args, **_kwargs: None
+        self.window._games_registry_panel = FakePanel()
+        self.window.state = type("FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")})()
+
+        result = self.window._on_registry_switch_project("C:/Game/work")
+
+        self.assertTrue(result)
+        self.assertEqual(switched, ["C:/Game/work"])
+        self.assertEqual(focused, ["project"])
 
     def test_focus_advanced_setting_navigates_to_project_page_for_project_fields(self):
         class FakeNav:
@@ -795,7 +858,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         nav = FakeNav()
         widget = FakeText()
         self.window.settings_nav = nav
-        self.window._settings_nav_rows = {"project": 1, "advanced": 5}
+        self.window._settings_nav_rows = {"workspace": 0, "project": 1, "advanced": 6}
         self.window._advanced_setting_widgets = {"game_root": widget}
 
         self.window._focus_advanced_setting("game_root")
