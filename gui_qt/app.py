@@ -113,6 +113,11 @@ from .retry_report import (
     retry_followup_allowed,
     summarize_retry_manifest,
 )
+from .retry_workflow import (
+    create_retry_followup_workflow,
+    describe_retry_followup_button,
+    retry_followup_workflow_ready,
+)
 from .cli_runner import CliRunner
 from .doctor_report import (
     DoctorSummary,
@@ -790,6 +795,12 @@ class MainWindow(QMainWindow):
         self.retry_btn.setEnabled(False)
         self.retry_btn.setVisible(False)
         writeback_actions.addWidget(self.retry_btn)
+        self.retry_followup_btn = QPushButton("继续补译")
+        self.retry_followup_btn.setObjectName("secondary_btn")
+        self.retry_followup_btn.clicked.connect(self._on_retry_followup_action)
+        self.retry_followup_btn.setEnabled(False)
+        self.retry_followup_btn.setVisible(False)
+        writeback_actions.addWidget(self.retry_followup_btn)
         self.apply_failure_btn = QPushButton("查看写回失败报告")
         self.apply_failure_btn.setObjectName("secondary_btn")
         self.apply_failure_btn.clicked.connect(self._open_apply_failure_report)
@@ -2056,6 +2067,7 @@ class MainWindow(QMainWindow):
             "recheck_btn",
             "check_issues_btn",
             "retry_btn",
+            "retry_followup_btn",
             "apply_failure_btn",
             "remediation_btn",
         )
@@ -2106,6 +2118,39 @@ class MainWindow(QMainWindow):
                 )
                 self.retry_btn.setEnabled(not running)
 
+        retry_manifest = None
+        retry_manifest_path = ""
+        if manifest is not None:
+            retry_manifest_path = existing_retry_manifest_path(manifest) or ""
+            if retry_manifest_path:
+                try:
+                    retry_manifest = self.state.load_manifest_file(retry_manifest_path)
+                except ValueError:
+                    retry_manifest = None
+        followup_ready = retry_followup_workflow_ready(
+            summary,
+            parent_manifest=manifest,
+            retry_manifest=retry_manifest,
+            retry_manifest_path=retry_manifest_path,
+            parent_manifest_path=summary.manifest_path,
+            confirmed_parent_paths=self._retry_followup_confirmed,
+            supports_translation_writeback=spec.supports_translation_writeback,
+        )
+        if hasattr(self, "retry_followup_btn"):
+            self.retry_followup_btn.setVisible(spec.supports_translation_writeback)
+            if followup_ready and retry_manifest is not None and retry_manifest_path:
+                label, tooltip = describe_retry_followup_button(
+                    retry_manifest_path,
+                    retry_manifest,
+                    summary.manifest_path,
+                )
+                self.retry_followup_btn.setText(label)
+                self.retry_followup_btn.setToolTip(tooltip)
+            else:
+                self.retry_followup_btn.setText("继续补译")
+                self.retry_followup_btn.setToolTip("")
+            self.retry_followup_btn.setEnabled(not running and followup_ready)
+
         if hasattr(self, "remediation_btn"):
             remediation_ready = (
                 self._remediation_ready(summary, manifest=manifest)
@@ -2124,7 +2169,7 @@ class MainWindow(QMainWindow):
         self,
         retry_manifest_path: str,
         *,
-        open_remediation_on_confirm: bool = False,
+        start_followup_on_confirm: bool = False,
     ) -> str:
         try:
             retry_manifest = self.state.load_manifest_file(retry_manifest_path)
@@ -2149,11 +2194,80 @@ class MainWindow(QMainWindow):
             summary,
             running=self.kill_btn.isEnabled(),
         )
-        if open_remediation_on_confirm:
-            self._open_remediation_commands()
+        if start_followup_on_confirm:
+            self._start_retry_followup_workflow()
         else:
             self.statusBar().showMessage("已确认补译包范围。", 3000)
         return "confirmed"
+
+    def _start_retry_followup_workflow(self, *, retry_manifest_path: str = "") -> bool:
+        parent_path = self._writeback_manifest_path
+        if not parent_path:
+            QMessageBox.information(self, "无法继续补译", "当前没有可用的父任务记录。")
+            return False
+
+        try:
+            parent_manifest = self.state.load_manifest_file(parent_path)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法继续补译", str(exc))
+            return False
+
+        if parent_path not in self._retry_followup_confirmed:
+            resolved_retry_path = retry_manifest_path or existing_retry_manifest_path(parent_manifest)
+            if not resolved_retry_path:
+                QMessageBox.information(self, "无法继续补译", "请先生成并预览补译包。")
+                return False
+            preview_result = self._show_retry_preview(resolved_retry_path)
+            if preview_result != "confirmed":
+                return False
+            try:
+                parent_manifest = self.state.load_manifest_file(parent_path)
+            except ValueError as exc:
+                QMessageBox.warning(self, "无法继续补译", str(exc))
+                return False
+
+        resolved_retry_path = retry_manifest_path or existing_retry_manifest_path(parent_manifest)
+        if not resolved_retry_path:
+            QMessageBox.information(self, "无法继续补译", "未找到补译任务记录。")
+            return False
+
+        try:
+            retry_manifest = self.state.load_manifest_file(resolved_retry_path)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法继续补译", str(exc))
+            return False
+
+        workflow = create_retry_followup_workflow(
+            resolved_retry_path,
+            retry_manifest,
+            parent_path,
+        )
+        next_step = workflow.current_step()
+        if next_step is None:
+            QMessageBox.information(
+                self,
+                "无法继续补译",
+                "补译流程暂无后续步骤；可查看诊断页任务上下文确认状态。",
+            )
+            return False
+
+        self._clear_log_view()
+        self._focus_log_tab()
+        self._begin_translation_workflow(
+            workflow,
+            log_heading=f"正在补译：gemini_translate_batch.py {' '.join(next_step.args)}",
+        )
+        return True
+
+    def _on_retry_followup_action(self) -> None:
+        if not work_mode_spec(self._current_work_mode()).supports_translation_writeback:
+            QMessageBox.information(
+                self,
+                "当前模式不支持",
+                "「继续补译」仅适用于批量翻译。",
+            )
+            return
+        self._start_retry_followup_workflow()
 
     def _on_retry_action(self) -> None:
         summary = self._current_writeback_summary()
@@ -3802,11 +3916,24 @@ class MainWindow(QMainWindow):
             self._set_writeback_summary(stale_writeback_summary())
         else:
             self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
+        self._begin_translation_workflow(
+            workflow,
+            log_heading=f"正在运行：{spec.label}",
+            status_tab=1,
+        )
+
+    def _begin_translation_workflow(
+        self,
+        workflow,
+        *,
+        log_heading: str,
+        status_tab: int = 1,
+    ) -> None:
         self._workflow = workflow
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
-        self._focus_workbench_status_tab(1)
-        self._append_log(f"=== 正在运行：{spec.label} ===\n")
+        self._focus_workbench_status_tab(status_tab)
+        self._append_log(f"=== {log_heading} ===\n")
         self._set_task_running(True)
         self._run_workflow_current_step()
 
@@ -4534,7 +4661,7 @@ class MainWindow(QMainWindow):
                 if retry_path:
                     preview_result = self._show_retry_preview(
                         retry_path,
-                        open_remediation_on_confirm=True,
+                        start_followup_on_confirm=True,
                     )
                 if preview_result == "cancelled":
                     self.statusBar().showMessage("补译包已生成，请先确认预览范围。", 6000)
@@ -4713,7 +4840,10 @@ class MainWindow(QMainWindow):
         if sync_keyword_completed:
             self._copy_sync_keyword_reports_to_game_parent(step_output)
 
-        if "Safety status:" in step_output:
+        retry_parent = getattr(self._workflow, "retry_parent_manifest_path", "")
+        if "Safety status:" in step_output and (
+            step_key == "check-parent" or not retry_parent
+        ):
             self._update_writeback_from_check(step_output, exit_code, manifest_path)
         if self._uses_revision_writeback() and (
             "Preview JSONL:" in step_output or "Preview Markdown:" in step_output

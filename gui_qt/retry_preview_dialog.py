@@ -19,7 +19,13 @@ from .retry_report import RetryPreviewReport
 class RetryPreviewDialog(QDialog):
     """Modal dialog that previews retry package scope and asks for confirmation."""
 
-    def __init__(self, parent: QWidget | None, *, report: RetryPreviewReport):
+    def __init__(
+        self,
+        parent: QWidget | None,
+        *,
+        report: RetryPreviewReport,
+        confirm_label: str = "确认并继续补译",
+    ):
         super().__init__(parent)
         self.setObjectName("retry_preview_dialog")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -72,7 +78,7 @@ class RetryPreviewDialog(QDialog):
         layout.addLayout(actions)
 
         buttons = QDialogButtonBox()
-        confirm_btn = buttons.addButton("确认并查看补救命令", QDialogButtonBox.ButtonRole.AcceptRole)
+        confirm_btn = buttons.addButton(confirm_label, QDialogButtonBox.ButtonRole.AcceptRole)
         close_btn = buttons.addButton("关闭", QDialogButtonBox.ButtonRole.RejectRole)
         if confirm_btn is not None:
             confirm_btn.setObjectName("apply_btn")

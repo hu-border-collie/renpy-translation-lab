@@ -71,7 +71,7 @@ def assess_retry_eligibility(
             heading="可生成补译包",
             message=(
                 f"检测到 {retry_count} 个适合补译的问题项。"
-                "生成后请先预览范围，确认后再到「补救命令」按步骤继续。"
+                "生成后请先预览范围，确认后可点击「继续补译」提交云端任务。"
             ),
         )
 
@@ -120,7 +120,7 @@ def parse_build_retry_output(output: str, exit_code: int) -> BuildRetryResult:
     return BuildRetryResult(
         status="ok",
         heading="补译包已生成",
-        message="请预览影响范围并确认后，再到「补救命令」按步骤继续。",
+        message="请预览影响范围并确认后，可点击写回页「继续补译」提交并合并结果。",
         retry_manifest_path=retry_manifest_path,
         package_dir=package_dir,
     )
@@ -202,7 +202,7 @@ def summarize_retry_manifest(
         heading="补译包预览",
         message=(
             "请确认影响范围后再继续。"
-            "界面不会自动提交补译任务；确认后可到「补救命令」按步骤提交、下载并合并结果。"
+            "界面不会自动提交补译任务；确认后可点击写回页「继续补译」编排后续步骤。"
         ),
         facts=facts,
         detail_lines=detail_lines,
