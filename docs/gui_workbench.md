@@ -118,7 +118,9 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 **下方（原始输出）**：始终可见，显示 CLI 的 stdout/stderr。
 
-工具栏提供「刷新上下文」与「清空日志」。切换到诊断 Tab 时会重新读取最近任务记录；流程进行中会优先展示当前活动的记录。
+工具栏提供「刷新上下文」「试跑样本请求」与「清空日志」。切换到诊断 Tab 时会重新读取最近任务记录；流程进行中会优先展示当前活动的记录。
+
+**试跑样本请求（probe）**：批量翻译模式下，若当前有可用的 translation manifest（version 1），可点击「试跑样本请求」对 package 内少量请求做同步 `generate_content` 冒烟测试（默认 `--limit 3`）。高级选项可调整 `--limit`、`--offset` 与 `--api-key-index`。该操作不会提交批量任务，也不会修改项目文件；摘要显示在任务上下文区，原始输出写入下方日志。适合在 `submit` 前排障 API、模型与请求格式。
 
 ## 配置兼容性
 
