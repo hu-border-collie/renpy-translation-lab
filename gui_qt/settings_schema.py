@@ -162,6 +162,16 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         allow_empty=True,
     ),
     SettingField(
+        "batch_non_chinese_extra_static_paths",
+        ("batch", "non_chinese_validation", "extra_static_name_credit_rel_paths"),
+        "非中文白名单追加路径",
+        "追加到默认静态姓名/名单文件白名单的相对路径；每行一个，例如 credits.rpy。",
+        "list",
+        [],
+        "翻译吞吐",
+        allow_empty=True,
+    ),
+    SettingField(
         "context_storage_game_dir_name",
         ("context_storage", "game_dir_name"),
         "游戏目录上下文文件夹",

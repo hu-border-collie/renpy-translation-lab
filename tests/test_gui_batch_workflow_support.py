@@ -9,6 +9,8 @@ from gui_qt.batch_workflow_support import (
     build_recover_submit_cli_args,
     build_submit_cli_args,
     format_cost_estimate_facts,
+    format_non_chinese_rules_facts,
+    load_non_chinese_rules_facts_from_manifest,
     get_uncertain_submit_kind,
     load_cost_estimate_facts_from_manifest,
     load_target_language_facts_from_manifest,
@@ -140,6 +142,26 @@ class GuiBatchWorkflowSupportTests(unittest.TestCase):
             workflow.current_step().args,
             ["submit", r"C:\package\manifest.json", "--max-cost", "3.5"],
         )
+
+    def test_load_non_chinese_rules_facts_from_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest_path = os.path.join(tmp_dir, "manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "non_chinese_rules": {
+                            "static_name_credit_rel_paths": ["a.rpy", "b.rpy"],
+                            "extra_static_name_credit_rel_paths": ["custom.rpy"],
+                        }
+                    },
+                    handle,
+                )
+            facts = load_non_chinese_rules_facts_from_manifest(manifest_path)
+            self.assertTrue(any("静态姓名/名单白名单：2 个文件" in fact for fact in facts))
+            self.assertTrue(any("custom.rpy" in fact for fact in facts))
+
+    def test_format_non_chinese_rules_facts_empty(self):
+        self.assertEqual(format_non_chinese_rules_facts({}), [])
 
     def test_load_target_language_facts_from_manifest(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -19,6 +19,7 @@ if SCRIPT_DIR not in sys.path:
 
 from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
 import batch_cost_estimate
+import batch_non_chinese_rules
 import batch_submit_recovery
 import prompt_context
 import story_memory
@@ -90,6 +91,7 @@ BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
 BATCH_SPLIT_RECOMMEND_CHUNKS = 400
 BATCH_SPLIT_RECOMMEND_ITEMS = 12000
 BATCH_MACRO_SETTING = ''
+BATCH_NON_CHINESE_RULES = batch_non_chinese_rules.normalize_non_chinese_rules(None)
 MANIFEST_MODE_TRANSLATION = 'translation'
 MANIFEST_MODE_KEYWORD_EXTRACTION = 'keyword_extraction'
 MANIFEST_MODE_REVISION = 'revision'
@@ -289,6 +291,7 @@ def load_batch_settings():
     global STORY_MEMORY_ENABLED, STORY_MEMORY_GRAPH_FILE, STORY_MEMORY_MAX_CONTEXT_CHARS
     global STORY_MEMORY_TOP_K_RELATIONS, STORY_MEMORY_TOP_K_TERMS
     global STORY_MEMORY_INCLUDE_SCENE_SUMMARY, _STORY_GRAPH, _STORY_GRAPH_PATH
+    global BATCH_NON_CHINESE_RULES
 
     config = load_json_file(legacy.CONFIG_FILE)
     translator_config = load_json_file(legacy.TRANSLATOR_CONFIG)
@@ -330,6 +333,8 @@ def load_batch_settings():
     batch = translator_config.get('batch')
     if not isinstance(batch, dict):
         batch = {}
+
+    BATCH_NON_CHINESE_RULES = batch_non_chinese_rules.load_non_chinese_rules(translator_config)
 
     model_name = batch.get('model')
     if isinstance(model_name, str) and model_name.strip():
@@ -803,11 +808,6 @@ def is_manifest_old_new_static_label_item(manifest, chunk, item):
     stripped = line.lstrip()
     return stripped.startswith('old ') or stripped.startswith('new ')
 
-STATIC_NAME_CREDIT_REL_PATHS = {
-    'screens_menu_about.rpy',
-    'screens_menu_gallery_bg.rpy',
-    'screens_patronlistitem.rpy',
-}
 GAME_LINE_COMMENT_RE = re.compile(r'^\s*#\s+(.+?):(\d+)\s*$')
 OLD_NEW_LINE_RE = re.compile(r'^\s*(?:old|new)\s+"(?P<text>.*)"\s*$')
 STATIC_NAME_PUNCT_TRANSLATION = str.maketrans({
@@ -968,13 +968,30 @@ def is_manifest_static_non_chinese_item(manifest, chunk, original, translated, i
 
     rel_path = str((chunk or {}).get('file_rel_path') or '').replace('\\', '/').lower()
     rel_name = os.path.basename(rel_path)
-    if rel_name == 'screens_patronlistitem.rpy':
+    rules = batch_non_chinese_rules.effective_non_chinese_rules(
+        manifest,
+        runtime_rules=BATCH_NON_CHINESE_RULES,
+    )
+
+    if batch_non_chinese_rules.rel_path_matches(
+        rel_path,
+        rel_name,
+        rules.get('static_name_credit_unconditional_rel_paths', []),
+    ):
         return True
 
-    if rel_name in STATIC_NAME_CREDIT_REL_PATHS:
+    if batch_non_chinese_rules.rel_path_matches(
+        rel_path,
+        rel_name,
+        rules.get('static_name_credit_rel_paths', []),
+    ):
         return looks_like_static_name_or_credit_text(original)
 
-    if rel_name == 'screens_charselect.rpy':
+    if batch_non_chinese_rules.rel_path_matches(
+        rel_path,
+        rel_name,
+        rules.get('charselect_rel_paths', []),
+    ):
         if any(mark in (original or '') for mark in ':!?！？'):
             return False
         return looks_like_static_name_or_credit_text(original)
@@ -988,10 +1005,20 @@ def is_manifest_static_non_chinese_item(manifest, chunk, original, translated, i
             return False
         return looks_like_static_name_or_credit_text(original)
 
-    if rel_name == 'script.rpy' and is_manifest_player_name_comparison_item(manifest, chunk, original, item):
+    if (
+        batch_non_chinese_rules.rel_path_matches(
+            rel_path,
+            rel_name,
+            rules.get('player_name_comparison_rel_paths', []),
+        )
+        and is_manifest_player_name_comparison_item(manifest, chunk, original, item)
+    ):
         return True
 
-    if rel_path.endswith('script_define.rpy') or rel_path.startswith('script_characters'):
+    if (
+        batch_non_chinese_rules.rel_path_has_suffix(rel_path, rules.get('define_rel_path_suffixes', []))
+        or batch_non_chinese_rules.rel_path_has_prefix(rel_path, rules.get('define_rel_path_prefixes', []))
+    ):
         cleaned = legacy.RENPY_TAG_RE.sub('', original or '').strip()
         if legacy.is_non_translatable(cleaned):
             return True
@@ -2462,6 +2489,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
+        **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': '',
         'job_name': '',
@@ -2794,6 +2822,7 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
+        **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': '',
         'job_name': '',
@@ -3057,6 +3086,7 @@ def create_keyword_package(display_name_override='', skip_prepare=True, chunk_si
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
+        **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': '',
         'job_name': '',
@@ -3175,6 +3205,7 @@ def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix
             'base_dir': manifest.get('base_dir', legacy.BASE_DIR),
             'tl_dir': manifest.get('tl_dir', legacy.TL_DIR),
             **_manifest_target_language_fields(manifest),
+            **batch_non_chinese_rules.manifest_non_chinese_rules_fields(manifest),
             'input_jsonl_path': part_input_jsonl_path,
             'result_jsonl_path': '',
             'job_name': '',
@@ -3515,6 +3546,7 @@ def build_retry_package(target=None, display_name_override=''):
         'base_dir': manifest.get('base_dir', legacy.BASE_DIR),
         'tl_dir': manifest.get('tl_dir', legacy.TL_DIR),
         **_manifest_target_language_fields(manifest),
+        **batch_non_chinese_rules.manifest_non_chinese_rules_fields(manifest),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': '',
         'job_name': '',
@@ -7411,6 +7443,7 @@ def make_sync_manifest(
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
+        **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': result_jsonl_path,
         'job_name': '',
