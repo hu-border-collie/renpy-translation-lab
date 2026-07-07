@@ -86,6 +86,18 @@ python gemini_translate_batch.py sync-keywords --limit 3
 
 `sync-keywords` 复用关键词 prompt、schema、候选去重、chunk 概要和 JSONL / Markdown 导出逻辑，适合小范围即时跑报告。
 
+人工确认后，可用 `merge-keywords-to-glossary` 把 `keyword_candidates.jsonl` 中的候选追加进 `glossary.json`（默认写入 `normalize_map`；`source` 与 `suggested_target` 相同时写入 `preserve_terms`）：
+
+```bash
+python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<package>/keyword_candidates.jsonl
+python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<package>/manifest.json --dry-run
+python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<package>/manifest.json --accept-confidence 0.85 --yes
+```
+
+- 默认逐条 `y/n` 确认；`--accept-confidence` 可半自动接受高置信候选，`--yes` 跳过交互。
+- `--min-confidence` 过滤低置信候选；已有 `source` 默认不覆盖，需 `--overwrite` 才改目标译法。
+- `--dry-run` / `--preview` 只预览 diff；真实写入前会生成 `glossary.json.bak-<timestamp>` 备份（可用 `--no-backup` 关闭）。
+
 订正 manifest 的 `mode=revision`，关键词 manifest 的 `mode=keyword_extraction`，普通 `check/apply` 会拒绝处理，避免把非翻译结果误写回 `.rpy`。
 
 ## Manifest 与 identity v2

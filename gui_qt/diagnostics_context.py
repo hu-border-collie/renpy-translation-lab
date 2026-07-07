@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
+from keyword_glossary_merge import build_merge_keywords_cli_command
+
 from .batch_workflow_support import (
     build_recover_submit_cli_args,
     build_submit_cli_args,
@@ -271,6 +273,33 @@ def build_cli_commands(
                 ),
             )
         )
+        keyword_export = manifest.get("keyword_export")
+        if isinstance(keyword_export, dict):
+            jsonl_path = keyword_export.get("jsonl_path")
+            if isinstance(jsonl_path, str) and jsonl_path.strip():
+                commands.append(
+                    DiagnosticsCommand(
+                        label="合并候选到 glossary（预览）",
+                        command=format_cli_command(
+                            python_exe,
+                            batch_script_path,
+                            build_merge_keywords_cli_command(
+                                manifest_path,
+                                dry_run=True,
+                            ),
+                        ),
+                    )
+                )
+                commands.append(
+                    DiagnosticsCommand(
+                        label="合并候选到 glossary",
+                        command=format_cli_command(
+                            python_exe,
+                            batch_script_path,
+                            build_merge_keywords_cli_command(manifest_path),
+                        ),
+                    )
+                )
         return commands
 
     retry_parent = manifest.get("retry_of_manifest")

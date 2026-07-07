@@ -21,6 +21,7 @@ from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreL
 import batch_cost_estimate
 import batch_non_chinese_rules
 import batch_submit_recovery
+import keyword_glossary_merge
 import prompt_context
 import story_memory
 import translation_core
@@ -9201,6 +9202,57 @@ def build_arg_parser():
         help='Relative chunk summary Markdown path inside the package.',
     )
 
+    merge_keywords_parser = subparsers.add_parser(
+        'merge-keywords-to-glossary',
+        help='Review keyword_candidates.jsonl entries and append accepted ones to glossary.json.',
+    )
+    merge_keywords_parser.add_argument(
+        'target',
+        help='keyword_candidates.jsonl path, keyword package dir, or manifest.json.',
+    )
+    merge_keywords_parser.add_argument(
+        '--glossary',
+        default='',
+        help='Glossary JSON path. Defaults to translator_config glossary_file.',
+    )
+    merge_keywords_parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Preview accepted/skipped entries without writing glossary.json.',
+    )
+    merge_keywords_parser.add_argument(
+        '--preview',
+        action='store_true',
+        help='Alias for --dry-run.',
+    )
+    merge_keywords_parser.add_argument(
+        '--min-confidence',
+        type=float,
+        default=0.0,
+        help='Skip candidates below this confidence threshold.',
+    )
+    merge_keywords_parser.add_argument(
+        '--accept-confidence',
+        type=float,
+        default=None,
+        help='Auto-accept candidates at or above this confidence without prompting.',
+    )
+    merge_keywords_parser.add_argument(
+        '--overwrite',
+        action='store_true',
+        help='Overwrite existing glossary entries with conflicting targets.',
+    )
+    merge_keywords_parser.add_argument(
+        '--yes',
+        action='store_true',
+        help='Accept all non-skipped candidates without interactive prompts.',
+    )
+    merge_keywords_parser.add_argument(
+        '--no-backup',
+        action='store_true',
+        help='Skip creating a timestamped glossary backup before writing.',
+    )
+
     revision_preview_parser = subparsers.add_parser(
         'preview-revisions',
         help='Dry-run downloaded revision results and export JSONL/Markdown preview reports.',
@@ -9494,6 +9546,22 @@ def main(argv=None):
             output_markdown=args.markdown,
             output_summary_jsonl=args.summary_jsonl,
             output_summary_markdown=args.summary_markdown,
+        )
+        return
+
+    if command == 'merge-keywords-to-glossary':
+        candidates_path = keyword_glossary_merge.resolve_keyword_candidates_path(args.target)
+        glossary_path = args.glossary.strip() if args.glossary else legacy.GLOSSARY_FILE
+        dry_run = args.dry_run or args.preview
+        keyword_glossary_merge.merge_keywords_to_glossary(
+            candidates_path,
+            glossary_path,
+            dry_run=dry_run,
+            min_confidence=max(0.0, float(args.min_confidence or 0.0)),
+            accept_confidence=args.accept_confidence,
+            overwrite=args.overwrite,
+            interactive=not args.yes and not dry_run,
+            backup=not args.no_backup,
         )
         return
 
