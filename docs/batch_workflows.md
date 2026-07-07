@@ -16,9 +16,11 @@
 `check` 默认要求译文包含中文字符（实现上检测 Unicode 中文范围，不包含日文假名或韩文），适用于以简体中文为目标的批次。以下情况允许保留非中文译文（无需改配置）：
 
 - 术语表中的固定译法、保留英文名/缩写、玩家名比较行等启发式规则
-- 特定 UI/制作人员名单文件路径上的静态文本（当前为内置白名单，见 #140 PR2 可配置化）
+- 特定 UI/制作人员名单文件路径上的静态文本（`batch.non_chinese_validation` 白名单，build 时写入 manifest `non_chinese_rules`）
 
-若目标语言为日语、韩语等，`No Chinese characters` 失败可能属于预期行为，需要调整校验策略或白名单（见 #140 PR2）。换语言前请先跑 `doctor` 确认 TL 路径，并在 `check` 结果中逐项确认失败原因。非中文白名单与性能优化将在 #140 后续 PR 中继续完善。
+可在 `translator_config.json` 的 `batch.non_chinese_validation` 中覆盖或追加路径；GUI 高级设置提供「非中文白名单追加路径」。默认白名单与当前 After Class / Glory Hounds 项目兼容。
+
+若目标语言为日语、韩语等，`No Chinese characters` 失败可能属于预期行为，需要调整校验策略或白名单。换语言前请先跑 `doctor` 确认 TL 路径，并在 `check` 结果中逐项确认失败原因。校验读文件缓存优化见 #140 PR3。
 
 ## 命令说明
 

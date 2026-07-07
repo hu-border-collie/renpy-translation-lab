@@ -12,6 +12,7 @@ from .batch_workflow_support import (
     build_recover_submit_cli_args,
     build_submit_cli_args,
     format_cost_estimate_facts,
+    format_non_chinese_rules_facts,
     get_uncertain_submit_kind,
     load_uncertain_submit_facts_from_manifest,
 )
@@ -587,6 +588,11 @@ def build_manifest_facts(manifest: dict[str, object], manifest_path: str) -> lis
 
     if manifest_path and not (isinstance(job_name, str) and job_name.strip()):
         facts.extend(load_uncertain_submit_facts_from_manifest(manifest_path))
+
+    non_chinese_rules = manifest.get("non_chinese_rules")
+    if isinstance(non_chinese_rules, dict):
+        for fact in format_non_chinese_rules_facts(non_chinese_rules):
+            facts.append(f"非中文校验：{fact}")
 
     mode = manifest.get("mode")
     if isinstance(mode, str) and mode.strip():

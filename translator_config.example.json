@@ -87,6 +87,29 @@
       "include_scene_summary": true
     },
     "submit_max_cost": 0,
+    "non_chinese_validation": {
+      "extra_static_name_credit_rel_paths": [],
+      "static_name_credit_rel_paths": [
+        "screens_menu_about.rpy",
+        "screens_menu_gallery_bg.rpy",
+        "screens_patronlistitem.rpy"
+      ],
+      "static_name_credit_unconditional_rel_paths": [
+        "screens_patronlistitem.rpy"
+      ],
+      "charselect_rel_paths": [
+        "screens_charselect.rpy"
+      ],
+      "player_name_comparison_rel_paths": [
+        "script.rpy"
+      ],
+      "define_rel_path_suffixes": [
+        "script_define.rpy"
+      ],
+      "define_rel_path_prefixes": [
+        "script_characters"
+      ]
+    },
     "pricing": {
       "version": 1,
       "currency": "USD",

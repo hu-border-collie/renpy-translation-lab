@@ -107,6 +107,28 @@ def format_cost_estimate_facts(estimate: dict[str, Any] | None) -> list[str]:
     return facts
 
 
+def format_non_chinese_rules_facts(rules: dict[str, Any] | None) -> list[str]:
+    if not isinstance(rules, dict):
+        return []
+    facts: list[str] = []
+    static_paths = rules.get("static_name_credit_rel_paths")
+    if isinstance(static_paths, list) and static_paths:
+        facts.append(f"静态姓名/名单白名单：{len(static_paths)} 个文件")
+    extra_paths = rules.get("extra_static_name_credit_rel_paths")
+    if isinstance(extra_paths, list) and extra_paths:
+        facts.append(f"追加白名单路径：{', '.join(str(path) for path in extra_paths[:3])}")
+    return facts
+
+
+def load_non_chinese_rules_facts_from_manifest(manifest_path: str) -> list[str]:
+    manifest = load_manifest_dict(manifest_path)
+    if not manifest:
+        return []
+    rules = manifest.get("non_chinese_rules")
+    facts = format_non_chinese_rules_facts(rules if isinstance(rules, dict) else None)
+    return [f"非中文校验：{fact}" for fact in facts]
+
+
 def load_target_language_facts_from_manifest(manifest_path: str) -> list[str]:
     manifest = load_manifest_dict(manifest_path)
     if not manifest:
