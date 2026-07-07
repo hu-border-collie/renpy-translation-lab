@@ -91,6 +91,13 @@ from .diagnostics_context import (
     existing_retry_manifest_path,
     sync_diagnostics_context,
 )
+from .probe_report import (
+    build_probe_cli_args,
+    probe_summary_to_diagnostics_context,
+    running_probe_summary,
+    summarize_probe_output,
+    translation_probe_ready,
+)
 from .keyword_report import summarize_keyword_result_from_manifest
 from .revision_report import summarize_revision_apply_output
 from .revision_writeback_report import (
@@ -265,6 +272,7 @@ class MainWindow(QMainWindow):
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
         self._recheck_output_lines: list[str] = []
+        self._probe_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
         self._bootstrap_progress: BootstrapProgressState | None = None
@@ -1243,6 +1251,15 @@ class MainWindow(QMainWindow):
         self.refresh_diagnostics_btn.setObjectName("secondary_btn")
         self.refresh_diagnostics_btn.clicked.connect(self._refresh_diagnostics_context)
         toolbar.addWidget(self.refresh_diagnostics_btn)
+
+        self.probe_btn = QPushButton("试跑样本请求")
+        self.probe_btn.setObjectName("secondary_btn")
+        self.probe_btn.setToolTip(
+            "对当前翻译包执行少量同步请求，提交批量任务前验证 API 与请求格式。"
+        )
+        self.probe_btn.clicked.connect(self._on_run_probe)
+        self.probe_btn.setEnabled(False)
+        toolbar.addWidget(self.probe_btn)
 
         self.clear_log_btn = QPushButton("清空日志")
         self.clear_log_btn.setObjectName("secondary_btn")
@@ -2400,6 +2417,36 @@ class MainWindow(QMainWindow):
         except ValueError:
             return None
 
+    def _current_diagnostics_manifest(self) -> tuple[str, dict[str, object] | None]:
+        spec = work_mode_spec(self._current_work_mode())
+        if spec.manifest_mode is None:
+            return "", None
+
+        game_root = self.state.get_game_root()
+        latest_manifest = None
+        if game_root is not None:
+            latest_manifest = self.state.get_latest_manifest_path_for_mode(
+                game_root,
+                spec.mode,
+            )
+        if self._workflow is not None and self._workflow.manifest_path:
+            manifest_path = self._workflow.manifest_path
+        elif self._writeback_manifest_path:
+            manifest_path = self._writeback_manifest_path
+        else:
+            manifest_path = str(latest_manifest) if latest_manifest is not None else ""
+        manifest = self._load_diagnostics_manifest(manifest_path or None)
+        return manifest_path, manifest
+
+    def _update_probe_btn_enabled(self, *, running: bool | None = None) -> None:
+        if not hasattr(self, "probe_btn"):
+            return
+        if running is None:
+            running = self.kill_btn.isEnabled()
+        manifest_path, manifest = self._current_diagnostics_manifest()
+        ready, _message = translation_probe_ready(manifest_path, manifest)
+        self.probe_btn.setEnabled(not running and ready)
+
     def _refresh_manifest_derived_ui(
         self,
         *,
@@ -2450,6 +2497,7 @@ class MainWindow(QMainWindow):
                 python_exe=sys.executable,
             )
             self._set_diagnostics_context(context)
+            self._update_probe_btn_enabled()
             return
 
         uses_batch_manifest = spec.manifest_mode is not None
@@ -2479,6 +2527,7 @@ class MainWindow(QMainWindow):
             python_exe=sys.executable,
         )
         self._set_diagnostics_context(context)
+        self._update_probe_btn_enabled()
 
     def _set_diagnostics_context(self, context: DiagnosticsContext) -> None:
         fingerprint = (
@@ -4066,6 +4115,96 @@ class MainWindow(QMainWindow):
     def _on_kill(self):
         self.runner.kill()
 
+    def _prompt_probe_options(self) -> dict[str, int | None] | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("试跑样本请求")
+        layout = QVBoxLayout(dialog)
+
+        hint = QLabel(
+            "将对当前翻译包执行少量同步请求，不会提交批量任务，也不会修改项目文件。"
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        limit_spin = QSpinBox()
+        limit_spin.setRange(1, 50)
+        limit_spin.setValue(3)
+        form.addRow("样本条数 (--limit)", limit_spin)
+
+        offset_spin = QSpinBox()
+        offset_spin.setRange(0, 1_000_000)
+        offset_spin.setValue(0)
+        form.addRow("起始偏移 (--offset)", offset_spin)
+
+        api_key_spin = QSpinBox()
+        api_key_spin.setRange(-1, 99)
+        api_key_spin.setValue(-1)
+        api_key_spin.setSpecialValueText("默认")
+        form.addRow("API Key 索引 (--api-key-index)", api_key_spin)
+        layout.addLayout(form)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(dialog.reject)
+        buttons.addWidget(cancel_btn)
+        run_btn = QPushButton("开始试跑")
+        run_btn.setObjectName("primary_btn")
+        run_btn.clicked.connect(dialog.accept)
+        buttons.addWidget(run_btn)
+        layout.addLayout(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        api_key_index = None if api_key_spin.value() < 0 else api_key_spin.value()
+        return {
+            "limit": limit_spin.value(),
+            "offset": offset_spin.value(),
+            "api_key_index": api_key_index,
+        }
+
+    def _on_run_probe(self) -> None:
+        manifest_path, manifest = self._current_diagnostics_manifest()
+        ready, message = translation_probe_ready(manifest_path, manifest)
+        if not ready:
+            QMessageBox.information(self, "无法试跑样本请求", message)
+            return
+
+        options = self._prompt_probe_options()
+        if options is None:
+            return
+
+        self._clear_log_view()
+        self._focus_log_tab()
+        self._active_command = "probe"
+        self._probe_output_lines = []
+        base_context = build_diagnostics_context(
+            latest_manifest_path=manifest_path,
+            manifest=manifest,
+            batch_script_path=str(self.state.get_batch_script_path()),
+            logs_dir=str(self.state.get_logs_dir()),
+            python_exe=sys.executable,
+        )
+        self._set_diagnostics_context(
+            probe_summary_to_diagnostics_context(
+                running_probe_summary(manifest_path=manifest_path),
+                base_context,
+            )
+        )
+        args = build_probe_cli_args(
+            manifest_path,
+            limit=int(options["limit"]),
+            offset=int(options["offset"]),
+            api_key_index=options["api_key_index"],
+        )
+        self._append_log(
+            f"=== 正在试跑样本请求：gemini_translate_batch.py {' '.join(args)} ===\n"
+        )
+        self._set_task_running(True)
+        self.runner.run(self.state.get_batch_script_path(), args)
+
     def _on_recheck_writeback(self) -> None:
         spec = work_mode_spec(self._current_work_mode())
         if not spec.supports_translation_writeback:
@@ -4278,6 +4417,8 @@ class MainWindow(QMainWindow):
             self._apply_output_lines.append(text)
         elif self._active_command == "recheck":
             self._recheck_output_lines.append(text)
+        elif self._active_command == "probe":
+            self._probe_output_lines.append(text)
         elif self._active_command == "apply_revision":
             self._apply_revision_output_lines.append(text)
         elif self._active_command == "build_retry":
@@ -4405,6 +4546,7 @@ class MainWindow(QMainWindow):
                 and writeback_summary.can_apply
             )
         self._update_writeback_action_buttons(writeback_summary, running=running)
+        self._update_probe_btn_enabled(running=running)
         self.kill_btn.setEnabled(running)
         self._sync_task_shortcuts()
 
@@ -4565,6 +4707,8 @@ class MainWindow(QMainWindow):
             self._apply_output_lines.append(message)
         elif self._active_command == "recheck":
             self._recheck_output_lines.append(message)
+        elif self._active_command == "probe":
+            self._probe_output_lines.append(message)
         elif self._active_command == "build_retry":
             self._build_retry_output_lines.append(message)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
@@ -4624,6 +4768,35 @@ class MainWindow(QMainWindow):
                     self.statusBar().showMessage("重新检查完成，当前禁止写回。", 6000)
                 else:
                     self.statusBar().showMessage("重新检查完成。", 6000)
+            return
+
+        if self._active_command == "probe":
+            manifest_path, manifest = self._current_diagnostics_manifest()
+            probe_summary = summarize_probe_output(
+                "\n".join(self._probe_output_lines),
+                exit_code,
+                manifest_path=manifest_path,
+            )
+            base_context = build_diagnostics_context(
+                latest_manifest_path=manifest_path or None,
+                manifest=manifest,
+                batch_script_path=str(self.state.get_batch_script_path()),
+                logs_dir=str(self.state.get_logs_dir()),
+                python_exe=sys.executable,
+            )
+            self._set_diagnostics_context(
+                probe_summary_to_diagnostics_context(probe_summary, base_context)
+            )
+            self._active_command = ""
+            self._set_task_running(False)
+            if probe_summary.status == "ok":
+                self.statusBar().showMessage("样本试跑通过。", 6000)
+            elif probe_summary.status == "warn":
+                self.statusBar().showMessage("样本试跑完成，但需关注部分结果。", 6000)
+            elif probe_summary.status == "failed":
+                self.statusBar().showMessage("样本试跑失败，请查看诊断日志。", 8000)
+            else:
+                self.statusBar().showMessage("样本试跑已结束。", 6000)
             return
 
         if self._active_command == "apply_revision":
