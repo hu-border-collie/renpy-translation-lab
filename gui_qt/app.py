@@ -219,6 +219,7 @@ from .work_modes import (
     work_mode_spec,
     work_modes_for_category,
 )
+from .batch_workflow_support import resolve_submit_max_cost
 from .workflow_factory import create_workflow, resume_workflow
 from .workflow_progress import (
     WorkflowProgressState,
@@ -2589,6 +2590,7 @@ class MainWindow(QMainWindow):
             batch_script_path=str(self.state.get_batch_script_path()),
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
+            submit_max_cost=self._submit_max_cost_from_config(),
         )
         self._set_diagnostics_context(context)
         self._update_probe_btn_enabled()
@@ -3912,6 +3914,9 @@ class MainWindow(QMainWindow):
     def _saved_batch_context_flags(self) -> dict[str, bool]:
         return read_batch_context_flags(self.state.load_translator_config())
 
+    def _submit_max_cost_from_config(self) -> float | None:
+        return resolve_submit_max_cost(self.state.load_translator_config())
+
     def _bootstrap_task_ready(self, spec) -> bool:
         if not spec.is_bootstrap:
             return True
@@ -4017,7 +4022,10 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-        workflow = create_workflow(spec.mode)
+        workflow = create_workflow(
+            spec.mode,
+            submit_max_cost=self._submit_max_cost_from_config(),
+        )
         if workflow is None:
             QMessageBox.information(self, "无法开始任务", spec.not_implemented_message)
             return
@@ -4103,7 +4111,12 @@ class MainWindow(QMainWindow):
                 self._run_workflow_current_step()
                 return
 
-        workflow = resume_workflow(spec.mode, str(latest_manifest), manifest)
+        workflow = resume_workflow(
+            spec.mode,
+            str(latest_manifest),
+            manifest,
+            submit_max_cost=self._submit_max_cost_from_config(),
+        )
         if workflow is None:
             QMessageBox.information(self, "无法继续任务", spec.not_implemented_message)
             return
@@ -4161,6 +4174,7 @@ class MainWindow(QMainWindow):
         workflow = SplitBatchQueueWorkflow.submit_remaining(
             entries,
             anchor_manifest_path=latest_manifest,
+            submit_max_cost=self._submit_max_cost_from_config(),
         )
         if workflow.current_step() is None:
             QMessageBox.information(self, "没有待提交拆分包", "当前拆分组没有尚未提交的包。")
@@ -4300,6 +4314,7 @@ class MainWindow(QMainWindow):
             batch_script_path=str(self.state.get_batch_script_path()),
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
+            submit_max_cost=self._submit_max_cost_from_config(),
         )
         self._set_diagnostics_context(
             probe_summary_to_diagnostics_context(
@@ -4340,6 +4355,7 @@ class MainWindow(QMainWindow):
             batch_script_path=str(self.state.get_batch_script_path()),
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
+            submit_max_cost=self._submit_max_cost_from_config(),
         )
         self._set_diagnostics_context(
             split_summary_to_diagnostics_context(
@@ -4557,6 +4573,7 @@ class MainWindow(QMainWindow):
             batch_script_path=str(self.state.get_batch_script_path()),
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
+            submit_max_cost=self._submit_max_cost_from_config(),
         )
         self._set_diagnostics_context(
             repair_summary_to_diagnostics_context(
@@ -5169,6 +5186,7 @@ class MainWindow(QMainWindow):
                 batch_script_path=str(self.state.get_batch_script_path()),
                 logs_dir=str(self.state.get_logs_dir()),
                 python_exe=sys.executable,
+                submit_max_cost=self._submit_max_cost_from_config(),
             )
             self._set_diagnostics_context(
                 probe_summary_to_diagnostics_context(probe_summary, base_context)
@@ -5205,6 +5223,7 @@ class MainWindow(QMainWindow):
                 batch_script_path=str(self.state.get_batch_script_path()),
                 logs_dir=str(self.state.get_logs_dir()),
                 python_exe=sys.executable,
+                submit_max_cost=self._submit_max_cost_from_config(),
             )
             self._set_diagnostics_context(
                 split_summary_to_diagnostics_context(split_summary, base_context)
@@ -5253,6 +5272,7 @@ class MainWindow(QMainWindow):
                 batch_script_path=str(self.state.get_batch_script_path()),
                 logs_dir=str(self.state.get_logs_dir()),
                 python_exe=sys.executable,
+                submit_max_cost=self._submit_max_cost_from_config(),
             )
             self._set_diagnostics_context(
                 repair_summary_to_diagnostics_context(parsed, base_context)

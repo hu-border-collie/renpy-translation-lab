@@ -283,6 +283,11 @@ def translate_doctor_warning(warning: str) -> str:
         return "风格设定路径仍指向其他项目，切换项目后应自动同步到当前 work 目录。"
     if text.startswith("macro_setting.md not found for current project"):
         return "当前项目缺少 macro_setting.md，批量翻译将缺少项目口吻与风格指引。"
+    if text.startswith("Translation conflict for "):
+        return (
+            "术语表与剧情记忆库对同一词条给出了不同译法，可能导致提示上下文互相冲突；"
+            "请人工确认后统一 glossary.json 与 story_graph.json。"
+        )
     return text
 
 

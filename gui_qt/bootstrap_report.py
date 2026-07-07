@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .duration_format import format_remaining_duration_zh
 from .summary_helpers import extend_facts_with_notices
@@ -154,105 +154,49 @@ def update_bootstrap_progress_from_line(
 
     match = _SOURCE_INDEX_PRE_RUN_TOTAL_RE.search(text)
     if match:
-        return BootstrapProgressState(
-            kind=state.kind,
-            phase=state.phase,
-            total_segments=int(match.group(1)),
-            stored_segments=state.stored_segments,
-            embedding_total=state.embedding_total,
-            embedding_done=state.embedding_done,
-            reused_embeddings=state.reused_embeddings,
-        )
+        return replace(state, total_segments=int(match.group(1)))
 
     match = _SOURCE_INDEX_PRE_RUN_PENDING_RE.search(text)
     if match:
-        return BootstrapProgressState(
-            kind=state.kind,
-            phase=state.phase,
-            total_segments=state.total_segments,
-            stored_segments=state.stored_segments,
-            embedding_total=int(match.group(1)),
-            embedding_done=state.embedding_done,
-            reused_embeddings=state.reused_embeddings,
-        )
+        return replace(state, embedding_total=int(match.group(1)))
 
     match = _SOURCE_INDEX_PRE_RUN_REUSED_RE.search(text)
     if match:
-        return BootstrapProgressState(
-            kind=state.kind,
-            phase="reusing",
-            total_segments=state.total_segments,
-            stored_segments=state.stored_segments,
-            embedding_total=state.embedding_total,
-            embedding_done=state.embedding_done,
-            reused_embeddings=int(match.group(1)),
-        )
+        return replace(state, phase="reusing", reused_embeddings=int(match.group(1)))
 
     match = _SOURCE_INDEX_REUSED_WRITTEN_RE.search(text)
     if match:
         stored = int(match.group(1))
-        return BootstrapProgressState(
-            kind=state.kind,
+        return replace(
+            state,
             phase="embedding",
-            total_segments=state.total_segments,
             stored_segments=stored,
-            embedding_total=state.embedding_total,
-            embedding_done=state.embedding_done,
             reused_embeddings=max(state.reused_embeddings, stored),
         )
 
     match = _SOURCE_INDEX_EMBEDDING_TOTAL_RE.search(text)
     if match:
-        return BootstrapProgressState(
-            kind=state.kind,
-            phase="embedding",
-            total_segments=state.total_segments,
-            stored_segments=state.stored_segments,
-            embedding_total=int(match.group(1)),
-            embedding_done=state.embedding_done,
-            reused_embeddings=state.reused_embeddings,
-        )
+        return replace(state, phase="embedding", embedding_total=int(match.group(1)))
 
     match = _SOURCE_INDEX_EMBEDDING_PROGRESS_RE.search(text)
     if match:
-        embedding_done = int(match.group(3))
-        embedding_total = int(match.group(2))
-        stored = int(match.group(4))
-        return BootstrapProgressState(
-            kind=state.kind,
+        return replace(
+            state,
             phase="embedding",
-            total_segments=state.total_segments,
-            stored_segments=stored,
-            embedding_total=embedding_total,
-            embedding_done=embedding_done,
-            reused_embeddings=state.reused_embeddings,
+            embedding_total=int(match.group(2)),
+            embedding_done=int(match.group(3)),
+            stored_segments=int(match.group(4)),
         )
 
     if text.startswith("Pruning ") and "stale segments" in text:
-        return BootstrapProgressState(
-            kind=state.kind,
-            phase="pruning",
-            total_segments=state.total_segments,
-            stored_segments=state.stored_segments,
-            embedding_total=state.embedding_total,
-            embedding_done=state.embedding_done,
-            reused_embeddings=state.reused_embeddings,
-        )
+        return replace(state, phase="pruning")
 
     if text.startswith("Sync complete."):
         total = state.total_segments
         stored = state.stored_segments
         if total > 0 and stored < total:
             stored = total
-        return BootstrapProgressState(
-            kind=state.kind,
-            phase="done",
-            total_segments=total,
-            stored_segments=stored,
-            embedding_total=state.embedding_total,
-            embedding_done=state.embedding_done,
-            reused_embeddings=state.reused_embeddings,
-        )
+        return replace(state, phase="done", stored_segments=stored)
 
     return state
 
@@ -296,9 +240,14 @@ class BootstrapProgressTracker:
         if stored <= self.last_stored_segments:
             return
 
+        # Rate sampling starts after the first progress point is anchored.
+        if self.last_sample_at is None:
+            self.last_stored_segments = stored
+            self.last_sample_at = now
+            return
+
         delta_stored = stored - self.last_stored_segments
-        last_sample_at = self.last_sample_at
-        delta_time = now - (last_sample_at if last_sample_at is not None else now)
+        delta_time = now - self.last_sample_at
         if delta_stored <= 0 or delta_time <= 0:
             return
 

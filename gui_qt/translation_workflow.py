@@ -8,6 +8,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .batch_workflow_support import (
+    build_submit_cli_args,
+    load_cost_estimate_facts_from_manifest,
+    output_blocked_by_max_cost,
+)
 from .user_copy import (
     format_job_state_fact,
     format_manifest_path_fact,
@@ -100,32 +105,58 @@ class TranslationWorkflow:
         pending_steps: list[str],
         manifest_path: str = "",
         *,
+        submit_max_cost: float | None = None,
         retry_parent_manifest_path: str = "",
     ):
         self._pending_steps = list(pending_steps)
         self.manifest_path = manifest_path
+        self.submit_max_cost = submit_max_cost
         self.retry_parent_manifest_path = retry_parent_manifest_path
 
     @classmethod
-    def start_new(cls) -> "TranslationWorkflow":
-        return cls(["build", "submit", "status"])
+    def start_new(cls, *, submit_max_cost: float | None = None) -> "TranslationWorkflow":
+        return cls(["build", "submit", "status"], submit_max_cost=submit_max_cost)
 
     @classmethod
-    def resume_latest(cls, manifest_path: str) -> "TranslationWorkflow":
-        return cls(["status"], manifest_path=manifest_path)
+    def resume_latest(
+        cls,
+        manifest_path: str,
+        *,
+        submit_max_cost: float | None = None,
+    ) -> "TranslationWorkflow":
+        return cls(["status"], manifest_path=manifest_path, submit_max_cost=submit_max_cost)
 
     @classmethod
-    def resume_manifest(cls, manifest_path: str, manifest: dict[str, object]) -> "TranslationWorkflow":
+    def resume_manifest(
+        cls,
+        manifest_path: str,
+        manifest: dict[str, object],
+        *,
+        submit_max_cost: float | None = None,
+    ) -> "TranslationWorkflow":
         retry_parent = _stripped(manifest.get("retry_of_manifest"))
         if retry_parent:
-            return cls.resume_retry_manifest(manifest_path, manifest, retry_parent)
+            return cls.resume_retry_manifest(
+                manifest_path,
+                manifest,
+                retry_parent,
+                submit_max_cost=submit_max_cost,
+            )
         if manifest.get("last_check") or manifest.get("last_check_summary"):
-            return cls([], manifest_path=manifest_path)
+            return cls([], manifest_path=manifest_path, submit_max_cost=submit_max_cost)
         if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
-            return cls(["download", "check"], manifest_path=manifest_path)
+            return cls(
+                ["download", "check"],
+                manifest_path=manifest_path,
+                submit_max_cost=submit_max_cost,
+            )
         if not manifest.get("job_name"):
-            return cls(["submit", "status"], manifest_path=manifest_path)
-        return cls.resume_latest(manifest_path)
+            return cls(
+                ["submit", "status"],
+                manifest_path=manifest_path,
+                submit_max_cost=submit_max_cost,
+            )
+        return cls.resume_latest(manifest_path, submit_max_cost=submit_max_cost)
 
     @classmethod
     def resume_retry_manifest(
@@ -133,6 +164,8 @@ class TranslationWorkflow:
         manifest_path: str,
         manifest: dict[str, object],
         retry_parent_manifest_path: str,
+        *,
+        submit_max_cost: float | None = None,
     ) -> "TranslationWorkflow":
         check_summary = manifest.get("last_check_summary")
         safety = ""
@@ -142,27 +175,36 @@ class TranslationWorkflow:
             return cls(
                 ["merge-retry", "check-parent"],
                 manifest_path=manifest_path,
+                submit_max_cost=submit_max_cost,
                 retry_parent_manifest_path=retry_parent_manifest_path,
             )
         if check_summary:
             return cls(
                 [],
                 manifest_path=manifest_path,
+                submit_max_cost=submit_max_cost,
                 retry_parent_manifest_path=retry_parent_manifest_path,
             )
         if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
             return cls(
                 ["download", "check"],
                 manifest_path=manifest_path,
+                submit_max_cost=submit_max_cost,
                 retry_parent_manifest_path=retry_parent_manifest_path,
             )
         if not manifest.get("job_name"):
             return cls(
                 ["submit", "status"],
                 manifest_path=manifest_path,
+                submit_max_cost=submit_max_cost,
                 retry_parent_manifest_path=retry_parent_manifest_path,
             )
-        return cls(["status"], manifest_path=manifest_path, retry_parent_manifest_path=retry_parent_manifest_path)
+        return cls(
+            ["status"],
+            manifest_path=manifest_path,
+            submit_max_cost=submit_max_cost,
+            retry_parent_manifest_path=retry_parent_manifest_path,
+        )
 
     def current_step(self) -> WorkflowStep | None:
         if not self._pending_steps:
@@ -225,7 +267,13 @@ class TranslationWorkflow:
     def _finish_failed_step(self, key: str, output: str) -> WorkflowUpdate:
         message = f"{STEP_TEXT[key][0]}没有正常完成，请查看下方原始输出。"
         extra_facts: list[str] = []
-        if key == "submit" and output_has_quota_error(output):
+        if key == "submit" and output_blocked_by_max_cost(output):
+            message = (
+                "提交被成本上限拦截。请在高级设置中提高「提交成本上限」，"
+                "或先拆分任务包以降低单次提交成本。"
+            )
+            extra_facts.append("建议：检查高级设置中的提交成本上限，或先运行 split 拆包。")
+        elif key == "submit" and output_has_quota_error(output):
             message = (
                 "提交云端任务时命中配额或资源限制。当前批量包可能过大，"
                 "建议先运行拆包，把当前任务拆成小包后再继续提交。"
@@ -262,7 +310,9 @@ class TranslationWorkflow:
             )
 
         self.manifest_path = manifest_path_for_package(package_path)
-        return self._continue_or_finish()
+        return self._continue_or_finish(
+            extra_facts=load_cost_estimate_facts_from_manifest(self.manifest_path),
+        )
 
     def _finish_status(self, output: str) -> WorkflowUpdate | None:
         state = extract_job_state(output)
@@ -343,6 +393,8 @@ class TranslationWorkflow:
             return ["check", self.retry_parent_manifest_path]
         if key == "build" or not self.manifest_path:
             return [key]
+        if key == "submit":
+            return build_submit_cli_args(self.manifest_path, self.submit_max_cost)
         return [key, self.manifest_path]
 
     def _facts(self, extra_facts: list[str] | None = None) -> list[str]:

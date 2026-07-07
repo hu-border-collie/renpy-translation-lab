@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
+from .batch_workflow_support import build_submit_cli_args, format_cost_estimate_facts
 from .user_copy import (
     format_job_fact,
     format_job_state_fact,
@@ -190,6 +191,7 @@ def build_cli_commands(
     batch_script_path: str,
     manifest_path: str,
     manifest: dict[str, object],
+    submit_max_cost: float | None = None,
 ) -> list[DiagnosticsCommand]:
     if not manifest_path:
         return []
@@ -210,6 +212,7 @@ def build_cli_commands(
                 batch_script_path=batch_script_path,
                 manifest_path=manifest_path,
                 manifest=manifest,
+                submit_max_cost=submit_max_cost,
                 submit_label="提交订正任务",
                 status_label="查询订正状态",
                 download_label="下载订正结果",
@@ -245,6 +248,7 @@ def build_cli_commands(
                 batch_script_path=batch_script_path,
                 manifest_path=manifest_path,
                 manifest=manifest,
+                submit_max_cost=submit_max_cost,
                 submit_label="提交关键词任务",
                 status_label="查询关键词状态",
                 download_label="下载关键词结果",
@@ -271,6 +275,7 @@ def build_cli_commands(
                 batch_script_path=batch_script_path,
                 manifest_path=manifest_path,
                 manifest=manifest,
+                submit_max_cost=submit_max_cost,
                 submit_label="提交补译任务",
                 status_label="查询补译状态",
                 download_label="下载补译结果",
@@ -304,6 +309,17 @@ def build_cli_commands(
             batch_script_path=batch_script_path,
             manifest_path=manifest_path,
             manifest=manifest,
+            submit_max_cost=submit_max_cost,
+        )
+    )
+    commands.append(
+        DiagnosticsCommand(
+            label="估算提交成本",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["estimate-cost", manifest_path],
+            ),
         )
     )
     commands.append(
@@ -337,6 +353,7 @@ def build_cli_commands(
                 batch_script_path=batch_script_path,
                 manifest_path=manifest_path,
                 manifest=manifest,
+                submit_max_cost=submit_max_cost,
             )
         )
 
@@ -345,6 +362,7 @@ def build_cli_commands(
             python_exe=python_exe,
             batch_script_path=batch_script_path,
             manifest=manifest,
+            submit_max_cost=submit_max_cost,
         )
     )
 
@@ -356,6 +374,7 @@ def build_split_child_submit_commands(
     python_exe: str,
     batch_script_path: str,
     manifest: dict[str, object],
+    submit_max_cost: float | None = None,
 ) -> list[DiagnosticsCommand]:
     children = manifest.get("split_children")
     if not isinstance(children, list):
@@ -371,7 +390,7 @@ def build_split_child_submit_commands(
                 command=format_cli_command(
                     python_exe,
                     batch_script_path,
-                    ["submit", child_path.strip()],
+                    build_submit_cli_args(child_path.strip(), submit_max_cost),
                 ),
             )
         )
@@ -384,6 +403,7 @@ def build_cloud_job_commands(
     batch_script_path: str,
     manifest_path: str,
     manifest: dict[str, object],
+    submit_max_cost: float | None = None,
     submit_label: str = "提交批量任务",
     status_label: str = "查询任务状态",
     download_label: str = "下载翻译结果",
@@ -396,7 +416,7 @@ def build_cloud_job_commands(
                 command=format_cli_command(
                     python_exe,
                     batch_script_path,
-                    ["submit", manifest_path],
+                    build_submit_cli_args(manifest_path, submit_max_cost),
                 ),
             )
         )
@@ -445,6 +465,7 @@ def build_warn_remediation_commands(
     batch_script_path: str,
     manifest_path: str,
     manifest: dict[str, object],
+    submit_max_cost: float | None = None,
 ) -> list[DiagnosticsCommand]:
     existing_retry_path = existing_retry_manifest_path(manifest)
     retry_manifest_path = existing_retry_path or "RETRY_MANIFEST_PATH"
@@ -469,7 +490,7 @@ def build_warn_remediation_commands(
             command=format_cli_command(
                 python_exe,
                 batch_script_path,
-                ["submit", retry_manifest_path],
+                build_submit_cli_args(retry_manifest_path, submit_max_cost),
             ),
         ),
         DiagnosticsCommand(
@@ -542,6 +563,10 @@ def build_manifest_facts(manifest: dict[str, object], manifest_path: str) -> lis
     if isinstance(display_name, str) and display_name.strip():
         facts.append(f"显示名称：{display_name.strip()}")
 
+    cost_estimate = manifest.get("cost_estimate")
+    if isinstance(cost_estimate, dict):
+        facts.extend(format_cost_estimate_facts(cost_estimate))
+
     mode = manifest.get("mode")
     if isinstance(mode, str) and mode.strip():
         facts.append(f"任务类型：{manifest_mode_label(mode.strip())}")
@@ -586,6 +611,7 @@ def build_diagnostics_context(
     logs_dir: str,
     python_exe: str = "python",
     path_exists: Callable[[str], bool] | None = None,
+    submit_max_cost: float | None = None,
 ) -> DiagnosticsContext:
     exists = path_exists or _default_path_exists
 
@@ -626,6 +652,7 @@ def build_diagnostics_context(
         batch_script_path=batch_script_path,
         manifest_path=manifest_path,
         manifest=manifest,
+        submit_max_cost=submit_max_cost,
     )
     preview = format_manifest_json_preview(manifest)
 
