@@ -2527,8 +2527,14 @@ class MainWindow(QMainWindow):
         if running is None:
             running = self.kill_btn.isEnabled()
         manifest_path, manifest = self._current_diagnostics_manifest()
-        ready, _message = translation_ab_experiment_ready(manifest_path, manifest)
+        ready, message = translation_ab_experiment_ready(manifest_path, manifest)
         self.compare_variants_btn.setEnabled(not running and ready)
+        if ready:
+            self.compare_variants_btn.setToolTip(
+                "用同一批 manifest chunk 并排比较多个配置变体的同步译文，不会写回游戏文件。",
+            )
+        elif message:
+            self.compare_variants_btn.setToolTip(message)
 
     def _update_split_btn_enabled(self, *, running: bool | None = None) -> None:
         if not hasattr(self, "split_btn"):

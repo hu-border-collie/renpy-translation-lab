@@ -5,6 +5,7 @@ import unittest
 from gui_qt.ab_experiment_report import (
     ab_experiment_summary_to_diagnostics_context,
     build_compare_variants_cli_args,
+    manifest_chunk_count,
     parse_compare_variants_output,
     summarize_compare_variants_output,
     translation_ab_experiment_ready,
@@ -79,6 +80,24 @@ class GuiAbExperimentReportTests(unittest.TestCase):
         )
         self.assertFalse(ready)
         self.assertIn("翻译块", message)
+
+    def test_manifest_chunk_count_uses_summary_when_chunks_omitted(self):
+        manifest = {
+            "mode": "translation",
+            "summary": {"chunk_count": 42},
+        }
+        self.assertEqual(manifest_chunk_count(manifest), 42)
+
+    def test_translation_ab_experiment_ready_accepts_lite_manifest_with_summary(self):
+        ready, message = translation_ab_experiment_ready(
+            r"C:\pkg\manifest.json",
+            {
+                "mode": "translation",
+                "summary": {"chunk_count": 120},
+            },
+        )
+        self.assertTrue(ready)
+        self.assertEqual(message, "")
 
     def test_translation_ab_experiment_ready_accepts_translation_manifest(self):
         ready, message = translation_ab_experiment_ready(

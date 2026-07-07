@@ -32,6 +32,18 @@ class AbExperimentSummary:
     dry_run: bool | None = None
 
 
+def manifest_chunk_count(manifest: dict[str, object]) -> int:
+    chunks = manifest.get("chunks")
+    if isinstance(chunks, list) and chunks:
+        return len(chunks)
+    summary = manifest.get("summary")
+    if isinstance(summary, dict):
+        chunk_count = summary.get("chunk_count")
+        if isinstance(chunk_count, int) and chunk_count > 0:
+            return chunk_count
+    return 0
+
+
 def translation_ab_experiment_ready(
     manifest_path: str,
     manifest: dict[str, object] | None,
@@ -44,8 +56,7 @@ def translation_ab_experiment_ready(
     mode_text = mode.strip() if isinstance(mode, str) else _MANIFEST_MODE_TRANSLATION
     if mode_text != _MANIFEST_MODE_TRANSLATION:
         return False, "翻译 A/B 对比仅支持批量翻译任务记录。"
-    chunks = manifest.get("chunks")
-    if not isinstance(chunks, list) or not chunks:
+    if manifest_chunk_count(manifest) <= 0:
         return False, "任务记录中没有可采样的翻译块。"
     return True, ""
 
