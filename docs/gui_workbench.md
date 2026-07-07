@@ -74,7 +74,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 工作台页负责普通用户主流程：
 
-- 顶部：**当前工作目录**选择与路径显示（也可先选项目根目录，存在 `work/` 时会自动切换）；旁侧 **「工作区项目…」** 打开工作区总表对话框，可浏览全部 registry 项目并一键切换 `game_root`（详见 [工作区项目总表](games_registry.md)）。
+- 顶部：**当前工作目录**选择与路径显示（也可先选项目根目录，存在 `work/` 时会自动切换）。浏览工作区内全部 registry 项目、切换 `game_root` 请前往 **设置 → 工作区**（详见 [工作区项目总表](games_registry.md)）。
 - **任务类型 + 子任务**（两列下拉，联动）：
   - **翻译**：批量翻译、同步翻译
   - **分析与准备**：批量关键词、同步关键词、预建记忆库、预建原文索引
@@ -93,8 +93,9 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 设置页采用左侧分区导航，右侧显示当前分区内容；底部固定提供 **重新加载**、**恢复推荐值**、**保存设置**。
 
-- **账户**：读取 / 保存 `api_keys.json`；环境变量 Key 只读提示。
-- **项目**：`game_root`、术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。通常仍建议先在工作台选择项目，再在这里微调路径。
+- **工作区**：浏览 `games_registry.json` 中的全部项目，扫描/刷新总表、同步 `GAMES.md`、编辑项目详情，并**切换当前 `game_root`**（唯一入口）。切换成功后会自动打开「项目」分区。此分区的操作即时写入 registry，不使用底部「保存设置」。
+- **密钥**：读取 / 保存 `api_keys.json`；环境变量 Key 只读提示。
+- **项目**：术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。当前 `game_root` 只读展示；需换项目请回到「工作区」或使用工作台「选择游戏目录…」。
 - **模型**：同步 / 批量翻译模型、embedding model、批量 thinking level。
 - **上下文**：批量 RAG 记忆库、原文索引、build 时自动补建、上下文库保存位置等开关。启用后需先保存设置，再到工作台「分析与准备」运行预建子任务。
 - **外观**：浅色 / 深色 / 跟随系统。切换主题会立即预览，保存设置后才写入 `translator_config.json`。

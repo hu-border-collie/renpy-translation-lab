@@ -122,7 +122,7 @@ from .doctor_report import (
 )
 from .doctor_worker import DoctorWorker, DoctorWorkerResult
 from .games_registry_actions import handle_post_apply_registry_update
-from .games_registry_dialog import GamesRegistryDialog
+from .games_registry_panel import GamesRegistryPanel
 from .games_registry_doctor_compare import compare_registry_with_doctor_report
 from .games_registry_view import resolve_workspace_root
 from .manifest_resume_summary import (
@@ -163,6 +163,9 @@ from .settings_schema import (
     recommended_advanced_settings,
     validate_advanced_settings,
 )
+
+# Selected on 设置 → 工作区; shown read-only on 设置 → 项目.
+_SETTINGS_WORKSPACE_MANAGED_KEYS = frozenset({"game_root"})
 from .translation_workflow import WorkflowUpdate
 from .user_copy import (
     format_job_fact,
@@ -281,6 +284,8 @@ class MainWindow(QMainWindow):
         self._settings_nav_rows: dict[str, int] = {}
         self._last_main_tab_index = 0
         self._handling_config_tab_leave = False
+        self._task_running = False
+        self._games_registry_panel: GamesRegistryPanel | None = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -508,10 +513,6 @@ class MainWindow(QMainWindow):
         self.select_btn = QPushButton("选择游戏目录...")
         self.select_btn.clicked.connect(self._on_select_project)
         proj_layout.addWidget(self.select_btn)
-        self.registry_btn = QPushButton("工作区项目...")
-        self.registry_btn.setObjectName("secondary_btn")
-        self.registry_btn.clicked.connect(self._open_games_registry_dialog)
-        proj_layout.addWidget(self.registry_btn)
         proj_outer.addLayout(proj_layout)
 
         self.project_redirect_label = QLabel()
@@ -837,8 +838,9 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.settings_stack, 1)
 
         pages = [
-            ("account", "账户", self._build_settings_account_page()),
+            ("workspace", "工作区", self._build_settings_workspace_page()),
             ("project", "项目", self._build_settings_project_page()),
+            ("api_keys", "密钥", self._build_settings_api_keys_page()),
             ("models", "模型", self._build_settings_models_page()),
             ("context", "上下文", self._build_settings_context_page()),
             ("appearance", "外观", self._build_settings_appearance_page()),
@@ -848,8 +850,7 @@ class MainWindow(QMainWindow):
             self._settings_nav_rows[key] = index
             self.settings_nav.addItem(label)
             self.settings_stack.addWidget(page)
-        self.settings_nav.currentRowChanged.connect(self.settings_stack.setCurrentIndex)
-        self.settings_nav.setCurrentRow(0)
+        self.settings_nav.currentRowChanged.connect(self._on_settings_nav_row_changed)
 
         action_bar = QFrame()
         action_bar.setObjectName("settings_action_bar")
@@ -870,6 +871,8 @@ class MainWindow(QMainWindow):
         self.save_config_btn.clicked.connect(self._on_save_config)
         action_layout.addWidget(self.save_config_btn)
         right_layout.addWidget(action_bar)
+
+        self.settings_nav.setCurrentRow(0)
 
         self.tab_widget.addTab(tab, "设置")
 
@@ -899,8 +902,29 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(12, 16, 12, 12)
         return group, layout
 
-    def _build_settings_account_page(self) -> QWidget:
-        page, layout = self._settings_page("settings_account")
+    def _build_settings_workspace_page(self) -> QWidget:
+        page, layout = self._settings_page("settings_workspace")
+        hint = QLabel(
+            "浏览和切换 Ren'Py 工作区内的游戏项目。"
+            "当前 work 目录只能在这里切换；切换后会自动打开「项目」分区以调整术语表、准备流程等参数。"
+        )
+        hint.setWordWrap(True)
+        hint.setObjectName("config_hint_label")
+        layout.addWidget(hint)
+
+        self._games_registry_panel = GamesRegistryPanel(
+            None,
+            workspace_root=resolve_workspace_root(self.state.get_tool_root()),
+            current_game_root=self.state.get_game_root(),
+            get_doctor_report=self._current_registry_doctor_report,
+            on_switch_project=self._on_registry_switch_project,
+            auto_discover_on_show=False,
+        )
+        layout.addWidget(self._games_registry_panel, 1)
+        return page
+
+    def _build_settings_api_keys_page(self) -> QWidget:
+        page, layout = self._settings_page("settings_api_keys")
         api_box, api_layout = self._settings_group("API Key")
 
         api_hint = QLabel(
@@ -931,12 +955,29 @@ class MainWindow(QMainWindow):
     def _build_settings_project_page(self) -> QWidget:
         page, layout = self._settings_page("settings_project")
         hint = QLabel(
-            "项目路径、术语表、翻译目录和准备流程都写入 translator_config.json。"
-            "通常建议通过工作台选择项目，再在这里微调其余路径。"
+            "配置当前选中项目的 translator_config.json 参数。"
+            "切换 work 目录请前往「工作区」；此处只调整术语表、翻译目录、过滤器和准备流程。"
         )
         hint.setWordWrap(True)
         hint.setObjectName("config_hint_label")
         layout.addWidget(hint)
+
+        current_box = QGroupBox("当前项目")
+        current_form = QFormLayout(current_box)
+        current_form.setSpacing(8)
+        current_form.setContentsMargins(12, 16, 12, 12)
+        self.settings_project_root_value = QLabel("（尚未选择项目）")
+        self.settings_project_root_value.setWordWrap(True)
+        self.settings_project_root_value.setObjectName("settings_project_root_value")
+        current_form.addRow("游戏 work 目录：", self.settings_project_root_value)
+        switch_row = QHBoxLayout()
+        switch_row.addStretch(1)
+        self.settings_go_workspace_btn = QPushButton("在工作区切换…")
+        self.settings_go_workspace_btn.setObjectName("secondary_btn")
+        self.settings_go_workspace_btn.clicked.connect(self._on_go_to_workspace_for_project_switch)
+        switch_row.addWidget(self.settings_go_workspace_btn)
+        current_form.addRow("", switch_row)
+        layout.addWidget(current_box)
 
         for group_title in ("项目与资源", "准备流程"):
             group = QGroupBox(group_title)
@@ -944,7 +985,11 @@ class MainWindow(QMainWindow):
             form.setSpacing(8)
             form.setContentsMargins(12, 16, 12, 12)
             form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-            for field in [item for item in ADVANCED_SETTING_FIELDS if item.category == group_title]:
+            for field in [
+                item
+                for item in ADVANCED_SETTING_FIELDS
+                if item.category == group_title and item.key not in _SETTINGS_WORKSPACE_MANAGED_KEYS
+            ]:
                 widget = self._create_advanced_setting_widget(field)
                 self._advanced_setting_widgets[field.key] = widget
                 row = self._advanced_setting_row(field, widget)
@@ -3072,29 +3117,69 @@ class MainWindow(QMainWindow):
         if result.message:
             self._append_log(result.message)
 
-    def _open_games_registry_dialog(self) -> None:
-        workspace = resolve_workspace_root(self.state.get_tool_root())
+    def _current_registry_doctor_report(self) -> dict | None:
         current_game_root = self.state.get_game_root()
-        doctor_report = None
         if (
             self._last_doctor_report is not None
             and current_game_root
             and self._last_doctor_report_game_root == current_game_root
         ):
-            doctor_report = self._last_doctor_report
-        dialog = GamesRegistryDialog(
-            self,
-            workspace_root=workspace,
-            current_game_root=current_game_root,
-            current_doctor_report=doctor_report,
-        )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return self._last_doctor_report
+        return None
+
+    def _on_registry_switch_project(self, target: str) -> bool:
+        if not self._switch_game_root(target):
+            return False
+        panel = getattr(self, "_games_registry_panel", None)
+        if panel is not None:
+            panel.set_current_game_root(self.state.get_game_root())
+        self._show_settings_status("已切换工作区项目", 5000)
+        self._focus_settings_section("project")
+        return True
+
+    def _focus_settings_section(self, key: str) -> None:
+        if hasattr(self, "_config_tab") and hasattr(self, "tab_widget"):
+            settings_index = self.tab_widget.indexOf(self._config_tab)
+            if settings_index >= 0:
+                self.tab_widget.setCurrentIndex(settings_index)
+        row = getattr(self, "_settings_nav_rows", {}).get(key)
+        nav = getattr(self, "settings_nav", None)
+        if nav is not None and row is not None:
+            nav.setCurrentRow(row)
+
+    def _on_go_to_workspace_for_project_switch(self) -> None:
+        self._focus_settings_section("workspace")
+
+    def _on_settings_nav_row_changed(self, row: int) -> None:
+        if row < 0:
             return
-        target = dialog.selected_project_root()
-        if not target:
-            return
-        if self._switch_game_root(target):
-            self.statusBar().showMessage("已从工作区项目总览切换项目", 5000)
+        self.settings_stack.setCurrentIndex(row)
+        self._sync_settings_action_bar_enabled(task_running=self._task_running, nav_row=row)
+        if self._settings_nav_rows.get("workspace") == row:
+            panel = getattr(self, "_games_registry_panel", None)
+            if panel is not None:
+                panel.set_current_game_root(self.state.get_game_root())
+                panel.activate_section()
+
+    def _sync_settings_action_bar_enabled(
+        self,
+        *,
+        task_running: bool,
+        nav_row: int | None = None,
+    ) -> None:
+        if nav_row is None:
+            nav = getattr(self, "settings_nav", None)
+            current_row = nav.currentRow() if nav is not None else -1
+        else:
+            current_row = nav_row
+        on_workspace = self._settings_nav_rows.get("workspace") == current_row
+        allow_config_save = not task_running and not on_workspace
+        if hasattr(self, "save_config_btn"):
+            self.save_config_btn.setEnabled(allow_config_save)
+        if hasattr(self, "restore_defaults_btn"):
+            self.restore_defaults_btn.setEnabled(allow_config_save)
+        if hasattr(self, "reload_config_btn"):
+            self.reload_config_btn.setEnabled(not task_running)
 
     def _refresh_api_status(self) -> None:
         count, source = self.state.get_api_key_status()
@@ -3131,6 +3216,8 @@ class MainWindow(QMainWindow):
             return {}
         values: dict[str, object] = {}
         for field in ADVANCED_SETTING_FIELDS:
+            if field.key in _SETTINGS_WORKSPACE_MANAGED_KEYS:
+                continue
             widget = widgets.get(field.key)
             if widget is None:
                 continue
@@ -3149,6 +3236,8 @@ class MainWindow(QMainWindow):
         if not widgets:
             return
         for field in ADVANCED_SETTING_FIELDS:
+            if field.key in _SETTINGS_WORKSPACE_MANAGED_KEYS:
+                continue
             widget = widgets.get(field.key)
             if widget is None:
                 continue
@@ -3191,16 +3280,19 @@ class MainWindow(QMainWindow):
         self._show_advanced_setting_errors({})
 
     def _focus_advanced_setting(self, key: str) -> None:
+        if key in _SETTINGS_WORKSPACE_MANAGED_KEYS:
+            self._focus_settings_section("workspace")
+            widget = getattr(self, "_advanced_setting_widgets", {}).get(key)
+            if widget is not None:
+                widget.setFocus()
+            return
         field = ADVANCED_SETTING_FIELD_BY_KEY.get(key)
         page_key = (
             "project"
             if field is not None and field.category in {"项目与资源", "准备流程"}
             else "advanced"
         )
-        row = getattr(self, "_settings_nav_rows", {}).get(page_key)
-        nav = getattr(self, "settings_nav", None)
-        if nav is not None and row is not None:
-            nav.setCurrentRow(row)
+        self._focus_settings_section(page_key)
         widget = getattr(self, "_advanced_setting_widgets", {}).get(key)
         if widget is not None:
             widget.setFocus()
@@ -3366,6 +3458,16 @@ class MainWindow(QMainWindow):
             return
         self._show_game_root_redirect_notice(original, effective)
 
+    def _refresh_settings_project_root_display(self) -> None:
+        label = getattr(self, "settings_project_root_value", None)
+        if label is None:
+            return
+        root = self.state.get_game_root()
+        if root:
+            label.setText(str(root))
+        else:
+            label.setText("（尚未选择项目，请前往「工作区」切换）")
+
     def _refresh_project_label(self):
         root = self.state.get_game_root()
         if root:
@@ -3373,6 +3475,7 @@ class MainWindow(QMainWindow):
         else:
             self.project_path_edit.setText("（尚未选择项目）")
             self._clear_game_root_redirect_notice()
+        self._refresh_settings_project_root_display()
 
     def _is_doctor_running(self) -> bool:
         return self._doctor_worker is not None and self._doctor_worker.isRunning()
@@ -4031,9 +4134,14 @@ class MainWindow(QMainWindow):
         scrollbar.setValue(scrollbar.maximum())
 
     def _set_task_running(self, running: bool):
+        self._task_running = running
         spec = work_mode_spec(self._current_work_mode())
         self.select_btn.setEnabled(not running)
-        self.registry_btn.setEnabled(not running)
+        panel = getattr(self, "_games_registry_panel", None)
+        if panel is not None:
+            panel.setEnabled(not running)
+        if hasattr(self, "settings_go_workspace_btn"):
+            self.settings_go_workspace_btn.setEnabled(not running)
         self.task_category_combo.setEnabled(not running)
         self.work_task_combo.setEnabled(not running)
         self.doctor_btn.setEnabled(not running)
@@ -4049,11 +4157,7 @@ class MainWindow(QMainWindow):
         )
         self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
         self._update_split_submit_btn(running=running)
-        self.save_config_btn.setEnabled(not running)
-        if hasattr(self, "reload_config_btn"):
-            self.reload_config_btn.setEnabled(not running)
-        if hasattr(self, "restore_defaults_btn"):
-            self.restore_defaults_btn.setEnabled(not running)
+        self._sync_settings_action_bar_enabled(task_running=running)
         writeback_summary = self._current_writeback_summary()
         self.apply_btn.setEnabled(
             not running
@@ -4835,14 +4939,9 @@ class MainWindow(QMainWindow):
             if advanced_values:
                 complete_advanced_values = read_advanced_settings(config)
                 complete_advanced_values.update(advanced_values)
-                if not self._config_string(complete_advanced_values.get("game_root")):
-                    get_game_root = getattr(self.state, "get_game_root", None)
-                    current_game_root = get_game_root() if callable(get_game_root) else None
-                    if current_game_root:
-                        complete_advanced_values["game_root"] = str(current_game_root)
-                        game_root_widget = getattr(self, "_advanced_setting_widgets", {}).get("game_root")
-                        if game_root_widget is not None and hasattr(game_root_widget, "setText"):
-                            game_root_widget.setText(str(current_game_root))
+                current_game_root = self.state.get_game_root()
+                if current_game_root is not None:
+                    complete_advanced_values["game_root"] = str(current_game_root)
                 errors = validate_advanced_settings(complete_advanced_values)
                 if errors:
                     self._show_advanced_setting_errors(errors)

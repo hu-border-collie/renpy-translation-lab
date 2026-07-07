@@ -14,6 +14,7 @@ try:
 
     from gui_qt.games_registry_actions import RegistryActionResult
     from gui_qt.games_registry_dialog import GamesRegistryDialog
+    from gui_qt.games_registry_panel import GamesRegistryPanel
     from gui_qt.games_registry_worker import RegistryRefreshWorker
 except ImportError as exc:
     GamesRegistryDialog = None  # type: ignore[assignment,misc]
@@ -27,6 +28,34 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._app = QApplication.instance() or QApplication([])
+
+    def test_panel_switch_invokes_callback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            payload = {
+                "projects": [
+                    {
+                        "id": "demo",
+                        "name": "Example",
+                        "path": "Game_Example",
+                    }
+                ]
+            }
+            project_root = workspace / "Game_Example"
+            (project_root / "work").mkdir(parents=True)
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            registry_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            switched = []
+            panel = GamesRegistryPanel(
+                None,
+                workspace_root=workspace,
+                on_switch_project=lambda target: switched.append(target) or True,
+            )
+            panel._table.selectRow(0)
+            panel._switch_to_selected()
+            self.assertEqual(len(switched), 1)
+            self.assertTrue(switched[0].endswith("Game_Example"))
 
     def test_dialog_loads_rows_and_accepts_switch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -83,7 +112,7 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
                 dialog._refresh_current_project()
                 start_mock.assert_called_once()
             with mock.patch(
-                "gui_qt.games_registry_dialog.prompt_render_games_md_after_refresh",
+                "gui_qt.games_registry_panel.prompt_render_games_md_after_refresh",
                 return_value=RegistryActionResult(True, "已跳过 GAMES.md 同步。"),
             ):
                 dialog._on_refresh_completed(
@@ -122,13 +151,13 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             registry_path.write_text(json.dumps(payload), encoding="utf-8")
 
             dialog = GamesRegistryDialog(None, workspace_root=workspace)
-            dialog._table.selectRow(0)
-            dialog._refresh_worker = mock.MagicMock()
-            dialog._refresh_worker.isRunning.return_value = True
+            dialog._panel._table.selectRow(0)
+            dialog._panel._refresh_worker = mock.MagicMock()
+            dialog._panel._refresh_worker.isRunning.return_value = True
 
             with mock.patch.object(dialog, "accept") as accept_mock:
-                dialog._switch_to_selected()
-                dialog._on_row_activated(0, 0)
+                dialog._panel._switch_to_selected()
+                dialog._panel._on_row_activated(0, 0)
                 accept_mock.assert_not_called()
 
     def test_stop_refresh_requests_worker_cancel(self):
@@ -140,8 +169,8 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             dialog = GamesRegistryDialog(None, workspace_root=workspace)
             worker = mock.MagicMock()
             worker.isRunning.return_value = True
-            dialog._refresh_worker = worker
-            dialog._on_stop_refresh()
+            dialog._panel._refresh_worker = worker
+            dialog._panel._on_stop_refresh()
             worker.request_stop.assert_called_once()
 
     def test_refresh_current_uses_deep_mode_when_selected(self):

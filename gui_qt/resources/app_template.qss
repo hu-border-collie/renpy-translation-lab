@@ -122,9 +122,9 @@ QWidget#config_scroll_content,
 QWidget#settings_right_panel,
 QStackedWidget#settings_stack,
 QFrame#settings_action_bar,
-QScrollArea#settings_account_scroll,
-QWidget#settings_account_viewport,
-QWidget#settings_account_content,
+QScrollArea#settings_api_keys_scroll,
+QWidget#settings_api_keys_viewport,
+QWidget#settings_api_keys_content,
 QScrollArea#settings_project_scroll,
 QWidget#settings_project_viewport,
 QWidget#settings_project_content,
@@ -139,7 +139,11 @@ QWidget#settings_appearance_viewport,
 QWidget#settings_appearance_content,
 QScrollArea#settings_advanced_scroll,
 QWidget#settings_advanced_viewport,
-QWidget#settings_advanced_content {
+QWidget#settings_advanced_content,
+QScrollArea#settings_workspace_scroll,
+QWidget#settings_workspace_viewport,
+QWidget#settings_workspace_content,
+QWidget#games_registry_panel {
     background-color: ${bg_surface};
     border: none;
 }
