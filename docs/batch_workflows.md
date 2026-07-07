@@ -20,7 +20,9 @@
 
 可在 `translator_config.json` 的 `batch.non_chinese_validation` 中覆盖或追加路径；GUI 高级设置提供「非中文白名单追加路径」。默认白名单与当前 After Class / Glory Hounds 项目兼容。
 
-若目标语言为日语、韩语等，`No Chinese characters` 失败可能属于预期行为，需要调整校验策略或白名单。换语言前请先跑 `doctor` 确认 TL 路径，并在 `check` 结果中逐项确认失败原因。校验读文件缓存优化见 #140 PR3。
+若目标语言为日语、韩语等，`No Chinese characters` 失败可能属于预期行为，需要调整校验策略或白名单。换语言前请先跑 `doctor` 确认 TL 路径，并在 `check` 结果中逐项确认失败原因。
+
+`allow_non_chinese_batch_translation` 在单次校验调用内会缓存 TL/source 文件读取，避免 short-circuit OR 链重复打开同一文件；pass/fail 结果与缓存前一致。
 
 ## 命令说明
 
