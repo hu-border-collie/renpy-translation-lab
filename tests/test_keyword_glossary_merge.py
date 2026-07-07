@@ -41,7 +41,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
 
     def test_merge_adds_new_normalize_map_and_preserve_entries(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
+            root = Path(tmpdir).resolve()
             candidates_path = root / 'keyword_candidates.jsonl'
             glossary_path = root / 'glossary.json'
             glossary_path.write_text(
@@ -67,7 +67,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
 
     def test_merge_skips_duplicate_without_overwrite(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
+            root = Path(tmpdir).resolve()
             candidates_path = root / 'keyword_candidates.jsonl'
             glossary_path = root / 'glossary.json'
             glossary_path.write_text(
@@ -93,7 +93,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
 
     def test_merge_overwrite_updates_conflicting_target(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
+            root = Path(tmpdir).resolve()
             candidates_path = root / 'keyword_candidates.jsonl'
             glossary_path = root / 'glossary.json'
             glossary_path.write_text(
@@ -120,7 +120,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
 
     def test_dry_run_does_not_write_glossary(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
+            root = Path(tmpdir).resolve()
             candidates_path = root / 'keyword_candidates.jsonl'
             glossary_path = root / 'glossary.json'
             original = {'preserve_terms': [], 'normalize_map': {}}
@@ -141,7 +141,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
 
     def test_min_confidence_filters_candidates(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
+            root = Path(tmpdir).resolve()
             candidates_path = root / 'keyword_candidates.jsonl'
             glossary_path = root / 'glossary.json'
             glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')
@@ -163,7 +163,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
 
     def test_resolve_candidates_path_from_manifest(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
+            root = Path(tmpdir).resolve()
             package = root / 'package'
             package.mkdir()
             jsonl_path = package / 'keyword_candidates.jsonl'
@@ -182,11 +182,11 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
             )
 
             resolved = merge_mod.resolve_keyword_candidates_path(str(manifest_path))
-            self.assertEqual(resolved, str(jsonl_path.resolve()))
+            self.assertEqual(Path(resolved).resolve(), jsonl_path.resolve())
 
     def test_interactive_skip_counts_user_rejection(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
+            root = Path(tmpdir).resolve()
             candidates_path = root / 'keyword_candidates.jsonl'
             glossary_path = root / 'glossary.json'
             glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')

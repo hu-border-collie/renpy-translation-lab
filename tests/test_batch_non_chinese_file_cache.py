@@ -25,7 +25,7 @@ class BatchNonChineseFileCacheTests(unittest.TestCase):
 
     def test_old_new_static_item_reuses_tl_line_read_within_call(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir))
+            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir).resolve())
             cache = batch_mod.NonChineseFileReadCache()
             open_paths = []
             real_open = open
@@ -49,7 +49,7 @@ class BatchNonChineseFileCacheTests(unittest.TestCase):
 
     def test_allow_non_chinese_reuses_single_tl_open_end_to_end(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir))
+            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir).resolve())
             open_paths = []
             real_open = open
 
@@ -71,7 +71,7 @@ class BatchNonChineseFileCacheTests(unittest.TestCase):
 
     def test_allow_non_chinese_matches_results_with_and_without_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir))
+            manifest, chunk, item = self._write_old_new_fixture(Path(tmpdir).resolve())
             kwargs = {
                 'manifest': manifest,
                 'chunk': chunk,
@@ -98,7 +98,7 @@ class BatchNonChineseFileCacheTests(unittest.TestCase):
 
     def test_player_name_comparison_uses_cached_reads_without_extra_tl_opens(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            base_dir = Path(tmpdir)
+            base_dir = Path(tmpdir).resolve()
             source_path = base_dir / 'game' / 'script.rpy'
             source_path.parent.mkdir(parents=True)
             source_path.write_text('if Main == _("Herbert"):\n    pass\n', encoding='utf-8')
@@ -139,7 +139,7 @@ class BatchNonChineseFileCacheTests(unittest.TestCase):
 
     def test_read_line_and_read_lines_share_same_path_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            tl_path = Path(tmpdir) / 'shared.rpy'
+            tl_path = Path(tmpdir).resolve() / 'shared.rpy'
             tl_path.write_text('line one\nline two\n', encoding='utf-8')
             cache = batch_mod.NonChineseFileReadCache()
             open_paths = []
