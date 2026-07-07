@@ -840,7 +840,7 @@ class MainWindow(QMainWindow):
         pages = [
             ("workspace", "工作区", self._build_settings_workspace_page()),
             ("project", "项目", self._build_settings_project_page()),
-            ("account", "账户", self._build_settings_account_page()),
+            ("api_keys", "密钥", self._build_settings_api_keys_page()),
             ("models", "模型", self._build_settings_models_page()),
             ("context", "上下文", self._build_settings_context_page()),
             ("appearance", "外观", self._build_settings_appearance_page()),
@@ -923,8 +923,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._games_registry_panel, 1)
         return page
 
-    def _build_settings_account_page(self) -> QWidget:
-        page, layout = self._settings_page("settings_account")
+    def _build_settings_api_keys_page(self) -> QWidget:
+        page, layout = self._settings_page("settings_api_keys")
         api_box, api_layout = self._settings_group("API Key")
 
         api_hint = QLabel(

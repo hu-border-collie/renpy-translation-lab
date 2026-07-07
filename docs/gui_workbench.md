@@ -94,7 +94,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 设置页采用左侧分区导航，右侧显示当前分区内容；底部固定提供 **重新加载**、**恢复推荐值**、**保存设置**。
 
 - **工作区**：浏览 `games_registry.json` 中的全部项目，扫描/刷新总表、同步 `GAMES.md`、编辑项目详情，并**切换当前 `game_root`**（唯一入口）。切换成功后会自动打开「项目」分区。此分区的操作即时写入 registry，不使用底部「保存设置」。
-- **账户**：读取 / 保存 `api_keys.json`；环境变量 Key 只读提示。
+- **密钥**：读取 / 保存 `api_keys.json`；环境变量 Key 只读提示。
 - **项目**：术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。当前 `game_root` 只读展示；需换项目请回到「工作区」或使用工作台「选择游戏目录…」。
 - **模型**：同步 / 批量翻译模型、embedding model、批量 thinking level。
 - **上下文**：批量 RAG 记忆库、原文索引、build 时自动补建、上下文库保存位置等开关。启用后需先保存设置，再到工作台「分析与准备」运行预建子任务。
