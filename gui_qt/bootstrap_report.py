@@ -240,12 +240,6 @@ class BootstrapProgressTracker:
         if stored <= self.last_stored_segments:
             return
 
-        # Rate sampling starts after the first progress point is anchored.
-        if self.last_sample_at is None:
-            self.last_stored_segments = stored
-            self.last_sample_at = now
-            return
-
         delta_stored = stored - self.last_stored_segments
         delta_time = now - self.last_sample_at
         if delta_stored <= 0 or delta_time <= 0:

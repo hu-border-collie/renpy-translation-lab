@@ -208,8 +208,8 @@ def attach_cost_estimate_to_manifest(manifest, pricing_config=None, translator_c
 def cost_estimate_exceeds_max(estimate, max_cost):
     try:
         limit = float(max_cost)
-    except (TypeError, ValueError):
-        raise ValueError(f'Invalid max-cost value: {max_cost!r}')
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'Invalid max-cost value: {max_cost!r}') from exc
     if limit < 0:
         raise ValueError('max-cost must be non-negative.')
     return float(estimate.get('estimated_cost_max') or 0.0) > limit

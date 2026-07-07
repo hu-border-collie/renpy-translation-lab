@@ -3794,10 +3794,21 @@ def ensure_manifest_cost_estimate(manifest):
     estimate = manifest.get('cost_estimate')
     if isinstance(estimate, dict) and estimate.get('estimated_cost_max') is not None:
         return estimate
-    return batch_cost_estimate.attach_cost_estimate_to_manifest(
-        manifest,
-        translator_config=load_json_file(legacy.TRANSLATOR_CONFIG),
-    )
+    try:
+        return batch_cost_estimate.attach_cost_estimate_to_manifest(
+            manifest,
+            translator_config=load_json_file(legacy.TRANSLATOR_CONFIG),
+        )
+    except FileNotFoundError as exc:
+        jsonl_path = manifest.get('input_jsonl_path') or ''
+        raise SystemExit(
+            f'Batch input JSONL not found: {jsonl_path or exc}'
+        ) from exc
+    except json.JSONDecodeError as exc:
+        jsonl_path = manifest.get('input_jsonl_path') or ''
+        raise SystemExit(
+            f'Batch input JSONL is not valid JSON: {jsonl_path} ({exc})'
+        ) from exc
 
 
 def submit_manifest(target=None, display_name_override='', model_override='', max_cost=None):

@@ -50,6 +50,17 @@ class BatchCostEstimateTests(unittest.TestCase):
         self.assertTrue(batch_cost_estimate.cost_estimate_exceeds_max(estimate, 10))
         self.assertFalse(batch_cost_estimate.cost_estimate_exceeds_max(estimate, 12.5))
 
+    def test_ensure_manifest_cost_estimate_exits_when_jsonl_missing(self):
+        manifest = {
+            'input_jsonl_path': 'missing.jsonl',
+            'batch_model': 'gemini-3.1-flash-lite',
+            'settings': {'max_output_tokens': 1000},
+            'summary': {'chunk_count': 1},
+        }
+        with self.assertRaises(SystemExit) as ctx:
+            batch_mod.ensure_manifest_cost_estimate(manifest)
+        self.assertIn('Batch input JSONL not found', str(ctx.exception))
+
     def test_submit_manifest_blocks_when_max_cost_exceeded(self):
         manifest = {
             '_manifest_path': '/tmp/manifest.json',

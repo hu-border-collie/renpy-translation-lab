@@ -2308,6 +2308,7 @@ class MainWindow(QMainWindow):
             resolved_retry_path,
             retry_manifest,
             parent_path,
+            submit_max_cost=self._submit_max_cost_from_config(),
         )
         next_step = workflow.current_step()
         if next_step is None:
@@ -3915,7 +3916,10 @@ class MainWindow(QMainWindow):
         return read_batch_context_flags(self.state.load_translator_config())
 
     def _submit_max_cost_from_config(self) -> float | None:
-        return resolve_submit_max_cost(self.state.load_translator_config())
+        load_config = getattr(self.state, "load_translator_config", None)
+        if not callable(load_config):
+            return None
+        return resolve_submit_max_cost(load_config())
 
     def _bootstrap_task_ready(self, spec) -> bool:
         if not spec.is_bootstrap:
