@@ -118,9 +118,11 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 **下方（原始输出）**：始终可见，显示 CLI 的 stdout/stderr。
 
-工具栏提供「刷新上下文」「试跑样本请求」与「清空日志」。切换到诊断 Tab 时会重新读取最近任务记录；流程进行中会优先展示当前活动的记录。
+工具栏提供「刷新上下文」「试跑样本请求」「拆分翻译包」与「清空日志」。切换到诊断 Tab 时会重新读取最近任务记录；流程进行中会优先展示当前活动的记录。
 
 **试跑样本请求（probe）**：批量翻译模式下，若当前有可用的 translation manifest（version 1），可点击「试跑样本请求」对 package 内少量请求做同步 `generate_content` 冒烟测试（默认 `--limit 3`）。高级选项可调整 `--limit`、`--offset` 与 `--api-key-index`。该操作不会提交批量任务，也不会修改项目文件；摘要显示在任务上下文区，原始输出写入下方日志。适合在 `submit` 前排障 API、模型与请求格式。
+
+**拆分翻译包（split）**：批量翻译模式下，若当前 translation manifest（version 1）含有可拆分的块，可点击「拆分翻译包」按上限生成多个子包（默认 `--max-chunks 600`）。高级选项可调整 `--max-items` 与 `--display-name-prefix`。拆分后 RAG 记忆库为静态快照，各子包需分别 submit，不会自动提交；子包路径会列在任务上下文区，命令参考会补充各子包的 `submit` 示例。详见 `docs/context_systems.md`。
 
 ## 配置兼容性
 
