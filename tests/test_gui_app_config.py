@@ -462,6 +462,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeState:
             def get_game_root(self):
                 return Path("C:/Game/work")
+            def normalize_game_root(self, path):
+                return Path("C:/Game/work"), False
             def load_translator_config(self):
                 return config
             def save_translator_config(self, saved_config):
@@ -499,6 +501,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._batch_thinking_user_changed = False
         self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
         self.window._append_log = lambda _text: None
+        self.window._refresh_project_label = lambda: None
         self.window.statusBar = lambda: FakeStatusBar()
 
         saved = self.window._on_save_config()
@@ -523,6 +526,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeState:
             def get_game_root(self):
                 return Path("C:/Game/work")
+            def normalize_game_root(self, path):
+                return Path("C:/Game/work"), False
             def load_translator_config(self):
                 return config
             def save_translator_config(self, saved_config):
@@ -560,6 +565,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._batch_thinking_user_changed = False
         self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
         self.window._append_log = lambda _text: None
+        self.window._refresh_project_label = lambda: None
         self.window.statusBar = lambda: FakeStatusBar()
 
         saved = self.window._on_save_config()
@@ -584,6 +590,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeState:
             def get_game_root(self):
                 return Path("C:/Game/work")
+            def normalize_game_root(self, path):
+                return Path("C:/Game/work"), False
             def load_translator_config(self):
                 return config
             def save_translator_config(self, saved_config):
@@ -636,6 +644,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.batch_embedding_combo = FakeCombo("gemini-embedding-001")
         self.window.batch_thinking_combo = FakeCombo(data="minimal")
         self.window.theme_combo = FakeCombo(data="dark")
+        self.window._refresh_project_label = lambda: None
         self.window._advanced_setting_widgets = {
             "game_root": FakeText("C:/Game/work"),
             "batch_chunk_size": FakeValue(12),
@@ -767,6 +776,75 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(nav.row, 4)
         self.assertTrue(invalid_widget.focused)
         self.assertEqual(status_bar.messages[-1][0], "高级设置有无效字段，未保存。")
+
+    def test_focus_advanced_setting_navigates_to_project_page_for_project_fields(self):
+        class FakeNav:
+            def __init__(self):
+                self.row = None
+
+            def setCurrentRow(self, row):
+                self.row = row
+
+        class FakeText:
+            def __init__(self):
+                self.focused = False
+
+            def setFocus(self):
+                self.focused = True
+
+        nav = FakeNav()
+        widget = FakeText()
+        self.window.settings_nav = nav
+        self.window._settings_nav_rows = {"project": 1, "advanced": 5}
+        self.window._advanced_setting_widgets = {"game_root": widget}
+
+        self.window._focus_advanced_setting("game_root")
+
+        self.assertEqual(nav.row, 1)
+        self.assertTrue(widget.focused)
+
+    def test_sync_state_game_root_from_settings_switches_root_when_changed(self):
+        class FakeState:
+            def __init__(self):
+                self._game_root = Path("C:/Game/old_work")
+
+            def get_game_root(self):
+                return self._game_root
+
+            def normalize_game_root(self, path):
+                return Path(str(path).replace("\\", "/")), False
+
+        switched = []
+        self.window.state = FakeState()
+        self.window._switch_game_root = lambda directory: switched.append(directory) or True
+
+        result = self.window._sync_state_game_root_from_settings("C:/Game/new_work")
+
+        self.assertTrue(result)
+        self.assertEqual(switched, ["C:/Game/new_work"])
+
+    def test_sync_state_game_root_from_settings_skips_switch_when_unchanged(self):
+        class FakeState:
+            def __init__(self):
+                self._game_root = Path("C:/Game/work")
+
+            def get_game_root(self):
+                return self._game_root
+
+            def normalize_game_root(self, path):
+                return Path("C:/Game/work"), False
+
+        switched = []
+        refreshed = []
+        self.window.state = FakeState()
+        self.window._switch_game_root = lambda directory: switched.append(directory) or True
+        self.window._refresh_project_label = lambda: refreshed.append(True)
+
+        result = self.window._sync_state_game_root_from_settings("C:/Game/work")
+
+        self.assertTrue(result)
+        self.assertEqual(switched, [])
+        self.assertEqual(refreshed, [True])
 
     def test_restore_recommended_config_updates_basic_and_advanced_widgets(self):
         class FakeCheckBox:

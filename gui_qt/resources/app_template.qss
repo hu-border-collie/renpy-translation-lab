@@ -121,7 +121,25 @@ QWidget#config_scroll_viewport,
 QWidget#config_scroll_content,
 QWidget#settings_right_panel,
 QStackedWidget#settings_stack,
-QFrame#settings_action_bar {
+QFrame#settings_action_bar,
+QScrollArea#settings_account_scroll,
+QWidget#settings_account_viewport,
+QWidget#settings_account_content,
+QScrollArea#settings_project_scroll,
+QWidget#settings_project_viewport,
+QWidget#settings_project_content,
+QScrollArea#settings_models_scroll,
+QWidget#settings_models_viewport,
+QWidget#settings_models_content,
+QScrollArea#settings_context_scroll,
+QWidget#settings_context_viewport,
+QWidget#settings_context_content,
+QScrollArea#settings_appearance_scroll,
+QWidget#settings_appearance_viewport,
+QWidget#settings_appearance_content,
+QScrollArea#settings_advanced_scroll,
+QWidget#settings_advanced_viewport,
+QWidget#settings_advanced_content {
     background-color: ${bg_surface};
     border: none;
 }

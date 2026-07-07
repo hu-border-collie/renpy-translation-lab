@@ -153,6 +153,7 @@ from .theme_helpers import (
     write_gui_theme_to_config,
 )
 from .settings_schema import (
+    ADVANCED_SETTING_FIELD_BY_KEY,
     ADVANCED_SETTING_FIELDS,
     BASIC_RECOMMENDED_VALUES,
     SettingField,
@@ -3190,7 +3191,13 @@ class MainWindow(QMainWindow):
         self._show_advanced_setting_errors({})
 
     def _focus_advanced_setting(self, key: str) -> None:
-        row = getattr(self, "_settings_nav_rows", {}).get("advanced")
+        field = ADVANCED_SETTING_FIELD_BY_KEY.get(key)
+        page_key = (
+            "project"
+            if field is not None and field.category in {"项目与资源", "准备流程"}
+            else "advanced"
+        )
+        row = getattr(self, "_settings_nav_rows", {}).get(page_key)
         nav = getattr(self, "settings_nav", None)
         if nav is not None and row is not None:
             nav.setCurrentRow(row)
@@ -4845,7 +4852,8 @@ class MainWindow(QMainWindow):
                 apply_advanced_settings(config, complete_advanced_values)
 
             self.state.save_translator_config(config)
-            self._sync_state_game_root_from_settings(config.get("game_root"))
+            if not self._sync_state_game_root_from_settings(config.get("game_root")):
+                self._show_settings_status("设置已保存，但同步项目目录到工作台失败。", 6000)
             if work_mode_spec(self._current_work_mode()).is_bootstrap:
                 self._apply_work_mode_ui(refresh_manifest_writeback=False)
             self._append_log("设置已成功保存至 translator_config.json。")
@@ -4862,16 +4870,27 @@ class MainWindow(QMainWindow):
             return False
 
 
-    def _sync_state_game_root_from_settings(self, value: object) -> None:
+    def _sync_state_game_root_from_settings(self, value: object) -> bool:
         if not isinstance(value, str) or not value.strip():
-            return
+            return True
         try:
-            normalized, _adjusted = self.state.normalize_game_root(value)
-            self.state._game_root = normalized
-            self.state._game_root_redirect_from = None
-            self._refresh_project_label()
-        except Exception as exc:
-            self._append_log(f"同步设置页 game_root 到当前窗口状态失败：{exc}")
+            new_root, _adjusted = self.state.normalize_game_root(value)
+        except (TypeError, ValueError) as exc:
+            QMessageBox.warning(self, "同步项目目录失败", str(exc))
+            self._append_log(f"同步设置页 game_root 到当前窗口状态失败: {exc}")
+            return False
+
+        current_root = self.state.get_game_root()
+        if current_root is not None:
+            try:
+                current_normalized, _ = self.state.normalize_game_root(current_root)
+                if canonical_abs_path(str(current_normalized)).lower() == canonical_abs_path(str(new_root)).lower():
+                    self._refresh_project_label()
+                    return True
+            except (TypeError, ValueError):
+                pass
+
+        return self._switch_game_root(value.strip())
 
 
 def run_app(argv: list[str] | None = None) -> int:
