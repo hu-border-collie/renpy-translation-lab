@@ -75,8 +75,10 @@ from .check_failures_report import build_check_issues_report
 from .check_issues_dialog import CheckIssuesDialog
 from .check_report import (
     WritebackSummary,
+    build_recheck_cli_args,
     idle_writeback_summary,
     idle_writeback_summary_for_work_mode,
+    recheck_writeback_ready,
     running_writeback_summary,
     stale_writeback_summary,
     summarize_apply_output,
@@ -257,6 +259,7 @@ class MainWindow(QMainWindow):
         self._work_mode = WorkMode.BATCH_TRANSLATION
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
+        self._recheck_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
         self._bootstrap_progress: BootstrapProgressState | None = None
@@ -770,6 +773,12 @@ class MainWindow(QMainWindow):
         self.apply_revision_btn.setEnabled(False)
         self.apply_revision_btn.setVisible(False)
         writeback_actions.addWidget(self.apply_revision_btn)
+        self.recheck_btn = QPushButton("重新检查")
+        self.recheck_btn.setObjectName("secondary_btn")
+        self.recheck_btn.clicked.connect(self._on_recheck_writeback)
+        self.recheck_btn.setEnabled(False)
+        self.recheck_btn.setVisible(False)
+        writeback_actions.addWidget(self.recheck_btn)
         self.check_issues_btn = QPushButton("查看问题清单")
         self.check_issues_btn.setObjectName("secondary_btn")
         self.check_issues_btn.clicked.connect(self._open_check_issues)
@@ -2044,6 +2053,7 @@ class MainWindow(QMainWindow):
         action_buttons = (
             "apply_btn",
             "apply_revision_btn",
+            "recheck_btn",
             "check_issues_btn",
             "retry_btn",
             "apply_failure_btn",
@@ -2059,6 +2069,14 @@ class MainWindow(QMainWindow):
 
         issues_ready = self._writeback_issues_ready(summary)
         manifest = self._load_writeback_manifest() if summary.manifest_path else None
+
+        recheck_ready = recheck_writeback_ready(
+            summary,
+            supports_translation_writeback=spec.supports_translation_writeback,
+        )
+        if hasattr(self, "recheck_btn"):
+            self.recheck_btn.setVisible(spec.supports_translation_writeback)
+            self.recheck_btn.setEnabled(not running and recheck_ready)
 
         if hasattr(self, "check_issues_btn"):
             self.check_issues_btn.setVisible(True)
@@ -3921,6 +3939,51 @@ class MainWindow(QMainWindow):
     def _on_kill(self):
         self.runner.kill()
 
+    def _on_recheck_writeback(self) -> None:
+        spec = work_mode_spec(self._current_work_mode())
+        if not spec.supports_translation_writeback:
+            QMessageBox.information(
+                self,
+                "当前模式不支持",
+                "「重新检查」仅适用于批量翻译。",
+            )
+            return
+        if not self._writeback_manifest_path:
+            QMessageBox.information(self, "无法重新检查", "没有可检查的任务记录。")
+            return
+
+        summary = self._current_writeback_summary()
+        if not recheck_writeback_ready(
+            summary,
+            supports_translation_writeback=spec.supports_translation_writeback,
+        ):
+            QMessageBox.information(
+                self,
+                "无法重新检查",
+                "请先完成翻译并下载结果，再重新检查。",
+            )
+            return
+
+        manifest_path = self._writeback_manifest_path
+        self._clear_log_view()
+        self._focus_log_tab()
+        self._active_command = "recheck"
+        self._recheck_output_lines = []
+        self._focus_workbench_status_tab(2)
+        self._set_writeback_summary(
+            running_writeback_summary(
+                manifest_path=manifest_path,
+                heading="正在重新检查",
+                message="正在校验翻译结果是否可以写回；完成后这里会更新写回摘要。",
+            )
+        )
+        args = build_recheck_cli_args(manifest_path)
+        self._append_log(
+            f"=== 正在重新检查：gemini_translate_batch.py {' '.join(args)} ===\n"
+        )
+        self._set_task_running(True)
+        self.runner.run(self.state.get_batch_script_path(), args)
+
     def _on_apply_writeback(self):
         if not work_mode_spec(self._current_work_mode()).supports_translation_writeback:
             QMessageBox.information(
@@ -4086,6 +4149,8 @@ class MainWindow(QMainWindow):
             self._schedule_progress_ui_flush()
         elif self._active_command == "apply":
             self._apply_output_lines.append(text)
+        elif self._active_command == "recheck":
+            self._recheck_output_lines.append(text)
         elif self._active_command == "apply_revision":
             self._apply_revision_output_lines.append(text)
         elif self._active_command == "build_retry":
@@ -4371,6 +4436,8 @@ class MainWindow(QMainWindow):
             self._workflow_step_output_lines.append(message)
         elif self._active_command == "apply":
             self._apply_output_lines.append(message)
+        elif self._active_command == "recheck":
+            self._recheck_output_lines.append(message)
         elif self._active_command == "build_retry":
             self._build_retry_output_lines.append(message)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
@@ -4405,6 +4472,31 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("翻译写回完成。", 6000)
             else:
                 self.statusBar().showMessage("翻译写回失败，请查看诊断日志。", 8000)
+            return
+
+        if self._active_command == "recheck":
+            manifest_path = self._writeback_manifest_path
+            self._update_writeback_from_check(
+                "\n".join(self._recheck_output_lines),
+                exit_code,
+                manifest_path,
+            )
+            if exit_code == 0:
+                self._refresh_workflow_from_latest_manifest()
+            self._active_command = ""
+            self._set_task_running(False)
+            if exit_code != 0:
+                self.statusBar().showMessage("重新检查失败，请查看诊断日志。", 8000)
+            else:
+                summary = self._current_writeback_summary()
+                if summary.status == "safe":
+                    self.statusBar().showMessage("重新检查完成，当前可写回。", 6000)
+                elif summary.status == "warn":
+                    self.statusBar().showMessage("重新检查完成，仍需处理问题。", 6000)
+                elif summary.status == "block":
+                    self.statusBar().showMessage("重新检查完成，当前禁止写回。", 6000)
+                else:
+                    self.statusBar().showMessage("重新检查完成。", 6000)
             return
 
         if self._active_command == "apply_revision":

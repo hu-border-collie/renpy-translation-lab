@@ -1,8 +1,11 @@
 import unittest
 
 from gui_qt.check_report import (
+    WritebackSummary,
+    build_recheck_cli_args,
     idle_writeback_summary_for_work_mode,
     parse_check_output,
+    recheck_writeback_ready,
     summarize_apply_output,
     summarize_check_output,
     summarize_manifest_writeback,
@@ -239,6 +242,99 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertFalse(summary.can_apply)
         self.assertIn("同步翻译", summary.message)
         self.assertNotIn("重新检查", summary.message)
+
+    def test_build_recheck_cli_args(self):
+        self.assertEqual(
+            build_recheck_cli_args(r"C:\pkg\manifest.json"),
+            ["check", r"C:\pkg\manifest.json"],
+        )
+
+    def test_recheck_writeback_ready_requires_batch_translation_and_manifest(self):
+        base = WritebackSummary(
+            status="warn",
+            heading="",
+            message="",
+            facts=[],
+            findings=[],
+            can_apply=False,
+            manifest_path=r"C:\pkg\manifest.json",
+        )
+
+        self.assertTrue(
+            recheck_writeback_ready(
+                base,
+                supports_translation_writeback=True,
+            )
+        )
+        self.assertFalse(
+            recheck_writeback_ready(
+                base,
+                supports_translation_writeback=False,
+            )
+        )
+        self.assertFalse(
+            recheck_writeback_ready(
+                WritebackSummary(
+                    status="warn",
+                    heading="",
+                    message="",
+                    facts=[],
+                    findings=[],
+                    can_apply=False,
+                    manifest_path="",
+                ),
+                supports_translation_writeback=True,
+            )
+        )
+
+    def test_recheck_writeback_ready_blocks_idle_and_running(self):
+        for status in ("idle", "running"):
+            with self.subTest(status=status):
+                summary = WritebackSummary(
+                    status=status,
+                    heading="",
+                    message="",
+                    facts=[],
+                    findings=[],
+                    can_apply=False,
+                    manifest_path=r"C:\pkg\manifest.json",
+                )
+                self.assertFalse(
+                    recheck_writeback_ready(
+                        summary,
+                        supports_translation_writeback=True,
+                    )
+                )
+
+    def test_recheck_safe_check_enables_apply_gate(self):
+        summary = summarize_check_output(
+            CHECK_OUTPUT_SAFE,
+            exit_code=0,
+            manifest_path=r"C:\pkg\manifest.json",
+        )
+
+        self.assertTrue(summary.can_apply)
+        self.assertTrue(
+            recheck_writeback_ready(
+                summary,
+                supports_translation_writeback=True,
+            )
+        )
+
+    def test_recheck_failed_check_blocks_apply_gate(self):
+        summary = summarize_check_output(
+            CHECK_OUTPUT_SAFE,
+            exit_code=1,
+            manifest_path=r"C:\pkg\manifest.json",
+        )
+
+        self.assertFalse(summary.can_apply)
+        self.assertTrue(
+            recheck_writeback_ready(
+                summary,
+                supports_translation_writeback=True,
+            )
+        )
 
 
 if __name__ == "__main__":
