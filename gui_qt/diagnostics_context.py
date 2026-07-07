@@ -368,6 +368,26 @@ def build_cli_commands(
             ),
         )
     )
+    commands.append(
+        DiagnosticsCommand(
+            label="翻译 A/B 对比（试跑）",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                [
+                    "compare-variants",
+                    manifest_path,
+                    "--variants-file",
+                    "<variants.json>",
+                    "--limit",
+                    "3",
+                    "--offset",
+                    "0",
+                    "--dry-run",
+                ],
+            ),
+        )
+    )
 
     safety_level = manifest_check_safety_level(manifest)
     if not manifest.get("applied_at") and safety_level not in {"warn", "block"}:
