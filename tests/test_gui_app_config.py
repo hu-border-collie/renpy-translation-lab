@@ -2147,6 +2147,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             "recheck_btn",
             "check_issues_btn",
             "retry_btn",
+            "retry_followup_btn",
             "apply_failure_btn",
             "remediation_btn",
         ]
@@ -2218,6 +2219,81 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(self.window.recheck_btn.visible)
         self.assertTrue(self.window.recheck_btn.enabled)
         self.assertTrue(self.window.check_issues_btn.enabled)
+
+    def test_retry_followup_button_enabled_after_confirmed_preview(self):
+        from gui_qt.check_report import WritebackSummary
+        from gui_qt.work_modes import WorkMode
+
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window._uses_revision_writeback = lambda *_args, **_kwargs: False
+        self.window._writeback_manifest_path = "C:/dummy/manifest.json"
+        self.window._retry_followup_confirmed = {"C:/dummy/manifest.json"}
+
+        class FakeState:
+            def load_manifest_file(self, path):
+                if path == "C:/dummy/retry/manifest.json":
+                    return {
+                        "retry_of_manifest": "C:/dummy/manifest.json",
+                        "job_name": "",
+                    }
+                return {
+                    "last_check_summary": {"safety_level": "warn"},
+                    "last_retry_manifest_path": "C:/dummy/retry/manifest.json",
+                }
+
+        self.window.state = FakeState()
+
+        class FakeButton:
+            def __init__(self):
+                self.visible = False
+                self.enabled = False
+                self.text = ""
+                self.tool_tip = ""
+
+            def setVisible(self, visible):
+                self.visible = visible
+
+            def setEnabled(self, enabled):
+                self.enabled = enabled
+
+            def setText(self, text):
+                self.text = text
+
+            def setToolTip(self, text):
+                self.tool_tip = text
+
+        for name in (
+            "apply_btn",
+            "apply_revision_btn",
+            "recheck_btn",
+            "check_issues_btn",
+            "retry_btn",
+            "retry_followup_btn",
+            "apply_failure_btn",
+            "remediation_btn",
+        ):
+            setattr(self.window, name, FakeButton())
+
+        self.window._load_writeback_manifest = lambda: FakeState().load_manifest_file(
+            "C:/dummy/manifest.json"
+        )
+
+        self.window._update_writeback_action_buttons(
+            WritebackSummary(
+                status="warn",
+                heading="需要先处理问题",
+                message="warn",
+                facts=[],
+                findings=[],
+                can_apply=False,
+                manifest_path="C:/dummy/manifest.json",
+            ),
+            running=False,
+        )
+
+        self.assertTrue(self.window.retry_followup_btn.visible)
+        self.assertTrue(self.window.retry_followup_btn.enabled)
+        self.assertEqual(self.window.retry_followup_btn.text, "提交补译任务")
 
     def test_recheck_button_disabled_while_running(self):
         from gui_qt.check_report import WritebackSummary
