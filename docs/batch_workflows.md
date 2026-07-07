@@ -134,7 +134,8 @@ python gemini_translate_batch.py compare-variants logs/batch_jobs/<package>/mani
 ]
 ```
 
-- `--dry-run` 只重建各变体 prompt 并写报告，不调用 API。
+- 变体文件至少需要 **2 个**命名变体，以便并排比较。
+- `--dry-run` 只重建各变体 prompt 并写报告，不调用翻译 API，也不会触发 RAG / source index / story memory 检索。
 - 默认输出到 `logs/experiments/<timestamp>_ab/`，包含 `ab_report.md`、`ab_results.jsonl`、`ab_settings.json`。
 - API 用量约为 `chunks × variants` 次同步请求；先用小 `--limit` 试跑。
 

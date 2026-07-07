@@ -49,8 +49,8 @@ def load_variants_file(path: str) -> list[dict]:
             payload = variants
         else:
             raise SystemExit('Variants JSON must be a list or an object with a "variants" array.')
-    if not isinstance(payload, list) or not payload:
-        raise SystemExit('Variants file must contain at least one variant.')
+    if not isinstance(payload, list) or len(payload) < 2:
+        raise SystemExit('Variants file must contain at least two variants.')
     normalized = []
     for index, entry in enumerate(payload, start=1):
         if not isinstance(entry, dict):
@@ -109,13 +109,79 @@ def summarize_variant_settings() -> dict:
     }
 
 
+_BATCH_GLOBAL_KEYS = (
+    'BATCH_MODEL',
+    'BATCH_TARGET_SIZE',
+    'BATCH_CONTEXT_BEFORE',
+    'BATCH_CONTEXT_AFTER',
+    'BATCH_TARGET_CHARS',
+    'BATCH_RETRY_TARGET_SIZE',
+    'BATCH_RETRY_TARGET_CHARS',
+    'BATCH_MAX_OUTPUT_TOKENS',
+    'BATCH_TEMPERATURE',
+    'BATCH_THINKING_LEVEL',
+    'BATCH_SAFETY_SETTINGS',
+    'BATCH_DISPLAY_NAME_PREFIX',
+    'BATCH_MACRO_SETTING',
+    'KEYWORD_DISPLAY_NAME_PREFIX',
+    'KEYWORD_CHUNK_SIZE',
+    'KEYWORD_MAX_CANDIDATES_PER_CHUNK',
+    'REVISION_DISPLAY_NAME_PREFIX',
+    'REVISION_CHUNK_SIZE',
+    'RAG_ENABLED',
+    'RAG_STORE_DIR',
+    'RAG_EMBEDDING_MODEL',
+    'RAG_QUERY_TASK_TYPE',
+    'RAG_DOCUMENT_TASK_TYPE',
+    'RAG_OUTPUT_DIMENSIONALITY',
+    'RAG_TOP_K_HISTORY',
+    'RAG_TOP_K_TERMS',
+    'RAG_MIN_SIMILARITY',
+    'RAG_SEGMENT_LINES',
+    'RAG_BOOTSTRAP_ON_BUILD',
+    'RAG_HISTORY_CHAR_LIMIT',
+    'SOURCE_INDEX_ENABLED',
+    'SOURCE_INDEX_STORE_DIR',
+    'SOURCE_INDEX_TOP_K',
+    'SOURCE_INDEX_MIN_SIMILARITY',
+    'SOURCE_INDEX_CHAR_LIMIT',
+    'STORY_MEMORY_ENABLED',
+    'STORY_MEMORY_GRAPH_FILE',
+    'STORY_MEMORY_MAX_CONTEXT_CHARS',
+    'STORY_MEMORY_TOP_K_RELATIONS',
+    'STORY_MEMORY_TOP_K_TERMS',
+    'STORY_MEMORY_INCLUDE_SCENE_SUMMARY',
+    'BATCH_NON_CHINESE_RULES',
+    '_RAG_STORE',
+    '_SOURCE_INDEX_STORE',
+    '_STORY_GRAPH',
+    '_STORY_GRAPH_PATH',
+)
+
+
+def _snapshot_batch_globals() -> dict:
+    batch_mod = _batch()
+    snapshot = {key: getattr(batch_mod, key) for key in _BATCH_GLOBAL_KEYS}
+    snapshot['load_json_file'] = batch_mod.load_json_file
+    return snapshot
+
+
+def _restore_batch_globals(snapshot: dict) -> None:
+    batch_mod = _batch()
+    load_json_file = snapshot.pop('load_json_file')
+    for key, value in snapshot.items():
+        setattr(batch_mod, key, copy.deepcopy(value))
+    batch_mod.load_json_file = load_json_file
+
+
 @contextmanager
 def variant_batch_settings(overrides: dict):
     batch_mod = _batch()
-    base_translator = batch_mod.load_json_file(legacy.TRANSLATOR_CONFIG)
-    base_legacy = batch_mod.load_json_file(legacy.CONFIG_FILE)
+    baseline = _snapshot_batch_globals()
+    base_translator = baseline['load_json_file'](legacy.TRANSLATOR_CONFIG)
+    base_legacy = baseline['load_json_file'](legacy.CONFIG_FILE)
     merged_translator = deep_merge_dict(base_translator, overrides)
-    original_load = batch_mod.load_json_file
+    original_load = baseline['load_json_file']
 
     def patched_load(path):
         if path == legacy.TRANSLATOR_CONFIG:
@@ -133,21 +199,25 @@ def variant_batch_settings(overrides: dict):
         batch_mod.load_batch_settings()
         yield summarize_variant_settings()
     finally:
-        batch_mod.load_json_file = original_load
-        batch_mod._STORY_GRAPH = None
-        batch_mod._STORY_GRAPH_PATH = ''
-        batch_mod._RAG_STORE = None
-        batch_mod._SOURCE_INDEX_STORE = None
-        batch_mod.load_batch_settings()
+        _restore_batch_globals(baseline)
 
 
-def enrich_chunk_for_current_settings(chunk: dict) -> dict:
+def enrich_chunk_for_current_settings(chunk: dict, *, dry_run: bool = False) -> dict:
     batch_mod = _batch()
     enriched = copy.deepcopy(chunk)
     target_items = enriched.get('items') or []
     context_past = enriched.get('context_past') or []
     context_future = enriched.get('context_future') or []
     file_rel_path = enriched.get('file_rel_path') or ''
+
+    if dry_run:
+        enriched['glossary_hits'] = []
+        enriched['history_hits'] = []
+        enriched['source_hits'] = []
+        enriched.pop('rag_stats', None)
+        enriched.pop('source_index_stats', None)
+        enriched.pop('story_hits', None)
+        return enriched
 
     if batch_mod.RAG_ENABLED:
         enriched['glossary_hits'] = batch_mod.retrieve_glossary_hits(target_items)
@@ -194,14 +264,40 @@ def extract_translation_map(response_text: str, items: list[dict]) -> tuple[dict
         return {}, str(exc)
 
     expected_ids = [str(item.get('id') or '') for item in items if item.get('id')]
-    translations = {}
+    if not expected_ids:
+        return {}, 'Chunk has no item ids to validate against.'
+
+    expected_id_set = set(expected_ids)
+    translations: dict[str, str] = {}
+    seen_ids: set[str] = set()
+    duplicate_ids: list[str] = []
     for row in result_items:
         item_id = str(row.get('id') or '')
         translation = _compact_text(row.get('translation'))
-        if item_id and translation:
+        if not item_id:
+            continue
+        if item_id in seen_ids:
+            duplicate_ids.append(item_id)
+        seen_ids.add(item_id)
+        if translation:
             translations[item_id] = translation
-    if not translations:
+
+    errors: list[str] = []
+    if duplicate_ids:
+        errors.append(
+            'Duplicate result ids: ' + ', '.join(sorted(set(duplicate_ids))),
+        )
+    missing_ids = [item_id for item_id in expected_ids if item_id not in translations]
+    if missing_ids:
+        errors.append('Missing translations for ids: ' + ', '.join(missing_ids))
+    extra_ids = [item_id for item_id in translations if item_id not in expected_id_set]
+    if extra_ids:
+        errors.append('Unexpected result ids: ' + ', '.join(extra_ids))
+
+    if not translations and not errors:
         return {}, 'No translation items parsed from response.'
+    if errors:
+        return translations, '; '.join(errors)
     return translations, ''
 
 
@@ -285,7 +381,8 @@ def render_markdown_report(
     for sample_index, chunk in enumerate(chunk_results, start=1):
         lines.append(f'### Sample {sample_index}: `{chunk.chunk_key}` ({chunk.file_rel_path})')
         lines.append('')
-        lines.append('| Item ID | Source | ' + ' | '.join(variant_names) + ' |')
+        escaped_variant_names = [_escape_table_cell(name) for name in variant_names]
+        lines.append('| Item ID | Source | ' + ' | '.join(escaped_variant_names) + ' |')
         lines.append('| --- | --- | ' + ' | '.join(['---'] * len(variant_names)) + ' |')
         translation_maps = {
             result.variant_name: result.translations for result in chunk.variant_results
@@ -315,7 +412,9 @@ def render_markdown_report(
                 meta_bits.append(f'error={result.error}')
             if result.dry_run:
                 meta_bits.append('dry_run=true')
-            lines.append(f'- **{result.variant_name}**: ' + '; '.join(meta_bits))
+            lines.append(
+                f'- **{_escape_table_cell(result.variant_name)}**: ' + '; '.join(meta_bits),
+            )
         lines.append('')
 
     if experiment_settings:
@@ -390,14 +489,15 @@ def run_variant_for_chunk(
     chunk: dict,
     *,
     variant_name: str,
-    overrides: dict,
-    model_name: str,
+    settings: dict,
+    model_override: str = '',
     api_key_index: int | None = None,
     dry_run: bool = False,
     sync_runner: Callable[..., dict] | None = None,
 ) -> VariantRunResult:
-    with variant_batch_settings(overrides) as settings:
-        enriched = enrich_chunk_for_current_settings(chunk)
+    model_name = model_override.strip() or settings.get('model') or _batch().BATCH_MODEL
+    try:
+        enriched = enrich_chunk_for_current_settings(chunk, dry_run=dry_run)
         request_row = _batch().build_batch_request(enriched)
         request_payload = request_row.get('request') or {}
         if dry_run:
@@ -408,15 +508,7 @@ def run_variant_for_chunk(
             )
 
         runner = sync_runner or _batch().run_sync_request
-        try:
-            response = runner(request_payload, model_name, api_key_index=api_key_index)
-        except Exception as exc:
-            return VariantRunResult(
-                variant_name=variant_name,
-                settings=settings,
-                error=str(exc),
-            )
-
+        response = runner(request_payload, model_name, api_key_index=api_key_index)
         translations, parse_error = extract_translation_map(
             response.get('response_text') or '',
             enriched.get('items') or [],
@@ -428,6 +520,12 @@ def run_variant_for_chunk(
             usage_metadata=response.get('usage_metadata') or {},
             finish_reason=response.get('finish_reason') or '',
             error=parse_error,
+        )
+    except Exception as exc:
+        return VariantRunResult(
+            variant_name=variant_name,
+            settings=settings,
+            error=str(exc),
         )
 
 
@@ -446,54 +544,65 @@ def run_translation_ab_experiment(
     batch_mod = _batch()
     batch_mod.require_manifest_mode(manifest, batch_mod.MANIFEST_MODE_TRANSLATION, 'compare-variants')
     chunks = select_manifest_chunks(manifest, limit=limit, offset=offset)
-    model_name = model_override.strip() or manifest.get('batch_model') or batch_mod.BATCH_MODEL
+    default_model = model_override.strip() or manifest.get('batch_model') or batch_mod.BATCH_MODEL
 
     if not output_dir:
         slug = batch_mod.guess_project_slug()
         output_dir = create_experiment_output_dir(f'{slug}_ab')
 
-    chunk_results: list[ChunkExperimentResult] = []
-    for chunk in chunks:
-        chunk_result = ChunkExperimentResult(
+    chunk_results: list[ChunkExperimentResult] = [
+        ChunkExperimentResult(
             chunk_key=str(chunk.get('key') or ''),
             file_rel_path=str(chunk.get('file_rel_path') or ''),
             items=copy.deepcopy(chunk.get('items') or []),
         )
+        for chunk in chunks
+    ]
+    experiment_error = ''
+    try:
         for variant in variants:
-            chunk_result.variant_results.append(
-                run_variant_for_chunk(
-                    chunk,
-                    variant_name=variant['name'],
-                    overrides=variant.get('overrides') or {},
-                    model_name=model_name,
-                    api_key_index=api_key_index,
-                    dry_run=dry_run,
-                    sync_runner=sync_runner,
-                )
-            )
-        chunk_results.append(chunk_result)
+            with variant_batch_settings(variant.get('overrides') or {}) as settings:
+                for chunk_index, chunk in enumerate(chunks):
+                    chunk_results[chunk_index].variant_results.append(
+                        run_variant_for_chunk(
+                            chunk,
+                            variant_name=variant['name'],
+                            settings=settings,
+                            model_override=model_override,
+                            api_key_index=api_key_index,
+                            dry_run=dry_run,
+                            sync_runner=sync_runner,
+                        )
+                    )
+    except Exception as exc:
+        experiment_error = str(exc)
+    finally:
+        experiment_settings = {
+            'manifest_path': manifest.get('_manifest_path', ''),
+            'model': default_model,
+            'limit': limit,
+            'offset': offset,
+            'dry_run': dry_run,
+            'variants': variants,
+            'chunk_keys': [chunk.chunk_key for chunk in chunk_results],
+        }
+        if experiment_error:
+            experiment_settings['experiment_error'] = experiment_error
+        output_paths = write_experiment_outputs(
+            output_dir,
+            manifest_path=manifest.get('_manifest_path', ''),
+            variants=variants,
+            chunk_results=chunk_results,
+            experiment_settings=experiment_settings,
+        )
 
-    experiment_settings = {
-        'manifest_path': manifest.get('_manifest_path', ''),
-        'model': model_name,
-        'limit': limit,
-        'offset': offset,
-        'dry_run': dry_run,
-        'variants': variants,
-        'chunk_keys': [chunk.chunk_key for chunk in chunk_results],
-    }
-    output_paths = write_experiment_outputs(
-        output_dir,
-        manifest_path=manifest.get('_manifest_path', ''),
-        variants=variants,
-        chunk_results=chunk_results,
-        experiment_settings=experiment_settings,
-    )
-
-    return {
+    result = {
         'output_dir': output_dir,
         'chunk_count': len(chunk_results),
         'variant_count': len(variants),
         'dry_run': dry_run,
         **output_paths,
     }
+    if experiment_error:
+        result['experiment_error'] = experiment_error
+    return result
