@@ -1,7 +1,7 @@
 """Dialog for displaying structured check=warn issue lists."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -19,7 +19,15 @@ from .check_failures_report import CheckIssuesReport, format_category_overview
 class CheckIssuesDialog(QDialog):
     """Modal dialog that presents a structured check=warn issue report."""
 
-    def __init__(self, parent: QWidget | None, *, report: CheckIssuesReport):
+    repair_requested = Signal()
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        *,
+        report: CheckIssuesReport,
+        show_repair_action: bool = False,
+    ):
         super().__init__(parent)
         self.setObjectName("check_issues_dialog")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -64,6 +72,14 @@ class CheckIssuesDialog(QDialog):
         layout.addWidget(self.detail_view)
 
         actions = QHBoxLayout()
+        if show_repair_action:
+            repair_btn = QPushButton("同步修补")
+            repair_btn.setObjectName("secondary_btn")
+            repair_btn.setToolTip(
+                "对 repair 类问题执行同步修补；会直接修改翻译文件，请先备份。"
+            )
+            repair_btn.clicked.connect(self._request_repair)
+            actions.addWidget(repair_btn)
         if report.report_path:
             copy_path_btn = QPushButton("复制报告路径")
             copy_path_btn.setObjectName("secondary_btn")
@@ -79,6 +95,10 @@ class CheckIssuesDialog(QDialog):
         if close_btn is not None:
             close_btn.setText("关闭")
         layout.addWidget(buttons)
+
+    def _request_repair(self) -> None:
+        self.repair_requested.emit()
+        self.accept()
 
     def _copy_report_path(self) -> None:
         from PySide6.QtGui import QGuiApplication

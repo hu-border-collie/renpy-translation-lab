@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QSpinBox,
     QDoubleSpinBox,
+    QComboBox,
 )
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
@@ -126,6 +127,17 @@ from .retry_report import (
     parse_build_retry_output,
     retry_followup_allowed,
     summarize_retry_manifest,
+)
+from .repair_report import (
+    RepairReportCandidate,
+    assess_repair_eligibility,
+    build_repair_cli_args,
+    discover_repair_report_candidates,
+    parse_repair_output,
+    repair_action_ready,
+    repair_summary_to_diagnostics_context,
+    running_repair_summary,
+    summarize_repair_output,
 )
 from .retry_workflow import (
     create_retry_followup_workflow,
@@ -281,6 +293,7 @@ class MainWindow(QMainWindow):
         self._recheck_output_lines: list[str] = []
         self._probe_output_lines: list[str] = []
         self._split_output_lines: list[str] = []
+        self._repair_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
         self._bootstrap_progress: BootstrapProgressState | None = None
@@ -817,6 +830,15 @@ class MainWindow(QMainWindow):
         self.retry_followup_btn.setEnabled(False)
         self.retry_followup_btn.setVisible(False)
         writeback_actions.addWidget(self.retry_followup_btn)
+        self.repair_btn = QPushButton("同步修补")
+        self.repair_btn.setObjectName("secondary_btn")
+        self.repair_btn.setToolTip(
+            "对 repair 类问题执行同步修补；会直接修改翻译文件，请先备份。"
+        )
+        self.repair_btn.clicked.connect(self._on_run_repair)
+        self.repair_btn.setEnabled(False)
+        self.repair_btn.setVisible(False)
+        writeback_actions.addWidget(self.repair_btn)
         self.apply_failure_btn = QPushButton("查看写回失败报告")
         self.apply_failure_btn.setObjectName("secondary_btn")
         self.apply_failure_btn.clicked.connect(self._open_apply_failure_report)
@@ -2102,6 +2124,7 @@ class MainWindow(QMainWindow):
             "check_issues_btn",
             "retry_btn",
             "retry_followup_btn",
+            "repair_btn",
             "apply_failure_btn",
             "remediation_btn",
         )
@@ -2184,6 +2207,15 @@ class MainWindow(QMainWindow):
                 self.retry_followup_btn.setText("继续补译")
                 self.retry_followup_btn.setToolTip("")
             self.retry_followup_btn.setEnabled(not running and followup_ready)
+
+        repair_ready = (
+            repair_action_ready(manifest, manifest_path=summary.manifest_path)
+            if issues_ready and manifest is not None
+            else False
+        )
+        if hasattr(self, "repair_btn"):
+            self.repair_btn.setVisible(spec.supports_translation_writeback and repair_ready)
+            self.repair_btn.setEnabled(not running and repair_ready)
 
         if hasattr(self, "remediation_btn"):
             remediation_ready = (
@@ -2368,7 +2400,12 @@ class MainWindow(QMainWindow):
             return
 
         report = build_check_issues_report(manifest, manifest_path=manifest_path)
-        dialog = CheckIssuesDialog(self, report=report)
+        dialog = CheckIssuesDialog(
+            self,
+            report=report,
+            show_repair_action=repair_action_ready(manifest, manifest_path=manifest_path),
+        )
+        dialog.repair_requested.connect(self._on_run_repair)
         dialog.exec()
         self.statusBar().showMessage("已查看检查问题清单。", 3000)
 
@@ -4322,6 +4359,229 @@ class MainWindow(QMainWindow):
         self._set_task_running(True)
         self.runner.run(self.state.get_batch_script_path(), args)
 
+    def _repair_search_roots(self) -> list[str]:
+        roots: list[str] = []
+        game_root = self.state.get_game_root()
+        if game_root is not None:
+            roots.append(str(game_root))
+        return roots
+
+    def _discover_repair_report_candidates(
+        self,
+        manifest: dict[str, object],
+        *,
+        manifest_path: str,
+    ) -> list[RepairReportCandidate]:
+        return discover_repair_report_candidates(
+            manifest,
+            manifest_path=manifest_path,
+            search_roots=self._repair_search_roots(),
+        )
+
+    def _prompt_repair_report_path(
+        self,
+        candidates: list[RepairReportCandidate],
+    ) -> str:
+        if not candidates:
+            return ""
+        if len(candidates) == 1:
+            return candidates[0].path
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择修补报告")
+        layout = QVBoxLayout(dialog)
+        hint = QLabel("找到多个可用于同步修补的报告，请选择其一：")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        combo = QComboBox()
+        for candidate in candidates:
+            combo.addItem(f"{candidate.label} — {candidate.path}", candidate.path)
+        layout.addWidget(combo)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(dialog.reject)
+        buttons.addWidget(cancel_btn)
+        ok_btn = QPushButton("继续")
+        ok_btn.setObjectName("primary_btn")
+        ok_btn.clicked.connect(dialog.accept)
+        buttons.addWidget(ok_btn)
+        layout.addLayout(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return ""
+        return str(combo.currentData() or "")
+
+    def _prompt_repair_options(self) -> dict[str, int | None] | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("同步修补")
+        layout = QVBoxLayout(dialog)
+
+        hint = QLabel(
+            "将按 JSONL 报告同步修补剩余条目。"
+            "该操作会直接修改翻译文件，不会提交批量任务。"
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        batch_size_spin = QSpinBox()
+        batch_size_spin.setRange(1, 20)
+        batch_size_spin.setValue(2)
+        form.addRow("每批条目 (--batch-size)", batch_size_spin)
+
+        limit_spin = QSpinBox()
+        limit_spin.setRange(0, 1_000_000)
+        limit_spin.setValue(0)
+        limit_spin.setSpecialValueText("不限制")
+        form.addRow("最大条目 (--limit)", limit_spin)
+
+        offset_spin = QSpinBox()
+        offset_spin.setRange(0, 1_000_000)
+        offset_spin.setValue(0)
+        form.addRow("起始偏移 (--offset)", offset_spin)
+
+        context_before_spin = QSpinBox()
+        context_before_spin.setRange(0, 20)
+        context_before_spin.setValue(2)
+        form.addRow("上文条数 (--context-before)", context_before_spin)
+
+        context_after_spin = QSpinBox()
+        context_after_spin.setRange(0, 20)
+        context_after_spin.setValue(2)
+        form.addRow("下文条数 (--context-after)", context_after_spin)
+
+        api_key_spin = QSpinBox()
+        api_key_spin.setRange(-1, 99)
+        api_key_spin.setValue(-1)
+        api_key_spin.setSpecialValueText("默认")
+        form.addRow("API Key 索引 (--api-key-index)", api_key_spin)
+        layout.addLayout(form)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(dialog.reject)
+        buttons.addWidget(cancel_btn)
+        run_btn = QPushButton("开始修补")
+        run_btn.setObjectName("primary_btn")
+        run_btn.clicked.connect(dialog.accept)
+        buttons.addWidget(run_btn)
+        layout.addLayout(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        api_key_index = None if api_key_spin.value() < 0 else api_key_spin.value()
+        return {
+            "batch_size": batch_size_spin.value(),
+            "limit": limit_spin.value(),
+            "offset": offset_spin.value(),
+            "context_before": context_before_spin.value(),
+            "context_after": context_after_spin.value(),
+            "api_key_index": api_key_index,
+        }
+
+    def _on_run_repair(self) -> None:
+        spec = work_mode_spec(self._current_work_mode())
+        if not spec.supports_translation_writeback:
+            QMessageBox.information(
+                self,
+                "当前模式不支持",
+                "「同步修补」仅适用于批量翻译。",
+            )
+            return
+
+        manifest_path = self._writeback_manifest_path
+        if not manifest_path:
+            QMessageBox.information(self, "无法同步修补", "没有可用的任务记录。")
+            return
+
+        try:
+            manifest = self.state.load_manifest_file(manifest_path)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法同步修补", str(exc))
+            return
+
+        eligibility = assess_repair_eligibility(manifest, manifest_path=manifest_path)
+        if not eligibility.eligible:
+            QMessageBox.information(self, eligibility.heading, eligibility.message)
+            return
+
+        candidates = self._discover_repair_report_candidates(
+            manifest,
+            manifest_path=manifest_path,
+        )
+        report_path = self._prompt_repair_report_path(candidates)
+        if not report_path:
+            if not candidates:
+                QMessageBox.information(
+                    self,
+                    "没有可用的修补报告",
+                    "未在任务包或项目目录找到 remaining_need_translate_*.jsonl、"
+                    "failures.jsonl，也无法从检查报告提取 repair 类条目。"
+                    "请先生成或准备 JSONL 报告后再试。",
+                )
+            return
+
+        options = self._prompt_repair_options()
+        if options is None:
+            return
+
+        confirm_lines = [
+            "即将执行同步修补，并直接修改翻译文件。",
+            "修补前请确认已在副本或备份上验证。",
+            "",
+            eligibility.message,
+            f"修补报告：{report_path}",
+        ]
+        reply = QMessageBox.question(
+            self,
+            "确认同步修补",
+            "\n".join(confirm_lines),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._clear_log_view()
+        self._focus_log_tab()
+        self._active_command = "repair"
+        self._repair_output_lines = []
+        base_context = build_diagnostics_context(
+            latest_manifest_path=manifest_path,
+            manifest=manifest,
+            batch_script_path=str(self.state.get_batch_script_path()),
+            logs_dir=str(self.state.get_logs_dir()),
+            python_exe=sys.executable,
+        )
+        self._set_diagnostics_context(
+            repair_summary_to_diagnostics_context(
+                running_repair_summary(
+                    report_path=report_path,
+                    manifest_path=manifest_path,
+                ),
+                base_context,
+            )
+        )
+        args = build_repair_cli_args(
+            report_path,
+            limit=int(options["limit"]),
+            offset=int(options["offset"]),
+            batch_size=int(options["batch_size"]),
+            context_before=int(options["context_before"]),
+            context_after=int(options["context_after"]),
+            api_key_index=options["api_key_index"],
+        )
+        self._append_log(
+            f"=== 正在同步修补：gemini_translate_batch.py {' '.join(args)} ===\n"
+        )
+        self._set_task_running(True)
+        self.runner.run(self.state.get_batch_script_path(), args)
+
     def _on_recheck_writeback(self) -> None:
         spec = work_mode_spec(self._current_work_mode())
         if not spec.supports_translation_writeback:
@@ -4538,6 +4798,8 @@ class MainWindow(QMainWindow):
             self._probe_output_lines.append(text)
         elif self._active_command == "split":
             self._split_output_lines.append(text)
+        elif self._active_command == "repair":
+            self._repair_output_lines.append(text)
         elif self._active_command == "apply_revision":
             self._apply_revision_output_lines.append(text)
         elif self._active_command == "build_retry":
@@ -4831,6 +5093,8 @@ class MainWindow(QMainWindow):
             self._probe_output_lines.append(message)
         elif self._active_command == "split":
             self._split_output_lines.append(message)
+        elif self._active_command == "repair":
+            self._repair_output_lines.append(message)
         elif self._active_command == "build_retry":
             self._build_retry_output_lines.append(message)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
@@ -4969,6 +5233,52 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("拆分翻译包失败，请查看诊断日志。", 8000)
             else:
                 self.statusBar().showMessage("拆分翻译包已结束。", 6000)
+            return
+
+        if self._active_command == "repair":
+            manifest_path = self._writeback_manifest_path
+            manifest = self._load_diagnostics_manifest(manifest_path or None)
+            output_text = "\n".join(self._repair_output_lines)
+            parsed_output = parse_repair_output(output_text)
+            report_path = parsed_output.get("report_path")
+            parsed = summarize_repair_output(
+                output_text,
+                exit_code,
+                report_path=report_path if isinstance(report_path, str) else "",
+                manifest_path=manifest_path or "",
+            )
+            base_context = build_diagnostics_context(
+                latest_manifest_path=manifest_path or None,
+                manifest=manifest,
+                batch_script_path=str(self.state.get_batch_script_path()),
+                logs_dir=str(self.state.get_logs_dir()),
+                python_exe=sys.executable,
+            )
+            self._set_diagnostics_context(
+                repair_summary_to_diagnostics_context(parsed, base_context)
+            )
+            self._active_command = ""
+            self._set_task_running(False)
+            if parsed.status == "ok":
+                self.statusBar().showMessage(
+                    "同步修补完成；建议点击「重新检查」。",
+                    8000,
+                )
+                QMessageBox.information(
+                    self,
+                    "同步修补完成",
+                    "修补已写入翻译文件。请点击写回页的「重新检查」更新检查结果，"
+                    "显示「可写回」后再决定是否写入项目。",
+                )
+            elif parsed.status == "warn":
+                self.statusBar().showMessage(
+                    "同步修补部分完成；请查看摘要并重新检查。",
+                    8000,
+                )
+            elif parsed.status == "failed":
+                self.statusBar().showMessage("同步修补失败，请查看诊断日志。", 8000)
+            else:
+                self.statusBar().showMessage("同步修补已结束。", 6000)
             return
 
         if self._active_command == "apply_revision":
