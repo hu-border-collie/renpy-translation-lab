@@ -769,40 +769,84 @@ def _item_source_line_number(item):
     return line_index + 1 if line_index >= 0 else 0
 
 
-def _read_line_at(path, line_number):
-    if not path or line_number <= 0:
+class NonChineseFileReadCache:
+    """Per-call cache for TL/source reads inside non-Chinese validation helpers."""
+
+    def __init__(self):
+        self._lines_by_path = {}
+        self._line_by_path_and_number = {}
+
+    def read_line(self, path, line_number):
+        if not path or line_number <= 0:
+            return ''
+        cache_key = (path, line_number)
+        if cache_key in self._line_by_path_and_number:
+            return self._line_by_path_and_number[cache_key]
+        line = self._read_line_uncached(path, line_number)
+        self._line_by_path_and_number[cache_key] = line
+        return line
+
+    def read_lines(self, path):
+        if not path:
+            return []
+        if path not in self._lines_by_path:
+            try:
+                with open(path, 'r', encoding='utf-8-sig') as handle:
+                    self._lines_by_path[path] = handle.readlines()
+            except OSError:
+                self._lines_by_path[path] = []
+        return self._lines_by_path[path]
+
+    @staticmethod
+    def _read_line_uncached(path, line_number):
+        if not path or line_number <= 0:
+            return ''
+        try:
+            with open(path, 'r', encoding='utf-8-sig') as handle:
+                for current_number, line in enumerate(handle, 1):
+                    if current_number == line_number:
+                        return line
+        except OSError:
+            return ''
         return ''
-    try:
-        with open(path, 'r', encoding='utf-8-sig') as handle:
-            for current_number, line in enumerate(handle, 1):
-                if current_number == line_number:
-                    return line
-    except OSError:
-        return ''
-    return ''
 
 
-def is_manifest_keyword_argument_item(manifest, chunk, item):
+def _read_line_at(path, line_number, *, file_read_cache=None):
+    if file_read_cache is not None:
+        return file_read_cache.read_line(path, line_number)
+    return NonChineseFileReadCache._read_line_uncached(path, line_number)
+
+
+def _manifest_tl_line_for_item(manifest, chunk, item, *, file_read_cache=None):
+    return _read_line_at(
+        _manifest_file_path_for_chunk(manifest, chunk),
+        _item_source_line_number(item),
+        file_read_cache=file_read_cache,
+    )
+
+
+def is_manifest_keyword_argument_item(manifest, chunk, item, *, file_read_cache=None):
     if not isinstance(item, dict):
         return False
-    line = _read_line_at(_manifest_file_path_for_chunk(manifest, chunk), _item_source_line_number(item))
+    line = _manifest_tl_line_for_item(manifest, chunk, item, file_read_cache=file_read_cache)
     if not line:
         return False
     return legacy.is_keyword_argument_string_span(line, item.get('start'), item.get('end'))
 
 
-def is_manifest_say_speaker_label_item(manifest, chunk, item):
+def is_manifest_say_speaker_label_item(manifest, chunk, item, *, file_read_cache=None):
     if not isinstance(item, dict):
         return False
-    line = _read_line_at(_manifest_file_path_for_chunk(manifest, chunk), _item_source_line_number(item))
+    line = _manifest_tl_line_for_item(manifest, chunk, item, file_read_cache=file_read_cache)
     if not line:
         return False
     return legacy.is_say_speaker_label_string_span(line, item.get('start'), item.get('end'))
 
-def is_manifest_old_new_static_label_item(manifest, chunk, item):
+
+def is_manifest_old_new_static_label_item(manifest, chunk, item, *, file_read_cache=None):
     if not isinstance(item, dict):
         return False
-    line = _read_line_at(_manifest_file_path_for_chunk(manifest, chunk), _item_source_line_number(item))
+    line = _manifest_tl_line_for_item(manifest, chunk, item, file_read_cache=file_read_cache)
     if not line:
         return False
     stripped = line.lstrip()
@@ -914,16 +958,19 @@ def _manifest_base_dir(manifest):
     return legacy.BASE_DIR
 
 
-def _read_source_line_for_tl_item(manifest, chunk, item):
+def _read_source_line_for_tl_item(manifest, chunk, item, *, file_read_cache=None):
     tl_path = _manifest_file_path_for_chunk(manifest, chunk)
     line_number = _item_source_line_number(item)
     if not tl_path or line_number <= 0:
         return ''
-    try:
-        with open(tl_path, 'r', encoding='utf-8-sig') as handle:
-            lines = handle.readlines()
-    except OSError:
-        return ''
+    if file_read_cache is not None:
+        lines = file_read_cache.read_lines(tl_path)
+    else:
+        try:
+            with open(tl_path, 'r', encoding='utf-8-sig') as handle:
+                lines = handle.readlines()
+        except OSError:
+            return ''
     start_index = max(0, line_number - 6)
     end_index = min(len(lines), line_number)
     for index in range(end_index - 1, start_index - 1, -1):
@@ -937,16 +984,25 @@ def _read_source_line_for_tl_item(manifest, chunk, item):
                 source_rel_path,
                 f'game source line {source_rel_path}',
             )
-            return _read_line_at(source_path, int(source_line_number))
+            return _read_line_at(
+                source_path,
+                int(source_line_number),
+                file_read_cache=file_read_cache,
+            )
         except (SystemExit, ValueError):
             return ''
     return ''
 
 
-def is_manifest_player_name_comparison_item(manifest, chunk, original, item):
+def is_manifest_player_name_comparison_item(manifest, chunk, original, item, *, file_read_cache=None):
     if not isinstance(item, dict):
         return False
-    line = _read_source_line_for_tl_item(manifest, chunk, item)
+    line = _read_source_line_for_tl_item(
+        manifest,
+        chunk,
+        item,
+        file_read_cache=file_read_cache,
+    )
     if not line:
         return False
     if not re.search(r'\b(?:Main|main_nm|yourname|persistent\.MainEP)\b\s*==\s*_\(', line):
@@ -960,7 +1016,15 @@ def is_manifest_player_name_comparison_item(manifest, chunk, original, item):
     return looks_like_static_name_or_credit_text(original)
 
 
-def is_manifest_static_non_chinese_item(manifest, chunk, original, translated, item=None):
+def is_manifest_static_non_chinese_item(
+    manifest,
+    chunk,
+    original,
+    translated,
+    item=None,
+    *,
+    file_read_cache=None,
+):
     if not static_name_or_credit_text_matches(original, translated):
         return False
     if legacy.contains_chinese(translated or ''):
@@ -996,8 +1060,18 @@ def is_manifest_static_non_chinese_item(manifest, chunk, original, translated, i
             return False
         return looks_like_static_name_or_credit_text(original)
 
-    if is_manifest_old_new_static_label_item(manifest, chunk, item):
-        line = _read_line_at(_manifest_file_path_for_chunk(manifest, chunk), _item_source_line_number(item))
+    if is_manifest_old_new_static_label_item(
+        manifest,
+        chunk,
+        item,
+        file_read_cache=file_read_cache,
+    ):
+        line = _manifest_tl_line_for_item(
+            manifest,
+            chunk,
+            item,
+            file_read_cache=file_read_cache,
+        )
         label_match = OLD_NEW_LINE_RE.match(line or '')
         if not label_match:
             return False
@@ -1011,7 +1085,13 @@ def is_manifest_static_non_chinese_item(manifest, chunk, original, translated, i
             rel_name,
             rules.get('player_name_comparison_rel_paths', []),
         )
-        and is_manifest_player_name_comparison_item(manifest, chunk, original, item)
+        and is_manifest_player_name_comparison_item(
+            manifest,
+            chunk,
+            original,
+            item,
+            file_read_cache=file_read_cache,
+        )
     ):
         return True
 
@@ -1031,13 +1111,31 @@ def is_manifest_static_non_chinese_item(manifest, chunk, original, translated, i
 
 
 def allow_non_chinese_batch_translation(manifest, chunk, original, translated, item=None):
+    file_read_cache = NonChineseFileReadCache()
     unchanged = (original or '').strip() == (translated or '').strip()
     if (
         (unchanged and (
-            is_manifest_keyword_argument_item(manifest, chunk, item)
-            or is_manifest_say_speaker_label_item(manifest, chunk, item)
+            is_manifest_keyword_argument_item(
+                manifest,
+                chunk,
+                item,
+                file_read_cache=file_read_cache,
+            )
+            or is_manifest_say_speaker_label_item(
+                manifest,
+                chunk,
+                item,
+                file_read_cache=file_read_cache,
+            )
         ))
-        or is_manifest_static_non_chinese_item(manifest, chunk, original, translated, item)
+        or is_manifest_static_non_chinese_item(
+            manifest,
+            chunk,
+            original,
+            translated,
+            item,
+            file_read_cache=file_read_cache,
+        )
         or matching_preserved_or_acronym_non_chinese_text(original, translated)
     ):
         return True
