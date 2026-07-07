@@ -109,6 +109,13 @@ from .split_batch import (
     load_split_manifest_entries,
     summarize_split_entries,
 )
+from .split_report import (
+    build_split_cli_args,
+    running_split_summary,
+    split_summary_to_diagnostics_context,
+    summarize_split_output,
+    translation_split_ready,
+)
 from .split_batch_workflow import SplitBatchQueueWorkflow
 from .split_status_delegate import SPLIT_ACTION_DATA_ROLE, SplitStatusActionDelegate
 from .split_status_table_helpers import is_split_action_column, split_action_item_payload
@@ -273,6 +280,7 @@ class MainWindow(QMainWindow):
         self._apply_output_lines: list[str] = []
         self._recheck_output_lines: list[str] = []
         self._probe_output_lines: list[str] = []
+        self._split_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
         self._bootstrap_progress: BootstrapProgressState | None = None
@@ -1260,6 +1268,15 @@ class MainWindow(QMainWindow):
         self.probe_btn.clicked.connect(self._on_run_probe)
         self.probe_btn.setEnabled(False)
         toolbar.addWidget(self.probe_btn)
+
+        self.split_btn = QPushButton("拆分翻译包")
+        self.split_btn.setObjectName("secondary_btn")
+        self.split_btn.setToolTip(
+            "将过大的翻译包拆成多个子包；拆分后需分别提交，RAG 为静态快照。"
+        )
+        self.split_btn.clicked.connect(self._on_run_split)
+        self.split_btn.setEnabled(False)
+        toolbar.addWidget(self.split_btn)
 
         self.clear_log_btn = QPushButton("清空日志")
         self.clear_log_btn.setObjectName("secondary_btn")
@@ -2447,6 +2464,15 @@ class MainWindow(QMainWindow):
         ready, _message = translation_probe_ready(manifest_path, manifest)
         self.probe_btn.setEnabled(not running and ready)
 
+    def _update_split_btn_enabled(self, *, running: bool | None = None) -> None:
+        if not hasattr(self, "split_btn"):
+            return
+        if running is None:
+            running = self.kill_btn.isEnabled()
+        manifest_path, manifest = self._current_diagnostics_manifest()
+        ready, _message = translation_split_ready(manifest_path, manifest)
+        self.split_btn.setEnabled(not running and ready)
+
     def _refresh_manifest_derived_ui(
         self,
         *,
@@ -2498,6 +2524,7 @@ class MainWindow(QMainWindow):
             )
             self._set_diagnostics_context(context)
             self._update_probe_btn_enabled()
+            self._update_split_btn_enabled()
             return
 
         uses_batch_manifest = spec.manifest_mode is not None
@@ -2528,6 +2555,7 @@ class MainWindow(QMainWindow):
         )
         self._set_diagnostics_context(context)
         self._update_probe_btn_enabled()
+        self._update_split_btn_enabled()
 
     def _set_diagnostics_context(self, context: DiagnosticsContext) -> None:
         fingerprint = (
@@ -4165,6 +4193,55 @@ class MainWindow(QMainWindow):
             "api_key_index": api_key_index,
         }
 
+    def _prompt_split_options(self) -> dict[str, int | str] | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("拆分翻译包")
+        layout = QVBoxLayout(dialog)
+
+        hint = QLabel(
+            "将把当前翻译包拆成多个子包。拆分后 RAG 记忆库为静态快照，"
+            "各子包需分别 submit，不会自动提交。"
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        max_chunks_spin = QSpinBox()
+        max_chunks_spin.setRange(1, 10_000)
+        max_chunks_spin.setValue(600)
+        form.addRow("每包最大块数 (--max-chunks)", max_chunks_spin)
+
+        max_items_spin = QSpinBox()
+        max_items_spin.setRange(0, 1_000_000)
+        max_items_spin.setValue(0)
+        max_items_spin.setSpecialValueText("不限制")
+        form.addRow("每包最大条目 (--max-items)", max_items_spin)
+
+        prefix_edit = QLineEdit()
+        prefix_edit.setPlaceholderText("留空则沿用源包显示名")
+        form.addRow("显示名前缀 (--display-name-prefix)", prefix_edit)
+        layout.addLayout(form)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(dialog.reject)
+        buttons.addWidget(cancel_btn)
+        run_btn = QPushButton("开始拆分")
+        run_btn.setObjectName("primary_btn")
+        run_btn.clicked.connect(dialog.accept)
+        buttons.addWidget(run_btn)
+        layout.addLayout(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        return {
+            "max_chunks": max_chunks_spin.value(),
+            "max_items": max_items_spin.value(),
+            "display_name_prefix": prefix_edit.text().strip(),
+        }
+
     def _on_run_probe(self) -> None:
         manifest_path, manifest = self._current_diagnostics_manifest()
         ready, message = translation_probe_ready(manifest_path, manifest)
@@ -4201,6 +4278,46 @@ class MainWindow(QMainWindow):
         )
         self._append_log(
             f"=== 正在试跑样本请求：gemini_translate_batch.py {' '.join(args)} ===\n"
+        )
+        self._set_task_running(True)
+        self.runner.run(self.state.get_batch_script_path(), args)
+
+    def _on_run_split(self) -> None:
+        manifest_path, manifest = self._current_diagnostics_manifest()
+        ready, message = translation_split_ready(manifest_path, manifest)
+        if not ready:
+            QMessageBox.information(self, "无法拆分翻译包", message)
+            return
+
+        options = self._prompt_split_options()
+        if options is None:
+            return
+
+        self._clear_log_view()
+        self._focus_log_tab()
+        self._active_command = "split"
+        self._split_output_lines = []
+        base_context = build_diagnostics_context(
+            latest_manifest_path=manifest_path,
+            manifest=manifest,
+            batch_script_path=str(self.state.get_batch_script_path()),
+            logs_dir=str(self.state.get_logs_dir()),
+            python_exe=sys.executable,
+        )
+        self._set_diagnostics_context(
+            split_summary_to_diagnostics_context(
+                running_split_summary(manifest_path=manifest_path),
+                base_context,
+            )
+        )
+        args = build_split_cli_args(
+            manifest_path,
+            max_chunks=int(options["max_chunks"]),
+            max_items=int(options["max_items"]),
+            display_name_prefix=str(options["display_name_prefix"]),
+        )
+        self._append_log(
+            f"=== 正在拆分翻译包：gemini_translate_batch.py {' '.join(args)} ===\n"
         )
         self._set_task_running(True)
         self.runner.run(self.state.get_batch_script_path(), args)
@@ -4419,6 +4536,8 @@ class MainWindow(QMainWindow):
             self._recheck_output_lines.append(text)
         elif self._active_command == "probe":
             self._probe_output_lines.append(text)
+        elif self._active_command == "split":
+            self._split_output_lines.append(text)
         elif self._active_command == "apply_revision":
             self._apply_revision_output_lines.append(text)
         elif self._active_command == "build_retry":
@@ -4547,6 +4666,7 @@ class MainWindow(QMainWindow):
             )
         self._update_writeback_action_buttons(writeback_summary, running=running)
         self._update_probe_btn_enabled(running=running)
+        self._update_split_btn_enabled(running=running)
         self.kill_btn.setEnabled(running)
         self._sync_task_shortcuts()
 
@@ -4709,6 +4829,8 @@ class MainWindow(QMainWindow):
             self._recheck_output_lines.append(message)
         elif self._active_command == "probe":
             self._probe_output_lines.append(message)
+        elif self._active_command == "split":
+            self._split_output_lines.append(message)
         elif self._active_command == "build_retry":
             self._build_retry_output_lines.append(message)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
@@ -4797,6 +4919,56 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("样本试跑失败，请查看诊断日志。", 8000)
             else:
                 self.statusBar().showMessage("样本试跑已结束。", 6000)
+            return
+
+        if self._active_command == "split":
+            manifest_path, _manifest = self._current_diagnostics_manifest()
+            split_summary = summarize_split_output(
+                "\n".join(self._split_output_lines),
+                exit_code,
+                manifest_path=manifest_path,
+            )
+            latest_manifest_path = split_summary.latest_manifest_path or manifest_path
+            context_manifest_path = (
+                split_summary.source_manifest_path or manifest_path
+            )
+            context_manifest = self._load_diagnostics_manifest(
+                context_manifest_path or None
+            )
+            base_context = build_diagnostics_context(
+                latest_manifest_path=latest_manifest_path or None,
+                manifest=context_manifest,
+                batch_script_path=str(self.state.get_batch_script_path()),
+                logs_dir=str(self.state.get_logs_dir()),
+                python_exe=sys.executable,
+            )
+            self._set_diagnostics_context(
+                split_summary_to_diagnostics_context(split_summary, base_context)
+            )
+            self._active_command = ""
+            self._set_task_running(False)
+            if split_summary.status == "ok":
+                latest_manifest = self._load_diagnostics_manifest(
+                    latest_manifest_path or None
+                )
+                self._refresh_workflow_from_latest_manifest(
+                    latest_manifest=latest_manifest_path or None,
+                    manifest=latest_manifest,
+                )
+                self._refresh_split_status_ui(
+                    manifest_path=context_manifest_path or manifest_path,
+                    manifest=context_manifest,
+                )
+                self.statusBar().showMessage(
+                    f"拆分完成，已生成 {len(split_summary.child_manifest_paths or [])} 个子包。",
+                    8000,
+                )
+            elif split_summary.status == "unchanged":
+                self.statusBar().showMessage("当前翻译包无需拆分。", 6000)
+            elif split_summary.status == "failed":
+                self.statusBar().showMessage("拆分翻译包失败，请查看诊断日志。", 8000)
+            else:
+                self.statusBar().showMessage("拆分翻译包已结束。", 6000)
             return
 
         if self._active_command == "apply_revision":

@@ -114,6 +114,26 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn(retry_path, by_label["提交补译任务"])
         self.assertIn(retry_path, by_label["合并补译结果"])
 
+    def test_translation_commands_include_split_child_submit_examples(self):
+        child_one = r"C:\logs\batch_jobs\job1\split_parts\part01_of_02\manifest.json"
+        child_two = r"C:\logs\batch_jobs\job1\split_parts\part02_of_02\manifest.json"
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=r"C:\logs\batch_jobs\job1\manifest.json",
+            manifest={
+                "mode": "translation",
+                "job_name": "",
+                "split_children": [child_one, child_two],
+            },
+        )
+
+        by_label = {command.label: command.command for command in commands}
+        self.assertIn("提交拆分包 01", by_label)
+        self.assertIn("提交拆分包 02", by_label)
+        self.assertIn(child_one, by_label["提交拆分包 01"])
+        self.assertIn(child_two, by_label["提交拆分包 02"])
+
     def test_warn_without_existing_retry_includes_build_retry(self):
         commands = build_cli_commands(
             python_exe="python",

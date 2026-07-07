@@ -340,6 +340,41 @@ def build_cli_commands(
             )
         )
 
+    commands.extend(
+        build_split_child_submit_commands(
+            python_exe=python_exe,
+            batch_script_path=batch_script_path,
+            manifest=manifest,
+        )
+    )
+
+    return commands
+
+
+def build_split_child_submit_commands(
+    *,
+    python_exe: str,
+    batch_script_path: str,
+    manifest: dict[str, object],
+) -> list[DiagnosticsCommand]:
+    children = manifest.get("split_children")
+    if not isinstance(children, list):
+        return []
+
+    commands: list[DiagnosticsCommand] = []
+    for index, child_path in enumerate(children, start=1):
+        if not isinstance(child_path, str) or not child_path.strip():
+            continue
+        commands.append(
+            DiagnosticsCommand(
+                label=f"提交拆分包 {index:02d}",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["submit", child_path.strip()],
+                ),
+            )
+        )
     return commands
 
 
