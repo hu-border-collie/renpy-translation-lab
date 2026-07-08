@@ -425,6 +425,50 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(message, "补译环境已就绪，可以开始批量翻译。")
 
+    def test_summarize_doctor_output_parses_json_cli_recommendations(self):
+        cli_line = doctor_rec.format_doctor_recommendation_cli_line(
+            doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_RAG)
+        )
+        output = DOCTOR_OUTPUT + f"\nRecommendations:\n- {cli_line}\n"
+
+        parsed = parse_doctor_output(output)
+        self.assertEqual(len(parsed["recommendations"]), 1)
+        self.assertEqual(parsed["recommendations"][0]["code"], doctor_rec.BOOTSTRAP_RAG)
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+        self.assertEqual(summary.message, "记忆库尚未建立，建议先预建记忆库再开始翻译。")
+        self.assertEqual(summary.status, "warning")
+        self.assertTrue(any("预建记忆库" in fact for fact in summary.facts))
+
+    def test_summarize_doctor_output_parses_json_cli_switch_to_work(self):
+        cli_line = doctor_rec.format_doctor_recommendation_cli_line(
+            doctor_rec.make_doctor_recommendation(
+                doctor_rec.SWITCH_TO_WORK,
+                work_dir="C:\\Games\\Example\\work",
+            )
+        )
+        output = SWITCH_TO_WORK_OUTPUT.replace(
+            "- game_root should use work directory; switch to C:\\Games\\Example\\work",
+            f"- {cli_line}",
+        )
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
+        self.assertTrue(
+            any(fact == "建议：将项目路径切换到C:\\Games\\Example\\work" for fact in summary.facts)
+        )
+
+    def test_format_doctor_recommendation_fact_for_unknown_code(self):
+        fact = format_doctor_recommendation_fact(
+            {
+                "code": doctor_rec.UNKNOWN,
+                "params": {},
+                "detail": "Some future recommendation text that has no mapping yet.",
+            }
+        )
+
+        self.assertEqual(fact, "建议：收到未识别的诊断建议，请查看诊断日志了解详情。")
+        self.assertNotIn("future recommendation", fact)
+
     def test_summarize_doctor_output_uses_primary_recommendation_message(self):
         output = DOCTOR_OUTPUT + (
             "\nRecommendations:\n"

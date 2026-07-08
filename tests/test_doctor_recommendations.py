@@ -31,6 +31,12 @@ class DoctorRecommendationTests(unittest.TestCase):
         self.assertIn("detail", payload)
         self.assertIn("bootstrap-work", payload["detail"])
 
+    def test_legacy_unknown_string_maps_to_unknown_code(self):
+        rec = doctor_rec.legacy_string_to_recommendation("Totally new recommendation wording.")
+
+        self.assertEqual(rec["code"], doctor_rec.UNKNOWN)
+        self.assertEqual(rec["detail"], "Totally new recommendation wording.")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,7 @@ ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT = "enable_source_index_for_new_project"
 START_INCREMENTAL_BATCH = "start_incremental_batch"
 START_PENDING_BATCH = "start_pending_batch"
 NO_PENDING_LINES = "no_pending_lines"
+UNKNOWN = "unknown"
 
 ALL_CODES = frozenset(
     {
@@ -188,7 +189,7 @@ def legacy_string_to_recommendation(text: str) -> dict[str, Any]:
     if code:
         return make_doctor_recommendation(code)
 
-    return {"code": "unknown", "params": {}, "detail": normalized}
+    return {"code": UNKNOWN, "params": {}, "detail": normalized}
 
 
 def normalize_doctor_recommendation(item: Any) -> dict[str, Any]:

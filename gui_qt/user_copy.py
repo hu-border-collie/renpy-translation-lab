@@ -79,6 +79,9 @@ DOCTOR_RECOMMENDATION_CODE_TRANSLATIONS: dict[str, str] = {
     ),
 }
 
+DOCTOR_RECOMMENDATION_UNKNOWN_FACT = "建议：收到未识别的诊断建议，请查看诊断日志了解详情。"
+DOCTOR_RECOMMENDATION_UNKNOWN_SUMMARY = "收到未识别的诊断建议，请查看诊断日志。"
+
 DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES: dict[str, str] = {
     doctor_rec.SUBSTANTIALLY_COMPLETE: "项目已基本译完；剩余待译行很少，可忽略或按需补译。",
     doctor_rec.ENABLE_RAG_FOR_CONSISTENCY: "补译量较大；若要进行批量补译，建议先启用并预建记忆库。",
@@ -91,6 +94,7 @@ DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES: dict[str, str] = {
     doctor_rec.START_INCREMENTAL_BATCH: "补译环境已就绪，可以开始批量翻译。",
     doctor_rec.NO_PENDING_LINES: "当前没有待译条目，请先检查或刷新翻译模板。",
     doctor_rec.START_PENDING_BATCH: "翻译环境已就绪，可以开始批量翻译。",
+    doctor_rec.UNKNOWN: DOCTOR_RECOMMENDATION_UNKNOWN_SUMMARY,
 }
 
 READY_DOCTOR_RECOMMENDATION_CODES = frozenset(
@@ -219,6 +223,8 @@ def format_doctor_recommendation_fact(recommendation: Any) -> str:
     rec = doctor_rec.normalize_doctor_recommendation(recommendation)
     code = str(rec.get("code") or "")
     params = rec.get("params") if isinstance(rec.get("params"), dict) else {}
+    if code == doctor_rec.UNKNOWN:
+        return DOCTOR_RECOMMENDATION_UNKNOWN_FACT
     rendered = DOCTOR_RECOMMENDATION_CODE_TRANSLATIONS.get(code)
     if rendered is not None:
         if code == doctor_rec.SWITCH_TO_WORK:
@@ -227,8 +233,8 @@ def format_doctor_recommendation_fact(recommendation: Any) -> str:
         return rendered
     detail = doctor_rec.doctor_recommendation_detail(rec)
     if detail:
-        return f"建议：{detail}"
-    return f"建议：{code or 'unknown'}"
+        return DOCTOR_RECOMMENDATION_UNKNOWN_FACT
+    return DOCTOR_RECOMMENDATION_UNKNOWN_FACT
 
 
 def translate_doctor_warning(warning: str) -> str:
