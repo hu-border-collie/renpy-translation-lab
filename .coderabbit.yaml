@@ -1,0 +1,9 @@
+# CodeRabbit review settings. See CONTRIBUTING.md § Docstring 约定.
+# Issue: https://github.com/hu-border-collie/renpy-translation-lab/issues/120
+reviews:
+  pre_merge_checks:
+    docstrings:
+      # Advisory only: this repo does not target repo-wide 80% docstring coverage.
+      # New/changed public APIs should still add docstrings per CONTRIBUTING.md.
+      mode: warning
+      threshold: 0
