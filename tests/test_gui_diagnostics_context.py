@@ -81,6 +81,18 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("提交批量任务", labels)
         self.assertIn("查询任务状态", labels)
 
+    def test_build_cli_commands_includes_compare_variants_dry_run(self):
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=r"C:\jobs\manifest.json",
+            manifest={"mode": "translation", "job_name": ""},
+        )
+        by_label = {command.label: command.command for command in commands}
+        self.assertIn("翻译 A/B 对比（试跑）", by_label)
+        self.assertIn("compare-variants", by_label["翻译 A/B 对比（试跑）"])
+        self.assertIn("--dry-run", by_label["翻译 A/B 对比（试跑）"])
+
     def test_build_cli_commands_includes_recover_submit_when_journal_has_job(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             package_dir = os.path.join(tmp_dir, "package")

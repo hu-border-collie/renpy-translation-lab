@@ -46,6 +46,8 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QComboBox,
+    QRadioButton,
+    QButtonGroup,
 )
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
@@ -98,6 +100,22 @@ from .probe_report import (
     running_probe_summary,
     summarize_probe_output,
     translation_probe_ready,
+)
+from .ab_experiment_report import (
+    AB_VARIANT_CHOICE_FORCE_OFF,
+    AB_VARIANT_CHOICE_FORCE_ON,
+    AB_VARIANT_CHOICE_SKIP,
+    AB_VARIANT_DIMENSIONS,
+    ab_experiment_summary_to_diagnostics_context,
+    build_compare_variants_cli_args,
+    build_variants_from_gui_selection,
+    format_variant_names,
+    read_ab_dimension_enabled_states,
+    running_ab_experiment_summary,
+    summarize_compare_variants_output,
+    translation_ab_experiment_ready,
+    validate_ab_experiment_variants,
+    write_variants_to_temp_file,
 )
 from .keyword_report import summarize_keyword_result_from_manifest
 from .revision_report import summarize_revision_apply_output
@@ -293,6 +311,9 @@ class MainWindow(QMainWindow):
         self._apply_output_lines: list[str] = []
         self._recheck_output_lines: list[str] = []
         self._probe_output_lines: list[str] = []
+        self._compare_variants_output_lines: list[str] = []
+        self._compare_variants_names = ""
+        self._compare_variants_temp_file = ""
         self._split_output_lines: list[str] = []
         self._repair_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
@@ -1291,6 +1312,15 @@ class MainWindow(QMainWindow):
         self.probe_btn.clicked.connect(self._on_run_probe)
         self.probe_btn.setEnabled(False)
         toolbar.addWidget(self.probe_btn)
+
+        self.compare_variants_btn = QPushButton("翻译 A/B 对比")
+        self.compare_variants_btn.setObjectName("secondary_btn")
+        self.compare_variants_btn.setToolTip(
+            "用同一批 manifest chunk 并排比较多个配置变体的同步译文，不会写回游戏文件。"
+        )
+        self.compare_variants_btn.clicked.connect(self._on_run_compare_variants)
+        self.compare_variants_btn.setEnabled(False)
+        toolbar.addWidget(self.compare_variants_btn)
 
         self.split_btn = QPushButton("拆分翻译包")
         self.split_btn.setObjectName("secondary_btn")
@@ -2503,6 +2533,21 @@ class MainWindow(QMainWindow):
         ready, _message = translation_probe_ready(manifest_path, manifest)
         self.probe_btn.setEnabled(not running and ready)
 
+    def _update_compare_variants_btn_enabled(self, *, running: bool | None = None) -> None:
+        if not hasattr(self, "compare_variants_btn"):
+            return
+        if running is None:
+            running = self.kill_btn.isEnabled()
+        manifest_path, manifest = self._current_diagnostics_manifest()
+        ready, message = translation_ab_experiment_ready(manifest_path, manifest)
+        self.compare_variants_btn.setEnabled(not running and ready)
+        if ready:
+            self.compare_variants_btn.setToolTip(
+                "用同一批 manifest chunk 并排比较多个配置变体的同步译文，不会写回游戏文件。",
+            )
+        elif message:
+            self.compare_variants_btn.setToolTip(message)
+
     def _update_split_btn_enabled(self, *, running: bool | None = None) -> None:
         if not hasattr(self, "split_btn"):
             return
@@ -2563,6 +2608,7 @@ class MainWindow(QMainWindow):
             )
             self._set_diagnostics_context(context)
             self._update_probe_btn_enabled()
+            self._update_compare_variants_btn_enabled()
             self._update_split_btn_enabled()
             return
 
@@ -2595,6 +2641,7 @@ class MainWindow(QMainWindow):
         )
         self._set_diagnostics_context(context)
         self._update_probe_btn_enabled()
+        self._update_compare_variants_btn_enabled()
         self._update_split_btn_enabled()
 
     def _set_diagnostics_context(self, context: DiagnosticsContext) -> None:
@@ -4248,6 +4295,119 @@ class MainWindow(QMainWindow):
             "api_key_index": api_key_index,
         }
 
+    def _prompt_compare_variants_options(self) -> dict[str, object] | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("翻译 A/B 对比")
+        layout = QVBoxLayout(dialog)
+
+        hint = QLabel(
+            "将对当前翻译包采样若干 chunk，用 baseline（当前 translator_config）"
+            "与所选配置变体并排生成译文报告；不会写回 .rpy 或 glossary.json。"
+            "每个对比项只能选一种：不参与、强制开启或强制关闭。"
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        variants_group = QGroupBox("对比变体")
+        variants_layout = QVBoxLayout(variants_group)
+        baseline_check = QCheckBox("baseline（当前配置，始终包含）")
+        baseline_check.setChecked(True)
+        baseline_check.setEnabled(False)
+        variants_layout.addWidget(baseline_check)
+
+        current_states = read_ab_dimension_enabled_states(self.state.load_translator_config())
+        dimension_button_groups: dict[str, QButtonGroup] = {}
+        for dimension in AB_VARIANT_DIMENSIONS:
+            dimension_id = str(dimension["id"])
+            label = str(dimension["label"])
+            current_enabled = current_states.get(dimension_id, False)
+            current_text = "当前：开启" if current_enabled else "当前：关闭"
+
+            row = QHBoxLayout()
+            row.addWidget(QLabel(f"{label}（{current_text}）"))
+
+            button_group = QButtonGroup(dialog)
+            skip_radio = QRadioButton("不参与")
+            on_radio = QRadioButton("强制开启")
+            off_radio = QRadioButton("强制关闭")
+            skip_radio.setChecked(True)
+            button_group.addButton(skip_radio, 0)
+            button_group.addButton(on_radio, 1)
+            button_group.addButton(off_radio, 2)
+            row.addWidget(skip_radio)
+            row.addWidget(on_radio)
+            row.addWidget(off_radio)
+            row.addStretch(1)
+            variants_layout.addLayout(row)
+            dimension_button_groups[dimension_id] = button_group
+
+        form.addRow(variants_group)
+
+        limit_spin = QSpinBox()
+        limit_spin.setRange(1, 50)
+        limit_spin.setValue(3)
+        form.addRow("采样块数 (--limit)", limit_spin)
+
+        offset_spin = QSpinBox()
+        offset_spin.setRange(0, 1_000_000)
+        offset_spin.setValue(0)
+        form.addRow("起始偏移 (--offset)", offset_spin)
+
+        output_dir_edit = QLineEdit()
+        output_dir_edit.setPlaceholderText("留空则写入 logs/experiments/")
+        form.addRow("输出目录 (--output-dir)", output_dir_edit)
+
+        dry_run_check = QCheckBox("仅试跑（不调用翻译 API）")
+        dry_run_check.setChecked(True)
+        form.addRow("", dry_run_check)
+
+        api_key_spin = QSpinBox()
+        api_key_spin.setRange(-1, 99)
+        api_key_spin.setValue(-1)
+        api_key_spin.setSpecialValueText("默认")
+        form.addRow("API Key 索引 (--api-key-index)", api_key_spin)
+        layout.addLayout(form)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(dialog.reject)
+        buttons.addWidget(cancel_btn)
+        run_btn = QPushButton("开始对比")
+        run_btn.setObjectName("primary_btn")
+        run_btn.clicked.connect(dialog.accept)
+        buttons.addWidget(run_btn)
+        layout.addLayout(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        dimension_choices: dict[str, str] = {}
+        for dimension_id, button_group in dimension_button_groups.items():
+            checked_id = button_group.checkedId()
+            if checked_id == 1:
+                dimension_choices[dimension_id] = AB_VARIANT_CHOICE_FORCE_ON
+            elif checked_id == 2:
+                dimension_choices[dimension_id] = AB_VARIANT_CHOICE_FORCE_OFF
+            else:
+                dimension_choices[dimension_id] = AB_VARIANT_CHOICE_SKIP
+        variants = build_variants_from_gui_selection(dimension_choices)
+        valid, validation_message = validate_ab_experiment_variants(variants)
+        if not valid:
+            QMessageBox.warning(dialog, "对比项不足", validation_message)
+            return None
+
+        api_key_index = None if api_key_spin.value() < 0 else api_key_spin.value()
+        return {
+            "variants": variants,
+            "limit": limit_spin.value(),
+            "offset": offset_spin.value(),
+            "output_dir": output_dir_edit.text().strip(),
+            "dry_run": dry_run_check.isChecked(),
+            "api_key_index": api_key_index,
+        }
+
     def _prompt_split_options(self) -> dict[str, int | str] | None:
         dialog = QDialog(self)
         dialog.setWindowTitle("拆分翻译包")
@@ -4334,6 +4494,67 @@ class MainWindow(QMainWindow):
         )
         self._append_log(
             f"=== 正在试跑样本请求：gemini_translate_batch.py {' '.join(args)} ===\n"
+        )
+        self._set_task_running(True)
+        self.runner.run(self.state.get_batch_script_path(), args)
+
+    def _cleanup_compare_variants_temp_file(self) -> None:
+        temp_file = self._compare_variants_temp_file
+        self._compare_variants_temp_file = ""
+        if not temp_file:
+            return
+        Path(temp_file).unlink(missing_ok=True)
+
+    def _on_run_compare_variants(self) -> None:
+        manifest_path, manifest = self._current_diagnostics_manifest()
+        ready, message = translation_ab_experiment_ready(manifest_path, manifest)
+        if not ready:
+            QMessageBox.information(self, "无法运行翻译 A/B 对比", message)
+            return
+
+        options = self._prompt_compare_variants_options()
+        if options is None:
+            return
+
+        self._clear_log_view()
+        self._focus_log_tab()
+        self._active_command = "compare_variants"
+        self._compare_variants_output_lines = []
+        variants = list(options["variants"])
+        variant_names = format_variant_names(variants)
+        self._compare_variants_names = variant_names
+        variants_file = write_variants_to_temp_file(variants)
+        self._compare_variants_temp_file = variants_file
+        dry_run = bool(options["dry_run"])
+        base_context = build_diagnostics_context(
+            latest_manifest_path=manifest_path,
+            manifest=manifest,
+            batch_script_path=str(self.state.get_batch_script_path()),
+            logs_dir=str(self.state.get_logs_dir()),
+            python_exe=sys.executable,
+            submit_max_cost=self._submit_max_cost_from_config(),
+        )
+        self._set_diagnostics_context(
+            ab_experiment_summary_to_diagnostics_context(
+                running_ab_experiment_summary(
+                    manifest_path=manifest_path,
+                    variant_names=variant_names,
+                    dry_run=dry_run,
+                ),
+                base_context,
+            )
+        )
+        args = build_compare_variants_cli_args(
+            manifest_path,
+            variants_file,
+            limit=int(options["limit"]),
+            offset=int(options["offset"]),
+            output_dir=str(options["output_dir"]),
+            dry_run=dry_run,
+            api_key_index=options["api_key_index"],  # type: ignore[arg-type]
+        )
+        self._append_log(
+            f"=== 正在运行翻译 A/B 对比：gemini_translate_batch.py {' '.join(args)} ===\n"
         )
         self._set_task_running(True)
         self.runner.run(self.state.get_batch_script_path(), args)
@@ -4817,6 +5038,8 @@ class MainWindow(QMainWindow):
             self._recheck_output_lines.append(text)
         elif self._active_command == "probe":
             self._probe_output_lines.append(text)
+        elif self._active_command == "compare_variants":
+            self._compare_variants_output_lines.append(text)
         elif self._active_command == "split":
             self._split_output_lines.append(text)
         elif self._active_command == "repair":
@@ -4949,6 +5172,7 @@ class MainWindow(QMainWindow):
             )
         self._update_writeback_action_buttons(writeback_summary, running=running)
         self._update_probe_btn_enabled(running=running)
+        self._update_compare_variants_btn_enabled(running=running)
         self._update_split_btn_enabled(running=running)
         self.kill_btn.setEnabled(running)
         self._sync_task_shortcuts()
@@ -5112,6 +5336,9 @@ class MainWindow(QMainWindow):
             self._recheck_output_lines.append(message)
         elif self._active_command == "probe":
             self._probe_output_lines.append(message)
+        elif self._active_command == "compare_variants":
+            self._compare_variants_output_lines.append(message)
+            self._cleanup_compare_variants_temp_file()
         elif self._active_command == "split":
             self._split_output_lines.append(message)
         elif self._active_command == "repair":
@@ -5205,6 +5432,41 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("样本试跑失败，请查看诊断日志。", 8000)
             else:
                 self.statusBar().showMessage("样本试跑已结束。", 6000)
+            return
+
+        if self._active_command == "compare_variants":
+            manifest_path, manifest = self._current_diagnostics_manifest()
+            ab_summary = summarize_compare_variants_output(
+                "\n".join(self._compare_variants_output_lines),
+                exit_code,
+                manifest_path=manifest_path,
+                variant_names=self._compare_variants_names,
+            )
+            base_context = build_diagnostics_context(
+                latest_manifest_path=manifest_path or None,
+                manifest=manifest,
+                batch_script_path=str(self.state.get_batch_script_path()),
+                logs_dir=str(self.state.get_logs_dir()),
+                python_exe=sys.executable,
+                submit_max_cost=self._submit_max_cost_from_config(),
+            )
+            self._set_diagnostics_context(
+                ab_experiment_summary_to_diagnostics_context(ab_summary, base_context)
+            )
+            self._active_command = ""
+            self._set_task_running(False)
+            if ab_summary.status == "ok":
+                if ab_summary.dry_run:
+                    self.statusBar().showMessage("翻译 A/B 试跑完成。", 6000)
+                else:
+                    self.statusBar().showMessage("翻译 A/B 对比完成。", 6000)
+            elif ab_summary.status == "failed":
+                self.statusBar().showMessage("翻译 A/B 对比失败，请查看诊断日志。", 8000)
+            elif ab_summary.status == "warn":
+                self.statusBar().showMessage("翻译 A/B 对比完成，但需关注部分结果。", 6000)
+            else:
+                self.statusBar().showMessage("翻译 A/B 对比已结束。", 6000)
+            self._cleanup_compare_variants_temp_file()
             return
 
         if self._active_command == "split":
