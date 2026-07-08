@@ -7,67 +7,69 @@ import re
 import tempfile
 from dataclasses import dataclass
 
+from .bootstrap_report import coerce_bool
 from .diagnostics_context import DiagnosticsContext, DiagnosticsPathEntry
 from .user_copy import format_manifest_path_fact
 
 _MANIFEST_MODE_TRANSLATION = "translation"
 _COMPARE_VARIANTS_LINE_RE = re.compile(
-    r"^\s*-\s*(output_dir|chunks|variants|dry_run|report|results|settings):\s*(.+?)\s*$",
+    r"^\s*-\s*(output_dir|chunks|variants|dry_run|report|results|settings|experiment_error):\s*(.+?)\s*$",
     re.MULTILINE,
 )
 
 BASELINE_VARIANT = {"name": "baseline", "overrides": {}}
 
-AB_VARIANT_OPTION_SPECS: tuple[dict[str, object], ...] = (
+AB_VARIANT_CHOICE_SKIP = "skip"
+AB_VARIANT_CHOICE_FORCE_ON = "force_on"
+AB_VARIANT_CHOICE_FORCE_OFF = "force_off"
+
+AB_VARIANT_DIMENSIONS: tuple[dict[str, object], ...] = (
     {
-        "id": "story_memory_on",
-        "label": "Story Memory 开启",
-        "name": "story_memory_on",
-        "overrides": {"batch": {"story_memory": {"enabled": True}}},
+        "id": "story_memory",
+        "label": "Story Memory",
+        "overrides_key": "story_memory",
     },
     {
-        "id": "story_memory_off",
-        "label": "Story Memory 关闭",
-        "name": "story_memory_off",
-        "overrides": {"batch": {"story_memory": {"enabled": False}}},
+        "id": "rag",
+        "label": "RAG",
+        "overrides_key": "rag",
     },
     {
-        "id": "rag_on",
-        "label": "RAG 开启",
-        "name": "rag_on",
-        "overrides": {"batch": {"rag": {"enabled": True}}},
-    },
-    {
-        "id": "rag_off",
-        "label": "RAG 关闭",
-        "name": "rag_off",
-        "overrides": {"batch": {"rag": {"enabled": False}}},
-    },
-    {
-        "id": "source_index_on",
-        "label": "原文索引 开启",
-        "name": "source_index_on",
-        "overrides": {"batch": {"source_index": {"enabled": True}}},
-    },
-    {
-        "id": "source_index_off",
-        "label": "原文索引 关闭",
-        "name": "source_index_off",
-        "overrides": {"batch": {"source_index": {"enabled": False}}},
+        "id": "source_index",
+        "label": "原文索引",
+        "overrides_key": "source_index",
     },
 )
 
 
-def build_variants_from_gui_selection(selected_option_ids: set[str]) -> list[dict]:
+def read_ab_dimension_enabled_states(config: dict[str, object]) -> dict[str, bool]:
+    batch = config.get("batch")
+    if not isinstance(batch, dict):
+        batch = {}
+    states: dict[str, bool] = {}
+    for dimension in AB_VARIANT_DIMENSIONS:
+        dimension_id = str(dimension["id"])
+        overrides_key = str(dimension["overrides_key"])
+        section = batch.get(overrides_key)
+        if not isinstance(section, dict):
+            section = {}
+        states[dimension_id] = coerce_bool(section.get("enabled"), False)
+    return states
+
+
+def build_variants_from_gui_selection(dimension_choices: dict[str, str]) -> list[dict]:
     variants = [dict(BASELINE_VARIANT)]
-    for spec in AB_VARIANT_OPTION_SPECS:
-        option_id = str(spec["id"])
-        if option_id not in selected_option_ids:
+    for dimension in AB_VARIANT_DIMENSIONS:
+        dimension_id = str(dimension["id"])
+        choice = dimension_choices.get(dimension_id, AB_VARIANT_CHOICE_SKIP)
+        if choice == AB_VARIANT_CHOICE_SKIP:
             continue
+        overrides_key = str(dimension["overrides_key"])
+        enabled = choice == AB_VARIANT_CHOICE_FORCE_ON
         variants.append(
             {
-                "name": str(spec["name"]),
-                "overrides": spec["overrides"],
+                "name": f"{dimension_id}_{'on' if enabled else 'off'}",
+                "overrides": {"batch": {overrides_key: {"enabled": enabled}}},
             },
         )
     return variants
@@ -75,7 +77,10 @@ def build_variants_from_gui_selection(selected_option_ids: set[str]) -> list[dic
 
 def validate_ab_experiment_variants(variants: list[dict]) -> tuple[bool, str]:
     if len(variants) < 2:
-        return False, "请至少勾选一个对比项；baseline（当前配置）会自动包含。"
+        return False, (
+            "请至少选择一个对比项（将某维度设为「强制开启」或「强制关闭」）；"
+            "baseline（当前配置）会自动包含。"
+        )
     names = [str(entry.get("name") or "") for entry in variants]
     if len(set(names)) != len(names):
         return False, "变体名称重复，请调整勾选项。"
@@ -191,6 +196,102 @@ def parse_compare_variants_output(output: str) -> dict[str, object]:
     return parsed
 
 
+def resolve_ab_settings_path(
+    report_path: str,
+    results_path: str,
+    settings_path: str = "",
+) -> str:
+    candidates: list[str] = []
+    if isinstance(settings_path, str) and settings_path.strip():
+        candidates.append(settings_path.strip())
+    for base_path in (report_path, results_path):
+        if isinstance(base_path, str) and base_path.strip():
+            candidates.append(os.path.join(os.path.dirname(base_path), "ab_settings.json"))
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return candidates[0] if candidates else ""
+
+
+def collect_ab_experiment_issues(
+    *,
+    settings_path: str = "",
+    results_path: str = "",
+    expected_variant_count: int | None = None,
+    stdout_experiment_error: str = "",
+) -> tuple[str, list[str]]:
+    findings: list[str] = []
+    severity = ""
+
+    if isinstance(stdout_experiment_error, str) and stdout_experiment_error.strip():
+        findings.append(f"实验中断：{stdout_experiment_error.strip()}")
+        severity = "failed"
+
+    if settings_path and os.path.isfile(settings_path):
+        try:
+            with open(settings_path, encoding="utf-8") as handle:
+                settings = json.load(handle)
+            experiment_error = settings.get("experiment_error")
+            if isinstance(experiment_error, str) and experiment_error.strip():
+                message = f"实验中断：{experiment_error.strip()}"
+                if message not in findings:
+                    findings.append(message)
+                severity = "failed"
+        except (OSError, json.JSONDecodeError):
+            findings.append("无法读取 ab_settings.json。")
+            if severity != "failed":
+                severity = "warn"
+
+    if results_path and os.path.isfile(results_path):
+        variant_errors: list[str] = []
+        max_variants_seen = 0
+        try:
+            with open(results_path, encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = json.loads(line)
+                    variants = row.get("variants")
+                    if not isinstance(variants, list):
+                        continue
+                    max_variants_seen = max(max_variants_seen, len(variants))
+                    chunk_key = str(row.get("chunk_key") or "")
+                    for variant in variants:
+                        if not isinstance(variant, dict):
+                            continue
+                        error = variant.get("error")
+                        name = str(variant.get("name") or "")
+                        if isinstance(error, str) and error.strip():
+                            label = "/".join(part for part in (chunk_key, name) if part) or "variant"
+                            variant_errors.append(f"{label}: {error.strip()}")
+        except (OSError, json.JSONDecodeError):
+            findings.append("无法读取 ab_results.jsonl。")
+            if severity != "failed":
+                severity = "warn"
+        else:
+            if variant_errors:
+                preview = "; ".join(variant_errors[:3])
+                if len(variant_errors) > 3:
+                    preview += f"；另有 {len(variant_errors) - 3} 条，见 ab_results.jsonl"
+                findings.append(f"部分变体出错：{preview}")
+                if severity != "failed":
+                    severity = "warn"
+            if (
+                isinstance(expected_variant_count, int)
+                and expected_variant_count > 0
+                and max_variants_seen > 0
+                and max_variants_seen < expected_variant_count
+            ):
+                findings.append(
+                    f"仅完成 {max_variants_seen}/{expected_variant_count} 个变体，报告可能不完整。",
+                )
+                if severity != "failed":
+                    severity = "warn"
+
+    return severity, findings
+
+
 def summarize_compare_variants_output(
     output: str,
     exit_code: int,
@@ -219,6 +320,7 @@ def summarize_compare_variants_output(
     report_path = parsed.get("report")
     results_path = parsed.get("results")
     settings_path = parsed.get("settings")
+    stdout_experiment_error = parsed.get("experiment_error")
     chunk_count = parsed.get("chunks")
     variant_count = parsed.get("variants")
     dry_run = parsed.get("dry_run")
@@ -239,6 +341,23 @@ def summarize_compare_variants_output(
         findings.append("命令已结束，但报告文件尚未找到。")
 
     if isinstance(report_path, str) and report_path and os.path.isfile(report_path):
+        resolved_settings_path = resolve_ab_settings_path(
+            report_path,
+            results_path if isinstance(results_path, str) else "",
+            settings_path if isinstance(settings_path, str) else "",
+        )
+        issue_severity, issue_findings = collect_ab_experiment_issues(
+            settings_path=resolved_settings_path,
+            results_path=results_path if isinstance(results_path, str) else "",
+            expected_variant_count=variant_count if isinstance(variant_count, int) else None,
+            stdout_experiment_error=(
+                stdout_experiment_error
+                if isinstance(stdout_experiment_error, str)
+                else ""
+            ),
+        )
+        findings.extend(issue_findings)
+
         if isinstance(dry_run, bool) and dry_run:
             message = (
                 "试跑已完成：各变体 prompt 已重建并写入报告，未调用翻译 API。"
@@ -250,8 +369,18 @@ def summarize_compare_variants_output(
                 "实验已完成：请打开并排 Markdown 报告，人工比较各变体译文与配置差异。"
             )
             heading = "翻译 A/B 对比完成"
+
+        status = "ok"
+        if issue_severity == "failed":
+            status = "failed"
+            heading = "翻译 A/B 对比失败"
+            message = "实验报告已生成，但部分变体未完成或实验中断，请查看诊断日志。"
+        elif issue_severity == "warn":
+            status = "warn"
+            message = f"{message} 部分变体可能不完整，请查看下方详情。"
+
         return AbExperimentSummary(
-            status="ok",
+            status=status,
             heading=heading,
             message=message,
             facts=facts,
@@ -260,7 +389,7 @@ def summarize_compare_variants_output(
             output_dir=output_dir if isinstance(output_dir, str) else "",
             report_path=report_path,
             results_path=results_path if isinstance(results_path, str) else "",
-            settings_path=settings_path if isinstance(settings_path, str) else "",
+            settings_path=resolved_settings_path,
             chunk_count=chunk_count if isinstance(chunk_count, int) else None,
             variant_count=variant_count if isinstance(variant_count, int) else None,
             dry_run=dry_run if isinstance(dry_run, bool) else None,

@@ -46,6 +46,8 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QComboBox,
+    QRadioButton,
+    QButtonGroup,
 )
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
@@ -100,11 +102,15 @@ from .probe_report import (
     translation_probe_ready,
 )
 from .ab_experiment_report import (
-    AB_VARIANT_OPTION_SPECS,
+    AB_VARIANT_CHOICE_FORCE_OFF,
+    AB_VARIANT_CHOICE_FORCE_ON,
+    AB_VARIANT_CHOICE_SKIP,
+    AB_VARIANT_DIMENSIONS,
     ab_experiment_summary_to_diagnostics_context,
     build_compare_variants_cli_args,
     build_variants_from_gui_selection,
     format_variant_names,
+    read_ab_dimension_enabled_states,
     running_ab_experiment_summary,
     summarize_compare_variants_output,
     translation_ab_experiment_ready,
@@ -4294,8 +4300,9 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dialog)
 
         hint = QLabel(
-            "将对当前翻译包采样若干 chunk，用勾选配置与 baseline（当前 translator_config）"
-            "并排生成译文报告；不会写回 .rpy 或 glossary.json。"
+            "将对当前翻译包采样若干 chunk，用 baseline（当前 translator_config）"
+            "与所选配置变体并排生成译文报告；不会写回 .rpy 或 glossary.json。"
+            "每个对比项只能选一种：不参与、强制开启或强制关闭。"
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -4307,12 +4314,33 @@ class MainWindow(QMainWindow):
         baseline_check.setChecked(True)
         baseline_check.setEnabled(False)
         variants_layout.addWidget(baseline_check)
-        option_checks: dict[str, QCheckBox] = {}
-        for spec in AB_VARIANT_OPTION_SPECS:
-            option_id = str(spec["id"])
-            checkbox = QCheckBox(str(spec["label"]))
-            option_checks[option_id] = checkbox
-            variants_layout.addWidget(checkbox)
+
+        current_states = read_ab_dimension_enabled_states(self.state.load_translator_config())
+        dimension_button_groups: dict[str, QButtonGroup] = {}
+        for dimension in AB_VARIANT_DIMENSIONS:
+            dimension_id = str(dimension["id"])
+            label = str(dimension["label"])
+            current_enabled = current_states.get(dimension_id, False)
+            current_text = "当前：开启" if current_enabled else "当前：关闭"
+
+            row = QHBoxLayout()
+            row.addWidget(QLabel(f"{label}（{current_text}）"))
+
+            button_group = QButtonGroup(dialog)
+            skip_radio = QRadioButton("不参与")
+            on_radio = QRadioButton("强制开启")
+            off_radio = QRadioButton("强制关闭")
+            skip_radio.setChecked(True)
+            button_group.addButton(skip_radio, 0)
+            button_group.addButton(on_radio, 1)
+            button_group.addButton(off_radio, 2)
+            row.addWidget(skip_radio)
+            row.addWidget(on_radio)
+            row.addWidget(off_radio)
+            row.addStretch(1)
+            variants_layout.addLayout(row)
+            dimension_button_groups[dimension_id] = button_group
+
         form.addRow(variants_group)
 
         limit_spin = QSpinBox()
@@ -4354,12 +4382,16 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
 
-        selected_option_ids = {
-            option_id
-            for option_id, checkbox in option_checks.items()
-            if checkbox.isChecked()
-        }
-        variants = build_variants_from_gui_selection(selected_option_ids)
+        dimension_choices: dict[str, str] = {}
+        for dimension_id, button_group in dimension_button_groups.items():
+            checked_id = button_group.checkedId()
+            if checked_id == 1:
+                dimension_choices[dimension_id] = AB_VARIANT_CHOICE_FORCE_ON
+            elif checked_id == 2:
+                dimension_choices[dimension_id] = AB_VARIANT_CHOICE_FORCE_OFF
+            else:
+                dimension_choices[dimension_id] = AB_VARIANT_CHOICE_SKIP
+        variants = build_variants_from_gui_selection(dimension_choices)
         valid, validation_message = validate_ab_experiment_variants(variants)
         if not valid:
             QMessageBox.warning(dialog, "对比项不足", validation_message)
