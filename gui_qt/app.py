@@ -2676,6 +2676,45 @@ class MainWindow(QMainWindow):
             tool_root=tool_root,
         )
 
+    def _validated_cached_keyword_merge_candidates_path(self) -> str:
+        cached_candidates = getattr(self, "_keyword_merge_candidates_path", "")
+        if not cached_candidates or not os.path.isfile(cached_candidates):
+            if cached_candidates:
+                self._keyword_merge_candidates_path = ""
+            return ""
+
+        state = getattr(self, "state", None)
+        if state is None:
+            return cached_candidates
+
+        game_root = state.get_game_root()
+        if game_root is not None:
+            try:
+                root = Path(canonical_abs_path(str(game_root)))
+                candidate = Path(canonical_abs_path(cached_candidates))
+                if candidate == root or root in candidate.parents:
+                    return cached_candidates
+            except (OSError, ValueError):
+                pass
+
+        keyword_manifest_path, keyword_manifest = self._latest_keyword_extraction_manifest()
+        expected = keyword_merge_candidates_path_from_manifest(
+            keyword_manifest_path,
+            keyword_manifest,
+        )
+        if expected:
+            try:
+                if (
+                    canonical_abs_path(cached_candidates).lower()
+                    == canonical_abs_path(expected).lower()
+                ):
+                    return cached_candidates
+            except (OSError, ValueError):
+                pass
+
+        self._keyword_merge_candidates_path = ""
+        return ""
+
     def _latest_keyword_extraction_manifest(
         self,
     ) -> tuple[str, dict[str, object] | None]:
@@ -2700,8 +2739,8 @@ class MainWindow(QMainWindow):
         manifest_path: str = "",
         manifest: dict[str, object] | None = None,
     ) -> str:
-        cached_candidates = getattr(self, "_keyword_merge_candidates_path", "")
-        if cached_candidates and os.path.isfile(cached_candidates):
+        cached_candidates = self._validated_cached_keyword_merge_candidates_path()
+        if cached_candidates:
             return cached_candidates
         if manifest is None and manifest_path:
             state = getattr(self, "state", None)
@@ -3692,6 +3731,7 @@ class MainWindow(QMainWindow):
                 "任务状态已清空；请先针对新项目重新检查。",
             )
         self._writeback_manifest_path = ""
+        self._keyword_merge_candidates_path = ""
         if spec.supports_translation_writeback:
             self._set_writeback_summary(stale_writeback_summary())
         else:
