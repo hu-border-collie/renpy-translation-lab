@@ -1308,62 +1308,80 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(10)
 
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)
         diag_hint = QLabel(
             "上方可查看任务上下文、命令参考与任务记录；下方显示原始命令输出。"
             "任务运行时会自动切到此页并放大日志区域。"
         )
         diag_hint.setWordWrap(True)
         diag_hint.setObjectName("config_hint_label")
-        toolbar.addWidget(diag_hint, 1)
+        diag_hint.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(diag_hint)
 
-        self.refresh_diagnostics_btn = QPushButton("刷新上下文")
+        action_frame = QFrame()
+        action_frame.setObjectName("action_frame")
+        action_outer = QVBoxLayout(action_frame)
+        action_outer.setContentsMargins(12, 10, 12, 10)
+        action_outer.setSpacing(8)
+
+        diagnostics_action_panel = ResponsiveActionPanel(
+            prep_label="上下文",
+            translate_label="工具",
+            compact_width=960,
+        )
+        self.refresh_diagnostics_btn = diagnostics_action_panel.add_prep_button(
+            QPushButton("刷新上下文")
+        )
         self.refresh_diagnostics_btn.setObjectName("secondary_btn")
         self.refresh_diagnostics_btn.clicked.connect(self._refresh_diagnostics_context)
-        toolbar.addWidget(self.refresh_diagnostics_btn)
 
-        self.probe_btn = QPushButton("试跑样本请求")
+        self.probe_btn = diagnostics_action_panel.add_translate_button(
+            QPushButton("试跑样本请求")
+        )
         self.probe_btn.setObjectName("secondary_btn")
         self.probe_btn.setToolTip(
             "对当前翻译包执行少量同步请求，提交批量任务前验证 API 与请求格式。"
         )
         self.probe_btn.clicked.connect(self._on_run_probe)
         self.probe_btn.setEnabled(False)
-        toolbar.addWidget(self.probe_btn)
 
-        self.compare_variants_btn = QPushButton("翻译 A/B 对比")
+        self.compare_variants_btn = diagnostics_action_panel.add_translate_button(
+            QPushButton("翻译 A/B 对比")
+        )
         self.compare_variants_btn.setObjectName("secondary_btn")
         self.compare_variants_btn.setToolTip(
             "用同一批 manifest chunk 并排比较多个配置变体的同步译文，不会写回游戏文件。"
         )
         self.compare_variants_btn.clicked.connect(self._on_run_compare_variants)
         self.compare_variants_btn.setEnabled(False)
-        toolbar.addWidget(self.compare_variants_btn)
 
-        self.keyword_merge_btn = QPushButton("合并到 glossary")
+        self.keyword_merge_btn = diagnostics_action_panel.add_translate_button(
+            QPushButton("合并到 glossary")
+        )
         self.keyword_merge_btn.setObjectName("secondary_btn")
         self.keyword_merge_btn.setToolTip(
             "勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。"
         )
         self.keyword_merge_btn.clicked.connect(self._on_open_keyword_merge)
         self.keyword_merge_btn.setEnabled(False)
-        toolbar.addWidget(self.keyword_merge_btn)
 
-        self.split_btn = QPushButton("拆分翻译包")
+        self.split_btn = diagnostics_action_panel.add_translate_button(
+            QPushButton("拆分翻译包")
+        )
         self.split_btn.setObjectName("secondary_btn")
         self.split_btn.setToolTip(
             "将过大的翻译包拆成多个子包；拆分后需分别提交，RAG 为静态快照。"
         )
         self.split_btn.clicked.connect(self._on_run_split)
         self.split_btn.setEnabled(False)
-        toolbar.addWidget(self.split_btn)
 
-        self.clear_log_btn = QPushButton("清空日志")
+        self.clear_log_btn = diagnostics_action_panel.add_translate_trailing(
+            QPushButton("清空日志")
+        )
         self.clear_log_btn.setObjectName("secondary_btn")
         self.clear_log_btn.clicked.connect(self._on_clear_log)
-        toolbar.addWidget(self.clear_log_btn)
-        layout.addLayout(toolbar)
+        diagnostics_action_panel.finish_setup()
+        action_outer.addWidget(diagnostics_action_panel)
+        layout.addWidget(action_frame)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.setObjectName("diagnostics_splitter")
