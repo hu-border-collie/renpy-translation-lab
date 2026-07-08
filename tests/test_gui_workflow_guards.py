@@ -26,12 +26,12 @@ class GuiWorkflowGuardTests(unittest.TestCase):
         window._current_config_ui_snapshot = lambda: {"api_key_count": 2}
 
         message_box = mock.Mock()
-        cancel_btn = object()
+        save_btn, discard_btn, cancel_btn = object(), object(), object()
+        message_box.addButton.side_effect = [save_btn, discard_btn, cancel_btn]
         message_box.clickedButton.return_value = cancel_btn
         with (
             mock.patch.object(MainWindow, "_config_tab_has_unsaved_changes", return_value=True),
             mock.patch("gui_qt.app.QMessageBox", return_value=message_box),
-            mock.patch("gui_qt.app.QMessageBox.addButton", side_effect=[object(), object(), cancel_btn]),
         ):
             allowed = window._confirm_unsaved_config_before_workflow()
 
