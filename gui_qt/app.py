@@ -3312,8 +3312,11 @@ class MainWindow(QMainWindow):
         self.timeline.setVisible(True)
 
     def _invalidate_manifest_caches(self, manifest_path: str | Path | None = None) -> None:
-        invalidate_history = getattr(self.state, "invalidate_manifest_history_cache", None)
-        invalidate_file = getattr(self.state, "invalidate_manifest_file_cache", None)
+        state = getattr(self, "state", None)
+        if state is None:
+            return
+        invalidate_history = getattr(state, "invalidate_manifest_history_cache", None)
+        invalidate_file = getattr(state, "invalidate_manifest_file_cache", None)
         if callable(invalidate_history):
             invalidate_history()
         if callable(invalidate_file):
@@ -4002,9 +4005,9 @@ class MainWindow(QMainWindow):
         return snapshot
 
     def _config_tab_has_unsaved_changes(self) -> bool:
-        if self._loading_config_to_ui:
+        if getattr(self, "_loading_config_to_ui", False):
             return False
-        if not self._config_ui_saved_snapshot:
+        if not getattr(self, "_config_ui_saved_snapshot", None):
             return False
         return self._current_config_ui_snapshot() != self._config_ui_saved_snapshot
 
