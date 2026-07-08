@@ -7,6 +7,7 @@ This is the first version shell (per #42):
 """
 from __future__ import annotations
 
+import os
 import sys
 import re
 import json
@@ -116,6 +117,14 @@ from .ab_experiment_report import (
     translation_ab_experiment_ready,
     validate_ab_experiment_variants,
     write_variants_to_temp_file,
+)
+from .keyword_merge_dialog import KeywordMergeDialog
+from .keyword_merge_report import (
+    keyword_merge_candidates_path_from_manifest,
+    keyword_merge_candidates_path_from_sync_output,
+    keyword_merge_ready,
+    load_keyword_merge_context,
+    summarize_keyword_merge_result,
 )
 from .keyword_report import summarize_keyword_result_from_manifest
 from .revision_report import summarize_revision_apply_output
@@ -314,6 +323,7 @@ class MainWindow(QMainWindow):
         self._compare_variants_output_lines: list[str] = []
         self._compare_variants_names = ""
         self._compare_variants_temp_file = ""
+        self._keyword_merge_candidates_path = ""
         self._split_output_lines: list[str] = []
         self._repair_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
@@ -872,6 +882,15 @@ class MainWindow(QMainWindow):
         self.remediation_btn.clicked.connect(self._open_remediation_commands)
         self.remediation_btn.setEnabled(False)
         writeback_actions.addWidget(self.remediation_btn)
+        self.keyword_merge_writeback_btn = QPushButton("合并到 glossary")
+        self.keyword_merge_writeback_btn.setObjectName("secondary_btn")
+        self.keyword_merge_writeback_btn.setToolTip(
+            "勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。"
+        )
+        self.keyword_merge_writeback_btn.clicked.connect(self._on_open_keyword_merge)
+        self.keyword_merge_writeback_btn.setEnabled(False)
+        self.keyword_merge_writeback_btn.setVisible(False)
+        writeback_actions.addWidget(self.keyword_merge_writeback_btn)
         writeback_actions.addStretch()
         writeback_layout.addLayout(writeback_actions)
         writeback_layout.addStretch()
@@ -1321,6 +1340,15 @@ class MainWindow(QMainWindow):
         self.compare_variants_btn.clicked.connect(self._on_run_compare_variants)
         self.compare_variants_btn.setEnabled(False)
         toolbar.addWidget(self.compare_variants_btn)
+
+        self.keyword_merge_btn = QPushButton("合并到 glossary")
+        self.keyword_merge_btn.setObjectName("secondary_btn")
+        self.keyword_merge_btn.setToolTip(
+            "勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。"
+        )
+        self.keyword_merge_btn.clicked.connect(self._on_open_keyword_merge)
+        self.keyword_merge_btn.setEnabled(False)
+        toolbar.addWidget(self.keyword_merge_btn)
 
         self.split_btn = QPushButton("拆分翻译包")
         self.split_btn.setObjectName("secondary_btn")
@@ -2147,7 +2175,15 @@ class MainWindow(QMainWindow):
     ) -> None:
         spec = work_mode_spec(self._current_work_mode())
         uses_revision_writeback = self._uses_revision_writeback(spec.mode)
-        has_writeback_actions = spec.supports_translation_writeback or uses_revision_writeback
+        uses_keyword_merge = spec.mode in {
+            WorkMode.KEYWORD_EXTRACTION,
+            WorkMode.SYNC_KEYWORD_EXTRACTION,
+        }
+        has_writeback_actions = (
+            spec.supports_translation_writeback
+            or uses_revision_writeback
+            or uses_keyword_merge
+        )
         action_buttons = (
             "apply_btn",
             "apply_revision_btn",
@@ -2158,6 +2194,7 @@ class MainWindow(QMainWindow):
             "repair_btn",
             "apply_failure_btn",
             "remediation_btn",
+            "keyword_merge_writeback_btn",
         )
         if not has_writeback_actions:
             for button_name in action_buttons:
@@ -2261,6 +2298,23 @@ class MainWindow(QMainWindow):
             self.apply_btn.setVisible(spec.supports_translation_writeback)
         if hasattr(self, "apply_revision_btn"):
             self.apply_revision_btn.setVisible(uses_revision_writeback)
+
+        keyword_merge_ready_flag = False
+        if uses_keyword_merge:
+            candidates_path = self._resolve_keyword_merge_candidates_path(
+                manifest_path=summary.manifest_path,
+                manifest=manifest,
+            )
+            glossary_path = self._resolve_keyword_merge_glossary_path()
+            keyword_merge_ready_flag, _message = keyword_merge_ready(
+                candidates_path=candidates_path,
+                glossary_path=glossary_path,
+            )
+        if hasattr(self, "keyword_merge_writeback_btn"):
+            self.keyword_merge_writeback_btn.setVisible(uses_keyword_merge)
+            self.keyword_merge_writeback_btn.setEnabled(
+                not running and keyword_merge_ready_flag
+            )
 
     def _show_retry_preview(
         self,
@@ -2533,6 +2587,133 @@ class MainWindow(QMainWindow):
         ready, _message = translation_probe_ready(manifest_path, manifest)
         self.probe_btn.setEnabled(not running and ready)
 
+    def _resolve_keyword_merge_glossary_path(self) -> str:
+        import keyword_glossary_merge as merge_mod
+
+        config = self.state.load_translator_config()
+        game_root = str(self.state.get_game_root() or "")
+        tool_root = str(self.state.get_tool_root())
+        return merge_mod.resolve_glossary_path_from_config(
+            config,
+            game_root=game_root,
+            tool_root=tool_root,
+        )
+
+    def _resolve_keyword_merge_candidates_path(
+        self,
+        *,
+        manifest_path: str = "",
+        manifest: dict[str, object] | None = None,
+    ) -> str:
+        if self._keyword_merge_candidates_path and os.path.isfile(
+            self._keyword_merge_candidates_path
+        ):
+            return self._keyword_merge_candidates_path
+        if not manifest_path or manifest is None:
+            manifest_path, manifest = self._current_diagnostics_manifest()
+        resolved = keyword_merge_candidates_path_from_manifest(manifest_path, manifest)
+        if resolved:
+            return resolved
+        if self._writeback_manifest_path:
+            try:
+                writeback_manifest = self.state.load_manifest_file(self._writeback_manifest_path)
+            except ValueError:
+                writeback_manifest = None
+            return keyword_merge_candidates_path_from_manifest(
+                self._writeback_manifest_path,
+                writeback_manifest,
+            )
+        return ""
+
+    def _update_keyword_merge_btn_enabled(self, *, running: bool | None = None) -> None:
+        if not hasattr(self, "keyword_merge_btn"):
+            return
+        if running is None:
+            running = self.kill_btn.isEnabled()
+        candidates_path = self._resolve_keyword_merge_candidates_path()
+        glossary_path = self._resolve_keyword_merge_glossary_path()
+        ready, message = keyword_merge_ready(
+            candidates_path=candidates_path,
+            glossary_path=glossary_path,
+        )
+        self.keyword_merge_btn.setEnabled(not running and ready)
+        if ready:
+            self.keyword_merge_btn.setToolTip(
+                "勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。",
+            )
+        elif message:
+            self.keyword_merge_btn.setToolTip(message)
+
+    def _on_open_keyword_merge(self) -> None:
+        candidates_path = self._resolve_keyword_merge_candidates_path()
+        if not candidates_path:
+            picked, _filter = QFileDialog.getOpenFileName(
+                self,
+                "选择关键词候选 JSONL",
+                str(self.state.get_game_root() or self.state.get_tool_root()),
+                "JSON Lines (*.jsonl);;All Files (*)",
+            )
+            candidates_path = picked.strip()
+        glossary_path = self._resolve_keyword_merge_glossary_path()
+        ready, message = keyword_merge_ready(
+            candidates_path=candidates_path,
+            glossary_path=glossary_path,
+        )
+        if not ready:
+            QMessageBox.information(self, "无法合并关键词", message)
+            return
+        try:
+            rows, candidates, resolved_glossary_path, _macro_path = load_keyword_merge_context(
+                candidates_path=candidates_path,
+                config=self.state.load_translator_config(),
+                game_root=str(self.state.get_game_root() or ""),
+                tool_root=str(self.state.get_tool_root()),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法读取候选", str(exc))
+            return
+        if not rows:
+            QMessageBox.information(self, "没有可合并候选", "候选文件中没有可写入 glossary 的条目。")
+            return
+
+        dialog = KeywordMergeDialog(
+            self,
+            rows=rows,
+            candidates_path=candidates_path,
+            glossary_path=resolved_glossary_path,
+            candidates=candidates,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        result = dialog.result
+        if result is None:
+            return
+
+        merge_summary = summarize_keyword_merge_result(result.summary)
+        self.statusBar().showMessage(merge_summary["message"], 8000)
+        if result.summary.wrote_glossary:
+            self._keyword_merge_candidates_path = candidates_path
+        manifest_path, manifest = self._current_diagnostics_manifest()
+        base_context = build_diagnostics_context(
+            latest_manifest_path=manifest_path or None,
+            manifest=manifest,
+            batch_script_path=str(self.state.get_batch_script_path()),
+            logs_dir=str(self.state.get_logs_dir()),
+            python_exe=sys.executable,
+            submit_max_cost=self._submit_max_cost_from_config(),
+        )
+        merged_context = DiagnosticsContext(
+            status=str(merge_summary["status"]),
+            heading=str(merge_summary["heading"]),
+            message=str(merge_summary["message"]),
+            facts=[*merge_summary["facts"], *base_context.facts],
+            paths=base_context.paths,
+            commands=base_context.commands,
+            manifest_json_preview=base_context.manifest_json_preview,
+        )
+        self._set_diagnostics_context(merged_context)
+        self._update_keyword_merge_btn_enabled()
+
     def _update_compare_variants_btn_enabled(self, *, running: bool | None = None) -> None:
         if not hasattr(self, "compare_variants_btn"):
             return
@@ -2609,6 +2790,7 @@ class MainWindow(QMainWindow):
             self._set_diagnostics_context(context)
             self._update_probe_btn_enabled()
             self._update_compare_variants_btn_enabled()
+            self._update_keyword_merge_btn_enabled()
             self._update_split_btn_enabled()
             return
 
@@ -2642,6 +2824,7 @@ class MainWindow(QMainWindow):
         self._set_diagnostics_context(context)
         self._update_probe_btn_enabled()
         self._update_compare_variants_btn_enabled()
+        self._update_keyword_merge_btn_enabled()
         self._update_split_btn_enabled()
 
     def _set_diagnostics_context(self, context: DiagnosticsContext) -> None:
@@ -5173,6 +5356,7 @@ class MainWindow(QMainWindow):
         self._update_writeback_action_buttons(writeback_summary, running=running)
         self._update_probe_btn_enabled(running=running)
         self._update_compare_variants_btn_enabled(running=running)
+        self._update_keyword_merge_btn_enabled(running=running)
         self._update_split_btn_enabled(running=running)
         self.kill_btn.setEnabled(running)
         self._sync_task_shortcuts()
@@ -5777,9 +5961,22 @@ class MainWindow(QMainWindow):
         keyword_export_completed = step_key == "export-keywords" and exit_code == 0
         if keyword_export_completed:
             self._copy_keyword_reports_to_game_parent(manifest_path)
+            try:
+                exported_manifest = self.state.load_manifest_file(manifest_path)
+            except ValueError:
+                exported_manifest = None
+            exported_candidates = keyword_merge_candidates_path_from_manifest(
+                manifest_path,
+                exported_manifest,
+            )
+            if exported_candidates:
+                self._keyword_merge_candidates_path = exported_candidates
         sync_keyword_completed = step_key == "sync-keywords" and exit_code == 0
         if sync_keyword_completed:
             self._copy_sync_keyword_reports_to_game_parent(step_output)
+            sync_candidates = keyword_merge_candidates_path_from_sync_output(step_output)
+            if sync_candidates:
+                self._keyword_merge_candidates_path = sync_candidates
 
         retry_parent = getattr(self._workflow, "retry_parent_manifest_path", "")
         if "Safety status:" in step_output and (
