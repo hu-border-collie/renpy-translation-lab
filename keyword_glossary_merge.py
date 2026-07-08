@@ -8,7 +8,9 @@ import re
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Iterable
+
+from project_asset_paths import canonical_abs_path, expected_project_asset_paths
 
 GLOSSARY_SECTION_PRESERVE = 'preserve_terms'
 GLOSSARY_SECTION_NON_TRANSLATABLE = 'non_translatable_exact'
@@ -42,6 +44,47 @@ class MergeSummary:
     candidates_path: str = ''
     dry_run: bool = False
     wrote_glossary: bool = False
+
+
+@dataclass(frozen=True)
+class CandidateMergeRow:
+    index: int
+    candidate: dict
+    action: MergeAction
+    warnings: tuple[str, ...] = ()
+    default_checked: bool = False
+
+
+_UI_NOISE_SOURCES = frozenset(
+    {
+        'start',
+        'load',
+        'save',
+        'quit',
+        'preferences',
+        'options',
+        'return',
+        'back',
+        'menu',
+        'history',
+        'skip',
+        'auto',
+        'q.save',
+        'q.load',
+        'q.quit',
+        'main menu',
+        'yes',
+        'no',
+        'ok',
+        'cancel',
+    }
+)
+_UI_NOISE_EVIDENCE_MARKERS = (
+    'common.rpy',
+    'screens.rpy',
+    'launcher',
+    'renpy/common',
+)
 
 
 def _compact_text(text: object) -> str:
@@ -393,6 +436,285 @@ def backup_glossary_file(glossary_path: str) -> str:
     backup_path = f'{glossary_path}.bak-{timestamp}'
     shutil.copy2(glossary_path, backup_path)
     return backup_path
+
+
+def resolve_glossary_path_from_config(
+    config: dict,
+    *,
+    game_root: str = '',
+    tool_root: str = '',
+) -> str:
+    glossary_configured = config.get('glossary_file') or config.get('glossary_path') or ''
+    if isinstance(glossary_configured, str) and glossary_configured.strip():
+        configured = glossary_configured.strip()
+        if os.path.isabs(configured):
+            return canonical_abs_path(configured)
+        base_dir = game_root or tool_root
+        if base_dir:
+            return canonical_abs_path(os.path.join(base_dir, configured))
+        return canonical_abs_path(configured)
+    if game_root:
+        return expected_project_asset_paths(game_root)['glossary_file']
+    if tool_root:
+        return os.path.join(canonical_abs_path(tool_root), 'glossary.json')
+    return ''
+
+
+def resolve_macro_setting_path_from_config(
+    config: dict,
+    *,
+    game_root: str = '',
+    tool_root: str = '',
+) -> str:
+    batch = config.get('batch')
+    if not isinstance(batch, dict):
+        batch = {}
+    macro_configured = batch.get('macro_setting_file') or ''
+    if isinstance(macro_configured, str) and macro_configured.strip():
+        configured = macro_configured.strip()
+        if os.path.isabs(configured):
+            return canonical_abs_path(configured)
+        base_dir = game_root or tool_root
+        if base_dir:
+            return canonical_abs_path(os.path.join(base_dir, configured))
+        return canonical_abs_path(configured)
+    if game_root:
+        return expected_project_asset_paths(game_root)['macro_setting_file']
+    return ''
+
+
+def load_macro_setting_text(macro_path: str) -> str:
+    if not macro_path or not os.path.isfile(macro_path):
+        return ''
+    try:
+        with open(macro_path, encoding='utf-8-sig') as handle:
+            return handle.read()
+    except OSError:
+        return ''
+
+
+def is_likely_ui_noise(candidate: dict) -> bool:
+    source = _compact_text(candidate.get('source'))
+    if not source:
+        return False
+    normalized = source.casefold()
+    if normalized in _UI_NOISE_SOURCES:
+        return True
+    evidence = _compact_text(candidate.get('evidence')).casefold()
+    if any(marker in evidence for marker in _UI_NOISE_EVIDENCE_MARKERS):
+        return True
+    return len(source) <= 3 and source.isascii() and source.isalpha() and bool(evidence)
+
+
+def _macro_line_suggests_preserve(line: str) -> bool:
+    lowered = line.casefold()
+    preserve_markers = (
+        'preserve',
+        'keep english',
+        'keep the english',
+        'do not translate',
+        "don't translate",
+        '保留英文',
+        '保留英语',
+        '不翻译',
+        '请勿翻译',
+    )
+    return any(marker in lowered for marker in preserve_markers)
+
+
+def _macro_line_suggests_translate(line: str) -> bool:
+    if _macro_line_suggests_preserve(line):
+        return False
+    lowered = line.casefold()
+    translate_markers = (
+        'translate',
+        'translating',
+        'must be translated',
+        'should be translated',
+        '翻译',
+        '需翻译',
+        '应翻译',
+    )
+    return any(marker in lowered for marker in translate_markers)
+
+
+def _macro_mentions_term(line: str, term: str) -> bool:
+    if not term:
+        return False
+    return _match_key(term) in _match_key(line)
+
+
+def detect_candidate_warnings(
+    candidate: dict,
+    action: MergeAction,
+    *,
+    macro_setting_text: str = '',
+) -> list[str]:
+    warnings: list[str] = []
+    source = _compact_text(candidate.get('source'))
+
+    if action.status == 'skip_duplicate' and 'conflicts' in action.reason:
+        warnings.append(f'与现有 glossary 冲突：{action.existing_target or action.reason}')
+    elif action.status == 'skip_duplicate':
+        warnings.append('glossary 中已有相同条目')
+
+    if macro_setting_text and source:
+        relevant_lines = [
+            line.strip()
+            for line in macro_setting_text.splitlines()
+            if line.strip() and _macro_mentions_term(line, source)
+        ]
+        if action.section == GLOSSARY_SECTION_PRESERVE and any(
+            _macro_line_suggests_translate(line) for line in relevant_lines
+        ):
+            warnings.append('macro_setting 可能要求翻译，但候选建议保留英文')
+        if action.section == GLOSSARY_SECTION_NORMALIZE and any(
+            _macro_line_suggests_preserve(line) for line in relevant_lines
+        ):
+            warnings.append('macro_setting 可能要求保留英文，但候选建议翻译')
+
+    return warnings
+
+
+def build_candidate_merge_rows(
+    candidates: list[dict],
+    glossary: dict,
+    *,
+    min_confidence: float = 0.0,
+    macro_setting_text: str = '',
+) -> list[CandidateMergeRow]:
+    rows: list[CandidateMergeRow] = []
+    for index, candidate in enumerate(candidates):
+        action = plan_merge_action(
+            candidate,
+            glossary,
+            min_confidence=min_confidence,
+        )
+        if action is None:
+            continue
+        warnings = tuple(
+            detect_candidate_warnings(
+                candidate,
+                action,
+                macro_setting_text=macro_setting_text,
+            )
+        )
+        default_checked = (
+            action.status in {'accept', 'overwrite'}
+            and not is_likely_ui_noise(candidate)
+            and not warnings
+        )
+        rows.append(
+            CandidateMergeRow(
+                index=index,
+                candidate=candidate,
+                action=action,
+                warnings=warnings,
+                default_checked=default_checked,
+            ),
+        )
+    return rows
+
+
+def preview_selected_merge_actions(
+    rows: Iterable[CandidateMergeRow],
+    selected_indices: set[int],
+    *,
+    overwrite: bool = False,
+) -> dict[str, int]:
+    counts = {
+        'selected': 0,
+        'accept': 0,
+        'overwrite': 0,
+        'blocked_duplicate': 0,
+        'skipped': 0,
+    }
+    for row in rows:
+        if row.index not in selected_indices:
+            continue
+        counts['selected'] += 1
+        action = row.action
+        if action.status in {'skip_empty', 'skip_low_confidence'}:
+            counts['skipped'] += 1
+            continue
+        if action.status == 'skip_duplicate':
+            if overwrite:
+                counts['overwrite'] += 1
+            else:
+                counts['blocked_duplicate'] += 1
+            continue
+        if action.status == 'overwrite':
+            counts['overwrite'] += 1
+        elif action.status == 'accept':
+            counts['accept'] += 1
+    return counts
+
+
+def merge_selected_candidates(
+    candidates: list[dict],
+    selected_indices: set[int],
+    glossary_path: str,
+    *,
+    candidates_path: str = '',
+    dry_run: bool = False,
+    overwrite: bool = False,
+    backup: bool = True,
+    min_confidence: float = 0.0,
+) -> MergeSummary:
+    glossary_before = load_glossary_file(glossary_path)
+    glossary_after = json.loads(json.dumps(glossary_before, ensure_ascii=False))
+    summary = MergeSummary(
+        candidates_read=len(candidates),
+        glossary_path=os.path.abspath(glossary_path),
+        candidates_path=os.path.abspath(candidates_path) if candidates_path else '',
+        dry_run=dry_run,
+    )
+
+    for index, candidate in enumerate(candidates):
+        if index not in selected_indices:
+            summary.skipped_user += 1
+            summary.preview_lines.append(
+                f'= skip (not selected): {_compact_text(candidate.get("source"))}'
+            )
+            continue
+
+        action = plan_merge_action(
+            candidate,
+            glossary_after,
+            min_confidence=min_confidence,
+            overwrite=overwrite,
+        )
+        if action is None:
+            continue
+
+        if action.status == 'skip_empty':
+            summary.skipped_empty += 1
+            summary.preview_lines.append(_preview_line_for_action(action))
+            continue
+        if action.status == 'skip_low_confidence':
+            summary.skipped_low_confidence += 1
+            summary.preview_lines.append(_preview_line_for_action(action))
+            continue
+        if action.status == 'skip_duplicate':
+            summary.skipped_duplicate += 1
+            summary.preview_lines.append(_preview_line_for_action(action))
+            continue
+
+        apply_merge_action(glossary_after, action)
+        if action.status == 'overwrite':
+            summary.overwritten += 1
+        summary.accepted += 1
+        summary.preview_lines.append(_preview_line_for_action(action))
+
+    if dry_run or summary.accepted == 0:
+        return summary
+
+    if os.path.isfile(glossary_path) and backup:
+        summary.backup_path = backup_glossary_file(glossary_path)
+
+    dump_glossary_file(glossary_path, glossary_after)
+    summary.wrote_glossary = True
+    return summary
 
 
 def merge_keywords_to_glossary(

@@ -274,6 +274,67 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
             self.assertEqual(summary.accepted, 1)
             self.assertFalse(summary.wrote_glossary)
 
+    def test_macro_preserve_line_does_not_trigger_translate_warning(self):
+        action = merge_mod.plan_merge_action(
+            {
+                'source': 'AR',
+                'suggested_target': 'AR',
+                'category': 'item',
+                'confidence': 0.9,
+            },
+            {'preserve_terms': [], 'normalize_map': {}},
+        )
+        self.assertIsNotNone(action)
+        warnings = merge_mod.detect_candidate_warnings(
+            {
+                'source': 'AR',
+                'suggested_target': 'AR',
+                'category': 'item',
+                'confidence': 0.9,
+            },
+            action,
+            macro_setting_text='AR 不翻译',
+        )
+        self.assertEqual(warnings, [])
+
+    def test_is_likely_ui_noise_detects_launcher_labels(self):
+        self.assertTrue(
+            merge_mod.is_likely_ui_noise(
+                {
+                    'source': 'Start',
+                    'suggested_target': '开始',
+                    'evidence': 'common.rpy menu',
+                }
+            )
+        )
+        self.assertFalse(
+            merge_mod.is_likely_ui_noise(
+                {
+                    'source': 'Void Gate',
+                    'suggested_target': '虚空门',
+                    'evidence': 'Recurring gate name.',
+                }
+            )
+        )
+
+    def test_merge_selected_candidates_honors_selection(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            candidates_path = root / 'keyword_candidates.jsonl'
+            glossary_path = root / 'glossary.json'
+            glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')
+            self._write_jsonl(candidates_path, self._sample_candidates())
+
+            candidates = merge_mod.load_keyword_candidates_jsonl(str(candidates_path))
+            summary = merge_mod.merge_selected_candidates(
+                candidates,
+                {0},
+                str(glossary_path),
+                dry_run=True,
+            )
+            self.assertEqual(summary.accepted, 1)
+            self.assertFalse(summary.wrote_glossary)
+
     def test_interactive_skip_counts_user_rejection(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir).resolve()
