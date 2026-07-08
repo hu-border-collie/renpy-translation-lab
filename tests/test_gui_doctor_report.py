@@ -1,6 +1,7 @@
 import unittest
 
 from gui_qt.doctor_report import (
+    cancelled_summary,
     doctor_report_to_parsed,
     format_project_assets_facts,
     format_tl_scan_facts,
@@ -551,6 +552,13 @@ Recommendations:
 
         self.assertEqual(summary.status, "stale")
         self.assertIn("重新运行", summary.heading)
+
+    def test_cancelled_summary_uses_cancel_copy_not_project_switch(self):
+        summary = cancelled_summary()
+
+        self.assertEqual(summary.status, "idle")
+        self.assertEqual(summary.heading, "环境检查已取消")
+        self.assertNotIn("项目已切换", summary.heading)
 
     def test_format_tl_scan_facts_separates_dialogue_and_strings(self):
         facts = format_tl_scan_facts(

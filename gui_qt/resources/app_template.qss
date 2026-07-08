@@ -258,6 +258,7 @@ QLabel#bootstrap_status_label {
 /* Success Badges */
 QLabel#diagnostics_status_label[status="ready"],
 QLabel#doctor_status_label[status="ready"],
+QLabel#workflow_status_label[status="ready"],
 QLabel#workflow_status_label[status="done"],
 QLabel#writeback_status_label[status="safe"],
 QLabel#writeback_status_label[status="applied"],
@@ -287,6 +288,7 @@ QLabel#bootstrap_status_label[status="running"] {
 QLabel#diagnostics_status_label[status="warning"],
 QLabel#doctor_status_label[status="warning"],
 QLabel#doctor_status_label[status="stale"],
+QLabel#workflow_status_label[status="warning"],
 QLabel#workflow_status_label[status="waiting"],
 QLabel#workflow_status_label[status="stale"],
 QLabel#writeback_status_label[status="warn"],

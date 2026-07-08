@@ -639,3 +639,14 @@ def stale_summary() -> DoctorSummary:
         findings=[],
         mode="",
     )
+
+
+def cancelled_summary() -> DoctorSummary:
+    return DoctorSummary(
+        status="idle",
+        heading="环境检查已取消",
+        message="上次检查未完成；需要时请重新运行环境检查。",
+        facts=[],
+        findings=[],
+        mode="",
+    )

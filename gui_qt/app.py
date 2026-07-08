@@ -175,6 +175,7 @@ from .cli_runner import CliRunner
 from .doctor_report import (
     DoctorSummary,
     idle_summary,
+    cancelled_summary,
     running_summary,
     stale_summary,
     summarize_doctor_output,
@@ -4666,7 +4667,7 @@ class MainWindow(QMainWindow):
             self._doctor_summary_status = ""
             self._last_doctor_report = None
             self._last_doctor_report_game_root = ""
-            self._set_doctor_summary(stale_summary())
+            self._set_doctor_summary(cancelled_summary())
             self.statusBar().showMessage("环境检查已取消。", 6000)
             return
         self.runner.kill()
