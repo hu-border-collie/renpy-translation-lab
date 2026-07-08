@@ -2172,6 +2172,39 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             self.assertFalse(button.visible, name)
             self.assertFalse(button.enabled, name)
 
+    def test_resolve_keyword_merge_candidates_path_uses_latest_keyword_manifest(self):
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from gui_qt.work_modes import WorkMode
+
+        jsonl_path = "C:/dummy/game/logs/keyword_candidates.jsonl"
+        keyword_manifest = {
+            "mode": "keyword_extraction",
+            "keyword_export": {"jsonl_path": jsonl_path},
+        }
+
+        class FakeState:
+            def get_game_root(self):
+                return Path("C:/dummy/game")
+
+            def get_latest_manifest_path_for_mode(self, game_root, mode):
+                if mode == WorkMode.KEYWORD_EXTRACTION:
+                    return Path("C:/dummy/game/logs/keyword_manifest.json")
+                return None
+
+        self.window.state = FakeState()
+        self.window._keyword_merge_candidates_path = ""
+        self.window._writeback_manifest_path = ""
+        self.window._workflow = None
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window._load_diagnostics_manifest = lambda _path: keyword_manifest
+
+        with patch("os.path.isfile", return_value=True):
+            resolved = self.window._resolve_keyword_merge_candidates_path()
+
+        self.assertEqual(resolved, jsonl_path)
+
     def test_recheck_button_enabled_for_batch_translation_with_manifest(self):
         from gui_qt.check_report import WritebackSummary
         from gui_qt.work_modes import WorkMode

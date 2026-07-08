@@ -2252,15 +2252,10 @@ class MainWindow(QMainWindow):
                 except ValueError:
                     manifest = None
 
-            candidates_path = ""
-            cached_candidates = getattr(self, "_keyword_merge_candidates_path", "")
-            if cached_candidates and os.path.isfile(cached_candidates):
-                candidates_path = cached_candidates
-            elif summary.manifest_path:
-                candidates_path = keyword_merge_candidates_path_from_manifest(
-                    summary.manifest_path,
-                    manifest,
-                )
+            candidates_path = self._resolve_keyword_merge_candidates_path(
+                manifest_path=summary.manifest_path,
+                manifest=manifest,
+            )
 
             glossary_path = ""
             if state is not None:
@@ -2681,31 +2676,67 @@ class MainWindow(QMainWindow):
             tool_root=tool_root,
         )
 
+    def _latest_keyword_extraction_manifest(
+        self,
+    ) -> tuple[str, dict[str, object] | None]:
+        state = getattr(self, "state", None)
+        if state is None:
+            return "", None
+        game_root = state.get_game_root()
+        if game_root is None:
+            return "", None
+        latest_manifest = state.get_latest_manifest_path_for_mode(
+            game_root,
+            WorkMode.KEYWORD_EXTRACTION,
+        )
+        if latest_manifest is None:
+            return "", None
+        manifest_path = str(latest_manifest)
+        return manifest_path, self._load_diagnostics_manifest(manifest_path)
+
     def _resolve_keyword_merge_candidates_path(
         self,
         *,
         manifest_path: str = "",
         manifest: dict[str, object] | None = None,
     ) -> str:
-        if self._keyword_merge_candidates_path and os.path.isfile(
-            self._keyword_merge_candidates_path
-        ):
-            return self._keyword_merge_candidates_path
-        if not manifest_path or manifest is None:
+        cached_candidates = getattr(self, "_keyword_merge_candidates_path", "")
+        if cached_candidates and os.path.isfile(cached_candidates):
+            return cached_candidates
+        if manifest is None and manifest_path:
+            state = getattr(self, "state", None)
+            if state is not None:
+                try:
+                    manifest = state.load_manifest_file(manifest_path)
+                except ValueError:
+                    manifest = None
+        if not manifest_path:
             manifest_path, manifest = self._current_diagnostics_manifest()
+        elif manifest is None and getattr(self, "state", None) is None:
+            manifest_path = ""
         resolved = keyword_merge_candidates_path_from_manifest(manifest_path, manifest)
         if resolved:
             return resolved
-        if self._writeback_manifest_path:
-            try:
-                writeback_manifest = self.state.load_manifest_file(self._writeback_manifest_path)
-            except ValueError:
-                writeback_manifest = None
-            return keyword_merge_candidates_path_from_manifest(
-                self._writeback_manifest_path,
+        writeback_manifest_path = getattr(self, "_writeback_manifest_path", "")
+        if writeback_manifest_path:
+            writeback_manifest = None
+            state = getattr(self, "state", None)
+            if state is not None:
+                try:
+                    writeback_manifest = state.load_manifest_file(writeback_manifest_path)
+                except ValueError:
+                    writeback_manifest = None
+            resolved = keyword_merge_candidates_path_from_manifest(
+                writeback_manifest_path,
                 writeback_manifest,
             )
-        return ""
+            if resolved:
+                return resolved
+        keyword_manifest_path, keyword_manifest = self._latest_keyword_extraction_manifest()
+        return keyword_merge_candidates_path_from_manifest(
+            keyword_manifest_path,
+            keyword_manifest,
+        )
 
     def _update_keyword_merge_btn_enabled(self, *, running: bool | None = None) -> None:
         if not hasattr(self, "keyword_merge_btn"):
