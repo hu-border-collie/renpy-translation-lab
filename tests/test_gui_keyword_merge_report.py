@@ -35,6 +35,17 @@ class GuiKeywordMergeReportTests(unittest.TestCase):
             resolved = keyword_merge_candidates_path_from_manifest("", manifest)
             self.assertEqual(resolved, jsonl_path)
 
+    def test_keyword_merge_candidates_path_ignores_non_keyword_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl_path = os.path.join(tmp, "keyword_candidates.jsonl")
+            self._write_jsonl(jsonl_path, [{"source": "A", "suggested_target": "甲"}])
+            manifest = {
+                "mode": "batch_translation",
+                "keyword_export": {"jsonl_path": jsonl_path},
+            }
+            resolved = keyword_merge_candidates_path_from_manifest("", manifest)
+            self.assertEqual(resolved, "")
+
     def test_load_keyword_merge_context_builds_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
             jsonl_path = os.path.join(tmp, "keyword_candidates.jsonl")
@@ -100,7 +111,8 @@ class GuiKeywordMergeReportTests(unittest.TestCase):
                 candidates_path=jsonl_path,
                 dry_run=False,
             )
-            data = json.loads(open(glossary_path, encoding="utf-8").read())
+            with open(glossary_path, encoding="utf-8") as handle:
+                data = json.loads(handle.read())
             self.assertEqual(summary.accepted, 1)
             self.assertIn("Void Gate", data["normalize_map"])
             self.assertNotIn("Crystal Key", data["normalize_map"])

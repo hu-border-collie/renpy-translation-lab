@@ -274,6 +274,29 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
             self.assertEqual(summary.accepted, 1)
             self.assertFalse(summary.wrote_glossary)
 
+    def test_macro_preserve_line_does_not_trigger_translate_warning(self):
+        action = merge_mod.plan_merge_action(
+            {
+                'source': 'AR',
+                'suggested_target': 'AR',
+                'category': 'item',
+                'confidence': 0.9,
+            },
+            {'preserve_terms': [], 'normalize_map': {}},
+        )
+        self.assertIsNotNone(action)
+        warnings = merge_mod.detect_candidate_warnings(
+            {
+                'source': 'AR',
+                'suggested_target': 'AR',
+                'category': 'item',
+                'confidence': 0.9,
+            },
+            action,
+            macro_setting_text='AR 不翻译',
+        )
+        self.assertEqual(warnings, [])
+
     def test_is_likely_ui_noise_detects_launcher_labels(self):
         self.assertTrue(
             merge_mod.is_likely_ui_noise(

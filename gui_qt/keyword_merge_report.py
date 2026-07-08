@@ -14,7 +14,7 @@ def keyword_merge_candidates_path_from_manifest(
     manifest_path: str,
     manifest: dict[str, object] | None,
 ) -> str:
-    if manifest is not None:
+    if manifest is not None and manifest.get("mode") == _MANIFEST_MODE_KEYWORD:
         export = manifest.get("keyword_export")
         if isinstance(export, dict):
             jsonl_path = export.get("jsonl_path")

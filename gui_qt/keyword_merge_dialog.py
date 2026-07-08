@@ -209,6 +209,7 @@ class KeywordMergeDialog(QDialog):
         self._set_all_checks(Qt.CheckState.Unchecked)
 
     def _invert_selection(self) -> None:
+        self.table.blockSignals(True)
         for table_row in range(self.table.rowCount()):
             item = self.table.item(table_row, 0)
             if item is None:
@@ -218,6 +219,8 @@ class KeywordMergeDialog(QDialog):
                 if item.checkState() == Qt.CheckState.Checked
                 else Qt.CheckState.Checked
             )
+        self.table.blockSignals(False)
+        self._refresh_preview()
 
     def _set_all_checks(self, state: Qt.CheckState) -> None:
         self.table.blockSignals(True)

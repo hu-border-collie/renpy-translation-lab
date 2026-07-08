@@ -500,10 +500,10 @@ def is_likely_ui_noise(candidate: dict) -> bool:
     normalized = source.casefold()
     if normalized in _UI_NOISE_SOURCES:
         return True
-    if len(source) <= 3 and source.isascii() and source.isalpha():
-        return True
     evidence = _compact_text(candidate.get('evidence')).casefold()
-    return any(marker in evidence for marker in _UI_NOISE_EVIDENCE_MARKERS)
+    if any(marker in evidence for marker in _UI_NOISE_EVIDENCE_MARKERS):
+        return True
+    return len(source) <= 3 and source.isascii() and source.isalpha() and bool(evidence)
 
 
 def _macro_line_suggests_preserve(line: str) -> bool:
@@ -523,6 +523,8 @@ def _macro_line_suggests_preserve(line: str) -> bool:
 
 
 def _macro_line_suggests_translate(line: str) -> bool:
+    if _macro_line_suggests_preserve(line):
+        return False
     lowered = line.casefold()
     translate_markers = (
         'translate',

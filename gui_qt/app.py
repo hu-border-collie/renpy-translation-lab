@@ -2222,8 +2222,70 @@ class MainWindow(QMainWindow):
                     button.setEnabled(False)
             return
 
+        needs_translation_manifest = (
+            spec.supports_translation_writeback or uses_revision_writeback
+        )
+        keyword_only = uses_keyword_merge and not needs_translation_manifest
+        if keyword_only:
+            translation_buttons = (
+                "apply_btn",
+                "apply_revision_btn",
+                "recheck_btn",
+                "check_issues_btn",
+                "retry_btn",
+                "retry_followup_btn",
+                "repair_btn",
+                "apply_failure_btn",
+                "remediation_btn",
+            )
+            for button_name in translation_buttons:
+                if hasattr(self, button_name):
+                    button = getattr(self, button_name)
+                    button.setVisible(False)
+                    button.setEnabled(False)
+
+            manifest = None
+            state = getattr(self, "state", None)
+            if summary.manifest_path and state is not None:
+                try:
+                    manifest = state.load_manifest_file(summary.manifest_path)
+                except ValueError:
+                    manifest = None
+
+            candidates_path = ""
+            cached_candidates = getattr(self, "_keyword_merge_candidates_path", "")
+            if cached_candidates and os.path.isfile(cached_candidates):
+                candidates_path = cached_candidates
+            elif summary.manifest_path:
+                candidates_path = keyword_merge_candidates_path_from_manifest(
+                    summary.manifest_path,
+                    manifest,
+                )
+
+            glossary_path = ""
+            if state is not None:
+                try:
+                    glossary_path = self._resolve_keyword_merge_glossary_path()
+                except Exception:
+                    glossary_path = ""
+
+            keyword_merge_ready_flag, _message = keyword_merge_ready(
+                candidates_path=candidates_path,
+                glossary_path=glossary_path,
+            )
+            if hasattr(self, "keyword_merge_writeback_btn"):
+                self.keyword_merge_writeback_btn.setVisible(True)
+                self.keyword_merge_writeback_btn.setEnabled(
+                    not running and keyword_merge_ready_flag
+                )
+            return
+
         issues_ready = self._writeback_issues_ready(summary)
-        manifest = self._load_writeback_manifest() if summary.manifest_path else None
+        manifest = (
+            self._load_writeback_manifest()
+            if summary.manifest_path and needs_translation_manifest
+            else None
+        )
 
         recheck_ready = recheck_writeback_ready(
             summary,
@@ -2234,8 +2296,10 @@ class MainWindow(QMainWindow):
             self.recheck_btn.setEnabled(not running and recheck_ready)
 
         if hasattr(self, "check_issues_btn"):
-            self.check_issues_btn.setVisible(True)
-            self.check_issues_btn.setEnabled(not running and issues_ready)
+            self.check_issues_btn.setVisible(needs_translation_manifest)
+            self.check_issues_btn.setEnabled(
+                not running and needs_translation_manifest and issues_ready
+            )
 
         apply_failure_ready = self._apply_failure_report_ready(
             summary,
@@ -2306,10 +2370,10 @@ class MainWindow(QMainWindow):
         if hasattr(self, "remediation_btn"):
             remediation_ready = (
                 self._remediation_ready(summary, manifest=manifest)
-                if issues_ready
+                if needs_translation_manifest and issues_ready
                 else False
             )
-            self.remediation_btn.setVisible(True)
+            self.remediation_btn.setVisible(needs_translation_manifest)
             self.remediation_btn.setEnabled(not running and remediation_ready)
 
         if hasattr(self, "apply_btn"):
@@ -2654,13 +2718,19 @@ class MainWindow(QMainWindow):
             candidates_path=candidates_path,
             glossary_path=glossary_path,
         )
-        self.keyword_merge_btn.setEnabled(not running and ready)
+        self.keyword_merge_btn.setEnabled(not running)
         if ready:
             self.keyword_merge_btn.setToolTip(
                 "勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。",
             )
         elif message:
-            self.keyword_merge_btn.setToolTip(message)
+            self.keyword_merge_btn.setToolTip(
+                f"{message} 也可点击后手动选择候选 JSONL 文件。",
+            )
+        else:
+            self.keyword_merge_btn.setToolTip(
+                "勾选审核关键词候选并写入 glossary.json；也可手动选择候选 JSONL。",
+            )
 
     def _on_open_keyword_merge(self) -> None:
         candidates_path = self._resolve_keyword_merge_candidates_path()
@@ -5979,10 +6049,13 @@ class MainWindow(QMainWindow):
         keyword_export_completed = step_key == "export-keywords" and exit_code == 0
         if keyword_export_completed:
             self._copy_keyword_reports_to_game_parent(manifest_path)
-            try:
-                exported_manifest = self.state.load_manifest_file(manifest_path)
-            except ValueError:
-                exported_manifest = None
+            exported_manifest = None
+            state = getattr(self, "state", None)
+            if state is not None:
+                try:
+                    exported_manifest = state.load_manifest_file(manifest_path)
+                except ValueError:
+                    exported_manifest = None
             exported_candidates = keyword_merge_candidates_path_from_manifest(
                 manifest_path,
                 exported_manifest,
