@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 import keyword_glossary_merge as merge_mod
+from project_asset_paths import canonical_abs_path
 
 from gui_qt.keyword_merge_report import (
     keyword_merge_candidates_path_from_manifest,
@@ -77,7 +78,10 @@ class GuiKeywordMergeReportTests(unittest.TestCase):
                 tool_root=tmp,
             )
             self.assertEqual(len(candidates), 2)
-            self.assertEqual(resolved_glossary, glossary_path)
+            self.assertEqual(
+                canonical_abs_path(resolved_glossary),
+                canonical_abs_path(glossary_path),
+            )
             self.assertEqual(len(rows), 2)
             start_row = next(row for row in rows if row.candidate.get("source") == "Start")
             self.assertFalse(start_row.default_checked)
