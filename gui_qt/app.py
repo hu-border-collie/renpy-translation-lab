@@ -2075,6 +2075,7 @@ class MainWindow(QMainWindow):
         self._set_writeback_summary(summary)
 
     def _select_split_manifest(self, manifest_path: str) -> None:
+        self._invalidate_manifest_caches(manifest_path)
         try:
             self.state.remember_latest_manifest_path(manifest_path)
         except ValueError as exc:
@@ -2789,7 +2790,7 @@ class MainWindow(QMainWindow):
             candidates_path=candidates_path,
             glossary_path=glossary_path,
         )
-        self.keyword_merge_btn.setEnabled(not running)
+        self.keyword_merge_btn.setEnabled(not running and ready)
         if ready:
             self.keyword_merge_btn.setToolTip(
                 "勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。",
@@ -3310,6 +3311,14 @@ class MainWindow(QMainWindow):
             self.timeline.set_current_step(step_key, status)
         self.timeline.setVisible(True)
 
+    def _invalidate_manifest_caches(self, manifest_path: str | Path | None = None) -> None:
+        invalidate_history = getattr(self.state, "invalidate_manifest_history_cache", None)
+        invalidate_file = getattr(self.state, "invalidate_manifest_file_cache", None)
+        if callable(invalidate_history):
+            invalidate_history()
+        if callable(invalidate_file):
+            invalidate_file(manifest_path)
+
     def _clear_completed_manifest_snapshot(self) -> None:
         self._completed_manifest_snapshot = None
         self._viewing_completed_manifest = False
@@ -3758,6 +3767,7 @@ class MainWindow(QMainWindow):
             self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
         self._apply_work_mode_ui(refresh_manifest_writeback=False)
         self._refresh_diagnostics_context()
+        self._invalidate_manifest_caches()
         self._append_log(f"项目目录已设置为：{directory}")
         return True
 
@@ -3998,6 +4008,31 @@ class MainWindow(QMainWindow):
             return False
         return self._current_config_ui_snapshot() != self._config_ui_saved_snapshot
 
+    def _confirm_unsaved_config_before_workflow(self) -> bool:
+        if not self._config_tab_has_unsaved_changes():
+            return True
+
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Icon.Warning)
+        message.setWindowTitle("设置尚未保存")
+        message.setText("设置页有未保存的更改。")
+        message.setInformativeText(
+            "当前任务会读取已保存的 translator_config.json；"
+            "未保存的更改不会生效。"
+        )
+        save_btn = message.addButton("保存并继续", QMessageBox.ButtonRole.AcceptRole)
+        discard_btn = message.addButton("不保存继续", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = message.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        message.setDefaultButton(save_btn)
+        message.exec()
+        clicked = message.clickedButton()
+
+        if clicked is save_btn:
+            return self._on_save_config()
+        if clicked is discard_btn:
+            return True
+        return False
+
     def _confirm_unsaved_config_before_registry_switch(self) -> bool:
         if not self._config_tab_has_unsaved_changes():
             return True
@@ -4181,6 +4216,8 @@ class MainWindow(QMainWindow):
         return self._doctor_worker is not None and self._doctor_worker.isRunning()
 
     def _on_run_doctor(self):
+        if not self._confirm_unsaved_config_before_workflow():
+            return
         if not self.state.get_game_root():
             QMessageBox.information(
                 self, "请先选择项目",
@@ -4267,6 +4304,8 @@ class MainWindow(QMainWindow):
         self._set_doctor_summary(summary)
 
     def _on_bootstrap_work(self):
+        if not self._confirm_unsaved_config_before_workflow():
+            return
         if not self.state.get_game_root():
             QMessageBox.information(
                 self,
@@ -4296,6 +4335,8 @@ class MainWindow(QMainWindow):
         self.runner.run(self.state.get_batch_script_path(), ["bootstrap-work"])
 
     def _on_generate_template(self):
+        if not self._confirm_unsaved_config_before_workflow():
+            return
         if not self.state.get_game_root():
             QMessageBox.information(
                 self,
@@ -4341,6 +4382,8 @@ class MainWindow(QMainWindow):
         return True
 
     def _start_bootstrap_task(self, kind: str) -> bool:
+        if not self._confirm_unsaved_config_before_workflow():
+            return False
         if not self.state.get_game_root():
             QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
             return False
@@ -4428,6 +4471,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "请先运行环境检查", detail)
             return
 
+        if not self._confirm_unsaved_config_before_workflow():
+            return
+
         if spec.mode in self._sync_work_modes_requiring_api_key():
             api_key_count, _ = self.state.get_api_key_status()
             if api_key_count == 0:
@@ -4476,6 +4522,8 @@ class MainWindow(QMainWindow):
         self._run_workflow_current_step()
 
     def _on_resume_translation(self):
+        if not self._confirm_unsaved_config_before_workflow():
+            return
         spec = work_mode_spec(self._current_work_mode())
         if not spec.implemented or not spec.supports_resume:
             QMessageBox.information(self, "功能开发中", spec.not_implemented_message)
@@ -5738,6 +5786,7 @@ class MainWindow(QMainWindow):
             return
 
         if self._active_command == "apply":
+            self._invalidate_manifest_caches(self._writeback_manifest_path or None)
             summary = summarize_apply_output(
                 "\n".join(self._apply_output_lines),
                 exit_code,
@@ -5758,6 +5807,7 @@ class MainWindow(QMainWindow):
 
         if self._active_command == "recheck":
             manifest_path = self._writeback_manifest_path
+            self._invalidate_manifest_caches(manifest_path or None)
             self._update_writeback_from_check(
                 "\n".join(self._recheck_output_lines),
                 exit_code,
@@ -6134,6 +6184,7 @@ class MainWindow(QMainWindow):
 
         step_output = "\n".join(self._workflow_step_output_lines)
         manifest_path = self._workflow.manifest_path
+        self._invalidate_manifest_caches(manifest_path or None)
 
         current_step = self._workflow.current_step()
         step_key = current_step.key if current_step else ""
