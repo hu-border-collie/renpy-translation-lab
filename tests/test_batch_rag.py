@@ -751,8 +751,10 @@ class BatchRagRegressionTests(unittest.TestCase):
             ):
                 report = batch_mod.collect_doctor_report()
 
-        joined = ' '.join(report.get('recommendations', []))
-        self.assertIn('bootstrap-work', joined)
+        import doctor_recommendations as doctor_rec
+
+        codes = doctor_rec.doctor_recommendation_codes(report.get('recommendations', []))
+        self.assertIn(doctor_rec.BOOTSTRAP_WORK, codes)
 
     def test_doctor_report_prefers_existing_tl_when_files_and_sdk_available(self):
         with tempfile.TemporaryDirectory() as tmp:

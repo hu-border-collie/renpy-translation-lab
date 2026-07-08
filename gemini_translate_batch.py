@@ -21,6 +21,7 @@ from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreL
 import batch_cost_estimate
 import batch_non_chinese_rules
 import batch_submit_recovery
+import doctor_recommendations as doctor_rec
 import keyword_glossary_merge
 import prompt_context
 import translation_ab_experiment
@@ -8176,14 +8177,15 @@ def collect_doctor_recommendations(report):
         work_dir = report.get('work_dir', '')
         if work_dir:
             recommendations.append(
-                f'game_root should use work directory; switch to {work_dir}'
+                doctor_rec.make_doctor_recommendation(
+                    doctor_rec.SWITCH_TO_WORK,
+                    work_dir=work_dir,
+                )
             )
         work_missing_or_empty = not report.get('work_exists') or report.get('work_empty')
         if work_missing_or_empty and report.get('work_bootstrap_allowed') and report.get('original_game_dir'):
             recommendations.append(
-                'work directory is missing or empty and original/game exists; '
-                'run: python gemini_translate_batch.py bootstrap-work '
-                '(copies original/game into work/game without generating TL).'
+                doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_WORK)
             )
         return recommendations
 
@@ -8194,23 +8196,19 @@ def collect_doctor_recommendations(report):
 
     if report.get('work_bootstrap_allowed') and report.get('original_game_dir'):
         recommendations.append(
-            'work directory is missing or empty and original/game exists; '
-            'run: python gemini_translate_batch.py bootstrap-work '
-            '(copies original/game into work/game without generating TL).'
+            doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_WORK)
         )
     elif not has_tl and report.get('prepare_enabled') and report.get('can_generate_template'):
         recommendations.append(
-            'Missing translation files; run: python gemini_translate_batch.py generate-template '
-            '(runs prepare only: unpack RPA if needed, generate tl template).'
+            doctor_rec.make_doctor_recommendation(doctor_rec.GENERATE_TEMPLATE)
         )
     elif not has_tl and report.get('prepare_enabled') and mode == 'blocked_missing_template':
         recommendations.append(
-            'Install Ren\'Py SDK or set prepare.renpy_sdk_dir, then run: '
-            'python gemini_translate_batch.py generate-template.'
+            doctor_rec.make_doctor_recommendation(doctor_rec.INSTALL_SDK_GENERATE_TEMPLATE)
         )
     elif not has_tl and not report.get('prepare_enabled'):
         recommendations.append(
-            'prepare is disabled; enable prepare.enabled in translator_config.json, then run build.'
+            doctor_rec.make_doctor_recommendation(doctor_rec.ENABLE_PREPARE)
         )
         return recommendations
 
@@ -8221,24 +8219,23 @@ def collect_doctor_recommendations(report):
     source_index_status = _doctor_source_index_needs_bootstrap(source_index)
     if source_index_status == 'missing':
         recommendations.append(
-            'Source index is enabled but not built; run bootstrap-source-index.'
+            doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_SOURCE_INDEX)
         )
         return recommendations
     if source_index_status == 'incomplete':
         recommendations.append(
-            'Source index bootstrap is incomplete; run bootstrap-source-index.'
+            doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_SOURCE_INDEX_INCOMPLETE)
         )
         return recommendations
 
     if _doctor_rag_needs_bootstrap(rag):
         if rag.get('bootstrap_on_build'):
             recommendations.append(
-                'RAG store is empty; run bootstrap-rag before batch translation, '
-                'or start batch translation to warm the store automatically on build.'
+                doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_RAG_OR_WARM_ON_BUILD)
             )
         else:
             recommendations.append(
-                'RAG store is enabled but empty; run bootstrap-rag before batch translation.'
+                doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_RAG)
             )
         return recommendations
 
@@ -8249,15 +8246,13 @@ def collect_doctor_recommendations(report):
         and _doctor_should_recommend_enabling_rag(report)
     ):
         recommendations.append(
-            'Existing translations detected with RAG disabled; enable RAG and run bootstrap-rag '
-            'for better terminology consistency, then start batch translation.'
+            doctor_rec.make_doctor_recommendation(doctor_rec.ENABLE_RAG_FOR_CONSISTENCY)
         )
         return recommendations
 
     if has_tl and pending > 0 and has_existing_translations and _doctor_pending_is_minor(report):
         recommendations.append(
-            'Project is substantially complete; remaining pending lines are minor. '
-            'Batch translation and RAG bootstrap are optional.'
+            doctor_rec.make_doctor_recommendation(doctor_rec.SUBSTANTIALLY_COMPLETE)
         )
         return recommendations
 
@@ -8268,25 +8263,24 @@ def collect_doctor_recommendations(report):
         and not has_existing_translations
     ):
         recommendations.append(
-            'Source index is disabled; enable it and run bootstrap-source-index '
-            'for better story context on a new translation project.'
+            doctor_rec.make_doctor_recommendation(doctor_rec.ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT)
         )
         return recommendations
 
     if has_tl and pending > 0:
         if _doctor_is_incremental_translation(report):
             recommendations.append(
-                'Incremental translation is ready; start batch translation when API keys are configured.'
+                doctor_rec.make_doctor_recommendation(doctor_rec.START_INCREMENTAL_BATCH)
             )
         else:
             recommendations.append(
-                'Pending translation lines are ready; start batch translation when API keys are configured.'
+                doctor_rec.make_doctor_recommendation(doctor_rec.START_PENDING_BATCH)
             )
         return recommendations
 
     if has_tl and pending == 0:
         recommendations.append(
-            'No pending translation lines detected; review TL files or refresh templates before starting a new batch.'
+            doctor_rec.make_doctor_recommendation(doctor_rec.NO_PENDING_LINES)
         )
 
     return recommendations
@@ -8833,7 +8827,8 @@ def print_doctor_report(report):
     if report.get('recommendations'):
         print('Recommendations:')
         for recommendation in report['recommendations']:
-            print(f'- {recommendation}')
+            rec = doctor_rec.normalize_doctor_recommendation(recommendation)
+            print(f'- {doctor_rec.format_doctor_recommendation_cli_line(rec)}')
 
 
 def print_work_bootstrap_summary(result):

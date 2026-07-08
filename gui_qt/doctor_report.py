@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+import doctor_recommendations as doctor_rec
+
 from .summary_helpers import append_unique_fact
 from .user_copy import (
     doctor_mode_label,
@@ -256,7 +258,9 @@ def parse_doctor_output(output: str) -> dict[str, object]:
 
         if in_recommendations:
             if line.startswith("- "):
-                parsed.setdefault("recommendations", []).append(line[2:].strip())
+                rec = doctor_rec.parse_doctor_recommendation_cli_line(line[2:].strip())
+                if rec is not None:
+                    parsed.setdefault("recommendations", []).append(rec)
                 continue
             in_recommendations = False
 
@@ -371,9 +375,9 @@ def doctor_report_to_parsed(report: dict[str, Any]) -> dict[str, object]:
             if isinstance(warning, str) and warning.strip()
         ],
         "recommendations": [
-            recommendation
+            doctor_rec.normalize_doctor_recommendation(recommendation)
             for recommendation in (report.get("recommendations") or [])
-            if isinstance(recommendation, str) and recommendation.strip()
+            if recommendation
         ],
     }
 
@@ -416,10 +420,15 @@ def _summarize_doctor_parsed(
         for warning in parsed.get("warnings", [])
         if isinstance(warning, str) and warning.strip()
     ]
+    normalized_recommendations = [
+        doctor_rec.normalize_doctor_recommendation(recommendation)
+        for recommendation in parsed.get("recommendations", [])
+        if recommendation
+    ]
+    recommendation_codes = doctor_rec.doctor_recommendation_codes(normalized_recommendations)
     recommendation_facts = [
         format_doctor_recommendation_fact(recommendation)
-        for recommendation in parsed.get("recommendations", [])
-        if isinstance(recommendation, str) and recommendation.strip()
+        for recommendation in normalized_recommendations
     ]
     counts_value = parsed.get("counts")
     counts = counts_value if isinstance(counts_value, dict) else {}
@@ -508,7 +517,7 @@ def _summarize_doctor_parsed(
     for warning in warnings:
         append_unique_fact(facts, format_doctor_warning_fact(warning))
 
-    recommendation_message = primary_recommendation_message(recommendation_facts)
+    recommendation_message = primary_recommendation_message(recommendation_codes)
 
     if exit_code != 0:
         return DoctorSummary(
@@ -543,7 +552,7 @@ def _summarize_doctor_parsed(
     else:
         needs_attention = (
             findings_require_attention(findings)
-            or recommendation_requires_attention(recommendation_facts)
+            or recommendation_requires_attention(recommendation_codes)
             or (api_key_count is not None and api_key_count == 0)
         )
         if needs_attention:
@@ -556,7 +565,7 @@ def _summarize_doctor_parsed(
 
     if recommendation_message:
         message = recommendation_message
-        if recommendation_requires_attention(recommendation_facts) and status == "ready":
+        if recommendation_requires_attention(recommendation_codes) and status == "ready":
             status = "warning"
             heading = LAYOUT_STATUS_HEADINGS["attention"][1]
 
