@@ -9,6 +9,8 @@ from gui_qt.doctor_report import (
     summarize_doctor_output,
     summarize_doctor_report,
 )
+import doctor_recommendations as doctor_rec
+
 from gui_qt.user_copy import format_doctor_recommendation_fact, primary_recommendation_message
 
 
@@ -383,16 +385,14 @@ class GuiDoctorReportTests(unittest.TestCase):
 
     def test_format_doctor_recommendation_fact_uses_fact_style(self):
         fact = format_doctor_recommendation_fact(
-            "work directory is missing or empty and original/game exists; "
-            "run: python gemini_translate_batch.py bootstrap-work "
-            "(copies original/game into work/game without generating TL)."
+            doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_WORK)
         )
 
         self.assertEqual(fact, "建议：点击「准备工作目录」")
 
     def test_format_doctor_recommendation_fact_for_ready_pending_lines(self):
         fact = format_doctor_recommendation_fact(
-            "Pending translation lines are ready; start batch translation when API keys are configured."
+            doctor_rec.make_doctor_recommendation(doctor_rec.START_PENDING_BATCH)
         )
 
         self.assertEqual(
@@ -402,7 +402,7 @@ class GuiDoctorReportTests(unittest.TestCase):
 
     def test_format_doctor_recommendation_fact_for_empty_rag(self):
         fact = format_doctor_recommendation_fact(
-            "RAG store is enabled but empty; run bootstrap-rag before batch translation."
+            doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_RAG)
         )
 
         self.assertEqual(
@@ -410,12 +410,18 @@ class GuiDoctorReportTests(unittest.TestCase):
             "建议：先在「分析与准备」运行「预建记忆库」，再开始批量翻译",
         )
 
-    def test_primary_recommendation_message_for_incremental_translation(self):
-        message = primary_recommendation_message(
-            [
-                "建议：补译环境已就绪；切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交",
-            ]
+    def test_format_doctor_recommendation_fact_supports_legacy_english_strings(self):
+        fact = format_doctor_recommendation_fact(
+            "Pending translation lines are ready; start batch translation when API keys are configured."
         )
+
+        self.assertEqual(
+            fact,
+            "建议：切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交云端任务",
+        )
+
+    def test_primary_recommendation_message_for_incremental_translation(self):
+        message = primary_recommendation_message([doctor_rec.START_INCREMENTAL_BATCH])
 
         self.assertEqual(message, "补译环境已就绪，可以开始批量翻译。")
 

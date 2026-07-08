@@ -4,6 +4,7 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
+import doctor_recommendations as doctor_rec
 import gemini_translate_batch as batch_mod
 
 
@@ -131,12 +132,12 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             layout_status="switch_to_work",
         )
         recommendations = batch_mod.collect_doctor_recommendations(report)
-        joined = " ".join(recommendations)
+        codes = doctor_rec.doctor_recommendation_codes(recommendations)
 
-        self.assertIn("switch to C:/Games/Example/work", joined)
-        self.assertIn("bootstrap-work", joined)
-        self.assertNotIn("gemini_translate_batch.py build", joined)
-        self.assertNotIn("Ren'Py SDK", joined)
+        self.assertIn(doctor_rec.SWITCH_TO_WORK, codes)
+        self.assertIn(doctor_rec.BOOTSTRAP_WORK, codes)
+        self.assertNotIn(doctor_rec.GENERATE_TEMPLATE, codes)
+        self.assertNotIn(doctor_rec.INSTALL_SDK_GENERATE_TEMPLATE, codes)
 
     def test_switch_to_work_without_original_only_recommends_switch(self):
         report = _layout_report(
@@ -148,7 +149,11 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         recommendations = batch_mod.collect_doctor_recommendations(report)
 
         self.assertEqual(len(recommendations), 1)
-        self.assertIn("switch to C:/Games/Example/work", recommendations[0])
+        self.assertEqual(recommendations[0]["code"], doctor_rec.SWITCH_TO_WORK)
+        self.assertEqual(
+            recommendations[0]["params"]["work_dir"],
+            "C:/Games/Example/work",
+        )
 
     def test_switch_to_work_with_existing_work_does_not_recommend_bootstrap(self):
         report = _layout_report(
@@ -162,10 +167,10 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         report["work_exists"] = True
         report["work_empty"] = False
         recommendations = batch_mod.collect_doctor_recommendations(report)
-        joined = " ".join(recommendations)
+        codes = doctor_rec.doctor_recommendation_codes(recommendations)
 
-        self.assertIn("switch to C:/Games/Example/work", joined)
-        self.assertNotIn("bootstrap-work", joined)
+        self.assertIn(doctor_rec.SWITCH_TO_WORK, codes)
+        self.assertNotIn(doctor_rec.BOOTSTRAP_WORK, codes)
 
     def test_work_root_without_tl_recommends_generate_template_when_available(self):
         report = _layout_report(
@@ -175,10 +180,10 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             layout_status="attention",
         )
         recommendations = batch_mod.collect_doctor_recommendations(report)
-        joined = " ".join(recommendations)
+        codes = doctor_rec.doctor_recommendation_codes(recommendations)
 
-        self.assertIn("gemini_translate_batch.py generate-template", joined)
-        self.assertNotIn("switch to", joined)
+        self.assertEqual(codes, [doctor_rec.GENERATE_TEMPLATE])
+        self.assertNotIn(doctor_rec.SWITCH_TO_WORK, codes)
 
     def test_resolve_source_index_expected_segments_scans_when_metadata_missing(self):
         with (
@@ -212,8 +217,11 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         recommendations = batch_mod.collect_doctor_recommendations(report)
 
         self.assertEqual(len(recommendations), 1)
-        self.assertIn("incomplete", recommendations[0])
-        self.assertNotIn("Pending translation lines", recommendations[0])
+        self.assertEqual(
+            recommendations[0]["code"],
+            doctor_rec.BOOTSTRAP_SOURCE_INDEX_INCOMPLETE,
+        )
+        self.assertNotIn(doctor_rec.START_PENDING_BATCH, doctor_rec.doctor_recommendation_codes(recommendations))
 
     def test_empty_rag_blocks_batch_translation_when_enabled(self):
         report = _layout_report(
@@ -246,8 +254,8 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         recommendations = batch_mod.collect_doctor_recommendations(report)
 
         self.assertEqual(len(recommendations), 1)
-        self.assertIn("bootstrap-rag", recommendations[0])
-        self.assertNotIn("Pending translation lines", recommendations[0])
+        self.assertEqual(recommendations[0]["code"], doctor_rec.BOOTSTRAP_RAG)
+        self.assertNotIn(doctor_rec.START_PENDING_BATCH, doctor_rec.doctor_recommendation_codes(recommendations))
 
     def test_incremental_translation_uses_incremental_recommendation(self):
         report = _layout_report(
@@ -279,7 +287,7 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         recommendations = batch_mod.collect_doctor_recommendations(report)
 
         self.assertEqual(len(recommendations), 1)
-        self.assertIn("Incremental translation", recommendations[0])
+        self.assertEqual(recommendations[0]["code"], doctor_rec.START_INCREMENTAL_BATCH)
 
     def test_mostly_complete_project_without_rag_does_not_require_bootstrap(self):
         report = _layout_report(
@@ -308,8 +316,8 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         recommendations = batch_mod.collect_doctor_recommendations(report)
 
         self.assertEqual(len(recommendations), 1)
-        self.assertIn("substantially complete", recommendations[0])
-        self.assertNotIn("RAG disabled", recommendations[0])
+        self.assertEqual(recommendations[0]["code"], doctor_rec.SUBSTANTIALLY_COMPLETE)
+        self.assertNotIn(doctor_rec.ENABLE_RAG_FOR_CONSISTENCY, doctor_rec.doctor_recommendation_codes(recommendations))
 
     def test_existing_translations_without_rag_recommends_enable_rag(self):
         report = _layout_report(
@@ -337,7 +345,7 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         recommendations = batch_mod.collect_doctor_recommendations(report)
 
         self.assertEqual(len(recommendations), 1)
-        self.assertIn("RAG disabled", recommendations[0])
+        self.assertEqual(recommendations[0]["code"], doctor_rec.ENABLE_RAG_FOR_CONSISTENCY)
 
 
 if __name__ == "__main__":

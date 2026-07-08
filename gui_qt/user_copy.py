@@ -1,6 +1,10 @@
 """Shared Chinese labels and copy helpers for GUI summaries."""
 from __future__ import annotations
 
+from typing import Any
+
+import doctor_recommendations as doctor_rec
+
 SAFETY_LEVEL_LABELS = {
     "safe": "可写回",
     "warn": "需处理",
@@ -43,71 +47,58 @@ BOOTSTRAP_FIELD_LABELS = {
     "external_seed_records": "外部种子记录数",
 }
 
-DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS: tuple[tuple[str, str], ...] = (
-    (
-        "game_root should use work directory; switch to",
-        "建议：将项目路径切换到",
+DOCTOR_RECOMMENDATION_CODE_TRANSLATIONS: dict[str, str] = {
+    doctor_rec.SWITCH_TO_WORK: "建议：将项目路径切换到",
+    doctor_rec.BOOTSTRAP_WORK: "建议：点击「准备工作目录」",
+    doctor_rec.GENERATE_TEMPLATE: "建议：点击「生成翻译模板」",
+    doctor_rec.INSTALL_SDK_GENERATE_TEMPLATE: "建议：配置 Ren'Py SDK 后点击「开始翻译」",
+    doctor_rec.ENABLE_PREPARE: "建议：在配置中启用 prepare 后点击「开始翻译」",
+    doctor_rec.BOOTSTRAP_SOURCE_INDEX: "建议：先在「分析与准备」运行「预建原文索引」",
+    doctor_rec.BOOTSTRAP_SOURCE_INDEX_INCOMPLETE: "建议：继续运行「预建原文索引」补全索引库",
+    doctor_rec.BOOTSTRAP_RAG: "建议：先在「分析与准备」运行「预建记忆库」，再开始批量翻译",
+    doctor_rec.BOOTSTRAP_RAG_OR_WARM_ON_BUILD: (
+        "建议：记忆库为空；可先「预建记忆库」，若已勾选「开始翻译时自动暖 RAG 库」也可直接「开始翻译」"
     ),
-    (
-        "work directory is missing or empty and original/game exists;",
-        "建议：点击「准备工作目录」",
+    doctor_rec.ENABLE_RAG_FOR_CONSISTENCY: (
+        "建议：补译量较大且记忆库未启用；若要进行批量补译，建议先在配置页启用并「预建记忆库」"
     ),
-    (
-        "Missing translation files; run: python gemini_translate_batch.py generate-template",
-        "建议：点击「生成翻译模板」",
+    doctor_rec.SUBSTANTIALLY_COMPLETE: (
+        "建议：项目已基本译完；剩余待译行很少（可能含专名/标点），可忽略或按需补译，不必预建记忆库"
     ),
-    (
-        "Install Ren'Py SDK or set prepare.renpy_sdk_dir, then run:",
-        "建议：配置 Ren'Py SDK 后点击「开始翻译」",
+    doctor_rec.ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT: (
+        "建议：全新初译项目建议在配置页启用原文索引并「预建原文索引」，再开始翻译"
     ),
-    (
-        "prepare is disabled; enable prepare.enabled in translator_config.json, then run build.",
-        "建议：在配置中启用 prepare 后点击「开始翻译」",
+    doctor_rec.START_INCREMENTAL_BATCH: (
+        "建议：补译环境已就绪；切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交"
     ),
-    (
-        "Source index is enabled but not built; run bootstrap-source-index.",
-        "建议：先在「分析与准备」运行「预建原文索引」",
+    doctor_rec.NO_PENDING_LINES: (
+        "建议：当前没有待译条目；请检查翻译文件，或重新生成/刷新模板后再开始"
     ),
-    (
-        "Source index bootstrap is incomplete; run bootstrap-source-index.",
-        "建议：继续运行「预建原文索引」补全索引库",
+    doctor_rec.START_PENDING_BATCH: (
+        "建议：切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交云端任务"
     ),
-    (
-        "RAG store is enabled but empty; run bootstrap-rag before batch translation.",
-        "建议：先在「分析与准备」运行「预建记忆库」，再开始批量翻译",
-    ),
-    (
-        "RAG store is empty; run bootstrap-rag before batch translation, "
-        "or start batch translation to warm the store automatically on build.",
-        "建议：记忆库为空；可先「预建记忆库」，若已勾选「开始翻译时自动暖 RAG 库」也可直接「开始翻译」",
-    ),
-    (
-        "Existing translations detected with RAG disabled; enable RAG and run bootstrap-rag "
-        "for better terminology consistency, then start batch translation.",
-        "建议：补译量较大且记忆库未启用；若要进行批量补译，建议先在配置页启用并「预建记忆库」",
-    ),
-    (
-        "Project is substantially complete; remaining pending lines are minor. "
-        "Batch translation and RAG bootstrap are optional.",
-        "建议：项目已基本译完；剩余待译行很少（可能含专名/标点），可忽略或按需补译，不必预建记忆库",
-    ),
-    (
-        "Source index is disabled; enable it and run bootstrap-source-index "
-        "for better story context on a new translation project.",
-        "建议：全新初译项目建议在配置页启用原文索引并「预建原文索引」，再开始翻译",
-    ),
-    (
-        "Incremental translation is ready; start batch translation when API keys are configured.",
-        "建议：补译环境已就绪；切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交",
-    ),
-    (
-        "No pending translation lines detected; review TL files or refresh templates before starting a new batch.",
-        "建议：当前没有待译条目；请检查翻译文件，或重新生成/刷新模板后再开始",
-    ),
-    (
-        "Pending translation lines are ready; start batch translation when API keys are configured.",
-        "建议：切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交云端任务",
-    ),
+}
+
+DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES: dict[str, str] = {
+    doctor_rec.SUBSTANTIALLY_COMPLETE: "项目已基本译完；剩余待译行很少，可忽略或按需补译。",
+    doctor_rec.ENABLE_RAG_FOR_CONSISTENCY: "补译量较大；若要进行批量补译，建议先启用并预建记忆库。",
+    doctor_rec.BOOTSTRAP_RAG: "记忆库尚未建立，建议先预建记忆库再开始翻译。",
+    doctor_rec.BOOTSTRAP_RAG_OR_WARM_ON_BUILD: "记忆库尚未建立，建议先预建记忆库再开始翻译。",
+    doctor_rec.BOOTSTRAP_SOURCE_INDEX: "原文索引尚未就绪，建议先完成预建再开始翻译。",
+    doctor_rec.BOOTSTRAP_SOURCE_INDEX_INCOMPLETE: "原文索引尚未就绪，建议先完成预建再开始翻译。",
+    doctor_rec.BOOTSTRAP_WORK: "请先准备工作目录，再开始翻译流程。",
+    doctor_rec.ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT: "全新项目建议先预建原文索引，再开始批量翻译。",
+    doctor_rec.START_INCREMENTAL_BATCH: "补译环境已就绪，可以开始批量翻译。",
+    doctor_rec.NO_PENDING_LINES: "当前没有待译条目，请先检查或刷新翻译模板。",
+    doctor_rec.START_PENDING_BATCH: "翻译环境已就绪，可以开始批量翻译。",
+}
+
+READY_DOCTOR_RECOMMENDATION_CODES = frozenset(
+    {
+        doctor_rec.START_INCREMENTAL_BATCH,
+        doctor_rec.START_PENDING_BATCH,
+        doctor_rec.SUBSTANTIALLY_COMPLETE,
+    }
 )
 
 DOCTOR_WARNING_TRANSLATIONS: tuple[tuple[str, str], ...] = (
@@ -209,59 +200,35 @@ def findings_require_attention(findings: list[str]) -> bool:
     return False
 
 
-def recommendation_requires_attention(recommendation_facts: list[str]) -> bool:
+def recommendation_requires_attention(recommendation_codes: list[str]) -> bool:
     """Return True when the primary recommendation is a prep step, not ready-to-translate."""
-    ready_messages = {
-        "补译环境已就绪，可以开始批量翻译。",
-        "翻译环境已就绪，可以开始批量翻译。",
-        "项目已基本译完；剩余待译行很少，可忽略或按需补译。",
-    }
-    message = primary_recommendation_message(recommendation_facts)
-    if message in ready_messages:
+    if not recommendation_codes:
         return False
-    return bool(recommendation_facts)
+    return recommendation_codes[0] not in READY_DOCTOR_RECOMMENDATION_CODES
 
 
-def primary_recommendation_message(recommendation_facts: list[str]) -> str:
-    """Map the first rendered recommendation fact to a short summary message."""
-    if not recommendation_facts:
+def primary_recommendation_message(recommendation_codes: list[str]) -> str:
+    """Map the first recommendation code to a short summary message."""
+    if not recommendation_codes:
         return ""
-    first = recommendation_facts[0].strip()
-    if not first.startswith("建议："):
-        return ""
-
-    if "已基本译完" in first:
-        return "项目已基本译完；剩余待译行很少，可忽略或按需补译。"
-    if "补译量较大且记忆库未启用" in first:
-        return "补译量较大；若要进行批量补译，建议先启用并预建记忆库。"
-    if "预建记忆库" in first and "不必预建记忆库" not in first:
-        return "记忆库尚未建立，建议先预建记忆库再开始翻译。"
-    if "预建原文索引" in first:
-        return "原文索引尚未就绪，建议先完成预建再开始翻译。"
-    if "准备工作目录" in first:
-        return "请先准备工作目录，再开始翻译流程。"
-    if "全新初译项目" in first:
-        return "全新项目建议先预建原文索引，再开始批量翻译。"
-    if "补译环境已就绪" in first:
-        return "补译环境已就绪，可以开始批量翻译。"
-    if "没有待译条目" in first:
-        return "当前没有待译条目，请先检查或刷新翻译模板。"
-    if "打包并提交" in first:
-        return "翻译环境已就绪，可以开始批量翻译。"
-    return ""
+    return DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES.get(recommendation_codes[0], "")
 
 
-def format_doctor_recommendation_fact(recommendation: str) -> str:
+def format_doctor_recommendation_fact(recommendation: Any) -> str:
     """Render doctor recommendations in the same `标签：值` style as other facts."""
-    text = recommendation.strip()
-    for prefix, rendered in DOCTOR_RECOMMENDATION_PREFIX_TRANSLATIONS:
-        if text.startswith(prefix):
-            if prefix == "game_root should use work directory; switch to":
-                return f"{rendered}{text[len(prefix):]}"
-            return rendered
-    if "bootstrap-work" in text and "copies original/game" in text:
-        return "建议：点击「准备工作目录」"
-    return f"建议：{text}"
+    rec = doctor_rec.normalize_doctor_recommendation(recommendation)
+    code = str(rec.get("code") or "")
+    params = rec.get("params") if isinstance(rec.get("params"), dict) else {}
+    rendered = DOCTOR_RECOMMENDATION_CODE_TRANSLATIONS.get(code)
+    if rendered is not None:
+        if code == doctor_rec.SWITCH_TO_WORK:
+            work_dir = str(params.get("work_dir") or "").strip()
+            return f"{rendered}{work_dir}" if work_dir else rendered
+        return rendered
+    detail = doctor_rec.doctor_recommendation_detail(rec)
+    if detail:
+        return f"建议：{detail}"
+    return f"建议：{code or 'unknown'}"
 
 
 def translate_doctor_warning(warning: str) -> str:
