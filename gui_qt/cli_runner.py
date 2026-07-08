@@ -72,6 +72,13 @@ class CliRunner(QObject):
             self._fail("启动进程失败（超时）")
             return
 
+    def is_running(self) -> bool:
+        """Return True while a CLI subprocess is active."""
+        return (
+            self._proc is not None
+            and self._proc.state() == QProcess.ProcessState.Running
+        )
+
     def kill(self) -> None:
         """Terminate the running process if any."""
         if self._proc and self._proc.state() == QProcess.ProcessState.Running:

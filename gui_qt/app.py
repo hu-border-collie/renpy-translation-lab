@@ -340,6 +340,7 @@ class MainWindow(QMainWindow):
         self._work_bootstrap_output_lines: list[str] = []
         self._template_generation_output_lines: list[str] = []
         self._doctor_summary_mode = ""
+        self._doctor_summary_status = ""
         self._doctor_check_completed = False
         self._doctor_worker: DoctorWorker | None = None
         self._last_doctor_report: dict | None = None
@@ -3173,6 +3174,13 @@ class MainWindow(QMainWindow):
     def _translation_requires_doctor_check(self, mode: WorkMode) -> bool:
         return mode in {WorkMode.BATCH_TRANSLATION, WorkMode.SYNC_TRANSLATION}
 
+    def _doctor_allows_translate_action(self) -> bool:
+        if not self._doctor_check_completed:
+            return False
+        if self._should_generate_template_only():
+            return True
+        return self._doctor_summary_status in {"ready", "warning"}
+
     def _translate_button_enabled(
         self,
         *,
@@ -3183,7 +3191,7 @@ class MainWindow(QMainWindow):
         if running or not spec.implemented or not bootstrap_ready:
             return False
         if self._translation_requires_doctor_check(spec.mode):
-            return self._doctor_check_completed
+            return self._doctor_allows_translate_action()
         return True
 
     def _update_translate_button_label(self) -> None:
@@ -3692,9 +3700,20 @@ class MainWindow(QMainWindow):
             worker.completed.disconnect(self._on_doctor_completed)
         except (RuntimeError, TypeError):
             pass
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(100)
         self._doctor_worker = None
+        if self._active_command == "doctor":
+            self._active_command = ""
+            self._set_task_running(False)
 
     def _switch_game_root(self, directory: str) -> bool:
+        if self._is_doctor_running():
+            self._invalidate_doctor_worker()
+        if self.runner.is_running():
+            self.runner.kill()
+            self._set_task_running(False)
         self._invalidate_doctor_worker()
         try:
             effective_root, adjusted = self.state.set_game_root(directory)
@@ -3718,6 +3737,7 @@ class MainWindow(QMainWindow):
         self._workflow_step_output_lines = []
         self._clear_completed_manifest_snapshot()
         self._doctor_check_completed = False
+        self._doctor_summary_status = ""
         self._last_doctor_report = None
         self._last_doctor_report_game_root = ""
         self._set_doctor_summary(stale_summary())
@@ -4397,12 +4417,15 @@ class MainWindow(QMainWindow):
                 "请先选择游戏的 work 目录。",
             )
             return
-        if self._translation_requires_doctor_check(spec.mode) and not self._doctor_check_completed:
-            QMessageBox.information(
-                self,
-                "请先运行环境检查",
-                "批量翻译与同步翻译需要先完成环境检查，确认项目状态后再开始。",
-            )
+        if self._translation_requires_doctor_check(spec.mode) and not self._doctor_allows_translate_action():
+            if not self._doctor_check_completed:
+                detail = "批量翻译与同步翻译需要先完成环境检查，确认项目状态后再开始。"
+            else:
+                detail = (
+                    "当前环境检查未通过或仍有阻塞项，无法开始翻译。"
+                    "请查看环境检查摘要，处理问题后重新运行检查。"
+                )
+            QMessageBox.information(self, "请先运行环境检查", detail)
             return
 
         if spec.mode in self._sync_work_modes_requiring_api_key():
@@ -4585,6 +4608,16 @@ class MainWindow(QMainWindow):
         self._run_workflow_current_step()
 
     def _on_kill(self):
+        if self._is_doctor_running():
+            self._invalidate_doctor_worker()
+            self._append_log("\n[环境检查已取消]\n")
+            self._doctor_check_completed = False
+            self._doctor_summary_status = ""
+            self._last_doctor_report = None
+            self._last_doctor_report_game_root = ""
+            self._set_doctor_summary(stale_summary())
+            self.statusBar().showMessage("环境检查已取消。", 6000)
+            return
         self.runner.kill()
 
     def _prompt_probe_options(self) -> dict[str, int | None] | None:
@@ -5649,6 +5682,7 @@ class MainWindow(QMainWindow):
 
     def _set_doctor_summary(self, summary: DoctorSummary):
         self._doctor_summary_mode = summary.mode
+        self._doctor_summary_status = summary.status
         self.doctor_status_label.set_status(summary.status, summary.heading)
         self.doctor_message_label.setText(summary.message)
         self.doctor_facts_label.setText("\n".join(summary.facts))
@@ -5993,11 +6027,7 @@ class MainWindow(QMainWindow):
             )
             game_root_update_failed = False
             if summary.status == "ready" and summary.work_dir:
-                try:
-                    self.state.set_game_root(summary.work_dir)
-                    self._refresh_project_label()
-                except ValueError as exc:
-                    self._append_log(f"未能保存项目路径：{exc}")
+                if not self._switch_game_root(summary.work_dir):
                     game_root_update_failed = True
                     summary = with_game_root_persist_warning(summary)
             self._set_doctor_summary(work_bootstrap_to_doctor_summary(summary))

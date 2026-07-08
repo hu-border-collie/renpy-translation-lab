@@ -87,6 +87,41 @@ class GuiTranslateButtonLabelTests(unittest.TestCase):
 
         self.assertTrue(window.translate_btn.isEnabled())
 
+    def test_batch_translation_button_disabled_when_doctor_blocked(self):
+        window = MainWindow()
+        window._work_mode = WorkMode.BATCH_TRANSLATION
+        window._doctor_check_completed = True
+        window._set_doctor_summary(
+            DoctorSummary(
+                status="blocked",
+                heading="项目检查失败",
+                message="环境检查没有正常完成，请查看诊断日志。",
+                facts=[],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+
+        self.assertEqual(window.translate_btn.text(), "开始翻译")
+        self.assertFalse(window.translate_btn.isEnabled())
+
+    def test_batch_translation_button_enabled_with_warning_status(self):
+        window = MainWindow()
+        window._work_mode = WorkMode.BATCH_TRANSLATION
+        window._doctor_check_completed = True
+        window._set_doctor_summary(
+            DoctorSummary(
+                status="warning",
+                heading="检查完成，但有需要处理的事项",
+                message="记忆库尚未建立，建议先预建记忆库再开始翻译。",
+                facts=[],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+
+        self.assertTrue(window.translate_btn.isEnabled())
+
     def test_button_keeps_generate_template_after_unknown_cli_status(self):
         window = MainWindow()
         window._work_mode = WorkMode.BATCH_TRANSLATION
