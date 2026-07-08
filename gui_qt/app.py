@@ -313,6 +313,7 @@ class MainWindow(QMainWindow):
         self._probe_output_lines: list[str] = []
         self._compare_variants_output_lines: list[str] = []
         self._compare_variants_names = ""
+        self._compare_variants_temp_file = ""
         self._split_output_lines: list[str] = []
         self._repair_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
@@ -4497,6 +4498,13 @@ class MainWindow(QMainWindow):
         self._set_task_running(True)
         self.runner.run(self.state.get_batch_script_path(), args)
 
+    def _cleanup_compare_variants_temp_file(self) -> None:
+        temp_file = self._compare_variants_temp_file
+        self._compare_variants_temp_file = ""
+        if not temp_file:
+            return
+        Path(temp_file).unlink(missing_ok=True)
+
     def _on_run_compare_variants(self) -> None:
         manifest_path, manifest = self._current_diagnostics_manifest()
         ready, message = translation_ab_experiment_ready(manifest_path, manifest)
@@ -4516,6 +4524,7 @@ class MainWindow(QMainWindow):
         variant_names = format_variant_names(variants)
         self._compare_variants_names = variant_names
         variants_file = write_variants_to_temp_file(variants)
+        self._compare_variants_temp_file = variants_file
         dry_run = bool(options["dry_run"])
         base_context = build_diagnostics_context(
             latest_manifest_path=manifest_path,
@@ -5329,6 +5338,7 @@ class MainWindow(QMainWindow):
             self._probe_output_lines.append(message)
         elif self._active_command == "compare_variants":
             self._compare_variants_output_lines.append(message)
+            self._cleanup_compare_variants_temp_file()
         elif self._active_command == "split":
             self._split_output_lines.append(message)
         elif self._active_command == "repair":
@@ -5452,8 +5462,11 @@ class MainWindow(QMainWindow):
                     self.statusBar().showMessage("翻译 A/B 对比完成。", 6000)
             elif ab_summary.status == "failed":
                 self.statusBar().showMessage("翻译 A/B 对比失败，请查看诊断日志。", 8000)
+            elif ab_summary.status == "warn":
+                self.statusBar().showMessage("翻译 A/B 对比完成，但需关注部分结果。", 6000)
             else:
                 self.statusBar().showMessage("翻译 A/B 对比已结束。", 6000)
+            self._cleanup_compare_variants_temp_file()
             return
 
         if self._active_command == "split":

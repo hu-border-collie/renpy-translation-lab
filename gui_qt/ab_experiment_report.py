@@ -251,7 +251,10 @@ def collect_ab_experiment_issues(
                     line = line.strip()
                     if not line:
                         continue
-                    row = json.loads(line)
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
                     variants = row.get("variants")
                     if not isinstance(variants, list):
                         continue
@@ -265,7 +268,7 @@ def collect_ab_experiment_issues(
                         if isinstance(error, str) and error.strip():
                             label = "/".join(part for part in (chunk_key, name) if part) or "variant"
                             variant_errors.append(f"{label}: {error.strip()}")
-        except (OSError, json.JSONDecodeError):
+        except OSError:
             findings.append("无法读取 ab_results.jsonl。")
             if severity != "failed":
                 severity = "warn"
@@ -339,6 +342,21 @@ def summarize_compare_variants_output(
     findings: list[str] = []
     if isinstance(report_path, str) and report_path and not os.path.isfile(report_path):
         findings.append("命令已结束，但报告文件尚未找到。")
+        return AbExperimentSummary(
+            status="warn",
+            heading="翻译 A/B 报告未找到",
+            message="命令已结束，但报告文件尚未找到，请查看诊断日志。",
+            facts=facts,
+            findings=findings,
+            manifest_path=manifest_path,
+            output_dir=output_dir if isinstance(output_dir, str) else "",
+            report_path=report_path,
+            results_path=results_path if isinstance(results_path, str) else "",
+            settings_path=settings_path if isinstance(settings_path, str) else "",
+            chunk_count=chunk_count if isinstance(chunk_count, int) else None,
+            variant_count=variant_count if isinstance(variant_count, int) else None,
+            dry_run=dry_run if isinstance(dry_run, bool) else None,
+        )
 
     if isinstance(report_path, str) and report_path and os.path.isfile(report_path):
         resolved_settings_path = resolve_ab_settings_path(

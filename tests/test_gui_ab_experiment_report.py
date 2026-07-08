@@ -73,6 +73,38 @@ class GuiAbExperimentReportTests(unittest.TestCase):
         summary = summarize_compare_variants_output(COMPARE_VARIANTS_OUTPUT_OK, 1)
         self.assertEqual(summary.status, "failed")
 
+    def test_summarize_compare_variants_output_missing_report_is_warn(self):
+        summary = summarize_compare_variants_output(
+            COMPARE_VARIANTS_OUTPUT_OK,
+            0,
+            manifest_path=r"C:\pkg\manifest.json",
+            variant_names="baseline, story_memory_on",
+        )
+        self.assertEqual(summary.status, "warn")
+        self.assertEqual(summary.heading, "翻译 A/B 报告未找到")
+        self.assertTrue(any("报告文件尚未找到" in finding for finding in summary.findings))
+        self.assertTrue(str(summary.report_path).endswith("ab_report.md"))
+
+    def test_collect_ab_experiment_issues_skips_malformed_jsonl_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            results_path = os.path.join(tmp, "ab_results.jsonl")
+            with open(results_path, "w", encoding="utf-8") as handle:
+                handle.write("not-json\n")
+                handle.write(
+                    json.dumps(
+                        {
+                            "chunk_key": "chunk-1",
+                            "variants": [
+                                {"name": "rag_off", "error": "API timeout"},
+                            ],
+                        },
+                    )
+                    + "\n",
+                )
+            severity, findings = collect_ab_experiment_issues(results_path=results_path)
+        self.assertEqual(severity, "warn")
+        self.assertTrue(any("部分变体出错" in finding for finding in findings))
+
     def test_translation_ab_experiment_ready_rejects_non_translation_manifest(self):
         ready, message = translation_ab_experiment_ready(
             r"C:\pkg\manifest.json",

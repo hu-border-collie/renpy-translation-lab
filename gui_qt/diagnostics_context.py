@@ -368,23 +368,19 @@ def build_cli_commands(
             ),
         )
     )
+    from .ab_experiment_report import build_compare_variants_cli_args
+
     commands.append(
         DiagnosticsCommand(
             label="翻译 A/B 对比（试跑）",
             command=format_cli_command(
                 python_exe,
                 batch_script_path,
-                [
-                    "compare-variants",
+                build_compare_variants_cli_args(
                     manifest_path,
-                    "--variants-file",
                     "<variants.json>",
-                    "--limit",
-                    "3",
-                    "--offset",
-                    "0",
-                    "--dry-run",
-                ],
+                    dry_run=True,
+                ),
             ),
         )
     )
