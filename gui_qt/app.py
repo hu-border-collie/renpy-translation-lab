@@ -658,6 +658,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(right, 1)
 
         # Stack keeps page identity for each nav item (shared chrome below).
+        # Keep pages empty/minimal so they do not compete with action buttons for space.
         self.workbench_stack = QStackedWidget()
         self.workbench_stack.setObjectName("workbench_stack")
         self._workbench_stack_pages: dict[WorkbenchNavItem, QWidget] = {}
@@ -666,13 +667,11 @@ class MainWindow(QMainWindow):
             page.setObjectName(f"workbench_page_{nav_item.value}")
             page_layout = QVBoxLayout(page)
             page_layout.setContentsMargins(0, 0, 0, 0)
-            title = QLabel(workbench_nav_spec(nav_item).label)
-            title.setObjectName("workbench_page_title")
-            page_layout.addWidget(title)
-            page_layout.addStretch()
+            page_layout.setSpacing(0)
             self._workbench_stack_pages[nav_item] = page
             self.workbench_stack.addWidget(page)
-        self.workbench_stack.setMaximumHeight(28)
+        self.workbench_stack.setFixedHeight(0)
+        self.workbench_stack.setVisible(False)
         layout.addWidget(self.workbench_stack)
 
         # Project path lives on the global bar; keep redirect notice only on workbench.
@@ -701,15 +700,14 @@ class MainWindow(QMainWindow):
         mode_outer.addLayout(submode_row)
         self._work_submode_row_widgets = (self.work_submode_label, self.work_submode_combo)
 
-        # Legacy combos kept hidden for any residual test/helper references.
-        self.task_category_combo = NoWheelComboBox()
+        # Legacy combos kept for residual helpers/tests — not placed in the layout
+        # so they cannot reserve vertical space or collide with action buttons.
+        self.task_category_combo = NoWheelComboBox(mode_frame)
         self.task_category_combo.setObjectName("task_category_combo")
-        self.task_category_combo.setVisible(False)
-        self.work_task_combo = NoWheelComboBox()
+        self.task_category_combo.hide()
+        self.work_task_combo = NoWheelComboBox(mode_frame)
         self.work_task_combo.setObjectName("work_task_combo")
-        self.work_task_combo.setVisible(False)
-        mode_outer.addWidget(self.task_category_combo)
-        mode_outer.addWidget(self.work_task_combo)
+        self.work_task_combo.hide()
 
         self.work_mode_hint_label = QLabel()
         self.work_mode_hint_label.setWordWrap(True)
@@ -727,7 +725,8 @@ class MainWindow(QMainWindow):
         action_outer.setContentsMargins(12, 10, 12, 10)
         action_outer.setSpacing(8)
 
-        self.action_panel = ResponsiveActionPanel()
+        # Left nav narrows the content column; stack action rows before buttons clip.
+        self.action_panel = ResponsiveActionPanel(compact_width=640)
         self.translate_group_label = self.action_panel.translate_label
         self.doctor_btn = self.action_panel.add_prep_button(QPushButton("环境检查"))
         self.doctor_btn.setObjectName("secondary_btn")
@@ -938,23 +937,31 @@ class MainWindow(QMainWindow):
         writeback_primary.setSpacing(8)
         self.apply_btn = QPushButton("写回翻译")
         self.apply_btn.setObjectName("apply_btn")
+        self.apply_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.apply_btn.clicked.connect(self._on_apply_writeback)
         self.apply_btn.setEnabled(False)
         writeback_primary.addWidget(self.apply_btn)
         self.apply_revision_btn = QPushButton("写回订正")
         self.apply_revision_btn.setObjectName("apply_revision_btn")
+        self.apply_revision_btn.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
         self.apply_revision_btn.clicked.connect(self._on_apply_revision)
         self.apply_revision_btn.setEnabled(False)
         self.apply_revision_btn.setVisible(False)
         writeback_primary.addWidget(self.apply_revision_btn)
         self.recheck_btn = QPushButton("重新检查")
         self.recheck_btn.setObjectName("secondary_btn")
+        self.recheck_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.recheck_btn.clicked.connect(self._on_recheck_writeback)
         self.recheck_btn.setEnabled(False)
         self.recheck_btn.setVisible(False)
         writeback_primary.addWidget(self.recheck_btn)
         self.keyword_merge_writeback_btn = QPushButton("合并到 glossary")
         self.keyword_merge_writeback_btn.setObjectName("secondary_btn")
+        self.keyword_merge_writeback_btn.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
         self.keyword_merge_writeback_btn.setToolTip(
             "勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。"
         )
@@ -982,29 +989,36 @@ class MainWindow(QMainWindow):
         issues_header.addStretch()
         writeback_layout.addLayout(issues_header)
 
+        # Two rows so recovery buttons do not paint over each other in narrow panes.
         self.writeback_issues_panel = QWidget()
         self.writeback_issues_panel.setObjectName("writeback_issues_panel")
-        issues_layout = QHBoxLayout(self.writeback_issues_panel)
-        issues_layout.setContentsMargins(0, 0, 0, 0)
-        issues_layout.setSpacing(8)
+        issues_outer = QVBoxLayout(self.writeback_issues_panel)
+        issues_outer.setContentsMargins(0, 0, 0, 0)
+        issues_outer.setSpacing(6)
+        issues_row1 = QHBoxLayout()
+        issues_row1.setSpacing(8)
+        issues_row2 = QHBoxLayout()
+        issues_row2.setSpacing(8)
 
         self.check_issues_btn = QPushButton("查看问题清单")
         self.check_issues_btn.setObjectName("secondary_btn")
         self.check_issues_btn.clicked.connect(self._open_check_issues)
         self.check_issues_btn.setEnabled(False)
-        issues_layout.addWidget(self.check_issues_btn)
+        issues_row1.addWidget(self.check_issues_btn)
         self.retry_btn = QPushButton("生成补译包")
         self.retry_btn.setObjectName("secondary_btn")
         self.retry_btn.clicked.connect(self._on_retry_action)
         self.retry_btn.setEnabled(False)
         self.retry_btn.setVisible(False)
-        issues_layout.addWidget(self.retry_btn)
+        issues_row1.addWidget(self.retry_btn)
         self.retry_followup_btn = QPushButton("继续补译")
         self.retry_followup_btn.setObjectName("secondary_btn")
         self.retry_followup_btn.clicked.connect(self._on_retry_followup_action)
         self.retry_followup_btn.setEnabled(False)
         self.retry_followup_btn.setVisible(False)
-        issues_layout.addWidget(self.retry_followup_btn)
+        issues_row1.addWidget(self.retry_followup_btn)
+        issues_row1.addStretch()
+
         self.repair_btn = QPushButton("同步修补")
         self.repair_btn.setObjectName("secondary_btn")
         self.repair_btn.setToolTip(
@@ -1013,19 +1027,22 @@ class MainWindow(QMainWindow):
         self.repair_btn.clicked.connect(self._on_run_repair)
         self.repair_btn.setEnabled(False)
         self.repair_btn.setVisible(False)
-        issues_layout.addWidget(self.repair_btn)
+        issues_row2.addWidget(self.repair_btn)
         self.apply_failure_btn = QPushButton("查看写回失败报告")
         self.apply_failure_btn.setObjectName("secondary_btn")
         self.apply_failure_btn.clicked.connect(self._open_apply_failure_report)
         self.apply_failure_btn.setEnabled(False)
         self.apply_failure_btn.setVisible(False)
-        issues_layout.addWidget(self.apply_failure_btn)
+        issues_row2.addWidget(self.apply_failure_btn)
         self.remediation_btn = QPushButton("补救命令")
         self.remediation_btn.setObjectName("secondary_btn")
         self.remediation_btn.clicked.connect(self._open_remediation_commands)
         self.remediation_btn.setEnabled(False)
-        issues_layout.addWidget(self.remediation_btn)
-        issues_layout.addStretch()
+        issues_row2.addWidget(self.remediation_btn)
+        issues_row2.addStretch()
+
+        issues_outer.addLayout(issues_row1)
+        issues_outer.addLayout(issues_row2)
         writeback_layout.addWidget(self.writeback_issues_panel)
 
         self._writeback_issues_expanded = False
@@ -1047,10 +1064,12 @@ class MainWindow(QMainWindow):
         frame = QFrame()
         frame.setObjectName("batch_stage_bar")
         self.batch_stage_bar = frame
-        row = QHBoxLayout(frame)
-        row.setContentsMargins(10, 6, 10, 6)
-        row.setSpacing(6)
+        outer = QVBoxLayout(frame)
+        outer.setContentsMargins(10, 6, 10, 6)
+        outer.setSpacing(4)
 
+        row = QHBoxLayout()
+        row.setSpacing(6)
         self._batch_stage_buttons: list[QPushButton] = []
         self._batch_stage_button_group = QButtonGroup(frame)
         self._batch_stage_button_group.setExclusive(True)
@@ -1069,11 +1088,14 @@ class MainWindow(QMainWindow):
                 sep = QLabel("→")
                 sep.setObjectName("batch_stage_sep")
                 row.addWidget(sep)
-
         row.addStretch(1)
+        outer.addLayout(row)
+
+        # Hint on its own row so stage buttons are never squeezed into each other.
         self.batch_stage_hint = QLabel("")
         self.batch_stage_hint.setObjectName("config_hint_label")
-        row.addWidget(self.batch_stage_hint)
+        self.batch_stage_hint.setWordWrap(True)
+        outer.addWidget(self.batch_stage_hint)
         frame.setVisible(False)
         return frame
 

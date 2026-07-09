@@ -197,6 +197,7 @@ QPushButton#batch_stage_btn {
     font-weight: 600;
     padding: 6px 14px;
     min-height: 18px;
+    min-width: 72px;
 }
 
 QPushButton#batch_stage_btn:hover {

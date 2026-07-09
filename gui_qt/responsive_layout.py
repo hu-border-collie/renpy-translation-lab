@@ -11,9 +11,10 @@ from PySide6.QtWidgets import (
 )
 
 
-def _configure_action_button(widget: QWidget, *, min_width: int = 100) -> QWidget:
+def _configure_action_button(widget: QWidget, *, min_width: int = 88) -> QWidget:
+    # Preferred (not Fixed) so rows can shrink instead of painting over neighbors.
     widget.setMinimumWidth(min_width)
-    widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
     return widget
 
 
@@ -37,11 +38,11 @@ class ResponsiveActionPanel(QFrame):
 
         self.prep_label = QLabel(prep_label)
         self.prep_label.setObjectName("action_group_label")
-        self.prep_label.setMinimumWidth(72)
+        self.prep_label.setMinimumWidth(64)
 
         self.translate_label = QLabel(translate_label)
         self.translate_label.setObjectName("action_group_label")
-        self.translate_label.setMinimumWidth(72)
+        self.translate_label.setMinimumWidth(64)
 
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(0, 0, 0, 0)
@@ -49,26 +50,25 @@ class ResponsiveActionPanel(QFrame):
 
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-    def add_prep_button(self, widget: QWidget, *, min_width: int = 100) -> QWidget:
+    def add_prep_button(self, widget: QWidget, *, min_width: int = 88) -> QWidget:
         self._prep_buttons.append(_configure_action_button(widget, min_width=min_width))
         return widget
 
-    def add_translate_button(self, widget: QWidget, *, min_width: int = 100) -> QWidget:
+    def add_translate_button(self, widget: QWidget, *, min_width: int = 88) -> QWidget:
         self._translate_buttons.append(_configure_action_button(widget, min_width=min_width))
         return widget
 
-    def add_translate_trailing(self, widget: QWidget, *, min_width: int = 80) -> QWidget:
+    def add_translate_trailing(self, widget: QWidget, *, min_width: int = 72) -> QWidget:
         self._translate_trailing.append(_configure_action_button(widget, min_width=min_width))
         return widget
 
     def finish_setup(self) -> None:
         self._is_wide = None
-        self._apply_layout_mode(self._effective_width() >= self._compact_width, force=True)
+        self._apply_layout_mode(self._should_use_wide_layout(), force=True)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        wide = self._effective_width() >= self._compact_width
-        self._apply_layout_mode(wide)
+        self._apply_layout_mode(self._should_use_wide_layout())
 
     def _effective_width(self) -> int:
         width = self.width()
@@ -80,6 +80,34 @@ class ResponsiveActionPanel(QFrame):
                 return parent.width()
             parent = parent.parentWidget()
         return self._compact_width
+
+    def _estimated_wide_min_width(self) -> int:
+        """Minimum width needed for a single-row layout without clipping."""
+        spacing = 12
+        width = max(self.prep_label.minimumWidth(), self.prep_label.sizeHint().width())
+        width += max(
+            self.translate_label.minimumWidth(),
+            self.translate_label.sizeHint().width(),
+        )
+        widgets = [
+            *self._prep_buttons,
+            *self._translate_buttons,
+            *self._translate_trailing,
+        ]
+        for widget in widgets:
+            hint = widget.sizeHint().width()
+            width += max(widget.minimumWidth(), hint if hint > 0 else 88)
+        # labels + vertical separator + inter-item spacing + padding slack
+        # (Chinese captions are wider than min_width alone suggests.)
+        gaps = max(0, len(widgets) + 2)
+        width += spacing * gaps + 96
+        return width
+
+    def _should_use_wide_layout(self) -> bool:
+        available = self._effective_width()
+        # Stack early enough that min-width buttons cannot paint over each other.
+        needed = max(self._compact_width, self._estimated_wide_min_width())
+        return available >= needed
 
     def _apply_layout_mode(self, wide: bool, *, force: bool = False) -> None:
         if not force and wide == self._is_wide:
