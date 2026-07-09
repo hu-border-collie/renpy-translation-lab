@@ -5436,9 +5436,12 @@ class MainWindow(QMainWindow):
         return True
 
     def _start_bootstrap_task(self, kind: str) -> bool:
-        if bool(getattr(self, "_task_running", False)) or (
-            hasattr(self, "runner") and self.runner.is_running()
-        ):
+        if bool(getattr(self, "_task_running", False)):
+            return False
+        # FakeRunner stubs in unit tests may omit is_running(); treat as idle then.
+        runner = getattr(self, "runner", None)
+        is_running = getattr(runner, "is_running", None) if runner is not None else None
+        if callable(is_running) and bool(is_running()):
             return False
         if not self._confirm_unsaved_config_before_workflow():
             return False
