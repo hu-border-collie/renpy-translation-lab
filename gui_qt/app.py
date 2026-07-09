@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QSizePolicy,
     QListWidget,
+    QListWidgetItem,
     QStackedWidget,
     QSpinBox,
     QDoubleSpinBox,
@@ -236,9 +237,12 @@ from .user_copy import (
 from .work_modes import (
     TASK_CATEGORY_ORDER,
     TaskCategory,
+    WORKBENCH_NAV_ORDER,
     WorkMode,
+    WorkbenchNavItem,
     bootstrap_disabled_message,
     default_work_mode_for_category,
+    default_work_mode_for_nav,
     normalize_task_category,
     normalize_work_mode,
     task_category_for_work_mode,
@@ -246,7 +250,10 @@ from .work_modes import (
     work_mode_hint_texts,
     work_mode_spec,
     work_modes_for_category,
+    workbench_nav_for_work_mode,
+    workbench_nav_spec,
 )
+from .workbench_session import WorkbenchModeSession
 from .batch_workflow_support import resolve_submit_max_cost
 from .workflow_factory import create_workflow, resume_workflow
 from .workflow_progress import (
@@ -322,6 +329,8 @@ class MainWindow(QMainWindow):
         self._completed_manifest_snapshot: dict[str, object] | None = None
         self._viewing_completed_manifest = False
         self._work_mode = WorkMode.BATCH_TRANSLATION
+        self._mode_sessions: dict[WorkMode, WorkbenchModeSession] = {}
+        self._workbench_nav_item = WorkbenchNavItem.BATCH_TRANSLATION
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
         self._recheck_output_lines: list[str] = []
@@ -610,9 +619,50 @@ class MainWindow(QMainWindow):
 
     def _build_workbench_tab(self) -> None:
         tab = QWidget()
-        layout = QVBoxLayout(tab)
+        outer = QHBoxLayout(tab)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Left fixed task navigation (GUI IA P1a / #160).
+        self.workbench_nav = QListWidget()
+        self.workbench_nav.setObjectName("workbench_nav")
+        self.workbench_nav.setFixedWidth(148)
+        self.workbench_nav.setSpacing(2)
+        self.workbench_nav.setFrameShape(QFrame.Shape.NoFrame)
+        for nav_item in WORKBENCH_NAV_ORDER:
+            item = QListWidgetItem(workbench_nav_spec(nav_item).label)
+            item.setData(Qt.ItemDataRole.UserRole, nav_item.value)
+            self.workbench_nav.addItem(item)
+        blocked_nav = self.workbench_nav.blockSignals(True)
+        self.workbench_nav.setCurrentRow(0)
+        self.workbench_nav.blockSignals(blocked_nav)
+        self.workbench_nav.currentRowChanged.connect(self._on_workbench_nav_changed)
+        outer.addWidget(self.workbench_nav)
+
+        right = QWidget()
+        right.setObjectName("workbench_content")
+        layout = QVBoxLayout(right)
         layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(14)
+        outer.addWidget(right, 1)
+
+        # Stack keeps page identity for each nav item (shared chrome below).
+        self.workbench_stack = QStackedWidget()
+        self.workbench_stack.setObjectName("workbench_stack")
+        self._workbench_stack_pages: dict[WorkbenchNavItem, QWidget] = {}
+        for nav_item in WORKBENCH_NAV_ORDER:
+            page = QWidget()
+            page.setObjectName(f"workbench_page_{nav_item.value}")
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(0, 0, 0, 0)
+            title = QLabel(workbench_nav_spec(nav_item).label)
+            title.setObjectName("workbench_page_title")
+            page_layout.addWidget(title)
+            page_layout.addStretch()
+            self._workbench_stack_pages[nav_item] = page
+            self.workbench_stack.addWidget(page)
+        self.workbench_stack.setMaximumHeight(28)
+        layout.addWidget(self.workbench_stack)
 
         # Project path lives on the global bar; keep redirect notice only on workbench.
         self.project_redirect_label = QLabel()
@@ -628,25 +678,27 @@ class MainWindow(QMainWindow):
         mode_outer.setContentsMargins(12, 8, 12, 8)
         mode_outer.setSpacing(6)
 
-        selectors_row = QHBoxLayout()
-        selectors_row.setSpacing(10)
-        selectors_row.addWidget(QLabel("任务类型："))
+        # Submode (batch|sync / rag|index) only for multi-mode nav items.
+        submode_row = QHBoxLayout()
+        submode_row.setSpacing(10)
+        self.work_submode_label = QLabel("模式：")
+        submode_row.addWidget(self.work_submode_label)
+        self.work_submode_combo = NoWheelComboBox()
+        self.work_submode_combo.setObjectName("work_submode_combo")
+        self.work_submode_combo.currentIndexChanged.connect(self._on_work_submode_changed)
+        submode_row.addWidget(self.work_submode_combo, 1)
+        mode_outer.addLayout(submode_row)
+        self._work_submode_row_widgets = (self.work_submode_label, self.work_submode_combo)
+
+        # Legacy combos kept hidden for any residual test/helper references.
         self.task_category_combo = NoWheelComboBox()
         self.task_category_combo.setObjectName("task_category_combo")
-        for category in TASK_CATEGORY_ORDER:
-            self.task_category_combo.addItem(
-                task_category_spec(category).label,
-                category.value,
-            )
-        self.task_category_combo.currentIndexChanged.connect(self._on_task_category_changed)
-        selectors_row.addWidget(self.task_category_combo)
-
-        selectors_row.addWidget(QLabel("子任务："))
+        self.task_category_combo.setVisible(False)
         self.work_task_combo = NoWheelComboBox()
         self.work_task_combo.setObjectName("work_task_combo")
-        self.work_task_combo.currentIndexChanged.connect(self._on_work_task_changed)
-        selectors_row.addWidget(self.work_task_combo, 1)
-        mode_outer.addLayout(selectors_row)
+        self.work_task_combo.setVisible(False)
+        mode_outer.addWidget(self.task_category_combo)
+        mode_outer.addWidget(self.work_task_combo)
 
         self.work_mode_hint_label = QLabel()
         self.work_mode_hint_label.setWordWrap(True)
@@ -3457,12 +3509,55 @@ class MainWindow(QMainWindow):
                 combo.blockSignals(blocked)
                 return
 
+    def _capture_mode_session(self) -> WorkbenchModeSession:
+        return WorkbenchModeSession(
+            workflow=getattr(self, "_workflow", None),
+            workflow_step_output_lines=list(
+                getattr(self, "_workflow_step_output_lines", []) or []
+            ),
+            writeback_manifest_path=str(
+                getattr(self, "_writeback_manifest_path", "") or ""
+            ),
+            completed_manifest_snapshot=getattr(
+                self, "_completed_manifest_snapshot", None
+            ),
+            viewing_completed_manifest=bool(
+                getattr(self, "_viewing_completed_manifest", False)
+            ),
+            keyword_merge_candidates_path=str(
+                getattr(self, "_keyword_merge_candidates_path", "") or ""
+            ),
+        )
+
+    def _restore_mode_session(self, session: WorkbenchModeSession) -> None:
+        self._workflow = session.workflow
+        self._workflow_step_output_lines = list(session.workflow_step_output_lines)
+        self._writeback_manifest_path = session.writeback_manifest_path
+        self._completed_manifest_snapshot = session.completed_manifest_snapshot
+        self._viewing_completed_manifest = session.viewing_completed_manifest
+        self._keyword_merge_candidates_path = session.keyword_merge_candidates_path
+
+    def _clear_all_mode_sessions(self) -> None:
+        """Clear per-mode sessions; safe on partially constructed MainWindow test stubs."""
+        sessions = getattr(self, "_mode_sessions", None)
+        if isinstance(sessions, dict):
+            sessions.clear()
+            return
+        try:
+            self._mode_sessions = {}
+        except Exception:
+            # QObject stubs from unit tests may reject new attributes.
+            pass
+
     def _rebuild_work_task_combo(
         self,
         category: TaskCategory,
         *,
         selected_mode: WorkMode | None = None,
     ) -> None:
+        """Legacy helper: keep hidden work_task_combo in sync for residual callers."""
+        if not hasattr(self, "work_task_combo"):
+            return
         blocked = self.work_task_combo.blockSignals(True)
         self.work_task_combo.clear()
         modes = work_modes_for_category(category)
@@ -3473,13 +3568,88 @@ class MainWindow(QMainWindow):
         self.work_task_combo.blockSignals(blocked)
 
     def _sync_task_selectors_from_work_mode(self) -> None:
-        spec = work_mode_spec(self._current_work_mode())
-        blocked_category = self.task_category_combo.blockSignals(True)
-        self._set_combo_value_by_data(self.task_category_combo, spec.category.value)
-        self.task_category_combo.blockSignals(blocked_category)
+        """Sync left nav + submode (+ hidden legacy combos) to the active WorkMode."""
+        mode = self._current_work_mode()
+        spec = work_mode_spec(mode)
+        nav_item = workbench_nav_for_work_mode(mode)
+        self._workbench_nav_item = nav_item
+
+        if hasattr(self, "workbench_nav"):
+            blocked = self.workbench_nav.blockSignals(True)
+            for row in range(self.workbench_nav.count()):
+                item = self.workbench_nav.item(row)
+                if item is not None and item.data(Qt.ItemDataRole.UserRole) == nav_item.value:
+                    self.workbench_nav.setCurrentRow(row)
+                    break
+            self.workbench_nav.blockSignals(blocked)
+
+        if hasattr(self, "workbench_stack"):
+            page = self._workbench_stack_pages.get(nav_item)
+            if page is not None:
+                self.workbench_stack.setCurrentWidget(page)
+
+        nav_spec = workbench_nav_spec(nav_item)
+        show_sub = nav_spec.show_submode
+        for widget in getattr(self, "_work_submode_row_widgets", ()):
+            widget.setVisible(show_sub)
+        if hasattr(self, "work_submode_combo"):
+            blocked = self.work_submode_combo.blockSignals(True)
+            self.work_submode_combo.clear()
+            for sub_mode in nav_spec.work_modes:
+                self.work_submode_combo.addItem(work_mode_spec(sub_mode).label, sub_mode.value)
+            self._set_combo_value_by_data(self.work_submode_combo, mode.value)
+            self.work_submode_combo.blockSignals(blocked)
+
+        if hasattr(self, "task_category_combo"):
+            blocked_category = self.task_category_combo.blockSignals(True)
+            # Ensure category items exist (hidden legacy combo may be empty).
+            if self.task_category_combo.count() == 0:
+                for category in TASK_CATEGORY_ORDER:
+                    self.task_category_combo.addItem(
+                        task_category_spec(category).label,
+                        category.value,
+                    )
+            self._set_combo_value_by_data(self.task_category_combo, spec.category.value)
+            self.task_category_combo.blockSignals(blocked_category)
         self._rebuild_work_task_combo(spec.category, selected_mode=spec.mode)
 
+    def _on_workbench_nav_changed(self, row: int) -> None:
+        if row < 0:
+            return
+        if self.kill_btn.isEnabled() or self._task_running:
+            self._sync_task_selectors_from_work_mode()
+            return
+        item = self.workbench_nav.item(row)
+        if item is None:
+            return
+        nav_item = WorkbenchNavItem(str(item.data(Qt.ItemDataRole.UserRole)))
+        if nav_item == self._workbench_nav_item and workbench_nav_for_work_mode(
+            self._work_mode
+        ) == nav_item:
+            return
+        # Prefer last session mode within this nav if present.
+        target_mode = default_work_mode_for_nav(nav_item)
+        for mode in workbench_nav_spec(nav_item).work_modes:
+            session = self._mode_sessions.get(mode)
+            if session is not None and not session.is_empty():
+                target_mode = mode
+                break
+            if mode == self._work_mode:
+                target_mode = mode
+                break
+        self._set_work_mode(target_mode, refresh_manifest_writeback=True)
+
+    def _on_work_submode_changed(self) -> None:
+        if self.kill_btn.isEnabled() or self._task_running:
+            self._sync_task_selectors_from_work_mode()
+            return
+        mode = normalize_work_mode(self.work_submode_combo.currentData())
+        if mode == self._work_mode:
+            return
+        self._set_work_mode(mode, refresh_manifest_writeback=True)
+
     def _on_task_category_changed(self) -> None:
+        # Legacy path (hidden combo); keep behavior for residual callers.
         if self.kill_btn.isEnabled():
             self._sync_task_selectors_from_work_mode()
             return
@@ -3500,12 +3670,39 @@ class MainWindow(QMainWindow):
             return
         self._set_work_mode(mode, refresh_manifest_writeback=True)
 
-    def _set_work_mode(self, mode: WorkMode, *, refresh_manifest_writeback: bool) -> None:
+    def _set_work_mode(
+        self,
+        mode: WorkMode,
+        *,
+        refresh_manifest_writeback: bool,
+        reset_session: bool = False,
+    ) -> None:
+        """Activate *mode*, preserving per-mode sessions unless reset_session=True."""
+        mode = normalize_work_mode(mode)
+        previous = getattr(self, "_work_mode", None)
+        if not hasattr(self, "_mode_sessions"):
+            self._mode_sessions = {}
+
+        if previous is not None and previous != mode and not reset_session:
+            self._mode_sessions[previous] = self._capture_mode_session()
+
         self._work_mode = mode
-        self._workflow = None
-        self._workflow_step_output_lines = []
-        self._writeback_manifest_path = ""
-        self._clear_completed_manifest_snapshot()
+        self._workbench_nav_item = workbench_nav_for_work_mode(mode)
+
+        if reset_session or mode not in self._mode_sessions:
+            self._mode_sessions[mode] = WorkbenchModeSession()
+            self._workflow = None
+            self._workflow_step_output_lines = []
+            self._writeback_manifest_path = ""
+            if hasattr(self, "_clear_completed_manifest_snapshot"):
+                self._clear_completed_manifest_snapshot()
+            else:
+                self._completed_manifest_snapshot = None
+                self._viewing_completed_manifest = False
+            self._keyword_merge_candidates_path = ""
+        else:
+            self._restore_mode_session(self._mode_sessions[mode])
+
         self._apply_work_mode_ui(refresh_manifest_writeback=refresh_manifest_writeback)
 
     def _update_resume_btn_text(self) -> None:
@@ -3590,13 +3787,40 @@ class MainWindow(QMainWindow):
         else:
             hint = spec.not_implemented_message
         self.work_mode_hint_label.setText(hint)
+        # Prefer session-bound writeback path when restoring a page.
+        session_manifest = str(self._writeback_manifest_path or "").strip() or None
         if refresh_manifest_writeback or refresh_diagnostics:
-            self._refresh_manifest_derived_ui(
-                refresh_writeback=refresh_manifest_writeback,
-                refresh_diagnostics=refresh_diagnostics,
-            )
+            if session_manifest:
+                try:
+                    session_data = self.state.load_resume_manifest(
+                        session_manifest,
+                        work_mode=spec.mode,
+                    )
+                except ValueError:
+                    session_data = None
+                self._refresh_workflow_from_latest_manifest(
+                    latest_manifest=session_manifest,
+                    manifest=session_data,
+                )
+                if refresh_manifest_writeback:
+                    self._refresh_writeback_from_latest_manifest(
+                        latest_manifest=session_manifest,
+                        manifest=session_data,
+                    )
+                if refresh_diagnostics:
+                    self._refresh_diagnostics_context(force=True)
+            else:
+                self._refresh_manifest_derived_ui(
+                    refresh_writeback=refresh_manifest_writeback,
+                    refresh_diagnostics=refresh_diagnostics,
+                )
         else:
-            self._refresh_workflow_from_latest_manifest()
+            if session_manifest:
+                self._refresh_workflow_from_latest_manifest(latest_manifest=session_manifest)
+            else:
+                self._refresh_workflow_from_latest_manifest()
+        # Keep session bag aligned after UI refresh mutates active fields.
+        self._mode_sessions[spec.mode] = self._capture_mode_session()
         running = self.kill_btn.isEnabled()
         bootstrap_ready = self._bootstrap_task_ready(spec)
         self.translate_btn.setEnabled(
@@ -4123,6 +4347,7 @@ class MainWindow(QMainWindow):
         self._load_config_to_ui()
         self._active_command = ""
         self._doctor_output_lines = []
+        self._clear_all_mode_sessions()
         self._workflow = None
         self._workflow_step_output_lines = []
         self._clear_completed_manifest_snapshot()
@@ -4142,6 +4367,16 @@ class MainWindow(QMainWindow):
             )
         self._writeback_manifest_path = ""
         self._keyword_merge_candidates_path = ""
+        sessions = getattr(self, "_mode_sessions", None)
+        if not isinstance(sessions, dict):
+            try:
+                self._mode_sessions = {}
+                sessions = self._mode_sessions
+            except Exception:
+                sessions = None
+        if isinstance(sessions, dict):
+            work_mode = getattr(self, "_work_mode", WorkMode.BATCH_TRANSLATION)
+            sessions[work_mode] = self._capture_mode_session()
         if spec.supports_translation_writeback:
             self._set_writeback_summary(stale_writeback_summary())
         else:
@@ -5992,8 +6227,14 @@ class MainWindow(QMainWindow):
             panel.setEnabled(not running)
         if hasattr(self, "settings_go_workspace_btn"):
             self.settings_go_workspace_btn.setEnabled(not running)
-        self.task_category_combo.setEnabled(not running)
-        self.work_task_combo.setEnabled(not running)
+        if hasattr(self, "task_category_combo"):
+            self.task_category_combo.setEnabled(not running)
+        if hasattr(self, "work_task_combo"):
+            self.work_task_combo.setEnabled(not running)
+        if hasattr(self, "workbench_nav"):
+            self.workbench_nav.setEnabled(not running)
+        if hasattr(self, "work_submode_combo"):
+            self.work_submode_combo.setEnabled(not running)
         self.doctor_btn.setEnabled(not running)
         self.bootstrap_work_btn.setEnabled(not running)
         self.api_btn.setEnabled(not running)

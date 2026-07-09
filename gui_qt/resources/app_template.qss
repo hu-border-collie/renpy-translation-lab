@@ -148,7 +148,8 @@ QWidget#games_registry_panel {
     border: none;
 }
 
-QListWidget#settings_nav {
+QListWidget#settings_nav,
+QListWidget#workbench_nav {
     background-color: ${bg_surface_alt};
     border: none;
     border-right: 1px solid ${border_default};
@@ -156,21 +157,30 @@ QListWidget#settings_nav {
     outline: none;
 }
 
-QListWidget#settings_nav::item {
+QListWidget#settings_nav::item,
+QListWidget#workbench_nav::item {
     color: ${fg_body};
     padding: 9px 10px;
     margin: 2px 0;
     border-radius: 6px;
 }
 
-QListWidget#settings_nav::item:selected {
+QListWidget#settings_nav::item:selected,
+QListWidget#workbench_nav::item:selected {
     background-color: ${bg_secondary};
     color: ${fg_secondary_btn};
     font-weight: 700;
 }
 
-QListWidget#settings_nav::item:hover:!selected {
+QListWidget#settings_nav::item:hover:!selected,
+QListWidget#workbench_nav::item:hover:!selected {
     background-color: ${bg_secondary_hover};
+}
+
+QLabel#workbench_page_title {
+    color: ${fg_section};
+    font-size: 12px;
+    font-weight: 700;
 }
 
 QLabel#settings_description_label {

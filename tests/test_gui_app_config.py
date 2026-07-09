@@ -2613,6 +2613,11 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         from gui_qt.work_modes import WorkMode
 
         self.window._work_mode = WorkMode.BATCH_TRANSLATION
+        self.window._mode_sessions = {}
+        self.window._workflow = None
+        self.window._workflow_step_output_lines = []
+        self.window._writeback_manifest_path = ""
+        self.window._keyword_merge_candidates_path = ""
         self.window._completed_manifest_snapshot = {"manifest_path": "C:/dummy/manifest.json"}
         self.window._viewing_completed_manifest = True
         cleared = []
@@ -2621,6 +2626,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         self.window._set_work_mode(WorkMode.KEYWORD_EXTRACTION, refresh_manifest_writeback=False)
 
+        # Switching into a mode without a prior session clears active completed snapshot.
         self.assertEqual(cleared, [True])
 
 if __name__ == "__main__":
