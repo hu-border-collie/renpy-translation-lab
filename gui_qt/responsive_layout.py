@@ -86,7 +86,11 @@ def effective_widget_width(widget: QWidget, *, fallback: int = 720) -> int:
     return fallback
 
 
+_EPHEMERAL_LAYOUT_OBJECT_NAMES = frozenset({"action_separator"})
+
+
 def clear_layout(layout: QLayout) -> None:
+    """Detach layout items. Ephemeral chrome (separators) is destroyed; keep buttons."""
     while layout.count():
         item = layout.takeAt(0)
         child = item.layout()
@@ -94,6 +98,27 @@ def clear_layout(layout: QLayout) -> None:
             clear_layout(child)
             # Drop nested layouts immediately so rebuild can re-parent widgets cleanly.
             child.setParent(None)
+            continue
+        widget = item.widget()
+        if widget is not None and (widget.objectName() or "") in _EPHEMERAL_LAYOUT_OBJECT_NAMES:
+            widget.hide()
+            widget.setParent(None)
+            widget.deleteLater()
+
+
+def _make_action_separator(*, vertical: bool) -> QFrame:
+    """Create a thin separator that never steals mouse events or grows to 640x480."""
+    separator = QFrame()
+    separator.setObjectName("action_separator")
+    if vertical:
+        separator.setFrameShape(QFrame.Shape.VLine)
+        separator.setFixedWidth(1)
+    else:
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setFixedHeight(1)
+    separator.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    separator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+    return separator
 
 
 class ResponsiveActionPanel(QFrame):
@@ -195,7 +220,19 @@ class ResponsiveActionPanel(QFrame):
         self._is_wide = wide
         self._rebuild_layout()
 
+    def _purge_orphan_separators(self) -> None:
+        """Destroy leftover separator frames from previous reflows (they block clicks)."""
+        for child in list(self.findChildren(QFrame)):
+            if (child.objectName() or "") != "action_separator":
+                continue
+            child.hide()
+            child.setParent(None)
+            child.deleteLater()
+
     def _rebuild_layout(self) -> None:
+        # clear_layout only walks current layout items; orphaned separators may remain
+        # as children with Qt's default 640x480 geom and steal mouse events.
+        self._purge_orphan_separators()
         clear_layout(self._root)
 
         prep = [w for w in self._prep_buttons if not w.isHidden()]
@@ -214,10 +251,7 @@ class ResponsiveActionPanel(QFrame):
             row.addWidget(self.prep_label)
             for widget in prep:
                 row.addWidget(widget)
-            separator = QFrame()
-            separator.setFrameShape(QFrame.Shape.VLine)
-            separator.setObjectName("action_separator")
-            row.addWidget(separator)
+            row.addWidget(_make_action_separator(vertical=True))
             row.addWidget(self.translate_label)
             for widget in translate:
                 row.addWidget(widget)
@@ -237,11 +271,6 @@ class ResponsiveActionPanel(QFrame):
             prep_row.addWidget(widget)
         prep_row.addStretch(1)
 
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setObjectName("action_separator")
-        separator.setFixedHeight(1)
-
         translate_row = QHBoxLayout()
         translate_row.setSpacing(12)
         translate_row.addWidget(self.translate_label)
@@ -252,7 +281,7 @@ class ResponsiveActionPanel(QFrame):
             translate_row.addWidget(widget)
 
         self._root.addLayout(prep_row)
-        self._root.addWidget(separator)
+        self._root.addWidget(_make_action_separator(vertical=False))
         self._root.addLayout(translate_row)
         self._sync_minimum_height()
 
