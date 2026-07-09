@@ -36,10 +36,15 @@ class WorkbenchModeSession:
             and self.completed_manifest_snapshot is None
             and not self.viewing_completed_manifest
             and not self.keyword_merge_candidates_path
-            and not self.workflow_status
-            and not self.workflow_heading
+            and not self.has_workflow_ui()
+            and not self.workflow_facts
             and self.writeback_summary is None
         )
 
     def has_workflow_ui(self) -> bool:
-        return bool(self.workflow_status or self.workflow_heading or self.workflow_message)
+        return bool(
+            self.workflow_status
+            or self.workflow_heading
+            or self.workflow_message
+            or self.workflow_facts
+        )

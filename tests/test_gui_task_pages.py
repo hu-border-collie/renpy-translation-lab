@@ -48,6 +48,9 @@ class TaskPageMetaTests(unittest.TestCase):
         )
         self.assertFalse(session.is_empty())
         self.assertTrue(session.has_workflow_ui())
+        facts_only = WorkbenchModeSession(workflow_facts=["project: demo"])
+        self.assertFalse(facts_only.is_empty())
+        self.assertTrue(facts_only.has_workflow_ui())
 
 
 @gui_test_support.skip_unless_gui(MainWindow is None, IMPORT_ERROR)
@@ -168,6 +171,26 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window.doctor_btn.isHidden())
         self.assertIn("记忆库", self.window.context_rag_status_label.text())
         self.assertIn("原文索引", self.window.context_source_index_status_label.text())
+
+    def test_context_bootstrap_buttons_disabled_while_running(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.BOOTSTRAP_RAG,
+            refresh_manifest_writeback=False,
+        )
+        with mock.patch.object(
+            self.window,
+            "_saved_batch_context_flags",
+            return_value={"rag_enabled": True, "source_index_enabled": True},
+        ):
+            self.window._refresh_context_library_panel()
+            self.assertTrue(self.window.context_bootstrap_rag_btn.isEnabled())
+            self.window._set_task_running(True)
+            self.assertFalse(self.window.context_bootstrap_rag_btn.isEnabled())
+            self.assertFalse(self.window.context_bootstrap_source_index_btn.isEnabled())
+            # Overlapping start must no-op while a task is already running.
+            self.assertFalse(self.window._start_bootstrap_task("source_index"))
+            self.window._set_task_running(False)
+            self.assertTrue(self.window.context_bootstrap_rag_btn.isEnabled())
 
     def test_roundtrip_keyword_candidates_and_merge_button(self) -> None:
         self.window._set_work_mode(

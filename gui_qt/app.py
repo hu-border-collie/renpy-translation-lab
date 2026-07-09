@@ -1131,7 +1131,7 @@ class MainWindow(QMainWindow):
             self._set_work_mode(target, refresh_manifest_writeback=False)
         self._start_bootstrap_task(kind)
 
-    def _refresh_context_library_panel(self) -> None:
+    def _refresh_context_library_panel(self, *, running: bool | None = None) -> None:
         if not hasattr(self, "context_library_panel"):
             return
         flags = self._saved_batch_context_flags()
@@ -1149,9 +1149,10 @@ class MainWindow(QMainWindow):
                 f"原文索引：{'已启用' if idx_on else '未启用'} · 项目 {root_hint}"
                 + ("" if idx_on else " · 请先在设置 · 上下文开启并保存")
             )
-        running = bool(getattr(self, "_task_running", False)) or (
-            hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
-        )
+        if running is None:
+            running = bool(getattr(self, "_task_running", False)) or (
+                hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
+            )
         if hasattr(self, "context_bootstrap_rag_btn"):
             self.context_bootstrap_rag_btn.setEnabled(not running and rag_on)
         if hasattr(self, "context_bootstrap_source_index_btn"):
@@ -4195,10 +4196,9 @@ class MainWindow(QMainWindow):
                 restored_workflow_ui = _try_restore_workflow_snapshot()
                 if not restored_workflow_ui:
                     self._refresh_workflow_from_latest_manifest()
+            # Soft switch (no disk refresh): restore frozen writeback UI when present.
             if pending_writeback is not None:
                 _try_restore_writeback_snapshot()
-            elif session_manifest and refresh_manifest_writeback:
-                self._refresh_writeback_from_latest_manifest(latest_manifest=session_manifest)
 
         # Restore stage tab when returning to a page (batch: 准备/执行/结果).
         pending_stage = getattr(self, "_pending_restore_stage_index", None)
@@ -5436,6 +5436,10 @@ class MainWindow(QMainWindow):
         return True
 
     def _start_bootstrap_task(self, kind: str) -> bool:
+        if bool(getattr(self, "_task_running", False)) or (
+            hasattr(self, "runner") and self.runner.is_running()
+        ):
+            return False
         if not self._confirm_unsaved_config_before_workflow():
             return False
         if not self.state.get_game_root():
@@ -6663,6 +6667,9 @@ class MainWindow(QMainWindow):
         self._update_keyword_merge_btn_enabled(running=running)
         self._update_split_btn_enabled(running=running)
         self.kill_btn.setEnabled(running)
+        # Context-library prebuild CTAs stay on-page while nav is locked; gate them here.
+        if hasattr(self, "context_library_panel"):
+            self._refresh_context_library_panel(running=running)
         self._sync_task_shortcuts()
         self._reflow_button_bars()
 
