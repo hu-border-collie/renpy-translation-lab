@@ -47,6 +47,17 @@ BASIC_RECOMMENDED_VALUES: dict[str, SettingValue] = {
     "batch_thinking_level": "minimal",
 }
 
+# Primary toggles shown only on 设置 · 上下文 (P2b / #165). Must not also appear
+# as independent advanced-page widgets — single write source via schema widgets.
+CONTEXT_PRIMARY_SETTING_KEYS: frozenset[str] = frozenset(
+    {
+        "sync_rag_enabled",
+        "sync_story_memory_enabled",
+        "batch_story_memory_enabled",
+    }
+)
+CONTEXT_PRIMARY_SETTING_CATEGORY = "上下文主开关"
+
 
 ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
@@ -187,7 +198,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步翻译时检索本地记忆库。",
         "bool",
         False,
-        "同步 RAG",
+        CONTEXT_PRIMARY_SETTING_CATEGORY,
     ),
     SettingField(
         "sync_rag_output_dimensionality",
@@ -388,7 +399,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步翻译时注入本地 story_graph 上下文。",
         "bool",
         False,
-        "同步剧情记忆",
+        CONTEXT_PRIMARY_SETTING_CATEGORY,
     ),
     SettingField(
         "sync_story_memory_graph_file",
@@ -446,7 +457,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "Batch 构建时注入本地 story_graph 上下文。",
         "bool",
         False,
-        "批量剧情记忆",
+        CONTEXT_PRIMARY_SETTING_CATEGORY,
     ),
     SettingField(
         "batch_story_memory_graph_file",
@@ -799,15 +810,36 @@ ADVANCED_SETTING_FIELDS = FULL_COVERAGE_SETTING_FIELDS + ADVANCED_SETTING_FIELDS
 ADVANCED_SETTING_FIELD_BY_KEY = {field.key: field for field in ADVANCED_SETTING_FIELDS}
 
 
-def grouped_advanced_fields() -> list[tuple[str, list[SettingField]]]:
+def grouped_advanced_fields(
+    *,
+    include_context_primary: bool = True,
+) -> list[tuple[str, list[SettingField]]]:
+    """Group schema fields by category for settings UI.
+
+    When *include_context_primary* is False, omit switches that live only on the
+    上下文 page (P2b single-source rule).
+    """
     groups: list[tuple[str, list[SettingField]]] = []
     by_category: dict[str, list[SettingField]] = {}
     for field in ADVANCED_SETTING_FIELDS:
+        if (
+            not include_context_primary
+            and field.key in CONTEXT_PRIMARY_SETTING_KEYS
+        ):
+            continue
         if field.category not in by_category:
             by_category[field.category] = []
             groups.append((field.category, by_category[field.category]))
         by_category[field.category].append(field)
     return groups
+
+
+def context_primary_setting_fields() -> tuple[SettingField, ...]:
+    return tuple(
+        field
+        for field in ADVANCED_SETTING_FIELDS
+        if field.key in CONTEXT_PRIMARY_SETTING_KEYS
+    )
 
 
 def read_advanced_settings(config: dict[str, Any]) -> dict[str, SettingValue]:

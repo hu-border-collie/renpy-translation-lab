@@ -217,6 +217,9 @@ from .theme_helpers import (
 from .settings_schema import (
     ADVANCED_SETTING_FIELD_BY_KEY,
     ADVANCED_SETTING_FIELDS,
+    CONTEXT_PRIMARY_SETTING_CATEGORY,
+    CONTEXT_PRIMARY_SETTING_KEYS,
+    context_primary_setting_fields,
     BASIC_RECOMMENDED_VALUES,
     SettingField,
     apply_advanced_settings,
@@ -659,12 +662,23 @@ class MainWindow(QMainWindow):
         self.workbench_nav.currentRowChanged.connect(self._on_workbench_nav_changed)
         outer.addWidget(self.workbench_nav)
 
+        # Scroll the workbench body so dense chrome (stacked actions + advanced +
+        # stages + writeback) never crushes buttons into each other on short windows.
+        right_scroll = QScrollArea()
+        right_scroll.setObjectName("workbench_content_scroll")
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._style_themed_surface(right_scroll)
         right = QWidget()
         right.setObjectName("workbench_content")
+        self._style_themed_surface(right)
         layout = QVBoxLayout(right)
         layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(14)
-        outer.addWidget(right, 1)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        right_scroll.setWidget(right)
+        outer.addWidget(right_scroll, 1)
 
         # Stack keeps page identity for each nav item (shared chrome below).
         # Keep pages empty/minimal so they do not compete with action buttons for space.
@@ -740,12 +754,16 @@ class MainWindow(QMainWindow):
         # Context library dual status cards (P1c / #162 · §3.2.5).
         layout.addWidget(self._build_context_library_panel())
 
+        # Stage strip above actions so it never collides with 高级工具 (P2a/P2b layout).
+        layout.addWidget(self._build_batch_stage_bar())
+
         action_frame = QFrame()
         action_frame.setObjectName("action_frame")
         self._action_frame = action_frame
         action_outer = QVBoxLayout(action_frame)
         action_outer.setContentsMargins(12, 10, 12, 10)
         action_outer.setSpacing(8)
+        action_outer.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         # Left nav narrows the content column; stack action rows before buttons clip.
         self.action_panel = ResponsiveActionPanel(compact_width=640)
@@ -773,20 +791,43 @@ class MainWindow(QMainWindow):
         self.kill_btn.setEnabled(False)
         self.action_panel.finish_setup()
         action_outer.addWidget(self.action_panel)
-        layout.addWidget(action_frame)
+        # When the panel stacks to two rows it needs vertical room; don't let the
+        # parent VBox crush it under the advanced-tools strip (overlap bug).
+        action_frame.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Minimum,
+        )
 
+        # Keep main actions + batch advanced tools in one column so stacked
+        # action height always pushes probe/split down (no sibling-layout race).
+        actions_column = QWidget()
+        actions_column.setObjectName("workbench_actions_column")
+        self._workbench_actions_column = actions_column
+        actions_column_layout = QVBoxLayout(actions_column)
+        actions_column_layout.setContentsMargins(0, 0, 0, 0)
+        actions_column_layout.setSpacing(10)
+        actions_column_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        actions_column.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Minimum,
+        )
+        actions_column_layout.addWidget(action_frame)
         # Batch · 执行 · 高级：试跑 / 拆分 (P2a / #164); 提交剩余包仍在主按钮行。
-        layout.addWidget(self._build_batch_advanced_tools_bar())
+        actions_column_layout.addWidget(self._build_batch_advanced_tools_bar())
+        layout.addWidget(actions_column)
 
         self.timeline = WizardTimeline()
         self.timeline.setObjectName("workbench_timeline")
         self.timeline.setVisible(False)
         layout.addWidget(self.timeline)
 
-        layout.addWidget(self._build_batch_stage_bar())
-
         self.workbench_status_tabs = NoWheelTabWidget()
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
+        self.workbench_status_tabs.setMinimumHeight(200)
+        self.workbench_status_tabs.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         self.workbench_status_tabs.currentChanged.connect(self._on_workbench_status_tab_changed)
 
         doctor_tab = QWidget()
@@ -920,7 +961,8 @@ class MainWindow(QMainWindow):
         self._style_themed_surface(writeback_tab)
         writeback_layout = QVBoxLayout(writeback_tab)
         writeback_layout.setContentsMargins(12, 12, 12, 12)
-        writeback_layout.setSpacing(6)
+        writeback_layout.setSpacing(10)
+        writeback_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.writeback_status_label = StatusBadge("writeback_status_label")
         writeback_layout.addWidget(self.writeback_status_label)
         writeback_scroll = QScrollArea()
@@ -1006,7 +1048,7 @@ class MainWindow(QMainWindow):
         primary_row.addWidget(self.writeback_issues_badge, 0)
         writeback_layout.addLayout(primary_row)
 
-        self.writeback_issues_panel = FlowButtonBar(spacing=8, row_spacing=6)
+        self.writeback_issues_panel = FlowButtonBar(spacing=8, row_spacing=8)
         self.writeback_issues_panel.setObjectName("writeback_issues_panel")
         self.check_issues_btn = QPushButton("查看问题清单")
         self.check_issues_btn.setObjectName("secondary_btn")
@@ -1074,8 +1116,12 @@ class MainWindow(QMainWindow):
         frame = QFrame()
         frame.setObjectName("batch_advanced_frame")
         self.batch_advanced_frame = frame
+        frame.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Minimum,
+        )
         outer = QVBoxLayout(frame)
-        outer.setContentsMargins(12, 8, 12, 8)
+        outer.setContentsMargins(12, 10, 12, 10)
         outer.setSpacing(6)
 
         title = QLabel("高级工具")
@@ -1383,14 +1429,26 @@ class MainWindow(QMainWindow):
         action_layout.addStretch()
         self.reload_config_btn = QPushButton("重新加载")
         self.reload_config_btn.setObjectName("secondary_btn")
+        self.reload_config_btn.setToolTip(
+            "从 translator_config.json 重新载入设置页字段。"
+            "「工作区」总表操作即时写入 registry，不受此按钮影响。"
+        )
         self.reload_config_btn.clicked.connect(self._on_reload_config)
         action_layout.addWidget(self.reload_config_btn)
         self.restore_defaults_btn = QPushButton("恢复推荐值")
         self.restore_defaults_btn.setObjectName("secondary_btn")
+        self.restore_defaults_btn.setToolTip(
+            "将模型、上下文主开关、高级参数等恢复为推荐值（仅填入界面，需再点保存）。"
+            "不改写工作区 registry。"
+        )
         self.restore_defaults_btn.clicked.connect(self._on_restore_recommended_config)
         action_layout.addWidget(self.restore_defaults_btn)
         self.save_config_btn = QPushButton("保存设置")
         self.save_config_btn.setObjectName("save_config_btn")
+        self.save_config_btn.setToolTip(
+            "写入 translator_config.json（项目/模型/上下文/高级/外观等）。"
+            "「工作区」扫描与切换项目即时生效，无需此按钮。"
+        )
         self.save_config_btn.clicked.connect(self._on_save_config)
         action_layout.addWidget(self.save_config_btn)
         right_layout.addWidget(action_bar)
@@ -1525,14 +1583,14 @@ class MainWindow(QMainWindow):
         context_box, context_layout = self._settings_group("批量上下文")
 
         context_hint = QLabel(
-            "启用后先保存设置，再到工作台「分析与准备」下运行预建子任务。"
+            "启用后先保存设置，再到工作台「上下文库」页运行预建。"
             "记忆库使用已有译文；原文索引只使用翻译模板里的原文；均不修改游戏脚本。"
         )
         context_hint.setWordWrap(True)
         context_hint.setObjectName("config_hint_label")
         context_layout.addWidget(context_hint)
 
-        self.rag_enabled_cb = QCheckBox("启用 RAG 记忆库")
+        self.rag_enabled_cb = QCheckBox("启用 RAG 记忆库（批量）")
         context_layout.addWidget(self.rag_enabled_cb)
 
         self.source_index_enabled_cb = QCheckBox("启用原文索引")
@@ -1548,6 +1606,23 @@ class MainWindow(QMainWindow):
         context_layout.addWidget(self.context_storage_game_cb)
 
         layout.addWidget(context_box)
+
+        # P2b / #165: primary toggles live here only (schema widgets = single write source).
+        primary_box, primary_layout = self._settings_group("同步 / 剧情记忆主开关")
+        primary_hint = QLabel(
+            "下列开关与高级页检索参数共用同一配置键；仅在本页编辑主开关，"
+            "高级页只保留调参字段。"
+        )
+        primary_hint.setWordWrap(True)
+        primary_hint.setObjectName("config_hint_label")
+        primary_layout.addWidget(primary_hint)
+        for field in context_primary_setting_fields():
+            widget = self._create_advanced_setting_widget(field)
+            self._advanced_setting_widgets[field.key] = widget
+            row = self._advanced_setting_row(field, widget)
+            primary_layout.addWidget(QLabel(f"{field.label}"))
+            primary_layout.addWidget(row)
+        layout.addWidget(primary_box)
         layout.addStretch(1)
         return page
 
@@ -1649,8 +1724,14 @@ class MainWindow(QMainWindow):
         hint.setObjectName("config_hint_label")
         layout.addWidget(hint)
 
-        skipped_categories = {"项目与资源", "准备流程"}
-        for group_title, fields in grouped_advanced_fields():
+        skipped_categories = {
+            "项目与资源",
+            "准备流程",
+            CONTEXT_PRIMARY_SETTING_CATEGORY,
+        }
+        for group_title, fields in grouped_advanced_fields(
+            include_context_primary=False,
+        ):
             if group_title in skipped_categories:
                 continue
             group = QGroupBox(group_title)
@@ -1659,10 +1740,15 @@ class MainWindow(QMainWindow):
             form.setContentsMargins(12, 16, 12, 12)
             form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
             for field in fields:
+                if field.key in CONTEXT_PRIMARY_SETTING_KEYS:
+                    continue
                 widget = self._create_advanced_setting_widget(field)
                 self._advanced_setting_widgets[field.key] = widget
                 row = self._advanced_setting_row(field, widget)
                 form.addRow(f"{field.label}：", row)
+            if form.rowCount() == 0:
+                group.deleteLater()
+                continue
             layout.addWidget(group)
         layout.addStretch(1)
         return page
@@ -1735,8 +1821,8 @@ class MainWindow(QMainWindow):
         diag_hint = QLabel(
             "上方可查看任务上下文、命令参考与任务记录；下方显示原始命令输出。"
             "工作台任务运行时默认留在工作台并展开底部日志抽屉；"
-            "试跑 / 拆分请在「批量翻译 · 执行 · 高级工具」使用；"
-            "从本页启动的 A/B 对比会放大下方日志区域。"
+            "试跑 / 拆分在「批量翻译 · 执行 · 高级工具」；"
+            "术语合并在「关键词 / 术语」结果区；本页保留刷新、A/B 对比与清空日志。"
         )
         diag_hint.setWordWrap(True)
         diag_hint.setObjectName("config_hint_label")
@@ -1773,16 +1859,13 @@ class MainWindow(QMainWindow):
         self.compare_variants_btn.clicked.connect(self._on_run_compare_variants)
         self.compare_variants_btn.setEnabled(False)
 
-        self.keyword_merge_btn = diagnostics_action_panel.add_translate_button(
-            QPushButton("合并到 glossary")
-        )
+        # P2b: glossary merge primary entry is workbench · 关键词; keep attribute for
+        # enable helpers but do not place a diagnostics toolbar button.
+        self.keyword_merge_btn = QPushButton("合并到 glossary")
         self.keyword_merge_btn.setObjectName("secondary_btn")
-        self.keyword_merge_btn.setToolTip(
-            "快捷入口：主路径在工作台 · 关键词页「合并到 glossary」。"
-            "勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。"
-        )
-        self.keyword_merge_btn.clicked.connect(self._on_open_keyword_merge)
+        self.keyword_merge_btn.setVisible(False)
         self.keyword_merge_btn.setEnabled(False)
+        self.keyword_merge_btn.clicked.connect(self._on_open_keyword_merge)
 
         self.clear_log_btn = diagnostics_action_panel.add_translate_trailing(
             QPushButton("清空日志")
@@ -1923,7 +2006,7 @@ class MainWindow(QMainWindow):
         splitter.setSizes([_DIAGNOSTICS_IDLE_CONTEXT_PX, _DIAGNOSTICS_IDLE_LOG_PX])
 
         layout.addWidget(splitter, 1)
-        self.tab_widget.addTab(tab, "诊断日志")
+        self.tab_widget.addTab(tab, "诊断与工具")
 
     def _set_workbench_log_drawer_expanded(self, expanded: bool) -> None:
         self._workbench_log_drawer_expanded = bool(expanded)
@@ -2768,6 +2851,64 @@ class MainWindow(QMainWindow):
     def _toggle_writeback_issues_panel(self) -> None:
         self._set_writeback_issues_expanded(not getattr(self, "_writeback_issues_expanded", False))
 
+    def _sync_action_frame_min_height(self) -> None:
+        """Ensure action_frame / actions column are tall enough for stacked rows."""
+        panel = getattr(self, "action_panel", None)
+        frame = getattr(self, "_action_frame", None)
+        if panel is None or frame is None:
+            return
+        margins = 20
+        layout = frame.layout()
+        if layout is not None:
+            m = layout.contentsMargins()
+            margins = int(m.top() + m.bottom())
+        frame.setMinimumHeight(max(0, int(panel.minimumHeight()) + margins))
+        frame.updateGeometry()
+
+        # Advanced tools strip also reports min height after FlowButtonBar reflow.
+        advanced = getattr(self, "batch_advanced_frame", None)
+        if advanced is not None and advanced.isVisible():
+            adv_layout = advanced.layout()
+            adv_margins = 20
+            if adv_layout is not None:
+                m = adv_layout.contentsMargins()
+                adv_margins = int(m.top() + m.bottom())
+            bar = getattr(self, "batch_advanced_bar", None)
+            bar_h = int(bar.minimumHeight()) if bar is not None else 38
+            title_h = 22
+            advanced.setMinimumHeight(max(60, bar_h + adv_margins + title_h))
+            advanced.updateGeometry()
+        elif advanced is not None:
+            advanced.setMinimumHeight(0)
+
+        column = getattr(self, "_workbench_actions_column", None)
+        if column is not None:
+            col_layout = column.layout()
+            if col_layout is not None:
+                col_layout.invalidate()
+                col_layout.activate()
+            # Explicit column min height = sum of visible children mins + spacing.
+            col_h = 0
+            if col_layout is not None:
+                spacing = col_layout.spacing()
+                visible_kids = 0
+                for i in range(col_layout.count()):
+                    item = col_layout.itemAt(i)
+                    child = item.widget() if item is not None else None
+                    if child is None or not child.isVisible():
+                        continue
+                    col_h += max(child.minimumHeight(), child.sizeHint().height())
+                    visible_kids += 1
+                if visible_kids > 1:
+                    col_h += spacing * (visible_kids - 1)
+            if col_h > 0:
+                column.setMinimumHeight(col_h)
+            column.updateGeometry()
+            parent = column.parentWidget()
+            if parent is not None and parent.layout() is not None:
+                parent.layout().invalidate()
+                parent.layout().activate()
+
     def _reflow_button_bars(self) -> None:
         """Re-pack all flow/responsive button strips after visibility or size changes."""
         for name in (
@@ -2782,6 +2923,23 @@ class MainWindow(QMainWindow):
             reflow = getattr(panel, "reflow", None) if panel is not None else None
             if callable(reflow):
                 reflow(force=True)
+        self._sync_action_frame_min_height()
+        # Deferred second pass: parent widths settle after min-height changes.
+        QTimer.singleShot(0, self._reflow_button_bars_deferred)
+
+    def _reflow_button_bars_deferred(self) -> None:
+        for name in (
+            "action_panel",
+            "writeback_primary_bar",
+            "writeback_issues_panel",
+            "batch_advanced_bar",
+            "global_project_actions",
+        ):
+            panel = getattr(self, name, None)
+            reflow = getattr(panel, "reflow", None) if panel is not None else None
+            if callable(reflow):
+                reflow(force=True)
+        self._sync_action_frame_min_height()
 
     def _sync_writeback_issues_panel_visibility(
         self,
@@ -5025,11 +5183,14 @@ class MainWindow(QMainWindow):
                 widget.setFocus()
             return
         field = ADVANCED_SETTING_FIELD_BY_KEY.get(key)
-        page_key = (
-            "project"
-            if field is not None and field.category in {"项目与资源", "准备流程"}
-            else "advanced"
-        )
+        if key in CONTEXT_PRIMARY_SETTING_KEYS or (
+            field is not None and field.category == CONTEXT_PRIMARY_SETTING_CATEGORY
+        ):
+            page_key = "context"
+        elif field is not None and field.category in {"项目与资源", "准备流程"}:
+            page_key = "project"
+        else:
+            page_key = "advanced"
         self._focus_settings_section(page_key)
         widget = getattr(self, "_advanced_setting_widgets", {}).get(key)
         if widget is not None:
