@@ -288,7 +288,7 @@ class FlowButtonBar(QFrame):
         self,
         *,
         spacing: int = 8,
-        row_spacing: int = 6,
+        row_spacing: int = 8,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -297,11 +297,14 @@ class FlowButtonBar(QFrame):
         self._items: list[QWidget] = []
         self._trailing_stretch = True
         self._signature: tuple[object, ...] | None = None
+        self._row_count = 1
 
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(0, 0, 0, 0)
         self._root.setSpacing(self._row_spacing)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        # Preferred allows parent shells to crush multi-row wrap into ~12px.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
     def add_widget(self, widget: QWidget, *, min_width: int | None = 80) -> QWidget:
         if min_width is not None:
@@ -353,17 +356,22 @@ class FlowButtonBar(QFrame):
         clear_layout(self._root)
         items = self._visible_items()
         if not items:
+            self._row_count = 0
+            self.setMinimumHeight(0)
             return
 
         available = max(120, effective_widget_width(self, fallback=800) - 8)
         row = QHBoxLayout()
         row.setSpacing(self._spacing)
         used = 0
+        rows = 0
 
-        def flush_row(current: QHBoxLayout, *, last: bool = False) -> QHBoxLayout:
+        def flush_row(current: QHBoxLayout) -> QHBoxLayout:
+            nonlocal rows
             if self._trailing_stretch:
                 current.addStretch(1)
             self._root.addLayout(current)
+            rows += 1
             nxt = QHBoxLayout()
             nxt.setSpacing(self._spacing)
             return nxt
@@ -377,12 +385,50 @@ class FlowButtonBar(QFrame):
             row.addWidget(widget)
             used += need if used == 0 else need
 
-        flush_row(row, last=True)
+        flush_row(row)
+        self._row_count = max(1, rows)
+        self._sync_minimum_height()
+
+    def _sync_minimum_height(self) -> None:
+        """Reserve full height for wrapped rows so parents cannot crush them."""
+        row_h = 38
+        for widget in self._visible_items():
+            hint = widget.sizeHint()
+            if hint.isValid() and hint.height() > 0:
+                row_h = max(row_h, hint.height())
+            row_h = max(row_h, widget.minimumHeight())
+        rows = max(1, self._row_count)
+        height = rows * row_h + max(0, rows - 1) * self._row_spacing
+        hint = self._root.sizeHint()
+        if hint.isValid():
+            height = max(height, hint.height())
+        self.setMinimumHeight(height)
+        self.updateGeometry()
+        parent = self.parentWidget()
+        depth = 0
+        while parent is not None and depth < 6:
+            parent.updateGeometry()
+            layout = parent.layout()
+            if layout is not None:
+                layout.invalidate()
+                layout.activate()
+            parent = parent.parentWidget()
+            depth += 1
 
     def sizeHint(self) -> QSize:  # noqa: N802
         hint = super().sizeHint()
-        if hint.height() < 28:
+        min_h = self.minimumHeight()
+        if min_h > 0:
+            hint.setHeight(max(hint.height(), min_h))
+        elif hint.height() < 28:
             hint.setHeight(28)
+        return hint
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        hint = super().minimumSizeHint()
+        min_h = self.minimumHeight()
+        if min_h > 0:
+            hint.setHeight(max(hint.height(), min_h))
         return hint
 
 

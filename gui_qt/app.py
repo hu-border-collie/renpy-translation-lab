@@ -662,12 +662,23 @@ class MainWindow(QMainWindow):
         self.workbench_nav.currentRowChanged.connect(self._on_workbench_nav_changed)
         outer.addWidget(self.workbench_nav)
 
+        # Scroll the workbench body so dense chrome (stacked actions + advanced +
+        # stages + writeback) never crushes buttons into each other on short windows.
+        right_scroll = QScrollArea()
+        right_scroll.setObjectName("workbench_content_scroll")
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._style_themed_surface(right_scroll)
         right = QWidget()
         right.setObjectName("workbench_content")
+        self._style_themed_surface(right)
         layout = QVBoxLayout(right)
         layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(14)
-        outer.addWidget(right, 1)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        right_scroll.setWidget(right)
+        outer.addWidget(right_scroll, 1)
 
         # Stack keeps page identity for each nav item (shared chrome below).
         # Keep pages empty/minimal so they do not compete with action buttons for space.
@@ -743,6 +754,9 @@ class MainWindow(QMainWindow):
         # Context library dual status cards (P1c / #162 · §3.2.5).
         layout.addWidget(self._build_context_library_panel())
 
+        # Stage strip above actions so it never collides with 高级工具 (P2a/P2b layout).
+        layout.addWidget(self._build_batch_stage_bar())
+
         action_frame = QFrame()
         action_frame.setObjectName("action_frame")
         self._action_frame = action_frame
@@ -807,10 +821,13 @@ class MainWindow(QMainWindow):
         self.timeline.setVisible(False)
         layout.addWidget(self.timeline)
 
-        layout.addWidget(self._build_batch_stage_bar())
-
         self.workbench_status_tabs = NoWheelTabWidget()
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
+        self.workbench_status_tabs.setMinimumHeight(200)
+        self.workbench_status_tabs.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         self.workbench_status_tabs.currentChanged.connect(self._on_workbench_status_tab_changed)
 
         doctor_tab = QWidget()
@@ -944,7 +961,8 @@ class MainWindow(QMainWindow):
         self._style_themed_surface(writeback_tab)
         writeback_layout = QVBoxLayout(writeback_tab)
         writeback_layout.setContentsMargins(12, 12, 12, 12)
-        writeback_layout.setSpacing(6)
+        writeback_layout.setSpacing(10)
+        writeback_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.writeback_status_label = StatusBadge("writeback_status_label")
         writeback_layout.addWidget(self.writeback_status_label)
         writeback_scroll = QScrollArea()
@@ -1030,7 +1048,7 @@ class MainWindow(QMainWindow):
         primary_row.addWidget(self.writeback_issues_badge, 0)
         writeback_layout.addLayout(primary_row)
 
-        self.writeback_issues_panel = FlowButtonBar(spacing=8, row_spacing=6)
+        self.writeback_issues_panel = FlowButtonBar(spacing=8, row_spacing=8)
         self.writeback_issues_panel.setObjectName("writeback_issues_panel")
         self.check_issues_btn = QPushButton("查看问题清单")
         self.check_issues_btn.setObjectName("secondary_btn")
@@ -2846,11 +2864,45 @@ class MainWindow(QMainWindow):
             margins = int(m.top() + m.bottom())
         frame.setMinimumHeight(max(0, int(panel.minimumHeight()) + margins))
         frame.updateGeometry()
+
+        # Advanced tools strip also reports min height after FlowButtonBar reflow.
+        advanced = getattr(self, "batch_advanced_frame", None)
+        if advanced is not None and advanced.isVisible():
+            adv_layout = advanced.layout()
+            adv_margins = 20
+            if adv_layout is not None:
+                m = adv_layout.contentsMargins()
+                adv_margins = int(m.top() + m.bottom())
+            bar = getattr(self, "batch_advanced_bar", None)
+            bar_h = int(bar.minimumHeight()) if bar is not None else 38
+            title_h = 22
+            advanced.setMinimumHeight(max(60, bar_h + adv_margins + title_h))
+            advanced.updateGeometry()
+        elif advanced is not None:
+            advanced.setMinimumHeight(0)
+
         column = getattr(self, "_workbench_actions_column", None)
         if column is not None:
             col_layout = column.layout()
             if col_layout is not None:
+                col_layout.invalidate()
                 col_layout.activate()
+            # Explicit column min height = sum of visible children mins + spacing.
+            col_h = 0
+            if col_layout is not None:
+                spacing = col_layout.spacing()
+                visible_kids = 0
+                for i in range(col_layout.count()):
+                    item = col_layout.itemAt(i)
+                    child = item.widget() if item is not None else None
+                    if child is None or not child.isVisible():
+                        continue
+                    col_h += max(child.minimumHeight(), child.sizeHint().height())
+                    visible_kids += 1
+                if visible_kids > 1:
+                    col_h += spacing * (visible_kids - 1)
+            if col_h > 0:
+                column.setMinimumHeight(col_h)
             column.updateGeometry()
             parent = column.parentWidget()
             if parent is not None and parent.layout() is not None:
@@ -2866,6 +2918,22 @@ class MainWindow(QMainWindow):
             "writeback_primary_bar",
             "writeback_issues_panel",
             "batch_advanced_bar",
+        ):
+            panel = getattr(self, name, None)
+            reflow = getattr(panel, "reflow", None) if panel is not None else None
+            if callable(reflow):
+                reflow(force=True)
+        self._sync_action_frame_min_height()
+        # Deferred second pass: parent widths settle after min-height changes.
+        QTimer.singleShot(0, self._reflow_button_bars_deferred)
+
+    def _reflow_button_bars_deferred(self) -> None:
+        for name in (
+            "action_panel",
+            "writeback_primary_bar",
+            "writeback_issues_panel",
+            "batch_advanced_bar",
+            "global_project_actions",
         ):
             panel = getattr(self, name, None)
             reflow = getattr(panel, "reflow", None) if panel is not None else None

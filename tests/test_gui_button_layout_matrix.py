@@ -97,6 +97,50 @@ class GuiButtonLayoutMatrixTests(unittest.TestCase):
             with self.subTest(width=width, height=height):
                 self._assert_no_button_overlap(width=width, height=height)
 
+    def test_no_overlap_batch_execute_and_result_dense(self) -> None:
+        """Regression: advanced tools / stacked actions / writeback recovery strips."""
+        for stage in (1, 2):
+            self.window._focus_workbench_status_tab(stage)
+            for name in (
+                "doctor_btn",
+                "bootstrap_work_btn",
+                "translate_btn",
+                "resume_btn",
+                "probe_btn",
+                "split_btn",
+                "apply_btn",
+                "recheck_btn",
+                "check_issues_btn",
+                "retry_btn",
+                "retry_followup_btn",
+                "repair_btn",
+                "apply_failure_btn",
+                "remediation_btn",
+            ):
+                btn = getattr(self.window, name, None)
+                if btn is not None:
+                    btn.setVisible(True)
+            self.window._set_writeback_issues_expanded(True)
+            for width, height in ((960, 700), (1100, 760), (1280, 800), (1600, 960)):
+                with self.subTest(stage=stage, width=width, height=height):
+                    self.window.resize(width, height)
+                    self.window.show()
+                    for _ in range(8):
+                        self._app.processEvents()
+                    self.window._reflow_button_bars()
+                    for _ in range(20):
+                        self._app.processEvents()
+                    overlaps = [
+                        hit
+                        for hit in find_overlapping_buttons(self.window, min_overlap_px=4)
+                        if hit[0] != hit[1]
+                    ]
+                    self.assertEqual(
+                        overlaps,
+                        [],
+                        msg=f"stage={stage} {width}x{height}: {overlaps[:8]}",
+                    )
+
     def test_action_panel_stacks_on_typical_workbench_content_width(self) -> None:
         # Window 960 with left nav leaves ~780–820 content width.
         self.window.resize(960, 700)
