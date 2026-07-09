@@ -1,21 +1,62 @@
-"""Responsive layouts for workbench action button groups."""
+"""Responsive layouts for workbench / settings / diagnostics button groups."""
 from __future__ import annotations
 
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
+    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 
-def _configure_action_button(widget: QWidget, *, min_width: int = 88) -> QWidget:
-    # Preferred (not Fixed) so rows can shrink instead of painting over neighbors.
+def configure_action_button(widget: QWidget, *, min_width: int = 88) -> QWidget:
+    """Prefer Preferred sizing so rows can shrink instead of painting over neighbors."""
     widget.setMinimumWidth(min_width)
     widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
     return widget
+
+
+# Back-compat alias used by older call sites / tests.
+_configure_action_button = configure_action_button
+
+
+def widget_layout_width(widget: QWidget, *, fallback: int = 88) -> int:
+    """Best-effort horizontal space a control needs in a flow row."""
+    if not widget.isVisibleTo(widget.parentWidget() or widget):
+        # Still measure hidden widgets that will be shown later via reflow.
+        pass
+    hint = widget.sizeHint()
+    min_w = widget.minimumWidth()
+    width = max(min_w, hint.width() if hint.isValid() and hint.width() > 0 else 0)
+    if width <= 0:
+        width = fallback
+    return width
+
+
+def effective_widget_width(widget: QWidget, *, fallback: int = 720) -> int:
+    width = widget.width()
+    if width > 0:
+        return width
+    parent = widget.parentWidget()
+    while parent is not None:
+        if parent.width() > 0:
+            return parent.width()
+        parent = parent.parentWidget()
+    return fallback
+
+
+def clear_layout(layout: QLayout) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
+        child = item.layout()
+        if child is not None:
+            clear_layout(child)
+            child.deleteLater()
 
 
 class ResponsiveActionPanel(QFrame):
@@ -51,61 +92,60 @@ class ResponsiveActionPanel(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
     def add_prep_button(self, widget: QWidget, *, min_width: int = 88) -> QWidget:
-        self._prep_buttons.append(_configure_action_button(widget, min_width=min_width))
+        self._prep_buttons.append(configure_action_button(widget, min_width=min_width))
         return widget
 
     def add_translate_button(self, widget: QWidget, *, min_width: int = 88) -> QWidget:
-        self._translate_buttons.append(_configure_action_button(widget, min_width=min_width))
+        self._translate_buttons.append(configure_action_button(widget, min_width=min_width))
         return widget
 
     def add_translate_trailing(self, widget: QWidget, *, min_width: int = 72) -> QWidget:
-        self._translate_trailing.append(_configure_action_button(widget, min_width=min_width))
+        self._translate_trailing.append(configure_action_button(widget, min_width=min_width))
         return widget
 
     def finish_setup(self) -> None:
         self._is_wide = None
         self._apply_layout_mode(self._should_use_wide_layout(), force=True)
 
+    def reflow(self, *, force: bool = True) -> None:
+        """Re-evaluate wide/stacked mode (e.g. after button visibility changes)."""
+        self._apply_layout_mode(self._should_use_wide_layout(), force=force)
+
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._apply_layout_mode(self._should_use_wide_layout())
 
     def _effective_width(self) -> int:
-        width = self.width()
-        if width > 0:
-            return width
-        parent = self.parentWidget()
-        while parent is not None:
-            if parent.width() > 0:
-                return parent.width()
-            parent = parent.parentWidget()
-        return self._compact_width
+        return effective_widget_width(self, fallback=self._compact_width)
 
     def _estimated_wide_min_width(self) -> int:
         """Minimum width needed for a single-row layout without clipping."""
         spacing = 12
-        width = max(self.prep_label.minimumWidth(), self.prep_label.sizeHint().width())
-        width += max(
-            self.translate_label.minimumWidth(),
-            self.translate_label.sizeHint().width(),
-        )
+        width = widget_layout_width(self.prep_label, fallback=64)
+        width += widget_layout_width(self.translate_label, fallback=64)
         widgets = [
             *self._prep_buttons,
             *self._translate_buttons,
             *self._translate_trailing,
         ]
+        # Only count currently visible action buttons for the estimate.
+        visible = [w for w in widgets if w.isVisible() or not w.testAttribute(Qt.WidgetAttribute.WA_WState_Hidden)]
+        # Before first show, isVisible() is false; treat non-explicitly-hidden as visible.
+        measured: list[QWidget] = []
         for widget in widgets:
-            hint = widget.sizeHint().width()
-            width += max(widget.minimumWidth(), hint if hint > 0 else 88)
-        # labels + vertical separator + inter-item spacing + padding slack
-        # (Chinese captions are wider than min_width alone suggests.)
-        gaps = max(0, len(widgets) + 2)
+            if widget.isHidden():
+                continue
+            measured.append(widget)
+        if not measured:
+            measured = list(widgets)
+        for widget in measured:
+            width += widget_layout_width(widget)
+        gaps = max(0, len(measured) + 2)
         width += spacing * gaps + 96
         return width
 
     def _should_use_wide_layout(self) -> bool:
         available = self._effective_width()
-        # Stack early enough that min-width buttons cannot paint over each other.
         needed = max(self._compact_width, self._estimated_wide_min_width())
         return available >= needed
 
@@ -115,20 +155,17 @@ class ResponsiveActionPanel(QFrame):
         self._is_wide = wide
         self._rebuild_layout()
 
-    def _detach_layout(self, layout) -> None:
-        while layout.count():
-            item = layout.takeAt(0)
-            child_layout = item.layout()
-            if child_layout is not None:
-                self._detach_layout(child_layout)
-                child_layout.deleteLater()
-
     def _rebuild_layout(self) -> None:
-        self._detach_layout(self._root)
+        clear_layout(self._root)
 
-        prep = self._prep_buttons
-        translate = self._translate_buttons
-        trailing = self._translate_trailing
+        prep = [w for w in self._prep_buttons if not w.isHidden()]
+        translate = [w for w in self._translate_buttons if not w.isHidden()]
+        trailing = [w for w in self._translate_trailing if not w.isHidden()]
+        # On first paint before show(), nothing is "shown" yet — keep all members.
+        if not prep and not translate and not trailing:
+            prep = list(self._prep_buttons)
+            translate = list(self._translate_buttons)
+            trailing = list(self._translate_trailing)
 
         if self._is_wide:
             row = QHBoxLayout()
@@ -143,7 +180,7 @@ class ResponsiveActionPanel(QFrame):
             row.addWidget(self.translate_label)
             for widget in translate:
                 row.addWidget(widget)
-            row.addStretch()
+            row.addStretch(1)
             for widget in trailing:
                 row.addWidget(widget)
             self._root.addLayout(row)
@@ -154,7 +191,7 @@ class ResponsiveActionPanel(QFrame):
         prep_row.addWidget(self.prep_label)
         for widget in prep:
             prep_row.addWidget(widget)
-        prep_row.addStretch()
+        prep_row.addStretch(1)
 
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
@@ -165,10 +202,150 @@ class ResponsiveActionPanel(QFrame):
         translate_row.addWidget(self.translate_label)
         for widget in translate:
             translate_row.addWidget(widget)
-        translate_row.addStretch()
+        translate_row.addStretch(1)
         for widget in trailing:
             translate_row.addWidget(widget)
 
         self._root.addLayout(prep_row)
         self._root.addWidget(separator)
         self._root.addLayout(translate_row)
+
+
+class FlowButtonBar(QFrame):
+    """Button/control row that wraps into multiple HBox rows when width is tight.
+
+    Intended for primary writeback actions, recovery tools, global project
+    actions, and other flat button strips that previously overflowed.
+    """
+
+    def __init__(
+        self,
+        *,
+        spacing: int = 8,
+        row_spacing: int = 6,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._spacing = spacing
+        self._row_spacing = row_spacing
+        self._items: list[QWidget] = []
+        self._trailing_stretch = True
+        self._signature: tuple[object, ...] | None = None
+
+        self._root = QVBoxLayout(self)
+        self._root.setContentsMargins(0, 0, 0, 0)
+        self._root.setSpacing(self._row_spacing)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+    def add_widget(self, widget: QWidget, *, min_width: int | None = 80) -> QWidget:
+        if min_width is not None:
+            configure_action_button(widget, min_width=min_width)
+        else:
+            widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self._items.append(widget)
+        return widget
+
+    def add_stretch_end(self, enabled: bool = True) -> None:
+        self._trailing_stretch = enabled
+
+    def finish_setup(self) -> None:
+        self.reflow(force=True)
+
+    def reflow(self, *, force: bool = False) -> None:
+        signature = self._layout_signature()
+        if not force and signature == self._signature:
+            return
+        self._signature = signature
+        self._rebuild()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.reflow()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self.reflow(force=True)
+
+    def _layout_signature(self) -> tuple[object, ...]:
+        available = effective_widget_width(self, fallback=800)
+        visible = tuple(
+            (id(w), w.isHidden(), widget_layout_width(w)) for w in self._items
+        )
+        return (available, visible)
+
+    def _visible_items(self) -> list[QWidget]:
+        # Prefer explicitly non-hidden widgets; before first show treat all as visible.
+        shown = [w for w in self._items if not w.isHidden()]
+        return shown if shown else list(self._items)
+
+    def _rebuild(self) -> None:
+        clear_layout(self._root)
+        items = self._visible_items()
+        if not items:
+            return
+
+        available = max(120, effective_widget_width(self, fallback=800) - 8)
+        row = QHBoxLayout()
+        row.setSpacing(self._spacing)
+        used = 0
+
+        def flush_row(current: QHBoxLayout, *, last: bool = False) -> QHBoxLayout:
+            if self._trailing_stretch:
+                current.addStretch(1)
+            self._root.addLayout(current)
+            nxt = QHBoxLayout()
+            nxt.setSpacing(self._spacing)
+            return nxt
+
+        for widget in items:
+            need = widget_layout_width(widget) + (self._spacing if used else 0)
+            if used > 0 and used + need > available:
+                row = flush_row(row)
+                used = 0
+                need = widget_layout_width(widget)
+            row.addWidget(widget)
+            used += need if used == 0 else need
+
+        flush_row(row, last=True)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        hint = super().sizeHint()
+        if hint.height() < 28:
+            hint.setHeight(28)
+        return hint
+
+
+def collect_visible_button_rects(root: QWidget) -> list[tuple[str, object]]:
+    """Return (objectName, QRect in root coords) for visible QPushButtons under root."""
+    from PySide6.QtCore import QRect
+
+    rects: list[tuple[str, QRect]] = []
+    for btn in root.findChildren(QPushButton):
+        if not btn.isVisible():
+            continue
+        # Skip zero-size or not yet laid out widgets.
+        if btn.width() <= 1 or btn.height() <= 1:
+            continue
+        top_left = btn.mapTo(root, btn.rect().topLeft())
+        rect = btn.rect()
+        rect.moveTopLeft(top_left)
+        name = btn.objectName() or btn.text() or btn.__class__.__name__
+        rects.append((name, rect))
+    return rects
+
+
+def find_overlapping_buttons(
+    root: QWidget,
+    *,
+    min_overlap_px: int = 4,
+) -> list[tuple[str, str, int, int]]:
+    """Return overlapping pairs (name_a, name_b, overlap_w, overlap_h)."""
+    items = collect_visible_button_rects(root)
+    hits: list[tuple[str, str, int, int]] = []
+    for i, (name_a, rect_a) in enumerate(items):
+        for name_b, rect_b in items[i + 1 :]:
+            inter = rect_a.intersected(rect_b)
+            if inter.width() >= min_overlap_px and inter.height() >= min_overlap_px:
+                # Same-center full containment can be nested chrome; still report.
+                hits.append((name_a, name_b, inter.width(), inter.height()))
+    return hits
