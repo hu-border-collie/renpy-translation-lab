@@ -93,8 +93,10 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
 
         play = panel._play_status_combo
         translation = panel._translation_status_combo
+        self.assertEqual(play.minimumWidth(), translation.minimumWidth())
         self.assertEqual(play.width(), translation.width())
-        self.assertGreaterEqual(play.width(), 120)
+        # Content-sized pair — must not stretch to the form field column.
+        self.assertLess(play.width(), panel._name_edit.width() // 2)
 
         engine = panel._engine_filter_combo
         tl_filter = panel._translation_filter_combo

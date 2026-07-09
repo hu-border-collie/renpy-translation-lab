@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -309,13 +308,11 @@ class GamesRegistryPanel(QWidget):
         self._play_status_combo.addItems(sorted(PLAY_STATUSES))
         self._translation_status_combo = NoWheelComboBox()
         self._translation_status_combo.addItems(sorted(TRANSLATION_STATUSES))
-        # Expand to the form field column so both status combos share one width
-        # (default Preferred keeps each at its own content sizeHint).
-        for status_combo in (self._play_status_combo, self._translation_status_combo):
-            status_combo.setSizePolicy(
-                QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.Fixed,
-            )
+        # Match widths to the wider content hint — do not stretch across the form row.
+        _uniform_combo_minimum_width(
+            self._play_status_combo,
+            self._translation_status_combo,
+        )
         edit_layout.addRow("游玩状态", self._play_status_combo)
         edit_layout.addRow("翻译状态", self._translation_status_combo)
 
