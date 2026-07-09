@@ -189,6 +189,21 @@ QFrame#batch_stage_bar {
     border-radius: 10px;
 }
 
+QLabel#sync_mode_warning {
+    color: ${badge_warning_fg};
+    background-color: ${badge_warning_bg};
+    border: 1px solid ${badge_warning_border};
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-weight: 600;
+}
+
+QFrame#context_library_panel {
+    background-color: ${bg_surface_alt};
+    border: 1px solid ${border_light};
+    border-radius: 10px;
+}
+
 QPushButton#batch_stage_btn {
     background-color: transparent;
     border: 1px solid ${border_default};
