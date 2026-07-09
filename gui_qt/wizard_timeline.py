@@ -31,9 +31,9 @@ def resolve_timeline_step_state(
             return "failed"
         if workflow_status == "ready":
             return "ready"
-        if workflow_status in {"waiting", "stale"}:
+        if workflow_status == "waiting":
             return "waiting"
-        if workflow_status == "warning":
+        if workflow_status in {"warning", "stale"}:
             return "warning"
         return "running"
     return "pending"
@@ -66,7 +66,7 @@ class WizardTimeline(QWidget):
         self.current_step_key = step_key
         self.status = status
 
-        if status == "waiting":
+        if status in {"running", "waiting"}:
             if not self._anim_timer.isActive():
                 self._anim_timer.start(50)  # 20 FPS
         else:

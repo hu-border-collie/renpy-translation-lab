@@ -26,6 +26,10 @@ class ResolveTimelineStepStateTests(unittest.TestCase):
         state = resolve_timeline_step_state(1, 1, "warning")
         self.assertEqual(state, "warning")
 
+    def test_stale_current_step_uses_warning_without_glow_pulse(self):
+        state = resolve_timeline_step_state(1, 1, "stale")
+        self.assertEqual(state, "warning")
+
     def test_done_marks_all_steps_success(self):
         self.assertEqual(resolve_timeline_step_state(0, -1, "done"), "success")
         self.assertEqual(resolve_timeline_step_state(3, -1, "done"), "success")
@@ -48,6 +52,18 @@ class WizardTimelineAnimationTests(unittest.TestCase):
         timeline.set_steps([("build", "准备"), ("submit", "提交")])
         timeline.set_current_step("submit", "waiting")
         self.assertTrue(timeline._anim_timer.isActive())
+
+    def test_running_status_starts_pulse_timer(self):
+        timeline = WizardTimeline()
+        timeline.set_steps([("build", "准备"), ("submit", "提交")])
+        timeline.set_current_step("submit", "running")
+        self.assertTrue(timeline._anim_timer.isActive())
+
+    def test_stale_status_does_not_start_pulse_timer(self):
+        timeline = WizardTimeline()
+        timeline.set_steps([("build", "准备"), ("submit", "提交")])
+        timeline.set_current_step("submit", "stale")
+        self.assertFalse(timeline._anim_timer.isActive())
 
 
 if __name__ == "__main__":
