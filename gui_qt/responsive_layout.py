@@ -125,8 +125,11 @@ class ResponsiveActionPanel(QFrame):
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(0, 0, 0, 0)
         self._root.setSpacing(8)
+        # Never let the parent VBox crush stacked action rows into each other.
+        self._root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        # Preferred allows vertical crush under tight shells; Minimum keeps row gaps.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
     def add_prep_button(self, widget: QWidget, *, min_width: int = 88) -> QWidget:
         self._prep_buttons.append(configure_action_button(widget, min_width=min_width))
@@ -205,6 +208,7 @@ class ResponsiveActionPanel(QFrame):
             trailing = list(self._translate_trailing)
 
         if self._is_wide:
+            self._root.setSpacing(8)
             row = QHBoxLayout()
             row.setSpacing(12)
             row.addWidget(self.prep_label)
@@ -221,8 +225,11 @@ class ResponsiveActionPanel(QFrame):
             for widget in trailing:
                 row.addWidget(widget)
             self._root.addLayout(row)
+            self._sync_minimum_height()
             return
 
+        # Stacked: keep a clear vertical gap so themed 38px buttons never paint over.
+        self._root.setSpacing(12)
         prep_row = QHBoxLayout()
         prep_row.setSpacing(12)
         prep_row.addWidget(self.prep_label)
@@ -233,6 +240,7 @@ class ResponsiveActionPanel(QFrame):
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
         separator.setObjectName("action_separator")
+        separator.setFixedHeight(1)
 
         translate_row = QHBoxLayout()
         translate_row.setSpacing(12)
@@ -246,6 +254,27 @@ class ResponsiveActionPanel(QFrame):
         self._root.addLayout(prep_row)
         self._root.addWidget(separator)
         self._root.addLayout(translate_row)
+        self._sync_minimum_height()
+
+    def _sync_minimum_height(self) -> None:
+        """Lock height to layout sizeHint so parent shells cannot crush stacked rows."""
+        hint = self._root.sizeHint()
+        height = max(36, hint.height() if hint.isValid() else 0)
+        if not self._is_wide:
+            # Two button rows + separator + spacings under QSS min-height.
+            height = max(height, 96)
+        self.setMinimumHeight(height)
+        self.updateGeometry()
+        # Bubble size change so siblings (e.g. batch advanced tools) reflow below us.
+        parent = self.parentWidget()
+        depth = 0
+        while parent is not None and depth < 4:
+            parent.updateGeometry()
+            layout = parent.layout()
+            if layout is not None:
+                layout.activate()
+            parent = parent.parentWidget()
+            depth += 1
 
 
 class FlowButtonBar(QFrame):

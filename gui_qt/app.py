@@ -749,6 +749,7 @@ class MainWindow(QMainWindow):
         action_outer = QVBoxLayout(action_frame)
         action_outer.setContentsMargins(12, 10, 12, 10)
         action_outer.setSpacing(8)
+        action_outer.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
         # Left nav narrows the content column; stack action rows before buttons clip.
         self.action_panel = ResponsiveActionPanel(compact_width=640)
@@ -776,10 +777,30 @@ class MainWindow(QMainWindow):
         self.kill_btn.setEnabled(False)
         self.action_panel.finish_setup()
         action_outer.addWidget(self.action_panel)
-        layout.addWidget(action_frame)
+        # When the panel stacks to two rows it needs vertical room; don't let the
+        # parent VBox crush it under the advanced-tools strip (overlap bug).
+        action_frame.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Minimum,
+        )
 
+        # Keep main actions + batch advanced tools in one column so stacked
+        # action height always pushes probe/split down (no sibling-layout race).
+        actions_column = QWidget()
+        actions_column.setObjectName("workbench_actions_column")
+        self._workbench_actions_column = actions_column
+        actions_column_layout = QVBoxLayout(actions_column)
+        actions_column_layout.setContentsMargins(0, 0, 0, 0)
+        actions_column_layout.setSpacing(10)
+        actions_column_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        actions_column.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Minimum,
+        )
+        actions_column_layout.addWidget(action_frame)
         # Batch · 执行 · 高级：试跑 / 拆分 (P2a / #164); 提交剩余包仍在主按钮行。
-        layout.addWidget(self._build_batch_advanced_tools_bar())
+        actions_column_layout.addWidget(self._build_batch_advanced_tools_bar())
+        layout.addWidget(actions_column)
 
         self.timeline = WizardTimeline()
         self.timeline.setObjectName("workbench_timeline")
@@ -1077,8 +1098,12 @@ class MainWindow(QMainWindow):
         frame = QFrame()
         frame.setObjectName("batch_advanced_frame")
         self.batch_advanced_frame = frame
+        frame.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Minimum,
+        )
         outer = QVBoxLayout(frame)
-        outer.setContentsMargins(12, 8, 12, 8)
+        outer.setContentsMargins(12, 10, 12, 10)
         outer.setSpacing(6)
 
         title = QLabel("高级工具")
@@ -2808,6 +2833,30 @@ class MainWindow(QMainWindow):
     def _toggle_writeback_issues_panel(self) -> None:
         self._set_writeback_issues_expanded(not getattr(self, "_writeback_issues_expanded", False))
 
+    def _sync_action_frame_min_height(self) -> None:
+        """Ensure action_frame / actions column are tall enough for stacked rows."""
+        panel = getattr(self, "action_panel", None)
+        frame = getattr(self, "_action_frame", None)
+        if panel is None or frame is None:
+            return
+        margins = 20
+        layout = frame.layout()
+        if layout is not None:
+            m = layout.contentsMargins()
+            margins = int(m.top() + m.bottom())
+        frame.setMinimumHeight(max(0, int(panel.minimumHeight()) + margins))
+        frame.updateGeometry()
+        column = getattr(self, "_workbench_actions_column", None)
+        if column is not None:
+            col_layout = column.layout()
+            if col_layout is not None:
+                col_layout.activate()
+            column.updateGeometry()
+            parent = column.parentWidget()
+            if parent is not None and parent.layout() is not None:
+                parent.layout().invalidate()
+                parent.layout().activate()
+
     def _reflow_button_bars(self) -> None:
         """Re-pack all flow/responsive button strips after visibility or size changes."""
         for name in (
@@ -2822,6 +2871,7 @@ class MainWindow(QMainWindow):
             reflow = getattr(panel, "reflow", None) if panel is not None else None
             if callable(reflow):
                 reflow(force=True)
+        self._sync_action_frame_min_height()
 
     def _sync_writeback_issues_panel_visibility(
         self,

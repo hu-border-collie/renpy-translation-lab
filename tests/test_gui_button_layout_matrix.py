@@ -53,11 +53,17 @@ class GuiButtonLayoutMatrixTests(unittest.TestCase):
             "remediation_btn",
             "keyword_merge_writeback_btn",
             "split_submit_btn",
+            "probe_btn",
+            "split_btn",
+            "resume_btn",
         ):
             btn = getattr(self.window, name, None)
             if btn is not None:
                 btn.setVisible(True)
         self.window._set_writeback_issues_expanded(True)
+        # Dense execute chrome (P2a advanced tools + main actions).
+        if hasattr(self.window, "_focus_workbench_status_tab"):
+            self.window._focus_workbench_status_tab(1)
         self.window._reflow_button_bars()
 
     def tearDown(self) -> None:
