@@ -326,3 +326,91 @@ def work_mode_hint_texts() -> tuple[str, ...]:
             texts.append(spec.not_implemented_message.strip())
     texts.extend(_BOOTSTRAP_DISABLED_HINTS)
     return tuple(texts)
+
+
+# ---------------------------------------------------------------------------
+# Workbench left-nav (GUI IA P1a / #160)
+# ---------------------------------------------------------------------------
+
+
+class WorkbenchNavItem(str, Enum):
+    """Top-level workbench navigation entries (not the same as WorkMode)."""
+
+    BATCH_TRANSLATION = "batch_translation"
+    SYNC_TRANSLATION = "sync_translation"
+    KEYWORDS = "keywords"
+    REVISION = "revision"
+    CONTEXT = "context"
+
+
+@dataclass(frozen=True)
+class WorkbenchNavSpec:
+    item: WorkbenchNavItem
+    label: str
+    work_modes: tuple[WorkMode, ...]
+    show_submode: bool
+
+
+WORKBENCH_NAV_SPECS: dict[WorkbenchNavItem, WorkbenchNavSpec] = {
+    WorkbenchNavItem.BATCH_TRANSLATION: WorkbenchNavSpec(
+        item=WorkbenchNavItem.BATCH_TRANSLATION,
+        label="批量翻译",
+        work_modes=(WorkMode.BATCH_TRANSLATION,),
+        show_submode=False,
+    ),
+    WorkbenchNavItem.SYNC_TRANSLATION: WorkbenchNavSpec(
+        item=WorkbenchNavItem.SYNC_TRANSLATION,
+        label="同步翻译",
+        work_modes=(WorkMode.SYNC_TRANSLATION,),
+        show_submode=False,
+    ),
+    WorkbenchNavItem.KEYWORDS: WorkbenchNavSpec(
+        item=WorkbenchNavItem.KEYWORDS,
+        label="关键词 / 术语",
+        work_modes=(WorkMode.KEYWORD_EXTRACTION, WorkMode.SYNC_KEYWORD_EXTRACTION),
+        show_submode=True,
+    ),
+    WorkbenchNavItem.REVISION: WorkbenchNavSpec(
+        item=WorkbenchNavItem.REVISION,
+        label="订正",
+        work_modes=(WorkMode.REVISION, WorkMode.SYNC_REVISION),
+        show_submode=True,
+    ),
+    WorkbenchNavItem.CONTEXT: WorkbenchNavSpec(
+        item=WorkbenchNavItem.CONTEXT,
+        label="上下文库",
+        work_modes=(WorkMode.BOOTSTRAP_RAG, WorkMode.BOOTSTRAP_SOURCE_INDEX),
+        show_submode=True,
+    ),
+}
+
+
+WORKBENCH_NAV_ORDER: tuple[WorkbenchNavItem, ...] = (
+    WorkbenchNavItem.BATCH_TRANSLATION,
+    WorkbenchNavItem.SYNC_TRANSLATION,
+    WorkbenchNavItem.KEYWORDS,
+    WorkbenchNavItem.REVISION,
+    WorkbenchNavItem.CONTEXT,
+)
+
+
+def workbench_nav_spec(item: WorkbenchNavItem | str) -> WorkbenchNavSpec:
+    if isinstance(item, WorkbenchNavItem):
+        return WORKBENCH_NAV_SPECS[item]
+    return WORKBENCH_NAV_SPECS[WorkbenchNavItem(item)]
+
+
+def workbench_nav_for_work_mode(mode: WorkMode | str) -> WorkbenchNavItem:
+    mode = normalize_work_mode(mode)
+    for item in WORKBENCH_NAV_ORDER:
+        if mode in workbench_nav_spec(item).work_modes:
+            return item
+    return WorkbenchNavItem.BATCH_TRANSLATION
+
+
+def default_work_mode_for_nav(item: WorkbenchNavItem | str) -> WorkMode:
+    modes = workbench_nav_spec(item).work_modes
+    for mode in modes:
+        if work_mode_spec(mode).implemented:
+            return mode
+    return modes[0]
