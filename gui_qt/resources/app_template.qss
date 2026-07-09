@@ -183,6 +183,41 @@ QLabel#workbench_page_title {
     font-weight: 700;
 }
 
+QFrame#batch_stage_bar {
+    background-color: ${bg_surface_alt};
+    border: 1px solid ${border_light};
+    border-radius: 10px;
+}
+
+QPushButton#batch_stage_btn {
+    background-color: transparent;
+    border: 1px solid ${border_default};
+    border-radius: 14px;
+    color: ${fg_muted};
+    font-weight: 600;
+    padding: 6px 14px;
+    min-height: 18px;
+}
+
+QPushButton#batch_stage_btn:hover {
+    border-color: ${accent_primary_hover};
+    color: ${fg_primary};
+}
+
+QPushButton#batch_stage_btn[active="true"],
+QPushButton#batch_stage_btn:checked {
+    background-color: ${badge_info_bg};
+    border-color: ${badge_info_border};
+    color: ${badge_info_fg};
+    font-weight: 700;
+}
+
+QLabel#batch_stage_sep {
+    color: ${fg_muted};
+    font-weight: 600;
+    padding: 0 2px;
+}
+
 QLabel#settings_description_label {
     color: ${fg_muted};
     font-size: 12px;

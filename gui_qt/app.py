@@ -276,6 +276,17 @@ _DIAGNOSTICS_RUNNING_CONTEXT_RATIO = 0.32
 _WORKBENCH_LOG_DRAWER_EXPANDED_HEIGHT = 180
 _WORKBENCH_LOG_DRAWER_HEADER_HEIGHT = 40
 
+# Batch translation stages (P1b / issue #161) — maps to workbench_status_tabs indices.
+_BATCH_STAGE_PREPARE = 0
+_BATCH_STAGE_EXECUTE = 1
+_BATCH_STAGE_RESULT = 2
+_BATCH_STAGE_LABELS = ("准备", "执行", "结果")
+_BATCH_STAGE_HINTS = (
+    "环境检查与项目准备",
+    "打包、提交、下载与进度",
+    "安全检查与写回",
+)
+
 _LOG_FLUSH_INTERVAL_MS = 80
 _LAYOUT_SYNC_DEBOUNCE_MS = 32
 _UI_PROGRESS_FLUSH_INTERVAL_MS = 100
@@ -748,8 +759,11 @@ class MainWindow(QMainWindow):
         self.timeline.setVisible(False)
         layout.addWidget(self.timeline)
 
+        layout.addWidget(self._build_batch_stage_bar())
+
         self.workbench_status_tabs = NoWheelTabWidget()
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
+        self.workbench_status_tabs.currentChanged.connect(self._on_workbench_status_tab_changed)
 
         doctor_tab = QWidget()
         doctor_tab.setObjectName("workbench_doctor_page")
@@ -1020,12 +1034,45 @@ class MainWindow(QMainWindow):
         writeback_layout.addStretch()
         self.workbench_status_tabs.addTab(writeback_tab, "写回")
 
-        self.workbench_status_tabs.setCurrentIndex(1)
+        self.workbench_status_tabs.setCurrentIndex(_BATCH_STAGE_EXECUTE)
         layout.addWidget(self.workbench_status_tabs, 1)
 
         layout.addWidget(self._build_workbench_log_drawer())
 
         self.tab_widget.addTab(tab, "工作台")
+        self._sync_batch_stage_chrome()
+
+    def _build_batch_stage_bar(self) -> QFrame:
+        """Step strip for batch translation: 准备 → 执行 → 结果 (P1b / #161)."""
+        frame = QFrame()
+        frame.setObjectName("batch_stage_bar")
+        self.batch_stage_bar = frame
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(10, 6, 10, 6)
+        row.setSpacing(6)
+
+        self._batch_stage_buttons: list[QPushButton] = []
+        for index, label in enumerate(_BATCH_STAGE_LABELS):
+            btn = QPushButton(f"{index + 1}  {label}")
+            btn.setObjectName("batch_stage_btn")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(
+                lambda _checked=False, idx=index: self._on_batch_stage_clicked(idx)
+            )
+            row.addWidget(btn)
+            self._batch_stage_buttons.append(btn)
+            if index < len(_BATCH_STAGE_LABELS) - 1:
+                sep = QLabel("→")
+                sep.setObjectName("batch_stage_sep")
+                row.addWidget(sep)
+
+        row.addStretch(1)
+        self.batch_stage_hint = QLabel("")
+        self.batch_stage_hint.setObjectName("config_hint_label")
+        row.addWidget(self.batch_stage_hint)
+        frame.setVisible(False)
+        return frame
 
     def _build_workbench_log_drawer(self) -> QFrame:
         """Bottom collapsible log drawer for the workbench (shares log document with diagnostics)."""
@@ -1803,6 +1850,45 @@ class MainWindow(QMainWindow):
     def _focus_workbench_status_tab(self, index: int) -> None:
         if 0 <= index < self.workbench_status_tabs.count():
             self.workbench_status_tabs.setCurrentIndex(index)
+            self._sync_batch_stage_chrome(stage_index=index)
+
+    def _on_workbench_status_tab_changed(self, index: int) -> None:
+        self._sync_batch_stage_chrome(stage_index=index)
+
+    def _on_batch_stage_clicked(self, index: int) -> None:
+        self._focus_workbench_status_tab(index)
+
+    def _batch_stage_mode_active(self) -> bool:
+        return self._current_work_mode() == WorkMode.BATCH_TRANSLATION
+
+    def _current_batch_stage_index(self) -> int:
+        if not hasattr(self, "workbench_status_tabs"):
+            return _BATCH_STAGE_EXECUTE
+        index = self.workbench_status_tabs.currentIndex()
+        if index < 0:
+            return _BATCH_STAGE_EXECUTE
+        return max(_BATCH_STAGE_PREPARE, min(_BATCH_STAGE_RESULT, index))
+
+    def _sync_batch_stage_chrome(self, *, stage_index: int | None = None) -> None:
+        """Show/hide and restyle the batch 准备/执行/结果 strip."""
+        is_batch = self._batch_stage_mode_active()
+        if hasattr(self, "batch_stage_bar"):
+            self.batch_stage_bar.setVisible(is_batch)
+        if not is_batch or not hasattr(self, "_batch_stage_buttons"):
+            return
+        if stage_index is None:
+            stage_index = self._current_batch_stage_index()
+        stage_index = max(_BATCH_STAGE_PREPARE, min(_BATCH_STAGE_RESULT, stage_index))
+        for i, btn in enumerate(self._batch_stage_buttons):
+            active = i == stage_index
+            btn.setChecked(active)
+            btn.setProperty("active", "true" if active else "false")
+            style = btn.style()
+            if style is not None:
+                style.unpolish(btn)
+                style.polish(btn)
+        if hasattr(self, "batch_stage_hint"):
+            self.batch_stage_hint.setText(_BATCH_STAGE_HINTS[stage_index])
 
     def _same_manifest_path(self, left: str, right: str) -> bool:
         if not left or not right:
@@ -3510,6 +3596,9 @@ class MainWindow(QMainWindow):
                 return
 
     def _capture_mode_session(self) -> WorkbenchModeSession:
+        stage_index = 0
+        if hasattr(self, "workbench_status_tabs"):
+            stage_index = max(0, self.workbench_status_tabs.currentIndex())
         return WorkbenchModeSession(
             workflow=getattr(self, "_workflow", None),
             workflow_step_output_lines=list(
@@ -3527,6 +3616,7 @@ class MainWindow(QMainWindow):
             keyword_merge_candidates_path=str(
                 getattr(self, "_keyword_merge_candidates_path", "") or ""
             ),
+            stage_index=stage_index,
         )
 
     def _restore_mode_session(self, session: WorkbenchModeSession) -> None:
@@ -3536,6 +3626,7 @@ class MainWindow(QMainWindow):
         self._completed_manifest_snapshot = session.completed_manifest_snapshot
         self._viewing_completed_manifest = session.viewing_completed_manifest
         self._keyword_merge_candidates_path = session.keyword_merge_candidates_path
+        self._pending_restore_stage_index = int(session.stage_index or 0)
 
     def _clear_all_mode_sessions(self) -> None:
         """Clear per-mode sessions; safe on partially constructed MainWindow test stubs."""
@@ -3777,8 +3868,14 @@ class MainWindow(QMainWindow):
             self.resume_btn.setText(spec.resume_button_label)
         self._update_resume_btn_text()
         self.resume_btn.setVisible(spec.supports_resume)
-        self.workbench_status_tabs.setTabText(1, spec.progress_tab_label)
-        self.workbench_status_tabs.setTabText(2, spec.writeback_tab_label)
+        if spec.mode == WorkMode.BATCH_TRANSLATION:
+            self.workbench_status_tabs.setTabText(0, _BATCH_STAGE_LABELS[0])
+            self.workbench_status_tabs.setTabText(1, _BATCH_STAGE_LABELS[1])
+            self.workbench_status_tabs.setTabText(2, _BATCH_STAGE_LABELS[2])
+        else:
+            self.workbench_status_tabs.setTabText(0, "环境检查")
+            self.workbench_status_tabs.setTabText(1, spec.progress_tab_label)
+            self.workbench_status_tabs.setTabText(2, spec.writeback_tab_label)
         if spec.implemented:
             if spec.is_bootstrap and not self._bootstrap_task_ready(spec):
                 hint = bootstrap_disabled_message(spec.bootstrap_kind)
@@ -3819,6 +3916,19 @@ class MainWindow(QMainWindow):
                 self._refresh_workflow_from_latest_manifest(latest_manifest=session_manifest)
             else:
                 self._refresh_workflow_from_latest_manifest()
+        # Restore stage tab when returning to a page (batch: 准备/执行/结果).
+        pending_stage = getattr(self, "_pending_restore_stage_index", None)
+        self._pending_restore_stage_index = None
+        if (
+            pending_stage is not None
+            and hasattr(self, "workbench_status_tabs")
+            and 0 <= int(pending_stage) < self.workbench_status_tabs.count()
+        ):
+            blocked = self.workbench_status_tabs.blockSignals(True)
+            self.workbench_status_tabs.setCurrentIndex(int(pending_stage))
+            self.workbench_status_tabs.blockSignals(blocked)
+        self._sync_batch_stage_chrome()
+
         # Keep session bag aligned after UI refresh mutates active fields.
         self._mode_sessions[spec.mode] = self._capture_mode_session()
         running = self.kill_btn.isEnabled()
