@@ -249,6 +249,7 @@ from .work_modes import (
     task_category_spec,
     work_mode_hint_texts,
     work_mode_spec,
+    work_mode_submode_label,
     work_modes_for_category,
     workbench_nav_for_work_mode,
     workbench_nav_spec,
@@ -725,10 +726,23 @@ class MainWindow(QMainWindow):
         )
         self.work_mode_hint_label.installEventFilter(self)
         mode_outer.addWidget(self.work_mode_hint_label)
+
+        # Sync-only risk banner (P1c / #162 · §3.2.2).
+        self.sync_mode_warning = QLabel(
+            "警告：同步翻译可能直接修改项目文件，请先备份或在副本上试跑。"
+        )
+        self.sync_mode_warning.setObjectName("sync_mode_warning")
+        self.sync_mode_warning.setWordWrap(True)
+        self.sync_mode_warning.setVisible(False)
+        mode_outer.addWidget(self.sync_mode_warning)
         layout.addWidget(mode_frame)
+
+        # Context library dual status cards (P1c / #162 · §3.2.5).
+        layout.addWidget(self._build_context_library_panel())
 
         action_frame = QFrame()
         action_frame.setObjectName("action_frame")
+        self._action_frame = action_frame
         action_outer = QVBoxLayout(action_frame)
         action_outer.setContentsMargins(12, 10, 12, 10)
         action_outer.setSpacing(8)
@@ -1051,6 +1065,130 @@ class MainWindow(QMainWindow):
 
         self.tab_widget.addTab(tab, "工作台")
         self._sync_batch_stage_chrome()
+
+    def _build_context_library_panel(self) -> QFrame:
+        """RAG / source-index status cards for the 上下文库 nav page (P1c / #162)."""
+        frame = QFrame()
+        frame.setObjectName("context_library_panel")
+        self.context_library_panel = frame
+        outer = QVBoxLayout(frame)
+        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setSpacing(10)
+
+        title = QLabel("上下文库状态")
+        title.setObjectName("diagnostics_section_label")
+        outer.addWidget(title)
+
+        rag_row = QHBoxLayout()
+        rag_row.setSpacing(8)
+        self.context_rag_status_label = QLabel("记忆库：—")
+        self.context_rag_status_label.setObjectName("summary_body_label")
+        self.context_rag_status_label.setWordWrap(True)
+        rag_row.addWidget(self.context_rag_status_label, 1)
+        self.context_bootstrap_rag_btn = QPushButton("预建记忆库")
+        self.context_bootstrap_rag_btn.setObjectName("secondary_btn")
+        self.context_bootstrap_rag_btn.clicked.connect(
+            lambda: self._on_context_bootstrap_clicked("rag")
+        )
+        rag_row.addWidget(self.context_bootstrap_rag_btn, 0)
+        outer.addLayout(rag_row)
+
+        idx_row = QHBoxLayout()
+        idx_row.setSpacing(8)
+        self.context_source_index_status_label = QLabel("原文索引：—")
+        self.context_source_index_status_label.setObjectName("summary_body_label")
+        self.context_source_index_status_label.setWordWrap(True)
+        idx_row.addWidget(self.context_source_index_status_label, 1)
+        self.context_bootstrap_source_index_btn = QPushButton("预建原文索引")
+        self.context_bootstrap_source_index_btn.setObjectName("secondary_btn")
+        self.context_bootstrap_source_index_btn.clicked.connect(
+            lambda: self._on_context_bootstrap_clicked("source_index")
+        )
+        idx_row.addWidget(self.context_bootstrap_source_index_btn, 0)
+        outer.addLayout(idx_row)
+
+        self.context_open_settings_btn = QPushButton("打开设置 · 上下文")
+        self.context_open_settings_btn.setObjectName("secondary_btn")
+        self.context_open_settings_btn.setToolTip(
+            "开关须在设置中保存后才能预建；打开设置的「上下文」分区。"
+        )
+        self.context_open_settings_btn.clicked.connect(self._on_open_context_settings)
+        outer.addWidget(self.context_open_settings_btn, 0, Qt.AlignmentFlag.AlignLeft)
+
+        frame.setVisible(False)
+        return frame
+
+    def _on_open_context_settings(self) -> None:
+        self._focus_settings_section("context")
+
+    def _on_context_bootstrap_clicked(self, kind: str) -> None:
+        target = (
+            WorkMode.BOOTSTRAP_RAG
+            if kind == "rag"
+            else WorkMode.BOOTSTRAP_SOURCE_INDEX
+        )
+        if self._current_work_mode() != target:
+            self._set_work_mode(target, refresh_manifest_writeback=False)
+        self._start_bootstrap_task(kind)
+
+    def _refresh_context_library_panel(self, *, running: bool | None = None) -> None:
+        if not hasattr(self, "context_library_panel"):
+            return
+        flags = self._saved_batch_context_flags()
+        rag_on = bool(flags.get("rag_enabled"))
+        idx_on = bool(flags.get("source_index_enabled"))
+        game_root = self.state.get_game_root() if hasattr(self, "state") else None
+        root_hint = str(game_root) if game_root else "未选择项目"
+        if hasattr(self, "context_rag_status_label"):
+            self.context_rag_status_label.setText(
+                f"记忆库：{'已启用' if rag_on else '未启用'} · 项目 {root_hint}"
+                + ("" if rag_on else " · 请先在设置 · 上下文开启并保存")
+            )
+        if hasattr(self, "context_source_index_status_label"):
+            self.context_source_index_status_label.setText(
+                f"原文索引：{'已启用' if idx_on else '未启用'} · 项目 {root_hint}"
+                + ("" if idx_on else " · 请先在设置 · 上下文开启并保存")
+            )
+        if running is None:
+            running = bool(getattr(self, "_task_running", False)) or (
+                hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
+            )
+        if hasattr(self, "context_bootstrap_rag_btn"):
+            self.context_bootstrap_rag_btn.setEnabled(not running and rag_on)
+        if hasattr(self, "context_bootstrap_source_index_btn"):
+            self.context_bootstrap_source_index_btn.setEnabled(not running and idx_on)
+
+    def _apply_task_page_chrome(self, spec) -> None:
+        """Show/hide per-nav chrome: sync warn, context cards, prep buttons (P1c)."""
+        mode = spec.mode
+        nav = workbench_nav_for_work_mode(mode)
+        is_sync = mode == WorkMode.SYNC_TRANSLATION
+        is_context = nav == WorkbenchNavItem.CONTEXT
+        is_translation = mode in {
+            WorkMode.BATCH_TRANSLATION,
+            WorkMode.SYNC_TRANSLATION,
+        }
+
+        if hasattr(self, "sync_mode_warning"):
+            self.sync_mode_warning.setVisible(is_sync)
+        if hasattr(self, "context_library_panel"):
+            self.context_library_panel.setVisible(is_context)
+            if is_context:
+                self._refresh_context_library_panel()
+
+        if hasattr(self, "doctor_btn"):
+            self.doctor_btn.setVisible(is_translation)
+        if hasattr(self, "bootstrap_work_btn"):
+            self.bootstrap_work_btn.setVisible(is_translation)
+
+        if hasattr(self, "translate_btn"):
+            self.translate_btn.setVisible(not is_context)
+        if hasattr(self, "resume_btn") and is_context:
+            self.resume_btn.setVisible(False)
+        if hasattr(self, "action_panel"):
+            reflow = getattr(self.action_panel, "reflow", None)
+            if callable(reflow):
+                reflow(force=True)
 
     def _build_batch_stage_bar(self) -> QFrame:
         """Step strip for batch translation: 准备 → 执行 → 结果 (P1b / #161)."""
@@ -3655,6 +3793,22 @@ class MainWindow(QMainWindow):
         stage_index = _BATCH_STAGE_EXECUTE
         if hasattr(self, "workbench_status_tabs"):
             stage_index = self._current_batch_stage_index()
+        wf_status = ""
+        wf_heading = ""
+        if hasattr(self, "workflow_status_label"):
+            raw = self.workflow_status_label.property("status")
+            wf_status = str(raw) if raw is not None else ""
+            # StatusBadge text includes an icon prefix; keep raw heading if tracked.
+            wf_heading = str(getattr(self, "_workflow_heading_text", "") or "")
+            if not wf_heading:
+                wf_heading = self.workflow_status_label.text()
+        wf_message = ""
+        if hasattr(self, "workflow_message_label"):
+            wf_message = self.workflow_message_label.text()
+        wf_facts: list[str] = []
+        if hasattr(self, "workflow_facts_label"):
+            facts_text = self.workflow_facts_label.text()
+            wf_facts = [line for line in facts_text.splitlines() if line.strip()]
         return WorkbenchModeSession(
             workflow=getattr(self, "_workflow", None),
             workflow_step_output_lines=list(
@@ -3673,6 +3827,11 @@ class MainWindow(QMainWindow):
                 getattr(self, "_keyword_merge_candidates_path", "") or ""
             ),
             stage_index=stage_index,
+            workflow_status=wf_status,
+            workflow_heading=wf_heading,
+            workflow_message=wf_message,
+            workflow_facts=wf_facts,
+            writeback_summary=getattr(self, "_writeback_summary", None),
         )
 
     def _restore_mode_session(self, session: WorkbenchModeSession) -> None:
@@ -3684,6 +3843,30 @@ class MainWindow(QMainWindow):
         self._keyword_merge_candidates_path = session.keyword_merge_candidates_path
         # Keep 0 (准备) as a real stage — do not use `or` falsy fallback.
         self._pending_restore_stage_index = int(session.stage_index)
+        self._pending_restore_workflow_ui = {
+            "status": session.workflow_status,
+            "heading": session.workflow_heading,
+            "message": session.workflow_message,
+            "facts": list(session.workflow_facts),
+        }
+        self._pending_restore_writeback_summary = session.writeback_summary
+
+    def _apply_session_workflow_ui(self, payload: dict[str, object] | None) -> bool:
+        """Re-paint progress labels from a frozen session; return True if applied."""
+        if not payload:
+            return False
+        status = str(payload.get("status") or "").strip()
+        heading = str(payload.get("heading") or "").strip()
+        message = str(payload.get("message") or "")
+        facts_raw = payload.get("facts") or []
+        facts = [str(x) for x in facts_raw] if isinstance(facts_raw, list) else []
+        if not status and not heading and not message:
+            return False
+        # Skip pure idle placeholders so mode switch can still show mode-specific idle.
+        if status in {"", "idle", "stale"} and not facts and not message.strip():
+            return False
+        self._set_workflow_summary(status or "idle", heading or "任务状态", message, facts)
+        return True
 
     def _clear_all_mode_sessions(self) -> None:
         """Clear per-mode sessions; safe on partially constructed MainWindow test stubs."""
@@ -3744,7 +3927,10 @@ class MainWindow(QMainWindow):
             blocked = self.work_submode_combo.blockSignals(True)
             self.work_submode_combo.clear()
             for sub_mode in nav_spec.work_modes:
-                self.work_submode_combo.addItem(work_mode_spec(sub_mode).label, sub_mode.value)
+                self.work_submode_combo.addItem(
+                    work_mode_submode_label(sub_mode),
+                    sub_mode.value,
+                )
             self._set_combo_value_by_data(self.work_submode_combo, mode.value)
             self.work_submode_combo.blockSignals(blocked)
 
@@ -3836,6 +4022,8 @@ class MainWindow(QMainWindow):
 
         self._work_mode = mode
         self._workbench_nav_item = workbench_nav_for_work_mode(mode)
+        self._pending_restore_workflow_ui = None
+        self._pending_restore_writeback_summary = None
 
         if reset_session or mode not in self._mode_sessions:
             self._mode_sessions[mode] = WorkbenchModeSession()
@@ -3941,8 +4129,26 @@ class MainWindow(QMainWindow):
         else:
             hint = spec.not_implemented_message
         self.work_mode_hint_label.setText(hint)
+        self._apply_task_page_chrome(spec)
+
         # Prefer session-bound writeback path when restoring a page.
         session_manifest = str(self._writeback_manifest_path or "").strip() or None
+        pending_workflow_ui = getattr(self, "_pending_restore_workflow_ui", None)
+        pending_writeback = getattr(self, "_pending_restore_writeback_summary", None)
+        self._pending_restore_workflow_ui = None
+        self._pending_restore_writeback_summary = None
+        restored_workflow_ui = False
+        restored_writeback_ui = False
+
+        def _try_restore_workflow_snapshot() -> bool:
+            return self._apply_session_workflow_ui(pending_workflow_ui)
+
+        def _try_restore_writeback_snapshot() -> bool:
+            if pending_writeback is None:
+                return False
+            self._set_writeback_summary(pending_writeback)
+            return True
+
         if refresh_manifest_writeback or refresh_diagnostics:
             if session_manifest:
                 try:
@@ -3952,15 +4158,25 @@ class MainWindow(QMainWindow):
                     )
                 except ValueError:
                     session_data = None
-                self._refresh_workflow_from_latest_manifest(
-                    latest_manifest=session_manifest,
-                    manifest=session_data,
-                )
-                if refresh_manifest_writeback:
-                    self._refresh_writeback_from_latest_manifest(
+                if session_data is not None:
+                    self._refresh_workflow_from_latest_manifest(
                         latest_manifest=session_manifest,
                         manifest=session_data,
                     )
+                    if refresh_manifest_writeback:
+                        self._refresh_writeback_from_latest_manifest(
+                            latest_manifest=session_manifest,
+                            manifest=session_data,
+                        )
+                else:
+                    # Path remembered but unloadable — keep UI snapshot if any.
+                    restored_workflow_ui = _try_restore_workflow_snapshot()
+                    if not restored_workflow_ui:
+                        self._refresh_workflow_from_latest_manifest()
+                    if refresh_manifest_writeback:
+                        restored_writeback_ui = _try_restore_writeback_snapshot()
+                        if not restored_writeback_ui:
+                            self._refresh_writeback_from_latest_manifest()
                 if refresh_diagnostics:
                     self._refresh_diagnostics_context(force=True)
             else:
@@ -3968,11 +4184,22 @@ class MainWindow(QMainWindow):
                     refresh_writeback=refresh_manifest_writeback,
                     refresh_diagnostics=refresh_diagnostics,
                 )
+                # Non-resume modes have no disk manifest; re-apply progress snapshot.
+                if not restored_workflow_ui:
+                    restored_workflow_ui = _try_restore_workflow_snapshot()
+                if refresh_manifest_writeback and not restored_writeback_ui:
+                    restored_writeback_ui = _try_restore_writeback_snapshot()
         else:
-            if session_manifest:
+            if session_manifest and spec.supports_resume:
                 self._refresh_workflow_from_latest_manifest(latest_manifest=session_manifest)
             else:
-                self._refresh_workflow_from_latest_manifest()
+                restored_workflow_ui = _try_restore_workflow_snapshot()
+                if not restored_workflow_ui:
+                    self._refresh_workflow_from_latest_manifest()
+            # Soft switch (no disk refresh): restore frozen writeback UI when present.
+            if pending_writeback is not None:
+                _try_restore_writeback_snapshot()
+
         # Restore stage tab when returning to a page (batch: 准备/执行/结果).
         pending_stage = getattr(self, "_pending_restore_stage_index", None)
         self._pending_restore_stage_index = None
@@ -4000,6 +4227,8 @@ class MainWindow(QMainWindow):
         self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
         self._update_split_submit_btn(running=running)
         self._sync_task_shortcuts()
+        # Re-apply page chrome after enable flags so context cards stay correct.
+        self._apply_task_page_chrome(spec)
 
     def _update_timeline_steps(self, mode: WorkMode) -> None:
         from .work_modes import WorkMode
@@ -5207,6 +5436,13 @@ class MainWindow(QMainWindow):
         return True
 
     def _start_bootstrap_task(self, kind: str) -> bool:
+        if bool(getattr(self, "_task_running", False)):
+            return False
+        # FakeRunner stubs in unit tests may omit is_running(); treat as idle then.
+        runner = getattr(self, "runner", None)
+        is_running = getattr(runner, "is_running", None) if runner is not None else None
+        if callable(is_running) and bool(is_running()):
+            return False
         if not self._confirm_unsaved_config_before_workflow():
             return False
         if not self.state.get_game_root():
@@ -6434,6 +6670,9 @@ class MainWindow(QMainWindow):
         self._update_keyword_merge_btn_enabled(running=running)
         self._update_split_btn_enabled(running=running)
         self.kill_btn.setEnabled(running)
+        # Context-library prebuild CTAs stay on-page while nav is locked; gate them here.
+        if hasattr(self, "context_library_panel"):
+            self._refresh_context_library_panel(running=running)
         self._sync_task_shortcuts()
         self._reflow_button_bars()
 
@@ -6455,6 +6694,7 @@ class MainWindow(QMainWindow):
         message: str,
         facts: list[str] | None = None,
     ):
+        self._workflow_heading_text = heading
         self.workflow_status_label.set_status(status, heading)
         self.workflow_message_label.setText(message)
         self.workflow_facts_label.setText("\n".join(facts or []))

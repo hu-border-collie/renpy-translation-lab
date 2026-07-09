@@ -111,7 +111,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         mode=WorkMode.SYNC_TRANSLATION,
         category=TaskCategory.TRANSLATION,
         label="同步翻译",
-        start_button_label="开始翻译",
+        start_button_label="开始同步翻译",
         resume_button_label="继续翻译",
         task_group_label="同步任务",
         progress_tab_label="翻译进度",
@@ -380,9 +380,26 @@ WORKBENCH_NAV_SPECS: dict[WorkbenchNavItem, WorkbenchNavSpec] = {
         item=WorkbenchNavItem.CONTEXT,
         label="上下文库",
         work_modes=(WorkMode.BOOTSTRAP_RAG, WorkMode.BOOTSTRAP_SOURCE_INDEX),
-        show_submode=True,
+        # Dual status cards replace the submode combo (P1c / #162).
+        show_submode=False,
     ),
 }
+
+# Short labels for 批量|同步 / 记忆库|原文索引 selectors (P1c).
+_WORK_MODE_SUBMODE_LABELS: dict[WorkMode, str] = {
+    WorkMode.KEYWORD_EXTRACTION: "批量",
+    WorkMode.SYNC_KEYWORD_EXTRACTION: "同步",
+    WorkMode.REVISION: "批量",
+    WorkMode.SYNC_REVISION: "同步",
+    WorkMode.BOOTSTRAP_RAG: "记忆库",
+    WorkMode.BOOTSTRAP_SOURCE_INDEX: "原文索引",
+}
+
+
+def work_mode_submode_label(mode: WorkMode | str) -> str:
+    mode = normalize_work_mode(mode)
+    return _WORK_MODE_SUBMODE_LABELS.get(mode, work_mode_spec(mode).label)
+
 
 
 WORKBENCH_NAV_ORDER: tuple[WorkbenchNavItem, ...] = (
