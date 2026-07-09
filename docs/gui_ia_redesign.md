@@ -2,7 +2,7 @@
 
 文档地图：[docs/README.md](README.md) · 现状说明：[GUI 工作台](gui_workbench.md)
 
-> **状态**：计划已修订；GitHub Epic/子 issue 已创建；**P0a (#158) 实现中/待审**。  
+> **状态**：计划已修订；GitHub Epic/子 issue 已创建；**P0a (#158) 已合并**；**P0b (#159) 实现中**。  
 > **Epic**：[#157](https://github.com/hu-border-collie/renpy-translation-lab/issues/157)  
 > **性质**：仅 GUI 布局 / 信息架构；**不改变** CLI 语义、`check → apply` 安全合约、manifest 字段。  
 > **依据**：2026-07 对 `gui_qt/` 全功能盘点（工作台、设置、诊断、8 种 WorkMode）+ 计划审阅修订。
