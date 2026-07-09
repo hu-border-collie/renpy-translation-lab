@@ -237,31 +237,35 @@ class GamesRegistryPanel(QWidget):
         filter_row.addWidget(self._search_edit, 2)
 
         self._engine_filter_combo = NoWheelComboBox()
+        self._engine_filter_combo.setObjectName("games_registry_engine_filter_combo")
         for value, label in registry_engine_filter_options():
             self._engine_filter_combo.addItem(label, value)
         self._engine_filter_combo.currentIndexChanged.connect(self._apply_filters)
         filter_row.addWidget(self._engine_filter_combo)
 
         self._translation_filter_combo = NoWheelComboBox()
+        self._translation_filter_combo.setObjectName("games_registry_translation_filter_combo")
         for label in registry_translation_filter_options():
             self._translation_filter_combo.addItem(label, label)
         self._translation_filter_combo.currentIndexChanged.connect(self._apply_filters)
         filter_row.addWidget(self._translation_filter_combo)
 
-        # Same fixed width so engine / translation filters stay aligned after show.
-        _uniform_combo_width(
-            self._engine_filter_combo,
-            self._translation_filter_combo,
-        )
-
         sort_label = QLabel("排序")
         sort_label.setObjectName("config_hint_label")
         filter_row.addWidget(sort_label)
         self._sort_combo = NoWheelComboBox()
+        self._sort_combo.setObjectName("games_registry_sort_combo")
         for value, label in REGISTRY_SORT_OPTIONS:
             self._sort_combo.addItem(label, value)
         self._sort_combo.currentIndexChanged.connect(self._apply_filters)
         filter_row.addWidget(self._sort_combo)
+
+        # Engine / translation / sort share one compact fixed width after show.
+        _uniform_combo_width(
+            self._engine_filter_combo,
+            self._translation_filter_combo,
+            self._sort_combo,
+        )
         layout.addLayout(filter_row)
 
         self._status_label = QLabel()
@@ -343,8 +347,10 @@ class GamesRegistryPanel(QWidget):
         edit_layout.addRow("总表对比", self._registry_compare_label)
 
         self._play_status_combo = NoWheelComboBox()
+        self._play_status_combo.setObjectName("games_registry_play_status_combo")
         self._play_status_combo.addItems(sorted(PLAY_STATUSES))
         self._translation_status_combo = NoWheelComboBox()
+        self._translation_status_combo.setObjectName("games_registry_translation_status_combo")
         self._translation_status_combo.addItems(sorted(TRANSLATION_STATUSES))
         # Compact equal width for both status fields (not full form row).
         _uniform_combo_width(
@@ -407,8 +413,14 @@ class GamesRegistryPanel(QWidget):
     def _reflow_uniform_combos(self) -> None:
         engine = getattr(self, "_engine_filter_combo", None)
         translation_filter = getattr(self, "_translation_filter_combo", None)
-        if engine is not None and translation_filter is not None:
-            _uniform_combo_width(engine, translation_filter)
+        sort_combo = getattr(self, "_sort_combo", None)
+        filter_group = [
+            combo
+            for combo in (engine, translation_filter, sort_combo)
+            if combo is not None
+        ]
+        if len(filter_group) >= 2:
+            _uniform_combo_width(*filter_group)
         play = getattr(self, "_play_status_combo", None)
         translation = getattr(self, "_translation_status_combo", None)
         if play is not None and translation is not None:

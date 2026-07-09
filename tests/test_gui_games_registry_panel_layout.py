@@ -116,10 +116,11 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
 
         engine = panel._engine_filter_combo
         tl_filter = panel._translation_filter_combo
+        sort_combo = panel._sort_combo
         self.assertEqual(engine.width(), tl_filter.width())
-        self.assertEqual(engine.minimumWidth(), engine.maximumWidth())
-        self.assertEqual(tl_filter.minimumWidth(), tl_filter.maximumWidth())
-        for combo in (engine, tl_filter):
+        self.assertEqual(engine.width(), sort_combo.width())
+        for combo in (engine, tl_filter, sort_combo):
+            self.assertEqual(combo.minimumWidth(), combo.maximumWidth())
             saved = combo.width()
             natural = _combo_natural_width(combo)
             combo.setFixedWidth(saved)
