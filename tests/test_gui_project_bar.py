@@ -125,6 +125,12 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         # Primary apply is a sibling layout control, not inside the collapse panel.
         self.assertIsNot(self.window.apply_btn.parentWidget(), panel)
 
+    def test_recheck_btn_lives_under_issues_panel(self) -> None:
+        # Design SSOT: 重新检查 is a recovery tool under 「问题处理」, not a primary action.
+        panel = self.window.writeback_issues_panel
+        self.assertIn(self.window.recheck_btn, panel._items)
+        self.assertNotIn(self.window.recheck_btn, self.window.writeback_primary_bar._items)
+
 
 if __name__ == "__main__":
     unittest.main()

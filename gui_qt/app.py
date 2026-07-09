@@ -53,7 +53,7 @@ from PySide6.QtWidgets import (
 )
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
-from .responsive_layout import ResponsiveActionPanel
+from .responsive_layout import FlowButtonBar, ResponsiveActionPanel
 from .api_key_dialog import ApiKeyDialog
 from .api_key_helpers import mask_api_key
 from .bootstrap_report import (
@@ -275,6 +275,17 @@ _DIAGNOSTICS_RUNNING_CONTEXT_RATIO = 0.32
 # Workbench bottom log drawer (P0a / issue #158).
 _WORKBENCH_LOG_DRAWER_EXPANDED_HEIGHT = 180
 _WORKBENCH_LOG_DRAWER_HEADER_HEIGHT = 40
+
+# Batch translation stages (P1b / issue #161) — maps to workbench_status_tabs indices.
+_BATCH_STAGE_PREPARE = 0
+_BATCH_STAGE_EXECUTE = 1
+_BATCH_STAGE_RESULT = 2
+_BATCH_STAGE_LABELS = ("准备", "执行", "结果")
+_BATCH_STAGE_HINTS = (
+    "环境检查与项目准备",
+    "打包、提交、下载与进度",
+    "安全检查与写回",
+)
 
 _LOG_FLUSH_INTERVAL_MS = 80
 _LAYOUT_SYNC_DEBOUNCE_MS = 32
@@ -520,6 +531,7 @@ class MainWindow(QMainWindow):
         self._layout_sync_timer.start()
 
     def _sync_layout_sizes(self) -> None:
+        self._reflow_button_bars()
         if not hasattr(self, "doctor_message_label") or not hasattr(self, "workbench_status_tabs"):
             return
 
@@ -581,29 +593,34 @@ class MainWindow(QMainWindow):
         bar = QFrame()
         bar.setObjectName("global_project_bar")
         self.global_project_bar = bar
-        row = QHBoxLayout(bar)
-        row.setContentsMargins(12, 8, 12, 8)
-        row.setSpacing(10)
+        outer = QVBoxLayout(bar)
+        outer.setContentsMargins(12, 8, 12, 8)
+        outer.setSpacing(6)
 
+        path_row = QHBoxLayout()
+        path_row.setSpacing(10)
         title = QLabel("项目：")
         title.setObjectName("global_project_bar_label")
-        row.addWidget(title)
+        path_row.addWidget(title)
 
         self.global_project_path_edit = QLineEdit("尚未选择项目")
         self.global_project_path_edit.setReadOnly(True)
         self.global_project_path_edit.setObjectName("global_project_path_edit")
-        row.addWidget(self.global_project_path_edit, 1)
-
+        path_row.addWidget(self.global_project_path_edit, 1)
         # Keep legacy objectName for mono-font QSS / tests that still look up project_path_edit.
         self.project_path_edit = self.global_project_path_edit
+        outer.addLayout(path_row)
 
+        # Buttons wrap under the path on narrow windows instead of colliding.
+        self.global_project_actions = FlowButtonBar(spacing=8)
+        self.global_project_actions.setObjectName("global_project_actions")
         self.global_switch_project_btn = QPushButton("切换项目")
         self.global_switch_project_btn.setObjectName("secondary_btn")
         self.global_switch_project_btn.setToolTip(
             "打开设置 → 工作区，从项目总表选择并切换当前 game_root。"
         )
         self.global_switch_project_btn.clicked.connect(self._on_global_switch_project)
-        row.addWidget(self.global_switch_project_btn)
+        self.global_project_actions.add_widget(self.global_switch_project_btn, min_width=88)
 
         self.global_browse_project_btn = QPushButton("指定本地目录…")
         self.global_browse_project_btn.setObjectName("secondary_btn")
@@ -611,9 +628,11 @@ class MainWindow(QMainWindow):
             "通过文件夹对话框指定本地路径（可与总表无关）；会立即写入 game_root。"
         )
         self.global_browse_project_btn.clicked.connect(self._on_select_project)
-        row.addWidget(self.global_browse_project_btn)
+        self.global_project_actions.add_widget(self.global_browse_project_btn, min_width=120)
         # Alias for existing enable/disable paths that still reference select_btn.
         self.select_btn = self.global_browse_project_btn
+        self.global_project_actions.finish_setup()
+        outer.addWidget(self.global_project_actions)
 
         return bar
 
@@ -647,6 +666,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(right, 1)
 
         # Stack keeps page identity for each nav item (shared chrome below).
+        # Keep pages empty/minimal so they do not compete with action buttons for space.
         self.workbench_stack = QStackedWidget()
         self.workbench_stack.setObjectName("workbench_stack")
         self._workbench_stack_pages: dict[WorkbenchNavItem, QWidget] = {}
@@ -655,13 +675,11 @@ class MainWindow(QMainWindow):
             page.setObjectName(f"workbench_page_{nav_item.value}")
             page_layout = QVBoxLayout(page)
             page_layout.setContentsMargins(0, 0, 0, 0)
-            title = QLabel(workbench_nav_spec(nav_item).label)
-            title.setObjectName("workbench_page_title")
-            page_layout.addWidget(title)
-            page_layout.addStretch()
+            page_layout.setSpacing(0)
             self._workbench_stack_pages[nav_item] = page
             self.workbench_stack.addWidget(page)
-        self.workbench_stack.setMaximumHeight(28)
+        self.workbench_stack.setFixedHeight(0)
+        self.workbench_stack.setVisible(False)
         layout.addWidget(self.workbench_stack)
 
         # Project path lives on the global bar; keep redirect notice only on workbench.
@@ -690,15 +708,14 @@ class MainWindow(QMainWindow):
         mode_outer.addLayout(submode_row)
         self._work_submode_row_widgets = (self.work_submode_label, self.work_submode_combo)
 
-        # Legacy combos kept hidden for any residual test/helper references.
-        self.task_category_combo = NoWheelComboBox()
+        # Legacy combos kept for residual helpers/tests — not placed in the layout
+        # so they cannot reserve vertical space or collide with action buttons.
+        self.task_category_combo = NoWheelComboBox(mode_frame)
         self.task_category_combo.setObjectName("task_category_combo")
-        self.task_category_combo.setVisible(False)
-        self.work_task_combo = NoWheelComboBox()
+        self.task_category_combo.hide()
+        self.work_task_combo = NoWheelComboBox(mode_frame)
         self.work_task_combo.setObjectName("work_task_combo")
-        self.work_task_combo.setVisible(False)
-        mode_outer.addWidget(self.task_category_combo)
-        mode_outer.addWidget(self.work_task_combo)
+        self.work_task_combo.hide()
 
         self.work_mode_hint_label = QLabel()
         self.work_mode_hint_label.setWordWrap(True)
@@ -716,7 +733,8 @@ class MainWindow(QMainWindow):
         action_outer.setContentsMargins(12, 10, 12, 10)
         action_outer.setSpacing(8)
 
-        self.action_panel = ResponsiveActionPanel()
+        # Left nav narrows the content column; stack action rows before buttons clip.
+        self.action_panel = ResponsiveActionPanel(compact_width=640)
         self.translate_group_label = self.action_panel.translate_label
         self.doctor_btn = self.action_panel.add_prep_button(QPushButton("环境检查"))
         self.doctor_btn.setObjectName("secondary_btn")
@@ -748,8 +766,11 @@ class MainWindow(QMainWindow):
         self.timeline.setVisible(False)
         layout.addWidget(self.timeline)
 
+        layout.addWidget(self._build_batch_stage_bar())
+
         self.workbench_status_tabs = NoWheelTabWidget()
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
+        self.workbench_status_tabs.currentChanged.connect(self._on_workbench_status_tab_changed)
 
         doctor_tab = QWidget()
         doctor_tab.setObjectName("workbench_doctor_page")
@@ -919,26 +940,25 @@ class MainWindow(QMainWindow):
         writeback_scroll.setWidget(writeback_content)
         writeback_layout.addWidget(writeback_scroll, 1)
 
-        # Primary writeback actions (always prominent when relevant).
-        writeback_primary = QHBoxLayout()
-        writeback_primary.setSpacing(8)
+        # Primary writeback row: main action(s) + 「问题处理」 toggle on one strip
+        # so fullscreen result view is not a vertical stack of separate toolbars.
+        primary_row = QHBoxLayout()
+        primary_row.setSpacing(8)
+        primary_row.setContentsMargins(0, 0, 0, 0)
+
+        self.writeback_primary_bar = FlowButtonBar(spacing=8)
+        self.writeback_primary_bar.setObjectName("writeback_primary_bar")
         self.apply_btn = QPushButton("写回翻译")
         self.apply_btn.setObjectName("apply_btn")
         self.apply_btn.clicked.connect(self._on_apply_writeback)
         self.apply_btn.setEnabled(False)
-        writeback_primary.addWidget(self.apply_btn)
+        self.writeback_primary_bar.add_widget(self.apply_btn, min_width=96)
         self.apply_revision_btn = QPushButton("写回订正")
         self.apply_revision_btn.setObjectName("apply_revision_btn")
         self.apply_revision_btn.clicked.connect(self._on_apply_revision)
         self.apply_revision_btn.setEnabled(False)
         self.apply_revision_btn.setVisible(False)
-        writeback_primary.addWidget(self.apply_revision_btn)
-        self.recheck_btn = QPushButton("重新检查")
-        self.recheck_btn.setObjectName("secondary_btn")
-        self.recheck_btn.clicked.connect(self._on_recheck_writeback)
-        self.recheck_btn.setEnabled(False)
-        self.recheck_btn.setVisible(False)
-        writeback_primary.addWidget(self.recheck_btn)
+        self.writeback_primary_bar.add_widget(self.apply_revision_btn, min_width=96)
         self.keyword_merge_writeback_btn = QPushButton("合并到 glossary")
         self.keyword_merge_writeback_btn.setObjectName("secondary_btn")
         self.keyword_merge_writeback_btn.setToolTip(
@@ -947,50 +967,47 @@ class MainWindow(QMainWindow):
         self.keyword_merge_writeback_btn.clicked.connect(self._on_open_keyword_merge)
         self.keyword_merge_writeback_btn.setEnabled(False)
         self.keyword_merge_writeback_btn.setVisible(False)
-        writeback_primary.addWidget(self.keyword_merge_writeback_btn)
-        writeback_primary.addStretch()
-        writeback_layout.addLayout(writeback_primary)
+        self.writeback_primary_bar.add_widget(self.keyword_merge_writeback_btn, min_width=120)
+        self.writeback_primary_bar.finish_setup()
+        primary_row.addWidget(self.writeback_primary_bar, 1)
 
-        # Recovery tools collapse under 「问题处理」 (GUI IA P0b / #159).
-        issues_header = QHBoxLayout()
-        issues_header.setSpacing(8)
+        # Recovery tools collapse under 「问题处理」 (GUI IA P0b / #159; 重新检查 included).
         self.writeback_issues_toggle_btn = QPushButton("问题处理 ▸")
         self.writeback_issues_toggle_btn.setObjectName("secondary_btn")
         self.writeback_issues_toggle_btn.setToolTip(
-            "展开补译、修补、问题清单等恢复操作；检查为「需处理」时会自动提示。"
+            "展开补译、修补、问题清单、重新检查等恢复操作；检查为「需处理」时会自动提示。"
         )
         self.writeback_issues_toggle_btn.clicked.connect(self._toggle_writeback_issues_panel)
-        issues_header.addWidget(self.writeback_issues_toggle_btn)
+        self.writeback_issues_toggle_btn.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        self.writeback_issues_toggle_btn.setMinimumWidth(100)
+        primary_row.addWidget(self.writeback_issues_toggle_btn, 0)
         self.writeback_issues_badge = QLabel("")
         self.writeback_issues_badge.setObjectName("writeback_issues_badge")
         self.writeback_issues_badge.setVisible(False)
-        issues_header.addWidget(self.writeback_issues_badge)
-        issues_header.addStretch()
-        writeback_layout.addLayout(issues_header)
+        primary_row.addWidget(self.writeback_issues_badge, 0)
+        writeback_layout.addLayout(primary_row)
 
-        self.writeback_issues_panel = QWidget()
+        self.writeback_issues_panel = FlowButtonBar(spacing=8, row_spacing=6)
         self.writeback_issues_panel.setObjectName("writeback_issues_panel")
-        issues_layout = QHBoxLayout(self.writeback_issues_panel)
-        issues_layout.setContentsMargins(0, 0, 0, 0)
-        issues_layout.setSpacing(8)
-
         self.check_issues_btn = QPushButton("查看问题清单")
         self.check_issues_btn.setObjectName("secondary_btn")
         self.check_issues_btn.clicked.connect(self._open_check_issues)
         self.check_issues_btn.setEnabled(False)
-        issues_layout.addWidget(self.check_issues_btn)
+        self.writeback_issues_panel.add_widget(self.check_issues_btn, min_width=100)
         self.retry_btn = QPushButton("生成补译包")
         self.retry_btn.setObjectName("secondary_btn")
         self.retry_btn.clicked.connect(self._on_retry_action)
         self.retry_btn.setEnabled(False)
         self.retry_btn.setVisible(False)
-        issues_layout.addWidget(self.retry_btn)
+        self.writeback_issues_panel.add_widget(self.retry_btn, min_width=96)
         self.retry_followup_btn = QPushButton("继续补译")
         self.retry_followup_btn.setObjectName("secondary_btn")
         self.retry_followup_btn.clicked.connect(self._on_retry_followup_action)
         self.retry_followup_btn.setEnabled(False)
         self.retry_followup_btn.setVisible(False)
-        issues_layout.addWidget(self.retry_followup_btn)
+        self.writeback_issues_panel.add_widget(self.retry_followup_btn, min_width=88)
         self.repair_btn = QPushButton("同步修补")
         self.repair_btn.setObjectName("secondary_btn")
         self.repair_btn.setToolTip(
@@ -999,19 +1016,26 @@ class MainWindow(QMainWindow):
         self.repair_btn.clicked.connect(self._on_run_repair)
         self.repair_btn.setEnabled(False)
         self.repair_btn.setVisible(False)
-        issues_layout.addWidget(self.repair_btn)
+        self.writeback_issues_panel.add_widget(self.repair_btn, min_width=88)
+        # Design SSOT: 重新检查 lives under 「问题处理」, not next to 写回翻译.
+        self.recheck_btn = QPushButton("重新检查")
+        self.recheck_btn.setObjectName("secondary_btn")
+        self.recheck_btn.clicked.connect(self._on_recheck_writeback)
+        self.recheck_btn.setEnabled(False)
+        self.recheck_btn.setVisible(False)
+        self.writeback_issues_panel.add_widget(self.recheck_btn, min_width=88)
         self.apply_failure_btn = QPushButton("查看写回失败报告")
         self.apply_failure_btn.setObjectName("secondary_btn")
         self.apply_failure_btn.clicked.connect(self._open_apply_failure_report)
         self.apply_failure_btn.setEnabled(False)
         self.apply_failure_btn.setVisible(False)
-        issues_layout.addWidget(self.apply_failure_btn)
+        self.writeback_issues_panel.add_widget(self.apply_failure_btn, min_width=120)
         self.remediation_btn = QPushButton("补救命令")
         self.remediation_btn.setObjectName("secondary_btn")
         self.remediation_btn.clicked.connect(self._open_remediation_commands)
         self.remediation_btn.setEnabled(False)
-        issues_layout.addWidget(self.remediation_btn)
-        issues_layout.addStretch()
+        self.writeback_issues_panel.add_widget(self.remediation_btn, min_width=88)
+        self.writeback_issues_panel.finish_setup()
         writeback_layout.addWidget(self.writeback_issues_panel)
 
         self._writeback_issues_expanded = False
@@ -1020,12 +1044,53 @@ class MainWindow(QMainWindow):
         writeback_layout.addStretch()
         self.workbench_status_tabs.addTab(writeback_tab, "写回")
 
-        self.workbench_status_tabs.setCurrentIndex(1)
+        self.workbench_status_tabs.setCurrentIndex(_BATCH_STAGE_EXECUTE)
         layout.addWidget(self.workbench_status_tabs, 1)
 
         layout.addWidget(self._build_workbench_log_drawer())
 
         self.tab_widget.addTab(tab, "工作台")
+        self._sync_batch_stage_chrome()
+
+    def _build_batch_stage_bar(self) -> QFrame:
+        """Step strip for batch translation: 准备 → 执行 → 结果 (P1b / #161)."""
+        frame = QFrame()
+        frame.setObjectName("batch_stage_bar")
+        self.batch_stage_bar = frame
+        outer = QVBoxLayout(frame)
+        outer.setContentsMargins(10, 6, 10, 6)
+        outer.setSpacing(4)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self._batch_stage_buttons: list[QPushButton] = []
+        self._batch_stage_button_group = QButtonGroup(frame)
+        self._batch_stage_button_group.setExclusive(True)
+        for index, label in enumerate(_BATCH_STAGE_LABELS):
+            btn = QPushButton(f"{index + 1}  {label}")
+            btn.setObjectName("batch_stage_btn")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(
+                lambda _checked=False, idx=index: self._on_batch_stage_clicked(idx)
+            )
+            self._batch_stage_button_group.addButton(btn, index)
+            row.addWidget(btn)
+            self._batch_stage_buttons.append(btn)
+            if index < len(_BATCH_STAGE_LABELS) - 1:
+                sep = QLabel("→")
+                sep.setObjectName("batch_stage_sep")
+                row.addWidget(sep)
+        row.addStretch(1)
+        outer.addLayout(row)
+
+        # Hint on its own row so stage buttons are never squeezed into each other.
+        self.batch_stage_hint = QLabel("")
+        self.batch_stage_hint.setObjectName("config_hint_label")
+        self.batch_stage_hint.setWordWrap(True)
+        outer.addWidget(self.batch_stage_hint)
+        frame.setVisible(False)
+        return frame
 
     def _build_workbench_log_drawer(self) -> QFrame:
         """Bottom collapsible log drawer for the workbench (shares log document with diagnostics)."""
@@ -1504,11 +1569,12 @@ class MainWindow(QMainWindow):
         action_outer.setContentsMargins(12, 10, 12, 10)
         action_outer.setSpacing(8)
 
-        diagnostics_action_panel = ResponsiveActionPanel(
+        self.diagnostics_action_panel = ResponsiveActionPanel(
             prep_label="上下文",
             translate_label="工具",
-            compact_width=960,
+            compact_width=720,
         )
+        diagnostics_action_panel = self.diagnostics_action_panel
         self.refresh_diagnostics_btn = diagnostics_action_panel.add_prep_button(
             QPushButton("刷新上下文")
         )
@@ -1801,8 +1867,59 @@ class MainWindow(QMainWindow):
         self._show_workbench_log_drawer()
 
     def _focus_workbench_status_tab(self, index: int) -> None:
-        if 0 <= index < self.workbench_status_tabs.count():
-            self.workbench_status_tabs.setCurrentIndex(index)
+        if not (0 <= index < self.workbench_status_tabs.count()):
+            return
+        # Avoid double chrome sync: currentChanged already calls _sync_batch_stage_chrome.
+        if self.workbench_status_tabs.currentIndex() == index:
+            self._sync_batch_stage_chrome(stage_index=index)
+            return
+        self.workbench_status_tabs.setCurrentIndex(index)
+
+    def _on_workbench_status_tab_changed(self, index: int) -> None:
+        self._sync_batch_stage_chrome(stage_index=index)
+
+    def _on_batch_stage_clicked(self, index: int) -> None:
+        self._focus_workbench_status_tab(index)
+
+    def _batch_stage_mode_active(self) -> bool:
+        return self._current_work_mode() == WorkMode.BATCH_TRANSLATION
+
+    def _current_batch_stage_index(self) -> int:
+        if not hasattr(self, "workbench_status_tabs"):
+            return _BATCH_STAGE_EXECUTE
+        index = self.workbench_status_tabs.currentIndex()
+        if index < 0:
+            return _BATCH_STAGE_EXECUTE
+        return max(_BATCH_STAGE_PREPARE, min(_BATCH_STAGE_RESULT, index))
+
+    def _sync_batch_stage_chrome(self, *, stage_index: int | None = None) -> None:
+        """Show/hide stage strip; in batch mode hide duplicate status tab bar."""
+        is_batch = self._batch_stage_mode_active()
+        if hasattr(self, "batch_stage_bar"):
+            self.batch_stage_bar.setVisible(is_batch)
+        if hasattr(self, "workbench_status_tabs"):
+            tab_bar = self.workbench_status_tabs.tabBar()
+            if tab_bar is not None:
+                # Stage strip replaces the flat three-tab chrome in batch mode.
+                tab_bar.setVisible(not is_batch)
+        if not is_batch or not hasattr(self, "_batch_stage_buttons"):
+            return
+        if stage_index is None:
+            stage_index = self._current_batch_stage_index()
+        stage_index = max(_BATCH_STAGE_PREPARE, min(_BATCH_STAGE_RESULT, stage_index))
+        for i, btn in enumerate(self._batch_stage_buttons):
+            active = i == stage_index
+            btn.setChecked(active)
+            btn.setProperty("active", "true" if active else "false")
+            style = btn.style()
+            if style is not None:
+                style.unpolish(btn)
+                style.polish(btn)
+        if hasattr(self, "batch_stage_hint"):
+            self.batch_stage_hint.setText(_BATCH_STAGE_HINTS[stage_index])
+        # Result stage hosts writeback flow bars that may have reflowed while off-stage.
+        if stage_index == _BATCH_STAGE_RESULT:
+            self._reflow_button_bars()
 
     def _same_manifest_path(self, left: str, right: str) -> bool:
         if not left or not right:
@@ -2322,7 +2439,8 @@ class MainWindow(QMainWindow):
         self.split_submit_btn.setVisible(has_split_group and needs_submit)
         self.split_submit_btn.setText("提交剩余包")
         self.split_submit_btn.setEnabled(has_split_group and needs_submit and not running)
-
+        if hasattr(self, "action_panel"):
+            self.action_panel.reflow(force=True)
 
     def _refresh_writeback_for_manifest_path(self, manifest_path: str) -> None:
         spec = work_mode_spec(self._current_work_mode())
@@ -2457,6 +2575,9 @@ class MainWindow(QMainWindow):
         self._writeback_issues_expanded = bool(expanded)
         if hasattr(self, "writeback_issues_panel"):
             self.writeback_issues_panel.setVisible(expanded)
+            reflow = getattr(self.writeback_issues_panel, "reflow", None)
+            if callable(reflow) and expanded:
+                reflow(force=True)
         if hasattr(self, "writeback_issues_toggle_btn"):
             self.writeback_issues_toggle_btn.setText(
                 "问题处理 ▾" if expanded else "问题处理 ▸"
@@ -2464,6 +2585,20 @@ class MainWindow(QMainWindow):
 
     def _toggle_writeback_issues_panel(self) -> None:
         self._set_writeback_issues_expanded(not getattr(self, "_writeback_issues_expanded", False))
+
+    def _reflow_button_bars(self) -> None:
+        """Re-pack all flow/responsive button strips after visibility or size changes."""
+        for name in (
+            "action_panel",
+            "diagnostics_action_panel",
+            "global_project_actions",
+            "writeback_primary_bar",
+            "writeback_issues_panel",
+        ):
+            panel = getattr(self, name, None)
+            reflow = getattr(panel, "reflow", None) if panel is not None else None
+            if callable(reflow):
+                reflow(force=True)
 
     def _sync_writeback_issues_panel_visibility(
         self,
@@ -2734,6 +2869,12 @@ class MainWindow(QMainWindow):
                 self.writeback_issues_panel.setVisible(False)
                 if hasattr(self, "writeback_issues_badge"):
                     self.writeback_issues_badge.setVisible(False)
+        if hasattr(self, "writeback_primary_bar"):
+            self.writeback_primary_bar.reflow(force=True)
+        if hasattr(self, "writeback_issues_panel"):
+            reflow = getattr(self.writeback_issues_panel, "reflow", None)
+            if callable(reflow) and self.writeback_issues_panel.isVisible():
+                reflow(force=True)
 
     def _show_retry_preview(
         self,
@@ -3510,6 +3651,10 @@ class MainWindow(QMainWindow):
                 return
 
     def _capture_mode_session(self) -> WorkbenchModeSession:
+        # Align with product default (执行) when tabs are unavailable.
+        stage_index = _BATCH_STAGE_EXECUTE
+        if hasattr(self, "workbench_status_tabs"):
+            stage_index = self._current_batch_stage_index()
         return WorkbenchModeSession(
             workflow=getattr(self, "_workflow", None),
             workflow_step_output_lines=list(
@@ -3527,6 +3672,7 @@ class MainWindow(QMainWindow):
             keyword_merge_candidates_path=str(
                 getattr(self, "_keyword_merge_candidates_path", "") or ""
             ),
+            stage_index=stage_index,
         )
 
     def _restore_mode_session(self, session: WorkbenchModeSession) -> None:
@@ -3536,6 +3682,8 @@ class MainWindow(QMainWindow):
         self._completed_manifest_snapshot = session.completed_manifest_snapshot
         self._viewing_completed_manifest = session.viewing_completed_manifest
         self._keyword_merge_candidates_path = session.keyword_merge_candidates_path
+        # Keep 0 (准备) as a real stage — do not use `or` falsy fallback.
+        self._pending_restore_stage_index = int(session.stage_index)
 
     def _clear_all_mode_sessions(self) -> None:
         """Clear per-mode sessions; safe on partially constructed MainWindow test stubs."""
@@ -3777,8 +3925,14 @@ class MainWindow(QMainWindow):
             self.resume_btn.setText(spec.resume_button_label)
         self._update_resume_btn_text()
         self.resume_btn.setVisible(spec.supports_resume)
-        self.workbench_status_tabs.setTabText(1, spec.progress_tab_label)
-        self.workbench_status_tabs.setTabText(2, spec.writeback_tab_label)
+        if spec.mode == WorkMode.BATCH_TRANSLATION:
+            self.workbench_status_tabs.setTabText(0, _BATCH_STAGE_LABELS[0])
+            self.workbench_status_tabs.setTabText(1, _BATCH_STAGE_LABELS[1])
+            self.workbench_status_tabs.setTabText(2, _BATCH_STAGE_LABELS[2])
+        else:
+            self.workbench_status_tabs.setTabText(0, "环境检查")
+            self.workbench_status_tabs.setTabText(1, spec.progress_tab_label)
+            self.workbench_status_tabs.setTabText(2, spec.writeback_tab_label)
         if spec.implemented:
             if spec.is_bootstrap and not self._bootstrap_task_ready(spec):
                 hint = bootstrap_disabled_message(spec.bootstrap_kind)
@@ -3819,6 +3973,19 @@ class MainWindow(QMainWindow):
                 self._refresh_workflow_from_latest_manifest(latest_manifest=session_manifest)
             else:
                 self._refresh_workflow_from_latest_manifest()
+        # Restore stage tab when returning to a page (batch: 准备/执行/结果).
+        pending_stage = getattr(self, "_pending_restore_stage_index", None)
+        self._pending_restore_stage_index = None
+        if (
+            pending_stage is not None
+            and hasattr(self, "workbench_status_tabs")
+            and 0 <= int(pending_stage) < self.workbench_status_tabs.count()
+        ):
+            blocked = self.workbench_status_tabs.blockSignals(True)
+            self.workbench_status_tabs.setCurrentIndex(int(pending_stage))
+            self.workbench_status_tabs.blockSignals(blocked)
+        self._sync_batch_stage_chrome()
+
         # Keep session bag aligned after UI refresh mutates active fields.
         self._mode_sessions[spec.mode] = self._capture_mode_session()
         running = self.kill_btn.isEnabled()
@@ -6268,6 +6435,7 @@ class MainWindow(QMainWindow):
         self._update_split_btn_enabled(running=running)
         self.kill_btn.setEnabled(running)
         self._sync_task_shortcuts()
+        self._reflow_button_bars()
 
     def _sync_task_shortcuts(self) -> None:
         """Keep task shortcuts aligned with the corresponding action buttons."""

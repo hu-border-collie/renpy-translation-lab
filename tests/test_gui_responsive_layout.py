@@ -32,7 +32,7 @@ class ResponsiveActionPanelTests(unittest.TestCase):
 
     def test_merges_rows_when_wide(self):
         panel = self._build_panel()
-        panel.resize(1000, 80)
+        panel.resize(1200, 80)
         panel.show()
         self._app.processEvents()
         self.assertTrue(panel._is_wide)
@@ -41,6 +41,16 @@ class ResponsiveActionPanelTests(unittest.TestCase):
     def test_stacks_rows_when_narrow(self):
         panel = self._build_panel()
         panel.resize(520, 120)
+        panel.show()
+        self._app.processEvents()
+        self.assertFalse(panel._is_wide)
+        self.assertEqual(panel._root.count(), 3)
+
+    def test_stacks_when_wide_enough_for_breakpoint_but_not_buttons(self):
+        """Left-nav workbench can be ~700–800px yet still too tight for one button row."""
+        panel = self._build_panel()
+        # compact_width is 700; estimated button row is larger → must stack.
+        panel.resize(720, 80)
         panel.show()
         self._app.processEvents()
         self.assertFalse(panel._is_wide)
