@@ -7,6 +7,7 @@ from pathlib import Path
 MONO_FONT_SELECTORS = (
     "QListWidget#api_key_list",
     "QLineEdit#project_path_edit",
+    "QLineEdit#global_project_path_edit",
     "QLabel#diagnostics_facts_label",
     "QLineEdit#diagnostics_command_edit",
     "QLineEdit#diagnostics_path_edit",

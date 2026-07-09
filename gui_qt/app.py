@@ -373,6 +373,8 @@ class MainWindow(QMainWindow):
         header.setObjectName("header_label")
         root_layout.addWidget(header)
 
+        root_layout.addWidget(self._build_global_project_bar())
+
         self.tab_widget = NoWheelTabWidget()
         self.tab_widget.setObjectName("main_tabs")
         root_layout.addWidget(self.tab_widget, 1)
@@ -565,39 +567,59 @@ class MainWindow(QMainWindow):
                 workflow_scroll.widget().updateGeometry()
             self.workbench_status_tabs.updateGeometry()
 
+    def _build_global_project_bar(self) -> QFrame:
+        """Always-visible project path + switch entries (GUI IA P0b / #159)."""
+        bar = QFrame()
+        bar.setObjectName("global_project_bar")
+        self.global_project_bar = bar
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(12, 8, 12, 8)
+        row.setSpacing(10)
+
+        title = QLabel("项目：")
+        title.setObjectName("global_project_bar_label")
+        row.addWidget(title)
+
+        self.global_project_path_edit = QLineEdit("尚未选择项目")
+        self.global_project_path_edit.setReadOnly(True)
+        self.global_project_path_edit.setObjectName("global_project_path_edit")
+        row.addWidget(self.global_project_path_edit, 1)
+
+        # Keep legacy objectName for mono-font QSS / tests that still look up project_path_edit.
+        self.project_path_edit = self.global_project_path_edit
+
+        self.global_switch_project_btn = QPushButton("切换项目")
+        self.global_switch_project_btn.setObjectName("secondary_btn")
+        self.global_switch_project_btn.setToolTip(
+            "打开设置 → 工作区，从项目总表选择并切换当前 game_root。"
+        )
+        self.global_switch_project_btn.clicked.connect(self._on_global_switch_project)
+        row.addWidget(self.global_switch_project_btn)
+
+        self.global_browse_project_btn = QPushButton("指定本地目录…")
+        self.global_browse_project_btn.setObjectName("secondary_btn")
+        self.global_browse_project_btn.setToolTip(
+            "通过文件夹对话框指定本地路径（可与总表无关）；会立即写入 game_root。"
+        )
+        self.global_browse_project_btn.clicked.connect(self._on_select_project)
+        row.addWidget(self.global_browse_project_btn)
+        # Alias for existing enable/disable paths that still reference select_btn.
+        self.select_btn = self.global_browse_project_btn
+
+        return bar
+
     def _build_workbench_tab(self) -> None:
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(12, 16, 12, 12)
         layout.setSpacing(14)
 
-        project_frame = QFrame()
-        project_frame.setObjectName("project_frame")
-        proj_outer = QVBoxLayout(project_frame)
-        proj_outer.setContentsMargins(12, 10, 12, 10)
-        proj_outer.setSpacing(6)
-        proj_layout = QHBoxLayout()
-        proj_layout.setSpacing(10)
-
-        proj_layout.addWidget(QLabel("当前工作目录："))
-
-        self.project_path_edit = QLineEdit("尚未选择项目")
-        self.project_path_edit.setReadOnly(True)
-        self.project_path_edit.setObjectName("project_path_edit")
-        proj_layout.addWidget(self.project_path_edit, 1)
-
-        self.select_btn = QPushButton("选择游戏目录...")
-        self.select_btn.clicked.connect(self._on_select_project)
-        proj_layout.addWidget(self.select_btn)
-        proj_outer.addLayout(proj_layout)
-
+        # Project path lives on the global bar; keep redirect notice only on workbench.
         self.project_redirect_label = QLabel()
         self.project_redirect_label.setWordWrap(True)
         self.project_redirect_label.setObjectName("config_hint_label")
         self.project_redirect_label.setVisible(False)
-        proj_outer.addWidget(self.project_redirect_label)
-
-        layout.addWidget(project_frame)
+        layout.addWidget(self.project_redirect_label)
 
         mode_frame = QFrame()
         mode_frame.setObjectName("mode_frame")
@@ -844,61 +866,27 @@ class MainWindow(QMainWindow):
         writeback_content_layout.addStretch()
         writeback_scroll.setWidget(writeback_content)
         writeback_layout.addWidget(writeback_scroll, 1)
-        writeback_actions = QHBoxLayout()
+
+        # Primary writeback actions (always prominent when relevant).
+        writeback_primary = QHBoxLayout()
+        writeback_primary.setSpacing(8)
         self.apply_btn = QPushButton("写回翻译")
         self.apply_btn.setObjectName("apply_btn")
         self.apply_btn.clicked.connect(self._on_apply_writeback)
         self.apply_btn.setEnabled(False)
-        writeback_actions.addWidget(self.apply_btn)
+        writeback_primary.addWidget(self.apply_btn)
         self.apply_revision_btn = QPushButton("写回订正")
         self.apply_revision_btn.setObjectName("apply_revision_btn")
         self.apply_revision_btn.clicked.connect(self._on_apply_revision)
         self.apply_revision_btn.setEnabled(False)
         self.apply_revision_btn.setVisible(False)
-        writeback_actions.addWidget(self.apply_revision_btn)
+        writeback_primary.addWidget(self.apply_revision_btn)
         self.recheck_btn = QPushButton("重新检查")
         self.recheck_btn.setObjectName("secondary_btn")
         self.recheck_btn.clicked.connect(self._on_recheck_writeback)
         self.recheck_btn.setEnabled(False)
         self.recheck_btn.setVisible(False)
-        writeback_actions.addWidget(self.recheck_btn)
-        self.check_issues_btn = QPushButton("查看问题清单")
-        self.check_issues_btn.setObjectName("secondary_btn")
-        self.check_issues_btn.clicked.connect(self._open_check_issues)
-        self.check_issues_btn.setEnabled(False)
-        writeback_actions.addWidget(self.check_issues_btn)
-        self.retry_btn = QPushButton("生成补译包")
-        self.retry_btn.setObjectName("secondary_btn")
-        self.retry_btn.clicked.connect(self._on_retry_action)
-        self.retry_btn.setEnabled(False)
-        self.retry_btn.setVisible(False)
-        writeback_actions.addWidget(self.retry_btn)
-        self.retry_followup_btn = QPushButton("继续补译")
-        self.retry_followup_btn.setObjectName("secondary_btn")
-        self.retry_followup_btn.clicked.connect(self._on_retry_followup_action)
-        self.retry_followup_btn.setEnabled(False)
-        self.retry_followup_btn.setVisible(False)
-        writeback_actions.addWidget(self.retry_followup_btn)
-        self.repair_btn = QPushButton("同步修补")
-        self.repair_btn.setObjectName("secondary_btn")
-        self.repair_btn.setToolTip(
-            "对 repair 类问题执行同步修补；会直接修改翻译文件，请先备份。"
-        )
-        self.repair_btn.clicked.connect(self._on_run_repair)
-        self.repair_btn.setEnabled(False)
-        self.repair_btn.setVisible(False)
-        writeback_actions.addWidget(self.repair_btn)
-        self.apply_failure_btn = QPushButton("查看写回失败报告")
-        self.apply_failure_btn.setObjectName("secondary_btn")
-        self.apply_failure_btn.clicked.connect(self._open_apply_failure_report)
-        self.apply_failure_btn.setEnabled(False)
-        self.apply_failure_btn.setVisible(False)
-        writeback_actions.addWidget(self.apply_failure_btn)
-        self.remediation_btn = QPushButton("补救命令")
-        self.remediation_btn.setObjectName("secondary_btn")
-        self.remediation_btn.clicked.connect(self._open_remediation_commands)
-        self.remediation_btn.setEnabled(False)
-        writeback_actions.addWidget(self.remediation_btn)
+        writeback_primary.addWidget(self.recheck_btn)
         self.keyword_merge_writeback_btn = QPushButton("合并到 glossary")
         self.keyword_merge_writeback_btn.setObjectName("secondary_btn")
         self.keyword_merge_writeback_btn.setToolTip(
@@ -907,9 +895,76 @@ class MainWindow(QMainWindow):
         self.keyword_merge_writeback_btn.clicked.connect(self._on_open_keyword_merge)
         self.keyword_merge_writeback_btn.setEnabled(False)
         self.keyword_merge_writeback_btn.setVisible(False)
-        writeback_actions.addWidget(self.keyword_merge_writeback_btn)
-        writeback_actions.addStretch()
-        writeback_layout.addLayout(writeback_actions)
+        writeback_primary.addWidget(self.keyword_merge_writeback_btn)
+        writeback_primary.addStretch()
+        writeback_layout.addLayout(writeback_primary)
+
+        # Recovery tools collapse under 「问题处理」 (GUI IA P0b / #159).
+        issues_header = QHBoxLayout()
+        issues_header.setSpacing(8)
+        self.writeback_issues_toggle_btn = QPushButton("问题处理 ▸")
+        self.writeback_issues_toggle_btn.setObjectName("secondary_btn")
+        self.writeback_issues_toggle_btn.setToolTip(
+            "展开补译、修补、问题清单等恢复操作；检查为「需处理」时会自动提示。"
+        )
+        self.writeback_issues_toggle_btn.clicked.connect(self._toggle_writeback_issues_panel)
+        issues_header.addWidget(self.writeback_issues_toggle_btn)
+        self.writeback_issues_badge = QLabel("")
+        self.writeback_issues_badge.setObjectName("writeback_issues_badge")
+        self.writeback_issues_badge.setVisible(False)
+        issues_header.addWidget(self.writeback_issues_badge)
+        issues_header.addStretch()
+        writeback_layout.addLayout(issues_header)
+
+        self.writeback_issues_panel = QWidget()
+        self.writeback_issues_panel.setObjectName("writeback_issues_panel")
+        issues_layout = QHBoxLayout(self.writeback_issues_panel)
+        issues_layout.setContentsMargins(0, 0, 0, 0)
+        issues_layout.setSpacing(8)
+
+        self.check_issues_btn = QPushButton("查看问题清单")
+        self.check_issues_btn.setObjectName("secondary_btn")
+        self.check_issues_btn.clicked.connect(self._open_check_issues)
+        self.check_issues_btn.setEnabled(False)
+        issues_layout.addWidget(self.check_issues_btn)
+        self.retry_btn = QPushButton("生成补译包")
+        self.retry_btn.setObjectName("secondary_btn")
+        self.retry_btn.clicked.connect(self._on_retry_action)
+        self.retry_btn.setEnabled(False)
+        self.retry_btn.setVisible(False)
+        issues_layout.addWidget(self.retry_btn)
+        self.retry_followup_btn = QPushButton("继续补译")
+        self.retry_followup_btn.setObjectName("secondary_btn")
+        self.retry_followup_btn.clicked.connect(self._on_retry_followup_action)
+        self.retry_followup_btn.setEnabled(False)
+        self.retry_followup_btn.setVisible(False)
+        issues_layout.addWidget(self.retry_followup_btn)
+        self.repair_btn = QPushButton("同步修补")
+        self.repair_btn.setObjectName("secondary_btn")
+        self.repair_btn.setToolTip(
+            "对 repair 类问题执行同步修补；会直接修改翻译文件，请先备份。"
+        )
+        self.repair_btn.clicked.connect(self._on_run_repair)
+        self.repair_btn.setEnabled(False)
+        self.repair_btn.setVisible(False)
+        issues_layout.addWidget(self.repair_btn)
+        self.apply_failure_btn = QPushButton("查看写回失败报告")
+        self.apply_failure_btn.setObjectName("secondary_btn")
+        self.apply_failure_btn.clicked.connect(self._open_apply_failure_report)
+        self.apply_failure_btn.setEnabled(False)
+        self.apply_failure_btn.setVisible(False)
+        issues_layout.addWidget(self.apply_failure_btn)
+        self.remediation_btn = QPushButton("补救命令")
+        self.remediation_btn.setObjectName("secondary_btn")
+        self.remediation_btn.clicked.connect(self._open_remediation_commands)
+        self.remediation_btn.setEnabled(False)
+        issues_layout.addWidget(self.remediation_btn)
+        issues_layout.addStretch()
+        writeback_layout.addWidget(self.writeback_issues_panel)
+
+        self._writeback_issues_expanded = False
+        self._set_writeback_issues_expanded(False)
+
         writeback_layout.addStretch()
         self.workbench_status_tabs.addTab(writeback_tab, "写回")
 
@@ -1435,6 +1490,7 @@ class MainWindow(QMainWindow):
         )
         self.keyword_merge_btn.setObjectName("secondary_btn")
         self.keyword_merge_btn.setToolTip(
+            "快捷入口：主路径在工作台 · 结果/写回区的「合并到 glossary」。"
             "勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。"
         )
         self.keyword_merge_btn.clicked.connect(self._on_open_keyword_merge)
@@ -2345,6 +2401,46 @@ class MainWindow(QMainWindow):
         dialog.exec()
         self.statusBar().showMessage("已查看写回失败报告。", 3000)
 
+    def _set_writeback_issues_expanded(self, expanded: bool) -> None:
+        self._writeback_issues_expanded = bool(expanded)
+        if hasattr(self, "writeback_issues_panel"):
+            self.writeback_issues_panel.setVisible(expanded)
+        if hasattr(self, "writeback_issues_toggle_btn"):
+            self.writeback_issues_toggle_btn.setText(
+                "问题处理 ▾" if expanded else "问题处理 ▸"
+            )
+
+    def _toggle_writeback_issues_panel(self) -> None:
+        self._set_writeback_issues_expanded(not getattr(self, "_writeback_issues_expanded", False))
+
+    def _sync_writeback_issues_panel_visibility(
+        self,
+        summary: WritebackSummary,
+        *,
+        force_expand: bool = False,
+    ) -> None:
+        """Show badge / auto-expand when recovery tools are relevant."""
+        if not hasattr(self, "writeback_issues_toggle_btn"):
+            return
+        status = str(getattr(summary, "status", "") or "")
+        needs_attention = status in {"warn", "failed", "block", "unknown"} or bool(
+            force_expand
+        )
+        if hasattr(self, "writeback_issues_badge"):
+            if needs_attention and status == "warn":
+                self.writeback_issues_badge.setText("有待处理问题")
+                self.writeback_issues_badge.setVisible(True)
+            elif needs_attention and status in {"failed", "block", "unknown"}:
+                self.writeback_issues_badge.setText("需处理")
+                self.writeback_issues_badge.setVisible(True)
+            else:
+                self.writeback_issues_badge.setText("")
+                self.writeback_issues_badge.setVisible(False)
+        if needs_attention:
+            self._set_writeback_issues_expanded(True)
+        # Keep toggle visible for batch translation modes only; callers hide when N/A.
+        self.writeback_issues_toggle_btn.setVisible(True)
+
     def _update_writeback_action_buttons(
         self,
         summary: WritebackSummary,
@@ -2380,6 +2476,12 @@ class MainWindow(QMainWindow):
                     button = getattr(self, button_name)
                     button.setVisible(False)
                     button.setEnabled(False)
+            if hasattr(self, "writeback_issues_toggle_btn"):
+                self.writeback_issues_toggle_btn.setVisible(False)
+            if hasattr(self, "writeback_issues_panel"):
+                self.writeback_issues_panel.setVisible(False)
+            if hasattr(self, "writeback_issues_badge"):
+                self.writeback_issues_badge.setVisible(False)
             return
 
         needs_translation_manifest = (
@@ -2433,6 +2535,12 @@ class MainWindow(QMainWindow):
                 self.keyword_merge_writeback_btn.setEnabled(
                     not running and keyword_merge_ready_flag
                 )
+            if hasattr(self, "writeback_issues_toggle_btn"):
+                self.writeback_issues_toggle_btn.setVisible(False)
+            if hasattr(self, "writeback_issues_panel"):
+                self.writeback_issues_panel.setVisible(False)
+            if hasattr(self, "writeback_issues_badge"):
+                self.writeback_issues_badge.setVisible(False)
             return
 
         issues_ready = self._writeback_issues_ready(summary)
@@ -2552,6 +2660,28 @@ class MainWindow(QMainWindow):
             self.keyword_merge_writeback_btn.setEnabled(
                 not running and keyword_merge_ready_flag
             )
+
+        if hasattr(self, "writeback_issues_toggle_btn"):
+            show_issues_chrome = bool(spec.supports_translation_writeback)
+            self.writeback_issues_toggle_btn.setVisible(show_issues_chrome)
+            if show_issues_chrome:
+                attention = bool(
+                    str(getattr(summary, "status", "") or "")
+                    in {"warn", "failed", "block", "unknown"}
+                    or issues_ready
+                    or apply_failure_ready
+                    or repair_ready
+                    or followup_ready
+                )
+                self._sync_writeback_issues_panel_visibility(
+                    summary,
+                    force_expand=attention,
+                )
+                self.writeback_issues_panel.setVisible(self._writeback_issues_expanded)
+            else:
+                self.writeback_issues_panel.setVisible(False)
+                if hasattr(self, "writeback_issues_badge"):
+                    self.writeback_issues_badge.setVisible(False)
 
     def _show_retry_preview(
         self,
@@ -2957,17 +3087,18 @@ class MainWindow(QMainWindow):
             glossary_path=glossary_path,
         )
         self.keyword_merge_btn.setEnabled(not running and ready)
+        primary_hint = "主入口在工作台写回/结果区。"
         if ready:
             self.keyword_merge_btn.setToolTip(
-                "勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。",
+                f"{primary_hint} 勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。",
             )
         elif message:
             self.keyword_merge_btn.setToolTip(
-                f"{message} 也可点击后手动选择候选 JSONL 文件。",
+                f"{primary_hint} {message} 也可点击后手动选择候选 JSONL 文件。",
             )
         else:
             self.keyword_merge_btn.setToolTip(
-                "勾选审核关键词候选并写入 glossary.json；也可手动选择候选 JSONL。",
+                f"{primary_hint} 勾选审核关键词候选并写入 glossary.json；也可手动选择候选 JSONL。",
             )
 
     def _on_open_keyword_merge(self) -> None:
@@ -3929,7 +4060,19 @@ class MainWindow(QMainWindow):
 
     # --- UI actions ---
 
+    def _on_global_switch_project(self) -> None:
+        """Open settings workspace — same registry switch path, no third state machine."""
+        if self._task_running:
+            return
+        self._on_go_to_workspace_for_project_switch()
+        self.statusBar().showMessage("请在工作区列表中选择项目并「切换到此项目」。", 5000)
+
     def _on_select_project(self):
+        if self._task_running:
+            return
+        # Same dirty-settings leave-guard as registry switch (global bar contract).
+        if not self._confirm_unsaved_config_before_registry_switch():
+            return
         start_dir = str(self.state.get_game_root() or Path.home())
         directory = QFileDialog.getExistingDirectory(
             self,
@@ -4481,10 +4624,12 @@ class MainWindow(QMainWindow):
 
     def _refresh_project_label(self):
         root = self.state.get_game_root()
-        if root:
-            self.project_path_edit.setText(str(root))
-        else:
-            self.project_path_edit.setText("（尚未选择项目）")
+        path_text = str(root) if root else "（尚未选择项目）"
+        if hasattr(self, "global_project_path_edit"):
+            self.global_project_path_edit.setText(path_text)
+        elif hasattr(self, "project_path_edit"):
+            self.project_path_edit.setText(path_text)
+        if not root:
             self._clear_game_root_redirect_notice()
         self._refresh_settings_project_root_display()
 
@@ -5835,7 +5980,13 @@ class MainWindow(QMainWindow):
     def _set_task_running(self, running: bool):
         self._task_running = running
         spec = work_mode_spec(self._current_work_mode())
-        self.select_btn.setEnabled(not running)
+        project_switch_enabled = not running
+        if hasattr(self, "select_btn"):
+            self.select_btn.setEnabled(project_switch_enabled)
+        if hasattr(self, "global_browse_project_btn"):
+            self.global_browse_project_btn.setEnabled(project_switch_enabled)
+        if hasattr(self, "global_switch_project_btn"):
+            self.global_switch_project_btn.setEnabled(project_switch_enabled)
         panel = getattr(self, "_games_registry_panel", None)
         if panel is not None:
             panel.setEnabled(not running)

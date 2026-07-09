@@ -419,6 +419,7 @@ QTabWidget#workbench_status_tabs QTabBar::tab:hover:!selected {
 }
 
 /* Project Path, Mode selector, and Action Frame styling (Glassmorphism Cards) */
+#global_project_bar,
 #project_frame,
 #mode_frame,
 #action_frame {
@@ -428,7 +429,14 @@ QTabWidget#workbench_status_tabs QTabBar::tab:hover:!selected {
     border-radius: 10px;
 }
 
-#project_path_edit {
+QLabel#global_project_bar_label {
+    color: ${fg_muted};
+    font-size: 12px;
+    font-weight: 600;
+}
+
+#project_path_edit,
+#global_project_path_edit {
     background-color: ${bg_surface_alt};
     border: 1px solid ${border_default};
     border-radius: 8px;
@@ -436,6 +444,16 @@ QTabWidget#workbench_status_tabs QTabBar::tab:hover:!selected {
     padding: 8px 12px;
     font-family: "Consolas", "Courier New", monospace;
     font-size: 12px;
+}
+
+QLabel#writeback_issues_badge {
+    color: ${badge_warning_fg};
+    background-color: ${badge_warning_bg};
+    border: 1px solid ${badge_warning_border};
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 10px;
 }
 
 QLabel#action_group_label {
