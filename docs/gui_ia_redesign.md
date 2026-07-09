@@ -2,11 +2,11 @@
 
 文档地图：[docs/README.md](README.md) · 现状说明：[GUI 工作台](gui_workbench.md)
 
-> **状态**：计划已修订；**P0a–P2a (#158–#164) 已合并**；**P2b (#165) 设置上下文单源 / 诊断瘦身** 进行中；下一阶段 P3（#166）。  
+> **状态**：**P0a–P2b (#158–#165) 已合并**；**P3 (#166) 打磨收尾进行中**（EmptyState / resume 门控 / splitter 恢复）。  
 > **Epic**：[#157](https://github.com/hu-border-collie/renpy-translation-lab/issues/157)  
 > **性质**：仅 GUI 布局 / 信息架构；**不改变** CLI 语义、`check → apply` 安全合约、manifest 字段。  
 > **依据**：2026-07 对 `gui_qt/` 全功能盘点（工作台、设置、诊断、8 种 WorkMode）+ 计划审阅修订。  
-> **用户可见说明**：以 [GUI 工作台](gui_workbench.md) 为准（P1d 后与实现一致）。
+> **用户可见说明**：以 [GUI 工作台](gui_workbench.md) 为准。
 
 ---
 
@@ -569,8 +569,8 @@ PageSession / ModeSession:
 
 **验收**
 
-- [ ] 空状态有明确 CTA  
-- [ ] resume 无任务时不可点  
+- [x] 空状态有明确 CTA（准备页环境检查 / 执行页进度）  
+- [x] resume 无任务时不可点（禁用 + tooltip）  
 - [x] 文档与 UI 无「两级下拉 / 强制跳诊断」旧描述（P1d / #163；计划书历史章节除外）  
 
 ---
