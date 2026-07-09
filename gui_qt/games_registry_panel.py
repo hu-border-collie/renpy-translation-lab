@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QBrush, QColor, QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QStyle,
+    QStyleOptionComboBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -66,35 +68,47 @@ SwitchProjectHandler = Callable[[str], bool]
 DoctorReportProvider = Callable[[], dict | None]
 
 
-def _uniform_combo_width(*combos: NoWheelComboBox, minimum: int = 0) -> None:
-    """Lock a group of combos to one content-based width (not full form row).
+def _combo_natural_width(combo: NoWheelComboBox) -> int:
+    """Width needed to show the longest item under the current style/font."""
+    # Clear prior fixed constraints so sizeHint is honest.
+    combo.setMinimumWidth(0)
+    combo.setMaximumWidth(16777215)
+    combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+    metrics = combo.fontMetrics()
+    longest = ""
+    longest_px = 0
+    for index in range(combo.count()):
+        text = combo.itemText(index)
+        advance = metrics.horizontalAdvance(text)
+        if advance > longest_px:
+            longest_px = advance
+            longest = text
+    opt = QStyleOptionComboBox()
+    combo.initStyleOption(opt)
+    opt.currentText = longest
+    styled = combo.style().sizeFromContents(
+        QStyle.ContentsType.CT_ComboBox,
+        opt,
+        QSize(longest_px, metrics.height()),
+        combo,
+    )
+    return max(combo.sizeHint().width(), styled.width())
 
-    Default AdjustToContentsOnFirstShow remeasures each combo on first show, so
-    a shared minimumWidth alone diverges after paint. Fixed width after a common
-    contents-length policy keeps the pair equal and compact.
+
+def _uniform_combo_width(*combos: NoWheelComboBox, minimum: int = 0, pad: int = 8) -> None:
+    """Lock a group of combos to one content-fitting width (not full form row).
+
+    Uses style/font sizeFromContents so CJK (e.g. YaHei UI) is not clipped.
+    Fixed width keeps the pair equal after first show.
     """
     if not combos:
         return
-    contents_len = 0
-    text_px = 0
+    width = max(minimum, max(_combo_natural_width(combo) for combo in combos) + pad)
     for combo in combos:
+        # Stop per-combo AdjustToContentsOnFirstShow from diverging after paint.
         combo.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
-        metrics = combo.fontMetrics()
-        for index in range(combo.count()):
-            text = combo.itemText(index)
-            contents_len = max(contents_len, len(text))
-            text_px = max(text_px, metrics.horizontalAdvance(text))
-    # Frame + dropdown arrow + padding; fall back to sizeHint if larger.
-    chrome = 36
-    width = max(
-        minimum,
-        text_px + chrome,
-        max(combo.sizeHint().width() for combo in combos),
-    )
-    for combo in combos:
-        combo.setMinimumContentsLength(contents_len)
         combo.setFixedWidth(width)
 
 
@@ -387,6 +401,18 @@ class GamesRegistryPanel(QWidget):
         reflow = getattr(toolbar, "reflow", None) if toolbar is not None else None
         if callable(reflow):
             reflow(force=True)
+        # Re-lock combo pairs after the real style/font is applied (YaHei etc.).
+        self._reflow_uniform_combos()
+
+    def _reflow_uniform_combos(self) -> None:
+        engine = getattr(self, "_engine_filter_combo", None)
+        translation_filter = getattr(self, "_translation_filter_combo", None)
+        if engine is not None and translation_filter is not None:
+            _uniform_combo_width(engine, translation_filter)
+        play = getattr(self, "_play_status_combo", None)
+        translation = getattr(self, "_translation_status_combo", None)
+        if play is not None and translation is not None:
+            _uniform_combo_width(play, translation)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)

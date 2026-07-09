@@ -79,6 +79,8 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
 
     def test_workspace_status_and_filter_combos_share_widths(self) -> None:
         """Play/translation status and engine/translation filters must match widths."""
+        from gui_qt.games_registry_panel import _combo_natural_width
+
         self.window.resize(960, 700)
         self.window.show()
         for _ in range(6):
@@ -98,10 +100,16 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
         self.assertEqual(translation.minimumWidth(), translation.maximumWidth())
         # Content-sized pair — must not stretch to the form field column.
         self.assertLess(play.width(), panel._name_edit.width() // 2)
+        # Must fit longest item under current style/font (no clipping).
+        for combo in (play, translation):
+            # Temporarily unlock to measure true natural width of this combo alone.
+            saved = combo.width()
+            natural = _combo_natural_width(combo)
+            combo.setFixedWidth(saved)
+            self.assertGreaterEqual(saved, natural)
 
         # Simulate first-show remeasure: fixed width must keep the pair equal.
-        for combo in (play, translation):
-            combo.adjustSize()
+        panel._reflow_uniform_combos()
         for _ in range(4):
             self._app.processEvents()
         self.assertEqual(play.width(), translation.width())
@@ -111,6 +119,11 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
         self.assertEqual(engine.width(), tl_filter.width())
         self.assertEqual(engine.minimumWidth(), engine.maximumWidth())
         self.assertEqual(tl_filter.minimumWidth(), tl_filter.maximumWidth())
+        for combo in (engine, tl_filter):
+            saved = combo.width()
+            natural = _combo_natural_width(combo)
+            combo.setFixedWidth(saved)
+            self.assertGreaterEqual(saved, natural)
 
 
 if __name__ == "__main__":
