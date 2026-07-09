@@ -446,10 +446,16 @@ class ProjectState:
             if isinstance(key, str) and key.strip() and not self._is_placeholder_api_key(key)
         ]
 
-    def get_api_key_status(self) -> tuple[int, str]:
-        file_keys = self._valid_api_keys(self.load_api_keys())
-        if file_keys:
-            return len(file_keys), "file"
+    def get_api_key_status(self, *, file_keys: list[str] | None = None) -> tuple[int, str]:
+        """Return (valid_count, source).
+
+        Pass ``file_keys`` when the caller already loaded ``api_keys.json`` to
+        avoid a second disk read (settings-tab enter hot path).
+        """
+        loaded_keys = self.load_api_keys() if file_keys is None else file_keys
+        valid_file = self._valid_api_keys(loaded_keys)
+        if valid_file:
+            return len(valid_file), "file"
         env_keys = [
             os.environ.get("GEMINI_API_KEY"),
             os.environ.get("GEMINI_API_KEY_2"),

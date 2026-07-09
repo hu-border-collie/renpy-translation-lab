@@ -175,6 +175,7 @@ from .cli_runner import CliRunner
 from .doctor_report import (
     DoctorSummary,
     idle_summary,
+    cancelled_summary,
     running_summary,
     stale_summary,
     summarize_doctor_output,
@@ -285,6 +286,8 @@ class MainWindow(QMainWindow):
 
         self.state = project_state or ProjectState()
         self._diagnostics_context_fingerprint: tuple[object, ...] | None = None
+        self._diagnostics_refresh_input_key: tuple[object, ...] | None = None
+        self._main_tab_enter_generation = 0
         self._pending_log_lines: list[str] = []
         self._workflow_progress_dirty = False
         self._log_flush_timer = QTimer(self)
@@ -672,6 +675,7 @@ class MainWindow(QMainWindow):
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
 
         doctor_tab = QWidget()
+        doctor_tab.setObjectName("workbench_doctor_page")
         self._style_themed_surface(doctor_tab)
         doctor_layout = QVBoxLayout(doctor_tab)
         doctor_layout.setContentsMargins(12, 12, 12, 12)
@@ -712,6 +716,7 @@ class MainWindow(QMainWindow):
         self.workbench_status_tabs.addTab(doctor_tab, "环境检查")
 
         workflow_tab = QWidget()
+        workflow_tab.setObjectName("workbench_workflow_page")
         self._style_themed_surface(workflow_tab)
         workflow_outer_layout = QVBoxLayout(workflow_tab)
         workflow_outer_layout.setContentsMargins(0, 0, 0, 0)
@@ -796,6 +801,7 @@ class MainWindow(QMainWindow):
         self.workbench_status_tabs.addTab(workflow_tab, "翻译进度")
 
         writeback_tab = QWidget()
+        writeback_tab.setObjectName("workbench_writeback_page")
         self._style_themed_surface(writeback_tab)
         writeback_layout = QVBoxLayout(writeback_tab)
         writeback_layout.setContentsMargins(12, 12, 12, 12)
@@ -803,9 +809,16 @@ class MainWindow(QMainWindow):
         self.writeback_status_label = StatusBadge("writeback_status_label")
         writeback_layout.addWidget(self.writeback_status_label)
         writeback_scroll = QScrollArea()
+        writeback_scroll.setObjectName("writeback_summary_scroll")
+        self._style_themed_surface(writeback_scroll)
         writeback_scroll.setWidgetResizable(True)
         writeback_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        writeback_viewport = writeback_scroll.viewport()
+        writeback_viewport.setObjectName("writeback_summary_viewport")
+        self._style_themed_surface(writeback_viewport)
         writeback_content = QWidget()
+        writeback_content.setObjectName("writeback_summary_content")
+        self._style_themed_surface(writeback_content)
         writeback_content_layout = QVBoxLayout(writeback_content)
         writeback_content_layout.setContentsMargins(0, 0, 0, 0)
         writeback_content_layout.setSpacing(6)
@@ -1333,7 +1346,9 @@ class MainWindow(QMainWindow):
             QPushButton("刷新上下文")
         )
         self.refresh_diagnostics_btn.setObjectName("secondary_btn")
-        self.refresh_diagnostics_btn.clicked.connect(self._refresh_diagnostics_context)
+        self.refresh_diagnostics_btn.clicked.connect(
+            lambda: self._refresh_diagnostics_context(force=True)
+        )
 
         self.probe_btn = diagnostics_action_panel.add_translate_button(
             QPushButton("试跑样本请求")
@@ -1393,6 +1408,7 @@ class MainWindow(QMainWindow):
         self.diagnostics_inner_tabs.setObjectName("diagnostics_inner_tabs")
 
         context_tab = QWidget()
+        context_tab.setObjectName("diagnostics_context_page")
         self._style_themed_surface(context_tab)
         context_outer = QVBoxLayout(context_tab)
         context_outer.setContentsMargins(0, 0, 0, 0)
@@ -1438,6 +1454,7 @@ class MainWindow(QMainWindow):
         self.diagnostics_inner_tabs.addTab(context_tab, "任务上下文")
 
         commands_tab = QWidget()
+        commands_tab.setObjectName("diagnostics_commands_page")
         self._style_themed_surface(commands_tab)
         commands_outer = QVBoxLayout(commands_tab)
         commands_outer.setContentsMargins(0, 0, 0, 0)
@@ -1466,6 +1483,7 @@ class MainWindow(QMainWindow):
         self.diagnostics_inner_tabs.addTab(commands_tab, "命令参考")
 
         manifest_tab = QWidget()
+        manifest_tab.setObjectName("diagnostics_manifest_page")
         self._style_themed_surface(manifest_tab)
         manifest_layout = QVBoxLayout(manifest_tab)
         manifest_layout.setContentsMargins(12, 12, 12, 12)
@@ -2657,12 +2675,19 @@ class MainWindow(QMainWindow):
         manifest = self._load_diagnostics_manifest(manifest_path or None)
         return manifest_path, manifest
 
-    def _update_probe_btn_enabled(self, *, running: bool | None = None) -> None:
+    def _update_probe_btn_enabled(
+        self,
+        *,
+        running: bool | None = None,
+        manifest_path: str | None = None,
+        manifest: dict[str, object] | None = None,
+    ) -> None:
         if not hasattr(self, "probe_btn"):
             return
         if running is None:
             running = self.kill_btn.isEnabled()
-        manifest_path, manifest = self._current_diagnostics_manifest()
+        if manifest_path is None:
+            manifest_path, manifest = self._current_diagnostics_manifest()
         ready, _message = translation_probe_ready(manifest_path, manifest)
         self.probe_btn.setEnabled(not running and ready)
 
@@ -2874,12 +2899,19 @@ class MainWindow(QMainWindow):
         self._set_diagnostics_context(merged_context)
         self._update_keyword_merge_btn_enabled()
 
-    def _update_compare_variants_btn_enabled(self, *, running: bool | None = None) -> None:
+    def _update_compare_variants_btn_enabled(
+        self,
+        *,
+        running: bool | None = None,
+        manifest_path: str | None = None,
+        manifest: dict[str, object] | None = None,
+    ) -> None:
         if not hasattr(self, "compare_variants_btn"):
             return
         if running is None:
             running = self.kill_btn.isEnabled()
-        manifest_path, manifest = self._current_diagnostics_manifest()
+        if manifest_path is None:
+            manifest_path, manifest = self._current_diagnostics_manifest()
         ready, message = translation_ab_experiment_ready(manifest_path, manifest)
         self.compare_variants_btn.setEnabled(not running and ready)
         if ready:
@@ -2889,12 +2921,19 @@ class MainWindow(QMainWindow):
         elif message:
             self.compare_variants_btn.setToolTip(message)
 
-    def _update_split_btn_enabled(self, *, running: bool | None = None) -> None:
+    def _update_split_btn_enabled(
+        self,
+        *,
+        running: bool | None = None,
+        manifest_path: str | None = None,
+        manifest: dict[str, object] | None = None,
+    ) -> None:
         if not hasattr(self, "split_btn"):
             return
         if running is None:
             running = self.kill_btn.isEnabled()
-        manifest_path, manifest = self._current_diagnostics_manifest()
+        if manifest_path is None:
+            manifest_path, manifest = self._current_diagnostics_manifest()
         ready, _message = translation_split_ready(manifest_path, manifest)
         self.split_btn.setEnabled(not running and ready)
 
@@ -2935,23 +2974,46 @@ class MainWindow(QMainWindow):
                 manifest=manifest,
             )
 
+    def _diagnostics_manifest_mtime_ns(self, manifest_path: str | None) -> int:
+        if not manifest_path:
+            return -1
+        try:
+            return Path(manifest_path).stat().st_mtime_ns
+        except OSError:
+            return -1
+
     def _refresh_diagnostics_context(
         self,
         *,
         latest_manifest_path: Path | str | None = None,
         manifest: dict[str, object] | None = None,
+        force: bool = False,
     ) -> None:
         spec = work_mode_spec(self._current_work_mode())
+        running = self.kill_btn.isEnabled()
         if spec.mode == WorkMode.SYNC_TRANSLATION:
+            input_key = (
+                "sync",
+                str(self.state.get_sync_script_path()),
+                sys.executable,
+                running,
+            )
+            if not force and self._diagnostics_refresh_input_key == input_key:
+                return
             context = sync_diagnostics_context(
                 sync_script_path=str(self.state.get_sync_script_path()),
                 python_exe=sys.executable,
             )
             self._set_diagnostics_context(context)
-            self._update_probe_btn_enabled()
-            self._update_compare_variants_btn_enabled()
-            self._update_keyword_merge_btn_enabled()
-            self._update_split_btn_enabled()
+            self._diagnostics_refresh_input_key = input_key
+            self._update_probe_btn_enabled(running=running, manifest_path="", manifest=None)
+            self._update_compare_variants_btn_enabled(
+                running=running,
+                manifest_path="",
+                manifest=None,
+            )
+            self._update_keyword_merge_btn_enabled(running=running)
+            self._update_split_btn_enabled(running=running, manifest_path="", manifest=None)
             return
 
         uses_batch_manifest = spec.manifest_mode is not None
@@ -2968,6 +3030,24 @@ class MainWindow(QMainWindow):
             manifest_path = self._writeback_manifest_path
         else:
             manifest_path = str(latest_manifest) if latest_manifest is not None else None
+        shared_path = str(manifest_path or "")
+        submit_max_cost = self._submit_max_cost_from_config()
+        input_key = (
+            "batch",
+            spec.mode.value,
+            str(game_root or ""),
+            str(latest_manifest or ""),
+            shared_path,
+            self._diagnostics_manifest_mtime_ns(shared_path or None),
+            str(self.state.get_batch_script_path()),
+            str(self.state.get_logs_dir()),
+            submit_max_cost,
+            running,
+        )
+        if not force and self._diagnostics_refresh_input_key == input_key:
+            # Inputs unchanged since last tab visit — skip disk/widget rebuild.
+            return
+
         if manifest is None or (
             manifest_path
             and str(manifest.get("_manifest_path", "")) != str(manifest_path)
@@ -2979,13 +3059,27 @@ class MainWindow(QMainWindow):
             batch_script_path=str(self.state.get_batch_script_path()),
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
-            submit_max_cost=self._submit_max_cost_from_config(),
+            submit_max_cost=submit_max_cost,
         )
         self._set_diagnostics_context(context)
-        self._update_probe_btn_enabled()
-        self._update_compare_variants_btn_enabled()
-        self._update_keyword_merge_btn_enabled()
-        self._update_split_btn_enabled()
+        self._diagnostics_refresh_input_key = input_key
+        # Share one loaded manifest across button readiness checks (tab switch hot path).
+        self._update_probe_btn_enabled(
+            running=running,
+            manifest_path=shared_path,
+            manifest=manifest,
+        )
+        self._update_compare_variants_btn_enabled(
+            running=running,
+            manifest_path=shared_path,
+            manifest=manifest,
+        )
+        self._update_keyword_merge_btn_enabled(running=running)
+        self._update_split_btn_enabled(
+            running=running,
+            manifest_path=shared_path,
+            manifest=manifest,
+        )
 
     def _set_diagnostics_context(self, context: DiagnosticsContext) -> None:
         fingerprint = (
@@ -3865,8 +3959,9 @@ class MainWindow(QMainWindow):
             self.reload_config_btn.setEnabled(not task_running)
 
     def _refresh_api_status(self) -> None:
-        count, source = self.state.get_api_key_status()
+        # Load keys once — get_api_key_status reuses the same list.
         file_keys = self.state.load_api_keys()
+        count, source = self.state.get_api_key_status(file_keys=file_keys)
 
         if count == 0:
             message = "当前状态：尚未配置有效 API Key。"
@@ -4104,7 +4199,43 @@ class MainWindow(QMainWindow):
             if not self._confirm_leave_config_tab(previous_index):
                 return
 
-        if current_widget is self._config_tab:
+        # Commit the new tab index immediately, then defer heavy enter work so Qt
+        # can paint the switched tab first (settings / diagnostics enter path).
+        self._last_main_tab_index = index
+        self._schedule_main_tab_enter_effects(current_widget)
+
+    def _schedule_main_tab_enter_effects(self, widget: QWidget | None) -> None:
+        self._main_tab_enter_generation = int(getattr(self, "_main_tab_enter_generation", 0)) + 1
+        generation = self._main_tab_enter_generation
+        # Defer only for a fully constructed window with a live Qt event loop.
+        # Partial MainWindow.__new__ tests (and headless runs) execute synchronously.
+        can_defer = False
+        try:
+            can_defer = (
+                QApplication.instance() is not None
+                and self.thread() is not None
+            )
+        except RuntimeError:
+            can_defer = False
+        if not can_defer:
+            self._apply_main_tab_enter_effects(widget, generation)
+            return
+        QTimer.singleShot(
+            0,
+            lambda w=widget, g=generation: self._apply_main_tab_enter_effects(w, g),
+        )
+
+    def _apply_main_tab_enter_effects(
+        self,
+        widget: QWidget | None,
+        generation: int,
+    ) -> None:
+        if generation != getattr(self, "_main_tab_enter_generation", 0):
+            return
+        if self.tab_widget.widget(self._last_main_tab_index) is not widget:
+            return
+
+        if widget is self._config_tab:
             self._refresh_api_status()
             nav = getattr(self, "settings_nav", None)
             if (
@@ -4112,9 +4243,10 @@ class MainWindow(QMainWindow):
                 and self._settings_nav_rows.get("workspace") == nav.currentRow()
             ):
                 self._activate_workspace_registry_section()
-        if current_widget is getattr(self, "_diagnostics_tab", None):
+            return
+
+        if widget is getattr(self, "_diagnostics_tab", None):
             self._refresh_diagnostics_context()
-        self._last_main_tab_index = index
 
 
     def _on_reload_config(self) -> None:
@@ -4666,7 +4798,7 @@ class MainWindow(QMainWindow):
             self._doctor_summary_status = ""
             self._last_doctor_report = None
             self._last_doctor_report_game_root = ""
-            self._set_doctor_summary(stale_summary())
+            self._set_doctor_summary(cancelled_summary())
             self.statusBar().showMessage("环境检查已取消。", 6000)
             return
         self.runner.kill()

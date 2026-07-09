@@ -210,7 +210,10 @@ QTabWidget#diagnostics_inner_tabs::pane {
     top: -1px;
 }
 
-QTabWidget#diagnostics_inner_tabs QWidget {
+/* Style only page roots — avoid descendant QWidget selectors (slow on tab switch). */
+QWidget#diagnostics_context_page,
+QWidget#diagnostics_commands_page,
+QWidget#diagnostics_manifest_page {
     background-color: ${bg_surface};
 }
 
@@ -258,6 +261,7 @@ QLabel#bootstrap_status_label {
 /* Success Badges */
 QLabel#diagnostics_status_label[status="ready"],
 QLabel#doctor_status_label[status="ready"],
+QLabel#workflow_status_label[status="ready"],
 QLabel#workflow_status_label[status="done"],
 QLabel#writeback_status_label[status="safe"],
 QLabel#writeback_status_label[status="applied"],
@@ -287,6 +291,7 @@ QLabel#bootstrap_status_label[status="running"] {
 QLabel#diagnostics_status_label[status="warning"],
 QLabel#doctor_status_label[status="warning"],
 QLabel#doctor_status_label[status="stale"],
+QLabel#workflow_status_label[status="warning"],
 QLabel#workflow_status_label[status="waiting"],
 QLabel#workflow_status_label[status="stale"],
 QLabel#writeback_status_label[status="warn"],
@@ -375,13 +380,18 @@ QTabWidget#workbench_status_tabs::pane {
     top: -1px;
 }
 
-QTabWidget#workbench_status_tabs QWidget {
-    background-color: ${bg_surface};
-}
-
+/* Style only page roots — avoid descendant QWidget selectors (slow on tab switch). */
+QWidget#workbench_doctor_page,
+QWidget#workbench_workflow_page,
+QWidget#workbench_writeback_page,
+QScrollArea#doctor_summary_scroll,
+QWidget#doctor_summary_viewport,
 QScrollArea#workflow_summary_scroll,
 QWidget#workflow_summary_viewport,
-QWidget#workflow_summary_content {
+QWidget#workflow_summary_content,
+QScrollArea#writeback_summary_scroll,
+QWidget#writeback_summary_viewport,
+QWidget#writeback_summary_content {
     background-color: ${bg_surface};
     border: none;
 }

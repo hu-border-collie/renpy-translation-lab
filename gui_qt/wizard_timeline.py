@@ -10,8 +10,33 @@ from __future__ import annotations
 
 import math
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
-from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont
+from PySide6.QtGui import QHideEvent, QPainter, QColor, QPen, QBrush, QFont, QShowEvent
 from PySide6.QtWidgets import QWidget
+
+
+def resolve_timeline_step_state(
+    step_index: int,
+    current_index: int,
+    workflow_status: str,
+) -> str:
+    """Map a step index to a visual state for the workflow timeline."""
+    if workflow_status == "done":
+        return "success"
+    if current_index == -1:
+        return "pending"
+    if step_index < current_index:
+        return "success"
+    if step_index == current_index:
+        if workflow_status == "failed":
+            return "failed"
+        if workflow_status == "ready":
+            return "ready"
+        if workflow_status == "waiting":
+            return "waiting"
+        if workflow_status in {"warning", "stale"}:
+            return "warning"
+        return "running"
+    return "pending"
 
 
 class WizardTimeline(QWidget):
@@ -40,14 +65,27 @@ class WizardTimeline(QWidget):
         """Set the currently active step key and its status."""
         self.current_step_key = step_key
         self.status = status
+        self._sync_animation_timer()
+        self.update()
 
-        if status in {"running", "waiting"}:
+    def _should_animate(self) -> bool:
+        return self.isVisible() and self.status in {"running", "waiting"}
+
+    def _sync_animation_timer(self) -> None:
+        """Keep the pulse timer running only while the timeline is visible and active."""
+        if self._should_animate():
             if not self._anim_timer.isActive():
                 self._anim_timer.start(50)  # 20 FPS
         else:
             self._anim_timer.stop()
 
-        self.update()
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        self._sync_animation_timer()
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        self._anim_timer.stop()
+        super().hideEvent(event)
 
     def _on_anim_tick(self) -> None:
         self._anim_tick_count += 1
@@ -124,21 +162,8 @@ class WizardTimeline(QWidget):
             color_waiting_glow = QColor(217, 119, 6, 60)
             color_waiting_text = QColor("#b45309")
 
-        # Helper to get state of a step index
         def get_step_state(idx: int) -> str:
-            if self.status == "done":
-                return "success"
-            if current_idx == -1:
-                return "pending"
-            if idx < current_idx:
-                return "success"
-            if idx == current_idx:
-                if self.status == "failed":
-                    return "failed"
-                if self.status in {"waiting", "ready", "stale"}:
-                    return "waiting"
-                return "running"
-            return "pending"
+            return resolve_timeline_step_state(idx, current_idx, self.status)
 
         # 1. Draw connecting tracks (lines between steps)
         for i in range(n - 1):
@@ -151,7 +176,7 @@ class WizardTimeline(QWidget):
             if state_from == "success":
                 if state_to == "running":
                     track_color = color_active
-                elif state_to == "waiting":
+                elif state_to in {"waiting", "warning"}:
                     track_color = color_waiting
                 elif state_to == "failed":
                     track_color = color_failed
@@ -159,8 +184,10 @@ class WizardTimeline(QWidget):
                     track_color = color_success
             elif state_from == "running":
                 track_color = color_active
-            elif state_from == "waiting":
+            elif state_from in {"waiting", "warning"}:
                 track_color = color_waiting
+            elif state_from == "ready":
+                track_color = color_success
             elif state_from == "failed":
                 track_color = color_failed
             else:
@@ -187,7 +214,7 @@ class WizardTimeline(QWidget):
             state = get_step_state(i)
 
             # Choose colors based on state
-            if state == "success":
+            if state in {"success", "ready"}:
                 bg_color = color_success
                 border_color = color_success
                 text_color = color_success_text
@@ -197,7 +224,7 @@ class WizardTimeline(QWidget):
                 border_color = color_active
                 text_color = color_active_text
                 num_color = QColor(Qt.GlobalColor.white)
-            elif state == "waiting":
+            elif state in {"waiting", "warning"}:
                 bg_color = color_waiting
                 border_color = color_waiting
                 text_color = color_waiting_text
@@ -213,7 +240,7 @@ class WizardTimeline(QWidget):
                 text_color = color_pending_text
                 num_color = color_pending_text
 
-            # Draw glowing pulse rings for running/waiting
+            # Draw glowing pulse rings for active cloud polling / running steps.
             if state in {"running", "waiting"}:
                 glow_color = color_active_glow if state == "running" else color_waiting_glow
                 pulse_val = abs(math.sin(self._anim_tick_count * 0.15))
@@ -231,7 +258,6 @@ class WizardTimeline(QWidget):
             painter.setFont(font_index)
             painter.setPen(QPen(num_color))
             if state == "success":
-                # Draw checkmark symbol
                 painter.drawText(
                     QRect(x - radius, y_center - radius, radius * 2, radius * 2),
                     Qt.AlignmentFlag.AlignCenter,
@@ -246,7 +272,7 @@ class WizardTimeline(QWidget):
 
             # Draw label below the circle
             painter.setPen(QPen(text_color))
-            if state in {"running", "waiting", "failed"}:
+            if state in {"running", "waiting", "warning", "ready", "failed"}:
                 painter.setFont(font_label_bold)
             else:
                 painter.setFont(font_label)
