@@ -2,10 +2,11 @@
 
 文档地图：[docs/README.md](README.md) · 现状说明：[GUI 工作台](gui_workbench.md)
 
-> **状态**：计划已修订；**P0a–P1b (#158–#161) 已合并**；**P1c (#162) 实现中**。  
+> **状态**：计划已修订；**P0a–P1c (#158–#162) 已合并**；**P1d (#163) 文档对齐进行中**；下一阶段 P2（#164–#165）。  
 > **Epic**：[#157](https://github.com/hu-border-collie/renpy-translation-lab/issues/157)  
 > **性质**：仅 GUI 布局 / 信息架构；**不改变** CLI 语义、`check → apply` 安全合约、manifest 字段。  
-> **依据**：2026-07 对 `gui_qt/` 全功能盘点（工作台、设置、诊断、8 种 WorkMode）+ 计划审阅修订。
+> **依据**：2026-07 对 `gui_qt/` 全功能盘点（工作台、设置、诊断、8 种 WorkMode）+ 计划审阅修订。  
+> **用户可见说明**：以 [GUI 工作台](gui_workbench.md) 为准（P1d 后与实现一致）。
 
 ---
 
@@ -570,7 +571,7 @@ PageSession / ModeSession:
 
 - [ ] 空状态有明确 CTA  
 - [ ] resume 无任务时不可点  
-- [ ] 文档与 UI 无「两级下拉 / 强制跳诊断」旧描述  
+- [x] 文档与 UI 无「两级下拉 / 强制跳诊断」旧描述（P1d / #163；计划书历史章节除外）  
 
 ---
 
@@ -747,12 +748,14 @@ Epic #157 GUI 信息架构重组
 | 2026-07-09 | 初版计划：左侧固定任务列表 + 底部日志抽屉；P0–P3 与 PR 切分 |
 | 2026-07-09 | 审阅修订：P0 硬拆 a/b；`_focus_log_tab` 双语义与调用矩阵；全局栏状态契约 §3.1.1；P1 页 session 返回恢复；P2 设置字段单源与测试 |
 | 2026-07-09 | 创建 GitHub Epic #157 与子 issue #158–#166；§7 编号回填 |
+| 2026-07-09 | P0a–P1c 已合并；P1d 对齐 `gui_workbench.md` / 根 README 与当前 IA |
 
 ---
 
 ## 13. 下一步（仓库流程）
 
 1. ~~创建 Epic + 子 issue~~ → **#157–#166 已开**  
-2. **仅从 P0a [#158](https://github.com/hu-border-collie/renpy-translation-lab/issues/158)** 开工；P0b #159 不得抢跑混进 P0a。  
-3. 计划书 `docs/gui_ia_redesign.md` 与 Epic 描述同步作为 SSOT（实现前先 push 本文到默认分支，避免 issue 链到未合入路径）。  
-4. 每完成一阶段：关闭对应 issue、勾选 Epic 清单、更新本文状态行、同步 `gui_workbench.md`。
+2. ~~P0a–P1c~~ → **#158–#162 已合并**  
+3. **P1d [#163](https://github.com/hu-border-collie/renpy-translation-lab/issues/163)** 文档对齐（本阶段）  
+4. 之后 **P2a [#164](https://github.com/hu-border-collie/renpy-translation-lab/issues/164)** / **P2b [#165](https://github.com/hu-border-collie/renpy-translation-lab/issues/165)**  
+5. 每完成一阶段：关闭对应 issue、勾选 Epic 清单、更新本文状态行、同步 `gui_workbench.md`。
