@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -63,6 +64,15 @@ from .games_registry_view import (
 
 SwitchProjectHandler = Callable[[str], bool]
 DoctorReportProvider = Callable[[], dict | None]
+
+
+def _uniform_combo_minimum_width(*combos: NoWheelComboBox, minimum: int = 0) -> None:
+    """Raise each combo's minimumWidth to the widest sizeHint among the group."""
+    if not combos:
+        return
+    width = max(minimum, max(combo.sizeHint().width() for combo in combos))
+    for combo in combos:
+        combo.setMinimumWidth(width)
 
 
 class GamesRegistryPanel(QWidget):
@@ -201,6 +211,12 @@ class GamesRegistryPanel(QWidget):
         self._translation_filter_combo.currentIndexChanged.connect(self._apply_filters)
         filter_row.addWidget(self._translation_filter_combo)
 
+        # Same min width so engine / translation filters look aligned in the row.
+        _uniform_combo_minimum_width(
+            self._engine_filter_combo,
+            self._translation_filter_combo,
+        )
+
         sort_label = QLabel("排序")
         sort_label.setObjectName("config_hint_label")
         filter_row.addWidget(sort_label)
@@ -291,10 +307,16 @@ class GamesRegistryPanel(QWidget):
 
         self._play_status_combo = NoWheelComboBox()
         self._play_status_combo.addItems(sorted(PLAY_STATUSES))
-        edit_layout.addRow("游玩状态", self._play_status_combo)
-
         self._translation_status_combo = NoWheelComboBox()
         self._translation_status_combo.addItems(sorted(TRANSLATION_STATUSES))
+        # Expand to the form field column so both status combos share one width
+        # (default Preferred keeps each at its own content sizeHint).
+        for status_combo in (self._play_status_combo, self._translation_status_combo):
+            status_combo.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Fixed,
+            )
+        edit_layout.addRow("游玩状态", self._play_status_combo)
         edit_layout.addRow("翻译状态", self._translation_status_combo)
 
         self._notes_edit = QPlainTextEdit()

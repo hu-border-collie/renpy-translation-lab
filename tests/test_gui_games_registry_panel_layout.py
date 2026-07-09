@@ -77,6 +77,30 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
                     hits.append((name_a, name_b))
         self.assertEqual(hits, [])
 
+    def test_workspace_status_and_filter_combos_share_widths(self) -> None:
+        """Play/translation status and engine/translation filters must match widths."""
+        self.window.resize(960, 700)
+        self.window.show()
+        for _ in range(6):
+            self._app.processEvents()
+        self.window._focus_settings_section("workspace")
+        for _ in range(12):
+            self._app.processEvents()
+
+        panel = self.window._games_registry_panel
+        self.assertIsNotNone(panel)
+        assert panel is not None
+
+        play = panel._play_status_combo
+        translation = panel._translation_status_combo
+        self.assertEqual(play.width(), translation.width())
+        self.assertGreaterEqual(play.width(), 120)
+
+        engine = panel._engine_filter_combo
+        tl_filter = panel._translation_filter_combo
+        self.assertEqual(engine.width(), tl_filter.width())
+        self.assertEqual(engine.minimumWidth(), tl_filter.minimumWidth())
+
 
 if __name__ == "__main__":
     unittest.main()
