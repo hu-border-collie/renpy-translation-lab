@@ -1185,8 +1185,9 @@ class MainWindow(QMainWindow):
         frame.setObjectName("context_library_panel")
         self.context_library_panel = frame
         outer = QVBoxLayout(frame)
-        outer.setContentsMargins(12, 10, 12, 10)
-        outer.setSpacing(10)
+        # Compact so the prebuild progress tab (and empty CTA) still fit at 700px.
+        outer.setContentsMargins(10, 8, 10, 8)
+        outer.setSpacing(6)
 
         title = QLabel("上下文库状态")
         title.setObjectName("diagnostics_section_label")
@@ -4385,6 +4386,50 @@ class MainWindow(QMainWindow):
             if not has_project:
                 show_wf_empty = True
             self.workflow_empty_state.setVisible(show_wf_empty)
+            # Empty CTA shares the progress column with summary chrome. Hide the
+            # chrome while empty so the action button is not height-crushed.
+            for attr in (
+                "workflow_status_label",
+                "workflow_message_label",
+                "workflow_facts_label",
+            ):
+                widget = getattr(self, attr, None)
+                if widget is not None:
+                    widget.setVisible(not show_wf_empty)
+            if show_wf_empty:
+                for attr in (
+                    "workflow_progress_bar",
+                    "view_last_completed_btn",
+                    "hide_completed_view_btn",
+                    "split_status_title",
+                    "split_status_table",
+                ):
+                    widget = getattr(self, attr, None)
+                    if widget is not None:
+                        widget.setVisible(False)
+                self._ensure_workflow_empty_cta_visible()
+            else:
+                if hasattr(self, "_apply_workflow_progress_ui"):
+                    self._apply_workflow_progress_ui()
+                if hasattr(self, "_update_completed_manifest_entry_ui"):
+                    self._update_completed_manifest_entry_ui()
+
+    def _ensure_workflow_empty_cta_visible(self) -> None:
+        """Scroll outer/inner workbench scroll areas so the empty CTA is on-screen."""
+        empty = getattr(self, "workflow_empty_state", None)
+        if empty is None or not empty.isVisible():
+            return
+        target = getattr(empty, "_action_btn", None) or empty
+
+        def _scroll_ancestors(widget) -> None:
+            parent = widget.parentWidget()
+            while parent is not None:
+                if isinstance(parent, QScrollArea):
+                    parent.ensureWidgetVisible(target, 16, 24)
+                parent = parent.parentWidget()
+
+        # Defer until after the current layout pass finishes.
+        QTimer.singleShot(0, lambda: _scroll_ancestors(empty))
 
     def _restore_diagnostics_splitter_idle(self) -> None:
         """Return diagnostics splitter toward idle context:log balance (P3 / #166)."""

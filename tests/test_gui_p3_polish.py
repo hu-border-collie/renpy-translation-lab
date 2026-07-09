@@ -78,6 +78,66 @@ class GuiP3PolishTests(unittest.TestCase):
         self.window._sync_workbench_empty_states()
         self.assertFalse(self.window.workflow_empty_state.isHidden())
 
+    def test_workflow_empty_cta_button_fully_visible(self) -> None:
+        """Empty-state CTA must not be clipped by the progress column."""
+        from PySide6.QtCore import QPoint, QRect
+        from PySide6.QtWidgets import QScrollArea
+
+        from gui_qt.work_modes import WorkMode
+
+        self.window.resize(1100, 700)
+        self.window.show()
+        for _ in range(8):
+            self._app.processEvents()
+        self.window._set_work_mode(WorkMode.BOOTSTRAP_RAG, refresh_manifest_writeback=False)
+        self.window.state.get_game_root = lambda: None  # type: ignore[method-assign]
+        self.window._workflow = None
+        self.window._writeback_manifest_path = ""
+        self.window._set_workflow_summary(
+            "idle",
+            "上下文库",
+            "选择项目后可预建记忆库或原文索引。",
+            [],
+        )
+        if hasattr(self.window, "workbench_status_tabs"):
+            self.window.workbench_status_tabs.setCurrentIndex(1)
+        for _ in range(6):
+            self._app.processEvents()
+        # Flush deferred ensureWidgetVisible scroll.
+        self.window._ensure_workflow_empty_cta_visible()
+        for _ in range(12):
+            self._app.processEvents()
+
+        empty = self.window.workflow_empty_state
+        self.assertFalse(empty.isHidden())
+        btn = empty._action_btn
+        self.assertIsNotNone(btn)
+        assert btn is not None
+        self.assertEqual(btn.text(), "去环境检查")
+        self.assertFalse(btn.isHidden())
+        # Button geometry fully inside empty-state widget.
+        btn_in_empty = QRect(btn.mapTo(empty, QPoint(0, 0)), btn.size())
+        self.assertTrue(
+            empty.rect().contains(btn_in_empty),
+            msg=f"btn {btn_in_empty} not in empty {empty.rect()}",
+        )
+        # After auto-scroll, button must lie inside each ancestor scroll viewport.
+        parent = btn.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                viewport = parent.viewport()
+                mapped = QRect(btn.mapTo(viewport, QPoint(0, 0)), btn.size())
+                self.assertTrue(
+                    viewport.rect().contains(mapped),
+                    msg=(
+                        f"btn {mapped} not in scroll {parent.objectName()} "
+                        f"viewport {viewport.rect()}"
+                    ),
+                )
+            parent = parent.parentWidget()
+        # Competing summary chrome must yield space to the empty CTA.
+        self.assertTrue(self.window.workflow_message_label.isHidden())
+
     def test_restore_diagnostics_splitter_idle(self) -> None:
         self.window.resize(1280, 900)
         self.window.show()

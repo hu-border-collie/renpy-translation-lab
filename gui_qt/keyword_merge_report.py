@@ -10,6 +10,28 @@ _MANIFEST_MODE_KEYWORD = "keyword_extraction"
 _SYNC_KEYWORD_JSONL_RE = re.compile(r"^JSONL:\s*(.+?)\s*$", re.MULTILINE)
 
 
+def _sibling_keyword_candidates_jsonl(manifest_path: str) -> str:
+    """Same-package keyword_candidates.jsonl next to manifest.json (O(1) stat).
+
+    Full keyword manifests can be tens of MB (embedded chunks). GUI mode switches
+    must not ``json.load`` them just to discover the export path.
+    """
+    path = (manifest_path or "").strip()
+    if not path:
+        return ""
+    package_dir = path
+    if path.lower().endswith("manifest.json") or path.lower().endswith(".json"):
+        package_dir = os.path.dirname(os.path.abspath(path))
+    elif os.path.isfile(path):
+        package_dir = os.path.dirname(os.path.abspath(path))
+    elif not os.path.isdir(path):
+        return ""
+    else:
+        package_dir = os.path.abspath(path)
+    candidate = os.path.join(package_dir, "keyword_candidates.jsonl")
+    return candidate if os.path.isfile(candidate) else ""
+
+
 def keyword_merge_candidates_path_from_manifest(
     manifest_path: str,
     manifest: dict[str, object] | None,
@@ -20,7 +42,17 @@ def keyword_merge_candidates_path_from_manifest(
             jsonl_path = export.get("jsonl_path")
             if isinstance(jsonl_path, str) and jsonl_path.strip() and os.path.isfile(jsonl_path):
                 return jsonl_path.strip()
+        # Lite readers drop keyword_export; still resolve via package sibling.
+        embedded = manifest.get("_manifest_path")
+        for candidate_path in (manifest_path, embedded if isinstance(embedded, str) else ""):
+            sibling = _sibling_keyword_candidates_jsonl(str(candidate_path or ""))
+            if sibling:
+                return sibling
     if manifest_path.strip():
+        sibling = _sibling_keyword_candidates_jsonl(manifest_path.strip())
+        if sibling:
+            return sibling
+        # Last resort: may parse full JSON (slow on multi-MB manifests).
         try:
             return merge_mod.resolve_keyword_candidates_path(manifest_path.strip())
         except SystemExit:
