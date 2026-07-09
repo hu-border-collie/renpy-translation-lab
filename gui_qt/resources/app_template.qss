@@ -665,8 +665,9 @@ QPushButton#kill_btn:disabled {
     color: ${fg_danger_disabled};
 }
 
-/* Log View terminal styling */
-QTextEdit#log_view {
+/* Log View terminal styling (diagnostics + workbench drawer share look) */
+QTextEdit#log_view,
+QTextEdit#workbench_log_view {
     background-color: ${bg_log};
     border: 1px solid ${border_log};
     border-radius: 10px;
@@ -674,6 +675,18 @@ QTextEdit#log_view {
     font-family: "Consolas", "Courier New", monospace;
     font-size: 12px;
     padding: 14px;
+}
+
+QFrame#workbench_log_drawer {
+    background-color: ${bg_surface};
+    border: 1px solid ${border_default};
+    border-radius: 10px;
+}
+
+QLabel#workbench_log_drawer_title {
+    color: ${fg_section};
+    font-size: 13px;
+    font-weight: 600;
 }
 
 QLabel#doctor_facts_label {
@@ -851,7 +864,8 @@ QScrollBar:horizontal {
     margin: 0px;
 }
 
-QTextEdit#log_view QScrollBar:vertical {
+QTextEdit#log_view QScrollBar:vertical,
+QTextEdit#workbench_log_view QScrollBar:vertical {
     background-color: transparent;
     width: 8px;
 }

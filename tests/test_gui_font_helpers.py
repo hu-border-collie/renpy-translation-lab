@@ -38,6 +38,7 @@ class GuiFontHelpersTests(unittest.TestCase):
         self.assertIn("HarmonyOS Sans SC", stylesheet)
         self.assertIn("LXGW WenKai Mono GB", stylesheet)
         self.assertIn("QTextEdit#log_view", stylesheet)
+        self.assertIn("QTextEdit#workbench_log_view", stylesheet)
 
     def test_load_gui_fonts_reads_bundled_files(self):
         try:

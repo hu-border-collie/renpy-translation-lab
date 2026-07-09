@@ -336,7 +336,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.state = FakeState()
         self.window.runner = FakeRunner()
         self.window.log_view = type("FakeLogView", (), {"clear": lambda _self: None})()
-        self.window._focus_log_tab = lambda: None
+        self.window._show_workbench_log_drawer = lambda: None
         self.window._focus_workbench_status_tab = lambda _index: None
         self.window._set_workflow_from_bootstrap_summary = lambda _summary: None
         self.window._append_log = lambda _text: None
@@ -1842,7 +1842,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.runner = FakeRunner()
         self.window.log_view = FakeLogView()
         self.window.resume_btn = FakeResumeButton()
-        self.window._focus_log_tab = lambda: None
+        self.window._show_workbench_log_drawer = lambda: None
         self.window._focus_workbench_status_tab = lambda index: None
         self.window._refresh_diagnostics_context = lambda: None
         self.window._append_log = lambda message: None

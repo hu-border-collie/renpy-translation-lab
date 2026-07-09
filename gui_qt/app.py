@@ -265,6 +265,9 @@ _DIAGNOSTICS_IDLE_CONTEXT_PX = 420
 _DIAGNOSTICS_IDLE_LOG_PX = 180
 _DIAGNOSTICS_RUNNING_CONTEXT_RATIO = 0.32
 
+# Workbench bottom log drawer (P0a / issue #158).
+_WORKBENCH_LOG_DRAWER_EXPANDED_HEIGHT = 180
+_WORKBENCH_LOG_DRAWER_HEADER_HEIGHT = 40
 
 _LOG_FLUSH_INTERVAL_MS = 80
 _LAYOUT_SYNC_DEBOUNCE_MS = 32
@@ -913,7 +916,63 @@ class MainWindow(QMainWindow):
         self.workbench_status_tabs.setCurrentIndex(1)
         layout.addWidget(self.workbench_status_tabs, 1)
 
+        layout.addWidget(self._build_workbench_log_drawer())
+
         self.tab_widget.addTab(tab, "工作台")
+
+    def _build_workbench_log_drawer(self) -> QFrame:
+        """Bottom collapsible log drawer for the workbench (shares log document with diagnostics)."""
+        drawer = QFrame()
+        drawer.setObjectName("workbench_log_drawer")
+        self.workbench_log_drawer = drawer
+        drawer_layout = QVBoxLayout(drawer)
+        drawer_layout.setContentsMargins(10, 6, 10, 8)
+        drawer_layout.setSpacing(6)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        self.workbench_log_drawer_title = QLabel("运行日志")
+        self.workbench_log_drawer_title.setObjectName("workbench_log_drawer_title")
+        header.addWidget(self.workbench_log_drawer_title)
+        header.addStretch()
+
+        self.workbench_log_open_diagnostics_btn = QPushButton("在诊断中打开")
+        self.workbench_log_open_diagnostics_btn.setObjectName("secondary_btn")
+        self.workbench_log_open_diagnostics_btn.setToolTip(
+            "打开诊断页查看任务上下文、命令参考与完整日志布局。"
+        )
+        self.workbench_log_open_diagnostics_btn.clicked.connect(
+            self._on_open_diagnostics_from_log_drawer
+        )
+        header.addWidget(self.workbench_log_open_diagnostics_btn)
+
+        self.workbench_log_clear_btn = QPushButton("清空")
+        self.workbench_log_clear_btn.setObjectName("secondary_btn")
+        self.workbench_log_clear_btn.clicked.connect(self._on_clear_log)
+        header.addWidget(self.workbench_log_clear_btn)
+
+        self.workbench_log_toggle_btn = QPushButton("展开")
+        self.workbench_log_toggle_btn.setObjectName("secondary_btn")
+        self.workbench_log_toggle_btn.clicked.connect(self._toggle_workbench_log_drawer)
+        header.addWidget(self.workbench_log_toggle_btn)
+        drawer_layout.addLayout(header)
+
+        self.workbench_log_body = QWidget()
+        self.workbench_log_body.setObjectName("workbench_log_body")
+        body_layout = QVBoxLayout(self.workbench_log_body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+        self.workbench_log_view = QTextEdit()
+        self.workbench_log_view.setReadOnly(True)
+        self.workbench_log_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.workbench_log_view.setObjectName("workbench_log_view")
+        self.workbench_log_view.setMinimumHeight(100)
+        body_layout.addWidget(self.workbench_log_view, 1)
+        drawer_layout.addWidget(self.workbench_log_body, 1)
+
+        self._workbench_log_drawer_expanded = False
+        self._set_workbench_log_drawer_expanded(False)
+        return drawer
 
     def _style_themed_surface(self, widget: QWidget) -> None:
         widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -1324,7 +1383,8 @@ class MainWindow(QMainWindow):
 
         diag_hint = QLabel(
             "上方可查看任务上下文、命令参考与任务记录；下方显示原始命令输出。"
-            "任务运行时会自动切到此页并放大日志区域。"
+            "工作台任务运行时默认留在工作台并展开底部日志抽屉；"
+            "从本页启动的试跑 / 拆分 / A/B 会放大下方日志区域。"
         )
         diag_hint.setWordWrap(True)
         diag_hint.setObjectName("config_hint_label")
@@ -1514,6 +1574,9 @@ class MainWindow(QMainWindow):
         self.log_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.log_view.setObjectName("log_view")
         self.log_view.setMinimumHeight(120)
+        # Share one document with the workbench drawer so append/clear stay in sync.
+        if hasattr(self, "workbench_log_view"):
+            self.workbench_log_view.setDocument(self.log_view.document())
         self._log_highlighter = LogHighlighter(
             self.log_view.document(),
             dark=self._effective_theme_is_dark(),
@@ -1528,9 +1591,62 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter, 1)
         self.tab_widget.addTab(tab, "诊断日志")
 
-    def _focus_log_tab(self) -> None:
-        if self._diagnostics_tab is not None:
+    def _set_workbench_log_drawer_expanded(self, expanded: bool) -> None:
+        self._workbench_log_drawer_expanded = bool(expanded)
+        if not hasattr(self, "workbench_log_body"):
+            return
+        self.workbench_log_body.setVisible(expanded)
+        if hasattr(self, "workbench_log_toggle_btn"):
+            self.workbench_log_toggle_btn.setText("折叠" if expanded else "展开")
+        if hasattr(self, "workbench_log_drawer"):
+            if expanded:
+                self.workbench_log_drawer.setMinimumHeight(
+                    _WORKBENCH_LOG_DRAWER_HEADER_HEIGHT + _WORKBENCH_LOG_DRAWER_EXPANDED_HEIGHT
+                )
+                self.workbench_log_drawer.setMaximumHeight(16777215)
+                self.workbench_log_drawer.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Preferred,
+                )
+            else:
+                self.workbench_log_drawer.setMinimumHeight(0)
+                self.workbench_log_drawer.setMaximumHeight(
+                    _WORKBENCH_LOG_DRAWER_HEADER_HEIGHT + 16
+                )
+                self.workbench_log_drawer.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Fixed,
+                )
+
+    def _toggle_workbench_log_drawer(self) -> None:
+        self._set_workbench_log_drawer_expanded(not self._workbench_log_drawer_expanded)
+
+    def _scroll_log_views_to_end(self) -> None:
+        for attr in ("log_view", "workbench_log_view"):
+            view = getattr(self, attr, None)
+            if view is None or not hasattr(view, "verticalScrollBar"):
+                continue
+            scrollbar = view.verticalScrollBar()
+            if scrollbar is not None:
+                scrollbar.setValue(scrollbar.maximum())
+
+    def _show_workbench_log_drawer(self) -> None:
+        """Reveal CLI output on the workbench without switching the main tab.
+
+        Used by workbench-started tasks (translate, writeback, repair, bootstrap, …).
+        """
+        self._set_workbench_log_drawer_expanded(True)
+        self._scroll_log_views_to_end()
+
+    def _expand_diagnostics_log(self, *, switch_tab: bool = True) -> None:
+        """Enlarge the diagnostics-page log splitter; optionally switch to that tab.
+
+        Used by diagnostics toolbar tools (probe / split / A/B) and 「在诊断中打开」.
+        """
+        if switch_tab and self._diagnostics_tab is not None:
             self.tab_widget.setCurrentWidget(self._diagnostics_tab)
+        if not hasattr(self, "diagnostics_splitter"):
+            return
         total = max(sum(self.diagnostics_splitter.sizes()), 1)
         target_context_size = int(total * _DIAGNOSTICS_RUNNING_CONTEXT_RATIO)
         start_context_size = self.diagnostics_splitter.sizes()[0]
@@ -1551,6 +1667,30 @@ class MainWindow(QMainWindow):
         anim.valueChanged.connect(update_sizes)
         anim.start()
         self._splitter_anim = anim
+        self._scroll_log_views_to_end()
+
+    def _reveal_log_for_active_context(self) -> None:
+        """On runner errors: expand drawer, or enlarge diagnostics log if already there."""
+        on_diagnostics = (
+            getattr(self, "_diagnostics_tab", None) is not None
+            and self.tab_widget.currentWidget() is self._diagnostics_tab
+        )
+        if on_diagnostics:
+            self._expand_diagnostics_log(switch_tab=False)
+        else:
+            self._show_workbench_log_drawer()
+
+    def _on_open_diagnostics_from_log_drawer(self) -> None:
+        self._expand_diagnostics_log(switch_tab=True)
+        self.statusBar().showMessage("已打开诊断日志页。", 3000)
+
+    def _focus_log_tab(self) -> None:
+        """Deprecated dual-purpose helper; prefer workbench drawer or diagnostics expand.
+
+        Kept as a thin alias to the workbench drawer so accidental leftover calls no longer
+        force a main-tab switch. New code must call the explicit APIs.
+        """
+        self._show_workbench_log_drawer()
 
     def _focus_workbench_status_tab(self, index: int) -> None:
         if 0 <= index < self.workbench_status_tabs.count():
@@ -2501,7 +2641,7 @@ class MainWindow(QMainWindow):
             return False
 
         self._clear_log_view()
-        self._focus_log_tab()
+        self._show_workbench_log_drawer()
         self._begin_translation_workflow(
             workflow,
             log_heading=f"正在补译：gemini_translate_batch.py {' '.join(next_step.args)}",
@@ -2559,6 +2699,7 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        self._show_workbench_log_drawer()
         self._active_command = "build_retry"
         self._build_retry_output_lines = []
         self._set_task_running(True)
@@ -2628,7 +2769,7 @@ class MainWindow(QMainWindow):
 
     def _on_clear_log(self) -> None:
         self._clear_log_view()
-        self.statusBar().showMessage("诊断日志已清空。", 3000)
+        self.statusBar().showMessage("运行日志已清空。", 3000)
 
     def _resolve_diagnostics_manifest_path(self) -> str | None:
         if self._workflow is not None and self._workflow.manifest_path:
@@ -4451,6 +4592,7 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
+        self._show_workbench_log_drawer()
         self._active_command = "bootstrap_work"
         self._work_bootstrap_output_lines = []
         self._workflow_progress = create_workflow_progress_state("work_bootstrap")
@@ -4481,6 +4623,7 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
+        self._show_workbench_log_drawer()
         self._active_command = "generate_template"
         self._template_generation_output_lines = []
         self._focus_workbench_status_tab(1)
@@ -4550,7 +4693,7 @@ class MainWindow(QMainWindow):
             running_summary = running_bootstrap_summary("source_index")
 
         self._clear_log_view()
-        self._focus_log_tab()
+        self._show_workbench_log_drawer()
         self._active_command = command
         self._bootstrap_output_lines = []
         self._bootstrap_progress = create_bootstrap_progress_state(kind)
@@ -4628,7 +4771,7 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
-        self._focus_log_tab()
+        self._show_workbench_log_drawer()
         self._clear_completed_manifest_snapshot()
         self._writeback_manifest_path = ""
         if spec.supports_translation_writeback:
@@ -4699,7 +4842,7 @@ class MainWindow(QMainWindow):
             )
             if split_workflow.current_step() is not None:
                 self._clear_log_view()
-                self._focus_log_tab()
+                self._show_workbench_log_drawer()
                 self._workflow = split_workflow
                 self._refresh_diagnostics_context()
                 self._active_command = "translation_workflow"
@@ -4736,7 +4879,7 @@ class MainWindow(QMainWindow):
         workflow.only_query = only_query
 
         self._clear_log_view()
-        self._focus_log_tab()
+        self._show_workbench_log_drawer()
         self._workflow = workflow
         self._refresh_diagnostics_context()
         self._active_command = "translation_workflow"
@@ -4780,7 +4923,7 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
-        self._focus_log_tab()
+        self._show_workbench_log_drawer()
         self._workflow = workflow
         self._refresh_diagnostics_context()
         self._active_command = "translation_workflow"
@@ -5027,7 +5170,7 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
-        self._focus_log_tab()
+        self._expand_diagnostics_log()
         self._active_command = "probe"
         self._probe_output_lines = []
         base_context = build_diagnostics_context(
@@ -5075,7 +5218,7 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
-        self._focus_log_tab()
+        self._expand_diagnostics_log()
         self._active_command = "compare_variants"
         self._compare_variants_output_lines = []
         variants = list(options["variants"])
@@ -5129,7 +5272,7 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
-        self._focus_log_tab()
+        self._expand_diagnostics_log()
         self._active_command = "split"
         self._split_output_lines = []
         base_context = build_diagnostics_context(
@@ -5347,7 +5490,7 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
-        self._focus_log_tab()
+        self._show_workbench_log_drawer()
         self._active_command = "repair"
         self._repair_output_lines = []
         base_context = build_diagnostics_context(
@@ -5409,7 +5552,7 @@ class MainWindow(QMainWindow):
 
         manifest_path = self._writeback_manifest_path
         self._clear_log_view()
-        self._focus_log_tab()
+        self._show_workbench_log_drawer()
         self._active_command = "recheck"
         self._recheck_output_lines = []
         self._focus_workbench_status_tab(2)
@@ -5467,7 +5610,7 @@ class MainWindow(QMainWindow):
 
         manifest_path = self._writeback_manifest_path
         self._clear_log_view()
-        self._focus_log_tab()
+        self._show_workbench_log_drawer()
         self._active_command = "apply"
         self._apply_output_lines = []
         self._focus_workbench_status_tab(2)
@@ -5522,7 +5665,7 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
-        self._focus_log_tab()
+        self._show_workbench_log_drawer()
         self._active_command = "apply_revision"
         self._apply_revision_output_lines = []
         self._focus_workbench_status_tab(2)
@@ -5674,8 +5817,7 @@ class MainWindow(QMainWindow):
         if pending is None or timer is None:
             if hasattr(self, "log_view"):
                 self.log_view.append(line)
-                scrollbar = self.log_view.verticalScrollBar()
-                scrollbar.setValue(scrollbar.maximum())
+                self._scroll_log_views_to_end()
             return
         pending.append(line)
         if not timer.isActive():
@@ -5688,8 +5830,7 @@ class MainWindow(QMainWindow):
         lines = self._pending_log_lines
         self._pending_log_lines = []
         self.log_view.append("\n".join(lines))
-        scrollbar = self.log_view.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        self._scroll_log_views_to_end()
 
     def _set_task_running(self, running: bool):
         self._task_running = running
@@ -5911,8 +6052,8 @@ class MainWindow(QMainWindow):
             self._work_bootstrap_output_lines.append(message)
         elif self._active_command == "generate_template":
             self._template_generation_output_lines.append(message)
-        self._focus_log_tab()
-        self.statusBar().showMessage("任务运行失败，请查看诊断日志。", 6000)
+        self._reveal_log_for_active_context()
+        self.statusBar().showMessage("任务运行失败，请查看运行日志。", 6000)
 
     def _on_finished(self, exit_code: int):
         self._append_log(f"\n[进程已结束，退出码：{exit_code}]")
