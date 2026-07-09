@@ -42,6 +42,7 @@ from .games_registry_doctor_compare import (
     format_registry_compare_hint,
 )
 from .games_registry_worker import RegistryRefreshWorker
+from .responsive_layout import FlowButtonBar
 from .widget_helpers import NoWheelComboBox
 from .games_registry_view import (
     REGISTRY_PREF_AUTO_DISCOVER,
@@ -101,11 +102,22 @@ class GamesRegistryPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        header = QHBoxLayout()
+        # Title + primary switch stay on one short row; tools wrap below so the
+        # panel no longer forces ~1250px min width (settings viewport is ~770–1100).
+        title_row = QHBoxLayout()
         title = QLabel("工作区项目")
         title.setObjectName("diagnostics_section_label")
-        header.addWidget(title)
-        header.addStretch(1)
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        self._switch_btn = QPushButton("切换到此项目")
+        self._switch_btn.setObjectName("secondary_btn")
+        self._switch_btn.clicked.connect(self._switch_to_selected)
+        self._switch_btn.setEnabled(False)
+        title_row.addWidget(self._switch_btn)
+        layout.addLayout(title_row)
+
+        self._toolbar = FlowButtonBar(spacing=8, row_spacing=8)
+        self._toolbar.setObjectName("games_registry_toolbar")
 
         self._import_md_btn = QPushButton("从 GAMES.md 导入")
         self._import_md_btn.setObjectName("secondary_btn")
@@ -114,53 +126,55 @@ class GamesRegistryPanel(QWidget):
             "JSON 仍是日常真源；导入后建议再点「同步 GAMES.md」。"
         )
         self._import_md_btn.clicked.connect(self._import_from_games_md)
-        header.addWidget(self._import_md_btn)
+        self._toolbar.add_widget(self._import_md_btn, min_width=100)
 
         self._discover_btn = QPushButton("扫描新项目")
         self._discover_btn.setObjectName("secondary_btn")
         self._discover_btn.setToolTip("扫描工作区中的 Game_* 目录，并把未登记的项目加入总表")
         self._discover_btn.clicked.connect(self._discover_new_projects)
-        header.addWidget(self._discover_btn)
+        self._toolbar.add_widget(self._discover_btn, min_width=88)
 
         self._sync_md_btn = QPushButton("同步 GAMES.md")
         self._sync_md_btn.setObjectName("secondary_btn")
         self._sync_md_btn.setToolTip("用 games_registry.json 重新生成 GAMES.md 表格（覆盖表格区）")
         self._sync_md_btn.clicked.connect(self._sync_games_md)
-        header.addWidget(self._sync_md_btn)
+        self._toolbar.add_widget(self._sync_md_btn, min_width=100)
 
         self._refresh_current_btn = QPushButton("刷新当前")
         self._refresh_current_btn.setObjectName("secondary_btn")
         self._refresh_current_btn.clicked.connect(self._refresh_current_project)
-        header.addWidget(self._refresh_current_btn)
+        self._toolbar.add_widget(self._refresh_current_btn, min_width=80)
 
         self._refresh_all_btn = QPushButton("刷新全部")
         self._refresh_all_btn.setObjectName("secondary_btn")
         self._refresh_all_btn.clicked.connect(self._refresh_all_projects)
-        header.addWidget(self._refresh_all_btn)
+        self._toolbar.add_widget(self._refresh_all_btn, min_width=80)
 
+        mode_host = QWidget()
+        mode_host.setObjectName("games_registry_mode_host")
+        mode_row = QHBoxLayout(mode_host)
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        mode_row.setSpacing(6)
         mode_label = QLabel("扫描模式")
         mode_label.setObjectName("config_hint_label")
-        header.addWidget(mode_label)
-
+        mode_row.addWidget(mode_label)
         self._refresh_mode_combo = NoWheelComboBox()
         self._refresh_mode_combo.setObjectName("games_registry_refresh_mode_combo")
         self._refresh_mode_combo.addItem("快速", REFRESH_MODE_LITE)
         self._refresh_mode_combo.addItem("深度", REFRESH_MODE_DEEP)
         self._refresh_mode_combo.setToolTip("快速：只扫磁盘与翻译文件；深度：额外运行 doctor（较慢）")
-        header.addWidget(self._refresh_mode_combo)
+        self._refresh_mode_combo.setMinimumWidth(72)
+        mode_row.addWidget(self._refresh_mode_combo)
+        self._toolbar.add_widget(mode_host, min_width=None)
 
         self._stop_refresh_btn = QPushButton("停止")
         self._stop_refresh_btn.setObjectName("kill_btn")
         self._stop_refresh_btn.setEnabled(False)
         self._stop_refresh_btn.clicked.connect(self._on_stop_refresh)
-        header.addWidget(self._stop_refresh_btn)
+        self._toolbar.add_widget(self._stop_refresh_btn, min_width=64)
 
-        self._switch_btn = QPushButton("切换到此项目")
-        self._switch_btn.setObjectName("secondary_btn")
-        self._switch_btn.clicked.connect(self._switch_to_selected)
-        self._switch_btn.setEnabled(False)
-        header.addWidget(self._switch_btn)
-        layout.addLayout(header)
+        self._toolbar.finish_setup()
+        layout.addWidget(self._toolbar)
 
         options_row = QHBoxLayout()
         self._auto_discover_checkbox = QCheckBox("打开分区时自动扫描新项目")
@@ -246,22 +260,33 @@ class GamesRegistryPanel(QWidget):
         edit_layout.addRow("项目名称", self._name_edit)
 
         self._layout_status_label = QLabel("—")
+        self._layout_status_label.setWordWrap(True)
+        self._layout_status_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         edit_layout.addRow("目录状态", self._layout_status_label)
 
         self._doctor_mode_label = QLabel("—")
+        self._doctor_mode_label.setWordWrap(True)
         edit_layout.addRow("Doctor 模式", self._doctor_mode_label)
 
         self._last_refresh_label = QLabel("—")
+        self._last_refresh_label.setWordWrap(True)
         edit_layout.addRow("最近刷新", self._last_refresh_label)
 
         self._doctor_check_layout_label = QLabel("—")
+        self._doctor_check_layout_label.setWordWrap(True)
         edit_layout.addRow("环境检查 layout", self._doctor_check_layout_label)
 
         self._doctor_check_mode_label = QLabel("—")
+        self._doctor_check_mode_label.setWordWrap(True)
         edit_layout.addRow("环境检查 mode", self._doctor_check_mode_label)
 
         self._registry_compare_label = QLabel("—")
         self._registry_compare_label.setWordWrap(True)
+        self._registry_compare_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         edit_layout.addRow("总表对比", self._registry_compare_label)
 
         self._play_status_combo = NoWheelComboBox()
@@ -314,6 +339,18 @@ class GamesRegistryPanel(QWidget):
         if not self._section_visible:
             self._section_visible = True
             self.activate_section()
+        # Parent settings viewport width is final after show; wrap toolbar to it.
+        toolbar = getattr(self, "_toolbar", None)
+        reflow = getattr(toolbar, "reflow", None) if toolbar is not None else None
+        if callable(reflow):
+            reflow(force=True)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        toolbar = getattr(self, "_toolbar", None)
+        reflow = getattr(toolbar, "reflow", None) if toolbar is not None else None
+        if callable(reflow):
+            reflow()
 
     def hideEvent(self, event) -> None:
         if self._is_refresh_running() and self._refresh_worker is not None:
