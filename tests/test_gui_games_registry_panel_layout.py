@@ -93,15 +93,24 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
 
         play = panel._play_status_combo
         translation = panel._translation_status_combo
-        self.assertEqual(play.minimumWidth(), translation.minimumWidth())
         self.assertEqual(play.width(), translation.width())
+        self.assertEqual(play.minimumWidth(), play.maximumWidth())
+        self.assertEqual(translation.minimumWidth(), translation.maximumWidth())
         # Content-sized pair — must not stretch to the form field column.
         self.assertLess(play.width(), panel._name_edit.width() // 2)
+
+        # Simulate first-show remeasure: fixed width must keep the pair equal.
+        for combo in (play, translation):
+            combo.adjustSize()
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertEqual(play.width(), translation.width())
 
         engine = panel._engine_filter_combo
         tl_filter = panel._translation_filter_combo
         self.assertEqual(engine.width(), tl_filter.width())
-        self.assertEqual(engine.minimumWidth(), tl_filter.minimumWidth())
+        self.assertEqual(engine.minimumWidth(), engine.maximumWidth())
+        self.assertEqual(tl_filter.minimumWidth(), tl_filter.maximumWidth())
 
 
 if __name__ == "__main__":
