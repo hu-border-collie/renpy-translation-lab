@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from unittest import mock
 
 try:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 
     from gui_qt.app import MainWindow
-    from gui_qt.work_modes import WorkMode, WorkbenchNavItem
 except ImportError as exc:
     MainWindow = None  # type: ignore[assignment,misc]
     QApplication = None  # type: ignore[assignment,misc]
@@ -17,8 +18,11 @@ except ImportError as exc:
 else:
     IMPORT_ERROR = None
 
+# Pure work_modes imports stay outside the GUI try so meta tests run without PySide6.
 from gui_qt.work_modes import (
     WORKBENCH_NAV_ORDER,
+    WorkMode,
+    WorkbenchNavItem,
     default_work_mode_for_nav,
     workbench_nav_for_work_mode,
     workbench_nav_spec,
@@ -147,11 +151,38 @@ class GuiWorkbenchNavTests(unittest.TestCase):
         self.assertTrue(self.window.work_submode_combo.isHidden())
 
     def test_game_root_switch_clears_sessions(self) -> None:
-        self.window._mode_sessions[WorkMode.BATCH_TRANSLATION] = WorkbenchModeSession(
-            writeback_manifest_path="C:/old.json",
+        """Drive real _switch_game_root wiring, not only the clear helper."""
+        self.window._mode_sessions[WorkMode.KEYWORD_EXTRACTION] = WorkbenchModeSession(
+            writeback_manifest_path="C:/keyword-old.json",
         )
-        self.window._clear_all_mode_sessions()
-        self.assertEqual(self.window._mode_sessions, {})
+        self.window._mode_sessions[WorkMode.BATCH_TRANSLATION] = WorkbenchModeSession(
+            writeback_manifest_path="C:/batch-old.json",
+        )
+        self.window._writeback_manifest_path = "C:/batch-old.json"
+
+        with (
+            mock.patch.object(
+                self.window.state,
+                "set_game_root",
+                return_value=(Path("C:/Games/Example/work"), False),
+            ),
+            mock.patch.object(self.window.runner, "is_running", return_value=False),
+            mock.patch.object(self.window, "_is_doctor_running", return_value=False),
+            mock.patch.object(self.window, "_load_config_to_ui"),
+            mock.patch.object(self.window, "_refresh_diagnostics_context"),
+            mock.patch.object(self.window, "_invalidate_manifest_caches"),
+            mock.patch.object(self.window, "_apply_work_mode_ui"),
+        ):
+            ok = self.window._switch_game_root("C:/Games/Example/work")
+
+        self.assertTrue(ok)
+        # Prior keyword session must not survive the root switch.
+        self.assertNotIn(WorkMode.KEYWORD_EXTRACTION, self.window._mode_sessions)
+        # Active mode is re-captured after clear; old writeback path must be gone.
+        self.assertEqual(self.window._writeback_manifest_path, "")
+        active = self.window._mode_sessions.get(self.window._work_mode)
+        if active is not None:
+            self.assertEqual(active.writeback_manifest_path, "")
 
 
 if __name__ == "__main__":
