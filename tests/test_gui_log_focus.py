@@ -146,8 +146,8 @@ class GuiLogFocusTests(unittest.TestCase):
         self.assertIs(self.window.tab_widget.currentWidget(), workbench)
         self.assertTrue(self.window._workbench_log_drawer_expanded)
 
-    def test_probe_entrypoint_uses_expand_diagnostics_log(self) -> None:
-        """Runtime guard: probe must expand diagnostics log, not only the workbench drawer."""
+    def test_probe_entrypoint_uses_workbench_log_drawer(self) -> None:
+        """P2a: probe starts from batch execute; expand workbench drawer, not diagnostics."""
         drawer_calls, expand_calls = self._install_log_spies()
         self.window._current_diagnostics_manifest = lambda: (  # type: ignore[method-assign]
             "C:/tmp/manifest.json",
@@ -172,8 +172,8 @@ class GuiLogFocusTests(unittest.TestCase):
 
         self.window._on_run_probe()
 
-        self.assertEqual(len(expand_calls), 1)
-        self.assertEqual(len(drawer_calls), 0)
+        self.assertEqual(len(drawer_calls), 1)
+        self.assertEqual(len(expand_calls), 0)
         self.window.runner.run.assert_called_once()
 
     def test_start_translation_entrypoint_uses_workbench_drawer(self) -> None:

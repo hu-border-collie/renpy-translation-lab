@@ -204,6 +204,12 @@ QFrame#context_library_panel {
     border-radius: 10px;
 }
 
+QFrame#batch_advanced_frame {
+    background-color: ${bg_surface_alt};
+    border: 1px solid ${border_light};
+    border-radius: 10px;
+}
+
 QPushButton#batch_stage_btn {
     background-color: transparent;
     border: 1px solid ${border_default};

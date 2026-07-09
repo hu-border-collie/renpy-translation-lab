@@ -775,6 +775,9 @@ class MainWindow(QMainWindow):
         action_outer.addWidget(self.action_panel)
         layout.addWidget(action_frame)
 
+        # Batch · 执行 · 高级：试跑 / 拆分 (P2a / #164); 提交剩余包仍在主按钮行。
+        layout.addWidget(self._build_batch_advanced_tools_bar())
+
         self.timeline = WizardTimeline()
         self.timeline.setObjectName("workbench_timeline")
         self.timeline.setVisible(False)
@@ -1065,6 +1068,44 @@ class MainWindow(QMainWindow):
 
         self.tab_widget.addTab(tab, "工作台")
         self._sync_batch_stage_chrome()
+
+    def _build_batch_advanced_tools_bar(self) -> QFrame:
+        """Batch execute advanced strip: probe + split (P2a / #164)."""
+        frame = QFrame()
+        frame.setObjectName("batch_advanced_frame")
+        self.batch_advanced_frame = frame
+        outer = QVBoxLayout(frame)
+        outer.setContentsMargins(12, 8, 12, 8)
+        outer.setSpacing(6)
+
+        title = QLabel("高级工具")
+        title.setObjectName("action_group_label")
+        outer.addWidget(title)
+
+        self.batch_advanced_bar = FlowButtonBar(spacing=8)
+        self.batch_advanced_bar.setObjectName("batch_advanced_bar")
+        self.probe_btn = QPushButton("试跑样本请求")
+        self.probe_btn.setObjectName("secondary_btn")
+        self.probe_btn.setToolTip(
+            "对当前翻译包执行少量同步请求，提交批量任务前验证 API 与请求格式。"
+        )
+        self.probe_btn.clicked.connect(self._on_run_probe)
+        self.probe_btn.setEnabled(False)
+        self.batch_advanced_bar.add_widget(self.probe_btn, min_width=108)
+
+        self.split_btn = QPushButton("拆分翻译包")
+        self.split_btn.setObjectName("secondary_btn")
+        self.split_btn.setToolTip(
+            "将过大的翻译包拆成多个子包；拆分后需分别提交，RAG 为静态快照。"
+        )
+        self.split_btn.clicked.connect(self._on_run_split)
+        self.split_btn.setEnabled(False)
+        self.batch_advanced_bar.add_widget(self.split_btn, min_width=96)
+        self.batch_advanced_bar.finish_setup()
+        outer.addWidget(self.batch_advanced_bar)
+
+        frame.setVisible(False)
+        return frame
 
     def _build_context_library_panel(self) -> QFrame:
         """RAG / source-index status cards for the 上下文库 nav page (P1c / #162)."""
@@ -1694,7 +1735,8 @@ class MainWindow(QMainWindow):
         diag_hint = QLabel(
             "上方可查看任务上下文、命令参考与任务记录；下方显示原始命令输出。"
             "工作台任务运行时默认留在工作台并展开底部日志抽屉；"
-            "从本页启动的试跑 / 拆分 / A/B 会放大下方日志区域。"
+            "试跑 / 拆分请在「批量翻译 · 执行 · 高级工具」使用；"
+            "从本页启动的 A/B 对比会放大下方日志区域。"
         )
         diag_hint.setWordWrap(True)
         diag_hint.setObjectName("config_hint_label")
@@ -1721,16 +1763,6 @@ class MainWindow(QMainWindow):
             lambda: self._refresh_diagnostics_context(force=True)
         )
 
-        self.probe_btn = diagnostics_action_panel.add_translate_button(
-            QPushButton("试跑样本请求")
-        )
-        self.probe_btn.setObjectName("secondary_btn")
-        self.probe_btn.setToolTip(
-            "对当前翻译包执行少量同步请求，提交批量任务前验证 API 与请求格式。"
-        )
-        self.probe_btn.clicked.connect(self._on_run_probe)
-        self.probe_btn.setEnabled(False)
-
         self.compare_variants_btn = diagnostics_action_panel.add_translate_button(
             QPushButton("翻译 A/B 对比")
         )
@@ -1746,21 +1778,11 @@ class MainWindow(QMainWindow):
         )
         self.keyword_merge_btn.setObjectName("secondary_btn")
         self.keyword_merge_btn.setToolTip(
-            "快捷入口：主路径在工作台 · 结果/写回区的「合并到 glossary」。"
+            "快捷入口：主路径在工作台 · 关键词页「合并到 glossary」。"
             "勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。"
         )
         self.keyword_merge_btn.clicked.connect(self._on_open_keyword_merge)
         self.keyword_merge_btn.setEnabled(False)
-
-        self.split_btn = diagnostics_action_panel.add_translate_button(
-            QPushButton("拆分翻译包")
-        )
-        self.split_btn.setObjectName("secondary_btn")
-        self.split_btn.setToolTip(
-            "将过大的翻译包拆成多个子包；拆分后需分别提交，RAG 为静态快照。"
-        )
-        self.split_btn.clicked.connect(self._on_run_split)
-        self.split_btn.setEnabled(False)
 
         self.clear_log_btn = diagnostics_action_panel.add_translate_trailing(
             QPushButton("清空日志")
@@ -2055,9 +2077,31 @@ class MainWindow(QMainWindow):
                 style.polish(btn)
         if hasattr(self, "batch_stage_hint"):
             self.batch_stage_hint.setText(_BATCH_STAGE_HINTS[stage_index])
+        self._sync_batch_advanced_tools_chrome(stage_index=stage_index)
         # Result stage hosts writeback flow bars that may have reflowed while off-stage.
         if stage_index == _BATCH_STAGE_RESULT:
             self._reflow_button_bars()
+
+    def _sync_batch_advanced_tools_chrome(self, *, stage_index: int | None = None) -> None:
+        """Show probe/split only on batch · 执行 (P2a / #164)."""
+        if not hasattr(self, "batch_advanced_frame"):
+            return
+        is_batch = self._batch_stage_mode_active()
+        if stage_index is None:
+            stage_index = self._current_batch_stage_index()
+        show = is_batch and stage_index == _BATCH_STAGE_EXECUTE
+        self.batch_advanced_frame.setVisible(show)
+        if show and hasattr(self, "batch_advanced_bar"):
+            reflow = getattr(self.batch_advanced_bar, "reflow", None)
+            if callable(reflow):
+                reflow(force=True)
+        if show:
+            running = (
+                bool(getattr(self, "_task_running", False))
+                or (hasattr(self, "kill_btn") and self.kill_btn.isEnabled())
+            )
+            self._update_probe_btn_enabled(running=running)
+            self._update_split_btn_enabled(running=running)
 
     def _same_manifest_path(self, left: str, right: str) -> bool:
         if not left or not right:
@@ -2732,6 +2776,7 @@ class MainWindow(QMainWindow):
             "global_project_actions",
             "writeback_primary_bar",
             "writeback_issues_panel",
+            "batch_advanced_bar",
         ):
             panel = getattr(self, name, None)
             reflow = getattr(panel, "reflow", None) if panel is not None else None
@@ -5953,7 +5998,8 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
-        self._expand_diagnostics_log()
+        # Workbench entry (P2a): keep user on batch · 执行 with drawer logs.
+        self._show_workbench_log_drawer()
         self._active_command = "probe"
         self._probe_output_lines = []
         base_context = build_diagnostics_context(
@@ -6055,7 +6101,8 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
-        self._expand_diagnostics_log()
+        # Workbench entry (P2a): keep user on batch · 执行 with drawer logs.
+        self._show_workbench_log_drawer()
         self._active_command = "split"
         self._split_output_lines = []
         base_context = build_diagnostics_context(
