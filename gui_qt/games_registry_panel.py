@@ -95,6 +95,7 @@ class GamesRegistryPanel(QWidget):
         self._on_switch_project = on_switch_project
         self._auto_discover_on_show = auto_discover_on_show
         self._section_visible = False
+        self._registry_disk_signature: tuple[str, int] | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -304,7 +305,7 @@ class GamesRegistryPanel(QWidget):
 
     def activate_section(self) -> None:
         """Refresh view when the settings nav selects the workspace section."""
-        self._reload_table_from_disk()
+        self._reload_table_from_disk(force=False)
         if self._auto_discover_on_show:
             self._maybe_auto_discover_on_open()
 
@@ -320,6 +321,15 @@ class GamesRegistryPanel(QWidget):
             self._refresh_worker.wait(5000)
         super().hideEvent(event)
 
+    def _registry_disk_signature_now(self) -> tuple[str, int]:
+        registry_path = resolve_registry_path(self._workspace_root)
+        path_text = str(registry_path)
+        try:
+            mtime_ns = registry_path.stat().st_mtime_ns
+        except OSError:
+            mtime_ns = -1
+        return path_text, mtime_ns
+
     def _current_doctor_report(self) -> dict | None:
         if self._get_doctor_report is None:
             return None
@@ -332,12 +342,19 @@ class GamesRegistryPanel(QWidget):
             return value
         return REGISTRY_SORT_NAME_ASC
 
-    def _reload_table_from_disk(self) -> None:
+    def _reload_table_from_disk(self, *, force: bool = True) -> None:
+        signature = self._registry_disk_signature_now()
+        if not force and self._registry_disk_signature == signature:
+            # Unchanged registry file: keep rows, only re-apply selection highlight.
+            self._on_selection_changed()
+            return
+
         registry_path = resolve_registry_path(self._workspace_root)
         rows, summary = load_registry_rows(
             workspace_root=self._workspace_root,
             registry_path=registry_path,
         )
+        self._registry_disk_signature = signature
         self._all_rows = rows
         if rows:
             self._registry_summary = summary

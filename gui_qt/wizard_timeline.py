@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 from PySide6.QtCore import Qt, QTimer, QPoint, QRect
-from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont
+from PySide6.QtGui import QHideEvent, QPainter, QColor, QPen, QBrush, QFont, QShowEvent
 from PySide6.QtWidgets import QWidget
 
 
@@ -65,14 +65,27 @@ class WizardTimeline(QWidget):
         """Set the currently active step key and its status."""
         self.current_step_key = step_key
         self.status = status
+        self._sync_animation_timer()
+        self.update()
 
-        if status in {"running", "waiting"}:
+    def _should_animate(self) -> bool:
+        return self.isVisible() and self.status in {"running", "waiting"}
+
+    def _sync_animation_timer(self) -> None:
+        """Keep the pulse timer running only while the timeline is visible and active."""
+        if self._should_animate():
             if not self._anim_timer.isActive():
                 self._anim_timer.start(50)  # 20 FPS
         else:
             self._anim_timer.stop()
 
-        self.update()
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        self._sync_animation_timer()
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        self._anim_timer.stop()
+        super().hideEvent(event)
 
     def _on_anim_tick(self) -> None:
         self._anim_tick_count += 1

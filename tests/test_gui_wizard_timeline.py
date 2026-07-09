@@ -44,25 +44,38 @@ class WizardTimelineAnimationTests(unittest.TestCase):
     def test_ready_status_does_not_start_pulse_timer(self):
         timeline = WizardTimeline()
         timeline.set_steps([("build", "准备"), ("submit", "提交")])
+        timeline.show()
         timeline.set_current_step("submit", "ready")
         self.assertFalse(timeline._anim_timer.isActive())
 
     def test_waiting_status_starts_pulse_timer(self):
         timeline = WizardTimeline()
         timeline.set_steps([("build", "准备"), ("submit", "提交")])
+        timeline.show()
         timeline.set_current_step("submit", "waiting")
         self.assertTrue(timeline._anim_timer.isActive())
 
     def test_running_status_starts_pulse_timer(self):
         timeline = WizardTimeline()
         timeline.set_steps([("build", "准备"), ("submit", "提交")])
+        timeline.show()
         timeline.set_current_step("submit", "running")
         self.assertTrue(timeline._anim_timer.isActive())
 
     def test_stale_status_does_not_start_pulse_timer(self):
         timeline = WizardTimeline()
         timeline.set_steps([("build", "准备"), ("submit", "提交")])
+        timeline.show()
         timeline.set_current_step("submit", "stale")
+        self.assertFalse(timeline._anim_timer.isActive())
+
+    def test_hide_stops_pulse_timer(self):
+        timeline = WizardTimeline()
+        timeline.set_steps([("build", "准备"), ("submit", "提交")])
+        timeline.show()
+        timeline.set_current_step("submit", "running")
+        self.assertTrue(timeline._anim_timer.isActive())
+        timeline.hide()
         self.assertFalse(timeline._anim_timer.isActive())
 
 
