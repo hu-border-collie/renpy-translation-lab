@@ -1052,6 +1052,8 @@ class MainWindow(QMainWindow):
         row.setSpacing(6)
 
         self._batch_stage_buttons: list[QPushButton] = []
+        self._batch_stage_button_group = QButtonGroup(frame)
+        self._batch_stage_button_group.setExclusive(True)
         for index, label in enumerate(_BATCH_STAGE_LABELS):
             btn = QPushButton(f"{index + 1}  {label}")
             btn.setObjectName("batch_stage_btn")
@@ -1060,6 +1062,7 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(
                 lambda _checked=False, idx=index: self._on_batch_stage_clicked(idx)
             )
+            self._batch_stage_button_group.addButton(btn, index)
             row.addWidget(btn)
             self._batch_stage_buttons.append(btn)
             if index < len(_BATCH_STAGE_LABELS) - 1:
@@ -1848,9 +1851,13 @@ class MainWindow(QMainWindow):
         self._show_workbench_log_drawer()
 
     def _focus_workbench_status_tab(self, index: int) -> None:
-        if 0 <= index < self.workbench_status_tabs.count():
-            self.workbench_status_tabs.setCurrentIndex(index)
+        if not (0 <= index < self.workbench_status_tabs.count()):
+            return
+        # Avoid double chrome sync: currentChanged already calls _sync_batch_stage_chrome.
+        if self.workbench_status_tabs.currentIndex() == index:
             self._sync_batch_stage_chrome(stage_index=index)
+            return
+        self.workbench_status_tabs.setCurrentIndex(index)
 
     def _on_workbench_status_tab_changed(self, index: int) -> None:
         self._sync_batch_stage_chrome(stage_index=index)
@@ -1870,10 +1877,15 @@ class MainWindow(QMainWindow):
         return max(_BATCH_STAGE_PREPARE, min(_BATCH_STAGE_RESULT, index))
 
     def _sync_batch_stage_chrome(self, *, stage_index: int | None = None) -> None:
-        """Show/hide and restyle the batch 准备/执行/结果 strip."""
+        """Show/hide stage strip; in batch mode hide duplicate status tab bar."""
         is_batch = self._batch_stage_mode_active()
         if hasattr(self, "batch_stage_bar"):
             self.batch_stage_bar.setVisible(is_batch)
+        if hasattr(self, "workbench_status_tabs"):
+            tab_bar = self.workbench_status_tabs.tabBar()
+            if tab_bar is not None:
+                # Stage strip replaces the flat three-tab chrome in batch mode.
+                tab_bar.setVisible(not is_batch)
         if not is_batch or not hasattr(self, "_batch_stage_buttons"):
             return
         if stage_index is None:
@@ -3596,9 +3608,10 @@ class MainWindow(QMainWindow):
                 return
 
     def _capture_mode_session(self) -> WorkbenchModeSession:
-        stage_index = 0
+        # Align with product default (执行) when tabs are unavailable.
+        stage_index = _BATCH_STAGE_EXECUTE
         if hasattr(self, "workbench_status_tabs"):
-            stage_index = max(0, self.workbench_status_tabs.currentIndex())
+            stage_index = self._current_batch_stage_index()
         return WorkbenchModeSession(
             workflow=getattr(self, "_workflow", None),
             workflow_step_output_lines=list(
@@ -3626,7 +3639,8 @@ class MainWindow(QMainWindow):
         self._completed_manifest_snapshot = session.completed_manifest_snapshot
         self._viewing_completed_manifest = session.viewing_completed_manifest
         self._keyword_merge_candidates_path = session.keyword_merge_candidates_path
-        self._pending_restore_stage_index = int(session.stage_index or 0)
+        # Keep 0 (准备) as a real stage — do not use `or` falsy fallback.
+        self._pending_restore_stage_index = int(session.stage_index)
 
     def _clear_all_mode_sessions(self) -> None:
         """Clear per-mode sessions; safe on partially constructed MainWindow test stubs."""

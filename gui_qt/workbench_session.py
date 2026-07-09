@@ -19,8 +19,8 @@ class WorkbenchModeSession:
     completed_manifest_snapshot: dict[str, object] | None = None
     viewing_completed_manifest: bool = False
     keyword_merge_candidates_path: str = ""
-    # Optional UI snapshot keys (status strings) for tests / future stage index.
-    stage_index: int = 0
+    # Workbench status-tab index (batch: 0=准备, 1=执行, 2=结果). Default 执行.
+    stage_index: int = 1
 
     def is_empty(self) -> bool:
         return (
