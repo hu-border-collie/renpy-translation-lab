@@ -18,8 +18,8 @@
 ### 配置与运行
 
 - [安装与本地配置](setup.md)：本地私有配置、游戏 `work` 目录、Ren'Py SDK / TL 模板和运行模式。
-- [GUI 工作台](gui_workbench.md)：可选 PySide6 图形界面的安装、任务模式（批量翻译 / 同步翻译 / 关键词 / 订正 / 翻译 A/B 对比）、诊断页和写回安全边界。
-- [GUI 信息架构重组计划](gui_ia_redesign.md)：工作台左导航、底部日志抽屉、设置/诊断归位与 P0–P3 分阶段交付（实现进行中时以该文档为 SSOT）。
+- [GUI 工作台](gui_workbench.md)：可选 PySide6 图形界面（左导航任务页、全局项目栏、日志抽屉、批量三阶段、写回安全边界与诊断工具）。
+- [GUI 信息架构重组计划](gui_ia_redesign.md)：P0–P3 分阶段交付 SSOT（**P0–P1 已落地**；P2/P3 进行中时以该文档为准）。
 - [工作区项目总表](games_registry.md)：`games_registry.json` 与 `GAMES.md`、CLI / GUI 刷新、与写回和 environment check 的边界。
 
 ### Batch 与安全
