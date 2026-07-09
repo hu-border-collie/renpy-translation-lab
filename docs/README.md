@@ -6,6 +6,7 @@
 
 - 只想先跑通一次 CLI 翻译：先读根目录 `README.md`，再读 [安装与本地配置](setup.md) 和 [Batch 工作流与安全检查](batch_workflows.md)。
 - 想用图形界面：先读 [GUI 工作台](gui_workbench.md)，再按需回看 [安装与本地配置](setup.md)。
+- 想了解或参与 GUI 信息架构重组：读 [GUI 信息架构重组计划](gui_ia_redesign.md)。
 - 想管理工作区内多个游戏项目总表：读 [工作区项目总表](games_registry.md)。
 - 想启用 RAG、原文索引或剧情图谱：读 [上下文系统](context_systems.md)。
 - 想做角色关系或语义分析：读 [关系与语义分析](relation_analysis.md)，内部模块见 [`relation_analyzer/README.md`](../relation_analyzer/README.md)。
@@ -18,6 +19,7 @@
 
 - [安装与本地配置](setup.md)：本地私有配置、游戏 `work` 目录、Ren'Py SDK / TL 模板和运行模式。
 - [GUI 工作台](gui_workbench.md)：可选 PySide6 图形界面的安装、任务模式（批量翻译 / 同步翻译 / 关键词 / 订正 / 翻译 A/B 对比）、诊断页和写回安全边界。
+- [GUI 信息架构重组计划](gui_ia_redesign.md)：工作台左导航、底部日志抽屉、设置/诊断归位与 P0–P3 分阶段交付（实现进行中时以该文档为 SSOT）。
 - [工作区项目总表](games_registry.md)：`games_registry.json` 与 `GAMES.md`、CLI / GUI 刷新、与写回和 environment check 的边界。
 
 ### Batch 与安全
