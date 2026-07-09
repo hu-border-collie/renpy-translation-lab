@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from unittest.mock import MagicMock
 
 try:
     from PySide6.QtWidgets import QApplication
@@ -34,6 +36,20 @@ class GuiLogFocusTests(unittest.TestCase):
         self.window.close()
         self.window.deleteLater()
 
+    def _install_log_spies(self) -> tuple[list[object], list[object]]:
+        drawer_calls: list[object] = []
+        expand_calls: list[object] = []
+
+        def show_drawer() -> None:
+            drawer_calls.append(True)
+
+        def expand_log(*, switch_tab: bool = True) -> None:
+            expand_calls.append({"switch_tab": switch_tab})
+
+        self.window._show_workbench_log_drawer = show_drawer  # type: ignore[method-assign]
+        self.window._expand_diagnostics_log = expand_log  # type: ignore[method-assign]
+        return drawer_calls, expand_calls
+
     def test_log_views_share_document(self) -> None:
         self.assertIs(
             self.window.workbench_log_view.document(),
@@ -64,7 +80,10 @@ class GuiLogFocusTests(unittest.TestCase):
     def test_expand_diagnostics_log_switches_to_diagnostics_tab(self) -> None:
         workbench = self.window.tab_widget.widget(0)
         self.window.tab_widget.setCurrentWidget(workbench)
+        self.window.diagnostics_splitter.setSizes([420, 180])
         idle_sizes = list(self.window.diagnostics_splitter.sizes())
+        idle_context = idle_sizes[0]
+        idle_log = idle_sizes[1]
 
         self.window._expand_diagnostics_log()
 
@@ -72,13 +91,19 @@ class GuiLogFocusTests(unittest.TestCase):
             self.window.tab_widget.currentWidget(),
             self.window._diagnostics_tab,
         )
-        # Animation may still be running; force end sizes for a stable assertion.
-        total = max(sum(self.window.diagnostics_splitter.sizes()), sum(idle_sizes), 1)
-        target_context = int(total * 0.32)
-        self.window.diagnostics_splitter.setSizes([target_context, total - target_context])
+        # Drive the running animation to its end so we assert real splitter output.
+        anim = getattr(self.window, "_splitter_anim", None)
+        self.assertIsNotNone(anim)
+        assert anim is not None
+        anim.setCurrentTime(anim.duration())
+        QApplication.processEvents()
+
         sizes = self.window.diagnostics_splitter.sizes()
+        self.assertEqual(len(sizes), 2)
         self.assertGreater(sizes[1], 0)
-        self.assertLess(sizes[0], total)
+        # Running layout shrinks the context pane and grows the log pane.
+        self.assertLess(sizes[0], idle_context)
+        self.assertGreater(sizes[1], idle_log)
 
     def test_expand_diagnostics_log_without_switch_keeps_workbench(self) -> None:
         workbench = self.window.tab_widget.widget(0)
@@ -122,20 +147,50 @@ class GuiLogFocusTests(unittest.TestCase):
         self.assertTrue(self.window._workbench_log_drawer_expanded)
 
     def test_probe_entrypoint_uses_expand_diagnostics_log(self) -> None:
-        """Regression: diagnostics tools must not be rewritten to workbench-only reveal."""
-        import inspect
-        from gui_qt import app as app_module
+        """Runtime guard: probe must expand diagnostics log, not only the workbench drawer."""
+        drawer_calls, expand_calls = self._install_log_spies()
+        self.window._current_diagnostics_manifest = lambda: (  # type: ignore[method-assign]
+            "C:/tmp/manifest.json",
+            {
+                "version": 1,
+                "mode": "translation",
+                "input_jsonl_path": "C:/tmp/requests.jsonl",
+            },
+        )
+        self.window._prompt_probe_options = lambda: {  # type: ignore[method-assign]
+            "limit": 1,
+            "offset": 0,
+            "api_key_index": None,
+        }
+        self.window._set_diagnostics_context = lambda *_a, **_k: None  # type: ignore[method-assign]
+        self.window._append_log = lambda _text: None  # type: ignore[method-assign]
+        self.window._set_task_running = lambda _running: None  # type: ignore[method-assign]
+        self.window.runner = MagicMock()
+        self.window.state.get_batch_script_path = lambda: Path("C:/tool/gemini_translate_batch.py")  # type: ignore[method-assign]
+        self.window.state.get_logs_dir = lambda: Path("C:/tool/logs")  # type: ignore[method-assign]
+        self.window._submit_max_cost_from_config = lambda: 0.0  # type: ignore[method-assign]
 
-        source = inspect.getsource(app_module.MainWindow._on_run_probe)
-        self.assertIn("_expand_diagnostics_log", source)
-        self.assertNotIn("_show_workbench_log_drawer", source)
+        self.window._on_run_probe()
+
+        self.assertEqual(len(expand_calls), 1)
+        self.assertEqual(len(drawer_calls), 0)
+        self.window.runner.run.assert_called_once()
 
     def test_start_translation_entrypoint_uses_workbench_drawer(self) -> None:
-        import inspect
-        from gui_qt import app as app_module
+        """Runtime guard: starting translation expands the workbench drawer only."""
+        drawer_calls, expand_calls = self._install_log_spies()
+        self.window.state.get_game_root = lambda: "C:/game/work"  # type: ignore[method-assign]
+        self.window._doctor_allows_translate_action = lambda: True  # type: ignore[method-assign]
+        self.window._confirm_unsaved_config_before_workflow = lambda: True  # type: ignore[method-assign]
+        self.window._begin_translation_workflow = lambda *_a, **_k: None  # type: ignore[method-assign]
+        self.window._clear_completed_manifest_snapshot = lambda: None  # type: ignore[method-assign]
+        self.window._set_writeback_summary = lambda *_a, **_k: None  # type: ignore[method-assign]
+        self.window._clear_log_view = lambda: None  # type: ignore[method-assign]
 
-        source = inspect.getsource(app_module.MainWindow._on_start_translation)
-        self.assertIn("_show_workbench_log_drawer", source)
+        self.window._on_start_translation()
+
+        self.assertEqual(len(drawer_calls), 1)
+        self.assertEqual(len(expand_calls), 0)
 
 
 if __name__ == "__main__":
