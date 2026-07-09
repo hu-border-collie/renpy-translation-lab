@@ -940,7 +940,12 @@ class MainWindow(QMainWindow):
         writeback_scroll.setWidget(writeback_content)
         writeback_layout.addWidget(writeback_scroll, 1)
 
-        # Primary writeback actions — wrap on narrow panes.
+        # Primary writeback row: main action(s) + 「问题处理」 toggle on one strip
+        # so fullscreen result view is not a vertical stack of separate toolbars.
+        primary_row = QHBoxLayout()
+        primary_row.setSpacing(8)
+        primary_row.setContentsMargins(0, 0, 0, 0)
+
         self.writeback_primary_bar = FlowButtonBar(spacing=8)
         self.writeback_primary_bar.setObjectName("writeback_primary_bar")
         self.apply_btn = QPushButton("写回翻译")
@@ -954,12 +959,6 @@ class MainWindow(QMainWindow):
         self.apply_revision_btn.setEnabled(False)
         self.apply_revision_btn.setVisible(False)
         self.writeback_primary_bar.add_widget(self.apply_revision_btn, min_width=96)
-        self.recheck_btn = QPushButton("重新检查")
-        self.recheck_btn.setObjectName("secondary_btn")
-        self.recheck_btn.clicked.connect(self._on_recheck_writeback)
-        self.recheck_btn.setEnabled(False)
-        self.recheck_btn.setVisible(False)
-        self.writeback_primary_bar.add_widget(self.recheck_btn, min_width=88)
         self.keyword_merge_writeback_btn = QPushButton("合并到 glossary")
         self.keyword_merge_writeback_btn.setObjectName("secondary_btn")
         self.keyword_merge_writeback_btn.setToolTip(
@@ -970,24 +969,25 @@ class MainWindow(QMainWindow):
         self.keyword_merge_writeback_btn.setVisible(False)
         self.writeback_primary_bar.add_widget(self.keyword_merge_writeback_btn, min_width=120)
         self.writeback_primary_bar.finish_setup()
-        writeback_layout.addWidget(self.writeback_primary_bar)
+        primary_row.addWidget(self.writeback_primary_bar, 1)
 
-        # Recovery tools collapse under 「问题处理」 (GUI IA P0b / #159).
-        issues_header = QHBoxLayout()
-        issues_header.setSpacing(8)
+        # Recovery tools collapse under 「问题处理」 (GUI IA P0b / #159; 重新检查 included).
         self.writeback_issues_toggle_btn = QPushButton("问题处理 ▸")
         self.writeback_issues_toggle_btn.setObjectName("secondary_btn")
         self.writeback_issues_toggle_btn.setToolTip(
-            "展开补译、修补、问题清单等恢复操作；检查为「需处理」时会自动提示。"
+            "展开补译、修补、问题清单、重新检查等恢复操作；检查为「需处理」时会自动提示。"
         )
         self.writeback_issues_toggle_btn.clicked.connect(self._toggle_writeback_issues_panel)
-        issues_header.addWidget(self.writeback_issues_toggle_btn)
+        self.writeback_issues_toggle_btn.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        self.writeback_issues_toggle_btn.setMinimumWidth(100)
+        primary_row.addWidget(self.writeback_issues_toggle_btn, 0)
         self.writeback_issues_badge = QLabel("")
         self.writeback_issues_badge.setObjectName("writeback_issues_badge")
         self.writeback_issues_badge.setVisible(False)
-        issues_header.addWidget(self.writeback_issues_badge)
-        issues_header.addStretch()
-        writeback_layout.addLayout(issues_header)
+        primary_row.addWidget(self.writeback_issues_badge, 0)
+        writeback_layout.addLayout(primary_row)
 
         self.writeback_issues_panel = FlowButtonBar(spacing=8, row_spacing=6)
         self.writeback_issues_panel.setObjectName("writeback_issues_panel")
@@ -1017,6 +1017,13 @@ class MainWindow(QMainWindow):
         self.repair_btn.setEnabled(False)
         self.repair_btn.setVisible(False)
         self.writeback_issues_panel.add_widget(self.repair_btn, min_width=88)
+        # Design SSOT: 重新检查 lives under 「问题处理」, not next to 写回翻译.
+        self.recheck_btn = QPushButton("重新检查")
+        self.recheck_btn.setObjectName("secondary_btn")
+        self.recheck_btn.clicked.connect(self._on_recheck_writeback)
+        self.recheck_btn.setEnabled(False)
+        self.recheck_btn.setVisible(False)
+        self.writeback_issues_panel.add_widget(self.recheck_btn, min_width=88)
         self.apply_failure_btn = QPushButton("查看写回失败报告")
         self.apply_failure_btn.setObjectName("secondary_btn")
         self.apply_failure_btn.clicked.connect(self._open_apply_failure_report)
@@ -1910,6 +1917,9 @@ class MainWindow(QMainWindow):
                 style.polish(btn)
         if hasattr(self, "batch_stage_hint"):
             self.batch_stage_hint.setText(_BATCH_STAGE_HINTS[stage_index])
+        # Result stage hosts writeback flow bars that may have reflowed while off-stage.
+        if stage_index == _BATCH_STAGE_RESULT:
+            self._reflow_button_bars()
 
     def _same_manifest_path(self, left: str, right: str) -> bool:
         if not left or not right:

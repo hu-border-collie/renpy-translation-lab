@@ -108,6 +108,42 @@ class GuiButtonLayoutMatrixTests(unittest.TestCase):
         self.assertIsInstance(self.window.writeback_primary_bar, FlowButtonBar)
         self.assertIsInstance(self.window.writeback_issues_panel, FlowButtonBar)
 
+    def test_result_writeback_actions_single_row_when_wide(self) -> None:
+        """Fullscreen-ish shell: 问题处理 tools must not stack into many rows."""
+        self.window.resize(1600, 900)
+        self.window.show()
+        self.window._set_work_mode(WorkMode.BATCH_TRANSLATION, refresh_manifest_writeback=False)
+        self.window._focus_workbench_status_tab(2)
+        self.window._set_writeback_issues_expanded(True)
+        for _ in range(8):
+            self._app.processEvents()
+        self.window._reflow_button_bars()
+        for _ in range(6):
+            self._app.processEvents()
+
+        page = self.window.workbench_status_tabs.widget(2)
+        self.assertGreaterEqual(page.width(), 1000)
+
+        # Apply + 问题处理 toggle share one horizontal band (not stacked toolbars).
+        apply_tl = self.window.apply_btn.mapTo(page, self.window.apply_btn.rect().topLeft())
+        toggle_tl = self.window.writeback_issues_toggle_btn.mapTo(
+            page, self.window.writeback_issues_toggle_btn.rect().topLeft()
+        )
+        self.assertLessEqual(
+            abs(apply_tl.y() - toggle_tl.y()),
+            12,
+            msg=f"写回翻译 / 问题处理 should share a row; y={apply_tl.y()} vs {toggle_tl.y()}",
+        )
+        self.assertGreater(toggle_tl.x(), apply_tl.x())
+
+        # Dense recovery strip stays a single flow row when the page is wide.
+        panel = self.window.writeback_issues_panel
+        self.assertEqual(panel._root.count(), 1, msg="issues panel should not wrap at 1600px shell")
+        visible = [b for b in panel._items if not b.isHidden() and b.isVisible()]
+        self.assertGreaterEqual(len(visible), 2)
+        ys = {b.mapTo(page, b.rect().topLeft()).y() for b in visible}
+        self.assertEqual(len(ys), 1, msg=f"recovery buttons on multiple Y rows: {sorted(ys)}")
+
 
 class FlowButtonBarUnitTests(unittest.TestCase):
     @classmethod
@@ -130,6 +166,20 @@ class FlowButtonBarUnitTests(unittest.TestCase):
         self._app.processEvents()
         # More than one row layout item means wrapping happened.
         self.assertGreaterEqual(bar._root.count(), 2)
+
+    @unittest.skipIf(QApplication is None, "GUI unavailable")
+    def test_flow_bar_single_row_when_wide(self) -> None:
+        bar = FlowButtonBar(spacing=8)
+        for label in ("查看问题清单", "生成补译包", "继续补译", "同步修补", "重新检查", "补救命令"):
+            btn = QPushButton(label)
+            bar.add_widget(btn, min_width=100)
+        bar.finish_setup()
+        bar.resize(1200, 80)
+        bar.show()
+        self._app.processEvents()
+        bar.reflow(force=True)
+        self._app.processEvents()
+        self.assertEqual(bar._root.count(), 1)
 
 
 if __name__ == "__main__":

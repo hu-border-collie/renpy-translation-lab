@@ -1,7 +1,7 @@
 """Responsive layouts for workbench / settings / diagnostics button groups."""
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -11,6 +11,19 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QVBoxLayout,
     QWidget,
+)
+
+# Qt often keeps hidden tab pages at this default until first real layout pass.
+_UNLAID_OUT_DEFAULT_WIDTH = 640
+
+# Prefer these ancestors when a flow bar is still at the default width (off-stage tab).
+_CONTENT_WIDTH_OBJECT_NAMES = frozenset(
+    {
+        "workbench_writeback_page",
+        "workbench_status_tabs",
+        "workbench_page",
+        "workbench_stack",
+    }
 )
 
 
@@ -39,14 +52,37 @@ def widget_layout_width(widget: QWidget, *, fallback: int = 88) -> int:
 
 
 def effective_widget_width(widget: QWidget, *, fallback: int = 720) -> int:
-    width = widget.width()
-    if width > 0:
-        return width
+    """Width available for laying out children of a flow / action strip.
+
+    Hidden ``QTabWidget`` pages often keep Qt's default ~640px size until shown.
+    When the bar itself still looks un-laid-out, prefer a named content ancestor
+    (writeback page / status tabs) so off-stage reflow targets the real shell width.
+    """
+    own = int(widget.width() or 0)
+    ancestor_w = 0
     parent = widget.parentWidget()
-    while parent is not None:
-        if parent.width() > 0:
-            return parent.width()
+    depth = 0
+    while parent is not None and depth < 16:
+        pw = int(parent.width() or 0)
+        name = parent.objectName() or ""
+        if name in _CONTENT_WIDTH_OBJECT_NAMES and pw > ancestor_w:
+            ancestor_w = pw
+        elif parent.isVisible() and pw > ancestor_w and name:
+            # Any visibly laid-out named chrome is better than the 640 default.
+            if pw > _UNLAID_OUT_DEFAULT_WIDTH:
+                ancestor_w = max(ancestor_w, pw)
         parent = parent.parentWidget()
+        depth += 1
+
+    if own > _UNLAID_OUT_DEFAULT_WIDTH:
+        return own
+    if widget.isVisible() and own > 0 and ancestor_w <= _UNLAID_OUT_DEFAULT_WIDTH:
+        return own
+    if ancestor_w > 0:
+        # Account for typical page margins when borrowing ancestor width.
+        return max(own, ancestor_w - 24) if own > 0 else max(120, ancestor_w - 24)
+    if own > 0:
+        return own
     return fallback
 
 
@@ -56,7 +92,8 @@ def clear_layout(layout: QLayout) -> None:
         child = item.layout()
         if child is not None:
             clear_layout(child)
-            child.deleteLater()
+            # Drop nested layouts immediately so rebuild can re-parent widgets cleanly.
+            child.setParent(None)
 
 
 class ResponsiveActionPanel(QFrame):
@@ -258,6 +295,10 @@ class FlowButtonBar(QFrame):
         self._signature = signature
         self._rebuild()
 
+    def _schedule_reflow(self) -> None:
+        """Reflow after the current event so parent/tab geometry is final."""
+        QTimer.singleShot(0, lambda: self.reflow(force=True))
+
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self.reflow()
@@ -265,6 +306,7 @@ class FlowButtonBar(QFrame):
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
         self.reflow(force=True)
+        self._schedule_reflow()
 
     def _layout_signature(self) -> tuple[object, ...]:
         available = effective_widget_width(self, fallback=800)
