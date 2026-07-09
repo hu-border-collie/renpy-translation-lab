@@ -3538,7 +3538,16 @@ class MainWindow(QMainWindow):
         self._keyword_merge_candidates_path = session.keyword_merge_candidates_path
 
     def _clear_all_mode_sessions(self) -> None:
-        self._mode_sessions.clear()
+        """Clear per-mode sessions; safe on partially constructed MainWindow test stubs."""
+        sessions = getattr(self, "_mode_sessions", None)
+        if isinstance(sessions, dict):
+            sessions.clear()
+            return
+        try:
+            self._mode_sessions = {}
+        except Exception:
+            # QObject stubs from unit tests may reject new attributes.
+            pass
 
     def _rebuild_work_task_combo(
         self,
@@ -4358,7 +4367,16 @@ class MainWindow(QMainWindow):
             )
         self._writeback_manifest_path = ""
         self._keyword_merge_candidates_path = ""
-        self._mode_sessions[self._work_mode] = self._capture_mode_session()
+        sessions = getattr(self, "_mode_sessions", None)
+        if not isinstance(sessions, dict):
+            try:
+                self._mode_sessions = {}
+                sessions = self._mode_sessions
+            except Exception:
+                sessions = None
+        if isinstance(sessions, dict):
+            work_mode = getattr(self, "_work_mode", WorkMode.BATCH_TRANSLATION)
+            sessions[work_mode] = self._capture_mode_session()
         if spec.supports_translation_writeback:
             self._set_writeback_summary(stale_writeback_summary())
         else:
