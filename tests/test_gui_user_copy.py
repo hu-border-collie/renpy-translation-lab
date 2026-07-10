@@ -82,6 +82,16 @@ class GuiUserCopyTests(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertFalse(recommendation_requires_attention([code]))
 
+    def test_workflow_state_messages_match_primary_recommendation_copy(self):
+        from gui_qt.user_copy import (
+            DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES,
+            DOCTOR_WORKFLOW_STATE_MESSAGES,
+        )
+
+        for code, message in DOCTOR_WORKFLOW_STATE_MESSAGES.items():
+            with self.subTest(code=code):
+                self.assertEqual(message, DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES[code])
+
 
 if __name__ == "__main__":
     unittest.main()

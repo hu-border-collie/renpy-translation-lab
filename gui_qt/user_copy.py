@@ -102,11 +102,16 @@ DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES: dict[str, str] = {
     doctor_rec.UNKNOWN: DOCTOR_RECOMMENDATION_UNKNOWN_SUMMARY,
 }
 
+# Keep workflow-state copy in lockstep with primary recommendation messages.
+_SHARED_WORKFLOW_STATE_CODES = (
+    doctor_rec.SUBSTANTIALLY_COMPLETE,
+    doctor_rec.START_INCREMENTAL_BATCH,
+    doctor_rec.NO_PENDING_LINES,
+    doctor_rec.START_PENDING_BATCH,
+)
 DOCTOR_WORKFLOW_STATE_MESSAGES: dict[str, str] = {
-    doctor_rec.SUBSTANTIALLY_COMPLETE: "项目已基本译完；剩余待译行很少，可忽略或按需补译。",
-    doctor_rec.START_INCREMENTAL_BATCH: "补译环境已就绪，可以开始批量翻译。",
-    doctor_rec.NO_PENDING_LINES: _NO_PENDING_STATUS_MESSAGE,
-    doctor_rec.START_PENDING_BATCH: "翻译环境已就绪，可以开始批量翻译。",
+    code: DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES[code]
+    for code in _SHARED_WORKFLOW_STATE_CODES
 }
 
 # Legacy recommendation codes that mean "ready / no action required" (do not elevate status).

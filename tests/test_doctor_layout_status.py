@@ -251,19 +251,21 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             },
         }
 
-        recommendations = batch_mod.collect_doctor_recommendations(report)
+        # Production gate used by collect_doctor_report(): required prep clears workflow_state.
+        finalized = batch_mod.finalize_doctor_actionable_signals(report)
 
-        self.assertEqual(len(recommendations), 1)
-        self.assertEqual(recommendations[0]["code"], doctor_rec.BOOTSTRAP_RAG)
-        self.assertNotIn(doctor_rec.START_PENDING_BATCH, doctor_rec.doctor_recommendation_codes(recommendations))
-        # Required prep must suppress readiness-flavored workflow_state (CLI dual-signal).
-        phase = batch_mod.collect_doctor_workflow_state(report)
-        self.assertEqual(phase, doctor_rec.START_INCREMENTAL_BATCH)
-        self.assertTrue(doctor_rec.recommendations_block_workflow_state(recommendations))
-        # Same gate as collect_doctor_report(): block phase when required prep exists.
-        if doctor_rec.recommendations_block_workflow_state(recommendations):
-            phase = ""
-        self.assertEqual(phase, "")
+        self.assertEqual(len(finalized["recommendations"]), 1)
+        self.assertEqual(finalized["recommendations"][0]["code"], doctor_rec.BOOTSTRAP_RAG)
+        self.assertNotIn(
+            doctor_rec.START_PENDING_BATCH,
+            doctor_rec.doctor_recommendation_codes(finalized["recommendations"]),
+        )
+        # Without the gate this scenario would emit start_incremental_batch.
+        self.assertEqual(
+            batch_mod.collect_doctor_workflow_state(report),
+            doctor_rec.START_INCREMENTAL_BATCH,
+        )
+        self.assertEqual(finalized["workflow_state"], "")
 
     def test_ready_incremental_translation_has_no_recommendation(self):
         report = _layout_report(

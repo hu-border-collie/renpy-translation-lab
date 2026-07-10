@@ -8725,8 +8725,16 @@ def collect_doctor_report():
     layout_context = collect_doctor_layout_context(report)
     report.update(layout_context)
     report['layout_status'] = assess_doctor_layout_status(report, layout_context)
-    # Recommendations first: required prep suppresses readiness-flavored workflow_state
-    # so CLI consumers do not see "start_*" alongside bootstrap_source_index / bootstrap_rag.
+    finalize_doctor_actionable_signals(report)
+    return report
+
+
+def finalize_doctor_actionable_signals(report):
+    """Attach recommendations + workflow_state with required-prep gate.
+
+    Recommendations are computed first so required prep (e.g. bootstrap_rag)
+    can suppress readiness-flavored workflow codes and avoid CLI dual-signal.
+    """
     report['recommendations'] = collect_doctor_recommendations(report)
     workflow_state = collect_doctor_workflow_state(report)
     if workflow_state and doctor_rec.recommendations_block_workflow_state(
