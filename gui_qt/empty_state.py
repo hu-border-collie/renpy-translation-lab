@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont, QPalette, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
 from .theme import system_prefers_dark
 from .theme_helpers import DEFAULT_THEME_PREFERENCE, THEME_DARK, THEME_LIGHT, resolve_effective_theme
 from .theme_tokens import tokens_for_theme
+
+_DESC_MAX_WIDTH = 360
 
 
 def _effective_theme_name(widget: QWidget) -> str:
@@ -43,11 +45,13 @@ class EmptyStateWidget(QWidget):
     Parameters
     ----------
     icon:
-        A single Unicode emoji / symbol rendered at 48 px.
+        A single Unicode emoji / symbol rendered large.
     title:
-        Short headline (16 px, semi-bold).
+        Short headline (semi-bold).
     description:
-        Explanatory body text (13 px, word-wrapped, max 400 px wide).
+        Explanatory body text (word-wrapped, fixed max width so multi-line
+        height is stable — avoids QLabel wrap height collapse that paints
+        Chinese lines on top of each other).
     action_text:
         If supplied, a secondary-style ``QPushButton`` is added below the
         description and :pyattr:`action_clicked` is emitted on click.
@@ -69,11 +73,22 @@ class EmptyStateWidget(QWidget):
     ) -> None:
         super().__init__(parent)
 
-        # ---- outer layout (centers the content block) --------------------
+        # Outer layout only centers a solid content block — never stretch the
+        # labels themselves, or word-wrapped Chinese collapses to one line.
         outer = QVBoxLayout(self)
-        # Compact margins so CTA fits short workbench status tabs.
         outer.setContentsMargins(8, 8, 8, 8)
-        outer.setSpacing(6)
+        outer.setSpacing(0)
+
+        self._content = QWidget()
+        self._content.setObjectName("empty_state_content")
+        self._content.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Preferred,
+        )
+        content_layout = QVBoxLayout(self._content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(8)
+        content_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         # ---- icon --------------------------------------------------------
         self._icon_label = QLabel(icon)
@@ -94,9 +109,10 @@ class EmptyStateWidget(QWidget):
         self._title_label.setFont(title_font)
         self._title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_label.setWordWrap(True)
+        self._title_label.setFixedWidth(_DESC_MAX_WIDTH)
         self._title_label.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Preferred,
         )
 
         # ---- description -------------------------------------------------
@@ -106,11 +122,13 @@ class EmptyStateWidget(QWidget):
         self._desc_label.setFont(desc_font)
         self._desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._desc_label.setWordWrap(True)
-        self._desc_label.setMaximumWidth(420)
+        # Fixed width + heightForWidth so multi-line Chinese never collapses.
+        self._desc_label.setFixedWidth(_DESC_MAX_WIDTH)
         self._desc_label.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
             QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Minimum,
         )
+        self._reflow_desc_height()
 
         # ---- optional action button --------------------------------------
         self._action_btn: QPushButton | None = None
@@ -122,30 +140,41 @@ class EmptyStateWidget(QWidget):
                 QSizePolicy.Policy.Fixed,
                 QSizePolicy.Policy.Fixed,
             )
-            # Keep full label visible even when parent is height-constrained.
             hint = self._action_btn.sizeHint()
             self._action_btn.setMinimumSize(hint)
             self._action_btn.clicked.connect(self.action_clicked)
 
-        # ---- assemble: stretch centers content; CTA stays after description ----
-        outer.addStretch(1)
-        outer.addWidget(self._icon_label)
-        outer.addWidget(self._title_label)
-        outer.addWidget(self._desc_label, alignment=Qt.AlignmentFlag.AlignCenter)
-
+        content_layout.addWidget(self._icon_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        content_layout.addWidget(self._title_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        content_layout.addWidget(self._desc_label, 0, Qt.AlignmentFlag.AlignHCenter)
         if self._action_btn is not None:
-            btn_row = QHBoxLayout()
-            btn_row.setContentsMargins(0, 0, 0, 0)
-            btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            btn_row.addWidget(self._action_btn)
-            outer.addSpacing(2)
-            outer.addLayout(btn_row)
+            content_layout.addWidget(self._action_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        outer.addStretch(1)
+        outer.addWidget(self._content, 0, Qt.AlignmentFlag.AlignHCenter)
         outer.addStretch(1)
 
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Expanding,
         )
+        # Opaque fill so any residual sibling chrome never bleeds through.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
+    def _reflow_desc_height(self) -> None:
+        """Reserve full multi-line height for the wrapped description."""
+        width = max(1, self._desc_label.width() or _DESC_MAX_WIDTH)
+        needed = max(
+            self._desc_label.fontMetrics().height(),
+            self._desc_label.heightForWidth(width),
+        )
+        if needed > 0:
+            self._desc_label.setMinimumHeight(needed)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._reflow_desc_height()
 
     # ------------------------------------------------------------------
     # Theme-aware colours
@@ -153,19 +182,44 @@ class EmptyStateWidget(QWidget):
 
     def _apply_theme_colors(self) -> None:
         """Set foreground colours from the app's effective theme tokens."""
-        tokens = tokens_for_theme(_effective_theme_name(self))
-        icon_color = tokens["fg_muted"]
-        title_color = tokens["fg_secondary"]
-        desc_color = tokens["fg_muted"]
+        if getattr(self, "_applying_theme_colors", False):
+            return
+        self._applying_theme_colors = True
+        try:
+            tokens = tokens_for_theme(_effective_theme_name(self))
+            icon_color = tokens["fg_muted"]
+            title_color = tokens["fg_secondary"]
+            desc_color = tokens["fg_muted"]
+            bg = tokens.get("bg_surface") or tokens.get("bg_window") or ""
 
-        self._icon_label.setStyleSheet(f"color: {icon_color}; background: transparent;")
-        self._title_label.setStyleSheet(f"color: {title_color}; background: transparent;")
-        self._desc_label.setStyleSheet(f"color: {desc_color}; background: transparent;")
+            # Prefer palette fill over setStyleSheet on self — StyleChange would
+            # re-enter changeEvent and recurse.
+            if bg:
+                color = QColor(bg)
+                if color.isValid():
+                    for widget in (self, self._content):
+                        palette = widget.palette()
+                        palette.setColor(QPalette.ColorRole.Window, color)
+                        widget.setAutoFillBackground(True)
+                        widget.setPalette(palette)
+
+            self._icon_label.setStyleSheet(
+                f"color: {icon_color}; background: transparent;"
+            )
+            self._title_label.setStyleSheet(
+                f"color: {title_color}; background: transparent;"
+            )
+            self._desc_label.setStyleSheet(
+                f"color: {desc_color}; background: transparent;"
+            )
+        finally:
+            self._applying_theme_colors = False
 
     def showEvent(self, event):  # noqa: N802 – Qt naming convention
         """Re-apply theme colours every time the widget becomes visible."""
         super().showEvent(event)
         self._apply_theme_colors()
+        self._reflow_desc_height()
 
     def changeEvent(self, event):  # noqa: N802 – Qt naming convention
         """React to palette / style changes at runtime."""

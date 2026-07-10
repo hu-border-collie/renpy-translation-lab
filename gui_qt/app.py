@@ -837,8 +837,20 @@ class MainWindow(QMainWindow):
         doctor_layout = QVBoxLayout(doctor_tab)
         doctor_layout.setContentsMargins(12, 12, 12, 12)
         doctor_layout.setSpacing(6)
+        # Stack empty CTA vs summary so they never share the same column height
+        # (VBox + dual stretch caused multi-line empty description to collapse).
+        self.doctor_page_stack = QStackedWidget()
+        self.doctor_page_stack.setObjectName("doctor_page_stack")
+        doctor_layout.addWidget(self.doctor_page_stack, 1)
+
+        doctor_summary_page = QWidget()
+        doctor_summary_page.setObjectName("doctor_summary_page")
+        self._style_themed_surface(doctor_summary_page)
+        doctor_summary_layout = QVBoxLayout(doctor_summary_page)
+        doctor_summary_layout.setContentsMargins(0, 0, 0, 0)
+        doctor_summary_layout.setSpacing(6)
         self.doctor_status_label = StatusBadge("doctor_status_label")
-        doctor_layout.addWidget(self.doctor_status_label)
+        doctor_summary_layout.addWidget(self.doctor_status_label)
         self.doctor_summary_scroll = QScrollArea()
         self.doctor_summary_scroll.setObjectName("doctor_summary_scroll")
         self._style_themed_surface(self.doctor_summary_scroll)
@@ -869,7 +881,9 @@ class MainWindow(QMainWindow):
         doctor_content_layout.addWidget(self.doctor_details_label)
         doctor_content_layout.addStretch()
         self.doctor_summary_scroll.setWidget(doctor_content)
-        doctor_layout.addWidget(self.doctor_summary_scroll, 1)
+        doctor_summary_layout.addWidget(self.doctor_summary_scroll, 1)
+        self.doctor_page_stack.addWidget(doctor_summary_page)
+
         # P3 / #166: empty CTA before the first environment check.
         self.doctor_empty_state = EmptyStateWidget(
             "🔍",
@@ -879,8 +893,8 @@ class MainWindow(QMainWindow):
         )
         self.doctor_empty_state.setObjectName("doctor_empty_state")
         self.doctor_empty_state.action_clicked.connect(self._on_run_doctor)
-        doctor_layout.addWidget(self.doctor_empty_state, 1)
-        self.doctor_empty_state.setVisible(False)
+        self.doctor_page_stack.addWidget(self.doctor_empty_state)
+        self.doctor_page_stack.setCurrentWidget(self.doctor_empty_state)
         self.workbench_status_tabs.addTab(doctor_tab, "环境检查")
 
         workflow_tab = QWidget()
@@ -4367,15 +4381,24 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "doctor_empty_state"):
             show_doctor_empty = not doctor_done and not running
-            self.doctor_empty_state.setVisible(show_doctor_empty)
-            # Hide the summary scroll while the empty CTA is front-and-center.
-            for attr in ("doctor_status_label",):
-                widget = getattr(self, attr, None)
-                if widget is not None:
-                    widget.setVisible(not show_doctor_empty)
-            doctor_scroll = getattr(self, "doctor_summary_scroll", None)
-            if doctor_scroll is not None:
-                doctor_scroll.setVisible(not show_doctor_empty)
+            stack = getattr(self, "doctor_page_stack", None)
+            if stack is not None and hasattr(self, "doctor_empty_state"):
+                # Mutual exclusion via stack — no VBox dual-stretch overlap.
+                if show_doctor_empty:
+                    stack.setCurrentWidget(self.doctor_empty_state)
+                else:
+                    # Summary page is index 0 (status + scroll).
+                    stack.setCurrentIndex(0)
+            else:
+                # Fallback if stack is unavailable (older layout).
+                self.doctor_empty_state.setVisible(show_doctor_empty)
+                for attr in ("doctor_status_label",):
+                    widget = getattr(self, attr, None)
+                    if widget is not None:
+                        widget.setVisible(not show_doctor_empty)
+                doctor_scroll = getattr(self, "doctor_summary_scroll", None)
+                if doctor_scroll is not None:
+                    doctor_scroll.setVisible(not show_doctor_empty)
 
         if hasattr(self, "workflow_empty_state"):
             show_wf_empty = (
