@@ -66,10 +66,56 @@ class GuiP3PolishTests(unittest.TestCase):
     def test_doctor_empty_state_visible_before_check(self) -> None:
         self.window._doctor_check_completed = False
         self.window._sync_workbench_empty_states()
-        self.assertFalse(self.window.doctor_empty_state.isHidden())
+        stack = self.window.doctor_page_stack
+        self.assertEqual(stack.currentWidget(), self.window.doctor_empty_state)
         self.window._doctor_check_completed = True
         self.window._sync_workbench_empty_states()
-        self.assertTrue(self.window.doctor_empty_state.isHidden())
+        self.assertNotEqual(stack.currentWidget(), self.window.doctor_empty_state)
+
+    def test_doctor_empty_no_overlap_with_summary_or_self(self) -> None:
+        """Empty CTA must replace summary (stack) and keep title/desc/btn separate."""
+        from PySide6.QtCore import QPoint, QRect
+
+        self.window.resize(1100, 700)
+        self.window.show()
+        for _ in range(8):
+            self._app.processEvents()
+        self.window._doctor_check_completed = False
+        self.window._sync_workbench_empty_states()
+        if hasattr(self.window, "workbench_status_tabs"):
+            self.window.workbench_status_tabs.setCurrentIndex(0)
+        for _ in range(10):
+            self._app.processEvents()
+
+        empty = self.window.doctor_empty_state
+        stack = self.window.doctor_page_stack
+        self.assertEqual(stack.currentWidget(), empty)
+        # Summary page must not paint while empty is active.
+        summary_page = stack.widget(0)
+        self.assertFalse(summary_page.isVisible())
+        self.assertFalse(self.window.doctor_status_label.isVisible())
+        self.assertFalse(self.window.doctor_message_label.isVisible())
+
+        desc = empty._desc_label
+        title = empty._title_label
+        btn = empty._action_btn
+        self.assertIsNotNone(btn)
+        assert btn is not None
+        self.assertTrue(desc.isVisible())
+        self.assertGreater(desc.height(), 0)
+        # Title / desc / button must not intersect inside the empty widget.
+        rects = [
+            ("title", QRect(title.mapTo(empty, QPoint(0, 0)), title.size())),
+            ("desc", QRect(desc.mapTo(empty, QPoint(0, 0)), desc.size())),
+            ("btn", QRect(btn.mapTo(empty, QPoint(0, 0)), btn.size())),
+        ]
+        for i, (name_a, rect_a) in enumerate(rects):
+            for name_b, rect_b in rects[i + 1 :]:
+                inter = rect_a.intersected(rect_b)
+                self.assertFalse(
+                    inter.width() >= 2 and inter.height() >= 2,
+                    msg=f"{name_a} overlaps {name_b}: {inter}",
+                )
 
     def test_workflow_empty_state_without_project(self) -> None:
         self.window.state.get_game_root = lambda: None  # type: ignore[method-assign]
