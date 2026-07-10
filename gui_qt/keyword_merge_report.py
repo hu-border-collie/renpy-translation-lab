@@ -36,6 +36,16 @@ def keyword_merge_candidates_path_from_manifest(
     manifest_path: str,
     manifest: dict[str, object] | None,
 ) -> str:
+    # Explicit non-keyword modes must never pick up a sibling candidates file
+    # from an unrelated package directory (e.g. batch_translation next to a
+    # leftover keyword_candidates.jsonl).
+    if (
+        manifest is not None
+        and isinstance(manifest.get("mode"), str)
+        and manifest["mode"] != _MANIFEST_MODE_KEYWORD
+    ):
+        return ""
+
     if manifest is not None and manifest.get("mode") == _MANIFEST_MODE_KEYWORD:
         export = manifest.get("keyword_export")
         if isinstance(export, dict):
