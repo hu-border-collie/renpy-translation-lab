@@ -1,11 +1,14 @@
 import unittest
 
+import doctor_recommendations as doctor_rec
+
 from gui_qt.user_copy import (
     doctor_mode_label,
     format_bootstrap_fact,
     format_manifest_path_fact,
     job_state_label,
     manifest_mode_label,
+    recommendation_requires_attention,
     safety_level_label,
     translate_doctor_warning,
 )
@@ -53,6 +56,31 @@ class GuiUserCopyTests(unittest.TestCase):
 
     def test_format_bootstrap_fact_passthrough_unknown_key(self):
         self.assertEqual(format_bootstrap_fact("unknown_key", "42"), "unknown_key：42")  # noqa: RUF001
+
+    def test_optional_doctor_recommendations_do_not_require_attention(self):
+        optional_codes = [
+            doctor_rec.BOOTSTRAP_RAG_OR_WARM_ON_BUILD,
+            doctor_rec.ENABLE_RAG_FOR_CONSISTENCY,
+            doctor_rec.ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT,
+        ]
+
+        for code in optional_codes:
+            with self.subTest(code=code):
+                self.assertFalse(recommendation_requires_attention([code]))
+        self.assertTrue(
+            recommendation_requires_attention([doctor_rec.BOOTSTRAP_SOURCE_INDEX])
+        )
+
+    def test_ready_doctor_recommendation_codes_do_not_require_attention(self):
+        ready_codes = [
+            doctor_rec.START_INCREMENTAL_BATCH,
+            doctor_rec.START_PENDING_BATCH,
+            doctor_rec.SUBSTANTIALLY_COMPLETE,
+            doctor_rec.NO_PENDING_LINES,
+        ]
+        for code in ready_codes:
+            with self.subTest(code=code):
+                self.assertFalse(recommendation_requires_attention([code]))
 
 
 if __name__ == "__main__":

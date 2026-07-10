@@ -124,6 +124,7 @@ def _report_from_parsed(parsed: dict) -> dict:
         "language": parsed.get("language", ""),
         "mode": parsed.get("mode", ""),
         "layout_status": parsed.get("layout_status", ""),
+        "workflow_state": parsed.get("workflow_state", ""),
         "is_work_root": parsed.get("is_work_root"),
         "work_dir": parsed.get("work_dir", ""),
         "work_exists": parsed.get("work_exists"),
@@ -521,6 +522,99 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.heading, "项目检查通过")
         self.assertEqual(summary.message, "补译环境已就绪，可以开始批量翻译。")
         self.assertTrue(any("记忆库含有旧版键格式" in fact for fact in summary.facts))
+
+    def test_no_pending_workflow_state_uses_status_message_without_recommendation(self):
+        output = READY_OUTPUT + """
+- Workflow state: no_pending_lines
+- Pending translation: task_count=0, file_count=0
+"""
+
+        parsed = parse_doctor_output(output)
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(parsed["workflow_state"], doctor_rec.NO_PENDING_LINES)
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertEqual(
+            summary.message,
+            "当前没有待译条目；如需创建新批次，请先刷新翻译模板。",
+        )
+        self.assertFalse(any(fact.startswith("建议：") for fact in summary.facts))
+
+    def test_legacy_no_pending_recommendation_stays_ready(self):
+        """Backward-compat: recommendation-only no_pending_lines must not elevate to warning."""
+        output = READY_OUTPUT + (
+            "\nRecommendations:\n"
+            "- No pending translation lines detected; review TL files or refresh templates "
+            "before starting a new batch.\n"
+        )
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertEqual(
+            summary.message,
+            "当前没有待译条目；如需创建新批次，请先刷新翻译模板。",
+        )
+
+    def test_workflow_state_only_start_incremental_stays_ready(self):
+        output = READY_OUTPUT + """
+- Workflow state: start_incremental_batch
+- Pending translation: task_count=240, file_count=12
+"""
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertEqual(summary.message, "补译环境已就绪，可以开始批量翻译。")
+        self.assertFalse(any(fact.startswith("建议：") for fact in summary.facts))
+
+    def test_workflow_state_only_start_pending_stays_ready(self):
+        output = READY_OUTPUT + """
+- Workflow state: start_pending_batch
+- Pending translation: task_count=240, file_count=12
+"""
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertEqual(summary.message, "翻译环境已就绪，可以开始批量翻译。")
+        self.assertFalse(any(fact.startswith("建议：") for fact in summary.facts))
+
+    def test_workflow_state_only_substantially_complete_stays_ready(self):
+        output = READY_OUTPUT.replace(
+            "commented_original_lines=2",
+            "commented_original_lines=85000",
+        ) + """
+- Workflow state: substantially_complete
+- Pending translation: task_count=45, file_count=12
+"""
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertEqual(
+            summary.message,
+            "项目已基本译完；剩余待译行很少，可忽略或按需补译。",
+        )
+        self.assertFalse(any(fact.startswith("建议：") for fact in summary.facts))
+
+    def test_optional_rag_recommendation_keeps_ready_status(self):
+        cli_line = doctor_rec.format_doctor_recommendation_cli_line(
+            doctor_rec.make_doctor_recommendation(doctor_rec.ENABLE_RAG_FOR_CONSISTENCY)
+        )
+        output = READY_OUTPUT + f"\nRecommendations:\n- {cli_line}\n"
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertTrue(summary.message.startswith("可选优化："))
+        self.assertTrue(any(fact.startswith("可选优化：") for fact in summary.facts))
 
     def test_partial_source_index_shows_progress_in_facts(self):
         output = """

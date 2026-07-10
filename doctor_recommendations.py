@@ -1,4 +1,4 @@
-"""Stable doctor recommendation codes shared by CLI output and GUI localization."""
+"""Stable doctor recommendation and workflow-state codes shared by CLI and GUI."""
 
 from __future__ import annotations
 
@@ -39,6 +39,24 @@ ALL_CODES = frozenset(
         START_INCREMENTAL_BATCH,
         START_PENDING_BATCH,
         NO_PENDING_LINES,
+    }
+)
+
+WORKFLOW_STATE_CODES = frozenset(
+    {
+        SUBSTANTIALLY_COMPLETE,
+        START_INCREMENTAL_BATCH,
+        START_PENDING_BATCH,
+        NO_PENDING_LINES,
+    }
+)
+
+# Optional quality tips: may coexist with workflow_state and must not block "ready".
+OPTIONAL_RECOMMENDATION_CODES = frozenset(
+    {
+        BOOTSTRAP_RAG_OR_WARM_ON_BUILD,
+        ENABLE_RAG_FOR_CONSISTENCY,
+        ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT,
     }
 )
 
@@ -219,3 +237,11 @@ def doctor_recommendation_codes(recommendations: list[Any]) -> list[str]:
         if code:
             codes.append(code)
     return codes
+
+
+def recommendations_block_workflow_state(recommendations: list[Any]) -> bool:
+    """True when any recommendation is required prep (not an optional tip)."""
+    for code in doctor_recommendation_codes(recommendations):
+        if code not in OPTIONAL_RECOMMENDATION_CODES:
+            return True
+    return False

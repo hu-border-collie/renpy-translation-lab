@@ -17,6 +17,7 @@ from .user_copy import (
     primary_recommendation_message,
     recommendation_requires_attention,
     translate_doctor_warning,
+    workflow_state_message,
 )
 
 
@@ -317,6 +318,10 @@ def parse_doctor_output(output: str) -> dict[str, object]:
             parsed["layout_status"] = line.split(":", 1)[1].strip()
             continue
 
+        if line.startswith("- Workflow state:"):
+            parsed["workflow_state"] = line.split(":", 1)[1].strip()
+            continue
+
         if line.startswith("- TL scan:"):
             parsed["counts"] = _parse_counts(line.split(":", 1)[1])
             continue
@@ -363,6 +368,7 @@ def doctor_report_to_parsed(report: dict[str, Any]) -> dict[str, object]:
         "mode": str(report.get("mode") or ""),
         "layout_status": str(report.get("layout_status") or ""),
         "is_work_root": report.get("is_work_root"),
+        "workflow_state": str(report.get("workflow_state") or ""),
         "work_dir": str(report.get("work_dir") or ""),
         "work_exists": report.get("work_exists"),
         "work_empty": report.get("work_empty"),
@@ -437,6 +443,9 @@ def _summarize_doctor_parsed(
     mode = parsed.get("mode") if isinstance(parsed.get("mode"), str) else ""
     layout_status = parsed.get("layout_status") if isinstance(parsed.get("layout_status"), str) else ""
 
+    workflow_state = (
+        parsed.get("workflow_state") if isinstance(parsed.get("workflow_state"), str) else ""
+    )
     facts: list[str] = []
     base_dir = parsed.get("base_dir") if isinstance(parsed.get("base_dir"), str) else ""
     work_dir = parsed.get("work_dir") if isinstance(parsed.get("work_dir"), str) else ""
@@ -519,6 +528,7 @@ def _summarize_doctor_parsed(
 
     recommendation_message = primary_recommendation_message(recommendation_codes)
 
+    normal_state_message = workflow_state_message(workflow_state)
     if exit_code != 0:
         return DoctorSummary(
             status="blocked",
@@ -569,6 +579,8 @@ def _summarize_doctor_parsed(
             status = "warning"
             heading = LAYOUT_STATUS_HEADINGS["attention"][1]
 
+    elif normal_state_message:
+        message = normal_state_message
     return DoctorSummary(
         status=status,
         heading=heading,

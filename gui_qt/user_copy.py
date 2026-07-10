@@ -57,22 +57,22 @@ DOCTOR_RECOMMENDATION_CODE_TRANSLATIONS: dict[str, str] = {
     doctor_rec.BOOTSTRAP_SOURCE_INDEX_INCOMPLETE: "建议：继续运行「预建原文索引」补全索引库",
     doctor_rec.BOOTSTRAP_RAG: "建议：先在「分析与准备」运行「预建记忆库」，再开始批量翻译",
     doctor_rec.BOOTSTRAP_RAG_OR_WARM_ON_BUILD: (
-        "建议：记忆库为空；可先「预建记忆库」，若已勾选「开始翻译时自动暖 RAG 库」也可直接「开始翻译」"
+        "可选准备：记忆库为空；可先「预建记忆库」，也可直接「开始翻译」并自动暖库"
     ),
     doctor_rec.ENABLE_RAG_FOR_CONSISTENCY: (
-        "建议：补译量较大且记忆库未启用；若要进行批量补译，建议先在配置页启用并「预建记忆库」"
+        "可选优化：补译量较大且记忆库未启用；可在配置页启用并「预建记忆库」以提高一致性"
     ),
     doctor_rec.SUBSTANTIALLY_COMPLETE: (
         "建议：项目已基本译完；剩余待译行很少（可能含专名/标点），可忽略或按需补译，不必预建记忆库"
     ),
     doctor_rec.ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT: (
-        "建议：全新初译项目建议在配置页启用原文索引并「预建原文索引」，再开始翻译"
+        "可选优化：全新初译项目可在配置页启用并「预建原文索引」，以获得更多剧情上下文"
     ),
     doctor_rec.START_INCREMENTAL_BATCH: (
         "建议：补译环境已就绪；切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交"
     ),
     doctor_rec.NO_PENDING_LINES: (
-        "建议：当前没有待译条目；请检查翻译文件，或重新生成/刷新模板后再开始"
+        "建议：当前没有待译条目；如需创建新批次，请先刷新翻译模板"
     ),
     doctor_rec.START_PENDING_BATCH: (
         "建议：切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交云端任务"
@@ -82,28 +82,44 @@ DOCTOR_RECOMMENDATION_CODE_TRANSLATIONS: dict[str, str] = {
 DOCTOR_RECOMMENDATION_UNKNOWN_FACT = "建议：收到未识别的诊断建议，请查看诊断日志了解详情。"
 DOCTOR_RECOMMENDATION_UNKNOWN_SUMMARY = "收到未识别的诊断建议，请查看诊断日志。"
 
+# Shared status copy for no-pending (legacy rec path and workflow_state path).
+_NO_PENDING_STATUS_MESSAGE = "当前没有待译条目；如需创建新批次，请先刷新翻译模板。"
+
 DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES: dict[str, str] = {
     doctor_rec.SUBSTANTIALLY_COMPLETE: "项目已基本译完；剩余待译行很少，可忽略或按需补译。",
-    doctor_rec.ENABLE_RAG_FOR_CONSISTENCY: "补译量较大；若要进行批量补译，建议先启用并预建记忆库。",
+    doctor_rec.ENABLE_RAG_FOR_CONSISTENCY: "可选优化：补译量较大，可启用并预建记忆库以提高一致性。",
     doctor_rec.BOOTSTRAP_RAG: "记忆库尚未建立，建议先预建记忆库再开始翻译。",
-    doctor_rec.BOOTSTRAP_RAG_OR_WARM_ON_BUILD: "记忆库尚未建立，建议先预建记忆库再开始翻译。",
+    doctor_rec.BOOTSTRAP_RAG_OR_WARM_ON_BUILD: (
+        "可选准备：记忆库尚未建立；可直接开始翻译自动暖库，也可先手动预建。"
+    ),
     doctor_rec.BOOTSTRAP_SOURCE_INDEX: "原文索引尚未就绪，建议先完成预建再开始翻译。",
     doctor_rec.BOOTSTRAP_SOURCE_INDEX_INCOMPLETE: "原文索引尚未就绪，建议先完成预建再开始翻译。",
     doctor_rec.BOOTSTRAP_WORK: "请先准备工作目录，再开始翻译流程。",
-    doctor_rec.ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT: "全新项目建议先预建原文索引，再开始批量翻译。",
+    doctor_rec.ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT: "可选优化：全新项目可预建原文索引以获得更多剧情上下文。",
     doctor_rec.START_INCREMENTAL_BATCH: "补译环境已就绪，可以开始批量翻译。",
-    doctor_rec.NO_PENDING_LINES: "当前没有待译条目，请先检查或刷新翻译模板。",
+    doctor_rec.NO_PENDING_LINES: _NO_PENDING_STATUS_MESSAGE,
     doctor_rec.START_PENDING_BATCH: "翻译环境已就绪，可以开始批量翻译。",
     doctor_rec.UNKNOWN: DOCTOR_RECOMMENDATION_UNKNOWN_SUMMARY,
 }
 
+DOCTOR_WORKFLOW_STATE_MESSAGES: dict[str, str] = {
+    doctor_rec.SUBSTANTIALLY_COMPLETE: "项目已基本译完；剩余待译行很少，可忽略或按需补译。",
+    doctor_rec.START_INCREMENTAL_BATCH: "补译环境已就绪，可以开始批量翻译。",
+    doctor_rec.NO_PENDING_LINES: _NO_PENDING_STATUS_MESSAGE,
+    doctor_rec.START_PENDING_BATCH: "翻译环境已就绪，可以开始批量翻译。",
+}
+
+# Legacy recommendation codes that mean "ready / no action required" (do not elevate status).
 READY_DOCTOR_RECOMMENDATION_CODES = frozenset(
     {
         doctor_rec.START_INCREMENTAL_BATCH,
         doctor_rec.START_PENDING_BATCH,
         doctor_rec.SUBSTANTIALLY_COMPLETE,
+        doctor_rec.NO_PENDING_LINES,
     }
 )
+
+OPTIONAL_DOCTOR_RECOMMENDATION_CODES = doctor_rec.OPTIONAL_RECOMMENDATION_CODES
 
 DOCTOR_WARNING_TRANSLATIONS: tuple[tuple[str, str], ...] = (
     (
@@ -208,7 +224,15 @@ def recommendation_requires_attention(recommendation_codes: list[str]) -> bool:
     """Return True when the primary recommendation is a prep step, not ready-to-translate."""
     if not recommendation_codes:
         return False
-    return recommendation_codes[0] not in READY_DOCTOR_RECOMMENDATION_CODES
+    code = recommendation_codes[0]
+    return (
+        code not in READY_DOCTOR_RECOMMENDATION_CODES
+        and code not in OPTIONAL_DOCTOR_RECOMMENDATION_CODES
+    )
+
+
+def workflow_state_message(workflow_state: str) -> str:
+    return DOCTOR_WORKFLOW_STATE_MESSAGES.get(str(workflow_state or "").strip(), "")
 
 
 def primary_recommendation_message(recommendation_codes: list[str]) -> str:

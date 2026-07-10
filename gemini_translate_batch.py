@@ -8162,11 +8162,24 @@ def _doctor_has_existing_translations(report):
     return False
 
 
-def _doctor_is_incremental_translation(report):
+def collect_doctor_workflow_state(report):
+    """Return a normal workflow state separately from actionable recommendations."""
+    if report.get('layout_status') != 'ready':
+        return ''
+    has_tl = int((report.get('counts') or {}).get('rpy_files') or 0) > 0
+    if not has_tl:
+        return ''
+
     pending = _doctor_pending_task_count(report)
     if pending <= 0:
-        return False
-    return _doctor_has_existing_translations(report)
+        return doctor_rec.NO_PENDING_LINES
+
+    has_existing_translations = _doctor_has_existing_translations(report)
+    if has_existing_translations and _doctor_pending_is_minor(report):
+        return doctor_rec.SUBSTANTIALLY_COMPLETE
+    if has_existing_translations:
+        return doctor_rec.START_INCREMENTAL_BATCH
+    return doctor_rec.START_PENDING_BATCH
 
 
 def collect_doctor_recommendations(report):
@@ -8198,14 +8211,17 @@ def collect_doctor_recommendations(report):
         recommendations.append(
             doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_WORK)
         )
+        return recommendations
     elif not has_tl and report.get('prepare_enabled') and report.get('can_generate_template'):
         recommendations.append(
             doctor_rec.make_doctor_recommendation(doctor_rec.GENERATE_TEMPLATE)
         )
+        return recommendations
     elif not has_tl and report.get('prepare_enabled') and mode == 'blocked_missing_template':
         recommendations.append(
             doctor_rec.make_doctor_recommendation(doctor_rec.INSTALL_SDK_GENERATE_TEMPLATE)
         )
+        return recommendations
     elif not has_tl and not report.get('prepare_enabled'):
         recommendations.append(
             doctor_rec.make_doctor_recommendation(doctor_rec.ENABLE_PREPARE)
@@ -8250,12 +8266,6 @@ def collect_doctor_recommendations(report):
         )
         return recommendations
 
-    if has_tl and pending > 0 and has_existing_translations and _doctor_pending_is_minor(report):
-        recommendations.append(
-            doctor_rec.make_doctor_recommendation(doctor_rec.SUBSTANTIALLY_COMPLETE)
-        )
-        return recommendations
-
     if (
         not source_index.get('enabled')
         and pending > 0
@@ -8266,22 +8276,6 @@ def collect_doctor_recommendations(report):
             doctor_rec.make_doctor_recommendation(doctor_rec.ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT)
         )
         return recommendations
-
-    if has_tl and pending > 0:
-        if _doctor_is_incremental_translation(report):
-            recommendations.append(
-                doctor_rec.make_doctor_recommendation(doctor_rec.START_INCREMENTAL_BATCH)
-            )
-        else:
-            recommendations.append(
-                doctor_rec.make_doctor_recommendation(doctor_rec.START_PENDING_BATCH)
-            )
-        return recommendations
-
-    if has_tl and pending == 0:
-        recommendations.append(
-            doctor_rec.make_doctor_recommendation(doctor_rec.NO_PENDING_LINES)
-        )
 
     return recommendations
 
@@ -8731,7 +8725,15 @@ def collect_doctor_report():
     layout_context = collect_doctor_layout_context(report)
     report.update(layout_context)
     report['layout_status'] = assess_doctor_layout_status(report, layout_context)
+    # Recommendations first: required prep suppresses readiness-flavored workflow_state
+    # so CLI consumers do not see "start_*" alongside bootstrap_source_index / bootstrap_rag.
     report['recommendations'] = collect_doctor_recommendations(report)
+    workflow_state = collect_doctor_workflow_state(report)
+    if workflow_state and doctor_rec.recommendations_block_workflow_state(
+        report['recommendations']
+    ):
+        workflow_state = ''
+    report['workflow_state'] = workflow_state
     return report
 
 
@@ -8768,6 +8770,9 @@ def print_doctor_report(report):
         f"- Original game dir: {report.get('original_game_dir') or '(not found)'}"
     )
     print(f"- Layout status: {report.get('layout_status', '')}")
+    workflow_state = str(report.get('workflow_state') or '').strip()
+    if workflow_state:
+        print(f"- Workflow state: {workflow_state}")
     print(
         '- TL scan: '
         f"rpy_files={counts['rpy_files']}, "
