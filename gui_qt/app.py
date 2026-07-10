@@ -839,12 +839,12 @@ class MainWindow(QMainWindow):
         doctor_layout.setSpacing(6)
         self.doctor_status_label = StatusBadge("doctor_status_label")
         doctor_layout.addWidget(self.doctor_status_label)
-        doctor_scroll = QScrollArea()
-        doctor_scroll.setObjectName("doctor_summary_scroll")
-        self._style_themed_surface(doctor_scroll)
-        doctor_scroll.setWidgetResizable(True)
-        doctor_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        doctor_viewport = doctor_scroll.viewport()
+        self.doctor_summary_scroll = QScrollArea()
+        self.doctor_summary_scroll.setObjectName("doctor_summary_scroll")
+        self._style_themed_surface(self.doctor_summary_scroll)
+        self.doctor_summary_scroll.setWidgetResizable(True)
+        self.doctor_summary_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        doctor_viewport = self.doctor_summary_scroll.viewport()
         doctor_viewport.setObjectName("doctor_summary_viewport")
         self._style_themed_surface(doctor_viewport)
         doctor_content = QWidget()
@@ -868,8 +868,8 @@ class MainWindow(QMainWindow):
         self.doctor_details_label.setVisible(False)
         doctor_content_layout.addWidget(self.doctor_details_label)
         doctor_content_layout.addStretch()
-        doctor_scroll.setWidget(doctor_content)
-        doctor_layout.addWidget(doctor_scroll, 1)
+        self.doctor_summary_scroll.setWidget(doctor_content)
+        doctor_layout.addWidget(self.doctor_summary_scroll, 1)
         # P3 / #166: empty CTA before the first environment check.
         self.doctor_empty_state = EmptyStateWidget(
             "🔍",
@@ -4311,7 +4311,12 @@ class MainWindow(QMainWindow):
             return False, str(exc)
         return True, ""
 
-    def _update_resume_btn_enabled(self, *, running: bool | None = None) -> None:
+    def _update_resume_btn_enabled(
+        self,
+        *,
+        running: bool | None = None,
+        resume_available: tuple[bool, str] | None = None,
+    ) -> None:
         if not hasattr(self, "resume_btn"):
             return
         if running is None:
@@ -4327,14 +4332,21 @@ class MainWindow(QMainWindow):
             self.resume_btn.setEnabled(False)
             self.resume_btn.setToolTip("任务运行中，请等待结束后再继续。")
             return
-        available, reason = self._resume_task_available()
+        if resume_available is None:
+            available, reason = self._resume_task_available()
+        else:
+            available, reason = resume_available
         self.resume_btn.setEnabled(available)
         if available:
             self.resume_btn.setToolTip("从最近任务记录继续未完成的步骤，或查询云端状态。")
         else:
             self.resume_btn.setToolTip(reason or "当前没有可继续的任务。")
 
-    def _sync_workbench_empty_states(self) -> None:
+    def _sync_workbench_empty_states(
+        self,
+        *,
+        resume_available: tuple[bool, str] | None = None,
+    ) -> None:
         """Show/hide EmptyState widgets on prepare/execute pages (P3 / #166)."""
         doctor_done = bool(getattr(self, "_doctor_check_completed", False))
         has_project = bool(
@@ -4346,7 +4358,12 @@ class MainWindow(QMainWindow):
         has_workflow = self._workflow is not None or bool(
             getattr(self, "_writeback_manifest_path", "")
         )
-        resume_ok, _ = self._resume_task_available() if not running else (False, "")
+        if running:
+            resume_ok = False
+        elif resume_available is not None:
+            resume_ok = bool(resume_available[0])
+        else:
+            resume_ok, _ = self._resume_task_available()
 
         if hasattr(self, "doctor_empty_state"):
             show_doctor_empty = not doctor_done and not running
@@ -4356,14 +4373,7 @@ class MainWindow(QMainWindow):
                 widget = getattr(self, attr, None)
                 if widget is not None:
                     widget.setVisible(not show_doctor_empty)
-            doctor_scroll = None
-            if hasattr(self, "doctor_message_label"):
-                parent = self.doctor_message_label
-                while parent is not None:
-                    if parent.objectName() == "doctor_summary_scroll":
-                        doctor_scroll = parent
-                        break
-                    parent = parent.parentWidget()
+            doctor_scroll = getattr(self, "doctor_summary_scroll", None)
             if doctor_scroll is not None:
                 doctor_scroll.setVisible(not show_doctor_empty)
 
@@ -4612,12 +4622,18 @@ class MainWindow(QMainWindow):
                 running=running,
             )
         )
-        self._update_resume_btn_enabled(running=running)
+        resume_available = (
+            (False, "任务运行中。") if running else self._resume_task_available()
+        )
+        self._update_resume_btn_enabled(
+            running=running,
+            resume_available=resume_available,
+        )
         self._update_split_submit_btn(running=running)
         self._sync_task_shortcuts()
         # Re-apply page chrome after enable flags so context cards stay correct.
         self._apply_task_page_chrome(spec)
-        self._sync_workbench_empty_states()
+        self._sync_workbench_empty_states(resume_available=resume_available)
 
     def _update_timeline_steps(self, mode: WorkMode) -> None:
         from .work_modes import WorkMode
@@ -7044,7 +7060,13 @@ class MainWindow(QMainWindow):
                 running=running,
             )
         )
-        self._update_resume_btn_enabled(running=running)
+        resume_available = (
+            (False, "任务运行中。") if running else self._resume_task_available()
+        )
+        self._update_resume_btn_enabled(
+            running=running,
+            resume_available=resume_available,
+        )
         self._update_split_submit_btn(running=running)
         self._sync_settings_action_bar_enabled(task_running=running)
         writeback_summary = self._current_writeback_summary()
@@ -7070,7 +7092,7 @@ class MainWindow(QMainWindow):
             self._refresh_context_library_panel(running=running)
         self._sync_task_shortcuts()
         self._reflow_button_bars()
-        self._sync_workbench_empty_states()
+        self._sync_workbench_empty_states(resume_available=resume_available)
         # After a workbench/diagnostics task finishes, ease splitter back to idle.
         if was_running and not running:
             self._restore_diagnostics_splitter_idle()
@@ -7098,8 +7120,9 @@ class MainWindow(QMainWindow):
         self.workflow_message_label.setText(message)
         self.workflow_facts_label.setText("\n".join(facts or []))
         self._update_resume_btn_text()
-        self._update_resume_btn_enabled()
-        self._sync_workbench_empty_states()
+        resume_available = self._resume_task_available()
+        self._update_resume_btn_enabled(resume_available=resume_available)
+        self._sync_workbench_empty_states(resume_available=resume_available)
         self._sync_layout_sizes()
 
     def _set_workflow_update(self, update: WorkflowUpdate):
