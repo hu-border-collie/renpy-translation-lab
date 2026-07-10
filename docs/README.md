@@ -8,6 +8,7 @@
 - 想用图形界面：先读 [GUI 工作台](gui_workbench.md)，再按需回看 [安装与本地配置](setup.md)。
 - 想了解或参与 GUI 信息架构重组：读 [GUI 信息架构重组计划](gui_ia_redesign.md)。
 - 想管理工作区内多个游戏项目总表：读 [工作区项目总表](games_registry.md)。
+- 想了解环境检查为何给出建议、如何扩展建议规则：读 [环境检查智能建议机制](doctor_recommendations.md)。
 - 想启用 RAG、原文索引或剧情图谱：读 [上下文系统](context_systems.md)。
 - 想做角色关系或语义分析：读 [关系与语义分析](relation_analysis.md)，内部模块见 [`relation_analyzer/README.md`](../relation_analyzer/README.md)。
 - 想确认项目成熟度、边界和安全注意事项：读 [项目说明](project_notes.md)。
@@ -21,6 +22,7 @@
 - [GUI 工作台](gui_workbench.md)：可选 PySide6 图形界面（左导航任务页、全局项目栏、日志抽屉、批量三阶段、写回安全边界与诊断工具）。
 - [GUI 信息架构重组计划](gui_ia_redesign.md)：P0–P3 分阶段交付 SSOT（**P0–P1 已落地**；P2/P3 进行中时以该文档为准）。
 - [工作区项目总表](games_registry.md)：`games_registry.json` 与 `GAMES.md`、CLI / GUI 刷新、与写回和 environment check 的边界。
+- [环境检查智能建议机制](doctor_recommendations.md)：doctor 建议的事实模型、等级、优先级、结构化协议与测试要求。
 
 ### Batch 与安全
 

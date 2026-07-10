@@ -27,6 +27,7 @@ QWidget {
 
 #subtitle_label,
 #config_hint_label,
+#doctor_details_label,
 #work_mode_hint_label {
     color: ${fg_hint};
     font-size: 14px;
@@ -39,6 +40,31 @@ QLabel#summary_body_label {
     font-size: 14px;
     font-weight: 400;
     line-height: 1.5;
+}
+
+/* Doctor summary disclosure — flat link, never “selected button” chrome. */
+QToolButton#doctor_details_toggle {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    color: ${fg_hint};
+    font-size: 13px;
+    font-weight: 400;
+    padding: 0;
+    margin: 0;
+    min-height: 20px;
+}
+QToolButton#doctor_details_toggle:hover {
+    background: transparent;
+    border: none;
+    color: ${fg_primary};
+}
+QToolButton#doctor_details_toggle:pressed,
+QToolButton#doctor_details_toggle:checked,
+QToolButton#doctor_details_toggle:focus {
+    background: transparent;
+    border: none;
+    color: ${fg_hint};
 }
 
 /* Dialogs are top-level windows */

@@ -17,6 +17,7 @@ from .user_copy import (
     primary_recommendation_message,
     recommendation_requires_attention,
     translate_doctor_warning,
+    workflow_state_message,
 )
 
 
@@ -28,6 +29,8 @@ class DoctorSummary:
     facts: list[str]
     findings: list[str]
     mode: str = ""
+    # Secondary lines for the collapsible "更多详情" section (never discarded).
+    detail_facts: list[str] | None = None
 
 
 MODE_MESSAGES = {
@@ -89,7 +92,7 @@ def format_tl_scan_facts(
     counts: dict[str, int],
     pending: dict[str, int] | None = None,
 ) -> list[str]:
-    """Turn doctor TL scan counters into user-facing facts."""
+    """Turn doctor TL scan counters into user-facing facts (full set; UI may split)."""
     rpy_files = int(counts.get("rpy_files", 0))
     translate_blocks = int(counts.get("translate_blocks", 0))
     commented_lines = int(counts.get("commented_original_lines", 0))
@@ -106,14 +109,11 @@ def format_tl_scan_facts(
         file_count = int(pending.get("file_count", 0))
         if task_count > 0:
             facts.append(
-                f"待翻译条目：约 {task_count} 条（分布在 {file_count} 个文件中，与 build 统计一致）"
-            )
-            facts.append(
-                "说明：此项统计仍含英文且无汉字的字符串，可能包含故意保留的专名、"
-                "赞助名单或仅改标点的行，不代表批量翻译漏翻；批次是否完成请以任务记录的写回状态为准。"
+                f"待翻译条目：约 {task_count} 条"
+                f"（{file_count} 个文件；可能含专名/名单等无汉字英文，不代表漏翻）"
             )
         else:
-            facts.append("待翻译条目：0 条（当前没有需要批量翻译的待译行）")
+            facts.append("待翻译条目：0 条")
 
     if commented_lines > 0:
         facts.append(f"剧情对话：{commented_lines} 条")
@@ -140,6 +140,7 @@ def format_context_status_facts(
     rag_context: dict[str, object] | None,
     source_index_context: dict[str, object] | None,
 ) -> list[str]:
+    """Full context-store facts (paths included; UI may fold secondary lines)."""
     facts: list[str] = []
 
     if rag_context:
@@ -196,6 +197,7 @@ def format_context_status_facts(
 
 
 def format_project_assets_facts(project_assets: dict[str, object] | None) -> list[str]:
+    """Full project-asset facts (healthy and problem lines; UI may fold healthy ones)."""
     if not project_assets:
         return []
 
@@ -228,6 +230,60 @@ def format_project_assets_facts(project_assets: dict[str, object] | None) -> lis
         facts.append(f"风格设定路径：{macro_file}")
 
     return facts
+
+
+def _is_detail_fact(fact: str, *, layout_status: str) -> bool:
+    """Secondary lines go under the collapsible details section, not deleted."""
+    text = fact.strip()
+    if not text:
+        return False
+    if text.startswith(
+        (
+            "记忆库路径：",
+            "原文索引路径：",
+            "术语表路径：",
+            "风格设定路径：",
+            "TL 路径：",
+            "检查模式：",
+            "work 路径：",
+        )
+    ):
+        return True
+    if text in {
+        "original/game：存在",
+        "翻译目录：存在",
+        "记忆库：未启用",
+        "原文索引：未启用",
+    }:
+        return True
+    if text.startswith("术语表：已找到") or text.startswith("风格设定：已找到"):
+        return True
+    if text.startswith("API 密钥：已配置") or text.startswith("API 密钥：已通过环境变量"):
+        return True
+    # Healthy work path on a ready work root is orientation noise.
+    if (
+        layout_status == "ready"
+        and text.startswith("work 目录：")
+        and "不存在" not in text
+        and "为空" not in text
+    ):
+        return True
+    return False
+
+
+def partition_doctor_facts(
+    all_facts: list[str],
+    *,
+    layout_status: str = "",
+) -> tuple[list[str], list[str]]:
+    primary: list[str] = []
+    details: list[str] = []
+    for fact in all_facts:
+        if _is_detail_fact(fact, layout_status=layout_status):
+            details.append(fact)
+        else:
+            primary.append(fact)
+    return primary, details
 
 
 def parse_doctor_output(output: str) -> dict[str, object]:
@@ -317,6 +373,10 @@ def parse_doctor_output(output: str) -> dict[str, object]:
             parsed["layout_status"] = line.split(":", 1)[1].strip()
             continue
 
+        if line.startswith("- Workflow state:"):
+            parsed["workflow_state"] = line.split(":", 1)[1].strip()
+            continue
+
         if line.startswith("- TL scan:"):
             parsed["counts"] = _parse_counts(line.split(":", 1)[1])
             continue
@@ -363,6 +423,7 @@ def doctor_report_to_parsed(report: dict[str, Any]) -> dict[str, object]:
         "mode": str(report.get("mode") or ""),
         "layout_status": str(report.get("layout_status") or ""),
         "is_work_root": report.get("is_work_root"),
+        "workflow_state": str(report.get("workflow_state") or ""),
         "work_dir": str(report.get("work_dir") or ""),
         "work_exists": report.get("work_exists"),
         "work_empty": report.get("work_empty"),
@@ -437,29 +498,32 @@ def _summarize_doctor_parsed(
     mode = parsed.get("mode") if isinstance(parsed.get("mode"), str) else ""
     layout_status = parsed.get("layout_status") if isinstance(parsed.get("layout_status"), str) else ""
 
-    facts: list[str] = []
+    workflow_state = (
+        parsed.get("workflow_state") if isinstance(parsed.get("workflow_state"), str) else ""
+    )
+    all_facts: list[str] = []
     base_dir = parsed.get("base_dir") if isinstance(parsed.get("base_dir"), str) else ""
     work_dir = parsed.get("work_dir") if isinstance(parsed.get("work_dir"), str) else ""
     is_work_root = parsed.get("is_work_root")
 
     if is_work_root is False and base_dir:
-        append_unique_fact(facts, f"项目目录：{base_dir}")
+        append_unique_fact(all_facts, f"项目目录：{base_dir}")
     elif base_dir:
-        append_unique_fact(facts, f"work 目录：{base_dir}")
+        append_unique_fact(all_facts, f"work 目录：{base_dir}")
 
     if is_work_root is False:
         if parsed.get("work_exists") is False:
-            append_unique_fact(facts, "work 目录：不存在")
+            append_unique_fact(all_facts, "work 目录：不存在")
         elif parsed.get("work_empty") is True:
             if work_dir:
-                append_unique_fact(facts, f"work 目录：{work_dir}（为空）")
+                append_unique_fact(all_facts, f"work 目录：{work_dir}（为空）")
             else:
-                append_unique_fact(facts, "work 目录：存在（为空）")
+                append_unique_fact(all_facts, "work 目录：存在（为空）")
         elif parsed.get("work_exists") is True:
             if work_dir:
-                append_unique_fact(facts, f"work 目录：{work_dir}")
+                append_unique_fact(all_facts, f"work 目录：{work_dir}")
             else:
-                append_unique_fact(facts, "work 目录：存在")
+                append_unique_fact(all_facts, "work 目录：存在")
 
     if (
         is_work_root is True
@@ -467,57 +531,63 @@ def _summarize_doctor_parsed(
         and base_dir
         and work_dir != base_dir
     ):
-        append_unique_fact(facts, f"work 路径：{work_dir}")
+        append_unique_fact(all_facts, f"work 路径：{work_dir}")
 
     if parsed.get("original_game_exists") is True:
-        append_unique_fact(facts, "original/game：存在")
+        append_unique_fact(all_facts, "original/game：存在")
     elif parsed.get("original_game_exists") is False:
-        append_unique_fact(facts, "original/game：不存在")
+        append_unique_fact(all_facts, "original/game：不存在")
     if parsed.get("tl_dir"):
         exists_text = "存在" if parsed.get("tl_exists") is True else "不存在"
-        append_unique_fact(facts, f"翻译目录：{exists_text}")
+        append_unique_fact(all_facts, f"翻译目录：{exists_text}")
     if parsed.get("tl_subdir"):
-        append_unique_fact(facts, f"TL 路径：{parsed['tl_subdir']}")
+        append_unique_fact(all_facts, f"TL 路径：{parsed['tl_subdir']}")
     if parsed.get("language"):
-        append_unique_fact(facts, f"目标语言：{parsed['language']}")
+        append_unique_fact(all_facts, f"目标语言：{parsed['language']}")
     if mode:
-        append_unique_fact(facts, f"检查模式：{doctor_mode_label(mode)}")
+        append_unique_fact(all_facts, f"检查模式：{doctor_mode_label(mode)}")
     if counts:
         for fact in format_tl_scan_facts(counts, pending=pending):
-            append_unique_fact(facts, fact)
+            append_unique_fact(all_facts, fact)
     for fact in format_context_status_facts(
         parsed.get("rag_context") if isinstance(parsed.get("rag_context"), dict) else None,
         parsed.get("source_index_context")
         if isinstance(parsed.get("source_index_context"), dict)
         else None,
     ):
-        append_unique_fact(facts, fact)
+        append_unique_fact(all_facts, fact)
     for fact in format_project_assets_facts(
         parsed.get("project_assets")
         if isinstance(parsed.get("project_assets"), dict)
         else None,
     ):
-        append_unique_fact(facts, fact)
+        append_unique_fact(all_facts, fact)
 
     findings = list(warnings)
     if api_key_count is not None:
         if api_key_count > 0:
             if api_key_source == "environment":
                 append_unique_fact(
-                    facts,
+                    all_facts,
                     f"API 密钥：已通过环境变量配置 {api_key_count} 个",
                 )
             else:
-                append_unique_fact(facts, f"API 密钥：已配置 {api_key_count} 个")
+                append_unique_fact(all_facts, f"API 密钥：已配置 {api_key_count} 个")
         else:
-            append_unique_fact(facts, "建议：在配置页填写 API 密钥后再开始翻译")
-
-    for fact in recommendation_facts:
-        append_unique_fact(facts, fact)
-    for warning in warnings:
-        append_unique_fact(facts, format_doctor_warning_fact(warning))
+            append_unique_fact(all_facts, "建议：在配置页填写 API 密钥后再开始翻译")
 
     recommendation_message = primary_recommendation_message(recommendation_codes)
+    normal_state_message = workflow_state_message(workflow_state)
+
+    for fact in recommendation_facts:
+        append_unique_fact(all_facts, fact)
+    for warning in warnings:
+        append_unique_fact(all_facts, format_doctor_warning_fact(warning))
+
+    facts, detail_facts = partition_doctor_facts(
+        all_facts,
+        layout_status=layout_status,
+    )
 
     if exit_code != 0:
         return DoctorSummary(
@@ -526,6 +596,7 @@ def _summarize_doctor_parsed(
             message="环境检查没有正常完成，请查看诊断日志。",
             facts=facts,
             findings=findings,
+            detail_facts=detail_facts,
         )
 
     if layout_status in LAYOUT_STATUS_HEADINGS:
@@ -569,6 +640,8 @@ def _summarize_doctor_parsed(
             status = "warning"
             heading = LAYOUT_STATUS_HEADINGS["attention"][1]
 
+    elif normal_state_message:
+        message = normal_state_message
     return DoctorSummary(
         status=status,
         heading=heading,
@@ -576,6 +649,7 @@ def _summarize_doctor_parsed(
         facts=facts,
         findings=findings,
         mode=mode,
+        detail_facts=detail_facts,
     )
 
 

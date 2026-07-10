@@ -142,6 +142,7 @@ class TargetLanguageConfigTests(unittest.TestCase):
             'work_empty': True,
             'original_game_dir': '',
             'layout_status': '',
+            'workflow_state': '',
             'warnings': [],
             'recommendations': [],
         }
@@ -151,6 +152,51 @@ class TargetLanguageConfigTests(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn('TL subdir: game/tl/japanese', output)
         self.assertIn('Language: japanese', output)
+        self.assertNotIn('Workflow state:', output)
+
+    def test_print_doctor_report_includes_nonempty_workflow_state(self):
+        report = {
+            'base_dir': 'C:/work',
+            'tl_dir': 'C:/work/game/tl/japanese',
+            'tl_exists': True,
+            'tl_subdir': 'game/tl/japanese',
+            'language': 'japanese',
+            'prepare_enabled': True,
+            'generate_template': True,
+            'refresh_existing_template': True,
+            'renpy_sdk_dir': '',
+            'launcher_py': '',
+            'python_exe': '',
+            'can_generate_template': False,
+            'template_command_kind': '',
+            'template_command': '',
+            'template_reason': 'missing',
+            'mode': 'existing_tl_only',
+            'counts': {
+                'rpy_files': 1,
+                'translate_blocks': 1,
+                'string_sections': 0,
+                'old_lines': 0,
+                'new_lines': 0,
+                'commented_original_lines': 0,
+            },
+            'pending_task_count': 1,
+            'pending_file_count': 1,
+            'context_status': {'rag': {}, 'source_index': {}},
+            'work_dir': '',
+            'work_exists': False,
+            'work_empty': True,
+            'original_game_dir': '',
+            'layout_status': 'ready',
+            'workflow_state': 'start_pending_batch',
+            'warnings': [],
+            'recommendations': [],
+        }
+        stdout = io.StringIO()
+        with mock.patch('sys.stdout', stdout):
+            batch_mod.print_doctor_report(report)
+        output = stdout.getvalue()
+        self.assertIn('Workflow state: start_pending_batch', output)
 
     def test_load_target_language_facts_from_manifest(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

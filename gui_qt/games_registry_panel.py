@@ -620,9 +620,9 @@ class GamesRegistryPanel(QWidget):
                 )
                 if show_doctor
                 else (
-                    "选中当前工作台项目并运行环境检查后，可在此对比总表记录。"
+                    "选中当前工作台项目并完成「环境检查」后，可在此查看总表是否需刷新。"
                     if row_matches_game_root(row, self._current_game_root)
-                    else "切换到该项目后运行环境检查，可对比总表 layout / mode。"
+                    else "切换到该项目并完成「环境检查」后，可对比总表记录。"
                 )
             )
 

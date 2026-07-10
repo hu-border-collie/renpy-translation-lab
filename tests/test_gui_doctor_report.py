@@ -124,6 +124,7 @@ def _report_from_parsed(parsed: dict) -> dict:
         "language": parsed.get("language", ""),
         "mode": parsed.get("mode", ""),
         "layout_status": parsed.get("layout_status", ""),
+        "workflow_state": parsed.get("workflow_state", ""),
         "is_work_root": parsed.get("is_work_root"),
         "work_dir": parsed.get("work_dir", ""),
         "work_exists": parsed.get("work_exists"),
@@ -196,6 +197,7 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertTrue(any("术语表：当前项目缺少 glossary.json" in fact for fact in facts))
         self.assertTrue(any("风格设定：当前项目缺少 macro_setting.md" in fact for fact in facts))
+        self.assertTrue(any("术语表路径：" in fact for fact in facts))
 
     def test_format_project_assets_facts_reports_mismatched_paths(self):
         facts = format_project_assets_facts(
@@ -233,9 +235,17 @@ class GuiDoctorReportTests(unittest.TestCase):
         summary = summarize_doctor_output(CONTEXT_OUTPUT, exit_code=0, api_key_count=1)
 
         self.assertTrue(any("记忆库：已启用，记录数 12" in fact for fact in summary.facts))
-        self.assertTrue(any("记忆库路径：C:/logs/rag_store/example" in fact for fact in summary.facts))
+        # Paths are kept, but folded into detail_facts.
+        self.assertTrue(
+            any("记忆库路径：C:/logs/rag_store/example" in fact for fact in (summary.detail_facts or []))
+        )
         self.assertTrue(any("原文索引：已启用，尚未创建" in fact for fact in summary.facts))
-        self.assertTrue(any("原文索引路径：C:/logs/source_index_store/example" in fact for fact in summary.facts))
+        self.assertTrue(
+            any(
+                "原文索引路径：C:/logs/source_index_store/example" in fact
+                for fact in (summary.detail_facts or [])
+            )
+        )
 
     def test_successful_existing_tl_without_api_key_is_warning(self):
         summary = summarize_doctor_output(DOCTOR_OUTPUT, exit_code=0, api_key_count=0)
@@ -251,13 +261,24 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "ready")
         self.assertEqual(summary.heading, "项目检查通过")
-        self.assertTrue(any("API 密钥：已配置 2 个" in fact for fact in summary.facts))
+        # Configured keys stay available under 更多详情, not the primary list.
+        self.assertFalse(any("API 密钥：已配置" in fact for fact in summary.facts))
+        self.assertTrue(
+            any("API 密钥：已配置 2 个" in fact for fact in (summary.detail_facts or []))
+        )
         self.assertTrue(any("翻译文件：3 个" in fact for fact in summary.facts))
-        self.assertTrue(any("待翻译条目：约 5 条" in fact for fact in summary.facts))
-        self.assertTrue(any("不代表批量翻译漏翻" in fact for fact in summary.facts))
+        self.assertTrue(
+            any(
+                "待翻译条目：约 5 条" in fact and "不代表漏翻" in fact
+                for fact in summary.facts
+            )
+        )
         self.assertTrue(any("剧情对话：2 条" in fact for fact in summary.facts))
         self.assertTrue(any("界面字符串：10 条" in fact for fact in summary.facts))
         self.assertFalse(any("old/new 行数" in fact for fact in summary.facts))
+        self.assertTrue(
+            any("检查模式：" in fact for fact in (summary.detail_facts or []))
+        )
         self.assertEqual(summary.findings, [])
 
     def test_can_generate_template_without_tl_files_is_warning(self):
@@ -290,7 +311,9 @@ class GuiDoctorReportTests(unittest.TestCase):
             api_key_source="environment",
         )
 
-        self.assertTrue(any("环境变量" in fact for fact in summary.facts))
+        self.assertTrue(
+            any("环境变量" in fact for fact in (summary.detail_facts or []))
+        )
 
     def test_blocked_missing_template_is_blocked(self):
         summary = summarize_doctor_output(FAILED_OUTPUT, exit_code=0, api_key_count=1)
@@ -321,7 +344,10 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "warning")
         self.assertEqual(summary.heading, "建议使用 work 目录")
         self.assertTrue(any("切换到" in fact for fact in summary.facts))
-        self.assertTrue(any("original/game：存在" in fact for fact in summary.facts))
+        # Healthy original/game is folded under 更多详情, not deleted.
+        self.assertTrue(
+            any("original/game：存在" in fact for fact in (summary.detail_facts or []))
+        )
 
     def test_switch_to_work_shows_resolved_work_path(self):
         output = SWITCH_TO_WORK_OUTPUT.replace(
@@ -366,23 +392,29 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=1)
         self.assertEqual(summary.findings, [])
+        self.assertIn("准备工作目录", summary.message)
         self.assertTrue(any(fact.startswith("建议：") for fact in summary.facts))
         self.assertTrue(any("准备工作目录" in fact for fact in summary.facts))
 
-    def test_api_key_facts_appear_before_doctor_recommendations(self):
-        output = DOCTOR_OUTPUT + (
-            "\nRecommendations:\n"
-            "- game_root should use work directory; switch to C:\\Games\\Example\\work\n"
-        )
-
-        summary = summarize_doctor_output(output, exit_code=0, api_key_count=2)
-        api_index = next(
-            i for i, fact in enumerate(summary.facts) if fact.startswith("API 密钥：")
+    def test_path_facts_appear_before_switch_recommendation(self):
+        summary = summarize_doctor_output(SWITCH_TO_WORK_OUTPUT, exit_code=0, api_key_count=2)
+        path_index = next(
+            i
+            for i, fact in enumerate(summary.facts)
+            if fact.startswith("项目目录：") or fact.startswith("work 目录：")
         )
         recommendation_index = next(
             i for i, fact in enumerate(summary.facts) if fact.startswith("建议：将项目路径")
         )
-        self.assertLess(api_index, recommendation_index)
+        self.assertLess(path_index, recommendation_index)
+
+    def test_secondary_facts_are_partitioned_not_dropped(self):
+        summary = summarize_doctor_output(CONTEXT_OUTPUT, exit_code=0, api_key_count=2)
+        combined = [*summary.facts, *(summary.detail_facts or [])]
+        self.assertTrue(any("记忆库路径：" in fact for fact in combined))
+        self.assertTrue(any("原文索引路径：" in fact for fact in combined))
+        self.assertTrue(any("检查模式：" in fact for fact in combined))
+        self.assertTrue(any("API 密钥：已配置" in fact for fact in combined))
 
     def test_format_doctor_recommendation_fact_uses_fact_style(self):
         fact = format_doctor_recommendation_fact(
@@ -480,9 +512,7 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(summary.message, "记忆库尚未建立，建议先预建记忆库再开始翻译。")
         self.assertEqual(summary.status, "warning")
-        self.assertTrue(
-            any("预建记忆库" in fact for fact in summary.facts),
-        )
+        self.assertTrue(any("预建记忆库" in fact for fact in summary.facts))
 
     def test_substantially_complete_stays_green_despite_optional_rag_wording(self):
         output = DOCTOR_OUTPUT.replace(
@@ -522,6 +552,99 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.message, "补译环境已就绪，可以开始批量翻译。")
         self.assertTrue(any("记忆库含有旧版键格式" in fact for fact in summary.facts))
 
+    def test_no_pending_workflow_state_uses_status_message_without_recommendation(self):
+        output = READY_OUTPUT + """
+- Workflow state: no_pending_lines
+- Pending translation: task_count=0, file_count=0
+"""
+
+        parsed = parse_doctor_output(output)
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(parsed["workflow_state"], doctor_rec.NO_PENDING_LINES)
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertEqual(
+            summary.message,
+            "当前没有待译条目；如需创建新批次，请先刷新翻译模板。",
+        )
+        self.assertFalse(any(fact.startswith("建议：") for fact in summary.facts))
+
+    def test_legacy_no_pending_recommendation_stays_ready(self):
+        """Backward-compat: recommendation-only no_pending_lines must not elevate to warning."""
+        output = READY_OUTPUT + (
+            "\nRecommendations:\n"
+            "- No pending translation lines detected; review TL files or refresh templates "
+            "before starting a new batch.\n"
+        )
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertEqual(
+            summary.message,
+            "当前没有待译条目；如需创建新批次，请先刷新翻译模板。",
+        )
+
+    def test_workflow_state_only_start_incremental_stays_ready(self):
+        output = READY_OUTPUT + """
+- Workflow state: start_incremental_batch
+- Pending translation: task_count=240, file_count=12
+"""
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertEqual(summary.message, "补译环境已就绪，可以开始批量翻译。")
+        self.assertFalse(any(fact.startswith("建议：") for fact in summary.facts))
+
+    def test_workflow_state_only_start_pending_stays_ready(self):
+        output = READY_OUTPUT + """
+- Workflow state: start_pending_batch
+- Pending translation: task_count=240, file_count=12
+"""
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertEqual(summary.message, "翻译环境已就绪，可以开始批量翻译。")
+        self.assertFalse(any(fact.startswith("建议：") for fact in summary.facts))
+
+    def test_workflow_state_only_substantially_complete_stays_ready(self):
+        output = READY_OUTPUT.replace(
+            "commented_original_lines=2",
+            "commented_original_lines=85000",
+        ) + """
+- Workflow state: substantially_complete
+- Pending translation: task_count=45, file_count=12
+"""
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertEqual(
+            summary.message,
+            "项目已基本译完；剩余待译行很少，可忽略或按需补译。",
+        )
+        self.assertFalse(any(fact.startswith("建议：") for fact in summary.facts))
+
+    def test_optional_rag_recommendation_keeps_ready_status(self):
+        cli_line = doctor_rec.format_doctor_recommendation_cli_line(
+            doctor_rec.make_doctor_recommendation(doctor_rec.ENABLE_RAG_FOR_CONSISTENCY)
+        )
+        output = READY_OUTPUT + f"\nRecommendations:\n- {cli_line}\n"
+
+        summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
+
+        self.assertEqual(summary.status, "ready")
+        self.assertEqual(summary.heading, "项目检查通过")
+        self.assertTrue(summary.message.startswith("可选优化："))
+        self.assertTrue(any(fact.startswith("可选优化：") for fact in summary.facts))
+
     def test_partial_source_index_shows_progress_in_facts(self):
         output = """
 Doctor report:
@@ -540,8 +663,9 @@ Recommendations:
         self.assertTrue(
             any("原文索引：已启用，片段数 4200/12000" in fact for fact in summary.facts)
         )
+        self.assertIn("原文索引尚未就绪", summary.message)
         self.assertTrue(
-            any("继续运行「预建原文索引」补全索引库" in fact for fact in summary.facts)
+            any("继续运行「预建原文索引」" in fact for fact in summary.facts)
         )
         self.assertFalse(
             any("提交约 8500" in fact for fact in summary.facts)
@@ -573,8 +697,13 @@ Recommendations:
         )
 
         self.assertIn("翻译文件：49 个", facts)
-        self.assertTrue(any("待翻译条目：约 48394 条" in fact for fact in facts))
-        self.assertTrue(any("不代表批量翻译漏翻" in fact for fact in facts))
+        self.assertTrue(
+            any(
+                "待翻译条目：约 48394 条（49 个文件；可能含专名/名单等无汉字英文，不代表漏翻）"
+                == fact
+                for fact in facts
+            )
+        )
         self.assertTrue(any("剧情对话：49863 条" in fact for fact in facts))
         self.assertTrue(any("界面字符串：637 条" in fact for fact in facts))
 

@@ -65,7 +65,7 @@ def compare_registry_with_doctor_report(
             doctor_mode=doctor_mode,
             last_refresh_at="",
             project_name="",
-            message="无法读取工作区总表（games_registry.json 格式无效），无法对比 layout。",
+            message="无法读取工作区总表（games_registry.json 格式无效）。",
             log_line=f"[总表对比] games_registry.json 解析失败：{exc}",
         )
 
@@ -78,7 +78,7 @@ def compare_registry_with_doctor_report(
             doctor_mode=doctor_mode,
             last_refresh_at="",
             project_name="",
-            message="当前项目不在工作区总表中，无法与 registry 对比 layout。",
+            message="当前项目尚未加入工作区总表。需要时请到「设置 → 工作区」扫描登记。",
             log_line="[总表对比] 当前项目未登记在 games_registry.json。",
         )
 
@@ -92,7 +92,10 @@ def compare_registry_with_doctor_report(
             doctor_mode=doctor_mode,
             last_refresh_at="",
             project_name=project_id,
-            message=f"总表中未找到项目记录（id={project_id}），无法对比 layout。",
+            message=(
+                f"总表中找不到该项目（id={project_id}）。"
+                "请到「设置 → 工作区」重新扫描。"
+            ),
             log_line=f"[总表对比] 项目 id={project_id} 未在 games_registry.json 中找到。",
         )
 
@@ -107,26 +110,17 @@ def compare_registry_with_doctor_report(
     matched = layout_match and mode_match
 
     if matched:
-        message = (
-            f"与工作区总表一致：layout={registry_layout or '（空）'}"
-            f"，mode={registry_mode or '（空）'}。"
-        )
+        message = "总表与本次检查一致。"
         log_line = (
             f"[总表对比] 与 games_registry 记录一致"
-            f"（layout={registry_layout or '-'}，mode={registry_mode or '-'}）。"
+            f"（layout={registry_layout or '-'}, mode={registry_mode or '-'}）。"
         )
     else:
-        message = (
-            f"与工作区总表不一致：总表 layout={registry_layout or '（空）'}"
-            f" / mode={registry_mode or '（空）'}，"
-            f"当前检查 layout={doctor_layout or '（空）'}"
-            f" / mode={doctor_mode or '（空）'}。"
-        )
+        message = "总表记录与本次检查不同，请到「设置 → 工作区」刷新当前项目。"
         if last_refresh_at:
-            message = f"{message} 总表最近刷新：{last_refresh_at}。"
-        message = f"{message} 建议在「工作区项目…」中对当前项执行刷新。"
+            message = f"{message}（总表上次刷新：{last_refresh_at}）"
         log_line = (
-            f"[总表对比] 不一致 — registry: layout={registry_layout or '-'}, "
+            f"[总表对比] 记录不同 — registry: layout={registry_layout or '-'}, "
             f"mode={registry_mode or '-'}；doctor: layout={doctor_layout or '-'}, "
             f"mode={doctor_mode or '-'}。"
         )
@@ -151,22 +145,14 @@ def format_registry_compare_hint(
 ) -> str:
     if compare is None:
         if for_registry_dialog:
-            return "请先在工作台运行「环境检查」，或选中已检查过的当前项目。"
+            return "暂无环境检查结果。请先在工作台运行「环境检查」。"
         return ""
 
     if compare.matched is None:
         return compare.message
 
-    if compare.matched:
-        prefix = "与环境检查一致"
-    else:
-        prefix = "与环境检查不一致"
-
     if for_registry_dialog:
-        return (
-            f"{prefix}：总表 layout={compare.registry_layout or '—'}"
-            f" / mode={compare.registry_mode or '—'}；"
-            f"检查 layout={compare.doctor_layout or '—'}"
-            f" / mode={compare.doctor_mode or '—'}。"
-        )
+        if compare.matched:
+            return "与环境检查一致。"
+        return "总表记录与环境检查不同，请刷新当前项目。"
     return compare.message

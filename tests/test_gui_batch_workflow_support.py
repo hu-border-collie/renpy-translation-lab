@@ -193,7 +193,13 @@ class GuiBatchWorkflowSupportTests(unittest.TestCase):
             }
         )
         summary = summarize_doctor_report(parsed, exit_code=0, api_key_count=1)
-        self.assertTrue(any("TL 路径：game/tl/schinese" in fact for fact in summary.facts))
+        # TL path is a secondary fact (folded under 更多详情).
+        detail_facts = list(summary.detail_facts or [])
+        self.assertTrue(
+            any("TL 路径：game/tl/schinese" in fact for fact in detail_facts),
+            msg=f"facts={summary.facts!r} detail_facts={detail_facts!r}",
+        )
+        self.assertTrue(any("目标语言：schinese" in fact for fact in summary.facts))
 
 
 if __name__ == "__main__":

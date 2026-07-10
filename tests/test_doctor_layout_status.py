@@ -251,13 +251,23 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             },
         }
 
-        recommendations = batch_mod.collect_doctor_recommendations(report)
+        # Production gate used by collect_doctor_report(): required prep clears workflow_state.
+        finalized = batch_mod.finalize_doctor_actionable_signals(report)
 
-        self.assertEqual(len(recommendations), 1)
-        self.assertEqual(recommendations[0]["code"], doctor_rec.BOOTSTRAP_RAG)
-        self.assertNotIn(doctor_rec.START_PENDING_BATCH, doctor_rec.doctor_recommendation_codes(recommendations))
+        self.assertEqual(len(finalized["recommendations"]), 1)
+        self.assertEqual(finalized["recommendations"][0]["code"], doctor_rec.BOOTSTRAP_RAG)
+        self.assertNotIn(
+            doctor_rec.START_PENDING_BATCH,
+            doctor_rec.doctor_recommendation_codes(finalized["recommendations"]),
+        )
+        # Without the gate this scenario would emit start_incremental_batch.
+        self.assertEqual(
+            batch_mod.collect_doctor_workflow_state(report),
+            doctor_rec.START_INCREMENTAL_BATCH,
+        )
+        self.assertEqual(finalized["workflow_state"], "")
 
-    def test_incremental_translation_uses_incremental_recommendation(self):
+    def test_ready_incremental_translation_has_no_recommendation(self):
         report = _layout_report(
             base_dir="C:/Games/Example/work",
             rpy_files=20,
@@ -286,8 +296,15 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
 
         recommendations = batch_mod.collect_doctor_recommendations(report)
 
-        self.assertEqual(len(recommendations), 1)
-        self.assertEqual(recommendations[0]["code"], doctor_rec.START_INCREMENTAL_BATCH)
+        self.assertEqual(recommendations, [])
+        self.assertFalse(
+            set(doctor_rec.doctor_recommendation_codes(recommendations))
+            & doctor_rec.WORKFLOW_STATE_CODES
+        )
+        self.assertEqual(
+            batch_mod.collect_doctor_workflow_state(report),
+            doctor_rec.START_INCREMENTAL_BATCH,
+        )
 
     def test_mostly_complete_project_without_rag_does_not_require_bootstrap(self):
         report = _layout_report(
@@ -315,9 +332,55 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
 
         recommendations = batch_mod.collect_doctor_recommendations(report)
 
-        self.assertEqual(len(recommendations), 1)
-        self.assertEqual(recommendations[0]["code"], doctor_rec.SUBSTANTIALLY_COMPLETE)
+        self.assertEqual(recommendations, [])
+        self.assertEqual(
+            batch_mod.collect_doctor_workflow_state(report),
+            doctor_rec.SUBSTANTIALLY_COMPLETE,
+        )
         self.assertNotIn(doctor_rec.ENABLE_RAG_FOR_CONSISTENCY, doctor_rec.doctor_recommendation_codes(recommendations))
+
+    def test_ready_project_without_pending_lines_has_no_recommendation(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=20,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 0
+        report["context_status"] = {
+            "rag": {"enabled": False},
+            "source_index": {
+                "enabled": True,
+                "store_exists": True,
+                "source_segments": 2979,
+                "expected_segments": 2979,
+            },
+        }
+
+        recommendations = batch_mod.collect_doctor_recommendations(report)
+
+        self.assertEqual(recommendations, [])
+        self.assertEqual(
+            batch_mod.collect_doctor_workflow_state(report),
+            doctor_rec.NO_PENDING_LINES,
+        )
+
+    def test_ready_new_translation_has_pending_workflow_state(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=20,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 240
+        report["counts"] = {
+            "rpy_files": 20,
+            "translate_blocks": 240,
+            "old_lines": 0,
+        }
+
+        self.assertEqual(
+            batch_mod.collect_doctor_workflow_state(report),
+            doctor_rec.START_PENDING_BATCH,
+        )
 
     def test_existing_translations_without_rag_recommends_enable_rag(self):
         report = _layout_report(
@@ -346,6 +409,109 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
 
         self.assertEqual(len(recommendations), 1)
         self.assertEqual(recommendations[0]["code"], doctor_rec.ENABLE_RAG_FOR_CONSISTENCY)
+        # Optional tip must not suppress workflow_state.
+        self.assertFalse(doctor_rec.recommendations_block_workflow_state(recommendations))
+
+    def test_recommendations_never_emit_workflow_state_codes(self):
+        """Phase markers live only in workflow_state, not in the recommendation list."""
+        cases = [
+            # required source index
+            {
+                "pending_task_count": 100,
+                "context_status": {
+                    "source_index": {
+                        "enabled": True,
+                        "store_exists": False,
+                        "source_segments": 0,
+                        "expected_segments": 100,
+                    }
+                },
+            },
+            # ready incremental (no recs)
+            {
+                "pending_task_count": 240,
+                "counts": {
+                    "rpy_files": 20,
+                    "translate_blocks": 12000,
+                    "old_lines": 120,
+                    "new_lines": 120,
+                },
+                "context_status": {
+                    "rag": {
+                        "enabled": True,
+                        "store_exists": True,
+                        "history_records": 5200,
+                    },
+                    "source_index": {
+                        "enabled": True,
+                        "store_exists": True,
+                        "source_segments": 2979,
+                        "expected_segments": 2979,
+                    },
+                },
+            },
+            # no pending
+            {
+                "pending_task_count": 0,
+                "context_status": {
+                    "rag": {"enabled": False},
+                    "source_index": {
+                        "enabled": True,
+                        "store_exists": True,
+                        "source_segments": 100,
+                        "expected_segments": 100,
+                    },
+                },
+            },
+        ]
+        for case in cases:
+            report = _layout_report(
+                base_dir="C:/Games/Example/work",
+                rpy_files=20,
+                layout_status="ready",
+            )
+            report.update(case)
+            codes = set(
+                doctor_rec.doctor_recommendation_codes(
+                    batch_mod.collect_doctor_recommendations(report)
+                )
+            )
+            self.assertFalse(
+                codes & doctor_rec.WORKFLOW_STATE_CODES,
+                msg=f"workflow codes leaked into recommendations: {codes & doctor_rec.WORKFLOW_STATE_CODES}",
+            )
+
+    def test_blocking_recommendation_suppresses_low_priority_recommendations(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            original_game_dir="C:/Games/Example/original/game",
+            work_bootstrap_allowed=True,
+            layout_status="attention",
+        )
+        # 配置已启用但未就绪的 RAG 和原文索引，如果在未抑制状态下会触发建议
+        report["context_status"] = {
+            "rag": {
+                "enabled": True,
+                "store_exists": False,
+                "history_records": 0,
+                "bootstrap_on_build": False,
+            },
+            "source_index": {
+                "enabled": True,
+                "store_exists": False,
+                "source_segments": 0,
+                "expected_segments": 100,
+            },
+        }
+
+        recommendations = batch_mod.collect_doctor_recommendations(report)
+        codes = doctor_rec.doctor_recommendation_codes(recommendations)
+
+        # 应当且仅应当推荐 BOOTSTRAP_WORK
+        self.assertIn(doctor_rec.BOOTSTRAP_WORK, codes)
+        # 低优先级的 RAG 与原文索引预建必须被抑制
+        self.assertNotIn(doctor_rec.BOOTSTRAP_RAG, codes)
+        self.assertNotIn(doctor_rec.BOOTSTRAP_SOURCE_INDEX, codes)
 
 
 if __name__ == "__main__":
