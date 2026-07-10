@@ -2,7 +2,7 @@
 
 文档地图：[docs/README.md](README.md) · 现状说明：[GUI 工作台](gui_workbench.md)
 
-> **状态**：**P0a–P3 (#158–#166) 已合并**；环境检查 EmptyState 与摘要重叠的后续修复已在 [PR #177](https://github.com/hu-border-collie/renpy-translation-lab/pull/177) 合并。尚待补记五个任务入口的人工往返烟测，再完成 Epic #157 的关闭记录。
+> **状态**：**P0a–P3 (#158–#166) 已合并**；环境检查 EmptyState 与摘要重叠的后续修复已在 [PR #177](https://github.com/hu-border-collie/renpy-translation-lab/pull/177) 合并。批量翻译主流程已有 2026-06-19 真实项目端到端烟测记录，但该记录早于本轮 IA；关闭 Epic #157 前，仍需对当前 P0–P3 界面的五个任务入口补做并记录人工往返烟测。
 > **Epic**：[#157](https://github.com/hu-border-collie/renpy-translation-lab/issues/157)  
 > **性质**：仅 GUI 布局 / 信息架构；**不改变** CLI 语义、`check → apply` 安全合约、manifest 字段。  
 > **依据**：2026-07 对 `gui_qt/` 全功能盘点（工作台、设置、诊断、8 种 WorkMode）+ 计划审阅修订。  
@@ -756,5 +756,5 @@ Epic #157 GUI 信息架构重组
 
 1. ~~创建 Epic + 子 issue~~ → **#157–#166 已开**  
 2. ~~P0a–P3~~ → **#158–#166 已合并**
-3. 补记五个任务入口的人工往返烟测，勾选 [#157](https://github.com/hu-border-collie/renpy-translation-lab/issues/157) / [#166](https://github.com/hu-border-collie/renpy-translation-lab/issues/166) 验收清单并关闭 Epic。
+3. 批量翻译主流程已有 2026-06-19 真实项目端到端烟测；由于该记录早于本轮 IA，仍需对当前五个任务入口补做并记录人工往返烟测，再勾选 [#157](https://github.com/hu-border-collie/renpy-translation-lab/issues/157) / [#166](https://github.com/hu-border-collie/renpy-translation-lab/issues/166) 验收清单并关闭 Epic。
 4. 后续真实页面化与 `app.py` 解耦按 [#176](https://github.com/hu-border-collie/renpy-translation-lab/issues/176) 拆分推进；不与本 Epic 的已交付 IA 收尾混淆。
