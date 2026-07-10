@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QRadioButton,
     QButtonGroup,
+    QToolButton,
 )
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
@@ -873,12 +874,39 @@ class MainWindow(QMainWindow):
         self.doctor_facts_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.doctor_facts_label.setObjectName("doctor_facts_label")
         doctor_content_layout.addWidget(self.doctor_facts_label)
+        # Flat disclosure control (not checkable — checked QToolButtons pick up
+        # selected-button chrome and change width when the label flips).
+        self._doctor_details_expanded = False
+        self.doctor_details_toggle = QToolButton()
+        self.doctor_details_toggle.setObjectName("doctor_details_toggle")
+        self.doctor_details_toggle.setCheckable(False)
+        self.doctor_details_toggle.setAutoRaise(True)
+        self.doctor_details_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.doctor_details_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.doctor_details_toggle.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.doctor_details_toggle.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
+        )
+        # Pin width to the wider of the two states so expand/collapse does not nudge layout.
+        _toggle_fm = self.doctor_details_toggle.fontMetrics()
+        _toggle_w = max(
+            _toggle_fm.horizontalAdvance("▾ 更多详情"),
+            _toggle_fm.horizontalAdvance("▸ 更多详情"),
+        ) + 8
+        self.doctor_details_toggle.setFixedWidth(max(_toggle_w, 88))
+        self.doctor_details_toggle.setVisible(False)
+        self.doctor_details_toggle.clicked.connect(self._on_doctor_details_clicked)
+        doctor_content_layout.addWidget(
+            self.doctor_details_toggle, 0, Qt.AlignmentFlag.AlignLeft
+        )
         self.doctor_details_label = QLabel()
         self.doctor_details_label.setWordWrap(True)
         self.doctor_details_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.doctor_details_label.setObjectName("config_hint_label")
+        self.doctor_details_label.setObjectName("doctor_details_label")
         self.doctor_details_label.setVisible(False)
         doctor_content_layout.addWidget(self.doctor_details_label)
+        self._sync_doctor_details_toggle_chrome()
         doctor_content_layout.addStretch()
         self.doctor_summary_scroll.setWidget(doctor_content)
         doctor_summary_layout.addWidget(self.doctor_summary_scroll, 1)
@@ -3447,9 +3475,36 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("已打开补救命令参考。", 3000)
 
     def _set_details_label(self, label: QLabel, findings: list[str]) -> None:
+        # Writeback details stay collapsed-away for now; doctor uses its own toggle.
         del findings
         label.setText("")
         label.setVisible(False)
+
+    def _sync_doctor_details_toggle_chrome(self) -> None:
+        """Keep disclosure label width-stable; only the marker character changes."""
+        # Same character width for ▸/▾ avoids horizontal drift when expanding.
+        marker = "▾" if self._doctor_details_expanded else "▸"
+        self.doctor_details_toggle.setText(f"{marker} 更多详情")
+
+    def _on_doctor_details_clicked(self) -> None:
+        self._doctor_details_expanded = not self._doctor_details_expanded
+        has_text = bool(self.doctor_details_label.text().strip())
+        self.doctor_details_label.setVisible(self._doctor_details_expanded and has_text)
+        self._sync_doctor_details_toggle_chrome()
+
+    def _set_doctor_detail_facts(self, detail_facts: list[str] | None) -> None:
+        lines = [line for line in (detail_facts or []) if str(line).strip()]
+        if not lines:
+            self._doctor_details_expanded = False
+            self.doctor_details_toggle.setVisible(False)
+            self.doctor_details_label.setText("")
+            self.doctor_details_label.setVisible(False)
+            self._sync_doctor_details_toggle_chrome()
+            return
+        self.doctor_details_label.setText("\n".join(lines))
+        self.doctor_details_toggle.setVisible(True)
+        self.doctor_details_label.setVisible(self._doctor_details_expanded)
+        self._sync_doctor_details_toggle_chrome()
 
     def _clear_layout(self, layout: QLayout) -> None:
         while layout.count():
@@ -5764,13 +5819,14 @@ class MainWindow(QMainWindow):
                     facts=[*summary.facts, compare.message],
                     findings=summary.findings,
                     mode=summary.mode,
+                    detail_facts=list(summary.detail_facts or []),
                 )
             self._doctor_check_completed = True
             status_message = "项目检查完成。"
             if compare is not None and compare.matched is False:
-                status_message = "项目检查完成；与工作区总表 layout 不一致。"
+                status_message = "项目检查完成。总表记录需刷新。"
             elif compare is not None and compare.matched is None:
-                status_message = "项目检查完成；当前项目未登记在总表。"
+                status_message = "项目检查完成。当前项目未在总表中登记。"
             self.statusBar().showMessage(status_message, 8000)
         else:
             summary = summarize_doctor_output(
@@ -7257,7 +7313,7 @@ class MainWindow(QMainWindow):
         self.doctor_status_label.set_status(summary.status, summary.heading)
         self.doctor_message_label.setText(summary.message)
         self.doctor_facts_label.setText("\n".join(summary.facts))
-        self._set_details_label(self.doctor_details_label, [])
+        self._set_doctor_detail_facts(summary.detail_facts)
         self._update_translate_button_label()
         spec = work_mode_spec(self._current_work_mode())
         running = self.kill_btn.isEnabled()
