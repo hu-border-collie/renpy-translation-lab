@@ -69,6 +69,10 @@ GAMES_MD_HEADER = """# 游戏状态总表
 
 {updated_line}
 
+> **请勿手改下方表格。** 真源是同目录的 `games_registry.json`（或 GUI「设置 → 工作区」）。  
+> 改完后执行：`python renpy-translation-lab/games_registry.py render-md` 重新生成本文件。  
+> 若已误改本表，用 `import-md --merge` 拉回 JSON，再 `render-md`。
+
 本表只记录已经纳入整理结构的项目：
 
 - 顶层 `Game_*` 项目。
