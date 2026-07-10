@@ -184,6 +184,40 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
             resolved = merge_mod.resolve_keyword_candidates_path(str(manifest_path))
             self.assertEqual(Path(resolved).resolve(), jsonl_path.resolve())
 
+    def test_resolve_rejects_non_keyword_manifest_with_sibling_candidates(self):
+        """A batch package must not be accepted merely because a stale JSONL exists."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            package = Path(tmpdir).resolve() / 'package'
+            package.mkdir()
+            jsonl_path = package / 'keyword_candidates.jsonl'
+            self._write_jsonl(jsonl_path, self._sample_candidates()[:1])
+            manifest_path = package / 'manifest.json'
+            manifest_path.write_text(
+                json.dumps({'mode': 'batch_translation'}, ensure_ascii=False),
+                encoding='utf-8',
+            )
+
+            with self.assertRaises(SystemExit) as ctx:
+                merge_mod.resolve_keyword_candidates_path(str(manifest_path))
+
+        self.assertIn('not a keyword extraction package', str(ctx.exception))
+
+    def test_resolve_keyword_lite_manifest_uses_sibling_candidates(self):
+        """Lite keyword manifests may omit keyword_export but retain mode metadata."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            package = Path(tmpdir).resolve() / 'package'
+            package.mkdir()
+            jsonl_path = package / 'keyword_candidates.jsonl'
+            self._write_jsonl(jsonl_path, self._sample_candidates()[:1])
+            manifest_path = package / 'manifest.json'
+            manifest_path.write_text(
+                json.dumps({'mode': 'keyword_extraction'}, ensure_ascii=False),
+                encoding='utf-8',
+            )
+
+            resolved = merge_mod.resolve_keyword_candidates_path(str(package))
+            self.assertEqual(Path(resolved).resolve(), jsonl_path.resolve())
+
     def test_resolve_missing_jsonl_reports_not_found(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             missing = Path(tmpdir).resolve() / 'missing.jsonl'

@@ -15,6 +15,7 @@ from project_asset_paths import canonical_abs_path, expected_project_asset_paths
 GLOSSARY_SECTION_PRESERVE = 'preserve_terms'
 GLOSSARY_SECTION_NON_TRANSLATABLE = 'non_translatable_exact'
 GLOSSARY_SECTION_NORMALIZE = 'normalize_map'
+MANIFEST_MODE_KEYWORD = 'keyword_extraction'
 
 
 @dataclass
@@ -211,10 +212,6 @@ def resolve_keyword_candidates_path(target: str) -> str:
 
     manifest_path = candidate_path
     if os.path.isdir(candidate_path):
-        # Prefer package-local export file before parsing a possibly multi-MB manifest.
-        sibling = os.path.join(candidate_path, 'keyword_candidates.jsonl')
-        if os.path.isfile(sibling):
-            return sibling
         manifest_path = os.path.join(candidate_path, 'manifest.json')
     elif not candidate_path.lower().endswith('manifest.json'):
         raise SystemExit(
@@ -224,18 +221,32 @@ def resolve_keyword_candidates_path(target: str) -> str:
     if not os.path.isfile(manifest_path):
         raise SystemExit(f'Manifest not found: {manifest_path}')
 
-    sibling = os.path.join(os.path.dirname(manifest_path), 'keyword_candidates.jsonl')
-    if os.path.isfile(sibling):
-        return sibling
-
     try:
         with open(manifest_path, 'r', encoding='utf-8-sig') as handle:
             manifest = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f'Failed to load manifest: {manifest_path} ({exc})') from exc
 
-    export = manifest.get('keyword_export') if isinstance(manifest, dict) else None
+    if not isinstance(manifest, dict):
+        raise SystemExit('Manifest is not a JSON object.')
+
+    mode = manifest.get('mode')
+    if isinstance(mode, str) and mode and mode != MANIFEST_MODE_KEYWORD:
+        raise SystemExit(
+            'Manifest is not a keyword extraction package; '
+            'refusing to merge a sibling keyword_candidates.jsonl.'
+        )
+
+    export = manifest.get('keyword_export')
     if not isinstance(export, dict):
+        # Lite manifests omit keyword_export. Only an explicitly keyword-mode
+        # manifest may use the sibling fallback, otherwise a batch package with
+        # a stale JSONL could mutate the glossary.
+        sibling = os.path.join(
+            os.path.dirname(manifest_path), 'keyword_candidates.jsonl'
+        )
+        if mode == MANIFEST_MODE_KEYWORD and os.path.isfile(sibling):
+            return sibling
         raise SystemExit('Manifest does not contain keyword_export metadata. Run export-keywords first.')
 
     jsonl_path = export.get('jsonl_path') or ''
