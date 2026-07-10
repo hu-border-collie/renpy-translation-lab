@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
 from .responsive_layout import FlowButtonBar, ResponsiveActionPanel
+from .empty_state import EmptyStateWidget
 from .api_key_dialog import ApiKeyDialog
 from .api_key_helpers import mask_api_key
 from .bootstrap_report import (
@@ -838,12 +839,12 @@ class MainWindow(QMainWindow):
         doctor_layout.setSpacing(6)
         self.doctor_status_label = StatusBadge("doctor_status_label")
         doctor_layout.addWidget(self.doctor_status_label)
-        doctor_scroll = QScrollArea()
-        doctor_scroll.setObjectName("doctor_summary_scroll")
-        self._style_themed_surface(doctor_scroll)
-        doctor_scroll.setWidgetResizable(True)
-        doctor_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        doctor_viewport = doctor_scroll.viewport()
+        self.doctor_summary_scroll = QScrollArea()
+        self.doctor_summary_scroll.setObjectName("doctor_summary_scroll")
+        self._style_themed_surface(self.doctor_summary_scroll)
+        self.doctor_summary_scroll.setWidgetResizable(True)
+        self.doctor_summary_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        doctor_viewport = self.doctor_summary_scroll.viewport()
         doctor_viewport.setObjectName("doctor_summary_viewport")
         self._style_themed_surface(doctor_viewport)
         doctor_content = QWidget()
@@ -867,8 +868,19 @@ class MainWindow(QMainWindow):
         self.doctor_details_label.setVisible(False)
         doctor_content_layout.addWidget(self.doctor_details_label)
         doctor_content_layout.addStretch()
-        doctor_scroll.setWidget(doctor_content)
-        doctor_layout.addWidget(doctor_scroll, 1)
+        self.doctor_summary_scroll.setWidget(doctor_content)
+        doctor_layout.addWidget(self.doctor_summary_scroll, 1)
+        # P3 / #166: empty CTA before the first environment check.
+        self.doctor_empty_state = EmptyStateWidget(
+            "🔍",
+            "尚未运行环境检查",
+            "完成检查后这里会显示项目就绪状态与建议下一步。",
+            action_text="运行环境检查",
+        )
+        self.doctor_empty_state.setObjectName("doctor_empty_state")
+        self.doctor_empty_state.action_clicked.connect(self._on_run_doctor)
+        doctor_layout.addWidget(self.doctor_empty_state, 1)
+        self.doctor_empty_state.setVisible(False)
         self.workbench_status_tabs.addTab(doctor_tab, "环境检查")
 
         workflow_tab = QWidget()
@@ -893,6 +905,20 @@ class MainWindow(QMainWindow):
         workflow_layout.setSpacing(6)
         self.workflow_status_label = StatusBadge("workflow_status_label")
         workflow_layout.addWidget(self.workflow_status_label)
+        # P3 / #166: empty CTA when there is no project / no resumable progress yet.
+        self.workflow_empty_state = EmptyStateWidget(
+            "📋",
+            "还没有任务进度",
+            "选择项目并开始翻译后，这里会显示时间线与任务事实。"
+            "若已有未完成的批量任务，可点「继续」。",
+            action_text="去环境检查",
+        )
+        self.workflow_empty_state.setObjectName("workflow_empty_state")
+        self.workflow_empty_state.action_clicked.connect(
+            lambda: self._focus_workbench_status_tab(_BATCH_STAGE_PREPARE)
+        )
+        workflow_layout.addWidget(self.workflow_empty_state)
+        self.workflow_empty_state.setVisible(False)
         self.workflow_message_label = QLabel()
         self.workflow_message_label.setWordWrap(True)
         self.workflow_message_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -1159,8 +1185,9 @@ class MainWindow(QMainWindow):
         frame.setObjectName("context_library_panel")
         self.context_library_panel = frame
         outer = QVBoxLayout(frame)
-        outer.setContentsMargins(12, 10, 12, 10)
-        outer.setSpacing(10)
+        # Compact so the prebuild progress tab (and empty CTA) still fit at 700px.
+        outer.setContentsMargins(10, 8, 10, 8)
+        outer.setSpacing(6)
 
         title = QLabel("上下文库状态")
         title.setObjectName("diagnostics_section_label")
@@ -4262,6 +4289,174 @@ class MainWindow(QMainWindow):
     def _resume_button_is_query_mode(self) -> bool:
         return hasattr(self, "resume_btn") and self.resume_btn.text() == "查询云端状态"
 
+    def _resume_task_available(self) -> tuple[bool, str]:
+        """Whether 「继续」 can load a resumable task for the current mode (P3 / #166)."""
+        spec = work_mode_spec(self._current_work_mode())
+        if not spec.implemented or not spec.supports_resume:
+            return False, "当前模式不支持继续任务。"
+        if self.kill_btn.isEnabled() or bool(getattr(self, "_task_running", False)):
+            return False, "任务运行中。"
+        # Mid-workflow waiting: keep enabled for status query.
+        if self._workflow is not None and self._workflow.current_step() is not None:
+            return True, ""
+        game_root = self.state.get_game_root() if hasattr(self, "state") else None
+        if game_root is None:
+            return False, "请先选择游戏的 work 目录。"
+        latest = self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+        if latest is None:
+            return False, f"未找到可继续的{spec.label}任务；请先开始一个任务。"
+        try:
+            self.state.load_resume_manifest(latest, work_mode=spec.mode)
+        except ValueError as exc:
+            return False, str(exc)
+        return True, ""
+
+    def _update_resume_btn_enabled(
+        self,
+        *,
+        running: bool | None = None,
+        resume_available: tuple[bool, str] | None = None,
+    ) -> None:
+        if not hasattr(self, "resume_btn"):
+            return
+        if running is None:
+            running = bool(getattr(self, "_task_running", False)) or (
+                hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
+            )
+        spec = work_mode_spec(self._current_work_mode())
+        if not spec.supports_resume or not spec.implemented:
+            self.resume_btn.setEnabled(False)
+            self.resume_btn.setToolTip("")
+            return
+        if running:
+            self.resume_btn.setEnabled(False)
+            self.resume_btn.setToolTip("任务运行中，请等待结束后再继续。")
+            return
+        if resume_available is None:
+            available, reason = self._resume_task_available()
+        else:
+            available, reason = resume_available
+        self.resume_btn.setEnabled(available)
+        if available:
+            self.resume_btn.setToolTip("从最近任务记录继续未完成的步骤，或查询云端状态。")
+        else:
+            self.resume_btn.setToolTip(reason or "当前没有可继续的任务。")
+
+    def _sync_workbench_empty_states(
+        self,
+        *,
+        resume_available: tuple[bool, str] | None = None,
+    ) -> None:
+        """Show/hide EmptyState widgets on prepare/execute pages (P3 / #166)."""
+        doctor_done = bool(getattr(self, "_doctor_check_completed", False))
+        has_project = bool(
+            hasattr(self, "state") and self.state.get_game_root() is not None
+        )
+        running = bool(getattr(self, "_task_running", False)) or (
+            hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
+        )
+        has_workflow = self._workflow is not None or bool(
+            getattr(self, "_writeback_manifest_path", "")
+        )
+        if running:
+            resume_ok = False
+        elif resume_available is not None:
+            resume_ok = bool(resume_available[0])
+        else:
+            resume_ok, _ = self._resume_task_available()
+
+        if hasattr(self, "doctor_empty_state"):
+            show_doctor_empty = not doctor_done and not running
+            self.doctor_empty_state.setVisible(show_doctor_empty)
+            # Hide the summary scroll while the empty CTA is front-and-center.
+            for attr in ("doctor_status_label",):
+                widget = getattr(self, attr, None)
+                if widget is not None:
+                    widget.setVisible(not show_doctor_empty)
+            doctor_scroll = getattr(self, "doctor_summary_scroll", None)
+            if doctor_scroll is not None:
+                doctor_scroll.setVisible(not show_doctor_empty)
+
+        if hasattr(self, "workflow_empty_state"):
+            show_wf_empty = (
+                not running
+                and not has_workflow
+                and not resume_ok
+                and not bool(getattr(self, "_viewing_completed_manifest", False))
+            )
+            # Hide when workflow labels already show non-idle content.
+            status = ""
+            if hasattr(self, "workflow_status_label"):
+                raw = self.workflow_status_label.property("status")
+                status = str(raw or "")
+            if status and status not in {"idle", "stale", ""}:
+                show_wf_empty = False
+            if has_project and status in {"idle", "stale"} and not resume_ok and not has_workflow:
+                show_wf_empty = True
+            if not has_project:
+                show_wf_empty = True
+            self.workflow_empty_state.setVisible(show_wf_empty)
+            # Empty CTA shares the progress column with summary chrome. Hide the
+            # chrome while empty so the action button is not height-crushed.
+            for attr in (
+                "workflow_status_label",
+                "workflow_message_label",
+                "workflow_facts_label",
+            ):
+                widget = getattr(self, attr, None)
+                if widget is not None:
+                    widget.setVisible(not show_wf_empty)
+            if show_wf_empty:
+                for attr in (
+                    "workflow_progress_bar",
+                    "view_last_completed_btn",
+                    "hide_completed_view_btn",
+                    "split_status_title",
+                    "split_status_table",
+                ):
+                    widget = getattr(self, attr, None)
+                    if widget is not None:
+                        widget.setVisible(False)
+                self._ensure_workflow_empty_cta_visible()
+            else:
+                if hasattr(self, "_apply_workflow_progress_ui"):
+                    self._apply_workflow_progress_ui()
+                if hasattr(self, "_update_completed_manifest_entry_ui"):
+                    self._update_completed_manifest_entry_ui()
+
+    def _ensure_workflow_empty_cta_visible(self) -> None:
+        """Scroll outer/inner workbench scroll areas so the empty CTA is on-screen."""
+        empty = getattr(self, "workflow_empty_state", None)
+        if empty is None or not empty.isVisible():
+            return
+        target = getattr(empty, "_action_btn", None) or empty
+
+        def _scroll_ancestors(widget) -> None:
+            parent = widget.parentWidget()
+            while parent is not None:
+                if isinstance(parent, QScrollArea):
+                    parent.ensureWidgetVisible(target, 16, 24)
+                parent = parent.parentWidget()
+
+        # Defer until after the current layout pass finishes.
+        QTimer.singleShot(0, lambda: _scroll_ancestors(empty))
+
+    def _restore_diagnostics_splitter_idle(self) -> None:
+        """Return diagnostics splitter toward idle context:log balance (P3 / #166)."""
+        if not hasattr(self, "diagnostics_splitter"):
+            return
+        if hasattr(self, "_splitter_anim") and self._splitter_anim.state() == self._splitter_anim.State.Running:
+            self._splitter_anim.stop()
+        total = max(sum(self.diagnostics_splitter.sizes()), 1)
+        # Prefer fixed idle pixels when total is large enough; else 70/30 split.
+        if total >= (_DIAGNOSTICS_IDLE_CONTEXT_PX + _DIAGNOSTICS_IDLE_LOG_PX):
+            context = _DIAGNOSTICS_IDLE_CONTEXT_PX
+            log = total - context
+        else:
+            context = int(total * 0.70)
+            log = max(1, total - context)
+        self.diagnostics_splitter.setSizes([context, log])
+
     def _should_generate_template_only(self) -> bool:
         spec = work_mode_spec(self._current_work_mode())
         if spec.mode not in {WorkMode.BATCH_TRANSLATION, WorkMode.SYNC_TRANSLATION}:
@@ -4427,11 +4622,18 @@ class MainWindow(QMainWindow):
                 running=running,
             )
         )
-        self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
+        resume_available = (
+            (False, "任务运行中。") if running else self._resume_task_available()
+        )
+        self._update_resume_btn_enabled(
+            running=running,
+            resume_available=resume_available,
+        )
         self._update_split_submit_btn(running=running)
         self._sync_task_shortcuts()
         # Re-apply page chrome after enable flags so context cards stay correct.
         self._apply_task_page_chrome(spec)
+        self._sync_workbench_empty_states(resume_available=resume_available)
 
     def _update_timeline_steps(self, mode: WorkMode) -> None:
         from .work_modes import WorkMode
@@ -6824,6 +7026,7 @@ class MainWindow(QMainWindow):
         self._scroll_log_views_to_end()
 
     def _set_task_running(self, running: bool):
+        was_running = bool(getattr(self, "_task_running", False))
         self._task_running = running
         spec = work_mode_spec(self._current_work_mode())
         project_switch_enabled = not running
@@ -6857,7 +7060,13 @@ class MainWindow(QMainWindow):
                 running=running,
             )
         )
-        self.resume_btn.setEnabled(spec.implemented and spec.supports_resume and not running)
+        resume_available = (
+            (False, "任务运行中。") if running else self._resume_task_available()
+        )
+        self._update_resume_btn_enabled(
+            running=running,
+            resume_available=resume_available,
+        )
         self._update_split_submit_btn(running=running)
         self._sync_settings_action_bar_enabled(task_running=running)
         writeback_summary = self._current_writeback_summary()
@@ -6883,6 +7092,10 @@ class MainWindow(QMainWindow):
             self._refresh_context_library_panel(running=running)
         self._sync_task_shortcuts()
         self._reflow_button_bars()
+        self._sync_workbench_empty_states(resume_available=resume_available)
+        # After a workbench/diagnostics task finishes, ease splitter back to idle.
+        if was_running and not running:
+            self._restore_diagnostics_splitter_idle()
 
     def _sync_task_shortcuts(self) -> None:
         """Keep task shortcuts aligned with the corresponding action buttons."""
@@ -6907,6 +7120,9 @@ class MainWindow(QMainWindow):
         self.workflow_message_label.setText(message)
         self.workflow_facts_label.setText("\n".join(facts or []))
         self._update_resume_btn_text()
+        resume_available = self._resume_task_available()
+        self._update_resume_btn_enabled(resume_available=resume_available)
+        self._sync_workbench_empty_states(resume_available=resume_available)
         self._sync_layout_sizes()
 
     def _set_workflow_update(self, update: WorkflowUpdate):
@@ -7031,6 +7247,7 @@ class MainWindow(QMainWindow):
             )
         )
         self._sync_task_shortcuts()
+        self._sync_workbench_empty_states()
         self._sync_layout_sizes()
 
     def _on_runner_error(self, message: str):

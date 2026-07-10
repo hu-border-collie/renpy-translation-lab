@@ -71,32 +71,46 @@ class EmptyStateWidget(QWidget):
 
         # ---- outer layout (centers the content block) --------------------
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Compact margins so CTA fits short workbench status tabs.
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(6)
 
         # ---- icon --------------------------------------------------------
         self._icon_label = QLabel(icon)
         icon_font = QFont()
-        icon_font.setPixelSize(48)
+        icon_font.setPixelSize(32)
         self._icon_label.setFont(icon_font)
         self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._icon_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Fixed,
+        )
 
         # ---- title -------------------------------------------------------
         self._title_label = QLabel(title)
         title_font = QFont()
-        title_font.setPixelSize(16)
+        title_font.setPixelSize(15)
         title_font.setWeight(QFont.Weight.DemiBold)
         self._title_label.setFont(title_font)
         self._title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._title_label.setWordWrap(True)
+        self._title_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Fixed,
+        )
 
         # ---- description -------------------------------------------------
         self._desc_label = QLabel(description)
         desc_font = QFont()
-        desc_font.setPixelSize(13)
+        desc_font.setPixelSize(12)
         self._desc_label.setFont(desc_font)
         self._desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._desc_label.setWordWrap(True)
-        self._desc_label.setMaximumWidth(400)
+        self._desc_label.setMaximumWidth(420)
+        self._desc_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Minimum,
+        )
 
         # ---- optional action button --------------------------------------
         self._action_btn: QPushButton | None = None
@@ -104,19 +118,29 @@ class EmptyStateWidget(QWidget):
             self._action_btn = QPushButton(action_text)
             self._action_btn.setObjectName("secondary_btn")
             self._action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._action_btn.setSizePolicy(
+                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Fixed,
+            )
+            # Keep full label visible even when parent is height-constrained.
+            hint = self._action_btn.sizeHint()
+            self._action_btn.setMinimumSize(hint)
             self._action_btn.clicked.connect(self.action_clicked)
 
-        # ---- assemble ----------------------------------------------------
+        # ---- assemble: stretch centers content; CTA stays after description ----
+        outer.addStretch(1)
         outer.addWidget(self._icon_label)
         outer.addWidget(self._title_label)
         outer.addWidget(self._desc_label, alignment=Qt.AlignmentFlag.AlignCenter)
 
         if self._action_btn is not None:
             btn_row = QHBoxLayout()
+            btn_row.setContentsMargins(0, 0, 0, 0)
             btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
             btn_row.addWidget(self._action_btn)
-            outer.addSpacing(8)
+            outer.addSpacing(2)
             outer.addLayout(btn_row)
+        outer.addStretch(1)
 
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding,

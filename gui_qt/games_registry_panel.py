@@ -4,11 +4,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QBrush, QColor, QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -19,6 +20,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QStyle,
+    QStyleOptionComboBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -42,6 +45,7 @@ from .games_registry_doctor_compare import (
     format_registry_compare_hint,
 )
 from .games_registry_worker import RegistryRefreshWorker
+from .responsive_layout import FlowButtonBar
 from .widget_helpers import NoWheelComboBox
 from .games_registry_view import (
     REGISTRY_PREF_AUTO_DISCOVER,
@@ -62,6 +66,50 @@ from .games_registry_view import (
 
 SwitchProjectHandler = Callable[[str], bool]
 DoctorReportProvider = Callable[[], dict | None]
+
+
+def _combo_natural_width(combo: NoWheelComboBox) -> int:
+    """Width needed to show the longest item under the current style/font."""
+    # Clear prior fixed constraints so sizeHint is honest.
+    combo.setMinimumWidth(0)
+    combo.setMaximumWidth(16777215)
+    combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+    metrics = combo.fontMetrics()
+    longest = ""
+    longest_px = 0
+    for index in range(combo.count()):
+        text = combo.itemText(index)
+        advance = metrics.horizontalAdvance(text)
+        if advance > longest_px:
+            longest_px = advance
+            longest = text
+    opt = QStyleOptionComboBox()
+    combo.initStyleOption(opt)
+    opt.currentText = longest
+    styled = combo.style().sizeFromContents(
+        QStyle.ContentsType.CT_ComboBox,
+        opt,
+        QSize(longest_px, metrics.height()),
+        combo,
+    )
+    return max(combo.sizeHint().width(), styled.width())
+
+
+def _uniform_combo_width(*combos: NoWheelComboBox, minimum: int = 0, pad: int = 8) -> None:
+    """Lock a group of combos to one content-fitting width (not full form row).
+
+    Uses style/font sizeFromContents so CJK (e.g. YaHei UI) is not clipped.
+    Fixed width keeps the pair equal after first show.
+    """
+    if not combos:
+        return
+    width = max(minimum, max(_combo_natural_width(combo) for combo in combos) + pad)
+    for combo in combos:
+        # Stop per-combo AdjustToContentsOnFirstShow from diverging after paint.
+        combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        combo.setFixedWidth(width)
 
 
 class GamesRegistryPanel(QWidget):
@@ -101,11 +149,22 @@ class GamesRegistryPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        header = QHBoxLayout()
+        # Title + primary switch stay on one short row; tools wrap below so the
+        # panel no longer forces ~1250px min width (settings viewport is ~770–1100).
+        title_row = QHBoxLayout()
         title = QLabel("工作区项目")
         title.setObjectName("diagnostics_section_label")
-        header.addWidget(title)
-        header.addStretch(1)
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        self._switch_btn = QPushButton("切换到此项目")
+        self._switch_btn.setObjectName("secondary_btn")
+        self._switch_btn.clicked.connect(self._switch_to_selected)
+        self._switch_btn.setEnabled(False)
+        title_row.addWidget(self._switch_btn)
+        layout.addLayout(title_row)
+
+        self._toolbar = FlowButtonBar(spacing=8, row_spacing=8)
+        self._toolbar.setObjectName("games_registry_toolbar")
 
         self._import_md_btn = QPushButton("从 GAMES.md 导入")
         self._import_md_btn.setObjectName("secondary_btn")
@@ -114,53 +173,55 @@ class GamesRegistryPanel(QWidget):
             "JSON 仍是日常真源；导入后建议再点「同步 GAMES.md」。"
         )
         self._import_md_btn.clicked.connect(self._import_from_games_md)
-        header.addWidget(self._import_md_btn)
+        self._toolbar.add_widget(self._import_md_btn, min_width=100)
 
         self._discover_btn = QPushButton("扫描新项目")
         self._discover_btn.setObjectName("secondary_btn")
         self._discover_btn.setToolTip("扫描工作区中的 Game_* 目录，并把未登记的项目加入总表")
         self._discover_btn.clicked.connect(self._discover_new_projects)
-        header.addWidget(self._discover_btn)
+        self._toolbar.add_widget(self._discover_btn, min_width=88)
 
         self._sync_md_btn = QPushButton("同步 GAMES.md")
         self._sync_md_btn.setObjectName("secondary_btn")
         self._sync_md_btn.setToolTip("用 games_registry.json 重新生成 GAMES.md 表格（覆盖表格区）")
         self._sync_md_btn.clicked.connect(self._sync_games_md)
-        header.addWidget(self._sync_md_btn)
+        self._toolbar.add_widget(self._sync_md_btn, min_width=100)
 
         self._refresh_current_btn = QPushButton("刷新当前")
         self._refresh_current_btn.setObjectName("secondary_btn")
         self._refresh_current_btn.clicked.connect(self._refresh_current_project)
-        header.addWidget(self._refresh_current_btn)
+        self._toolbar.add_widget(self._refresh_current_btn, min_width=80)
 
         self._refresh_all_btn = QPushButton("刷新全部")
         self._refresh_all_btn.setObjectName("secondary_btn")
         self._refresh_all_btn.clicked.connect(self._refresh_all_projects)
-        header.addWidget(self._refresh_all_btn)
+        self._toolbar.add_widget(self._refresh_all_btn, min_width=80)
 
+        mode_host = QWidget()
+        mode_host.setObjectName("games_registry_mode_host")
+        mode_row = QHBoxLayout(mode_host)
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        mode_row.setSpacing(6)
         mode_label = QLabel("扫描模式")
         mode_label.setObjectName("config_hint_label")
-        header.addWidget(mode_label)
-
+        mode_row.addWidget(mode_label)
         self._refresh_mode_combo = NoWheelComboBox()
         self._refresh_mode_combo.setObjectName("games_registry_refresh_mode_combo")
         self._refresh_mode_combo.addItem("快速", REFRESH_MODE_LITE)
         self._refresh_mode_combo.addItem("深度", REFRESH_MODE_DEEP)
         self._refresh_mode_combo.setToolTip("快速：只扫磁盘与翻译文件；深度：额外运行 doctor（较慢）")
-        header.addWidget(self._refresh_mode_combo)
+        self._refresh_mode_combo.setMinimumWidth(72)
+        mode_row.addWidget(self._refresh_mode_combo)
+        self._toolbar.add_widget(mode_host, min_width=None)
 
         self._stop_refresh_btn = QPushButton("停止")
         self._stop_refresh_btn.setObjectName("kill_btn")
         self._stop_refresh_btn.setEnabled(False)
         self._stop_refresh_btn.clicked.connect(self._on_stop_refresh)
-        header.addWidget(self._stop_refresh_btn)
+        self._toolbar.add_widget(self._stop_refresh_btn, min_width=64)
 
-        self._switch_btn = QPushButton("切换到此项目")
-        self._switch_btn.setObjectName("secondary_btn")
-        self._switch_btn.clicked.connect(self._switch_to_selected)
-        self._switch_btn.setEnabled(False)
-        header.addWidget(self._switch_btn)
-        layout.addLayout(header)
+        self._toolbar.finish_setup()
+        layout.addWidget(self._toolbar)
 
         options_row = QHBoxLayout()
         self._auto_discover_checkbox = QCheckBox("打开分区时自动扫描新项目")
@@ -176,12 +237,14 @@ class GamesRegistryPanel(QWidget):
         filter_row.addWidget(self._search_edit, 2)
 
         self._engine_filter_combo = NoWheelComboBox()
+        self._engine_filter_combo.setObjectName("games_registry_engine_filter_combo")
         for value, label in registry_engine_filter_options():
             self._engine_filter_combo.addItem(label, value)
         self._engine_filter_combo.currentIndexChanged.connect(self._apply_filters)
         filter_row.addWidget(self._engine_filter_combo)
 
         self._translation_filter_combo = NoWheelComboBox()
+        self._translation_filter_combo.setObjectName("games_registry_translation_filter_combo")
         for label in registry_translation_filter_options():
             self._translation_filter_combo.addItem(label, label)
         self._translation_filter_combo.currentIndexChanged.connect(self._apply_filters)
@@ -191,10 +254,18 @@ class GamesRegistryPanel(QWidget):
         sort_label.setObjectName("config_hint_label")
         filter_row.addWidget(sort_label)
         self._sort_combo = NoWheelComboBox()
+        self._sort_combo.setObjectName("games_registry_sort_combo")
         for value, label in REGISTRY_SORT_OPTIONS:
             self._sort_combo.addItem(label, value)
         self._sort_combo.currentIndexChanged.connect(self._apply_filters)
         filter_row.addWidget(self._sort_combo)
+
+        # Engine / translation / sort share one compact fixed width after show.
+        _uniform_combo_width(
+            self._engine_filter_combo,
+            self._translation_filter_combo,
+            self._sort_combo,
+        )
         layout.addLayout(filter_row)
 
         self._status_label = QLabel()
@@ -246,30 +317,47 @@ class GamesRegistryPanel(QWidget):
         edit_layout.addRow("项目名称", self._name_edit)
 
         self._layout_status_label = QLabel("—")
+        self._layout_status_label.setWordWrap(True)
+        self._layout_status_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         edit_layout.addRow("目录状态", self._layout_status_label)
 
         self._doctor_mode_label = QLabel("—")
+        self._doctor_mode_label.setWordWrap(True)
         edit_layout.addRow("Doctor 模式", self._doctor_mode_label)
 
         self._last_refresh_label = QLabel("—")
+        self._last_refresh_label.setWordWrap(True)
         edit_layout.addRow("最近刷新", self._last_refresh_label)
 
         self._doctor_check_layout_label = QLabel("—")
+        self._doctor_check_layout_label.setWordWrap(True)
         edit_layout.addRow("环境检查 layout", self._doctor_check_layout_label)
 
         self._doctor_check_mode_label = QLabel("—")
+        self._doctor_check_mode_label.setWordWrap(True)
         edit_layout.addRow("环境检查 mode", self._doctor_check_mode_label)
 
         self._registry_compare_label = QLabel("—")
         self._registry_compare_label.setWordWrap(True)
+        self._registry_compare_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         edit_layout.addRow("总表对比", self._registry_compare_label)
 
         self._play_status_combo = NoWheelComboBox()
+        self._play_status_combo.setObjectName("games_registry_play_status_combo")
         self._play_status_combo.addItems(sorted(PLAY_STATUSES))
-        edit_layout.addRow("游玩状态", self._play_status_combo)
-
         self._translation_status_combo = NoWheelComboBox()
+        self._translation_status_combo.setObjectName("games_registry_translation_status_combo")
         self._translation_status_combo.addItems(sorted(TRANSLATION_STATUSES))
+        # Compact equal width for both status fields (not full form row).
+        _uniform_combo_width(
+            self._play_status_combo,
+            self._translation_status_combo,
+        )
+        edit_layout.addRow("游玩状态", self._play_status_combo)
         edit_layout.addRow("翻译状态", self._translation_status_combo)
 
         self._notes_edit = QPlainTextEdit()
@@ -314,6 +402,36 @@ class GamesRegistryPanel(QWidget):
         if not self._section_visible:
             self._section_visible = True
             self.activate_section()
+        # Parent settings viewport width is final after show; wrap toolbar to it.
+        toolbar = getattr(self, "_toolbar", None)
+        reflow = getattr(toolbar, "reflow", None) if toolbar is not None else None
+        if callable(reflow):
+            reflow(force=True)
+        # Re-lock combo pairs after the real style/font is applied (YaHei etc.).
+        self._reflow_uniform_combos()
+
+    def _reflow_uniform_combos(self) -> None:
+        engine = getattr(self, "_engine_filter_combo", None)
+        translation_filter = getattr(self, "_translation_filter_combo", None)
+        sort_combo = getattr(self, "_sort_combo", None)
+        filter_group = [
+            combo
+            for combo in (engine, translation_filter, sort_combo)
+            if combo is not None
+        ]
+        if len(filter_group) >= 2:
+            _uniform_combo_width(*filter_group)
+        play = getattr(self, "_play_status_combo", None)
+        translation = getattr(self, "_translation_status_combo", None)
+        if play is not None and translation is not None:
+            _uniform_combo_width(play, translation)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        toolbar = getattr(self, "_toolbar", None)
+        reflow = getattr(toolbar, "reflow", None) if toolbar is not None else None
+        if callable(reflow):
+            reflow()
 
     def hideEvent(self, event) -> None:
         if self._is_refresh_running() and self._refresh_worker is not None:

@@ -211,6 +211,10 @@ def resolve_keyword_candidates_path(target: str) -> str:
 
     manifest_path = candidate_path
     if os.path.isdir(candidate_path):
+        # Prefer package-local export file before parsing a possibly multi-MB manifest.
+        sibling = os.path.join(candidate_path, 'keyword_candidates.jsonl')
+        if os.path.isfile(sibling):
+            return sibling
         manifest_path = os.path.join(candidate_path, 'manifest.json')
     elif not candidate_path.lower().endswith('manifest.json'):
         raise SystemExit(
@@ -219,6 +223,10 @@ def resolve_keyword_candidates_path(target: str) -> str:
 
     if not os.path.isfile(manifest_path):
         raise SystemExit(f'Manifest not found: {manifest_path}')
+
+    sibling = os.path.join(os.path.dirname(manifest_path), 'keyword_candidates.jsonl')
+    if os.path.isfile(sibling):
+        return sibling
 
     try:
         with open(manifest_path, 'r', encoding='utf-8-sig') as handle:

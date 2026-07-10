@@ -77,6 +77,39 @@ class ResponsiveActionPanelTests(unittest.TestCase):
             translate_top = min(b.geometry().top() for b in translate)
             self.assertGreaterEqual(translate_top, prep_bottom)
 
+    def test_reflow_does_not_leave_orphan_separators_blocking_clicks(self):
+        """Regression: old VLine separators sat at 640x480 and stole mouse events."""
+        from PySide6.QtWidgets import QFrame
+
+        panel = self._build_panel()
+        panel.resize(1200, 80)
+        panel.show()
+        for _ in range(4):
+            self._app.processEvents()
+        # Many reflows (as on resize/mode switch) used to accumulate separators.
+        for width in (1200, 500, 1100, 480, 1280, 640, 900):
+            panel.resize(width, 140)
+            panel.reflow(force=True)
+            for _ in range(3):
+                self._app.processEvents()
+        seps = [
+            fr
+            for fr in panel.findChildren(QFrame)
+            if fr.objectName() == "action_separator" and fr.parentWidget() is panel
+        ]
+        # At most one live separator from the current layout mode.
+        self.assertLessEqual(len(seps), 1)
+        for fr in seps:
+            self.assertLessEqual(fr.width(), 4)
+            self.assertLessEqual(fr.height(), 40)
+        # Buttons must be the topmost widget at their center (not a ghost separator).
+        for btn in panel._prep_buttons + panel._translate_buttons:
+            if btn.isHidden():
+                continue
+            center = btn.mapTo(panel, btn.rect().center())
+            hit = panel.childAt(center)
+            self.assertIs(hit, btn, msg=f"{btn.text()} blocked by {hit}")
+
     def test_resize_does_not_hang(self):
         panel = self._build_panel()
         panel.resize(900, 140)

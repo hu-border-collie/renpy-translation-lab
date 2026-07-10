@@ -47,6 +47,39 @@ class GuiKeywordMergeReportTests(unittest.TestCase):
             resolved = keyword_merge_candidates_path_from_manifest("", manifest)
             self.assertEqual(resolved, "")
 
+    def test_non_keyword_manifest_with_path_ignores_sibling_candidates(self):
+        """batch_translation + path must not enable merge via leftover sibling jsonl."""
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl_path = os.path.join(tmp, "keyword_candidates.jsonl")
+            self._write_jsonl(jsonl_path, [{"source": "A", "suggested_target": "甲"}])
+            manifest_path = os.path.join(tmp, "manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps({"mode": "batch_translation"}, ensure_ascii=False))
+            manifest = {"mode": "batch_translation", "_manifest_path": manifest_path}
+            resolved = keyword_merge_candidates_path_from_manifest(manifest_path, manifest)
+            self.assertEqual(resolved, "")
+
+    def test_keyword_merge_candidates_path_uses_sibling_without_export(self):
+        """Lite manifests omit keyword_export; resolve via package sibling, not full JSON."""
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl_path = os.path.join(tmp, "keyword_candidates.jsonl")
+            self._write_jsonl(jsonl_path, [{"source": "A", "suggested_target": "甲"}])
+            manifest_path = os.path.join(tmp, "manifest.json")
+            # Oversized-looking payload without keyword_export (simulates lite reader).
+            with open(manifest_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {"mode": "keyword_extraction", "chunks": [{"i": n} for n in range(50)]},
+                        ensure_ascii=False,
+                    )
+                )
+            lite = {"mode": "keyword_extraction", "_manifest_path": manifest_path}
+            resolved = keyword_merge_candidates_path_from_manifest(manifest_path, lite)
+            self.assertEqual(resolved, jsonl_path)
+            # Path-only (no export field) still finds sibling quickly.
+            resolved_path_only = keyword_merge_candidates_path_from_manifest(manifest_path, None)
+            self.assertEqual(resolved_path_only, jsonl_path)
+
     def test_load_keyword_merge_context_builds_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
             jsonl_path = os.path.join(tmp, "keyword_candidates.jsonl")
