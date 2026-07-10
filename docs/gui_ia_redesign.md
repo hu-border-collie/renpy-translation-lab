@@ -2,7 +2,7 @@
 
 文档地图：[docs/README.md](README.md) · 现状说明：[GUI 工作台](gui_workbench.md)
 
-> **状态**：**P0a–P2b (#158–#165) 已合并**；**P3 (#166) 打磨收尾进行中**（EmptyState / resume 门控 / splitter 恢复）。  
+> **状态**：**P0a–P3 (#158–#166) 已合并**；环境检查 EmptyState 与摘要重叠的后续修复已在 [PR #177](https://github.com/hu-border-collie/renpy-translation-lab/pull/177) 合并。尚待补记五个任务入口的人工往返烟测，再完成 Epic #157 的关闭记录。
 > **Epic**：[#157](https://github.com/hu-border-collie/renpy-translation-lab/issues/157)  
 > **性质**：仅 GUI 布局 / 信息架构；**不改变** CLI 语义、`check → apply` 安全合约、manifest 字段。  
 > **依据**：2026-07 对 `gui_qt/` 全功能盘点（工作台、设置、诊断、8 种 WorkMode）+ 计划审阅修订。  
@@ -755,7 +755,6 @@ Epic #157 GUI 信息架构重组
 ## 13. 下一步（仓库流程）
 
 1. ~~创建 Epic + 子 issue~~ → **#157–#166 已开**  
-2. ~~P0a–P1c~~ → **#158–#162 已合并**  
-3. **P1d [#163](https://github.com/hu-border-collie/renpy-translation-lab/issues/163)** 文档对齐（本阶段）  
-4. 之后 **P2a [#164](https://github.com/hu-border-collie/renpy-translation-lab/issues/164)** / **P2b [#165](https://github.com/hu-border-collie/renpy-translation-lab/issues/165)**  
-5. 每完成一阶段：关闭对应 issue、勾选 Epic 清单、更新本文状态行、同步 `gui_workbench.md`。
+2. ~~P0a–P3~~ → **#158–#166 已合并**
+3. 补记五个任务入口的人工往返烟测，勾选 [#157](https://github.com/hu-border-collie/renpy-translation-lab/issues/157) / [#166](https://github.com/hu-border-collie/renpy-translation-lab/issues/166) 验收清单并关闭 Epic。
+4. 后续真实页面化与 `app.py` 解耦按 [#176](https://github.com/hu-border-collie/renpy-translation-lab/issues/176) 拆分推进；不与本 Epic 的已交付 IA 收尾混淆。
