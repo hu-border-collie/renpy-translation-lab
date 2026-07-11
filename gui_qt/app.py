@@ -1344,9 +1344,21 @@ class MainWindow(QMainWindow):
                     QSizePolicy.Policy.Expanding,
                     QSizePolicy.Policy.Fixed,
                 )
-            elif is_sync or is_keywords:
-                page = getattr(self, "sync_translation_page", None) if is_sync else getattr(self, "keywords_page", None)
+            elif is_sync:
+                page = getattr(self, "sync_translation_page", None)
                 hint_h = page.sizeHint().height() if page is not None else 72
+                self.workbench_stack.setMaximumHeight(max(hint_h, 48))
+                self.workbench_stack.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Maximum,
+                )
+            elif is_keywords:
+                page = getattr(self, "keywords_page", None)
+                hint_h = (
+                    page.preferred_height(self.workbench_stack.width())
+                    if page is not None
+                    else 96
+                )
                 self.workbench_stack.setMaximumHeight(max(hint_h, 48))
                 self.workbench_stack.setSizePolicy(
                     QSizePolicy.Policy.Expanding,
@@ -4646,9 +4658,12 @@ class MainWindow(QMainWindow):
             start_enabled=self.translate_btn.isEnabled(),
             resume_enabled=self.resume_btn.isEnabled(),
             resume_visible=work_mode_spec(mode).supports_resume,
+            resume_label=self.resume_btn.text(),
             merge_enabled=merge_ready,
             merge_message=result_hint,
         )
+        if workbench_nav_for_work_mode(mode) == WorkbenchNavItem.KEYWORDS:
+            self._apply_task_page_chrome(work_mode_spec(mode))
 
     def _sync_sync_translation_page_controls(
         self,
@@ -5333,6 +5348,9 @@ class MainWindow(QMainWindow):
         sync_page = getattr(self, "sync_translation_page", None)
         if sync_page is not None:
             sync_page.reset_project()
+        keywords_page = getattr(self, "keywords_page", None)
+        if keywords_page is not None:
+            keywords_page.reset_project()
         self._workflow = None
         self._workflow_step_output_lines = []
         self._clear_completed_manifest_snapshot()
@@ -7324,6 +7342,7 @@ class MainWindow(QMainWindow):
         self._update_resume_btn_text()
         resume_available = self._resume_task_available()
         self._update_resume_btn_enabled(resume_available=resume_available)
+        self._sync_keywords_page_controls()
         self._sync_workbench_empty_states(resume_available=resume_available)
         self._sync_layout_sizes()
 

@@ -1,7 +1,6 @@
 """Persistent keywords/terminology page for the workbench stack (#176 P3)."""
 from __future__ import annotations
 
-from PySide6.QtCore import QSize
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -83,13 +82,13 @@ class KeywordsPage(QFrame):
         self.result_hint.setWordWrap(True)
         outer.addWidget(self.result_hint)
 
-    def sizeHint(self):  # noqa: N802
-        return self.minimumSizeHint()
-
-    def minimumSizeHint(self):  # noqa: N802
-        width = super().minimumSizeHint().width()
-        controls_h = max(self.start_btn.sizeHint().height(), 32) + 16
-        return QSize(max(width, 260), self.mode_combo.sizeHint().height() + controls_h + 40)
+    def preferred_height(self, width: int) -> int:
+        """Return the layout's word-wrap-aware height for the current page width."""
+        layout = self.layout()
+        if layout is None:
+            return self.sizeHint().height()
+        content_width = max(width, 260)
+        return max(self.minimumSizeHint().height(), layout.heightForWidth(content_width))
 
     def set_action_callbacks(self, actions: WorkbenchPageActions) -> None:
         self._actions = actions
@@ -120,14 +119,17 @@ class KeywordsPage(QFrame):
         start_enabled: bool,
         resume_enabled: bool,
         resume_visible: bool,
+        resume_label: str,
         merge_enabled: bool,
         merge_message: str,
     ) -> None:
         self.start_btn.setEnabled(start_enabled and not self._running)
         self.resume_btn.setVisible(resume_visible)
+        self.resume_btn.setText(resume_label)
         self.resume_btn.setEnabled(resume_enabled and not self._running)
         self.merge_btn.setEnabled(merge_enabled and not self._running)
         self.result_hint.setText(merge_message)
+        self.updateGeometry()
 
     def reset_project(self) -> None:
         self.set_task_running(False)
@@ -135,13 +137,14 @@ class KeywordsPage(QFrame):
             start_enabled=False,
             resume_enabled=False,
             resume_visible=self._active_mode == WorkMode.KEYWORD_EXTRACTION,
+            resume_label="继续提取",
             merge_enabled=False,
             merge_message="项目已切换；请先完成环境检查并重新提取关键词。",
         )
 
     def _trigger_mode_change(self) -> None:
         mode = WorkMode(str(self.mode_combo.currentData()))
-        if not self._running and mode != self._active_mode and self._actions.select_mode:
+        if not self._running and mode != self._active_mode and self._actions.select_mode is not None:
             self._actions.select_mode(mode)
 
     def _trigger_start(self) -> None:
@@ -157,5 +160,5 @@ class KeywordsPage(QFrame):
             self._actions.stop()
 
     def _trigger_merge(self) -> None:
-        if not self._running and self.merge_btn.isEnabled() and self._actions.writeback:
+        if not self._running and self.merge_btn.isEnabled() and self._actions.writeback is not None:
             self._actions.writeback()

@@ -237,6 +237,7 @@ class GuiTaskPageTests(unittest.TestCase):
             start_enabled=True,
             resume_enabled=True,
             resume_visible=True,
+            resume_label="继续提取",
             merge_enabled=True,
             merge_message="关键词候选已就绪。",
         )
@@ -255,6 +256,46 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertEqual(merges, [True])
         self.assertEqual(stops, [True])
         self.assertEqual(selected, [WorkMode.SYNC_KEYWORD_EXTRACTION])
+
+    def test_keywords_page_mode_selector_switches_main_window(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.KEYWORD_EXTRACTION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.keywords_page
+        page.mode_combo.setCurrentIndex(
+            page.mode_combo.findData(WorkMode.SYNC_KEYWORD_EXTRACTION.value)
+        )
+
+        self.assertEqual(self.window._work_mode, WorkMode.SYNC_KEYWORD_EXTRACTION)
+        self.assertTrue(self.window.work_submode_combo.isHidden())
+        self.assertFalse(page.mode_combo.isHidden())
+
+    def test_keywords_page_mirrors_waiting_resume_and_running_lock(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.KEYWORD_EXTRACTION,
+            refresh_manifest_writeback=False,
+        )
+        workflow = mock.Mock()
+        step = mock.Mock()
+        step.key = "status"
+        workflow.current_step.return_value = step
+        workflow.manifest_path = ""
+        self.window._workflow = workflow
+        self.window._set_workflow_summary(
+            "waiting",
+            "正在等待云端结果",
+            "可查询状态。",
+        )
+        page = self.window.keywords_page
+
+        self.assertEqual(page.resume_btn.text(), "查询云端状态")
+        self.window._set_task_running(True)
+        self.assertFalse(page.mode_combo.isEnabled())
+        self.assertFalse(page.start_btn.isEnabled())
+        self.assertFalse(page.resume_btn.isEnabled())
+        self.assertFalse(page.merge_btn.isEnabled())
+        self.assertTrue(page.stop_btn.isEnabled())
 
     def test_revision_page_shows_apply_revision_not_translation_apply(self) -> None:
         self.window._set_work_mode(
