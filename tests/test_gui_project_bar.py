@@ -65,6 +65,65 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         self.assertTrue(self.window.doctor_btn.isEnabled())
         self.assertTrue(self.window.bootstrap_work_btn.isEnabled())
 
+    def test_global_prep_actions_switch_to_workbench_tab(self) -> None:
+        """Doctor / bootstrap from Settings/Diagnostics must reveal Workbench UI."""
+        from gui_qt.app import _BATCH_STAGE_EXECUTE, _BATCH_STAGE_PREPARE
+
+        workbench = self.window._workbench_tab
+        config = self.window._config_tab
+        self.assertIsNotNone(workbench)
+        self.assertIsNotNone(config)
+
+        # --- doctor from Settings ---
+        self.window.tab_widget.setCurrentWidget(config)
+        self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
+        self.window._confirm_unsaved_config_before_workflow = lambda: True  # type: ignore[method-assign]
+        self.window._is_doctor_running = lambda: False  # type: ignore[method-assign]
+        self.window._clear_log_view = lambda: None  # type: ignore[method-assign]
+        self.window._append_log = lambda *_a, **_k: None  # type: ignore[method-assign]
+        self.window._set_task_running = lambda *_a, **_k: None  # type: ignore[method-assign]
+        started: list[str] = []
+
+        class _FakeDoctorWorker:
+            def __init__(self, *args, **kwargs) -> None:
+                self.completed = MagicMock()
+
+            def isRunning(self) -> bool:
+                return False
+
+            def start(self) -> None:
+                started.append("doctor")
+
+        import gui_qt.app as app_mod
+
+        original_worker = app_mod.DoctorWorker
+        app_mod.DoctorWorker = _FakeDoctorWorker  # type: ignore[misc,assignment]
+        try:
+            self.window._on_run_doctor()
+        finally:
+            app_mod.DoctorWorker = original_worker  # type: ignore[misc,assignment]
+
+        self.assertIs(self.window.tab_widget.currentWidget(), workbench)
+        self.assertEqual(
+            self.window.workbench_status_tabs.currentIndex(),
+            _BATCH_STAGE_PREPARE,
+        )
+        self.assertEqual(started, ["doctor"])
+
+        # --- bootstrap-work from Diagnostics ---
+        self.window.tab_widget.setCurrentWidget(self.window._diagnostics_tab)
+        runner_calls: list[list[str]] = []
+        self.window.runner.run = (  # type: ignore[method-assign]
+            lambda _script, args: runner_calls.append(list(args))
+        )
+        self.window._on_bootstrap_work()
+        self.assertIs(self.window.tab_widget.currentWidget(), workbench)
+        self.assertEqual(
+            self.window.workbench_status_tabs.currentIndex(),
+            _BATCH_STAGE_EXECUTE,
+        )
+        self.assertEqual(runner_calls, [["bootstrap-work"]])
+
     def test_refresh_project_label_updates_global_bar(self) -> None:
         self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
         self.window._refresh_project_label()

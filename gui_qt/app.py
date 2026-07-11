@@ -816,7 +816,7 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Minimum,
         )
         actions_column_layout.addWidget(action_frame)
-        # Batch · 执行 · 高级：试跑 / 拆分 (P2a / #164); 提交剩余包仍在主按钮行。
+        # Batch · 翻译进度 · 高级：试跑 / 拆分 (P2a / #164); 提交剩余包仍在主按钮行。
         actions_column_layout.addWidget(self._build_batch_advanced_tools_bar())
         layout.addWidget(actions_column)
 
@@ -1194,6 +1194,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._build_workbench_log_drawer())
 
+        self._workbench_tab = tab
         self.tab_widget.addTab(tab, "工作台")
         self._sync_workbench_status_chrome()
 
@@ -1862,7 +1863,7 @@ class MainWindow(QMainWindow):
         diag_hint = QLabel(
             "上方可查看任务上下文、命令参考与任务记录；下方显示原始命令输出。"
             "工作台任务运行时默认留在工作台并展开底部日志抽屉；"
-            "试跑 / 拆分在「批量翻译 · 执行 · 高级工具」；"
+            "试跑 / 拆分在「批量翻译 · 翻译进度 · 高级工具」；"
             "术语合并在「关键词 / 术语」结果区；本页保留刷新、A/B 对比与清空日志。"
         )
         diag_hint.setWordWrap(True)
@@ -2087,6 +2088,14 @@ class MainWindow(QMainWindow):
             scrollbar = view.verticalScrollBar()
             if scrollbar is not None:
                 scrollbar.setValue(scrollbar.maximum())
+
+    def _focus_workbench_main_tab(self) -> None:
+        """Switch the top-level shell to Workbench so prep progress is visible."""
+        workbench = getattr(self, "_workbench_tab", None)
+        if workbench is None or not hasattr(self, "tab_widget"):
+            return
+        if self.tab_widget.currentWidget() is not workbench:
+            self.tab_widget.setCurrentWidget(workbench)
 
     def _show_workbench_log_drawer(self) -> None:
         """Reveal CLI output on the workbench without switching the main tab.
@@ -5715,10 +5724,13 @@ class MainWindow(QMainWindow):
         if self._is_doctor_running():
             return
 
+        # Global bar can launch from Settings/Diagnostics; show status on Workbench.
+        self._focus_workbench_main_tab()
         self._clear_log_view()
         self._active_command = "doctor"
         self._doctor_output_lines = []
         self._focus_workbench_status_tab(0)
+        self._show_workbench_log_drawer()
         self._set_doctor_summary(running_summary())
         self._append_log("=== 正在运行环境检查（collect_doctor_report）===\n")
         self._set_task_running(True)
@@ -5803,6 +5815,8 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Global bar can launch from Settings/Diagnostics; show status on Workbench.
+        self._focus_workbench_main_tab()
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._active_command = "bootstrap_work"
