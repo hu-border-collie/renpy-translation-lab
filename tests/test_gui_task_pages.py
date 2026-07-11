@@ -76,10 +76,41 @@ class GuiTaskPageTests(unittest.TestCase):
             WorkMode.SYNC_TRANSLATION,
             refresh_manifest_writeback=False,
         )
-        self.assertFalse(self.window.sync_mode_warning.isHidden())
-        self.assertIn("备份", self.window.sync_mode_warning.text())
-        self.assertEqual(self.window.translate_btn.text(), "开始同步翻译")
+        page = self.window.sync_translation_page
+        self.assertIs(self.window.workbench_stack.currentWidget(), page)
+        self.assertFalse(self.window.workbench_stack.isHidden())
+        self.assertFalse(page.risk_warning.isHidden())
+        self.assertIn("备份", page.risk_warning.text())
+        self.assertEqual(page.start_btn.text(), "开始同步翻译")
+        self.assertTrue(self.window.sync_mode_warning.isHidden())
+        self.assertTrue(self.window._workbench_actions_column.isHidden())
+        self.assertTrue(self.window.workbench_status_card.isHidden())
         self.assertTrue(self.window.context_library_panel.isHidden())
+
+    def test_sync_page_uses_start_stop_callbacks_and_owns_summary(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.sync_translation_page
+        starts: list[bool] = []
+        stops: list[bool] = []
+        page.set_action_callbacks(
+            WorkbenchPageActions(
+                start=lambda: starts.append(True),
+                stop=lambda: stops.append(True),
+            )
+        )
+        page.set_start_enabled(True)
+        page.start_btn.click()
+        page.set_task_running(True)
+        page.stop_btn.click()
+        page.render_summary("ready", "同步完成", "已写入 3 条译文", ["project: demo"])
+
+        self.assertEqual(starts, [True])
+        self.assertEqual(stops, [True])
+        self.assertIn("已写入 3 条译文", page.message_label.text())
+        self.assertIn("demo", page.facts_label.text())
 
     def test_batch_hides_sync_warning(self) -> None:
         self.window._set_work_mode(

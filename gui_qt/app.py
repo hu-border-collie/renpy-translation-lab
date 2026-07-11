@@ -262,6 +262,7 @@ from .work_modes import (
 )
 from .workbench import WorkbenchPageActions
 from .workbench.context_library_page import ContextLibraryPage
+from .workbench.sync_translation_page import SyncTranslationPage
 from .workbench_session import WorkbenchModeSession
 from .batch_workflow_support import resolve_submit_max_cost
 from .workflow_factory import create_workflow, resume_workflow
@@ -721,6 +722,15 @@ class MainWindow(QMainWindow):
                 self.context_bootstrap_rag_btn = page.bootstrap_rag_btn
                 self.context_bootstrap_source_index_btn = page.bootstrap_source_index_btn
                 self.context_open_settings_btn = page.open_settings_btn
+            elif nav_item == WorkbenchNavItem.SYNC_TRANSLATION:
+                page = SyncTranslationPage()
+                page.set_action_callbacks(
+                    WorkbenchPageActions(
+                        start=self._on_start_translation,
+                        stop=self._on_kill,
+                    )
+                )
+                self.sync_translation_page = page
             else:
                 page = QWidget()
                 page.setObjectName(f"workbench_page_{nav_item.value}")
@@ -1304,23 +1314,24 @@ class MainWindow(QMainWindow):
         nav = workbench_nav_for_work_mode(mode)
         is_sync = mode == WorkMode.SYNC_TRANSLATION
         is_context = nav == WorkbenchNavItem.CONTEXT
+        is_real_page = is_context or nav == WorkbenchNavItem.SYNC_TRANSLATION
 
         if hasattr(self, "sync_mode_warning"):
-            self.sync_mode_warning.setVisible(is_sync)
+            self.sync_mode_warning.setVisible(is_sync and not is_real_page)
         if hasattr(self, "workbench_stack"):
-            self.workbench_stack.setVisible(is_context)
+            self.workbench_stack.setVisible(is_real_page)
             self.workbench_stack.setMinimumHeight(0)
-            self.workbench_stack.setMaximumHeight(16_777_215 if is_context else 0)
+            self.workbench_stack.setMaximumHeight(16_777_215 if is_real_page else 0)
         for widget in getattr(self, "_legacy_workbench_shell_widgets", ()):
-            widget.setVisible(not is_context)
+            widget.setVisible(not is_real_page)
         if is_context:
             self._refresh_context_library_panel()
 
         # Doctor / bootstrap live on the global project bar (always available).
 
         if hasattr(self, "translate_btn"):
-            self.translate_btn.setVisible(not is_context)
-        if hasattr(self, "resume_btn") and is_context:
+            self.translate_btn.setVisible(not is_real_page)
+        if hasattr(self, "resume_btn") and is_real_page:
             self.resume_btn.setVisible(False)
         if hasattr(self, "action_panel"):
             reflow = getattr(self.action_panel, "reflow", None)
@@ -4154,13 +4165,20 @@ class MainWindow(QMainWindow):
             page = self._workbench_stack_pages.get(nav_item)
             if page is not None:
                 self.workbench_stack.setCurrentWidget(page)
-        if nav_item == WorkbenchNavItem.CONTEXT:
-            context_page = getattr(self, "context_library_page", None)
+        if nav_item in {
+            WorkbenchNavItem.CONTEXT,
+            WorkbenchNavItem.SYNC_TRANSLATION,
+        }:
+            page = (
+                getattr(self, "context_library_page", None)
+                if nav_item == WorkbenchNavItem.CONTEXT
+                else getattr(self, "sync_translation_page", None)
+            )
             sessions = getattr(self, "_mode_sessions", None)
             session = sessions.get(mode) if isinstance(sessions, dict) else None
-            if context_page is not None:
-                context_page.activate(mode, session or WorkbenchModeSession())
-                context_page.set_task_running(
+            if page is not None:
+                page.activate(mode, session or WorkbenchModeSession())
+                page.set_task_running(
                     bool(getattr(self, "_task_running", False))
                 )
 
@@ -4641,6 +4659,10 @@ class MainWindow(QMainWindow):
                 running=running,
             )
         )
+        sync_page = getattr(self, "sync_translation_page", None)
+        if spec.mode == WorkMode.SYNC_TRANSLATION and sync_page is not None:
+            sync_page.set_task_running(running)
+            sync_page.set_start_enabled(self.translate_btn.isEnabled())
         resume_available = (
             (False, "任务运行中。") if running else self._resume_task_available()
         )
@@ -5175,6 +5197,9 @@ class MainWindow(QMainWindow):
         context_page = getattr(self, "context_library_page", None)
         if context_page is not None:
             context_page.reset_project()
+        sync_page = getattr(self, "sync_translation_page", None)
+        if sync_page is not None:
+            sync_page.reset_project()
         self._workflow = None
         self._workflow_step_output_lines = []
         self._clear_completed_manifest_snapshot()
@@ -6004,7 +6029,8 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
-        self._show_workbench_log_drawer()
+        if spec.mode != WorkMode.SYNC_TRANSLATION:
+            self._show_workbench_log_drawer()
         self._clear_completed_manifest_snapshot()
         self._writeback_manifest_path = ""
         if spec.supports_translation_writeback:
@@ -7129,6 +7155,10 @@ class MainWindow(QMainWindow):
         self._update_keyword_merge_btn_enabled(running=running)
         self._update_split_btn_enabled(running=running)
         self.kill_btn.setEnabled(running)
+        sync_page = getattr(self, "sync_translation_page", None)
+        if sync_page is not None:
+            sync_page.set_task_running(running)
+            sync_page.set_start_enabled(self.translate_btn.isEnabled())
         # Context-library prebuild CTAs stay on-page while nav is locked; gate them here.
         if hasattr(self, "context_library_panel"):
             self._refresh_context_library_panel(running=running)
@@ -7161,6 +7191,10 @@ class MainWindow(QMainWindow):
         self.workflow_status_label.set_status(status, heading)
         self.workflow_message_label.setText(message)
         self.workflow_facts_label.setText("\n".join(facts or []))
+        if self._current_work_mode() == WorkMode.SYNC_TRANSLATION:
+            sync_page = getattr(self, "sync_translation_page", None)
+            if sync_page is not None:
+                sync_page.render_summary(status, heading, message, list(facts or []))
         self._update_resume_btn_text()
         resume_available = self._resume_task_available()
         self._update_resume_btn_enabled(resume_available=resume_available)
