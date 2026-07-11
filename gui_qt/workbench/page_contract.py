@@ -23,6 +23,7 @@ class WorkbenchPageActions:
     stop: Callable[[], None] | None = None
     writeback: Callable[[], None] | None = None
     prebuild: Callable[[str], None] | None = None
+    open_settings: Callable[[], None] | None = None
 
 
 class WorkbenchPage(Protocol):
