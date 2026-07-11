@@ -146,19 +146,21 @@ class GuiBatchStageTests(unittest.TestCase):
         self.window._focus_workbench_status_tab(2)
         self.assertEqual(self.window._current_batch_stage_index(), _BATCH_STAGE_RESULT)
 
-    def test_advanced_tools_only_on_batch_progress_tab(self) -> None:
+    def test_advanced_tools_stay_on_batch_across_status_tabs(self) -> None:
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,
             refresh_manifest_writeback=False,
         )
-        self.window._focus_workbench_status_tab(_BATCH_STAGE_EXECUTE)
-        self.assertFalse(self.window.batch_advanced_frame.isHidden())
-
-        self.window._focus_workbench_status_tab(_BATCH_STAGE_PREPARE)
-        self.assertTrue(self.window.batch_advanced_frame.isHidden())
-
-        self.window._focus_workbench_status_tab(_BATCH_STAGE_RESULT)
-        self.assertTrue(self.window.batch_advanced_frame.isHidden())
+        for stage in (
+            _BATCH_STAGE_PREPARE,
+            _BATCH_STAGE_EXECUTE,
+            _BATCH_STAGE_RESULT,
+        ):
+            self.window._focus_workbench_status_tab(stage)
+            self.assertFalse(
+                self.window.batch_advanced_frame.isHidden(),
+                msg=f"advanced tools should stay on batch (stage {stage})",
+            )
 
         self.window._set_work_mode(
             WorkMode.SYNC_TRANSLATION,

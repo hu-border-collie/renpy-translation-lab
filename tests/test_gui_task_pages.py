@@ -323,14 +323,22 @@ class GuiTaskPageTests(unittest.TestCase):
         ):
             self.window._refresh_context_library_panel()
             self.assertTrue(self.window.context_bootstrap_rag_btn.isEnabled())
+            self.assertFalse(self.window.context_library_page.stop_btn.isHidden())
+            self.assertFalse(self.window.context_library_page.stop_btn.isEnabled())
             self.window._set_task_running(True)
             self.assertFalse(self.window.context_bootstrap_rag_btn.isEnabled())
             self.assertFalse(self.window.context_bootstrap_source_index_btn.isEnabled())
+            self.assertFalse(self.window.context_library_page.stop_btn.isHidden())
             self.assertTrue(self.window.context_library_page.stop_btn.isEnabled())
+            self.assertEqual(
+                self.window.context_library_page.stop_btn.objectName(),
+                "context_library_stop_btn",
+            )
             # Overlapping start must no-op while a task is already running.
             self.assertFalse(self.window._start_bootstrap_task("source_index"))
             self.window._set_task_running(False)
             self.assertTrue(self.window.context_bootstrap_rag_btn.isEnabled())
+            self.assertFalse(self.window.context_library_page.stop_btn.isHidden())
             self.assertFalse(self.window.context_library_page.stop_btn.isEnabled())
 
     def test_roundtrip_keyword_candidates_and_merge_button(self) -> None:

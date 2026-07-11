@@ -49,19 +49,17 @@ class GuiBatchAdvancedToolsTests(unittest.TestCase):
         self.assertNotIn("拆分翻译包", diag_buttons)
         self.assertIn("翻译 A/B 对比", diag_buttons)
 
-    def test_advanced_bar_only_on_batch_execute_stage(self) -> None:
+    def test_advanced_bar_stays_on_batch_across_status_tabs(self) -> None:
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,
             refresh_manifest_writeback=False,
         )
-        self.window._focus_workbench_status_tab(1)  # EXECUTE
-        self.assertFalse(self.window.batch_advanced_frame.isHidden())
-
-        self.window._focus_workbench_status_tab(0)  # PREPARE
-        self.assertTrue(self.window.batch_advanced_frame.isHidden())
-
-        self.window._focus_workbench_status_tab(2)  # RESULT
-        self.assertTrue(self.window.batch_advanced_frame.isHidden())
+        for tab in (0, 1, 2):
+            self.window._focus_workbench_status_tab(tab)
+            self.assertFalse(
+                self.window.batch_advanced_frame.isHidden(),
+                msg=f"advanced tools should stay on batch (status tab {tab})",
+            )
 
         self.window._set_work_mode(
             WorkMode.SYNC_TRANSLATION,

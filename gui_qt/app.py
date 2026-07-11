@@ -1321,7 +1321,29 @@ class MainWindow(QMainWindow):
         if hasattr(self, "workbench_stack"):
             self.workbench_stack.setVisible(is_real_page)
             self.workbench_stack.setMinimumHeight(0)
-            self.workbench_stack.setMaximumHeight(16_777_215 if is_real_page else 0)
+            # QStackedWidget sizeHint = max(all pages). Sync is a short strip; pin
+            # the stack to the current page so a tall context sibling cannot leave
+            # a huge empty action band above the shared status card.
+            if not is_real_page:
+                self.workbench_stack.setMaximumHeight(0)
+                self.workbench_stack.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Fixed,
+                )
+            elif is_sync:
+                page = getattr(self, "sync_translation_page", None)
+                hint_h = page.sizeHint().height() if page is not None else 72
+                self.workbench_stack.setMaximumHeight(max(hint_h, 48))
+                self.workbench_stack.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Maximum,
+                )
+            else:
+                self.workbench_stack.setMaximumHeight(16_777_215)
+                self.workbench_stack.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Preferred,
+                )
         for widget in getattr(self, "_legacy_workbench_shell_widgets", ()):
             widget.setVisible(not is_real_page)
         if is_context:
@@ -1333,6 +1355,18 @@ class MainWindow(QMainWindow):
             self.translate_btn.setVisible(not is_real_page)
         if hasattr(self, "resume_btn") and is_real_page:
             self.resume_btn.setVisible(False)
+        # Idle workflow hint is redundant with status-card empty states; hide it.
+        # mode_frame only stays for submode row and/or legacy sync risk banner.
+        if hasattr(self, "work_mode_hint_label"):
+            self.work_mode_hint_label.setVisible(False)
+        if hasattr(self, "_mode_frame") and not is_real_page:
+            show_sub = workbench_nav_spec(nav).show_submode
+            show_sync_warn = bool(
+                is_sync
+                and hasattr(self, "sync_mode_warning")
+                and self.sync_mode_warning.isVisible()
+            )
+            self._mode_frame.setVisible(show_sub or show_sync_warn)
         if hasattr(self, "action_panel"):
             reflow = getattr(self.action_panel, "reflow", None)
             if callable(reflow):
@@ -2177,13 +2211,16 @@ class MainWindow(QMainWindow):
         self._sync_workbench_status_chrome(stage_index=stage_index)
 
     def _sync_batch_advanced_tools_chrome(self, *, stage_index: int | None = None) -> None:
-        """Show probe/split only on batch translation · 翻译进度 (P2a / #164)."""
+        """Show probe/split whenever batch translation is active (under main actions).
+
+        Stays on the workbench action column (not diagnostics): batch-only tools that
+        prepare packages before / around a run, always reachable without tab switching.
+        """
         if not hasattr(self, "batch_advanced_frame"):
             return
+        del stage_index  # kept for call-site compat; visibility is mode-based
         is_batch = self._batch_stage_mode_active()
-        if stage_index is None:
-            stage_index = self._current_batch_stage_index()
-        show = is_batch and stage_index == _BATCH_STAGE_EXECUTE
+        show = is_batch
         self.batch_advanced_frame.setVisible(show)
         if show and hasattr(self, "batch_advanced_bar"):
             reflow = getattr(self.batch_advanced_bar, "reflow", None)
