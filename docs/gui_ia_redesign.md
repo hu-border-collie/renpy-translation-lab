@@ -1,12 +1,17 @@
 # GUI 信息架构重组计划
 
-文档地图：[docs/README.md](README.md) · 现状说明：[GUI 工作台](gui_workbench.md)
+文档地图：[docs/README.md](README.md) · **现行界面说明**：[GUI 工作台](gui_workbench.md)
 
-> **状态**：**P0a–P3 (#158–#166) 已合并**；环境检查 EmptyState 与摘要重叠的后续修复已在 [PR #177](https://github.com/hu-border-collie/renpy-translation-lab/pull/177) 合并。批量翻译主流程已有 2026-06-19 真实项目端到端烟测记录，但该记录早于本轮 IA；关闭 Epic #157 前，仍需对当前 P0–P3 界面的五个任务入口补做并记录人工往返烟测。
+> ## 历史文档（非现行用户手册）
+>
+> 本文是 Epic #157 的**设计与交付计划 SSOT**，保留改造前问题、P0–P3 分期与验收清单，供回顾与对照。
+>
+> - **交付状态**：**P0a–P3（#158–#166）已合并**；EmptyState 修复见 [PR #177](https://github.com/hu-border-collie/renpy-translation-lab/pull/177)。
+> - **请勿**把文中的「分析与准备」「诊断页」「两级下拉子任务」等当作当前 UI 名称——那是改造前形态。
+> - **当前界面、入口与设置分区**一律以 [gui_workbench.md](gui_workbench.md) 为准。
+>
 > **Epic**：[#157](https://github.com/hu-border-collie/renpy-translation-lab/issues/157)  
-> **性质**：仅 GUI 布局 / 信息架构；**不改变** CLI 语义、`check → apply` 安全合约、manifest 字段。  
-> **依据**：2026-07 对 `gui_qt/` 全功能盘点（工作台、设置、诊断、8 种 WorkMode）+ 计划审阅修订。  
-> **用户可见说明**：以 [GUI 工作台](gui_workbench.md) 为准。
+> **性质**：仅 GUI 布局 / 信息架构；**不改变** CLI 语义、`check → apply` 安全合约、manifest 字段。
 
 ---
 

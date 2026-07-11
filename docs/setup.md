@@ -18,9 +18,38 @@
 说明：
 
 - `api_keys.json` 保存 Gemini API Key；旧的 `batch_size/max_chars` 等字段仍兼容，但不再推荐写在这里。
-- `translator_config.json` 保存本地游戏路径、模型、include 过滤和同步 / Batch 分块参数。
+- `translator_config.json` 保存**工具级**设置：当前 `game_root`、模型、include 过滤、同步 / Batch 分块参数，以及 RAG/原文索引的**全局默认值**（当前项目尚未写过项目文件时使用）。
+- **按项目生效**的批量上下文开关见下一节 `project_context_settings.json`。
 - `glossary.json` 通常包含项目私有术语；不存在时脚本会退回内置默认术语规则。
 - `macro_setting.md` 往往包含剧情、角色口吻、世界观约束，可供 Batch 的 `macro_setting_file` 使用。
+
+## 项目级上下文开关
+
+批量 **启用 RAG**、**启用原文索引**、**build 时自动暖库** 跟随**当前游戏 work 目录**，不写进全局配置以免切换项目互相覆盖。
+
+路径：
+
+```text
+<game_root>/project_context_settings.json
+```
+
+示例：
+
+```json
+{
+  "schema_version": 1,
+  "batch_rag_enabled": true,
+  "batch_source_index_enabled": true,
+  "batch_rag_bootstrap_on_build": true
+}
+```
+
+行为：
+
+- GUI「设置 · 上下文」保存时写入该文件；加载时按当前 `game_root` 读取。
+- CLI 的 `load_batch_settings` 会在解析 `translator_config.json` 后套用该文件。
+- 文件不存在时：回退到 `translator_config.json` 里 `batch.rag.enabled` / `batch.source_index.enabled` / `batch.rag.bootstrap_on_build`。
+- 实现见 `project_context_settings.py`。
 - 如果你不想使用 `api_keys.json`，也可以改用环境变量 `GEMINI_API_KEY`、`GEMINI_API_KEY_2`、`GEMINI_API_KEY_3`。
 - 如果你不想使用 `translator_config.json`，也可以至少通过 `GAME_ROOT` 或 `SA_GAME_ROOT` 指向目标 `work` 目录。
 - 也可以把 `.env.example` 复制为 `.env`，填写后供本地 shell/启动器加载；`.env` 只用于本机私有配置，不应提交。

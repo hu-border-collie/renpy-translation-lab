@@ -1,6 +1,14 @@
 # Ren'Py Translation Lab 翻译全生命周期与影响因子全景审计报告
 
-本报告对照当前代码，审计 `Ren'Py Translation Lab` 的**核心翻译流水线**、**提示词与上下文记忆系统**、**辅助工作流（订正与关键词）**以及 **CLI 与 GUI 同步门禁设计**。
+文档地图：[docs/README.md](README.md)
+
+> ## 历史审计快照（非现行用户手册）
+>
+> 本文是对流水线、上下文与 CLI/GUI 门禁的**代码审计笔记**，便于理解设计动机。
+> 实现细节可能已演进（例如 GUI 信息架构、项目级上下文开关、doctor 建议并列输出）。
+> **现行操作说明**见 [Batch 工作流](batch_workflows.md)、[上下文系统](context_systems.md)、[GUI 工作台](gui_workbench.md)。
+
+本报告对照审计时点的代码，梳理 `Ren'Py Translation Lab` 的**核心翻译流水线**、**提示词与上下文记忆系统**、**辅助工作流（订正与关键词）**以及 **CLI 与 GUI 同步门禁设计**。
 
 ---
 

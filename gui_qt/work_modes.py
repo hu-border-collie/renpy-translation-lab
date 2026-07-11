@@ -61,7 +61,8 @@ TASK_CATEGORY_SPECS: dict[TaskCategory, TaskCategorySpec] = {
     ),
     TaskCategory.ANALYSIS_PREP: TaskCategorySpec(
         category=TaskCategory.ANALYSIS_PREP,
-        label="分析与准备",
+        # Legacy category id kept for compatibility; not shown as workbench nav.
+        label="上下文 / 术语",
         work_modes=(
             WorkMode.BOOTSTRAP_RAG,
             WorkMode.BOOTSTRAP_SOURCE_INDEX,
@@ -177,7 +178,10 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         progress_tab_label="预建进度",
         writeback_tab_label="说明",
         idle_workflow_heading="尚未预建记忆库",
-        idle_workflow_message="扫描已有译文并写入本地记忆库；需先在配置页启用并保存配置。",
+        idle_workflow_message=(
+            "扫描已有译文并写入本地记忆库；"
+            "需先在「设置 · 上下文」启用并保存，再到左侧「上下文库」预建。"
+        ),
         supports_resume=False,
         supports_translation_writeback=False,
         implemented=True,
@@ -196,7 +200,10 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         progress_tab_label="预建进度",
         writeback_tab_label="说明",
         idle_workflow_heading="尚未预建原文索引",
-        idle_workflow_message="只索引翻译模板里的原文，不修改游戏脚本；需先在配置页启用并保存配置。",
+        idle_workflow_message=(
+            "只索引翻译模板里的原文，不修改游戏脚本；"
+            "需先在「设置 · 上下文」启用并保存，再到左侧「上下文库」预建。"
+        ),
         supports_resume=False,
         supports_translation_writeback=False,
         implemented=True,
@@ -306,8 +313,14 @@ def work_mode_from_manifest_mode(manifest_mode: object) -> WorkMode | None:
 
 def bootstrap_disabled_message(kind: str) -> str:
     if kind == "rag":
-        return "请先在配置页勾选「启用记忆库」，并点击「保存参数配置」。"
-    return "请先在配置页勾选「启用原文索引」，并点击「保存参数配置」。"
+        return (
+            "请先在「设置 · 上下文」勾选「启用 RAG 记忆库（批量，当前项目）」，"
+            "并点击「保存设置」。"
+        )
+    return (
+        "请先在「设置 · 上下文」勾选「启用原文索引（当前项目）」，"
+        "并点击「保存设置」。"
+    )
 
 
 _BOOTSTRAP_DISABLED_HINTS = (

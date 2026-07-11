@@ -107,13 +107,34 @@ def format_tl_scan_facts(
     if pending is not None:
         task_count = int(pending.get("task_count", 0))
         file_count = int(pending.get("file_count", 0))
-        if task_count > 0:
+        translated_count = pending.get("translated_count")
+        total_count = pending.get("total_count")
+        has_progress = translated_count is not None or total_count is not None
+        if has_progress:
+            done = int(translated_count or 0)
+            total = int(total_count if total_count is not None else done + task_count)
+            if total > 0:
+                pct = min(100, max(0, (done * 100) // total))
+                facts.append(
+                    f"翻译进度：已译约 {done} 条，未译约 {task_count} 条"
+                    f"（共约 {total} 条，约 {pct}%）"
+                )
+            elif task_count > 0:
+                facts.append(f"翻译进度：已译约 0 条，未译约 {task_count} 条")
+            else:
+                facts.append("翻译进度：已译约 0 条，未译约 0 条")
+            if task_count > 0:
+                facts.append(
+                    f"未译分布：{file_count} 个文件仍有待译"
+                    f"（可能含专名/名单等无汉字英文，不代表漏翻）"
+                )
+        elif task_count > 0:
             facts.append(
-                f"待翻译条目：约 {task_count} 条"
+                f"未翻译条目：约 {task_count} 条"
                 f"（{file_count} 个文件；可能含专名/名单等无汉字英文，不代表漏翻）"
             )
         else:
-            facts.append("待翻译条目：0 条")
+            facts.append("未翻译条目：0 条")
 
     if commented_lines > 0:
         facts.append(f"剧情对话：{commented_lines} 条")
@@ -152,13 +173,13 @@ def format_context_status_facts(
                 if bootstrap_on_build:
                     detail += "（build 会自动补建）"
                 else:
-                    detail += "（建议先预建记忆库）"
+                    detail += "（建议到「上下文库」预建记忆库）"
             elif records == 0:
                 detail = "记录数 0"
                 if bootstrap_on_build:
                     detail += "（build 会自动补建）"
                 else:
-                    detail += "（建议先预建记忆库）"
+                    detail += "（建议到「上下文库」预建记忆库）"
             else:
                 detail = f"记录数 {records}"
             facts.append(f"记忆库：已启用，{detail}")
@@ -175,9 +196,9 @@ def format_context_status_facts(
             expected = _int_context_value(source_index_context, "expected_segments")
             schema_version = source_index_context.get("schema_version")
             if source_index_context.get("store_exists") is not True:
-                detail = "尚未创建（建议先预建原文索引）"
+                detail = "尚未创建（建议到「上下文库」预建原文索引）"
             elif segments == 0:
-                detail = "片段数 0（建议先预建原文索引）"
+                detail = "片段数 0（建议到「上下文库」预建原文索引）"
             elif expected > 0 and segments < expected:
                 percent = (segments * 100) // expected
                 detail = f"片段数 {segments}/{expected}（约 {percent}%，预建未完成）"
@@ -382,7 +403,21 @@ def parse_doctor_output(output: str) -> dict[str, object]:
             continue
 
         if line.startswith("- Pending translation:"):
-            parsed["pending"] = _parse_counts(line.split(":", 1)[1])
+            # CLI prints task_count/file_count/translated_count/total_count.
+            raw_pending = _parse_counts(line.split(":", 1)[1])
+            pending_parsed: dict[str, int] = {
+                "task_count": int(raw_pending.get("task_count", 0)),
+                "file_count": int(raw_pending.get("file_count", 0)),
+            }
+            if "translated_count" in raw_pending:
+                pending_parsed["translated_count"] = int(raw_pending["translated_count"])
+            if "total_count" in raw_pending:
+                pending_parsed["total_count"] = int(raw_pending["total_count"])
+            elif "translated_count" in pending_parsed:
+                pending_parsed["total_count"] = (
+                    pending_parsed["task_count"] + pending_parsed["translated_count"]
+                )
+            parsed["pending"] = pending_parsed
             continue
 
         if line.startswith("- RAG context:"):
@@ -448,12 +483,21 @@ def doctor_report_to_parsed(report: dict[str, Any]) -> dict[str, object]:
         and (
             "pending_task_count" in report
             or "pending_file_count" in report
+            or "translated_task_count" in report
+            or "total_task_count" in report
         )
     ):
-        parsed["pending"] = {
+        pending: dict[str, int] = {
             "task_count": int(report.get("pending_task_count") or 0),
             "file_count": int(report.get("pending_file_count") or 0),
         }
+        if "translated_task_count" in report:
+            pending["translated_count"] = int(report.get("translated_task_count") or 0)
+        if "total_task_count" in report:
+            pending["total_count"] = int(report.get("total_task_count") or 0)
+        elif "translated_task_count" in report:
+            pending["total_count"] = pending["task_count"] + pending["translated_count"]
+        parsed["pending"] = pending
 
     rag_context = context_status.get("rag")
     if isinstance(rag_context, dict):
@@ -574,7 +618,10 @@ def _summarize_doctor_parsed(
             else:
                 append_unique_fact(all_facts, f"API 密钥：已配置 {api_key_count} 个")
         else:
-            append_unique_fact(all_facts, "建议：在配置页填写 API 密钥后再开始翻译")
+            append_unique_fact(
+                all_facts,
+                "建议：在「设置 · 密钥」填写 API 密钥后再开始翻译",
+            )
 
     recommendation_message = primary_recommendation_message(recommendation_codes)
     normal_state_message = workflow_state_message(workflow_state)

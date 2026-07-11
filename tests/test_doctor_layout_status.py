@@ -412,6 +412,84 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
         # Optional tip must not suppress workflow_state.
         self.assertFalse(doctor_rec.recommendations_block_workflow_state(recommendations))
 
+    def test_required_source_index_and_optional_enable_rag_coexist(self):
+        """Required prep and optional tips are listed together (required first)."""
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=20,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 240
+        report["counts"] = {
+            "rpy_files": 20,
+            "translate_blocks": 12000,
+            "old_lines": 120,
+            "new_lines": 120,
+        }
+        report["context_status"] = {
+            "rag": {"enabled": False},
+            "source_index": {
+                "enabled": True,
+                "store_exists": False,
+                "source_segments": 0,
+                "expected_segments": 3000,
+            },
+        }
+
+        recommendations = batch_mod.collect_doctor_recommendations(report)
+        codes = doctor_rec.doctor_recommendation_codes(recommendations)
+
+        self.assertEqual(
+            codes,
+            [
+                doctor_rec.BOOTSTRAP_SOURCE_INDEX,
+                doctor_rec.ENABLE_RAG_FOR_CONSISTENCY,
+            ],
+        )
+        # Required prep still clears workflow_state; optional tip alone would not.
+        finalized = batch_mod.finalize_doctor_actionable_signals(report)
+        self.assertEqual(finalized["workflow_state"], "")
+        self.assertTrue(doctor_rec.recommendations_block_workflow_state(recommendations))
+
+    def test_required_source_index_and_required_rag_bootstrap_coexist(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=20,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 240
+        report["counts"] = {
+            "rpy_files": 20,
+            "translate_blocks": 12000,
+            "old_lines": 120,
+            "new_lines": 120,
+        }
+        report["context_status"] = {
+            "rag": {
+                "enabled": True,
+                "store_exists": False,
+                "history_records": 0,
+                "bootstrap_on_build": False,
+            },
+            "source_index": {
+                "enabled": True,
+                "store_exists": False,
+                "source_segments": 0,
+                "expected_segments": 3000,
+            },
+        }
+
+        codes = doctor_rec.doctor_recommendation_codes(
+            batch_mod.collect_doctor_recommendations(report)
+        )
+        self.assertEqual(
+            codes,
+            [
+                doctor_rec.BOOTSTRAP_SOURCE_INDEX,
+                doctor_rec.BOOTSTRAP_RAG,
+            ],
+        )
+
     def test_recommendations_never_emit_workflow_state_codes(self):
         """Phase markers live only in workflow_state, not in the recommendation list."""
         cases = [

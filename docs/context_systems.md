@@ -12,6 +12,11 @@
 
 这些上下文层会进入不同 prompt 分区，避免把“以前的译法参考”和“相关剧情原文”混在一起。
 
+**开关分层**：
+
+- **是否启用**批量 RAG / 原文索引 / build 时暖库：优先读当前项目 `work/project_context_settings.json`（见 [setup.md](setup.md#项目级上下文开关)）；无项目文件时回退 `translator_config.json` 的 `batch.rag` / `batch.source_index`。
+- **库文件放哪**：由下方 `context_storage` 与可选的 `store_dir` 决定（与开关是否按项目是两件独立的事）。
+
 ## 上下文文件存放位置
 
 默认情况下，上下文库仍保存在工具项目的 `logs/` 下，保持旧行为：

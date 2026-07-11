@@ -1,6 +1,9 @@
 # 环境检查智能建议状态关联矩阵审核报告
 
-本报告对照当前代码，汇总影响环境检查（Doctor）的主要输入状态、配置项和物理文件指标。
+文档地图：[docs/README.md](README.md) · 建议规则说明：[doctor_recommendations.md](doctor_recommendations.md)
+
+> 本文是 **doctor 派生字段与决策漏斗的开发对照表**。用户可见建议文案与 GUI 入口名称见 [doctor_recommendations.md](doctor_recommendations.md) 与 [gui_workbench.md](gui_workbench.md)。
+> 布局就绪后，上下文相关**必需准备与可选建议可并列输出**（见 `collect_doctor_recommendations`）。
 
 ---
 

@@ -364,18 +364,24 @@ def idle_writeback_summary_for_work_mode(mode) -> WritebackSummary:
         if spec.mode == WorkMode.SYNC_TRANSLATION:
             message = (
                 "同步翻译可能直接改项目文件；"
-                "请先在副本或备份上试跑，详情见诊断页。"
+                "请先在副本或备份上试跑，详情见诊断与工具。"
             )
         elif spec.mode == WorkMode.KEYWORD_EXTRACTION:
             message = "关键词模式只生成报告，不会修改游戏脚本。"
         elif spec.mode == WorkMode.REVISION:
-            message = "订正写回与普通翻译分开；请先生成订正预览，再在「写回订正」页确认。"
+            message = (
+                "订正写回与普通翻译分开；请先在左侧「订正」生成预览，"
+                "再在结果区点击「写回订正」确认。"
+            )
         elif spec.mode == WorkMode.SYNC_REVISION:
-            message = "同步订正默认只出预览报告；请先生成订正预览，再在「写回订正」页写回订正。"
+            message = (
+                "同步订正默认只出预览报告；请先在左侧「订正」生成预览，"
+                "再在结果区点击「写回订正」。"
+            )
         elif spec.is_bootstrap:
             message = "预建库只更新本地上下文存储，不会启用普通「写回翻译」按钮。"
         else:
-            message = "当前子任务不使用普通翻译写回。"
+            message = "当前任务不使用普通翻译写回。"
         return WritebackSummary(
             status="idle",
             heading="此模式不写回翻译",

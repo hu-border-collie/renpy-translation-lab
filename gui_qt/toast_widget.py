@@ -6,21 +6,23 @@
 
 from __future__ import annotations
 
+import re
 from enum import Enum, auto
-from typing import Optional
 
 from PySide6.QtCore import (
     QEasingCurve,
     QPoint,
     QPropertyAnimation,
-    QSequentialAnimationGroup,
+    QRectF,
     QTimer,
     Qt,
 )
+from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QWidget,
 )
 
@@ -37,31 +39,28 @@ class ToastStyle(Enum):
 # 样式常量
 # ---------------------------------------------------------------------------
 
-# (dark_rgba, light_rgba)
+# (dark_rgba, light_rgba) — solid colours for painted rounded pill
 _BACKGROUND_COLORS: dict[ToastStyle, tuple[str, str]] = {
-    ToastStyle.SUCCESS: (
-        "rgba(16, 185, 129, 0.9)",
-        "rgba(5, 150, 105, 0.9)",
-    ),
-    ToastStyle.WARNING: (
-        "rgba(217, 119, 6, 0.9)",
-        "rgba(180, 83, 9, 0.9)",
-    ),
-    ToastStyle.ERROR: (
-        "rgba(239, 68, 68, 0.9)",
-        "rgba(220, 38, 38, 0.9)",
-    ),
+    ToastStyle.SUCCESS: ("#10b981", "#059669"),
+    ToastStyle.WARNING: ("#d97706", "#b45309"),
+    ToastStyle.ERROR: ("#ef4444", "#dc2626"),
 }
 
 _ICON_TEXT: dict[ToastStyle, str] = {
-    ToastStyle.SUCCESS: "✔",
-    ToastStyle.WARNING: "⚠",
-    ToastStyle.ERROR: "✘",
+    ToastStyle.SUCCESS: "✓",
+    ToastStyle.WARNING: "!",
+    ToastStyle.ERROR: "×",
 }
+
+# Strip caller-supplied status glyphs so we never show icon + message glyph twice.
+_LEADING_STATUS_GLYPHS = re.compile(
+    r"^[\s✓✔✕✖❌⚠⚠️✘×!！]+",
+)
 
 _SLIDE_OFFSET_PX = 20
 _FADE_DURATION_MS = 350
 _SLIDE_DURATION_MS = 250
+_CORNER_RADIUS = 12
 
 
 class ToastNotification(QWidget):
@@ -86,7 +85,7 @@ class ToastNotification(QWidget):
 
         Args:
             parent: 父组件，通知将相对于此组件定位。
-            message: 要显示的消息文本。
+            message: 要显示的消息文本（不必再写 ✓/⚠ 等图标）。
             style: 通知样式（成功/警告/错误）。
             duration_ms: 通知显示时长（毫秒），之后自动淡出。
 
@@ -113,58 +112,90 @@ class ToastNotification(QWidget):
         self._style = style
         self._duration_ms = duration_ms
         self._is_dark = self._detect_dark_mode()
+        self._bg_color = QColor(
+            _BACKGROUND_COLORS[style][0 if self._is_dark else 1]
+        )
 
-        # 窗口标志：无边框提示
+        # Frameless floating tip; translucent so rounded corners are not a hard box.
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.ToolTip
+            | Qt.WindowType.Tool
             | Qt.WindowType.WindowStaysOnTopHint
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
 
         self._setup_ui(message)
-        self._apply_style()
 
     # ------------------------------------------------------------------
     # UI 构建
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _normalize_message(message: str) -> str:
+        text = (message or "").strip()
+        text = _LEADING_STATUS_GLYPHS.sub("", text).strip()
+        return text or message.strip()
+
     def _setup_ui(self, message: str) -> None:
         """构建通知的内部布局。"""
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(20, 10, 20, 10)
+        layout.setContentsMargins(16, 10, 18, 10)
         layout.setSpacing(8)
 
-        # 图标
         icon_label = QLabel(_ICON_TEXT[self._style])
-        icon_label.setStyleSheet("font-size: 14px; color: white; background: transparent;")
+        icon_label.setObjectName("toast_icon")
+        icon_label.setStyleSheet(
+            "QLabel#toast_icon {"
+            "  font-size: 14px;"
+            "  font-weight: 700;"
+            "  color: white;"
+            "  background: transparent;"
+            "  border: none;"
+            "}"
+        )
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(icon_label)
 
-        # 消息文本
-        msg_label = QLabel(message)
+        msg_label = QLabel(self._normalize_message(message))
+        msg_label.setObjectName("toast_message")
         msg_label.setStyleSheet(
-            "font-size: 13px; font-weight: bold; color: white; background: transparent;"
+            "QLabel#toast_message {"
+            "  font-size: 13px;"
+            "  font-weight: 600;"
+            "  color: white;"
+            "  background: transparent;"
+            "  border: none;"
+            "}"
         )
-        msg_label.setWordWrap(True)
-        layout.addWidget(msg_label, stretch=1)
+        msg_label.setWordWrap(False)
+        msg_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Preferred,
+        )
+        layout.addWidget(msg_label)
 
-        self.setMinimumWidth(200)
+        self.adjustSize()
+        # Keep short toasts compact; cap very long messages.
+        width = min(max(self.sizeHint().width(), 160), 420)
+        self.setFixedWidth(width)
         self.adjustSize()
 
-    def _apply_style(self) -> None:
-        """根据通知类型和明暗模式设置样式表。"""
-        dark_bg, light_bg = _BACKGROUND_COLORS[self._style]
-        bg = dark_bg if self._is_dark else light_bg
-        self.setStyleSheet(
-            f"ToastNotification {{"
-            f"  background: {bg};"
-            f"  border-radius: 10px;"
-            f"  padding: 10px 20px;"
-            f"  min-width: 200px;"
-            f"}}"
+    def paintEvent(self, event) -> None:  # noqa: N802 — Qt override
+        """Paint a rounded pill; avoids the hard rectangular ToolTip chrome on Windows."""
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        path = QPainterPath()
+        path.addRoundedRect(
+            QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+            _CORNER_RADIUS,
+            _CORNER_RADIUS,
         )
+        painter.fillPath(path, self._bg_color)
+        painter.end()
 
     # ------------------------------------------------------------------
     # 暗色模式检测

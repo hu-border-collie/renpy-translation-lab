@@ -26,7 +26,7 @@ pip install -r requirements-gui.txt
 python -m gui_qt
 ```
 
-批量翻译写回仅在检查显示**可写回**（CLI 的 `safe`）时启用；需处理问题收在结果区 **问题处理** 折叠内。同步翻译、关键词与订正各有独立导航页与写回规则。安装步骤、各模式说明与安全边界见 [GUI 工作台](docs/gui_workbench.md)。信息架构分阶段计划见 [GUI IA 重组](docs/gui_ia_redesign.md)。参与开发或让自动化工具改代码时，请遵守 [CONTRIBUTING.md](CONTRIBUTING.md)（含 CLI / GUI 同步约定）。
+批量翻译写回仅在检查显示**可写回**（CLI 的 `safe`）时启用；需处理问题收在结果区 **问题处理** 折叠内。同步翻译、关键词、订正与上下文库各有独立导航页。安装步骤、各模式说明与安全边界见 [GUI 工作台](docs/gui_workbench.md)。完整文档地图见 [docs/README.md](docs/README.md)。Epic #157 的设计过程稿（历史）见 [GUI IA 重组](docs/gui_ia_redesign.md)。参与开发请遵守 [CONTRIBUTING.md](CONTRIBUTING.md)（含 CLI / GUI 同步约定）。
 
 工作区根目录可用 **`games_registry.json`** 维护多项目总表并生成 `GAMES.md`；GUI 在 **设置 → 工作区** 或全局栏「切换项目」浏览与切换。说明见 [工作区项目总表](docs/games_registry.md)。
 
@@ -134,15 +134,15 @@ python gemini_translate_batch.py apply
 完整导航见 [文档地图](docs/README.md)。常用入口：
 
 - 配置与运行
-  - [安装与本地配置](docs/setup.md)：本地私有配置、项目目录、Ren'Py SDK / TL 模板和运行模式。
-  - [GUI 工作台](docs/gui_workbench.md)：可选图形界面的安装、任务模式、诊断页与写回安全边界。
+  - [安装与本地配置](docs/setup.md)：全局配置、**项目级**上下文开关、SDK / TL 模板。
+  - [GUI 工作台](docs/gui_workbench.md)：左导航五页、批量三阶段、设置分区、诊断与工具、写回安全边界。
 - Batch 与安全
-  - [Batch 工作流与安全检查](docs/batch_workflows.md)：manifest / identity v2、`check/apply` 安全闸门、订正、关键词和 golden corpus 测试。
-  - [上下文系统](docs/context_systems.md)：RAG history store、Batch source-only index、Structured Story Memory 和 RAG store benchmark。
+  - [Batch 工作流与安全检查](docs/batch_workflows.md)：manifest / identity v2、`check/apply`、订正、关键词、golden corpus。
+  - [上下文系统](docs/context_systems.md)：RAG、原文索引、Story Memory、store 路径。
 - 分析与项目状态
-  - [关系与语义分析](docs/relation_analysis.md)：`extract_relations.py`、relation / semantic 模式和 Story Memory seed 导出。
-  - [项目说明](docs/project_notes.md)：环境要求、当前边界、项目状态、安全说明和适用人群。
-  - [CONTRIBUTING.md](CONTRIBUTING.md)：贡献与开发约定（CLI / GUI 同步、完成定义、测试要求）。
+  - [关系与语义分析](docs/relation_analysis.md)
+  - [项目说明](docs/project_notes.md)
+  - [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## 当前状态
 

@@ -104,11 +104,11 @@ class GuiWorkModesTests(unittest.TestCase):
                 self.assertIn(spec.idle_workflow_message.strip(), texts)
         self.assertEqual(
             bootstrap_disabled_message("rag"),
-            "请先在配置页勾选「启用记忆库」，并点击「保存参数配置」。",
+            "请先在「设置 · 上下文」勾选「启用 RAG 记忆库（批量，当前项目）」，并点击「保存设置」。",
         )
         self.assertEqual(
             bootstrap_disabled_message("source_index"),
-            "请先在配置页勾选「启用原文索引」，并点击「保存参数配置」。",
+            "请先在「设置 · 上下文」勾选「启用原文索引（当前项目）」，并点击「保存设置」。",
         )
         self.assertIn(bootstrap_disabled_message("rag"), texts)
         self.assertIn(bootstrap_disabled_message("source_index"), texts)

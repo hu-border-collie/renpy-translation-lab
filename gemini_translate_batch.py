@@ -298,6 +298,13 @@ def load_batch_settings():
 
     config = load_json_file(legacy.CONFIG_FILE)
     translator_config = load_json_file(legacy.TRANSLATOR_CONFIG)
+    # Per-project RAG / source-index flags (work/project_context_settings.json).
+    try:
+        from project_context_settings import apply_project_context_settings_to_config
+
+        apply_project_context_settings_to_config(translator_config, legacy.BASE_DIR)
+    except Exception as exc:
+        print(f'Warning: Failed to apply project context settings: {exc}')
 
     batch_model = config.get('batch_model')
     if isinstance(batch_model, str) and batch_model.strip():
@@ -2215,14 +2222,20 @@ def collect_files_to_process():
     return files_to_process
 
 
-def collect_pending_file_jobs():
+def collect_pending_file_jobs(*, include_complete_files=False):
+    """Collect per-file pending translation tasks.
+
+    By default only files with at least one pending task are returned (batch build).
+    Pass ``include_complete_files=True`` for doctor progress so fully-translated
+    files still contribute to ``translated_count``.
+    """
     jobs = []
 
     for rel_path, file_path in collect_files_to_process():
         with open(file_path, 'r', encoding='utf-8-sig') as handle:
             lines = handle.readlines()
 
-        raw_tasks = legacy.collect_tasks(lines)
+        raw_tasks, progress = legacy.collect_tasks_with_progress(lines)
         pending = []
 
         for task in raw_tasks:
@@ -2240,17 +2253,39 @@ def collect_pending_file_jobs():
             )
             pending.append(current)
 
-        if pending:
+        translated_count = int(progress.get('translated_count') or 0)
+        if pending or (include_complete_files and translated_count):
             jobs.append(
                 {
                     'file_rel_path': rel_path,
                     'file_path': file_path,
                     'task_count': len(pending),
+                    'translated_count': translated_count,
                     'tasks': pending,
                 }
             )
 
     return jobs
+
+
+def summarize_translation_progress(file_jobs):
+    """Aggregate pending vs already-translated task counts from file jobs."""
+    pending_task_count = 0
+    translated_task_count = 0
+    pending_file_count = 0
+    for job in file_jobs or []:
+        task_count = int(job.get('task_count') or 0)
+        translated_count = int(job.get('translated_count') or 0)
+        pending_task_count += task_count
+        translated_task_count += translated_count
+        if task_count > 0:
+            pending_file_count += 1
+    return {
+        'pending_task_count': pending_task_count,
+        'translated_task_count': translated_task_count,
+        'total_task_count': pending_task_count + translated_task_count,
+        'pending_file_count': pending_file_count,
+    }
 
 
 def format_context_block(lines, empty_label):
@@ -8228,6 +8263,9 @@ def collect_doctor_recommendations(report):
         )
         return recommendations
 
+    # Past layout/template blockers: collect required prep and optional tips together
+    # (required first, then optional). Do not early-return between context tips so
+    # e.g. "bootstrap source index" and "enable RAG" can both appear.
     context_status = report.get('context_status') or {}
     source_index = context_status.get('source_index') or {}
     rag = context_status.get('rag') or {}
@@ -8237,12 +8275,10 @@ def collect_doctor_recommendations(report):
         recommendations.append(
             doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_SOURCE_INDEX)
         )
-        return recommendations
-    if source_index_status == 'incomplete':
+    elif source_index_status == 'incomplete':
         recommendations.append(
             doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_SOURCE_INDEX_INCOMPLETE)
         )
-        return recommendations
 
     if _doctor_rag_needs_bootstrap(rag):
         if rag.get('bootstrap_on_build'):
@@ -8253,9 +8289,7 @@ def collect_doctor_recommendations(report):
             recommendations.append(
                 doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_RAG)
             )
-        return recommendations
-
-    if (
+    elif (
         not rag.get('enabled')
         and has_existing_translations
         and pending > 0
@@ -8264,7 +8298,6 @@ def collect_doctor_recommendations(report):
         recommendations.append(
             doctor_rec.make_doctor_recommendation(doctor_rec.ENABLE_RAG_FOR_CONSISTENCY)
         )
-        return recommendations
 
     if (
         not source_index.get('enabled')
@@ -8275,7 +8308,6 @@ def collect_doctor_recommendations(report):
         recommendations.append(
             doctor_rec.make_doctor_recommendation(doctor_rec.ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT)
         )
-        return recommendations
 
     return recommendations
 
@@ -8674,11 +8706,16 @@ def collect_doctor_report():
 
     pending_task_count = 0
     pending_file_count = 0
+    translated_task_count = 0
+    total_task_count = 0
     if has_tl_files:
         try:
-            file_jobs = collect_pending_file_jobs()
-            pending_file_count = len(file_jobs)
-            pending_task_count = sum(job['task_count'] for job in file_jobs)
+            file_jobs = collect_pending_file_jobs(include_complete_files=True)
+            progress = summarize_translation_progress(file_jobs)
+            pending_file_count = progress['pending_file_count']
+            pending_task_count = progress['pending_task_count']
+            translated_task_count = progress['translated_task_count']
+            total_task_count = progress['total_task_count']
         except Exception as exc:
             print(f'Warning: Could not compute pending translation counts: {exc}')
 
@@ -8718,6 +8755,8 @@ def collect_doctor_report():
         'counts': counts,
         'pending_task_count': pending_task_count,
         'pending_file_count': pending_file_count,
+        'translated_task_count': translated_task_count,
+        'total_task_count': total_task_count,
         'context_status': context_status,
         'project_assets': project_assets,
         'warnings': warnings,
@@ -8794,12 +8833,15 @@ def print_doctor_report(report):
         print(
             '- Pending translation: '
             f"task_count={report['pending_task_count']}, "
-            f"file_count={report['pending_file_count']}"
+            f"file_count={report['pending_file_count']}, "
+            f"translated_count={report.get('translated_task_count', 0)}, "
+            f"total_count={report.get('total_task_count', 0)}"
         )
         if report['pending_task_count'] > 0:
             print(
-                '  Note: counts English strings without Han characters; may include '
+                '  Note: pending counts English strings without Han characters; may include '
                 'preserved names, patron lists, or punctuation-only updates. '
+                'translated_count counts targets that already contain Chinese. '
                 'This does not indicate missed batch writeback.'
             )
     print(

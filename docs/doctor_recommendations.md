@@ -15,6 +15,13 @@
 
 `doctor` 仍是只读检查：它负责报告事实和建议，不生成翻译文件、不预建上下文库，也不调用 Gemini。建议对应的动作由用户在 GUI 或 CLI 中显式触发。
 
+GUI 文案入口名称（须与界面一致）：
+
+- 预建记忆库 / 原文索引 → 左侧 **「上下文库」**
+- 启用开关 → **「设置 · 上下文」** 后 **保存设置**
+- 开始批量翻译 → 左侧 **「批量翻译」**
+- API 密钥 → **「设置 · 密钥」**
+
 ## 不穷举所有状态组合
 
 建议系统不应为每一种原始字段组合编写独立分支。例如，无须创建一个名为「work 正常 + 模板存在 + 240 条待译 + 有旧译 + 索引完整 + RAG 关闭」的状态。
@@ -101,7 +108,8 @@ rag_needs_bootstrap
 阻断问题 > 必需准备 > 可选优化 > 正常状态
 ```
 
-高优先级问题应抑制暂时不可执行的低优先级建议。例如 work 目录不存在时，不应同时要求用户预建原文索引。
+布局 / 模板类阻断问题应抑制上下文类建议（例如 work 目录不存在时，不应同时要求预建原文索引）。
+在布局与模板已就绪后，**必需准备与可选优化并列输出**（先必需、后可选），不再因「索引未建」而吞掉「建议启用 RAG」等可选提示。
 
 ## 建议结构
 
@@ -145,27 +153,37 @@ RAG：未启用
 规则可以写成：
 
 ```python
+# 布局 / 模板阻断：仍只处理并返回（无法继续时不堆上下文建议）
 if not work_ready:
     recommend("bootstrap_work", severity="blocking", priority=100)
-elif not template_ready:
+    return
+if not template_ready:
     recommend("generate_template", severity="blocking", priority=90)
-elif source_index_needs_bootstrap:
+    return
+
+# 上下文层：必需准备与可选建议并列输出（必需在前，可选在后）
+if source_index_needs_bootstrap:
     recommend("bootstrap_source_index", severity="required", priority=80)
-elif rag_needs_bootstrap:
+if rag_needs_bootstrap:
     recommend("bootstrap_rag", severity="required", priority=70)
 elif has_existing_translations and pending_count >= 150 and not rag_enabled:
     recommend("enable_rag_for_consistency", severity="optional", priority=30)
+if new_project and not source_index_enabled:
+    recommend("enable_source_index_for_new_project", severity="optional", priority=20)
 ```
 
-该项目只命中最后一条，GUI 可以显示：
+示例：work 正常、模板就绪、待译 240、有旧译、原文索引已启用但未建、RAG 未启用时，可同时得到：
 
-> 可选优化：检测到 240 条补译内容和已有译文。启用记忆库有助于保持术语一致，但不影响直接开始翻译。
+1. 必需准备：预建原文索引
+2. 可选优化：启用记忆库以提高术语一致性
 
-如果用户随后启用了 RAG，但尚未预建，则命中优先级更高的必需准备规则：
+GUI 主文案通常取**第一条**（最高优先的必需准备）；其余建议仍出现在事实列表中。
+
+如果用户随后启用了 RAG 但尚未预建，则在索引已就绪的前提下会出现：
 
 > 需要准备：记忆库已启用但尚未建立，请先预建记忆库。
 
-如果所有必需条件均满足，建议列表为空，摘要只显示环境已就绪。
+如果所有必需条件均满足且无可选提示，建议列表为空，摘要只显示环境已就绪（`workflow_state`）。
 
 ## 当前代码边界
 

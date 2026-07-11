@@ -269,7 +269,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertTrue(any("翻译文件：3 个" in fact for fact in summary.facts))
         self.assertTrue(
             any(
-                "待翻译条目：约 5 条" in fact and "不代表漏翻" in fact
+                "未翻译条目：约 5 条" in fact and "不代表漏翻" in fact
                 for fact in summary.facts
             )
         )
@@ -430,7 +430,7 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(
             fact,
-            "建议：切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交云端任务",
+            "建议：在左侧「批量翻译」点击「开始翻译」打包并提交云端任务",
         )
 
     def test_format_doctor_recommendation_fact_for_empty_rag(self):
@@ -440,7 +440,7 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(
             fact,
-            "建议：先在「分析与准备」运行「预建记忆库」，再开始批量翻译",
+            "建议：先到左侧「上下文库」运行「预建记忆库」，再开始批量翻译",
         )
 
     def test_format_doctor_recommendation_fact_supports_legacy_english_strings(self):
@@ -450,7 +450,7 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         self.assertEqual(
             fact,
-            "建议：切换到「翻译 · 批量翻译」，点击「开始翻译」打包并提交云端任务",
+            "建议：在左侧「批量翻译」点击「开始翻译」打包并提交云端任务",
         )
 
     def test_primary_recommendation_message_for_incremental_translation(self):
@@ -469,7 +469,7 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(parsed["recommendations"][0]["code"], doctor_rec.BOOTSTRAP_RAG)
 
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
-        self.assertEqual(summary.message, "记忆库尚未建立，建议先预建记忆库再开始翻译。")
+        self.assertEqual(summary.message, "记忆库尚未建立，请先到左侧「上下文库」预建记忆库再开始翻译。")
         self.assertEqual(summary.status, "warning")
         self.assertTrue(any("预建记忆库" in fact for fact in summary.facts))
 
@@ -510,7 +510,7 @@ class GuiDoctorReportTests(unittest.TestCase):
 
         summary = summarize_doctor_output(output, exit_code=0, api_key_count=3)
 
-        self.assertEqual(summary.message, "记忆库尚未建立，建议先预建记忆库再开始翻译。")
+        self.assertEqual(summary.message, "记忆库尚未建立，请先到左侧「上下文库」预建记忆库再开始翻译。")
         self.assertEqual(summary.status, "warning")
         self.assertTrue(any("预建记忆库" in fact for fact in summary.facts))
 
@@ -665,7 +665,7 @@ Recommendations:
         )
         self.assertIn("原文索引尚未就绪", summary.message)
         self.assertTrue(
-            any("继续运行「预建原文索引」" in fact for fact in summary.facts)
+            any("预建原文索引" in fact for fact in summary.facts)
         )
         self.assertFalse(
             any("提交约 8500" in fact for fact in summary.facts)
@@ -699,13 +699,71 @@ Recommendations:
         self.assertIn("翻译文件：49 个", facts)
         self.assertTrue(
             any(
-                "待翻译条目：约 48394 条（49 个文件；可能含专名/名单等无汉字英文，不代表漏翻）"
+                "未翻译条目：约 48394 条（49 个文件；可能含专名/名单等无汉字英文，不代表漏翻）"
                 == fact
                 for fact in facts
             )
         )
         self.assertTrue(any("剧情对话：49863 条" in fact for fact in facts))
         self.assertTrue(any("界面字符串：637 条" in fact for fact in facts))
+
+    def test_format_tl_scan_facts_shows_translated_and_pending(self):
+        facts = format_tl_scan_facts(
+            {
+                "rpy_files": 25,
+                "translate_blocks": 4733,
+                "commented_original_lines": 4733,
+                "old_lines": 592,
+                "new_lines": 592,
+            },
+            pending={
+                "task_count": 1788,
+                "file_count": 12,
+                "translated_count": 3200,
+                "total_count": 4988,
+            },
+        )
+
+        self.assertIn(
+            "翻译进度：已译约 3200 条，未译约 1788 条（共约 4988 条，约 64%）",
+            facts,
+        )
+        self.assertIn(
+            "未译分布：12 个文件仍有待译（可能含专名/名单等无汉字英文，不代表漏翻）",
+            facts,
+        )
+
+    def test_doctor_report_to_parsed_preserves_translated_counts(self):
+        report = {
+            "base_dir": r"C:\Games\Example\work",
+            "tl_dir": r"C:\Games\Example\work\game\tl\schinese",
+            "tl_exists": True,
+            "language": "schinese",
+            "mode": "existing_tl_only",
+            "layout_status": "ready",
+            "counts": {
+                "rpy_files": 3,
+                "translate_blocks": 2,
+                "string_sections": 1,
+                "old_lines": 10,
+                "new_lines": 10,
+                "commented_original_lines": 2,
+            },
+            "pending_task_count": 5,
+            "pending_file_count": 2,
+            "translated_task_count": 12,
+            "total_task_count": 17,
+            "warnings": [],
+            "recommendations": [],
+        }
+        parsed = doctor_report_to_parsed(report)
+        pending = parsed.get("pending")
+        self.assertIsInstance(pending, dict)
+        assert isinstance(pending, dict)
+        self.assertEqual(pending.get("task_count"), 5)
+        self.assertEqual(pending.get("file_count"), 2)
+        self.assertEqual(pending.get("translated_count"), 12)
+        self.assertEqual(pending.get("total_count"), 17)
 
 
 if __name__ == "__main__":

@@ -65,7 +65,10 @@ def _resume_display_copy(spec: WorkModeSpec, *, is_retry: bool) -> _ResumeDispla
             done_heading="补译任务已完成",
             done_message="补译包流程已完成。",
             ready_heading="可继续补译后续处理",
-            ready_message="检测到补译任务还有后续步骤，可点击写回页「继续补译」或工作台「继续翻译」。",
+            ready_message=(
+                "检测到补译任务还有后续步骤；可在「批量翻译 · 结果」的「问题处理」中"
+                "点击「继续补译」，或使用「继续翻译」。"
+            ),
         )
     return _ResumeDisplayCopy(
         safety_heading="需要先处理问题",

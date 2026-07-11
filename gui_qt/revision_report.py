@@ -128,7 +128,7 @@ def summarize_revision_preview_output(output: str, exit_code: int) -> WorkflowUp
     return WorkflowUpdate(
         status="done",
         heading="订正预览完成",
-        message="预览已完成；可在「写回订正」页确认后写回。写回前请备份项目。",
+        message="预览已完成；可在「订正」结果区点击「写回订正」确认后写回。写回前请备份项目。",
         facts=facts,
     )
 
@@ -180,7 +180,7 @@ def summarize_sync_revision_output(output: str, exit_code: int) -> WorkflowUpdat
     return WorkflowUpdate(
         status="done",
         heading="同步订正预览完成",
-        message="同步订正预览已完成；可在「写回订正」页查看摘要，确认后写回订正。",
+        message="同步订正预览已完成；可在「订正」结果区查看摘要，确认后点击「写回订正」。",
         facts=facts,
     )
 
