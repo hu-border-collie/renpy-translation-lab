@@ -24,6 +24,7 @@ class WorkbenchPageActions:
     writeback: Callable[[], None] | None = None
     prebuild: Callable[[str], None] | None = None
     open_settings: Callable[[], None] | None = None
+    select_mode: Callable[[WorkMode], None] | None = None
 
 
 class WorkbenchPage(Protocol):

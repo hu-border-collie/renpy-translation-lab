@@ -148,8 +148,9 @@ class GuiWorkbenchNavTests(unittest.TestCase):
             WorkMode.KEYWORD_EXTRACTION,
             refresh_manifest_writeback=False,
         )
-        self.assertFalse(self.window.work_submode_combo.isHidden())
-        self.assertGreaterEqual(self.window.work_submode_combo.count(), 2)
+        self.assertTrue(self.window.work_submode_combo.isHidden())
+        self.assertFalse(self.window.keywords_page.mode_combo.isHidden())
+        self.assertGreaterEqual(self.window.keywords_page.mode_combo.count(), 2)
 
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,
