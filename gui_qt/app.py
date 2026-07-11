@@ -5905,12 +5905,17 @@ class MainWindow(QMainWindow):
         self._set_task_running(True)
         self.runner.run(self.state.get_batch_script_path(), ["generate-template"])
 
-    def _saved_batch_context_flags(self) -> dict[str, bool]:
-        get_game_root = getattr(self.state, "get_game_root", None)
+    def _game_root_str_for_flags(self) -> str | None:
+        """Resolve current game_root for project-scoped context flags (defensive)."""
+        state = getattr(self, "state", None)
+        get_game_root = getattr(state, "get_game_root", None)
         game_root = get_game_root() if callable(get_game_root) else None
+        return str(game_root) if game_root else None
+
+    def _saved_batch_context_flags(self) -> dict[str, bool]:
         return read_batch_context_flags(
             self.state.load_translator_config(),
-            game_root=str(game_root) if game_root else None,
+            game_root=self._game_root_str_for_flags(),
         )
 
     def _submit_max_cost_from_config(self) -> float | None:
@@ -8037,13 +8042,9 @@ class MainWindow(QMainWindow):
             batch_config = self._config_section(config, "batch")
             sync_rag_config = self._config_section(sync_config, "rag")
             batch_rag_config = self._config_section(batch_config, "rag")
-            get_game_root_for_flags = getattr(self.state, "get_game_root", None)
-            flag_game_root = (
-                get_game_root_for_flags() if callable(get_game_root_for_flags) else None
-            )
             context_flags = read_batch_context_flags(
                 config,
-                game_root=str(flag_game_root) if flag_game_root else None,
+                game_root=self._game_root_str_for_flags(),
             )
             self.rag_enabled_cb.setChecked(context_flags["rag_enabled"])
             self.source_index_enabled_cb.setChecked(context_flags["source_index_enabled"])

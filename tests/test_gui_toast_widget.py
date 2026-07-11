@@ -22,6 +22,18 @@ class ToastWidgetTests(unittest.TestCase):
             "设置已成功保存",
         )
         self.assertEqual(
+            ToastNotification._normalize_message("⚠ 需要注意"),
+            "需要注意",
+        )
+        self.assertEqual(
+            ToastNotification._normalize_message("⚠️ 需要注意"),
+            "需要注意",
+        )
+        self.assertEqual(
+            ToastNotification._normalize_message("✘ 失败"),
+            "失败",
+        )
+        self.assertEqual(
             ToastNotification._normalize_message("设置已成功保存"),
             "设置已成功保存",
         )
@@ -29,6 +41,7 @@ class ToastWidgetTests(unittest.TestCase):
             ToastNotification._normalize_message("XML 解析完成"),
             "XML 解析完成",
         )
+        # Ordinary punctuation / math prefixes must not be treated as status icons.
         self.assertEqual(
             ToastNotification._normalize_message("!important notice"),
             "!important notice",
@@ -37,8 +50,13 @@ class ToastWidgetTests(unittest.TestCase):
             ToastNotification._normalize_message("× 3 retries"),
             "× 3 retries",
         )
+        # Glyph-only input strips to empty (widget still shows the style icon).
         self.assertEqual(
             ToastNotification._normalize_message("✓"),
+            "",
+        )
+        self.assertEqual(
+            ToastNotification._normalize_message("✔  "),
             "",
         )
 
