@@ -2938,8 +2938,9 @@ class MainWindow(QMainWindow):
                 reflow(force=True)
         self._sync_action_frame_min_height()
         # Deferred second pass: parent widths settle after min-height changes.
-        # Context object cancels the callback if this window is already gone.
-        QTimer.singleShot(0, self, self._reflow_button_bars_deferred)
+        # Use the 2-arg form: helper tests construct MainWindow via __new__ without
+        # QObject init, and the 3-arg context overload requires a live C++ base.
+        QTimer.singleShot(0, self._reflow_button_bars_deferred)
 
     def _reflow_button_bars_deferred(self) -> None:
         for name in (
