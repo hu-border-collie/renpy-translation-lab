@@ -1,17 +1,19 @@
 """Persistent synchronous-translation page for the workbench stack (#176 P2)."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ..status_icons import StatusBadge
 from ..work_modes import WorkMode
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
 
 
 class SyncTranslationPage(QFrame):
-    """Page-local controls and summary for direct synchronous translation."""
+    """Page-local risk notice and start/stop for direct synchronous translation.
+
+    Live progress, doctor status, and writeback stay on the shared workbench
+    status card so the page does not duplicate that surface.
+    """
 
     supported_modes = (WorkMode.SYNC_TRANSLATION,)
 
@@ -32,7 +34,7 @@ class SyncTranslationPage(QFrame):
         self.risk_warning = QLabel(
             "警告：同步翻译可能直接修改项目文件，请先备份或在副本上试跑。"
         )
-        self.risk_warning.setObjectName("sync_mode_warning")
+        self.risk_warning.setObjectName("sync_translation_risk_warning")
         self.risk_warning.setWordWrap(True)
         outer.addWidget(self.risk_warning)
 
@@ -42,40 +44,17 @@ class SyncTranslationPage(QFrame):
         action_layout.setContentsMargins(10, 8, 10, 8)
         action_layout.setSpacing(8)
         self.start_btn = QPushButton("开始同步翻译")
-        self.start_btn.setObjectName("translate_btn")
+        self.start_btn.setObjectName("sync_translation_start_btn")
         self.start_btn.clicked.connect(self._trigger_start)
         self.start_btn.setEnabled(False)
         action_layout.addWidget(self.start_btn)
         self.stop_btn = QPushButton("停止")
-        self.stop_btn.setObjectName("kill_btn")
+        self.stop_btn.setObjectName("sync_translation_stop_btn")
         self.stop_btn.clicked.connect(self._trigger_stop)
         self.stop_btn.setEnabled(False)
         action_layout.addWidget(self.stop_btn)
         action_layout.addStretch()
         outer.addWidget(actions)
-
-        summary = QFrame()
-        summary.setObjectName("workbench_status_card")
-        summary_layout = QVBoxLayout(summary)
-        summary_layout.setContentsMargins(12, 12, 12, 12)
-        summary_layout.setSpacing(6)
-        self.status_label = StatusBadge("sync_translation_status_label")
-        summary_layout.addWidget(self.status_label)
-        self.heading_label = QLabel("尚未开始同步翻译")
-        self.heading_label.setObjectName("action_group_label")
-        self.heading_label.setWordWrap(True)
-        summary_layout.addWidget(self.heading_label)
-        self.message_label = QLabel(
-            "完成环境检查后即可开始；同步翻译会直接写入项目文件。"
-        )
-        self.message_label.setObjectName("summary_body_label")
-        self.message_label.setWordWrap(True)
-        summary_layout.addWidget(self.message_label)
-        self.facts_label = QLabel()
-        self.facts_label.setObjectName("workflow_facts_label")
-        self.facts_label.setWordWrap(True)
-        summary_layout.addWidget(self.facts_label)
-        outer.addWidget(summary)
         outer.addStretch()
 
     def set_action_callbacks(self, actions: WorkbenchPageActions) -> None:
@@ -84,12 +63,8 @@ class SyncTranslationPage(QFrame):
     def activate(self, mode: WorkMode, session: WorkbenchModeSession) -> None:
         if mode not in self.supported_modes:
             raise ValueError(f"Unsupported sync-translation mode: {mode.value}")
-        self.render_summary(
-            session.workflow_status or "idle",
-            session.workflow_heading or "尚未开始同步翻译",
-            session.workflow_message or "完成环境检查后即可开始；同步翻译会直接写入项目文件。",
-            session.workflow_facts,
-        )
+        # Progress / doctor / writeback live on the shared status card.
+        del session
 
     def set_task_running(self, running: bool) -> None:
         self._running = running
@@ -100,25 +75,13 @@ class SyncTranslationPage(QFrame):
     def set_start_enabled(self, enabled: bool) -> None:
         self.start_btn.setEnabled(enabled and not self._running)
 
-    def reset_project(self) -> None:
-        self.render_summary(
-            "stale",
-            "项目已切换",
-            "任务状态已清空；请先针对新项目重新检查。",
-            [],
-        )
+    def set_start_label(self, text: str) -> None:
+        self.start_btn.setText(text)
 
-    def render_summary(
-        self,
-        status: str,
-        heading: str,
-        message: str,
-        facts: list[str],
-    ) -> None:
-        self.status_label.set_status(status, heading)
-        self.heading_label.setText(heading)
-        self.message_label.setText(message)
-        self.facts_label.setText("\n".join(facts))
+    def reset_project(self) -> None:
+        """Page-local chrome has no project-bound state beyond button enablement."""
+        self.set_task_running(False)
+        self.set_start_enabled(False)
 
     def _trigger_start(self) -> None:
         if not self._running and self._actions.start is not None:

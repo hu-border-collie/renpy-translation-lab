@@ -1224,10 +1224,10 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._build_workbench_log_drawer())
 
+        # Log drawer stays available on real pages (sync / context CLI runs).
         self._legacy_workbench_shell_widgets = (
             self._mode_frame,
             self._workbench_actions_column,
-            self.workbench_log_drawer,
         )
 
         self._workbench_tab = tab
@@ -4178,9 +4178,12 @@ class MainWindow(QMainWindow):
             session = sessions.get(mode) if isinstance(sessions, dict) else None
             if page is not None:
                 page.activate(mode, session or WorkbenchModeSession())
-                page.set_task_running(
-                    bool(getattr(self, "_task_running", False))
-                )
+                if nav_item == WorkbenchNavItem.SYNC_TRANSLATION:
+                    self._sync_sync_translation_page_controls()
+                else:
+                    page.set_task_running(
+                        bool(getattr(self, "_task_running", False))
+                    )
 
         nav_spec = workbench_nav_spec(nav_item)
         show_sub = nav_spec.show_submode
@@ -4535,6 +4538,27 @@ class MainWindow(QMainWindow):
 
     def _update_translate_button_label(self) -> None:
         self.translate_btn.setText(self._translate_button_label())
+        self._sync_sync_translation_page_controls(label_only=True)
+
+    def _sync_sync_translation_page_controls(
+        self,
+        *,
+        running: bool | None = None,
+        label_only: bool = False,
+    ) -> None:
+        """Keep page-local Start/Stop aligned with the legacy translate/kill buttons."""
+        sync_page = getattr(self, "sync_translation_page", None)
+        if sync_page is None:
+            return
+        sync_page.set_start_label(self._translate_button_label())
+        if label_only:
+            return
+        if running is None:
+            running = bool(getattr(self, "_task_running", False)) or (
+                hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
+            )
+        sync_page.set_task_running(running)
+        sync_page.set_start_enabled(self.translate_btn.isEnabled())
 
     def _apply_work_mode_ui(
         self,
@@ -4659,10 +4683,8 @@ class MainWindow(QMainWindow):
                 running=running,
             )
         )
-        sync_page = getattr(self, "sync_translation_page", None)
-        if spec.mode == WorkMode.SYNC_TRANSLATION and sync_page is not None:
-            sync_page.set_task_running(running)
-            sync_page.set_start_enabled(self.translate_btn.isEnabled())
+        if spec.mode == WorkMode.SYNC_TRANSLATION:
+            self._sync_sync_translation_page_controls(running=running)
         resume_available = (
             (False, "任务运行中。") if running else self._resume_task_available()
         )
@@ -6029,8 +6051,7 @@ class MainWindow(QMainWindow):
             return
 
         self._clear_log_view()
-        if spec.mode != WorkMode.SYNC_TRANSLATION:
-            self._show_workbench_log_drawer()
+        self._show_workbench_log_drawer()
         self._clear_completed_manifest_snapshot()
         self._writeback_manifest_path = ""
         if spec.supports_translation_writeback:
@@ -7155,10 +7176,7 @@ class MainWindow(QMainWindow):
         self._update_keyword_merge_btn_enabled(running=running)
         self._update_split_btn_enabled(running=running)
         self.kill_btn.setEnabled(running)
-        sync_page = getattr(self, "sync_translation_page", None)
-        if sync_page is not None:
-            sync_page.set_task_running(running)
-            sync_page.set_start_enabled(self.translate_btn.isEnabled())
+        self._sync_sync_translation_page_controls(running=running)
         # Context-library prebuild CTAs stay on-page while nav is locked; gate them here.
         if hasattr(self, "context_library_panel"):
             self._refresh_context_library_panel(running=running)
@@ -7191,10 +7209,6 @@ class MainWindow(QMainWindow):
         self.workflow_status_label.set_status(status, heading)
         self.workflow_message_label.setText(message)
         self.workflow_facts_label.setText("\n".join(facts or []))
-        if self._current_work_mode() == WorkMode.SYNC_TRANSLATION:
-            sync_page = getattr(self, "sync_translation_page", None)
-            if sync_page is not None:
-                sync_page.render_summary(status, heading, message, list(facts or []))
         self._update_resume_btn_text()
         resume_available = self._resume_task_available()
         self._update_resume_btn_enabled(resume_available=resume_available)
@@ -7322,6 +7336,7 @@ class MainWindow(QMainWindow):
                 running=running,
             )
         )
+        self._sync_sync_translation_page_controls(running=running)
         self._sync_task_shortcuts()
         self._sync_workbench_empty_states()
         self._sync_layout_sizes()

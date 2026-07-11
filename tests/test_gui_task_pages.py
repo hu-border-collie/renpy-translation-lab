@@ -10,11 +10,13 @@ try:
 
     from gui_qt.app import MainWindow
     from gui_qt.check_report import WritebackSummary
+    from gui_qt.doctor_report import DoctorSummary
 except ImportError as exc:
     MainWindow = None  # type: ignore[assignment,misc]
     QApplication = None  # type: ignore[assignment,misc]
     Qt = None  # type: ignore[assignment,misc]
     WritebackSummary = None  # type: ignore[misc,assignment]
+    DoctorSummary = None  # type: ignore[misc,assignment]
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
@@ -82,12 +84,15 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(page.risk_warning.isHidden())
         self.assertIn("备份", page.risk_warning.text())
         self.assertEqual(page.start_btn.text(), "开始同步翻译")
+        self.assertEqual(page.start_btn.objectName(), "sync_translation_start_btn")
+        self.assertEqual(page.stop_btn.objectName(), "sync_translation_stop_btn")
         self.assertTrue(self.window.sync_mode_warning.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
         self.assertFalse(self.window.workbench_status_card.isHidden())
+        self.assertFalse(self.window.workbench_log_drawer.isHidden())
         self.assertTrue(self.window.context_library_panel.isHidden())
 
-    def test_sync_page_uses_start_stop_callbacks_and_owns_summary(self) -> None:
+    def test_sync_page_uses_start_stop_callbacks(self) -> None:
         self.window._set_work_mode(
             WorkMode.SYNC_TRANSLATION,
             refresh_manifest_writeback=False,
@@ -105,12 +110,63 @@ class GuiTaskPageTests(unittest.TestCase):
         page.start_btn.click()
         page.set_task_running(True)
         page.stop_btn.click()
-        page.render_summary("ready", "同步完成", "已写入 3 条译文", ["project: demo"])
 
         self.assertEqual(starts, [True])
         self.assertEqual(stops, [True])
-        self.assertIn("已写入 3 条译文", page.message_label.text())
-        self.assertIn("demo", page.facts_label.text())
+        self.assertFalse(page.start_btn.isEnabled())
+        self.assertTrue(page.stop_btn.isEnabled())
+
+    def test_sync_page_start_enabled_after_doctor_summary(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.sync_translation_page
+        self.assertFalse(page.start_btn.isEnabled())
+
+        self.window._doctor_check_completed = True
+        self.window._set_doctor_summary(
+            DoctorSummary(
+                status="ready",
+                heading="项目检查通过",
+                message="可以开始同步翻译。",
+                facts=["game_root: demo"],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+        self.assertTrue(self.window.translate_btn.isEnabled())
+        self.assertTrue(page.start_btn.isEnabled())
+        self.assertEqual(page.start_btn.text(), "开始同步翻译")
+
+        self.window._set_doctor_summary(
+            DoctorSummary(
+                status="warning",
+                heading="可生成模板",
+                message="请先生成翻译模板。",
+                facts=[],
+                findings=[],
+                mode="can_generate_template",
+            )
+        )
+        self.assertTrue(page.start_btn.isEnabled())
+        self.assertEqual(page.start_btn.text(), "生成翻译模板")
+
+    def test_sync_page_defers_progress_to_shared_status_card(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.sync_translation_page
+        self.assertFalse(hasattr(page, "render_summary"))
+        self.window._set_workflow_summary(
+            "running",
+            "正在同步翻译",
+            "处理中…",
+            ["files: 2/10"],
+        )
+        self.assertIn("正在同步翻译", self.window.workflow_status_label.text())
+        self.assertIn("files: 2/10", self.window.workflow_facts_label.text())
 
     def test_batch_hides_sync_warning(self) -> None:
         self.window._set_work_mode(
