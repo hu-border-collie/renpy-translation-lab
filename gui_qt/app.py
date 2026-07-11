@@ -262,6 +262,7 @@ from .work_modes import (
 )
 from .workbench import WorkbenchPageActions
 from .workbench.context_library_page import ContextLibraryPage
+from .workbench.keywords_page import KeywordsPage
 from .workbench.sync_translation_page import SyncTranslationPage
 from .workbench_session import WorkbenchModeSession
 from .batch_workflow_support import resolve_submit_max_cost
@@ -732,6 +733,18 @@ class MainWindow(QMainWindow):
                     )
                 )
                 self.sync_translation_page = page
+            elif nav_item == WorkbenchNavItem.KEYWORDS:
+                page = KeywordsPage()
+                page.set_action_callbacks(
+                    WorkbenchPageActions(
+                        start=self._on_start_translation,
+                        resume=self._on_resume_translation,
+                        stop=self._on_kill,
+                        writeback=self._on_open_keyword_merge,
+                        select_mode=self._on_keywords_page_mode_selected,
+                    )
+                )
+                self.keywords_page = page
             else:
                 page = QWidget()
                 page.setObjectName(f"workbench_page_{nav_item.value}")
@@ -1314,7 +1327,8 @@ class MainWindow(QMainWindow):
         nav = workbench_nav_for_work_mode(mode)
         is_sync = mode == WorkMode.SYNC_TRANSLATION
         is_context = nav == WorkbenchNavItem.CONTEXT
-        is_real_page = is_context or nav == WorkbenchNavItem.SYNC_TRANSLATION
+        is_keywords = nav == WorkbenchNavItem.KEYWORDS
+        is_real_page = is_context or nav in {WorkbenchNavItem.SYNC_TRANSLATION, WorkbenchNavItem.KEYWORDS}
 
         if hasattr(self, "sync_mode_warning"):
             self.sync_mode_warning.setVisible(is_sync and not is_real_page)
@@ -1338,6 +1352,18 @@ class MainWindow(QMainWindow):
                     QSizePolicy.Policy.Expanding,
                     QSizePolicy.Policy.Maximum,
                 )
+            elif is_keywords:
+                page = getattr(self, "keywords_page", None)
+                hint_h = (
+                    page.preferred_height(self.workbench_stack.width())
+                    if page is not None
+                    else 96
+                )
+                self.workbench_stack.setMaximumHeight(max(hint_h, 48))
+                self.workbench_stack.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Maximum,
+                )
             else:
                 self.workbench_stack.setMaximumHeight(16_777_215)
                 self.workbench_stack.setSizePolicy(
@@ -1355,7 +1381,13 @@ class MainWindow(QMainWindow):
             self.translate_btn.setVisible(not is_real_page)
         if hasattr(self, "resume_btn") and is_real_page:
             self.resume_btn.setVisible(False)
+        if is_real_page:
+            for widget in getattr(self, "_work_submode_row_widgets", ()):
+                widget.setVisible(False)
         # Idle workflow hint is redundant with status-card empty states; hide it.
+        if hasattr(self, "keyword_merge_writeback_btn") and is_keywords:
+            self.keyword_merge_writeback_btn.setVisible(False)
+            self.keyword_merge_writeback_btn.setEnabled(False)
         # mode_frame only stays for submode row and/or legacy sync risk banner.
         if hasattr(self, "work_mode_hint_label"):
             self.work_mode_hint_label.setVisible(False)
@@ -3111,7 +3143,10 @@ class MainWindow(QMainWindow):
                 glossary_path=glossary_path,
             )
             if hasattr(self, "keyword_merge_writeback_btn"):
-                self.keyword_merge_writeback_btn.setVisible(True)
+                self.keyword_merge_writeback_btn.setVisible(
+                    workbench_nav_for_work_mode(self._current_work_mode())
+                    != WorkbenchNavItem.KEYWORDS
+                )
                 self.keyword_merge_writeback_btn.setEnabled(
                     not running and keyword_merge_ready_flag
                 )
@@ -3236,7 +3271,11 @@ class MainWindow(QMainWindow):
                 glossary_path=glossary_path,
             )
         if hasattr(self, "keyword_merge_writeback_btn"):
-            self.keyword_merge_writeback_btn.setVisible(uses_keyword_merge)
+            self.keyword_merge_writeback_btn.setVisible(
+                uses_keyword_merge
+                and workbench_nav_for_work_mode(self._current_work_mode())
+                != WorkbenchNavItem.KEYWORDS
+            )
             self.keyword_merge_writeback_btn.setEnabled(
                 not running and keyword_merge_ready_flag
             )
@@ -4209,18 +4248,21 @@ class MainWindow(QMainWindow):
         if nav_item in {
             WorkbenchNavItem.CONTEXT,
             WorkbenchNavItem.SYNC_TRANSLATION,
+            WorkbenchNavItem.KEYWORDS,
         }:
-            page = (
-                getattr(self, "context_library_page", None)
-                if nav_item == WorkbenchNavItem.CONTEXT
-                else getattr(self, "sync_translation_page", None)
-            )
+            page = {
+                WorkbenchNavItem.CONTEXT: getattr(self, "context_library_page", None),
+                WorkbenchNavItem.SYNC_TRANSLATION: getattr(self, "sync_translation_page", None),
+                WorkbenchNavItem.KEYWORDS: getattr(self, "keywords_page", None),
+            }[nav_item]
             sessions = getattr(self, "_mode_sessions", None)
             session = sessions.get(mode) if isinstance(sessions, dict) else None
             if page is not None:
                 page.activate(mode, session or WorkbenchModeSession())
                 if nav_item == WorkbenchNavItem.SYNC_TRANSLATION:
                     self._sync_sync_translation_page_controls()
+                elif nav_item == WorkbenchNavItem.KEYWORDS:
+                    self._sync_keywords_page_controls()
                 else:
                     page.set_task_running(
                         bool(getattr(self, "_task_running", False))
@@ -4282,6 +4324,14 @@ class MainWindow(QMainWindow):
         if mode == self._work_mode:
             return
         self._set_work_mode(mode, refresh_manifest_writeback=True)
+
+    def _on_keywords_page_mode_selected(self, mode: WorkMode) -> None:
+        """Apply the page-local batch/sync selector through the coordinator."""
+        if self.kill_btn.isEnabled() or bool(getattr(self, "_task_running", False)):
+            self._sync_task_selectors_from_work_mode()
+            return
+        if mode in {WorkMode.KEYWORD_EXTRACTION, WorkMode.SYNC_KEYWORD_EXTRACTION}:
+            self._set_work_mode(mode, refresh_manifest_writeback=True)
 
     def _on_task_category_changed(self) -> None:
         # Legacy path (hidden combo); keep behavior for residual callers.
@@ -4581,6 +4631,40 @@ class MainWindow(QMainWindow):
         self.translate_btn.setText(self._translate_button_label())
         self._sync_sync_translation_page_controls(label_only=True)
 
+    def _sync_keywords_page_controls(self, *, running: bool | None = None) -> None:
+        """Mirror coordinator-owned keyword actions onto the real page."""
+        page = getattr(self, "keywords_page", None)
+        if page is None:
+            return
+        mode = self._current_work_mode()
+        if mode not in {WorkMode.KEYWORD_EXTRACTION, WorkMode.SYNC_KEYWORD_EXTRACTION}:
+            return
+        if running is None:
+            running = bool(getattr(self, "_task_running", False)) or self.kill_btn.isEnabled()
+        candidates_path = self._resolve_keyword_merge_candidates_path()
+        glossary_path = self._resolve_keyword_merge_glossary_path()
+        merge_ready, merge_message = keyword_merge_ready(
+            candidates_path=candidates_path,
+            glossary_path=glossary_path,
+        )
+        if merge_ready:
+            result_hint = "关键词候选已就绪；可审核并合并到 glossary.json。"
+        elif merge_message:
+            result_hint = f"关键词结果：{merge_message}"
+        else:
+            result_hint = "提取完成后，可在此合并审核通过的术语候选。"
+        page.set_task_running(running)
+        page.set_controls(
+            start_enabled=self.translate_btn.isEnabled(),
+            resume_enabled=self.resume_btn.isEnabled(),
+            resume_visible=work_mode_spec(mode).supports_resume,
+            resume_label=self.resume_btn.text(),
+            merge_enabled=merge_ready,
+            merge_message=result_hint,
+        )
+        if workbench_nav_for_work_mode(mode) == WorkbenchNavItem.KEYWORDS:
+            self._apply_task_page_chrome(work_mode_spec(mode))
+
     def _sync_sync_translation_page_controls(
         self,
         *,
@@ -4733,6 +4817,7 @@ class MainWindow(QMainWindow):
             running=running,
             resume_available=resume_available,
         )
+        self._sync_keywords_page_controls(running=running)
         self._update_split_submit_btn(running=running)
         self._sync_task_shortcuts()
         # Re-apply page chrome after enable flags so context cards stay correct.
@@ -5263,6 +5348,9 @@ class MainWindow(QMainWindow):
         sync_page = getattr(self, "sync_translation_page", None)
         if sync_page is not None:
             sync_page.reset_project()
+        keywords_page = getattr(self, "keywords_page", None)
+        if keywords_page is not None:
+            keywords_page.reset_project()
         self._workflow = None
         self._workflow_step_output_lines = []
         self._clear_completed_manifest_snapshot()
@@ -7218,6 +7306,7 @@ class MainWindow(QMainWindow):
         self._update_split_btn_enabled(running=running)
         self.kill_btn.setEnabled(running)
         self._sync_sync_translation_page_controls(running=running)
+        self._sync_keywords_page_controls(running=running)
         # Context-library prebuild CTAs stay on-page while nav is locked; gate them here.
         if hasattr(self, "context_library_panel"):
             self._refresh_context_library_panel(running=running)
@@ -7253,6 +7342,7 @@ class MainWindow(QMainWindow):
         self._update_resume_btn_text()
         resume_available = self._resume_task_available()
         self._update_resume_btn_enabled(resume_available=resume_available)
+        self._sync_keywords_page_controls()
         self._sync_workbench_empty_states(resume_available=resume_available)
         self._sync_layout_sizes()
 
@@ -7325,6 +7415,7 @@ class MainWindow(QMainWindow):
             summary,
             running=self.kill_btn.isEnabled(),
         )
+        self._sync_keywords_page_controls()
         if not self.kill_btn.isEnabled():
             self.apply_btn.setEnabled(
                 summary.can_apply and not self._uses_revision_writeback()
@@ -7378,6 +7469,7 @@ class MainWindow(QMainWindow):
             )
         )
         self._sync_sync_translation_page_controls(running=running)
+        self._sync_keywords_page_controls(running=running)
         self._sync_task_shortcuts()
         self._sync_workbench_empty_states()
         self._sync_layout_sizes()

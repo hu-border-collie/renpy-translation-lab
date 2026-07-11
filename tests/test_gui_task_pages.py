@@ -204,11 +204,98 @@ class GuiTaskPageTests(unittest.TestCase):
         ):
             self.window._set_writeback_summary(summary)
 
-        self.assertFalse(self.window.keyword_merge_writeback_btn.isHidden())
-        self.assertTrue(self.window.keyword_merge_writeback_btn.isEnabled())
+        page = self.window.keywords_page
+        self.assertIs(self.window.workbench_stack.currentWidget(), page)
+        self.assertFalse(self.window.workbench_stack.isHidden())
+        self.assertTrue(self.window._mode_frame.isHidden())
+        self.assertTrue(self.window._workbench_actions_column.isHidden())
+        self.assertFalse(self.window.workbench_status_card.isHidden())
+        self.assertTrue(self.window.keyword_merge_writeback_btn.isHidden())
+        self.assertTrue(page.merge_btn.isEnabled())
         self.assertTrue(self.window.apply_revision_btn.isHidden())
         self.assertTrue(self.window.apply_btn.isHidden())
-        self.assertFalse(self.window.work_submode_combo.isHidden())
+        self.assertTrue(self.window.work_submode_combo.isHidden())
+
+    def test_keywords_page_uses_callbacks_and_local_mode_selector(self) -> None:
+        page = self.window.keywords_page
+        starts: list[bool] = []
+        resumes: list[bool] = []
+        stops: list[bool] = []
+        merges: list[bool] = []
+        selected: list[WorkMode] = []
+        page.set_action_callbacks(
+            WorkbenchPageActions(
+                start=lambda: starts.append(True),
+                resume=lambda: resumes.append(True),
+                stop=lambda: stops.append(True),
+                writeback=lambda: merges.append(True),
+                select_mode=selected.append,
+            )
+        )
+        page.activate(WorkMode.KEYWORD_EXTRACTION, WorkbenchModeSession())
+        page.set_controls(
+            start_enabled=True,
+            resume_enabled=True,
+            resume_visible=True,
+            resume_label="继续提取",
+            merge_enabled=True,
+            merge_message="关键词候选已就绪。",
+        )
+        page.start_btn.click()
+        page.resume_btn.click()
+        page.merge_btn.click()
+        page.set_task_running(True)
+        page.stop_btn.click()
+        page.set_task_running(False)
+        page.mode_combo.setCurrentIndex(
+            page.mode_combo.findData(WorkMode.SYNC_KEYWORD_EXTRACTION.value)
+        )
+
+        self.assertEqual(starts, [True])
+        self.assertEqual(resumes, [True])
+        self.assertEqual(merges, [True])
+        self.assertEqual(stops, [True])
+        self.assertEqual(selected, [WorkMode.SYNC_KEYWORD_EXTRACTION])
+
+    def test_keywords_page_mode_selector_switches_main_window(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.KEYWORD_EXTRACTION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.keywords_page
+        page.mode_combo.setCurrentIndex(
+            page.mode_combo.findData(WorkMode.SYNC_KEYWORD_EXTRACTION.value)
+        )
+
+        self.assertEqual(self.window._work_mode, WorkMode.SYNC_KEYWORD_EXTRACTION)
+        self.assertTrue(self.window.work_submode_combo.isHidden())
+        self.assertFalse(page.mode_combo.isHidden())
+
+    def test_keywords_page_mirrors_waiting_resume_and_running_lock(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.KEYWORD_EXTRACTION,
+            refresh_manifest_writeback=False,
+        )
+        workflow = mock.Mock()
+        step = mock.Mock()
+        step.key = "status"
+        workflow.current_step.return_value = step
+        workflow.manifest_path = ""
+        self.window._workflow = workflow
+        self.window._set_workflow_summary(
+            "waiting",
+            "正在等待云端结果",
+            "可查询状态。",
+        )
+        page = self.window.keywords_page
+
+        self.assertEqual(page.resume_btn.text(), "查询云端状态")
+        self.window._set_task_running(True)
+        self.assertFalse(page.mode_combo.isEnabled())
+        self.assertFalse(page.start_btn.isEnabled())
+        self.assertFalse(page.resume_btn.isEnabled())
+        self.assertFalse(page.merge_btn.isEnabled())
+        self.assertTrue(page.stop_btn.isEnabled())
 
     def test_revision_page_shows_apply_revision_not_translation_apply(self) -> None:
         self.window._set_work_mode(
@@ -390,8 +477,8 @@ class GuiTaskPageTests(unittest.TestCase):
                 "C:/kw/manifest.json",
             )
             # Snapshot should restore merge readiness without needing the file on disk.
-            self.assertFalse(self.window.keyword_merge_writeback_btn.isHidden())
-            self.assertTrue(self.window.keyword_merge_writeback_btn.isEnabled())
+            self.assertTrue(self.window.keyword_merge_writeback_btn.isHidden())
+            self.assertTrue(self.window.keywords_page.merge_btn.isEnabled())
 
     def test_roundtrip_revision_writeback_state(self) -> None:
         self.window._set_work_mode(
