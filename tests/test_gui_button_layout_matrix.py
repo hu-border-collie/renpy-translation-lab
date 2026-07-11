@@ -141,8 +141,8 @@ class GuiButtonLayoutMatrixTests(unittest.TestCase):
                         msg=f"stage={stage} {width}x{height}: {overlaps[:8]}",
                     )
 
-    def test_action_panel_stacks_on_typical_workbench_content_width(self) -> None:
-        # Window 960 with left nav leaves ~780–820 content width.
+    def test_action_panel_fits_single_row_without_prep_buttons(self) -> None:
+        # Project prep moved to the global bar; task actions are translate-only.
         self.window.resize(960, 700)
         self.window.show()
         for _ in range(6):
@@ -150,8 +150,9 @@ class GuiButtonLayoutMatrixTests(unittest.TestCase):
         self.window.action_panel.reflow(force=True)
         for _ in range(4):
             self._app.processEvents()
-        # Prefer stacked rows over a clipped single row at this density.
-        self.assertFalse(self.window.action_panel._is_wide)
+        self.assertEqual(self.window.action_panel._prep_buttons, [])
+        # Translate + 停止 fit a single row at typical workbench width.
+        self.assertTrue(self.window.action_panel._is_wide)
 
     def test_flow_bars_exist_for_main_strips(self) -> None:
         self.assertIsInstance(self.window.global_project_actions, FlowButtonBar)

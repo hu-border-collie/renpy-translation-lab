@@ -283,16 +283,10 @@ _DIAGNOSTICS_RUNNING_CONTEXT_RATIO = 0.32
 _WORKBENCH_LOG_DRAWER_EXPANDED_HEIGHT = 180
 _WORKBENCH_LOG_DRAWER_HEADER_HEIGHT = 40
 
-# Batch translation stages (P1b / issue #161) — maps to workbench_status_tabs indices.
-_BATCH_STAGE_PREPARE = 0
-_BATCH_STAGE_EXECUTE = 1
-_BATCH_STAGE_RESULT = 2
-_BATCH_STAGE_LABELS = ("准备", "执行", "结果")
-_BATCH_STAGE_HINTS = (
-    "环境检查与项目准备",
-    "打包、提交、下载与进度",
-    "安全检查与写回",
-)
+# Workbench status-tab indices (shared by all task pages).
+_BATCH_STAGE_PREPARE = 0  # 环境检查
+_BATCH_STAGE_EXECUTE = 1  # 进度
+_BATCH_STAGE_RESULT = 2  # 写回 / 结果
 
 _LOG_FLUSH_INTERVAL_MS = 80
 _LAYOUT_SYNC_DEBOUNCE_MS = 32
@@ -638,6 +632,22 @@ class MainWindow(QMainWindow):
         self.global_project_actions.add_widget(self.global_browse_project_btn, min_width=120)
         # Alias for existing enable/disable paths that still reference select_btn.
         self.select_btn = self.global_browse_project_btn
+
+        # Project-level prep lives with directory switch (not per-task action row).
+        self.doctor_btn = QPushButton("环境检查")
+        self.doctor_btn.setObjectName("secondary_btn")
+        self.doctor_btn.setToolTip("环境检查 (Ctrl+D)")
+        self.doctor_btn.clicked.connect(self._on_run_doctor)
+        self.global_project_actions.add_widget(self.doctor_btn, min_width=88)
+
+        self.bootstrap_work_btn = QPushButton("准备工作目录")
+        self.bootstrap_work_btn.setObjectName("secondary_btn")
+        self.bootstrap_work_btn.setToolTip(
+            "从 original/game 复制到 work/game（若已存在则按 CLI 规则跳过或更新）。"
+        )
+        self.bootstrap_work_btn.clicked.connect(self._on_bootstrap_work)
+        self.global_project_actions.add_widget(self.bootstrap_work_btn, min_width=108)
+
         self.global_project_actions.finish_setup()
         outer.addWidget(self.global_project_actions)
 
@@ -757,9 +767,6 @@ class MainWindow(QMainWindow):
         # Context library dual status cards (P1c / #162 · §3.2.5).
         layout.addWidget(self._build_context_library_panel())
 
-        # Stage strip above actions so it never collides with 高级工具 (P2a/P2b layout).
-        layout.addWidget(self._build_batch_stage_bar())
-
         action_frame = QFrame()
         action_frame.setObjectName("action_frame")
         self._action_frame = action_frame
@@ -768,15 +775,9 @@ class MainWindow(QMainWindow):
         action_outer.setSpacing(8)
         action_outer.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
-        # Left nav narrows the content column; stack action rows before buttons clip.
+        # Task actions only (project prep is on the global project bar).
         self.action_panel = ResponsiveActionPanel(compact_width=640)
         self.translate_group_label = self.action_panel.translate_label
-        self.doctor_btn = self.action_panel.add_prep_button(QPushButton("环境检查"))
-        self.doctor_btn.setObjectName("secondary_btn")
-        self.doctor_btn.clicked.connect(self._on_run_doctor)
-        self.bootstrap_work_btn = self.action_panel.add_prep_button(QPushButton("准备工作目录"))
-        self.bootstrap_work_btn.setObjectName("secondary_btn")
-        self.bootstrap_work_btn.clicked.connect(self._on_bootstrap_work)
         self.translate_btn = self.action_panel.add_translate_button(QPushButton("开始翻译"))
         self.translate_btn.setObjectName("translate_btn")
         self.translate_btn.clicked.connect(self._on_start_translation)
@@ -815,7 +816,7 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Minimum,
         )
         actions_column_layout.addWidget(action_frame)
-        # Batch · 执行 · 高级：试跑 / 拆分 (P2a / #164); 提交剩余包仍在主按钮行。
+        # Batch · 翻译进度 · 高级：试跑 / 拆分 (P2a / #164); 提交剩余包仍在主按钮行。
         actions_column_layout.addWidget(self._build_batch_advanced_tools_bar())
         layout.addWidget(actions_column)
 
@@ -824,14 +825,30 @@ class MainWindow(QMainWindow):
         self.timeline.setVisible(False)
         layout.addWidget(self.timeline)
 
+        # QTabWidget border-radius is unreliable on Windows; wrap in a card
+        # frame (same pattern as action_frame / mode_frame) for real rounded corners.
+        status_card = QFrame()
+        status_card.setObjectName("workbench_status_card")
+        self.workbench_status_card = status_card
+        self._style_themed_surface(status_card)
+        status_card.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        status_card_layout = QVBoxLayout(status_card)
+        status_card_layout.setContentsMargins(0, 0, 0, 0)
+        status_card_layout.setSpacing(0)
+
         self.workbench_status_tabs = NoWheelTabWidget()
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
+        self.workbench_status_tabs.setDocumentMode(True)
         self.workbench_status_tabs.setMinimumHeight(200)
         self.workbench_status_tabs.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Expanding,
         )
         self.workbench_status_tabs.currentChanged.connect(self._on_workbench_status_tab_changed)
+        status_card_layout.addWidget(self.workbench_status_tabs)
 
         doctor_tab = QWidget()
         doctor_tab.setObjectName("workbench_doctor_page")
@@ -1173,12 +1190,13 @@ class MainWindow(QMainWindow):
         self.workbench_status_tabs.addTab(writeback_tab, "写回")
 
         self.workbench_status_tabs.setCurrentIndex(_BATCH_STAGE_EXECUTE)
-        layout.addWidget(self.workbench_status_tabs, 1)
+        layout.addWidget(self.workbench_status_card, 1)
 
         layout.addWidget(self._build_workbench_log_drawer())
 
+        self._workbench_tab = tab
         self.tab_widget.addTab(tab, "工作台")
-        self._sync_batch_stage_chrome()
+        self._sync_workbench_status_chrome()
 
     def _build_batch_advanced_tools_bar(self) -> QFrame:
         """Batch execute advanced strip: probe + split (P2a / #164)."""
@@ -1316,15 +1334,11 @@ class MainWindow(QMainWindow):
             self.context_bootstrap_source_index_btn.setEnabled(not running and idx_on)
 
     def _apply_task_page_chrome(self, spec) -> None:
-        """Show/hide per-nav chrome: sync warn, context cards, prep buttons (P1c)."""
+        """Show/hide per-nav chrome: sync warn, context cards, task actions (P1c)."""
         mode = spec.mode
         nav = workbench_nav_for_work_mode(mode)
         is_sync = mode == WorkMode.SYNC_TRANSLATION
         is_context = nav == WorkbenchNavItem.CONTEXT
-        is_translation = mode in {
-            WorkMode.BATCH_TRANSLATION,
-            WorkMode.SYNC_TRANSLATION,
-        }
 
         if hasattr(self, "sync_mode_warning"):
             self.sync_mode_warning.setVisible(is_sync)
@@ -1333,10 +1347,7 @@ class MainWindow(QMainWindow):
             if is_context:
                 self._refresh_context_library_panel()
 
-        if hasattr(self, "doctor_btn"):
-            self.doctor_btn.setVisible(is_translation)
-        if hasattr(self, "bootstrap_work_btn"):
-            self.bootstrap_work_btn.setVisible(is_translation)
+        # Doctor / bootstrap live on the global project bar (always available).
 
         if hasattr(self, "translate_btn"):
             self.translate_btn.setVisible(not is_context)
@@ -1346,46 +1357,6 @@ class MainWindow(QMainWindow):
             reflow = getattr(self.action_panel, "reflow", None)
             if callable(reflow):
                 reflow(force=True)
-
-    def _build_batch_stage_bar(self) -> QFrame:
-        """Step strip for batch translation: 准备 → 执行 → 结果 (P1b / #161)."""
-        frame = QFrame()
-        frame.setObjectName("batch_stage_bar")
-        self.batch_stage_bar = frame
-        outer = QVBoxLayout(frame)
-        outer.setContentsMargins(10, 6, 10, 6)
-        outer.setSpacing(4)
-
-        row = QHBoxLayout()
-        row.setSpacing(6)
-        self._batch_stage_buttons: list[QPushButton] = []
-        self._batch_stage_button_group = QButtonGroup(frame)
-        self._batch_stage_button_group.setExclusive(True)
-        for index, label in enumerate(_BATCH_STAGE_LABELS):
-            btn = QPushButton(f"{index + 1}  {label}")
-            btn.setObjectName("batch_stage_btn")
-            btn.setCheckable(True)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(
-                lambda _checked=False, idx=index: self._on_batch_stage_clicked(idx)
-            )
-            self._batch_stage_button_group.addButton(btn, index)
-            row.addWidget(btn)
-            self._batch_stage_buttons.append(btn)
-            if index < len(_BATCH_STAGE_LABELS) - 1:
-                sep = QLabel("→")
-                sep.setObjectName("batch_stage_sep")
-                row.addWidget(sep)
-        row.addStretch(1)
-        outer.addLayout(row)
-
-        # Hint on its own row so stage buttons are never squeezed into each other.
-        self.batch_stage_hint = QLabel("")
-        self.batch_stage_hint.setObjectName("config_hint_label")
-        self.batch_stage_hint.setWordWrap(True)
-        outer.addWidget(self.batch_stage_hint)
-        frame.setVisible(False)
-        return frame
 
     def _build_workbench_log_drawer(self) -> QFrame:
         """Bottom collapsible log drawer for the workbench (shares log document with diagnostics)."""
@@ -1892,7 +1863,7 @@ class MainWindow(QMainWindow):
         diag_hint = QLabel(
             "上方可查看任务上下文、命令参考与任务记录；下方显示原始命令输出。"
             "工作台任务运行时默认留在工作台并展开底部日志抽屉；"
-            "试跑 / 拆分在「批量翻译 · 执行 · 高级工具」；"
+            "试跑 / 拆分在「批量翻译 · 翻译进度 · 高级工具」；"
             "术语合并在「关键词 / 术语」结果区；本页保留刷新、A/B 对比与清空日志。"
         )
         diag_hint.setWordWrap(True)
@@ -2118,6 +2089,14 @@ class MainWindow(QMainWindow):
             if scrollbar is not None:
                 scrollbar.setValue(scrollbar.maximum())
 
+    def _focus_workbench_main_tab(self) -> None:
+        """Switch the top-level shell to Workbench so prep progress is visible."""
+        workbench = getattr(self, "_workbench_tab", None)
+        if workbench is None or not hasattr(self, "tab_widget"):
+            return
+        if self.tab_widget.currentWidget() is not workbench:
+            self.tab_widget.setCurrentWidget(workbench)
+
     def _show_workbench_log_drawer(self) -> None:
         """Reveal CLI output on the workbench without switching the main tab.
 
@@ -2183,17 +2162,14 @@ class MainWindow(QMainWindow):
     def _focus_workbench_status_tab(self, index: int) -> None:
         if not (0 <= index < self.workbench_status_tabs.count()):
             return
-        # Avoid double chrome sync: currentChanged already calls _sync_batch_stage_chrome.
+        # Avoid double chrome sync: currentChanged already calls _sync_workbench_status_chrome.
         if self.workbench_status_tabs.currentIndex() == index:
-            self._sync_batch_stage_chrome(stage_index=index)
+            self._sync_workbench_status_chrome(stage_index=index)
             return
         self.workbench_status_tabs.setCurrentIndex(index)
 
     def _on_workbench_status_tab_changed(self, index: int) -> None:
-        self._sync_batch_stage_chrome(stage_index=index)
-
-    def _on_batch_stage_clicked(self, index: int) -> None:
-        self._focus_workbench_status_tab(index)
+        self._sync_workbench_status_chrome(stage_index=index)
 
     def _batch_stage_mode_active(self) -> bool:
         return self._current_work_mode() == WorkMode.BATCH_TRANSLATION
@@ -2206,38 +2182,22 @@ class MainWindow(QMainWindow):
             return _BATCH_STAGE_EXECUTE
         return max(_BATCH_STAGE_PREPARE, min(_BATCH_STAGE_RESULT, index))
 
-    def _sync_batch_stage_chrome(self, *, stage_index: int | None = None) -> None:
-        """Show/hide stage strip; in batch mode hide duplicate status tab bar."""
-        is_batch = self._batch_stage_mode_active()
-        if hasattr(self, "batch_stage_bar"):
-            self.batch_stage_bar.setVisible(is_batch)
-        if hasattr(self, "workbench_status_tabs"):
-            tab_bar = self.workbench_status_tabs.tabBar()
-            if tab_bar is not None:
-                # Stage strip replaces the flat three-tab chrome in batch mode.
-                tab_bar.setVisible(not is_batch)
-        if not is_batch or not hasattr(self, "_batch_stage_buttons"):
-            return
+    def _sync_workbench_status_chrome(self, *, stage_index: int | None = None) -> None:
+        """Sync tab-dependent chrome (batch advanced tools, result reflow)."""
         if stage_index is None:
             stage_index = self._current_batch_stage_index()
         stage_index = max(_BATCH_STAGE_PREPARE, min(_BATCH_STAGE_RESULT, stage_index))
-        for i, btn in enumerate(self._batch_stage_buttons):
-            active = i == stage_index
-            btn.setChecked(active)
-            btn.setProperty("active", "true" if active else "false")
-            style = btn.style()
-            if style is not None:
-                style.unpolish(btn)
-                style.polish(btn)
-        if hasattr(self, "batch_stage_hint"):
-            self.batch_stage_hint.setText(_BATCH_STAGE_HINTS[stage_index])
         self._sync_batch_advanced_tools_chrome(stage_index=stage_index)
-        # Result stage hosts writeback flow bars that may have reflowed while off-stage.
+        # Result tab hosts writeback flow bars that may have reflowed while off-tab.
         if stage_index == _BATCH_STAGE_RESULT:
             self._reflow_button_bars()
 
+    # Back-compat alias for older call sites / tests.
+    def _sync_batch_stage_chrome(self, *, stage_index: int | None = None) -> None:
+        self._sync_workbench_status_chrome(stage_index=stage_index)
+
     def _sync_batch_advanced_tools_chrome(self, *, stage_index: int | None = None) -> None:
-        """Show probe/split only on batch · 执行 (P2a / #164)."""
+        """Show probe/split only on batch translation · 翻译进度 (P2a / #164)."""
         if not hasattr(self, "batch_advanced_frame"):
             return
         is_batch = self._batch_stage_mode_active()
@@ -4090,7 +4050,7 @@ class MainWindow(QMainWindow):
                 return
 
     def _capture_mode_session(self) -> WorkbenchModeSession:
-        # Align with product default (执行) when tabs are unavailable.
+        # Align with product default (进度 tab) when tabs are unavailable.
         stage_index = _BATCH_STAGE_EXECUTE
         if hasattr(self, "workbench_status_tabs"):
             stage_index = self._current_batch_stage_index()
@@ -4591,14 +4551,10 @@ class MainWindow(QMainWindow):
             self.resume_btn.setText(spec.resume_button_label)
         self._update_resume_btn_text()
         self.resume_btn.setVisible(spec.supports_resume)
-        if spec.mode == WorkMode.BATCH_TRANSLATION:
-            self.workbench_status_tabs.setTabText(0, _BATCH_STAGE_LABELS[0])
-            self.workbench_status_tabs.setTabText(1, _BATCH_STAGE_LABELS[1])
-            self.workbench_status_tabs.setTabText(2, _BATCH_STAGE_LABELS[2])
-        else:
-            self.workbench_status_tabs.setTabText(0, "环境检查")
-            self.workbench_status_tabs.setTabText(1, spec.progress_tab_label)
-            self.workbench_status_tabs.setTabText(2, spec.writeback_tab_label)
+        # All task pages share the same three flat status tabs; labels vary by mode.
+        self.workbench_status_tabs.setTabText(0, "环境检查")
+        self.workbench_status_tabs.setTabText(1, spec.progress_tab_label)
+        self.workbench_status_tabs.setTabText(2, spec.writeback_tab_label)
         if spec.implemented:
             if spec.is_bootstrap and not self._bootstrap_task_ready(spec):
                 hint = bootstrap_disabled_message(spec.bootstrap_kind)
@@ -4678,7 +4634,7 @@ class MainWindow(QMainWindow):
             if pending_writeback is not None:
                 _try_restore_writeback_snapshot()
 
-        # Restore stage tab when returning to a page (batch: 准备/执行/结果).
+        # Restore status-tab index when returning to a page.
         pending_stage = getattr(self, "_pending_restore_stage_index", None)
         self._pending_restore_stage_index = None
         if (
@@ -4689,7 +4645,7 @@ class MainWindow(QMainWindow):
             blocked = self.workbench_status_tabs.blockSignals(True)
             self.workbench_status_tabs.setCurrentIndex(int(pending_stage))
             self.workbench_status_tabs.blockSignals(blocked)
-        self._sync_batch_stage_chrome()
+        self._sync_workbench_status_chrome()
 
         # Keep session bag aligned after UI refresh mutates active fields.
         self._mode_sessions[spec.mode] = self._capture_mode_session()
@@ -5768,10 +5724,13 @@ class MainWindow(QMainWindow):
         if self._is_doctor_running():
             return
 
+        # Global bar can launch from Settings/Diagnostics; show status on Workbench.
+        self._focus_workbench_main_tab()
         self._clear_log_view()
         self._active_command = "doctor"
         self._doctor_output_lines = []
         self._focus_workbench_status_tab(0)
+        self._show_workbench_log_drawer()
         self._set_doctor_summary(running_summary())
         self._append_log("=== 正在运行环境检查（collect_doctor_report）===\n")
         self._set_task_running(True)
@@ -5856,6 +5815,8 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Global bar can launch from Settings/Diagnostics; show status on Workbench.
+        self._focus_workbench_main_tab()
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._active_command = "bootstrap_work"
