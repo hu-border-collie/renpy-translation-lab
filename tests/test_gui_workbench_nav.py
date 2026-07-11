@@ -28,6 +28,7 @@ from gui_qt.work_modes import (
     workbench_nav_spec,
 )
 from gui_qt.workbench_session import WorkbenchModeSession
+from gui_qt.workbench import WorkbenchPage, WorkbenchPageActions
 from tests import gui_test_support
 
 
@@ -54,6 +55,12 @@ class WorkbenchNavMetaTests(unittest.TestCase):
     def test_keywords_nav_shows_submode(self) -> None:
         self.assertTrue(workbench_nav_spec(WorkbenchNavItem.KEYWORDS).show_submode)
         self.assertFalse(workbench_nav_spec(WorkbenchNavItem.BATCH_TRANSLATION).show_submode)
+
+    def test_page_contract_exposes_migration_boundary(self) -> None:
+        self.assertIn("supported_modes", WorkbenchPage.__annotations__)
+        for method in ("set_action_callbacks", "activate", "set_task_running", "reset_project"):
+            self.assertTrue(hasattr(WorkbenchPage, method))
+        self.assertIsNone(WorkbenchPageActions().start)
 
 
 class WorkbenchSessionTests(unittest.TestCase):
@@ -150,8 +157,24 @@ class GuiWorkbenchNavTests(unittest.TestCase):
         )
         self.assertTrue(self.window.work_submode_combo.isHidden())
 
+    def test_keywords_nav_restores_last_selected_submode_without_session_data(self) -> None:
+        self.window._set_work_mode(WorkMode.SYNC_KEYWORD_EXTRACTION, refresh_manifest_writeback=False)
+        self.window._set_work_mode(WorkMode.BATCH_TRANSLATION, refresh_manifest_writeback=False)
+        self.window.workbench_nav.setCurrentRow(WORKBENCH_NAV_ORDER.index(WorkbenchNavItem.KEYWORDS))
+        self.assertEqual(self.window._work_mode, WorkMode.SYNC_KEYWORD_EXTRACTION)
+
+    def test_revision_nav_restores_last_selected_submode_without_session_data(self) -> None:
+        self.window._set_work_mode(WorkMode.SYNC_REVISION, refresh_manifest_writeback=False)
+        self.window._set_work_mode(WorkMode.BATCH_TRANSLATION, refresh_manifest_writeback=False)
+        self.window.workbench_nav.setCurrentRow(WORKBENCH_NAV_ORDER.index(WorkbenchNavItem.REVISION))
+        self.assertEqual(self.window._work_mode, WorkMode.SYNC_REVISION)
+
     def test_game_root_switch_clears_sessions(self) -> None:
         """Drive real _switch_game_root wiring, not only the clear helper."""
+        self.window._set_work_mode(
+            WorkMode.SYNC_KEYWORD_EXTRACTION,
+            refresh_manifest_writeback=False,
+        )
         self.window._mode_sessions[WorkMode.KEYWORD_EXTRACTION] = WorkbenchModeSession(
             writeback_manifest_path="C:/keyword-old.json",
         )
@@ -176,13 +199,19 @@ class GuiWorkbenchNavTests(unittest.TestCase):
             ok = self.window._switch_game_root("C:/Games/Example/work")
 
         self.assertTrue(ok)
-        # Prior keyword session must not survive the root switch.
-        self.assertNotIn(WorkMode.KEYWORD_EXTRACTION, self.window._mode_sessions)
+        # The active keyword page receives a new stale session, never the old path.
+        keyword_session = self.window._mode_sessions[WorkMode.KEYWORD_EXTRACTION]
+        self.assertEqual(keyword_session.writeback_manifest_path, "")
         # Active mode is re-captured after clear; old writeback path must be gone.
         self.assertEqual(self.window._writeback_manifest_path, "")
         active = self.window._mode_sessions.get(self.window._work_mode)
         if active is not None:
             self.assertEqual(active.writeback_manifest_path, "")
+        self.assertEqual(
+            self.window._last_mode_by_nav[WorkbenchNavItem.KEYWORDS],
+            WorkMode.KEYWORD_EXTRACTION,
+        )
+        self.assertEqual(self.window._work_mode, WorkMode.KEYWORD_EXTRACTION)
 
 
 if __name__ == "__main__":
