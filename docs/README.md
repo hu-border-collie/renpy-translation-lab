@@ -22,7 +22,7 @@
 ### 现行：配置与 GUI
 
 - [安装与本地配置](setup.md)：`translator_config.json`、**按项目**的 `project_context_settings.json`、work 目录、SDK / TL 模板。
-- [GUI 工作台](gui_workbench.md)：当前 PySide6 界面（左导航五页、批量三阶段、设置分区、诊断与工具、写回安全边界）。
+- [GUI 工作台](gui_workbench.md)：当前 PySide6 界面（左导航五页、状态三栏、设置分区、诊断与工具、写回安全边界）。
 - [工作区项目总表](games_registry.md)：`games_registry.json` / `GAMES.md`、CLI 与 GUI 刷新边界。
 
 ### 现行：Batch、上下文与检查

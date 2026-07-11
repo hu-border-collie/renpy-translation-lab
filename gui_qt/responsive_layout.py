@@ -21,6 +21,7 @@ _CONTENT_WIDTH_OBJECT_NAMES = frozenset(
     {
         "workbench_writeback_page",
         "workbench_status_tabs",
+        "workbench_status_card",
         "workbench_page",
         "workbench_stack",
     }
@@ -186,26 +187,27 @@ class ResponsiveActionPanel(QFrame):
     def _estimated_wide_min_width(self) -> int:
         """Minimum width needed for a single-row layout without clipping."""
         spacing = 12
-        width = widget_layout_width(self.prep_label, fallback=64)
-        width += widget_layout_width(self.translate_label, fallback=64)
-        widgets = [
-            *self._prep_buttons,
-            *self._translate_buttons,
-            *self._translate_trailing,
-        ]
-        # Only count currently visible action buttons for the estimate.
-        visible = [w for w in widgets if w.isVisible() or not w.testAttribute(Qt.WidgetAttribute.WA_WState_Hidden)]
+        prep = [w for w in self._prep_buttons if not w.isHidden()]
+        translate = [w for w in self._translate_buttons if not w.isHidden()]
+        trailing = [w for w in self._translate_trailing if not w.isHidden()]
         # Before first show, isVisible() is false; treat non-explicitly-hidden as visible.
-        measured: list[QWidget] = []
-        for widget in widgets:
-            if widget.isHidden():
-                continue
-            measured.append(widget)
-        if not measured:
-            measured = list(widgets)
+        if not prep and not translate and not trailing:
+            prep = list(self._prep_buttons)
+            translate = list(self._translate_buttons)
+            trailing = list(self._translate_trailing)
+
+        width = 0
+        labels = 0
+        if prep:
+            width += widget_layout_width(self.prep_label, fallback=64)
+            labels += 1
+        if translate or trailing or not prep:
+            width += widget_layout_width(self.translate_label, fallback=64)
+            labels += 1
+        measured = [*prep, *translate, *trailing]
         for widget in measured:
             width += widget_layout_width(widget)
-        gaps = max(0, len(measured) + 2)
+        gaps = max(0, len(measured) + labels)
         width += spacing * gaps + 96
         return width
 
@@ -248,11 +250,14 @@ class ResponsiveActionPanel(QFrame):
             self._root.setSpacing(8)
             row = QHBoxLayout()
             row.setSpacing(12)
-            row.addWidget(self.prep_label)
-            for widget in prep:
-                row.addWidget(widget)
-            row.addWidget(_make_action_separator(vertical=True))
-            row.addWidget(self.translate_label)
+            if prep:
+                row.addWidget(self.prep_label)
+                for widget in prep:
+                    row.addWidget(widget)
+                if translate or trailing:
+                    row.addWidget(_make_action_separator(vertical=True))
+            if translate or trailing or not prep:
+                row.addWidget(self.translate_label)
             for widget in translate:
                 row.addWidget(widget)
             row.addStretch(1)
@@ -264,12 +269,16 @@ class ResponsiveActionPanel(QFrame):
 
         # Stacked: keep a clear vertical gap so themed 38px buttons never paint over.
         self._root.setSpacing(12)
-        prep_row = QHBoxLayout()
-        prep_row.setSpacing(12)
-        prep_row.addWidget(self.prep_label)
-        for widget in prep:
-            prep_row.addWidget(widget)
-        prep_row.addStretch(1)
+        if prep:
+            prep_row = QHBoxLayout()
+            prep_row.setSpacing(12)
+            prep_row.addWidget(self.prep_label)
+            for widget in prep:
+                prep_row.addWidget(widget)
+            prep_row.addStretch(1)
+            self._root.addLayout(prep_row)
+            if translate or trailing:
+                self._root.addWidget(_make_action_separator(vertical=False))
 
         translate_row = QHBoxLayout()
         translate_row.setSpacing(12)
@@ -279,9 +288,6 @@ class ResponsiveActionPanel(QFrame):
         translate_row.addStretch(1)
         for widget in trailing:
             translate_row.addWidget(widget)
-
-        self._root.addLayout(prep_row)
-        self._root.addWidget(_make_action_separator(vertical=False))
         self._root.addLayout(translate_row)
         self._sync_minimum_height()
 
@@ -290,8 +296,16 @@ class ResponsiveActionPanel(QFrame):
         hint = self._root.sizeHint()
         height = max(36, hint.height() if hint.isValid() else 0)
         if not self._is_wide:
-            # Two button rows + separator + spacings under QSS min-height.
-            height = max(height, 96)
+            prep = [w for w in self._prep_buttons if not w.isHidden()]
+            translate = [w for w in self._translate_buttons if not w.isHidden()]
+            trailing = [w for w in self._translate_trailing if not w.isHidden()]
+            if not prep and not translate and not trailing:
+                prep = list(self._prep_buttons)
+            if prep:
+                # Two button rows + separator + spacings under QSS min-height.
+                height = max(height, 96)
+            else:
+                height = max(height, 44)
         self.setMinimumHeight(height)
         self.updateGeometry()
         # Bubble size change so siblings (e.g. batch advanced tools) reflow below us.

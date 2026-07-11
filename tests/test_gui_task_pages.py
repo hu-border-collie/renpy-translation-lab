@@ -168,9 +168,24 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(self.window.context_library_panel.isHidden())
         self.assertTrue(self.window.work_submode_combo.isHidden())
         self.assertTrue(self.window.translate_btn.isHidden())
-        self.assertTrue(self.window.doctor_btn.isHidden())
+        # Doctor / bootstrap stay on the global project bar for every task page.
+        self.assertFalse(self.window.doctor_btn.isHidden())
+        self.assertFalse(self.window.bootstrap_work_btn.isHidden())
         self.assertIn("记忆库", self.window.context_rag_status_label.text())
         self.assertIn("原文索引", self.window.context_source_index_status_label.text())
+
+    def test_global_prep_buttons_visible_on_all_task_pages(self) -> None:
+        for mode in (
+            WorkMode.BATCH_TRANSLATION,
+            WorkMode.SYNC_TRANSLATION,
+            WorkMode.KEYWORD_EXTRACTION,
+            WorkMode.REVISION,
+            WorkMode.BOOTSTRAP_RAG,
+        ):
+            with self.subTest(mode=mode):
+                self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+                self.assertFalse(self.window.doctor_btn.isHidden())
+                self.assertFalse(self.window.bootstrap_work_btn.isHidden())
 
     def test_context_bootstrap_buttons_disabled_while_running(self) -> None:
         self.window._set_work_mode(

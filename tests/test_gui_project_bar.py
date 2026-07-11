@@ -42,9 +42,28 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         self.assertTrue(hasattr(self.window, "global_project_path_edit"))
         self.assertTrue(hasattr(self.window, "global_switch_project_btn"))
         self.assertTrue(hasattr(self.window, "global_browse_project_btn"))
+        # Project-level prep lives on the global bar with directory switch.
+        self.assertFalse(self.window.doctor_btn.isHidden())
+        self.assertFalse(self.window.bootstrap_work_btn.isHidden())
+        self.assertIs(
+            self.window.doctor_btn.parentWidget(),
+            self.window.global_project_actions,
+        )
+        self.assertIs(
+            self.window.bootstrap_work_btn.parentWidget(),
+            self.window.global_project_actions,
+        )
         # Legacy alias still points at browse control for enable/disable callers.
         self.assertIs(self.window.select_btn, self.window.global_browse_project_btn)
         self.assertIs(self.window.project_path_edit, self.window.global_project_path_edit)
+
+    def test_task_running_disables_global_prep_buttons(self) -> None:
+        self.window._set_task_running(True)
+        self.assertFalse(self.window.doctor_btn.isEnabled())
+        self.assertFalse(self.window.bootstrap_work_btn.isEnabled())
+        self.window._set_task_running(False)
+        self.assertTrue(self.window.doctor_btn.isEnabled())
+        self.assertTrue(self.window.bootstrap_work_btn.isEnabled())
 
     def test_refresh_project_label_updates_global_bar(self) -> None:
         self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]

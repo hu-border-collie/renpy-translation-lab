@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPalette, QResizeEvent
+from PySide6.QtGui import QFont, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -190,18 +190,11 @@ class EmptyStateWidget(QWidget):
             icon_color = tokens["fg_muted"]
             title_color = tokens["fg_secondary"]
             desc_color = tokens["fg_muted"]
-            bg = tokens.get("bg_surface") or tokens.get("bg_window") or ""
 
-            # Prefer palette fill over setStyleSheet on self — StyleChange would
-            # re-enter changeEvent and recurse.
-            if bg:
-                color = QColor(bg)
-                if color.isValid():
-                    for widget in (self, self._content):
-                        palette = widget.palette()
-                        palette.setColor(QPalette.ColorRole.Window, color)
-                        widget.setAutoFillBackground(True)
-                        widget.setPalette(palette)
+            # Stay transparent so parent rounded cards (e.g. workbench status)
+            # keep visible corner radius. Stacked pages already isolate siblings.
+            for widget in (self, self._content):
+                widget.setAutoFillBackground(False)
 
             self._icon_label.setStyleSheet(
                 f"color: {icon_color}; background: transparent;"

@@ -135,7 +135,7 @@ python gemini_translate_batch.py apply
 
 - 配置与运行
   - [安装与本地配置](docs/setup.md)：全局配置、**项目级**上下文开关、SDK / TL 模板。
-  - [GUI 工作台](docs/gui_workbench.md)：左导航五页、批量三阶段、设置分区、诊断与工具、写回安全边界。
+  - [GUI 工作台](docs/gui_workbench.md)：左导航五页、状态三栏、设置分区、诊断与工具、写回安全边界。
 - Batch 与安全
   - [Batch 工作流与安全检查](docs/batch_workflows.md)：manifest / identity v2、`check/apply`、订正、关键词、golden corpus。
   - [上下文系统](docs/context_systems.md)：RAG、原文索引、Story Memory、store 路径。
@@ -154,7 +154,7 @@ python gemini_translate_batch.py apply
 
 如果使用图形工作台，可按左导航选择流程：
 
-- **批量翻译**（已有 2026-06-19 真实项目烟测）：`选择项目 -> 设置 -> 准备(环境检查) -> 可选上下文库预建 -> 执行(开始翻译) -> 结果(检查/写回)`
+- **批量翻译**（已有 2026-06-19 真实项目烟测）：`选择项目 -> 设置 -> 环境检查 -> 可选上下文库预建 -> 翻译进度(开始翻译) -> 写回(检查/写回)`
 - **同步翻译**：即时调用 `gemini_translate.py`，无批量 `check/apply` 闸门（GUI 已实现，尚无独立真实项目烟测）
 - **关键词 / 术语**（批量|同步）：只生成报告，经「合并到 glossary」写入术语表（GUI 已实现，尚无独立真实项目烟测）
 - **订正**（批量|同步）：预览后通过「写回订正」单独写回，与普通翻译写回分离（GUI 已实现，尚无独立真实项目烟测）

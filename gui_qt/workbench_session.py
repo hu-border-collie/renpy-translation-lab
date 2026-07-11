@@ -19,7 +19,7 @@ class WorkbenchModeSession:
     completed_manifest_snapshot: dict[str, object] | None = None
     viewing_completed_manifest: bool = False
     keyword_merge_candidates_path: str = ""
-    # Workbench status-tab index (batch: 0=准备, 1=执行, 2=结果). Default 执行.
+    # Workbench status-tab index (0=环境检查, 1=进度, 2=写回/结果). Default 进度.
     stage_index: int = 1
     # UI snapshots so non-resume / offline modes do not fall back to blank idle.
     workflow_status: str = ""
