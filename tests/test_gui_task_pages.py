@@ -84,7 +84,7 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertEqual(page.start_btn.text(), "开始同步翻译")
         self.assertTrue(self.window.sync_mode_warning.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
-        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertFalse(self.window.workbench_status_card.isHidden())
         self.assertTrue(self.window.context_library_panel.isHidden())
 
     def test_sync_page_uses_start_stop_callbacks_and_owns_summary(self) -> None:
@@ -205,7 +205,7 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(self.window.workbench_stack.isHidden())
         self.assertTrue(self.window._mode_frame.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
-        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertFalse(self.window.workbench_status_card.isHidden())
         self.assertTrue(self.window.work_submode_combo.isHidden())
         self.assertTrue(self.window.translate_btn.isHidden())
         # Doctor / bootstrap stay on the global project bar for every task page.
@@ -270,10 +270,12 @@ class GuiTaskPageTests(unittest.TestCase):
             self.window._set_task_running(True)
             self.assertFalse(self.window.context_bootstrap_rag_btn.isEnabled())
             self.assertFalse(self.window.context_bootstrap_source_index_btn.isEnabled())
+            self.assertTrue(self.window.context_library_page.stop_btn.isEnabled())
             # Overlapping start must no-op while a task is already running.
             self.assertFalse(self.window._start_bootstrap_task("source_index"))
             self.window._set_task_running(False)
             self.assertTrue(self.window.context_bootstrap_rag_btn.isEnabled())
+            self.assertFalse(self.window.context_library_page.stop_btn.isEnabled())
 
     def test_roundtrip_keyword_candidates_and_merge_button(self) -> None:
         self.window._set_work_mode(

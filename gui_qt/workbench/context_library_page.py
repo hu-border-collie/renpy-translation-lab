@@ -71,7 +71,14 @@ class ContextLibraryPage(QFrame):
             "开关须在设置中保存后才能预建；打开设置的「上下文」分区。"
         )
         self.open_settings_btn.clicked.connect(self._trigger_open_settings)
-        status_layout.addWidget(self.open_settings_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.stop_btn = QPushButton("停止")
+        self.stop_btn.setObjectName("kill_btn")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self._trigger_stop)
+        action_row = QHBoxLayout()
+        action_row.addWidget(self.open_settings_btn)
+        action_row.addWidget(self.stop_btn)
+        status_layout.addLayout(action_row)
         status_layout.addStretch()
         self.page_stack.addWidget(self.status_page)
         self.page_stack.setCurrentWidget(self.empty_state)
@@ -161,6 +168,7 @@ class ContextLibraryPage(QFrame):
             not self._running and self._source_index_enabled
         )
         self.open_settings_btn.setEnabled(not self._running)
+        self.stop_btn.setEnabled(self._running)
 
     def _trigger_prebuild(self, kind: str) -> None:
         if self._running or self._actions.prebuild is None:
@@ -170,3 +178,7 @@ class ContextLibraryPage(QFrame):
     def _trigger_open_settings(self) -> None:
         if not self._running and self._actions.open_settings is not None:
             self._actions.open_settings()
+
+    def _trigger_stop(self) -> None:
+        if self._running and self._actions.stop is not None:
+            self._actions.stop()

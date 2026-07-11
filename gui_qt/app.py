@@ -713,6 +713,7 @@ class MainWindow(QMainWindow):
                     WorkbenchPageActions(
                         prebuild=self._on_context_bootstrap_clicked,
                         open_settings=self._on_open_context_settings,
+                        stop=self._on_kill,
                     )
                 )
                 self.context_library_page = page
@@ -1226,7 +1227,6 @@ class MainWindow(QMainWindow):
         self._legacy_workbench_shell_widgets = (
             self._mode_frame,
             self._workbench_actions_column,
-            self.workbench_status_card,
             self.workbench_log_drawer,
         )
 
