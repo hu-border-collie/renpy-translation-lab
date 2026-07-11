@@ -1,8 +1,16 @@
 import unittest
 
-from gui_qt.toast_widget import ToastNotification, ToastStyle
+try:
+    from gui_qt.toast_widget import ToastNotification, ToastStyle
+except ImportError as exc:
+    ToastNotification = None  # type: ignore[assignment]
+    ToastStyle = None  # type: ignore[assignment]
+    IMPORT_ERROR = exc
+else:
+    IMPORT_ERROR = None
 
 
+@unittest.skipIf(ToastNotification is None, f"GUI dependencies are unavailable: {IMPORT_ERROR}")
 class ToastWidgetTests(unittest.TestCase):
     def test_normalize_message_strips_leading_status_glyphs(self):
         self.assertEqual(
