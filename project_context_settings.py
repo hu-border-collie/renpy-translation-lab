@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
+import tempfile
 from typing import Any
 
 from project_asset_paths import canonical_abs_path
@@ -125,11 +125,26 @@ def save_project_context_settings(
             flags.get("bootstrap_on_build"), True
         ),
     }
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-    os.replace(tmp_path, path)
+    tmp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=parent,
+            prefix=f".{PROJECT_CONTEXT_SETTINGS_FILENAME}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            tmp_path = handle.name
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
     return path
 
 

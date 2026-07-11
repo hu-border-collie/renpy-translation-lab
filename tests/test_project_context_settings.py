@@ -44,6 +44,7 @@ class ProjectContextSettingsTests(unittest.TestCase):
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             self.assertFalse(data["batch_rag_enabled"])
             self.assertTrue(data["batch_source_index_enabled"])
+            self.assertEqual(list(root.glob(".project_context_settings.json.*.tmp")), [])
 
             global_config = {
                 "batch": {

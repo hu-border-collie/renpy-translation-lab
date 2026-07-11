@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from gui_qt.bootstrap_report import (
     BootstrapProgressState,
@@ -44,6 +45,14 @@ class GuiBootstrapReportTests(unittest.TestCase):
         self.assertTrue(flags["rag_enabled"])
         self.assertTrue(flags["source_index_enabled"])
         self.assertFalse(flags["bootstrap_on_build"])
+
+    def test_read_batch_context_flags_propagates_resolver_failures(self):
+        with mock.patch(
+            "project_context_settings.resolve_batch_context_flags",
+            side_effect=PermissionError("denied"),
+        ):
+            with self.assertRaises(PermissionError):
+                read_batch_context_flags({})
 
     def test_summarize_rag_bootstrap_output_marks_disabled(self):
         summary = summarize_rag_bootstrap_output(

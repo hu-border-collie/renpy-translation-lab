@@ -54,7 +54,7 @@ _ICON_TEXT: dict[ToastStyle, str] = {
 
 # Strip caller-supplied status glyphs so we never show icon + message glyph twice.
 _LEADING_STATUS_GLYPHS = re.compile(
-    r"^[\s✓✔✕✖❌⚠⚠️✘×!！]+",
+    r"^\s*(?:(?:✓|✔|✕|✖|❌|⚠️?|✘)\s*)+",
 )
 
 _SLIDE_OFFSET_PX = 20
@@ -137,7 +137,7 @@ class ToastNotification(QWidget):
     def _normalize_message(message: str) -> str:
         text = (message or "").strip()
         text = _LEADING_STATUS_GLYPHS.sub("", text).strip()
-        return text or message.strip()
+        return text
 
     def _setup_ui(self, message: str) -> None:
         """构建通知的内部布局。"""
@@ -170,15 +170,16 @@ class ToastNotification(QWidget):
             "  border: none;"
             "}"
         )
-        msg_label.setWordWrap(False)
+        msg_label.setWordWrap(True)
+        msg_label.setMaximumWidth(340)
         msg_label.setSizePolicy(
             QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Minimum,
         )
         layout.addWidget(msg_label)
 
         self.adjustSize()
-        # Keep short toasts compact; cap very long messages.
+        # Keep short toasts compact; wrap longer messages within the width cap.
         width = min(max(self.sizeHint().width(), 160), 420)
         self.setFixedWidth(width)
         self.adjustSize()

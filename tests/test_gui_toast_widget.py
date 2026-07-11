@@ -29,6 +29,18 @@ class ToastWidgetTests(unittest.TestCase):
             ToastNotification._normalize_message("XML 解析完成"),
             "XML 解析完成",
         )
+        self.assertEqual(
+            ToastNotification._normalize_message("!important notice"),
+            "!important notice",
+        )
+        self.assertEqual(
+            ToastNotification._normalize_message("× 3 retries"),
+            "× 3 retries",
+        )
+        self.assertEqual(
+            ToastNotification._normalize_message("✓"),
+            "",
+        )
 
     def test_icon_text_defined_for_all_styles(self):
         from gui_qt import toast_widget as mod

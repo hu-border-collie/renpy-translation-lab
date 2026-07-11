@@ -7,6 +7,7 @@ This is the first version shell (per #42):
 """
 from __future__ import annotations
 
+import copy
 import os
 import sys
 import re
@@ -8126,6 +8127,7 @@ class MainWindow(QMainWindow):
 
         try:
             config = self.state.load_translator_config()
+            original_config = copy.deepcopy(config)
             sync_config = self._ensure_config_section(config, "sync")
             batch_config = self._ensure_config_section(config, "batch")
             sync_rag_config = self._ensure_config_section(sync_config, "rag")
@@ -8197,16 +8199,30 @@ class MainWindow(QMainWindow):
             # avoids persisting project flags when the UI reports "未保存".
             from project_context_settings import save_project_context_settings
 
-            project_settings_path = save_project_context_settings(
-                self.state.get_game_root(),
-                project_context_flags,
-            )
+            # Write the global file first. If the project write then fails,
+            # restore the original global config so the two files commit together.
+            self.state.save_translator_config(config)
+            try:
+                project_settings_path = save_project_context_settings(
+                    self.state.get_game_root(),
+                    project_context_flags,
+                )
+            except Exception:
+                try:
+                    self.state.save_translator_config(original_config)
+                except Exception as rollback_exc:
+                    self._append_log(
+                        f"全局设置回滚失败，请检查 translator_config.json：{rollback_exc}"
+                    )
+                raise
             self._append_log(
                 f"当前项目上下文开关已保存：{project_settings_path}"
             )
-            self.state.save_translator_config(config)
             if not self._sync_state_game_root_from_settings(config.get("game_root")):
                 self._show_settings_status("设置已保存，但同步项目目录到工作台失败。", 6000)
+                self._append_log("设置已保存，但同步项目目录到工作台失败。")
+                self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
+                return True
             if work_mode_spec(self._current_work_mode()).is_bootstrap:
                 self._apply_work_mode_ui(refresh_manifest_writeback=False)
             self._append_log(
