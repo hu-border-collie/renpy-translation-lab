@@ -195,6 +195,24 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(tasks[0]['block_index'], 1)
         self.assertTrue(all(':sample_block:1:' in identity for identity in mapping))
 
+    def test_collect_tasks_with_progress_counts_finished_translation_targets(self):
+        lines = [
+            "translate schinese sample_block:\n",
+            "\n",
+            '    # e "Hello there."\n',
+            '    e "你好。"\n',
+            "\n",
+            '    # e "Goodbye now."\n',
+            '    e "Goodbye now."\n',
+        ]
+
+        tasks, progress = runtime.collect_tasks_with_progress(lines)
+
+        self.assertEqual([task["text"] for task in tasks], ["Goodbye now."])
+        self.assertEqual(progress, {"translated_count": 1})
+        self.assertEqual(runtime.collect_tasks(lines), tasks)
+
+
     def test_batch_non_chinese_allowance_accepts_say_speaker_label_item(self):
         line = '    "Terry" "Hello there." (ctc="ctc_blink", ctc_position="nestled")\n'
         start = line.index('"Terry"')

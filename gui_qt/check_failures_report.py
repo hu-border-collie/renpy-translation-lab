@@ -504,7 +504,7 @@ def build_check_issues_report(
             heading="检查报告无法解析",
             message=(
                 "找到了检查报告，但内容无法读取或解析。"
-                "请打开原始报告文件，或在诊断页查看完整日志。"
+                "请打开原始报告文件，或在诊断与工具查看完整日志。"
             ),
             report_path=report_path,
             safety_level=safety_level,
@@ -519,7 +519,7 @@ def build_check_issues_report(
     if not report_path and report_text is None:
         message = (
             "任务记录中没有检查报告路径，也无法从翻译包目录推断。"
-            "请重新检查，或到诊断页查看任务上下文。"
+            "请重新检查，或到诊断与工具查看任务上下文。"
         )
         if summary_groups:
             message = (

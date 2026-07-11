@@ -104,7 +104,7 @@ python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<pac
 
 `compare-variants` 用同一批 manifest chunk 在**同步模式**下跑多个配置变体，生成并排 Markdown 报告，**不会写回** `.rpy` 或 `glossary.json`。适合比较 Story Memory、RAG、macro setting 等上下文层对译文的影响。
 
-图形界面入口见 [GUI 工作台 · 翻译 A/B 对比](gui_workbench.md#翻译-ab-对比)：诊断页工具栏按钮，通过对话框选择 baseline 与 Story Memory / RAG / 原文索引 的强制开/关变体，无需手写 `variants.json`。
+图形界面入口见 [GUI 工作台 · 翻译 A/B 对比](gui_workbench.md#翻译-ab-对比)：在顶层「诊断与工具」页工具栏打开，通过对话框选择 baseline 与 Story Memory / RAG / 原文索引的强制开/关变体，无需手写 `variants.json`。
 
 ```bash
 python gemini_translate_batch.py compare-variants logs/batch_jobs/<package>/manifest.json \

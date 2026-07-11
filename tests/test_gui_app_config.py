@@ -1,4 +1,6 @@
+import copy
 import unittest
+from unittest import mock
 from pathlib import Path
 
 try:
@@ -450,13 +452,13 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(flags["rag_enabled"])
         self.assertFalse(flags["source_index_enabled"])
 
-    def test_save_config_persists_context_storage_location(self):
+    def test_save_config_persists_context_storage_and_rolls_back_on_project_failure(self):
         from gui_qt.work_modes import WorkMode
 
         saved_configs = []
         config = {
             "sync": {"rag": {}},
-            "batch": {"rag": {}, "source_index": {}, "model": "gemini-3.1-flash-lite"},
+            "batch": {"rag": {"enabled": False}, "source_index": {"enabled": True}, "model": "gemini-3.1-flash-lite"},
         }
 
         class FakeState:
@@ -467,7 +469,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def load_translator_config(self):
                 return config
             def save_translator_config(self, saved_config):
-                saved_configs.append(saved_config)
+                saved_configs.append(copy.deepcopy(saved_config))
 
         class FakeCheckBox:
             def __init__(self, checked):
@@ -504,14 +506,40 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._refresh_project_label = lambda: None
         self.window.statusBar = lambda: FakeStatusBar()
 
-        saved = self.window._on_save_config()
+        with mock.patch("project_context_settings.save_project_context_settings") as save_project:
+            saved = self.window._on_save_config()
 
         self.assertTrue(saved)
         self.assertEqual(len(saved_configs), 1)
         self.assertEqual(saved_configs[0]["context_storage"]["location"], "game")
         self.assertEqual(saved_configs[0]["context_storage"]["game_dir_name"], "translation_context")
-        self.assertTrue(saved_configs[0]["batch"]["rag"]["enabled"])
+        save_project.assert_called_once_with(
+            Path("C:/Game/work"),
+            {
+                "rag_enabled": True,
+                "source_index_enabled": True,
+                "bootstrap_on_build": False,
+            },
+        )
+        # Legacy global values remain fallback defaults for projects without
+        # project_context_settings.json; this project's values live in save_project.
+        self.assertFalse(saved_configs[0]["batch"]["rag"]["enabled"])
         self.assertTrue(saved_configs[0]["batch"]["source_index"]["enabled"])
+
+        saved_configs.clear()
+        self.window.context_storage_game_cb = FakeCheckBox(False)
+        with (
+            mock.patch(
+                "project_context_settings.save_project_context_settings",
+                side_effect=OSError("project write failed"),
+            ),
+            mock.patch("gui_qt.app.QMessageBox.warning"),
+        ):
+            saved = self.window._on_save_config()
+        self.assertFalse(saved)
+        self.assertEqual(saved_configs[0]["context_storage"]["location"], "tool")
+        self.assertEqual(len(saved_configs), 2)
+        self.assertEqual(saved_configs[1]["context_storage"]["location"], "game")
 
     def test_save_config_preserves_legacy_context_storage_dir_name(self):
         from gui_qt.work_modes import WorkMode
@@ -568,7 +596,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._refresh_project_label = lambda: None
         self.window.statusBar = lambda: FakeStatusBar()
 
-        saved = self.window._on_save_config()
+        with mock.patch("project_context_settings.save_project_context_settings"):
+            saved = self.window._on_save_config()
 
         self.assertTrue(saved)
         self.assertEqual(saved_configs[0]["context_storage"]["game_dir_name"], "my_context")
@@ -662,7 +691,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._append_log = lambda _text: None
         self.window.statusBar = lambda: FakeStatusBar()
 
-        saved = self.window._on_save_config()
+        with mock.patch("project_context_settings.save_project_context_settings"):
+            saved = self.window._on_save_config()
 
         self.assertTrue(saved)
         self.assertEqual(len(saved_configs), 1)
@@ -767,10 +797,12 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._append_log = lambda _text: None
         self.window.statusBar = lambda: status_bar
 
-        saved = self.window._on_save_config()
+        with mock.patch("project_context_settings.save_project_context_settings") as save_project:
+            saved = self.window._on_save_config()
 
         self.assertFalse(saved)
         self.assertEqual(saved_configs, [])
+        save_project.assert_not_called()
         self.assertIn("不能为空", error_label.text)
         self.assertEqual(nav.row, 6)
         self.assertTrue(invalid_widget.focused)

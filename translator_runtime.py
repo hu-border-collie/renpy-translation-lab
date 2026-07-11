@@ -3555,11 +3555,16 @@ def scan_all_translation_units(lines, file_rel_path, mode=translation_core.MODE_
     return mapping
 
 
-def collect_tasks(lines, skip_translated=True):
+def collect_tasks_with_progress(lines, skip_translated=True):
     # Logic to parse Ren'Py files
     # Note: caller handles filename lookup, this function just parses
+    #
+    # Returns (pending_tasks, progress) where progress includes:
+    # - translated_count: identity-bearing targets that already contain Chinese
+    #   (same heuristic as skip_translated / batch pending collection)
 
     tasks = []
+    translated_count = 0
     # Detect Ren'Py translation files so we can protect `old` entries.
     is_translation_file = any(
         line.lstrip().startswith("translate ")
@@ -3645,6 +3650,14 @@ def collect_tasks(lines, skip_translated=True):
                 )
                 block_index += 1
                 if not should_translate:
+                    # Count finished units so doctor can show translated vs pending.
+                    if (
+                        skip_translated
+                        and is_translation_file
+                        and source_marker is not None
+                        and contains_chinese(text_val)
+                    ):
+                        translated_count += 1
                     continue
 
                 task_id = translation_core.build_identity_v2(
@@ -3681,6 +3694,11 @@ def collect_tasks(lines, skip_translated=True):
         except Exception:
             continue
 
+    return tasks, {"translated_count": translated_count}
+
+
+def collect_tasks(lines, skip_translated=True):
+    tasks, _progress = collect_tasks_with_progress(lines, skip_translated=skip_translated)
     return tasks
 
 def run_translation():

@@ -41,7 +41,7 @@ def translation_probe_ready(
     if not manifest_path.strip():
         return False, "没有可探测的翻译任务记录。"
     if manifest is None:
-        return False, "无法读取任务记录，请先在诊断页刷新上下文。"
+        return False, "无法读取任务记录，请先在诊断与工具刷新上下文。"
     mode = manifest.get("mode")
     mode_text = mode.strip() if isinstance(mode, str) else _MANIFEST_MODE_TRANSLATION
     if mode_text != _MANIFEST_MODE_TRANSLATION:

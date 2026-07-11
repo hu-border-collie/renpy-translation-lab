@@ -73,21 +73,14 @@ def coerce_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
-def read_batch_context_flags(config: dict[str, Any]) -> dict[str, bool]:
-    batch = config.get("batch")
-    if not isinstance(batch, dict):
-        batch = {}
-    rag = batch.get("rag")
-    if not isinstance(rag, dict):
-        rag = {}
-    source_index = batch.get("source_index")
-    if not isinstance(source_index, dict):
-        source_index = {}
-    return {
-        "rag_enabled": coerce_bool(rag.get("enabled"), False),
-        "source_index_enabled": coerce_bool(source_index.get("enabled"), False),
-        "bootstrap_on_build": coerce_bool(rag.get("bootstrap_on_build"), True),
-    }
+def read_batch_context_flags(
+    config: dict[str, Any],
+    game_root: str | None = None,
+) -> dict[str, bool]:
+    """Effective batch context flags (global defaults + per-project overrides)."""
+    from project_context_settings import resolve_batch_context_flags
+
+    return resolve_batch_context_flags(config, game_root)
 
 
 def _parse_summary_values(output: str, header: str) -> dict[str, str]:
@@ -373,7 +366,10 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
             kind="rag",
             status="warning",
             heading="记忆库未启用",
-            message="请先在配置页启用记忆库并保存配置，再运行预建记忆库。",
+            message=(
+                "请先在「设置 · 上下文」启用记忆库并保存设置，"
+                "再到左侧「上下文库」运行预建记忆库。"
+            ),
             facts=[],
             findings=[],
         )

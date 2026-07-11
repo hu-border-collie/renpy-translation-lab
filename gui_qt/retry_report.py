@@ -120,7 +120,10 @@ def parse_build_retry_output(output: str, exit_code: int) -> BuildRetryResult:
     return BuildRetryResult(
         status="ok",
         heading="补译包已生成",
-        message="请预览影响范围并确认后，可点击写回页「继续补译」提交并合并结果。",
+        message=(
+            "请预览影响范围并确认后，可在「批量翻译 · 结果」的「问题处理」中"
+            "点击「继续补译」提交并合并结果。"
+        ),
         retry_manifest_path=retry_manifest_path,
         package_dir=package_dir,
     )
@@ -202,7 +205,7 @@ def summarize_retry_manifest(
         heading="补译包预览",
         message=(
             "请确认影响范围后再继续。"
-            "界面不会自动提交补译任务；确认后可点击写回页「继续补译」编排后续步骤。"
+            "界面不会自动提交补译任务；确认后可在「问题处理」中点击「继续补译」编排后续步骤。"
         ),
         facts=facts,
         detail_lines=detail_lines,

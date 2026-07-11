@@ -282,7 +282,7 @@ class TranslationWorkflow:
             extra_facts.append("建议：检查高级设置中的提交成本上限，或先运行 split 拆包。")
         elif key in {"submit", "recover-submit"} and output_blocked_by_uncertain_submit(output):
             message = uncertain_submit_failure_message(output)
-            extra_facts.append("建议：在诊断页运行 recover-submit，或按提示使用 --resume / --force。")
+            extra_facts.append("建议：在诊断与工具运行 recover-submit，或按提示使用 --resume / --force。")
         elif key == "submit" and output_has_quota_error(output):
             message = (
                 "提交云端任务时命中配额或资源限制。当前批量包可能过大，"

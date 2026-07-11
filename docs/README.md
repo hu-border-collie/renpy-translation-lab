@@ -1,42 +1,61 @@
 # 文档地图
 
-根目录 `README.md` 保持快速上手和项目定位；本目录收纳配置、Batch 流程、上下文系统、GUI、分析工具和项目边界等专题说明。
+根目录 `README.md` 负责快速上手和项目定位；本目录收纳配置、Batch、上下文、GUI 与项目边界等专题说明。
 
-## 推荐阅读顺序
+**读文档时**：用户手册以「现行」一组为准；标为历史的文稿只作设计/审计背景，不要当当前界面说明。
 
-- 只想先跑通一次 CLI 翻译：先读根目录 `README.md`，再读 [安装与本地配置](setup.md) 和 [Batch 工作流与安全检查](batch_workflows.md)。
-- 想用图形界面：先读 [GUI 工作台](gui_workbench.md)，再按需回看 [安装与本地配置](setup.md)。
-- 想了解或参与 GUI 信息架构重组：读 [GUI 信息架构重组计划](gui_ia_redesign.md)。
-- 想管理工作区内多个游戏项目总表：读 [工作区项目总表](games_registry.md)。
-- 想了解环境检查为何给出建议、如何扩展建议规则：读 [环境检查智能建议机制](doctor_recommendations.md)。
-- 想启用 RAG、原文索引或剧情图谱：读 [上下文系统](context_systems.md)。
-- 想做角色关系或语义分析：读 [关系与语义分析](relation_analysis.md)，内部模块见 [`relation_analyzer/README.md`](../relation_analyzer/README.md)。
-- 想确认项目成熟度、边界和安全注意事项：读 [项目说明](project_notes.md)。
-- 想参与改动或让 AI 按仓库规则开发：读根目录 [CONTRIBUTING.md](../CONTRIBUTING.md)（含 **CLI / GUI 同步** 约定）。
+## 推荐阅读（现行）
+
+| 你想… | 读 |
+|---|---|
+| 先跑通 CLI 翻译 | 根目录 `README.md` → [安装与本地配置](setup.md) → [Batch 工作流与安全检查](batch_workflows.md) |
+| 使用图形界面 | [GUI 工作台](gui_workbench.md) → 按需回看 [setup.md](setup.md) |
+| 多游戏工作区总表 | [工作区项目总表](games_registry.md) |
+| 理解环境检查建议 | [环境检查智能建议机制](doctor_recommendations.md) · [状态矩阵](doctor_states_matrix.md) |
+| 启用 RAG / 原文索引 / 剧情记忆 | [上下文系统](context_systems.md) · [setup.md](setup.md) 中的项目级开关 |
+| 角色关系 / 语义分析 | [关系与语义分析](relation_analysis.md) · [`relation_analyzer/README.md`](../relation_analyzer/README.md) |
+| 项目边界与安全 | [项目说明](project_notes.md) |
+| 参与开发 / AI 协作 | 根目录 [CONTRIBUTING.md](../CONTRIBUTING.md)（含 **CLI / GUI 同步**） |
 
 ## 文档分组
 
-### 配置与运行
+### 现行：配置与 GUI
 
-- [安装与本地配置](setup.md)：本地私有配置、游戏 `work` 目录、Ren'Py SDK / TL 模板和运行模式。
-- [GUI 工作台](gui_workbench.md)：可选 PySide6 图形界面（左导航任务页、全局项目栏、日志抽屉、批量三阶段、写回安全边界与诊断工具）。
-- [GUI 信息架构重组计划](gui_ia_redesign.md)：P0–P3 分阶段交付 SSOT（**P0–P1 已落地**；P2/P3 进行中时以该文档为准）。
-- [工作区项目总表](games_registry.md)：`games_registry.json` 与 `GAMES.md`、CLI / GUI 刷新、与写回和 environment check 的边界。
-- [环境检查智能建议机制](doctor_recommendations.md)：doctor 建议的事实模型、等级、优先级、结构化协议与测试要求。
+- [安装与本地配置](setup.md)：`translator_config.json`、**按项目**的 `project_context_settings.json`、work 目录、SDK / TL 模板。
+- [GUI 工作台](gui_workbench.md)：当前 PySide6 界面（左导航五页、批量三阶段、设置分区、诊断与工具、写回安全边界）。
+- [工作区项目总表](games_registry.md)：`games_registry.json` / `GAMES.md`、CLI 与 GUI 刷新边界。
 
-### Batch 与安全
+### 现行：Batch、上下文与检查
 
-- [Batch 工作流与安全检查](batch_workflows.md)：命令注意事项、`check/apply` 安全闸门、订正、关键词提取、manifest identity v2 和 golden corpus 测试。
-- [上下文系统](context_systems.md)：RAG history store、Batch source-only index、Structured Story Memory 和 RAG store benchmark。
+- [Batch 工作流与安全检查](batch_workflows.md)：`build → apply`、订正、关键词、identity v2、A/B、golden corpus。
+- [上下文系统](context_systems.md)：RAG、原文索引、Story Memory、store 路径与 benchmark。
+- [环境检查智能建议机制](doctor_recommendations.md)：建议等级、必需/可选并列、workflow_state。
+- [环境检查状态矩阵](doctor_states_matrix.md)：layout / pending / 上下文派生字段与决策漏斗（开发对照）。
 
-### 分析与项目状态
+### 现行：分析与项目状态
 
-- [关系与语义分析](relation_analysis.md)：`extract_relations.py` 的 relation / semantic 模式和 Story Memory seed 导出。
-- [项目说明](project_notes.md)：环境要求、当前边界、项目状态、安全说明和适用人群。
-- [CONTRIBUTING.md](../CONTRIBUTING.md)：贡献与开发约定（CLI / GUI 同步、完成定义、测试要求）。
+- [关系与语义分析](relation_analysis.md)
+- [项目说明](project_notes.md)
+- [story_graph.example.json](story_graph.example.json) · [story_graph.schema.json](story_graph.schema.json)
 
-### 相邻参考
+### 历史参考（非现行用户手册）
 
-- [`relation_analyzer/README.md`](../relation_analyzer/README.md)：关系分析模块内部划分。
-- [`macro_setting.example.md`](../macro_setting.example.md)：Batch macro setting 模板。
-- [`story_graph.example.json`](story_graph.example.json) 与 [`story_graph.schema.json`](story_graph.schema.json)：Structured Story Memory 示例和 schema。
+下列文档**保留为过程与审计记录**，界面与交付状态以 [GUI 工作台](gui_workbench.md) 和代码为准。
+
+- [GUI 信息架构重组计划](gui_ia_redesign.md)：Epic #157 的 P0–P3 设计 SSOT；**P0a–P3 已合并**。文中「分析与准备」「诊断页」等多为改造前用语。
+- [翻译全生命周期审计](translation_workflow_audit.md)：流水线与门禁的代码审计快照，可能落后于最新实现细节。
+
+## 配置分层（速查）
+
+| 范围 | 文件 | 典型内容 |
+|---|---|---|
+| 工具全局 | `translator_config.json`、`api_keys.json` | `game_root`、模型、chunk、SDK、RAG/索引的**默认** |
+| **当前项目** | `<work>/project_context_settings.json` | 是否启用批量 RAG、原文索引、build 时暖库 |
+| 项目资产 | `<work>/glossary.json`、`macro_setting.md` 等 | 术语、口吻 |
+| 工作区总表 | 工作区根 `games_registry.json` | 多游戏进度（非 lab 仓库内默认） |
+
+## 维护约定
+
+- 改 GUI 入口名称或设置分区时，**同步改** `gui_workbench.md` 与 `gui_qt/user_copy.py` 中的用户文案。
+- 改 doctor 规则时，同步 `doctor_recommendations.md` 与测试。
+- 历史文稿只加状态横幅、不整篇改写成新手册，避免与「现行」重复维护。

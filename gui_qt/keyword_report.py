@@ -34,7 +34,7 @@ def summarize_keyword_export_output(output: str, exit_code: int) -> WorkflowUpda
     raw = int(candidate_match.group(2))
     message = (
         f"已导出 {deduped} 个去重候选（原始 {raw} 个）。"
-        "报告不修改游戏脚本，完整路径可在诊断页复制。"
+        "报告不修改游戏脚本，完整路径可在诊断与工具复制。"
     )
     return WorkflowUpdate(
         status="done",
@@ -80,7 +80,7 @@ def summarize_keyword_result_from_manifest(manifest: dict[str, object]) -> Write
     return WritebackSummary(
         status="safe",
         heading="关键词报告已生成",
-        message="批量关键词任务已完成；报告不会修改游戏脚本，可在诊断页复制完整路径。",
+        message="批量关键词任务已完成；报告不会修改游戏脚本，可在诊断与工具复制完整路径。",
         facts=facts,
         findings=[],
         can_apply=False,
@@ -123,7 +123,7 @@ def summarize_sync_keyword_output(output: str, exit_code: int) -> WorkflowUpdate
     raw = int(candidate_match.group(2)) if candidate_match else 0
     message = (
         f"同步关键词提取已完成，导出 {deduped} 个去重候选（原始 {raw} 个）。"
-        "报告不修改游戏脚本，完整路径可在诊断页复制。"
+        "报告不修改游戏脚本，完整路径可在诊断与工具复制。"
     )
     return WorkflowUpdate(
         status="done",

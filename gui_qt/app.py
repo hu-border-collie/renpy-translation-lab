@@ -7,6 +7,7 @@ This is the first version shell (per #42):
 """
 from __future__ import annotations
 
+import copy
 import os
 import sys
 import re
@@ -1405,7 +1406,7 @@ class MainWindow(QMainWindow):
         self.workbench_log_open_diagnostics_btn = QPushButton("在诊断中打开")
         self.workbench_log_open_diagnostics_btn.setObjectName("secondary_btn")
         self.workbench_log_open_diagnostics_btn.setToolTip(
-            "打开诊断页查看任务上下文、命令参考与完整日志布局。"
+            "打开诊断与工具查看任务上下文、命令参考与完整日志布局。"
         )
         self.workbench_log_open_diagnostics_btn.clicked.connect(
             self._on_open_diagnostics_from_log_drawer
@@ -1652,20 +1653,21 @@ class MainWindow(QMainWindow):
         context_box, context_layout = self._settings_group("批量上下文")
 
         context_hint = QLabel(
-            "启用后先保存设置，再到工作台「上下文库」页运行预建。"
-            "记忆库使用已有译文；原文索引只使用翻译模板里的原文；均不修改游戏脚本。"
+            "下列三项按【当前项目】保存（work/project_context_settings.json），"
+            "切换游戏不会互相覆盖。启用后先保存设置，再到工作台「上下文库」页预建。"
+            "记忆库用已有译文；原文索引只用模板原文；均不修改游戏脚本。"
         )
         context_hint.setWordWrap(True)
         context_hint.setObjectName("config_hint_label")
         context_layout.addWidget(context_hint)
 
-        self.rag_enabled_cb = QCheckBox("启用 RAG 记忆库（批量）")
+        self.rag_enabled_cb = QCheckBox("启用 RAG 记忆库（批量，当前项目）")
         context_layout.addWidget(self.rag_enabled_cb)
 
-        self.source_index_enabled_cb = QCheckBox("启用原文索引")
+        self.source_index_enabled_cb = QCheckBox("启用原文索引（当前项目）")
         context_layout.addWidget(self.source_index_enabled_cb)
 
-        self.bootstrap_on_build_cb = QCheckBox("开始翻译时自动暖 RAG 库")
+        self.bootstrap_on_build_cb = QCheckBox("开始翻译时自动暖 RAG 库（当前项目）")
         context_layout.addWidget(self.bootstrap_on_build_cb)
 
         self.context_storage_game_cb = QCheckBox("上下文库保存到游戏目录")
@@ -3369,7 +3371,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "无法继续补译",
-                "补译流程暂无后续步骤；可查看诊断页任务上下文确认状态。",
+                "补译流程暂无后续步骤；可查看诊断与工具任务上下文确认状态。",
             )
             return False
 
@@ -3717,7 +3719,7 @@ class MainWindow(QMainWindow):
             glossary_path=glossary_path,
         )
         self.keyword_merge_btn.setEnabled(not running and ready)
-        primary_hint = "主入口在工作台写回/结果区。"
+        primary_hint = "主入口在工作台「关键词 / 术语」结果区。"
         if ready:
             self.keyword_merge_btn.setToolTip(
                 f"{primary_hint} 勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。",
@@ -5903,8 +5905,18 @@ class MainWindow(QMainWindow):
         self._set_task_running(True)
         self.runner.run(self.state.get_batch_script_path(), ["generate-template"])
 
+    def _game_root_str_for_flags(self) -> str | None:
+        """Resolve current game_root for project-scoped context flags (defensive)."""
+        state = getattr(self, "state", None)
+        get_game_root = getattr(state, "get_game_root", None)
+        game_root = get_game_root() if callable(get_game_root) else None
+        return str(game_root) if game_root else None
+
     def _saved_batch_context_flags(self) -> dict[str, bool]:
-        return read_batch_context_flags(self.state.load_translator_config())
+        return read_batch_context_flags(
+            self.state.load_translator_config(),
+            game_root=self._game_root_str_for_flags(),
+        )
 
     def _submit_max_cost_from_config(self) -> float | None:
         load_config = getattr(self.state, "load_translator_config", None)
@@ -7560,7 +7572,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(
                     self,
                     "同步修补完成",
-                    "修补已写入翻译文件。请点击写回页的「重新检查」更新检查结果，"
+                    "修补已写入翻译文件。请在「批量翻译 · 结果」的「问题处理」中"
+                    "点击「重新检查」更新检查结果，"
                     "显示「可写回」后再决定是否写入项目。",
                 )
             elif parsed.status == "warn":
@@ -8029,7 +8042,10 @@ class MainWindow(QMainWindow):
             batch_config = self._config_section(config, "batch")
             sync_rag_config = self._config_section(sync_config, "rag")
             batch_rag_config = self._config_section(batch_config, "rag")
-            context_flags = read_batch_context_flags(config)
+            context_flags = read_batch_context_flags(
+                config,
+                game_root=self._game_root_str_for_flags(),
+            )
             self.rag_enabled_cb.setChecked(context_flags["rag_enabled"])
             self.source_index_enabled_cb.setChecked(context_flags["source_index_enabled"])
             self.bootstrap_on_build_cb.setChecked(context_flags["bootstrap_on_build"])
@@ -8112,6 +8128,7 @@ class MainWindow(QMainWindow):
 
         try:
             config = self.state.load_translator_config()
+            original_config = copy.deepcopy(config)
             sync_config = self._ensure_config_section(config, "sync")
             batch_config = self._ensure_config_section(config, "batch")
             sync_rag_config = self._ensure_config_section(sync_config, "rag")
@@ -8132,9 +8149,13 @@ class MainWindow(QMainWindow):
                 )
                 or "translation_context"
             )
-            batch_rag_config["enabled"] = self.rag_enabled_cb.isChecked()
-            batch_rag_config["bootstrap_on_build"] = self.bootstrap_on_build_cb.isChecked()
-            batch_source_index_config["enabled"] = self.source_index_enabled_cb.isChecked()
+            # RAG / source-index / bootstrap_on_build are per-project only.
+            # Do not write them into the global translator_config.json.
+            project_context_flags = {
+                "rag_enabled": self.rag_enabled_cb.isChecked(),
+                "source_index_enabled": self.source_index_enabled_cb.isChecked(),
+                "bootstrap_on_build": self.bootstrap_on_build_cb.isChecked(),
+            }
 
             sync_model = self.sync_model_combo.currentText().strip()
             sync_config["model"] = sync_model
@@ -8175,14 +8196,42 @@ class MainWindow(QMainWindow):
                 self._clear_advanced_setting_errors()
                 apply_advanced_settings(config, complete_advanced_values)
 
+            # Validate every field before either settings file is written. This
+            # avoids persisting project flags when the UI reports "未保存".
+            from project_context_settings import save_project_context_settings
+
+            # Write the global file first. If the project write then fails,
+            # restore the original global config so the two files commit together.
             self.state.save_translator_config(config)
+            try:
+                project_settings_path = save_project_context_settings(
+                    self.state.get_game_root(),
+                    project_context_flags,
+                )
+            except Exception:
+                try:
+                    self.state.save_translator_config(original_config)
+                except Exception as rollback_exc:
+                    self._append_log(
+                        f"全局设置回滚失败，请检查 translator_config.json：{rollback_exc}"
+                    )
+                raise
+            self._append_log(
+                f"当前项目上下文开关已保存：{project_settings_path}"
+            )
             if not self._sync_state_game_root_from_settings(config.get("game_root")):
                 self._show_settings_status("设置已保存，但同步项目目录到工作台失败。", 6000)
+                self._append_log("设置已保存，但同步项目目录到工作台失败。")
+                self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
+                return True
             if work_mode_spec(self._current_work_mode()).is_bootstrap:
                 self._apply_work_mode_ui(refresh_manifest_writeback=False)
-            self._append_log("设置已成功保存至 translator_config.json。")
+            self._append_log(
+                "设置已成功保存（全局项 → translator_config.json；"
+                "RAG/原文索引 → 当前项目 project_context_settings.json）。"
+            )
             try:
-                ToastNotification.show_toast(self, "✓ 设置已成功保存")
+                ToastNotification.show_toast(self, "设置已成功保存")
             except Exception as exc:
                 self._append_log(f"提示通知显示失败：{exc}")
                 self.statusBar().showMessage("设置已成功保存", 3000)
