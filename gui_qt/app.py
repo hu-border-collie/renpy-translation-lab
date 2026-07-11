@@ -260,6 +260,8 @@ from .work_modes import (
     workbench_nav_for_work_mode,
     workbench_nav_spec,
 )
+from .workbench import WorkbenchPageActions
+from .workbench.context_library_page import ContextLibraryPage
 from .workbench_session import WorkbenchModeSession
 from .batch_workflow_support import resolve_submit_max_cost
 from .workflow_factory import create_workflow, resume_workflow
@@ -698,20 +700,35 @@ class MainWindow(QMainWindow):
         right_scroll.setWidget(right)
         outer.addWidget(right_scroll, 1)
 
-        # Stack keeps page identity for each nav item (shared chrome below).
-        # Keep pages empty/minimal so they do not compete with action buttons for space.
+        # P1: context is the first real, persistent stack page. Other entries
+        # remain migration placeholders until their own phase.
         self.workbench_stack = QStackedWidget()
         self.workbench_stack.setObjectName("workbench_stack")
         self._workbench_stack_pages: dict[WorkbenchNavItem, QWidget] = {}
         for nav_item in WORKBENCH_NAV_ORDER:
-            page = QWidget()
-            page.setObjectName(f"workbench_page_{nav_item.value}")
-            page_layout = QVBoxLayout(page)
-            page_layout.setContentsMargins(0, 0, 0, 0)
-            page_layout.setSpacing(0)
+            if nav_item == WorkbenchNavItem.CONTEXT:
+                page = ContextLibraryPage()
+                page.set_action_callbacks(
+                    WorkbenchPageActions(
+                        prebuild=self._on_context_bootstrap_clicked,
+                        open_settings=self._on_open_context_settings,
+                    )
+                )
+                self.context_library_page = page
+                self.context_library_panel = page
+                self.context_rag_status_label = page.rag_status_label
+                self.context_source_index_status_label = page.source_index_status_label
+                self.context_bootstrap_rag_btn = page.bootstrap_rag_btn
+                self.context_bootstrap_source_index_btn = page.bootstrap_source_index_btn
+                self.context_open_settings_btn = page.open_settings_btn
+            else:
+                page = QWidget()
+                page.setObjectName(f"workbench_page_{nav_item.value}")
+                page_layout = QVBoxLayout(page)
+                page_layout.setContentsMargins(0, 0, 0, 0)
+                page_layout.setSpacing(0)
             self._workbench_stack_pages[nav_item] = page
             self.workbench_stack.addWidget(page)
-        self.workbench_stack.setFixedHeight(0)
         self.workbench_stack.setVisible(False)
         layout.addWidget(self.workbench_stack)
 
@@ -768,9 +785,6 @@ class MainWindow(QMainWindow):
         self.sync_mode_warning.setVisible(False)
         mode_outer.addWidget(self.sync_mode_warning)
         layout.addWidget(mode_frame)
-
-        # Context library dual status cards (P1c / #162 · §3.2.5).
-        layout.addWidget(self._build_context_library_panel())
 
         action_frame = QFrame()
         action_frame.setObjectName("action_frame")
@@ -1199,6 +1213,13 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._build_workbench_log_drawer())
 
+        self._legacy_workbench_shell_widgets = (
+            self._mode_frame,
+            self._workbench_actions_column,
+            self.workbench_status_card,
+            self.workbench_log_drawer,
+        )
+
         self._workbench_tab = tab
         self.tab_widget.addTab(tab, "工作台")
         self._sync_workbench_status_chrome()
@@ -1245,59 +1266,6 @@ class MainWindow(QMainWindow):
         frame.setVisible(False)
         return frame
 
-    def _build_context_library_panel(self) -> QFrame:
-        """RAG / source-index status cards for the 上下文库 nav page (P1c / #162)."""
-        frame = QFrame()
-        frame.setObjectName("context_library_panel")
-        self.context_library_panel = frame
-        outer = QVBoxLayout(frame)
-        # Compact so the prebuild progress tab (and empty CTA) still fit at 700px.
-        outer.setContentsMargins(10, 8, 10, 8)
-        outer.setSpacing(6)
-
-        title = QLabel("上下文库状态")
-        title.setObjectName("diagnostics_section_label")
-        outer.addWidget(title)
-
-        rag_row = QHBoxLayout()
-        rag_row.setSpacing(8)
-        self.context_rag_status_label = QLabel("记忆库：—")
-        self.context_rag_status_label.setObjectName("summary_body_label")
-        self.context_rag_status_label.setWordWrap(True)
-        rag_row.addWidget(self.context_rag_status_label, 1)
-        self.context_bootstrap_rag_btn = QPushButton("预建记忆库")
-        self.context_bootstrap_rag_btn.setObjectName("secondary_btn")
-        self.context_bootstrap_rag_btn.clicked.connect(
-            lambda: self._on_context_bootstrap_clicked("rag")
-        )
-        rag_row.addWidget(self.context_bootstrap_rag_btn, 0)
-        outer.addLayout(rag_row)
-
-        idx_row = QHBoxLayout()
-        idx_row.setSpacing(8)
-        self.context_source_index_status_label = QLabel("原文索引：—")
-        self.context_source_index_status_label.setObjectName("summary_body_label")
-        self.context_source_index_status_label.setWordWrap(True)
-        idx_row.addWidget(self.context_source_index_status_label, 1)
-        self.context_bootstrap_source_index_btn = QPushButton("预建原文索引")
-        self.context_bootstrap_source_index_btn.setObjectName("secondary_btn")
-        self.context_bootstrap_source_index_btn.clicked.connect(
-            lambda: self._on_context_bootstrap_clicked("source_index")
-        )
-        idx_row.addWidget(self.context_bootstrap_source_index_btn, 0)
-        outer.addLayout(idx_row)
-
-        self.context_open_settings_btn = QPushButton("打开设置 · 上下文")
-        self.context_open_settings_btn.setObjectName("secondary_btn")
-        self.context_open_settings_btn.setToolTip(
-            "开关须在设置中保存后才能预建；打开设置的「上下文」分区。"
-        )
-        self.context_open_settings_btn.clicked.connect(self._on_open_context_settings)
-        outer.addWidget(self.context_open_settings_btn, 0, Qt.AlignmentFlag.AlignLeft)
-
-        frame.setVisible(False)
-        return frame
-
     def _on_open_context_settings(self) -> None:
         self._focus_settings_section("context")
 
@@ -1312,31 +1280,23 @@ class MainWindow(QMainWindow):
         self._start_bootstrap_task(kind)
 
     def _refresh_context_library_panel(self, *, running: bool | None = None) -> None:
-        if not hasattr(self, "context_library_panel"):
+        page = getattr(self, "context_library_page", None)
+        if page is not None:
+            flags = self._saved_batch_context_flags()
+            rag_on = bool(flags.get("rag_enabled"))
+            idx_on = bool(flags.get("source_index_enabled"))
+            game_root = self.state.get_game_root() if hasattr(self, "state") else None
+            if running is None:
+                running = bool(getattr(self, "_task_running", False)) or (
+                    hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
+                )
+            page.set_context_status(
+                rag_enabled=rag_on,
+                source_index_enabled=idx_on,
+                game_root=str(game_root or ""),
+            )
+            page.set_task_running(running)
             return
-        flags = self._saved_batch_context_flags()
-        rag_on = bool(flags.get("rag_enabled"))
-        idx_on = bool(flags.get("source_index_enabled"))
-        game_root = self.state.get_game_root() if hasattr(self, "state") else None
-        root_hint = str(game_root) if game_root else "未选择项目"
-        if hasattr(self, "context_rag_status_label"):
-            self.context_rag_status_label.setText(
-                f"记忆库：{'已启用' if rag_on else '未启用'} · 项目 {root_hint}"
-                + ("" if rag_on else " · 请先在设置 · 上下文开启并保存")
-            )
-        if hasattr(self, "context_source_index_status_label"):
-            self.context_source_index_status_label.setText(
-                f"原文索引：{'已启用' if idx_on else '未启用'} · 项目 {root_hint}"
-                + ("" if idx_on else " · 请先在设置 · 上下文开启并保存")
-            )
-        if running is None:
-            running = bool(getattr(self, "_task_running", False)) or (
-                hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
-            )
-        if hasattr(self, "context_bootstrap_rag_btn"):
-            self.context_bootstrap_rag_btn.setEnabled(not running and rag_on)
-        if hasattr(self, "context_bootstrap_source_index_btn"):
-            self.context_bootstrap_source_index_btn.setEnabled(not running and idx_on)
 
     def _apply_task_page_chrome(self, spec) -> None:
         """Show/hide per-nav chrome: sync warn, context cards, task actions (P1c)."""
@@ -1347,10 +1307,14 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "sync_mode_warning"):
             self.sync_mode_warning.setVisible(is_sync)
-        if hasattr(self, "context_library_panel"):
-            self.context_library_panel.setVisible(is_context)
-            if is_context:
-                self._refresh_context_library_panel()
+        if hasattr(self, "workbench_stack"):
+            self.workbench_stack.setVisible(is_context)
+            self.workbench_stack.setMinimumHeight(0)
+            self.workbench_stack.setMaximumHeight(16_777_215 if is_context else 0)
+        for widget in getattr(self, "_legacy_workbench_shell_widgets", ()):
+            widget.setVisible(not is_context)
+        if is_context:
+            self._refresh_context_library_panel()
 
         # Doctor / bootstrap live on the global project bar (always available).
 
@@ -4190,6 +4154,15 @@ class MainWindow(QMainWindow):
             page = self._workbench_stack_pages.get(nav_item)
             if page is not None:
                 self.workbench_stack.setCurrentWidget(page)
+        if nav_item == WorkbenchNavItem.CONTEXT:
+            context_page = getattr(self, "context_library_page", None)
+            sessions = getattr(self, "_mode_sessions", None)
+            session = sessions.get(mode) if isinstance(sessions, dict) else None
+            if context_page is not None:
+                context_page.activate(mode, session or WorkbenchModeSession())
+                context_page.set_task_running(
+                    bool(getattr(self, "_task_running", False))
+                )
 
         nav_spec = workbench_nav_spec(nav_item)
         show_sub = nav_spec.show_submode
@@ -5199,6 +5172,9 @@ class MainWindow(QMainWindow):
         self._workbench_nav_item = workbench_nav_for_work_mode(previous_mode)
         self._reset_last_mode_by_nav()
         self._work_mode = default_work_mode_for_nav(self._workbench_nav_item)
+        context_page = getattr(self, "context_library_page", None)
+        if context_page is not None:
+            context_page.reset_project()
         self._workflow = None
         self._workflow_step_output_lines = []
         self._clear_completed_manifest_snapshot()

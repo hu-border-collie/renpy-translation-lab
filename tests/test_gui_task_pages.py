@@ -25,6 +25,7 @@ from gui_qt.work_modes import (
     work_mode_submode_label,
     workbench_nav_spec,
 )
+from gui_qt.workbench import WorkbenchPageActions
 from gui_qt.workbench_session import WorkbenchModeSession
 from tests import gui_test_support
 
@@ -166,6 +167,14 @@ class GuiTaskPageTests(unittest.TestCase):
             refresh_manifest_writeback=False,
         )
         self.assertFalse(self.window.context_library_panel.isHidden())
+        self.assertIs(
+            self.window.workbench_stack.currentWidget(),
+            self.window.context_library_page,
+        )
+        self.assertFalse(self.window.workbench_stack.isHidden())
+        self.assertTrue(self.window._mode_frame.isHidden())
+        self.assertTrue(self.window._workbench_actions_column.isHidden())
+        self.assertTrue(self.window.workbench_status_card.isHidden())
         self.assertTrue(self.window.work_submode_combo.isHidden())
         self.assertTrue(self.window.translate_btn.isHidden())
         # Doctor / bootstrap stay on the global project bar for every task page.
@@ -173,6 +182,34 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(self.window.bootstrap_work_btn.isHidden())
         self.assertIn("记忆库", self.window.context_rag_status_label.text())
         self.assertIn("原文索引", self.window.context_source_index_status_label.text())
+
+    def test_context_page_uses_callbacks_and_owns_empty_state(self) -> None:
+        page = self.window.context_library_page
+        prebuilds: list[str] = []
+        opens: list[bool] = []
+        page.set_action_callbacks(
+            WorkbenchPageActions(
+                prebuild=prebuilds.append,
+                open_settings=lambda: opens.append(True),
+            )
+        )
+
+        page.set_context_status(
+            rag_enabled=False,
+            source_index_enabled=False,
+            game_root="",
+        )
+        self.assertIs(page.page_stack.currentWidget(), page.empty_state)
+        page.empty_state.action_clicked.emit()
+        self.assertEqual(opens, [True])
+
+        page.set_context_status(
+            rag_enabled=True,
+            source_index_enabled=False,
+            game_root="C:/Games/Example/work",
+        )
+        page.bootstrap_rag_btn.click()
+        self.assertEqual(prebuilds, ["rag"])
 
     def test_global_prep_buttons_visible_on_all_task_pages(self) -> None:
         for mode in (
