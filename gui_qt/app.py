@@ -262,6 +262,7 @@ from .work_modes import (
 )
 from .workbench import WorkbenchPageActions
 from .workbench.context_library_page import ContextLibraryPage
+from .workbench.sync_translation_page import SyncTranslationPage
 from .workbench_session import WorkbenchModeSession
 from .batch_workflow_support import resolve_submit_max_cost
 from .workflow_factory import create_workflow, resume_workflow
@@ -712,6 +713,7 @@ class MainWindow(QMainWindow):
                     WorkbenchPageActions(
                         prebuild=self._on_context_bootstrap_clicked,
                         open_settings=self._on_open_context_settings,
+                        stop=self._on_kill,
                     )
                 )
                 self.context_library_page = page
@@ -721,6 +723,15 @@ class MainWindow(QMainWindow):
                 self.context_bootstrap_rag_btn = page.bootstrap_rag_btn
                 self.context_bootstrap_source_index_btn = page.bootstrap_source_index_btn
                 self.context_open_settings_btn = page.open_settings_btn
+            elif nav_item == WorkbenchNavItem.SYNC_TRANSLATION:
+                page = SyncTranslationPage()
+                page.set_action_callbacks(
+                    WorkbenchPageActions(
+                        start=self._on_start_translation,
+                        stop=self._on_kill,
+                    )
+                )
+                self.sync_translation_page = page
             else:
                 page = QWidget()
                 page.setObjectName(f"workbench_page_{nav_item.value}")
@@ -1213,11 +1224,10 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._build_workbench_log_drawer())
 
+        # Log drawer stays available on real pages (sync / context CLI runs).
         self._legacy_workbench_shell_widgets = (
             self._mode_frame,
             self._workbench_actions_column,
-            self.workbench_status_card,
-            self.workbench_log_drawer,
         )
 
         self._workbench_tab = tab
@@ -1304,24 +1314,59 @@ class MainWindow(QMainWindow):
         nav = workbench_nav_for_work_mode(mode)
         is_sync = mode == WorkMode.SYNC_TRANSLATION
         is_context = nav == WorkbenchNavItem.CONTEXT
+        is_real_page = is_context or nav == WorkbenchNavItem.SYNC_TRANSLATION
 
         if hasattr(self, "sync_mode_warning"):
-            self.sync_mode_warning.setVisible(is_sync)
+            self.sync_mode_warning.setVisible(is_sync and not is_real_page)
         if hasattr(self, "workbench_stack"):
-            self.workbench_stack.setVisible(is_context)
+            self.workbench_stack.setVisible(is_real_page)
             self.workbench_stack.setMinimumHeight(0)
-            self.workbench_stack.setMaximumHeight(16_777_215 if is_context else 0)
+            # QStackedWidget sizeHint = max(all pages). Sync is a short strip; pin
+            # the stack to the current page so a tall context sibling cannot leave
+            # a huge empty action band above the shared status card.
+            if not is_real_page:
+                self.workbench_stack.setMaximumHeight(0)
+                self.workbench_stack.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Fixed,
+                )
+            elif is_sync:
+                page = getattr(self, "sync_translation_page", None)
+                hint_h = page.sizeHint().height() if page is not None else 72
+                self.workbench_stack.setMaximumHeight(max(hint_h, 48))
+                self.workbench_stack.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Maximum,
+                )
+            else:
+                self.workbench_stack.setMaximumHeight(16_777_215)
+                self.workbench_stack.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Preferred,
+                )
         for widget in getattr(self, "_legacy_workbench_shell_widgets", ()):
-            widget.setVisible(not is_context)
+            widget.setVisible(not is_real_page)
         if is_context:
             self._refresh_context_library_panel()
 
         # Doctor / bootstrap live on the global project bar (always available).
 
         if hasattr(self, "translate_btn"):
-            self.translate_btn.setVisible(not is_context)
-        if hasattr(self, "resume_btn") and is_context:
+            self.translate_btn.setVisible(not is_real_page)
+        if hasattr(self, "resume_btn") and is_real_page:
             self.resume_btn.setVisible(False)
+        # Idle workflow hint is redundant with status-card empty states; hide it.
+        # mode_frame only stays for submode row and/or legacy sync risk banner.
+        if hasattr(self, "work_mode_hint_label"):
+            self.work_mode_hint_label.setVisible(False)
+        if hasattr(self, "_mode_frame") and not is_real_page:
+            show_sub = workbench_nav_spec(nav).show_submode
+            show_sync_warn = bool(
+                is_sync
+                and hasattr(self, "sync_mode_warning")
+                and self.sync_mode_warning.isVisible()
+            )
+            self._mode_frame.setVisible(show_sub or show_sync_warn)
         if hasattr(self, "action_panel"):
             reflow = getattr(self.action_panel, "reflow", None)
             if callable(reflow):
@@ -2166,13 +2211,16 @@ class MainWindow(QMainWindow):
         self._sync_workbench_status_chrome(stage_index=stage_index)
 
     def _sync_batch_advanced_tools_chrome(self, *, stage_index: int | None = None) -> None:
-        """Show probe/split only on batch translation · 翻译进度 (P2a / #164)."""
+        """Show probe/split whenever batch translation is active (under main actions).
+
+        Stays on the workbench action column (not diagnostics): batch-only tools that
+        prepare packages before / around a run, always reachable without tab switching.
+        """
         if not hasattr(self, "batch_advanced_frame"):
             return
+        del stage_index  # kept for call-site compat; visibility is mode-based
         is_batch = self._batch_stage_mode_active()
-        if stage_index is None:
-            stage_index = self._current_batch_stage_index()
-        show = is_batch and stage_index == _BATCH_STAGE_EXECUTE
+        show = is_batch
         self.batch_advanced_frame.setVisible(show)
         if show and hasattr(self, "batch_advanced_bar"):
             reflow = getattr(self.batch_advanced_bar, "reflow", None)
@@ -2884,12 +2932,12 @@ class MainWindow(QMainWindow):
         column = getattr(self, "_workbench_actions_column", None)
         if column is not None:
             col_layout = column.layout()
-            if col_layout is not None:
+            if isinstance(col_layout, QLayout):
                 col_layout.invalidate()
                 col_layout.activate()
             # Explicit column min height = sum of visible children mins + spacing.
             col_h = 0
-            if col_layout is not None:
+            if isinstance(col_layout, QLayout):
                 spacing = col_layout.spacing()
                 visible_kids = 0
                 for i in range(col_layout.count()):
@@ -2905,9 +2953,11 @@ class MainWindow(QMainWindow):
                 column.setMinimumHeight(col_h)
             column.updateGeometry()
             parent = column.parentWidget()
-            if parent is not None and parent.layout() is not None:
-                parent.layout().invalidate()
-                parent.layout().activate()
+            if parent is not None:
+                layout = parent.layout()
+                if isinstance(layout, QLayout):
+                    layout.invalidate()
+                    layout.activate()
 
     def _reflow_button_bars(self) -> None:
         """Re-pack all flow/responsive button strips after visibility or size changes."""
@@ -2925,6 +2975,8 @@ class MainWindow(QMainWindow):
                 reflow(force=True)
         self._sync_action_frame_min_height()
         # Deferred second pass: parent widths settle after min-height changes.
+        # Use the 2-arg form: helper tests construct MainWindow via __new__ without
+        # QObject init, and the 3-arg context overload requires a live C++ base.
         QTimer.singleShot(0, self._reflow_button_bars_deferred)
 
     def _reflow_button_bars_deferred(self) -> None:
@@ -4154,15 +4206,25 @@ class MainWindow(QMainWindow):
             page = self._workbench_stack_pages.get(nav_item)
             if page is not None:
                 self.workbench_stack.setCurrentWidget(page)
-        if nav_item == WorkbenchNavItem.CONTEXT:
-            context_page = getattr(self, "context_library_page", None)
+        if nav_item in {
+            WorkbenchNavItem.CONTEXT,
+            WorkbenchNavItem.SYNC_TRANSLATION,
+        }:
+            page = (
+                getattr(self, "context_library_page", None)
+                if nav_item == WorkbenchNavItem.CONTEXT
+                else getattr(self, "sync_translation_page", None)
+            )
             sessions = getattr(self, "_mode_sessions", None)
             session = sessions.get(mode) if isinstance(sessions, dict) else None
-            if context_page is not None:
-                context_page.activate(mode, session or WorkbenchModeSession())
-                context_page.set_task_running(
-                    bool(getattr(self, "_task_running", False))
-                )
+            if page is not None:
+                page.activate(mode, session or WorkbenchModeSession())
+                if nav_item == WorkbenchNavItem.SYNC_TRANSLATION:
+                    self._sync_sync_translation_page_controls()
+                else:
+                    page.set_task_running(
+                        bool(getattr(self, "_task_running", False))
+                    )
 
         nav_spec = workbench_nav_spec(nav_item)
         show_sub = nav_spec.show_submode
@@ -4517,6 +4579,27 @@ class MainWindow(QMainWindow):
 
     def _update_translate_button_label(self) -> None:
         self.translate_btn.setText(self._translate_button_label())
+        self._sync_sync_translation_page_controls(label_only=True)
+
+    def _sync_sync_translation_page_controls(
+        self,
+        *,
+        running: bool | None = None,
+        label_only: bool = False,
+    ) -> None:
+        """Keep page-local Start/Stop aligned with the legacy translate/kill buttons."""
+        sync_page = getattr(self, "sync_translation_page", None)
+        if sync_page is None:
+            return
+        sync_page.set_start_label(self._translate_button_label())
+        if label_only:
+            return
+        if running is None:
+            running = bool(getattr(self, "_task_running", False)) or (
+                hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
+            )
+        sync_page.set_task_running(running)
+        sync_page.set_start_enabled(self.translate_btn.isEnabled())
 
     def _apply_work_mode_ui(
         self,
@@ -4641,6 +4724,8 @@ class MainWindow(QMainWindow):
                 running=running,
             )
         )
+        if spec.mode == WorkMode.SYNC_TRANSLATION:
+            self._sync_sync_translation_page_controls(running=running)
         resume_available = (
             (False, "任务运行中。") if running else self._resume_task_available()
         )
@@ -5175,6 +5260,9 @@ class MainWindow(QMainWindow):
         context_page = getattr(self, "context_library_page", None)
         if context_page is not None:
             context_page.reset_project()
+        sync_page = getattr(self, "sync_translation_page", None)
+        if sync_page is not None:
+            sync_page.reset_project()
         self._workflow = None
         self._workflow_step_output_lines = []
         self._clear_completed_manifest_snapshot()
@@ -7129,6 +7217,7 @@ class MainWindow(QMainWindow):
         self._update_keyword_merge_btn_enabled(running=running)
         self._update_split_btn_enabled(running=running)
         self.kill_btn.setEnabled(running)
+        self._sync_sync_translation_page_controls(running=running)
         # Context-library prebuild CTAs stay on-page while nav is locked; gate them here.
         if hasattr(self, "context_library_panel"):
             self._refresh_context_library_panel(running=running)
@@ -7288,6 +7377,7 @@ class MainWindow(QMainWindow):
                 running=running,
             )
         )
+        self._sync_sync_translation_page_controls(running=running)
         self._sync_task_shortcuts()
         self._sync_workbench_empty_states()
         self._sync_layout_sizes()

@@ -36,12 +36,9 @@ class ContextLibraryPage(QFrame):
         self._active_mode = WorkMode.BOOTSTRAP_RAG
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 12, 12, 12)
-        outer.setSpacing(10)
-
-        title = QLabel("上下文库")
-        title.setObjectName("diagnostics_section_label")
-        outer.addWidget(title)
+        # No page title — left nav already names the task (same as sync page).
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(8)
 
         self.page_stack = QStackedWidget()
         self.page_stack.setObjectName("context_library_page_stack")
@@ -71,7 +68,20 @@ class ContextLibraryPage(QFrame):
             "开关须在设置中保存后才能预建；打开设置的「上下文」分区。"
         )
         self.open_settings_btn.clicked.connect(self._trigger_open_settings)
-        status_layout.addWidget(self.open_settings_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        # Secondary style + hidden when idle: page already has no legacy kill row,
+        # so stop is only revealed while a prebuild is running (less visual noise).
+        # Danger stop, same family as kill_btn / sync stop; always visible, enabled while running.
+        self.stop_btn = QPushButton("停止")
+        self.stop_btn.setObjectName("context_library_stop_btn")
+        self.stop_btn.setToolTip("停止当前预建任务")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self._trigger_stop)
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        action_row.addWidget(self.open_settings_btn)
+        action_row.addStretch()
+        action_row.addWidget(self.stop_btn)
+        status_layout.addLayout(action_row)
         status_layout.addStretch()
         self.page_stack.addWidget(self.status_page)
         self.page_stack.setCurrentWidget(self.empty_state)
@@ -87,7 +97,7 @@ class ContextLibraryPage(QFrame):
         self.rag_status_label.setWordWrap(True)
         row.addWidget(self.rag_status_label, 1)
         self.bootstrap_rag_btn = QPushButton("预建记忆库")
-        self.bootstrap_rag_btn.setObjectName("secondary_btn")
+        self.bootstrap_rag_btn.setObjectName("context_bootstrap_rag_btn")
         self.bootstrap_rag_btn.clicked.connect(lambda: self._trigger_prebuild("rag"))
         row.addWidget(self.bootstrap_rag_btn)
         return row_frame
@@ -103,7 +113,7 @@ class ContextLibraryPage(QFrame):
         self.source_index_status_label.setWordWrap(True)
         row.addWidget(self.source_index_status_label, 1)
         self.bootstrap_source_index_btn = QPushButton("预建原文索引")
-        self.bootstrap_source_index_btn.setObjectName("secondary_btn")
+        self.bootstrap_source_index_btn.setObjectName("context_bootstrap_source_index_btn")
         self.bootstrap_source_index_btn.clicked.connect(
             lambda: self._trigger_prebuild("source_index")
         )
@@ -161,6 +171,7 @@ class ContextLibraryPage(QFrame):
             not self._running and self._source_index_enabled
         )
         self.open_settings_btn.setEnabled(not self._running)
+        self.stop_btn.setEnabled(self._running)
 
     def _trigger_prebuild(self, kind: str) -> None:
         if self._running or self._actions.prebuild is None:
@@ -170,3 +181,7 @@ class ContextLibraryPage(QFrame):
     def _trigger_open_settings(self) -> None:
         if not self._running and self._actions.open_settings is not None:
             self._actions.open_settings()
+
+    def _trigger_stop(self) -> None:
+        if self._running and self._actions.stop is not None:
+            self._actions.stop()

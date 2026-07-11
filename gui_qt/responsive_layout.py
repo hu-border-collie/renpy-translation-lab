@@ -107,6 +107,31 @@ def clear_layout(layout: QLayout) -> None:
             widget.deleteLater()
 
 
+def _activate_ancestor_layouts(
+    widget: QWidget,
+    *,
+    max_depth: int = 6,
+    invalidate: bool = False,
+) -> None:
+    """Invalidate/activate installed QLayouts on ancestor widgets.
+
+    ``QWidget.layout()`` is expected to return a ``QLayout``, but during nested
+    reflow / teardown some PySide builds can surface a stale ``QLayoutItem``
+    wrapper. Only call layout APIs on real ``QLayout`` instances.
+    """
+    parent = widget.parentWidget()
+    depth = 0
+    while parent is not None and depth < max_depth:
+        parent.updateGeometry()
+        layout = parent.layout()
+        if isinstance(layout, QLayout):
+            if invalidate:
+                layout.invalidate()
+            layout.activate()
+        parent = parent.parentWidget()
+        depth += 1
+
+
 def _make_action_separator(*, vertical: bool) -> QFrame:
     """Create a thin separator that never steals mouse events or grows to 640x480."""
     separator = QFrame()
@@ -309,15 +334,7 @@ class ResponsiveActionPanel(QFrame):
         self.setMinimumHeight(height)
         self.updateGeometry()
         # Bubble size change so siblings (e.g. batch advanced tools) reflow below us.
-        parent = self.parentWidget()
-        depth = 0
-        while parent is not None and depth < 4:
-            parent.updateGeometry()
-            layout = parent.layout()
-            if layout is not None:
-                layout.activate()
-            parent = parent.parentWidget()
-            depth += 1
+        _activate_ancestor_layouts(self, max_depth=4)
 
 
 class FlowButtonBar(QFrame):
@@ -372,7 +389,8 @@ class FlowButtonBar(QFrame):
 
     def _schedule_reflow(self) -> None:
         """Reflow after the current event so parent/tab geometry is final."""
-        QTimer.singleShot(0, lambda: self.reflow(force=True))
+        # Bind to self so the timer is cancelled if this bar is destroyed.
+        QTimer.singleShot(0, self, lambda: self.reflow(force=True))
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -447,16 +465,7 @@ class FlowButtonBar(QFrame):
             height = max(height, hint.height())
         self.setMinimumHeight(height)
         self.updateGeometry()
-        parent = self.parentWidget()
-        depth = 0
-        while parent is not None and depth < 6:
-            parent.updateGeometry()
-            layout = parent.layout()
-            if layout is not None:
-                layout.invalidate()
-                layout.activate()
-            parent = parent.parentWidget()
-            depth += 1
+        _activate_ancestor_layouts(self, max_depth=6, invalidate=True)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         hint = super().sizeHint()
