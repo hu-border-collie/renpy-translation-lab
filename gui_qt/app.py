@@ -343,6 +343,11 @@ class MainWindow(QMainWindow):
         self._work_mode = WorkMode.BATCH_TRANSLATION
         self._mode_sessions: dict[WorkMode, WorkbenchModeSession] = {}
         self._workbench_nav_item = WorkbenchNavItem.BATCH_TRANSLATION
+        # Session emptiness is not navigation state: a user can choose 同步
+        # before it has produced any workflow or manifest to save.
+        self._last_mode_by_nav: dict[WorkbenchNavItem, WorkMode] = {
+            item: default_work_mode_for_nav(item) for item in WORKBENCH_NAV_ORDER
+        }
         self._workflow_step_output_lines: list[str] = []
         self._apply_output_lines: list[str] = []
         self._recheck_output_lines: list[str] = []
@@ -4141,6 +4146,12 @@ class MainWindow(QMainWindow):
             # QObject stubs from unit tests may reject new attributes.
             pass
 
+    def _reset_last_mode_by_nav(self) -> None:
+        """Restore each navigation entry's default mode after a project switch."""
+        self._last_mode_by_nav = {
+            item: default_work_mode_for_nav(item) for item in WORKBENCH_NAV_ORDER
+        }
+
     def _rebuild_work_task_combo(
         self,
         category: TaskCategory,
@@ -4222,16 +4233,10 @@ class MainWindow(QMainWindow):
             self._work_mode
         ) == nav_item:
             return
-        # Prefer last session mode within this nav if present.
-        target_mode = default_work_mode_for_nav(nav_item)
-        for mode in workbench_nav_spec(nav_item).work_modes:
-            session = self._mode_sessions.get(mode)
-            if session is not None and not session.is_empty():
-                target_mode = mode
-                break
-            if mode == self._work_mode:
-                target_mode = mode
-                break
+        target_mode = self._last_mode_by_nav.get(
+            nav_item,
+            default_work_mode_for_nav(nav_item),
+        )
         self._set_work_mode(target_mode, refresh_manifest_writeback=True)
 
     def _on_work_submode_changed(self) -> None:
@@ -4283,6 +4288,7 @@ class MainWindow(QMainWindow):
 
         self._work_mode = mode
         self._workbench_nav_item = workbench_nav_for_work_mode(mode)
+        self._last_mode_by_nav[self._workbench_nav_item] = mode
         self._pending_restore_workflow_ui = None
         self._pending_restore_writeback_summary = None
 
@@ -5185,6 +5191,9 @@ class MainWindow(QMainWindow):
         self._active_command = ""
         self._doctor_output_lines = []
         self._clear_all_mode_sessions()
+        self._reset_last_mode_by_nav()
+        self._workbench_nav_item = workbench_nav_for_work_mode(self._work_mode)
+        self._work_mode = self._last_mode_by_nav[self._workbench_nav_item]
         self._workflow = None
         self._workflow_step_output_lines = []
         self._clear_completed_manifest_snapshot()
