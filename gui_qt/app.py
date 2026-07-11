@@ -2895,12 +2895,12 @@ class MainWindow(QMainWindow):
         column = getattr(self, "_workbench_actions_column", None)
         if column is not None:
             col_layout = column.layout()
-            if col_layout is not None:
+            if isinstance(col_layout, QLayout):
                 col_layout.invalidate()
                 col_layout.activate()
             # Explicit column min height = sum of visible children mins + spacing.
             col_h = 0
-            if col_layout is not None:
+            if isinstance(col_layout, QLayout):
                 spacing = col_layout.spacing()
                 visible_kids = 0
                 for i in range(col_layout.count()):
@@ -2916,9 +2916,11 @@ class MainWindow(QMainWindow):
                 column.setMinimumHeight(col_h)
             column.updateGeometry()
             parent = column.parentWidget()
-            if parent is not None and parent.layout() is not None:
-                parent.layout().invalidate()
-                parent.layout().activate()
+            if parent is not None:
+                layout = parent.layout()
+                if isinstance(layout, QLayout):
+                    layout.invalidate()
+                    layout.activate()
 
     def _reflow_button_bars(self) -> None:
         """Re-pack all flow/responsive button strips after visibility or size changes."""
@@ -2936,7 +2938,8 @@ class MainWindow(QMainWindow):
                 reflow(force=True)
         self._sync_action_frame_min_height()
         # Deferred second pass: parent widths settle after min-height changes.
-        QTimer.singleShot(0, self._reflow_button_bars_deferred)
+        # Context object cancels the callback if this window is already gone.
+        QTimer.singleShot(0, self, self._reflow_button_bars_deferred)
 
     def _reflow_button_bars_deferred(self) -> None:
         for name in (
