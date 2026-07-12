@@ -4498,6 +4498,20 @@ class MainWindow(QMainWindow):
     def _resume_button_is_query_mode(self) -> bool:
         return hasattr(self, "resume_btn") and self.resume_btn.text() == "查询云端状态"
 
+    def _latest_resume_manifest_path(self, game_root, spec_or_mode):
+        """Choose the cloud task behind an explicit status query when possible."""
+        mode = getattr(spec_or_mode, "mode", spec_or_mode)
+        if self._resume_button_is_query_mode():
+            get_submitted = getattr(
+                self.state,
+                "get_latest_submitted_manifest_path_for_mode",
+                None,
+            )
+            if callable(get_submitted):
+                submitted = get_submitted(game_root, mode)
+                if submitted is not None:
+                    return submitted
+        return self.state.get_latest_manifest_path_for_mode(game_root, mode)
     def _resume_task_available(self) -> tuple[bool, str]:
         """Whether 「继续」 can load a resumable task for the current mode (P3 / #166)."""
         spec = work_mode_spec(self._current_work_mode())
@@ -4511,7 +4525,7 @@ class MainWindow(QMainWindow):
         game_root = self.state.get_game_root() if hasattr(self, "state") else None
         if game_root is None:
             return False, "请先选择游戏的 work 目录。"
-        latest = self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+        latest = self._latest_resume_manifest_path(game_root, spec)
         if latest is None:
             return False, f"未找到可继续的{spec.label}任务；请先开始一个任务。"
         try:
@@ -6407,7 +6421,7 @@ class MainWindow(QMainWindow):
             return
 
         game_root = self.state.get_game_root()
-        latest_manifest = self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+        latest_manifest = self._latest_resume_manifest_path(game_root, spec)
         if latest_manifest is None:
             QMessageBox.information(
                 self,
