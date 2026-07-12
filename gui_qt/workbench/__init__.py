@@ -1,10 +1,5 @@
-"""Shared contracts and coordination for persistent workbench pages."""
+"""Shared contracts for the gradually migrated workbench pages."""
 
-from .coordinator import WorkbenchPageCoordinator
 from .page_contract import WorkbenchPage, WorkbenchPageActions
 
-__all__ = (
-    "WorkbenchPage",
-    "WorkbenchPageActions",
-    "WorkbenchPageCoordinator",
-)
+__all__ = ("WorkbenchPage", "WorkbenchPageActions")

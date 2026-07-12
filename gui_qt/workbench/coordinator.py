@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from PySide6.QtWidgets import QSizePolicy, QStackedWidget, QWidget
+from PySide6.QtWidgets import QSizePolicy, QStackedWidget
 
 from ..work_modes import WorkMode, WorkbenchNavItem, workbench_nav_for_work_mode
 from ..workbench_session import WorkbenchModeSession
+from .page_contract import WorkbenchPage
 
 
 class WorkbenchPageCoordinator:
@@ -15,7 +16,7 @@ class WorkbenchPageCoordinator:
     def __init__(
         self,
         stack: QStackedWidget,
-        pages: Mapping[WorkbenchNavItem, QWidget],
+        pages: Mapping[WorkbenchNavItem, WorkbenchPage],
     ) -> None:
         self._stack = stack
         self._pages = dict(pages)
