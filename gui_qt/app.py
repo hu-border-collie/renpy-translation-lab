@@ -263,6 +263,7 @@ from .work_modes import (
 from .workbench import WorkbenchPageActions
 from .workbench.context_library_page import ContextLibraryPage
 from .workbench.keywords_page import KeywordsPage
+from .workbench.revision_page import RevisionPage
 from .workbench.sync_translation_page import SyncTranslationPage
 from .workbench_session import WorkbenchModeSession
 from .batch_workflow_support import resolve_submit_max_cost
@@ -745,6 +746,18 @@ class MainWindow(QMainWindow):
                     )
                 )
                 self.keywords_page = page
+            elif nav_item == WorkbenchNavItem.REVISION:
+                page = RevisionPage()
+                page.set_action_callbacks(
+                    WorkbenchPageActions(
+                        start=self._on_start_translation,
+                        resume=self._on_resume_translation,
+                        stop=self._on_kill,
+                        writeback=self._on_apply_revision,
+                        select_mode=self._on_revision_page_mode_selected,
+                    )
+                )
+                self.revision_page = page
             else:
                 page = QWidget()
                 page.setObjectName(f"workbench_page_{nav_item.value}")
@@ -1328,7 +1341,8 @@ class MainWindow(QMainWindow):
         is_sync = mode == WorkMode.SYNC_TRANSLATION
         is_context = nav == WorkbenchNavItem.CONTEXT
         is_keywords = nav == WorkbenchNavItem.KEYWORDS
-        is_real_page = is_context or nav in {WorkbenchNavItem.SYNC_TRANSLATION, WorkbenchNavItem.KEYWORDS}
+        is_revision = nav == WorkbenchNavItem.REVISION
+        is_real_page = is_context or nav in {WorkbenchNavItem.SYNC_TRANSLATION, WorkbenchNavItem.KEYWORDS, WorkbenchNavItem.REVISION}
 
         if hasattr(self, "sync_mode_warning"):
             self.sync_mode_warning.setVisible(is_sync and not is_real_page)
@@ -1364,6 +1378,18 @@ class MainWindow(QMainWindow):
                     QSizePolicy.Policy.Expanding,
                     QSizePolicy.Policy.Maximum,
                 )
+            elif is_revision:
+                page = getattr(self, "revision_page", None)
+                hint_h = (
+                    page.preferred_height(self.workbench_stack.width())
+                    if page is not None
+                    else 96
+                )
+                self.workbench_stack.setMaximumHeight(max(hint_h, 48))
+                self.workbench_stack.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Maximum,
+                )
             else:
                 self.workbench_stack.setMaximumHeight(16_777_215)
                 self.workbench_stack.setSizePolicy(
@@ -1388,6 +1414,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "keyword_merge_writeback_btn") and is_keywords:
             self.keyword_merge_writeback_btn.setVisible(False)
             self.keyword_merge_writeback_btn.setEnabled(False)
+        if hasattr(self, "apply_revision_btn") and is_revision:
+            self.apply_revision_btn.setVisible(False)
+            self.apply_revision_btn.setEnabled(False)
         # mode_frame only stays for submode row and/or legacy sync risk banner.
         if hasattr(self, "work_mode_hint_label"):
             self.work_mode_hint_label.setVisible(False)
@@ -3257,8 +3286,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, "apply_btn"):
             self.apply_btn.setVisible(spec.supports_translation_writeback)
         if hasattr(self, "apply_revision_btn"):
-            self.apply_revision_btn.setVisible(uses_revision_writeback)
-
+            self.apply_revision_btn.setVisible(
+                uses_revision_writeback
+                and workbench_nav_for_work_mode(self._current_work_mode())
+                != WorkbenchNavItem.REVISION
+            )
         keyword_merge_ready_flag = False
         if uses_keyword_merge:
             candidates_path = self._resolve_keyword_merge_candidates_path(
@@ -4249,11 +4281,13 @@ class MainWindow(QMainWindow):
             WorkbenchNavItem.CONTEXT,
             WorkbenchNavItem.SYNC_TRANSLATION,
             WorkbenchNavItem.KEYWORDS,
+            WorkbenchNavItem.REVISION,
         }:
             page = {
                 WorkbenchNavItem.CONTEXT: getattr(self, "context_library_page", None),
                 WorkbenchNavItem.SYNC_TRANSLATION: getattr(self, "sync_translation_page", None),
                 WorkbenchNavItem.KEYWORDS: getattr(self, "keywords_page", None),
+                WorkbenchNavItem.REVISION: getattr(self, "revision_page", None),
             }[nav_item]
             sessions = getattr(self, "_mode_sessions", None)
             session = sessions.get(mode) if isinstance(sessions, dict) else None
@@ -4263,6 +4297,8 @@ class MainWindow(QMainWindow):
                     self._sync_sync_translation_page_controls()
                 elif nav_item == WorkbenchNavItem.KEYWORDS:
                     self._sync_keywords_page_controls()
+                elif nav_item == WorkbenchNavItem.REVISION:
+                    self._sync_revision_page_controls()
                 else:
                     page.set_task_running(
                         bool(getattr(self, "_task_running", False))
@@ -4331,6 +4367,14 @@ class MainWindow(QMainWindow):
             self._sync_task_selectors_from_work_mode()
             return
         if mode in {WorkMode.KEYWORD_EXTRACTION, WorkMode.SYNC_KEYWORD_EXTRACTION}:
+            self._set_work_mode(mode, refresh_manifest_writeback=True)
+
+    def _on_revision_page_mode_selected(self, mode: WorkMode) -> None:
+        """Apply the page-local revision batch/sync selector through the coordinator."""
+        if self.kill_btn.isEnabled() or bool(getattr(self, "_task_running", False)):
+            self._sync_task_selectors_from_work_mode()
+            return
+        if mode in {WorkMode.REVISION, WorkMode.SYNC_REVISION}:
             self._set_work_mode(mode, refresh_manifest_writeback=True)
 
     def _on_task_category_changed(self) -> None:
@@ -4665,6 +4709,35 @@ class MainWindow(QMainWindow):
         if workbench_nav_for_work_mode(mode) == WorkbenchNavItem.KEYWORDS:
             self._apply_task_page_chrome(work_mode_spec(mode))
 
+    def _sync_revision_page_controls(self, *, running: bool | None = None) -> None:
+        """Mirror coordinator-owned revision actions onto the real page."""
+        page = getattr(self, "revision_page", None)
+        if page is None:
+            return
+        mode = self._current_work_mode()
+        if mode not in {WorkMode.REVISION, WorkMode.SYNC_REVISION}:
+            return
+        if running is None:
+            running = bool(getattr(self, "_task_running", False)) or self.kill_btn.isEnabled()
+        summary = self._current_writeback_summary()
+        if summary.can_apply:
+            result_message = summary.message or "订正预览已通过，可安全写回。"
+        elif summary.message:
+            result_message = f"订正结果：{summary.message}"
+        else:
+            result_message = "生成预览后，可在此确认订正结果并安全写回。"
+        page.set_task_running(running)
+        page.set_controls(
+            start_enabled=self.translate_btn.isEnabled(),
+            resume_enabled=self.resume_btn.isEnabled(),
+            resume_visible=work_mode_spec(mode).supports_resume,
+            resume_label=self.resume_btn.text(),
+            writeback_enabled=summary.can_apply,
+            result_message=result_message,
+        )
+        if workbench_nav_for_work_mode(mode) == WorkbenchNavItem.REVISION:
+            self._apply_task_page_chrome(work_mode_spec(mode))
+
     def _sync_sync_translation_page_controls(
         self,
         *,
@@ -4818,6 +4891,7 @@ class MainWindow(QMainWindow):
             resume_available=resume_available,
         )
         self._sync_keywords_page_controls(running=running)
+        self._sync_revision_page_controls(running=running)
         self._update_split_submit_btn(running=running)
         self._sync_task_shortcuts()
         # Re-apply page chrome after enable flags so context cards stay correct.
@@ -5351,6 +5425,9 @@ class MainWindow(QMainWindow):
         keywords_page = getattr(self, "keywords_page", None)
         if keywords_page is not None:
             keywords_page.reset_project()
+        revision_page = getattr(self, "revision_page", None)
+        if revision_page is not None:
+            revision_page.reset_project()
         self._workflow = None
         self._workflow_step_output_lines = []
         self._clear_completed_manifest_snapshot()
@@ -7307,6 +7384,7 @@ class MainWindow(QMainWindow):
         self.kill_btn.setEnabled(running)
         self._sync_sync_translation_page_controls(running=running)
         self._sync_keywords_page_controls(running=running)
+        self._sync_revision_page_controls(running=running)
         # Context-library prebuild CTAs stay on-page while nav is locked; gate them here.
         if hasattr(self, "context_library_panel"):
             self._refresh_context_library_panel(running=running)
@@ -7343,6 +7421,7 @@ class MainWindow(QMainWindow):
         resume_available = self._resume_task_available()
         self._update_resume_btn_enabled(resume_available=resume_available)
         self._sync_keywords_page_controls()
+        self._sync_revision_page_controls()
         self._sync_workbench_empty_states(resume_available=resume_available)
         self._sync_layout_sizes()
 
@@ -7416,6 +7495,7 @@ class MainWindow(QMainWindow):
             running=self.kill_btn.isEnabled(),
         )
         self._sync_keywords_page_controls()
+        self._sync_revision_page_controls()
         if not self.kill_btn.isEnabled():
             self.apply_btn.setEnabled(
                 summary.can_apply and not self._uses_revision_writeback()
@@ -7470,6 +7550,7 @@ class MainWindow(QMainWindow):
         )
         self._sync_sync_translation_page_controls(running=running)
         self._sync_keywords_page_controls(running=running)
+        self._sync_revision_page_controls(running=running)
         self._sync_task_shortcuts()
         self._sync_workbench_empty_states()
         self._sync_layout_sizes()

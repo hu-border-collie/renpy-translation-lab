@@ -248,6 +248,40 @@ class GuiWorkbenchNavTests(unittest.TestCase):
         self.assertFalse(page.merge_btn.isEnabled())
         self.assertIn("项目已切换", page.result_hint.text())
 
+    def test_project_switch_resets_dormant_revision_page(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.revision_page
+        page.set_controls(
+            start_enabled=True,
+            resume_enabled=True,
+            resume_visible=True,
+            resume_label="继续订正",
+            writeback_enabled=True,
+            result_message="订正预览已通过。",
+        )
+
+        with (
+            mock.patch.object(
+                self.window.state,
+                "set_game_root",
+                return_value=(Path("C:/Games/Example/work"), False),
+            ),
+            mock.patch.object(self.window.runner, "is_running", return_value=False),
+            mock.patch.object(self.window, "_is_doctor_running", return_value=False),
+            mock.patch.object(self.window, "_load_config_to_ui"),
+            mock.patch.object(self.window, "_refresh_diagnostics_context"),
+            mock.patch.object(self.window, "_invalidate_manifest_caches"),
+            mock.patch.object(self.window, "_apply_work_mode_ui"),
+        ):
+            self.assertTrue(self.window._switch_game_root("C:/Games/Example/work"))
+
+        self.assertFalse(page.start_btn.isEnabled())
+        self.assertFalse(page.writeback_btn.isEnabled())
+        self.assertIn("项目已切换", page.result_hint.text())
+
 
 if __name__ == "__main__":
     unittest.main()
