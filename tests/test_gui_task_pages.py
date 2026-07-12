@@ -214,7 +214,7 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(page.merge_btn.isEnabled())
         self.assertTrue(self.window.apply_revision_btn.isHidden())
         self.assertTrue(self.window.apply_btn.isHidden())
-        self.assertTrue(self.window.work_submode_combo.isHidden())
+        self.assertFalse(hasattr(self.window, "work_submode_combo"))
 
     def test_keywords_page_uses_callbacks_and_local_mode_selector(self) -> None:
         page = self.window.keywords_page
@@ -268,7 +268,7 @@ class GuiTaskPageTests(unittest.TestCase):
         )
 
         self.assertEqual(self.window._work_mode, WorkMode.SYNC_KEYWORD_EXTRACTION)
-        self.assertTrue(self.window.work_submode_combo.isHidden())
+        self.assertFalse(hasattr(self.window, "work_submode_combo"))
         self.assertFalse(page.mode_combo.isHidden())
 
     def test_keywords_page_mirrors_waiting_resume_and_running_lock(self) -> None:
@@ -456,7 +456,7 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window._mode_frame.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
         self.assertFalse(self.window.workbench_status_card.isHidden())
-        self.assertTrue(self.window.work_submode_combo.isHidden())
+        self.assertFalse(hasattr(self.window, "work_submode_combo"))
         self.assertTrue(self.window.translate_btn.isHidden())
         # Doctor / bootstrap stay on the global project bar for every task page.
         self.assertFalse(self.window.doctor_btn.isHidden())
@@ -647,8 +647,8 @@ class GuiTaskPageTests(unittest.TestCase):
             refresh_manifest_writeback=False,
         )
         labels = [
-            self.window.work_submode_combo.itemText(i)
-            for i in range(self.window.work_submode_combo.count())
+            self.window.keywords_page.mode_combo.itemText(i)
+            for i in range(self.window.keywords_page.mode_combo.count())
         ]
         self.assertEqual(labels, ["批量", "同步"])
 
