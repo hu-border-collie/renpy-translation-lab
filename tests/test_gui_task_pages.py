@@ -312,10 +312,69 @@ class GuiTaskPageTests(unittest.TestCase):
             manifest_path="C:/rev/manifest.json",
         )
         self.window._set_writeback_summary(summary)
-        self.assertFalse(self.window.apply_revision_btn.isHidden())
-        self.assertTrue(self.window.apply_revision_btn.isEnabled())
+        page = self.window.revision_page
+        self.assertIs(self.window.workbench_stack.currentWidget(), page)
+        self.assertFalse(self.window.workbench_stack.isHidden())
+        self.assertTrue(self.window._mode_frame.isHidden())
+        self.assertTrue(self.window._workbench_actions_column.isHidden())
+        self.assertFalse(self.window.workbench_status_card.isHidden())
+        self.assertTrue(self.window.apply_revision_btn.isHidden())
+        self.assertTrue(page.writeback_btn.isEnabled())
         self.assertTrue(self.window.apply_btn.isHidden())
         self.assertTrue(self.window.keyword_merge_writeback_btn.isHidden())
+
+    def test_revision_page_uses_callbacks_and_local_mode_selector(self) -> None:
+        page = self.window.revision_page
+        starts: list[bool] = []
+        resumes: list[bool] = []
+        stops: list[bool] = []
+        writebacks: list[bool] = []
+        selected: list[WorkMode] = []
+        page.set_action_callbacks(
+            WorkbenchPageActions(
+                start=lambda: starts.append(True),
+                resume=lambda: resumes.append(True),
+                stop=lambda: stops.append(True),
+                writeback=lambda: writebacks.append(True),
+                select_mode=selected.append,
+            )
+        )
+        page.activate(WorkMode.REVISION, WorkbenchModeSession())
+        page.set_controls(
+            start_enabled=True,
+            resume_enabled=True,
+            resume_visible=True,
+            resume_label="继续订正",
+            writeback_enabled=True,
+            result_message="订正预览已通过。",
+        )
+        page.start_btn.click()
+        page.resume_btn.click()
+        page.writeback_btn.click()
+        page.set_task_running(True)
+        page.stop_btn.click()
+        page.set_task_running(False)
+        page.mode_combo.setCurrentIndex(
+            page.mode_combo.findData(WorkMode.SYNC_REVISION.value)
+        )
+
+        self.assertEqual(starts, [True])
+        self.assertEqual(resumes, [True])
+        self.assertEqual(writebacks, [True])
+        self.assertEqual(stops, [True])
+        self.assertEqual(selected, [WorkMode.SYNC_REVISION])
+
+    def test_revision_page_mode_selector_and_running_lock(self) -> None:
+        self.window._set_work_mode(WorkMode.REVISION, refresh_manifest_writeback=False)
+        page = self.window.revision_page
+        page.mode_combo.setCurrentIndex(page.mode_combo.findData(WorkMode.SYNC_REVISION.value))
+        self.assertEqual(self.window._work_mode, WorkMode.SYNC_REVISION)
+        self.window._set_task_running(True)
+        self.assertFalse(page.mode_combo.isEnabled())
+        self.assertFalse(page.start_btn.isEnabled())
+        self.assertFalse(page.resume_btn.isEnabled())
+        self.assertFalse(page.writeback_btn.isEnabled())
+        self.assertTrue(page.stop_btn.isEnabled())
 
     def test_batch_page_hides_revision_apply(self) -> None:
         self.window._set_work_mode(
@@ -505,8 +564,8 @@ class GuiTaskPageTests(unittest.TestCase):
             refresh_manifest_writeback=True,
         )
         self.assertEqual(self.window._writeback_manifest_path, "C:/rev/manifest.json")
-        self.assertFalse(self.window.apply_revision_btn.isHidden())
-        self.assertTrue(self.window.apply_revision_btn.isEnabled())
+        self.assertTrue(self.window.apply_revision_btn.isHidden())
+        self.assertTrue(self.window.revision_page.writeback_btn.isEnabled())
 
     def test_roundtrip_preserves_workflow_progress_ui(self) -> None:
         self.window._set_work_mode(
