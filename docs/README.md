@@ -22,7 +22,7 @@
 ### 现行：配置与 GUI
 
 - [安装与本地配置](setup.md)：`translator_config.json`、**按项目**的 `project_context_settings.json`、work 目录、SDK / TL 模板。
-- [GUI 工作台](gui_workbench.md)：当前 PySide6 界面（左导航五页、状态三栏、设置分区、诊断与工具、写回安全边界）。
+- [GUI 工作台](gui_workbench.md)：当前 PySide6 界面（左导航五个真实页面、页内状态标签、设置分区、诊断与工具、写回安全边界）。
 - [工作区项目总表](games_registry.md)：`games_registry.json` / `GAMES.md`、CLI 与 GUI 刷新边界。
 
 ### 现行：Batch、上下文与检查
@@ -42,7 +42,7 @@
 
 下列文档**保留为过程与审计记录**，界面与交付状态以 [GUI 工作台](gui_workbench.md) 和代码为准。
 
-- [GUI 信息架构重组计划](gui_ia_redesign.md)：Epic #157 的 P0–P3 设计 SSOT；**P0a–P3 已合并**。文中「分析与准备」「诊断页」等多为改造前用语。
+- [GUI 信息架构重组计划](gui_ia_redesign.md)：Epic #157 的 P0–P3 历史设计 SSOT，并记录后续 #176 页面化交付衔接。文中「分析与准备」「诊断页」等多为改造前用语。
 - [翻译全生命周期审计](translation_workflow_audit.md)：流水线与门禁的代码审计快照，可能落后于最新实现细节。
 
 ## 配置分层（速查）
