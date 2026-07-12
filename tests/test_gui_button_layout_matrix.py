@@ -185,6 +185,8 @@ class GuiButtonLayoutMatrixTests(unittest.TestCase):
         self.assertFalse(page.writeback_bar.isHidden())
         self.assertFalse(page.buttons["apply"].isHidden())
         self.assertFalse(page.issues_toggle_btn.isHidden())
+        self.assertIs(page.issues_toggle_btn.parentWidget(), page.writeback_row)
+        self.assertIs(page.writeback_bar.parentWidget(), page.writeback_row)
         page.issues_toggle_btn.click()
         self.assertFalse(page.issues_bar.isHidden())
 
