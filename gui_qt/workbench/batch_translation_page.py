@@ -1,6 +1,7 @@
 """Persistent batch-translation page for the workbench stack (#176 P5)."""
 from __future__ import annotations
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from ..responsive_layout import FlowButtonBar
@@ -15,6 +16,7 @@ ControlState = tuple[bool, bool, str]
 class BatchTranslationPage(QWidget):
     """Page-local batch actions; the coordinator remains the state authority."""
 
+    content_height_changed = Signal()
     supported_modes = (WorkMode.BATCH_TRANSLATION,)
     _main_actions = ("start", "resume", "stop", "split_submit")
     _writeback_actions = ("apply",)
@@ -134,6 +136,7 @@ class BatchTranslationPage(QWidget):
         self.issues_bar.setVisible(self._issues_expanded)
         self.issues_bar.reflow(force=True)
         self.updateGeometry()
+        self.content_height_changed.emit()
 
     def _trigger(self, action: str) -> None:
         if action == "stop":

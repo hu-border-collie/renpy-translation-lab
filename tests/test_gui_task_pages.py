@@ -416,6 +416,25 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(page.buttons["apply"].isEnabled())
         self.assertTrue(page.buttons["stop"].isEnabled())
 
+    def test_batch_issue_toggle_recalculates_stack_height(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.batch_translation_page
+        page.set_controls(
+            {
+                "issues": (True, True, "查看问题清单"),
+                "retry": (True, True, "生成补译包"),
+                "repair": (True, True, "同步修补"),
+            }
+        )
+        page.issues_toggle_btn.click()
+
+        self.assertGreaterEqual(
+            self.window.workbench_stack.maximumHeight(),
+            page.preferred_height(self.window.workbench_stack.width()),
+        )
     def test_context_page_shows_status_cards(self) -> None:
         self.window._set_work_mode(
             WorkMode.BOOTSTRAP_RAG,

@@ -715,6 +715,9 @@ class MainWindow(QMainWindow):
                 page.set_action_callbacks(
                     WorkbenchPageActions(action=self._on_batch_translation_page_action)
                 )
+                page.content_height_changed.connect(
+                    self._on_batch_translation_page_height_changed
+                )
                 self.batch_translation_page = page
             elif nav_item == WorkbenchNavItem.CONTEXT:
                 page = ContextLibraryPage()
@@ -4732,6 +4735,13 @@ class MainWindow(QMainWindow):
         callback = callbacks.get(action)
         if callback is not None:
             callback()
+
+    def _on_batch_translation_page_height_changed(self) -> None:
+        """Resize the stack immediately after a page-local disclosure changes."""
+        if self._current_work_mode() == WorkMode.BATCH_TRANSLATION:
+            self._apply_task_page_chrome(
+                work_mode_spec(WorkMode.BATCH_TRANSLATION)
+            )
 
     def _sync_batch_translation_page_controls(
         self,
