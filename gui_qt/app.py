@@ -398,10 +398,10 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(16, 16, 16, 16)
-        root_layout.setSpacing(12)
+        root_layout.setContentsMargins(20, 18, 20, 16)
+        root_layout.setSpacing(10)
 
-        header = QLabel("Ren'Py Translation Lab · 图形工作台")
+        header = QLabel("Ren'Py Translation Lab")
         header.setObjectName("header_label")
         root_layout.addWidget(header)
 
@@ -606,8 +606,8 @@ class MainWindow(QMainWindow):
         bar.setObjectName("global_project_bar")
         self.global_project_bar = bar
         outer = QVBoxLayout(bar)
-        outer.setContentsMargins(12, 8, 12, 8)
-        outer.setSpacing(6)
+        outer.setContentsMargins(14, 10, 14, 10)
+        outer.setSpacing(8)
 
         path_row = QHBoxLayout()
         path_row.setSpacing(10)
@@ -673,7 +673,7 @@ class MainWindow(QMainWindow):
         # Left fixed task navigation (GUI IA P1a / #160).
         self.workbench_nav = QListWidget()
         self.workbench_nav.setObjectName("workbench_nav")
-        self.workbench_nav.setFixedWidth(148)
+        self.workbench_nav.setFixedWidth(172)
         self.workbench_nav.setSpacing(2)
         self.workbench_nav.setFrameShape(QFrame.Shape.NoFrame)
         for nav_item in WORKBENCH_NAV_ORDER:
@@ -698,8 +698,8 @@ class MainWindow(QMainWindow):
         right.setObjectName("workbench_content")
         self._style_themed_surface(right)
         layout = QVBoxLayout(right)
-        layout.setContentsMargins(12, 16, 12, 12)
-        layout.setSpacing(14)
+        layout.setContentsMargins(18, 18, 18, 14)
+        layout.setSpacing(16)
         layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         right_scroll.setWidget(right)
         outer.addWidget(right_scroll, 1)
