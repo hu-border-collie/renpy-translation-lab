@@ -148,7 +148,7 @@ class GuiWorkbenchNavTests(unittest.TestCase):
             WorkMode.KEYWORD_EXTRACTION,
             refresh_manifest_writeback=False,
         )
-        self.assertTrue(self.window.work_submode_combo.isHidden())
+        self.assertFalse(hasattr(self.window, "work_submode_combo"))
         self.assertFalse(self.window.keywords_page.mode_combo.isHidden())
         self.assertGreaterEqual(self.window.keywords_page.mode_combo.count(), 2)
 
@@ -156,7 +156,7 @@ class GuiWorkbenchNavTests(unittest.TestCase):
             WorkMode.BATCH_TRANSLATION,
             refresh_manifest_writeback=False,
         )
-        self.assertTrue(self.window.work_submode_combo.isHidden())
+        self.assertFalse(hasattr(self.window, "work_submode_combo"))
 
     def test_keywords_nav_restores_last_selected_submode_without_session_data(self) -> None:
         self.window._set_work_mode(WorkMode.SYNC_KEYWORD_EXTRACTION, refresh_manifest_writeback=False)

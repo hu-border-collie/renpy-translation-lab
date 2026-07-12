@@ -241,26 +241,19 @@ from .user_copy import (
     format_manifest_path_fact,
 )
 from .work_modes import (
-    TASK_CATEGORY_ORDER,
-    TaskCategory,
     WORKBENCH_NAV_ORDER,
     WorkMode,
     WorkbenchNavItem,
     bootstrap_disabled_message,
-    default_work_mode_for_category,
     default_work_mode_for_nav,
-    normalize_task_category,
     normalize_work_mode,
-    task_category_for_work_mode,
-    task_category_spec,
     work_mode_hint_texts,
     work_mode_spec,
-    work_mode_submode_label,
-    work_modes_for_category,
     workbench_nav_for_work_mode,
     workbench_nav_spec,
 )
 from .workbench import WorkbenchPageActions
+from .workbench.coordinator import WorkbenchPageCoordinator
 from .workbench.batch_translation_page import BatchTranslationPage
 from .workbench.context_library_page import ContextLibraryPage
 from .workbench.keywords_page import KeywordsPage
@@ -776,7 +769,9 @@ class MainWindow(QMainWindow):
                 page_layout.setSpacing(0)
             self._workbench_stack_pages[nav_item] = page
             self.workbench_stack.addWidget(page)
-        self.workbench_stack.setVisible(False)
+        self._workbench_coordinator = WorkbenchPageCoordinator(
+            self.workbench_stack, self._workbench_stack_pages
+        )
         layout.addWidget(self.workbench_stack)
 
         # Project path lives on the global bar; keep redirect notice only on workbench.
@@ -792,27 +787,6 @@ class MainWindow(QMainWindow):
         mode_outer = QVBoxLayout(mode_frame)
         mode_outer.setContentsMargins(12, 8, 12, 8)
         mode_outer.setSpacing(6)
-
-        # Submode (batch|sync / rag|index) only for multi-mode nav items.
-        submode_row = QHBoxLayout()
-        submode_row.setSpacing(10)
-        self.work_submode_label = QLabel("模式：")
-        submode_row.addWidget(self.work_submode_label)
-        self.work_submode_combo = NoWheelComboBox()
-        self.work_submode_combo.setObjectName("work_submode_combo")
-        self.work_submode_combo.currentIndexChanged.connect(self._on_work_submode_changed)
-        submode_row.addWidget(self.work_submode_combo, 1)
-        mode_outer.addLayout(submode_row)
-        self._work_submode_row_widgets = (self.work_submode_label, self.work_submode_combo)
-
-        # Legacy combos kept for residual helpers/tests — not placed in the layout
-        # so they cannot reserve vertical space or collide with action buttons.
-        self.task_category_combo = NoWheelComboBox(mode_frame)
-        self.task_category_combo.setObjectName("task_category_combo")
-        self.task_category_combo.hide()
-        self.work_task_combo = NoWheelComboBox(mode_frame)
-        self.work_task_combo.setObjectName("work_task_combo")
-        self.work_task_combo.hide()
 
         self.work_mode_hint_label = QLabel()
         self.work_mode_hint_label.setWordWrap(True)
@@ -1260,11 +1234,10 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._build_workbench_log_drawer())
 
-        # Log drawer stays available on real pages (sync / context CLI runs).
-        self._legacy_workbench_shell_widgets = (
-            self._mode_frame,
-            self._workbench_actions_column,
-        )
+        # Real pages own all visible task actions. The old action widgets remain
+        # internal readiness adapters until their workflow state is made widget-free.
+        self._mode_frame.hide()
+        self._workbench_actions_column.hide()
 
         self._workbench_tab = tab
         self.tab_widget.addTab(tab, "工作台")
@@ -1344,130 +1317,30 @@ class MainWindow(QMainWindow):
             page.set_task_running(running)
             return
 
-    def _apply_task_page_chrome(self, spec) -> None:
-        """Show/hide per-nav chrome: sync warn, context cards, task actions (P1c)."""
-        mode = spec.mode
-        nav = workbench_nav_for_work_mode(mode)
-        is_sync = mode == WorkMode.SYNC_TRANSLATION
-        is_batch = nav == WorkbenchNavItem.BATCH_TRANSLATION
-        is_context = nav == WorkbenchNavItem.CONTEXT
-        is_keywords = nav == WorkbenchNavItem.KEYWORDS
-        is_revision = nav == WorkbenchNavItem.REVISION
-        is_real_page = is_batch or is_context or nav in {WorkbenchNavItem.SYNC_TRANSLATION, WorkbenchNavItem.KEYWORDS, WorkbenchNavItem.REVISION}
-
-        if hasattr(self, "sync_mode_warning"):
-            self.sync_mode_warning.setVisible(is_sync and not is_real_page)
-        if hasattr(self, "workbench_stack"):
-            self.workbench_stack.setVisible(is_real_page)
-            self.workbench_stack.setMinimumHeight(0)
-            # QStackedWidget sizeHint = max(all pages). Sync is a short strip; pin
-            # the stack to the current page so a tall context sibling cannot leave
-            # a huge empty action band above the shared status card.
-            if not is_real_page:
-                self.workbench_stack.setMaximumHeight(0)
-                self.workbench_stack.setSizePolicy(
-                    QSizePolicy.Policy.Expanding,
-                    QSizePolicy.Policy.Fixed,
-                )
-            elif is_sync:
-                page = getattr(self, "sync_translation_page", None)
-                hint_h = page.sizeHint().height() if page is not None else 72
-                self.workbench_stack.setMaximumHeight(max(hint_h, 48))
-                self.workbench_stack.setSizePolicy(
-                    QSizePolicy.Policy.Expanding,
-                    QSizePolicy.Policy.Maximum,
-                )
-            elif is_keywords:
-                page = getattr(self, "keywords_page", None)
-                hint_h = (
-                    page.preferred_height(self.workbench_stack.width())
-                    if page is not None
-                    else 96
-                )
-                self.workbench_stack.setMaximumHeight(max(hint_h, 48))
-                self.workbench_stack.setSizePolicy(
-                    QSizePolicy.Policy.Expanding,
-                    QSizePolicy.Policy.Maximum,
-                )
-            elif is_batch:
-                page = getattr(self, "batch_translation_page", None)
-                hint_h = (
-                    page.preferred_height(self.workbench_stack.width())
-                    if page is not None
-                    else 96
-                )
-                self.workbench_stack.setMaximumHeight(max(hint_h, 48))
-                self.workbench_stack.setSizePolicy(
-                    QSizePolicy.Policy.Expanding,
-                    QSizePolicy.Policy.Maximum,
-                )
-            elif is_revision:
-                page = getattr(self, "revision_page", None)
-                hint_h = (
-                    page.preferred_height(self.workbench_stack.width())
-                    if page is not None
-                    else 96
-                )
-                self.workbench_stack.setMaximumHeight(max(hint_h, 48))
-                self.workbench_stack.setSizePolicy(
-                    QSizePolicy.Policy.Expanding,
-                    QSizePolicy.Policy.Maximum,
-                )
-            else:
-                self.workbench_stack.setMaximumHeight(16_777_215)
-                self.workbench_stack.setSizePolicy(
-                    QSizePolicy.Policy.Expanding,
-                    QSizePolicy.Policy.Preferred,
-                )
-        for widget in getattr(self, "_legacy_workbench_shell_widgets", ()):
-            widget.setVisible(not is_real_page)
-        if is_batch:
-            # P5 owns batch action widgets; these legacy bars remain only as
-            # coordinator-side readiness sources during the staged migration.
-            for widget_name in (
-                "writeback_primary_bar",
-                "writeback_issues_toggle_btn",
-                "writeback_issues_badge",
-                "writeback_issues_panel",
-            ):
-                widget = getattr(self, widget_name, None)
-                if widget is not None:
-                    widget.setVisible(False)
-        if is_context:
+    def _refresh_active_workbench_page(self, spec) -> None:
+        """Refresh the active real page and hide internal readiness adapters."""
+        nav = workbench_nav_for_work_mode(spec.mode)
+        self._workbench_coordinator.resize(nav)
+        if nav == WorkbenchNavItem.CONTEXT:
             self._refresh_context_library_panel()
 
-        # Doctor / bootstrap live on the global project bar (always available).
-
-        if hasattr(self, "translate_btn"):
-            self.translate_btn.setVisible(not is_real_page)
-        if hasattr(self, "resume_btn") and is_real_page:
-            self.resume_btn.setVisible(False)
-        if is_real_page:
-            for widget in getattr(self, "_work_submode_row_widgets", ()):
+        self.translate_btn.setVisible(False)
+        self.resume_btn.setVisible(False)
+        self.work_mode_hint_label.setVisible(False)
+        if nav == WorkbenchNavItem.BATCH_TRANSLATION:
+            for widget in (
+                self.writeback_primary_bar,
+                self.writeback_issues_toggle_btn,
+                self.writeback_issues_badge,
+                self.writeback_issues_panel,
+            ):
                 widget.setVisible(False)
-        # Idle workflow hint is redundant with status-card empty states; hide it.
-        if hasattr(self, "keyword_merge_writeback_btn") and is_keywords:
+        if nav == WorkbenchNavItem.KEYWORDS:
             self.keyword_merge_writeback_btn.setVisible(False)
             self.keyword_merge_writeback_btn.setEnabled(False)
-        if hasattr(self, "apply_revision_btn") and is_revision:
+        if nav == WorkbenchNavItem.REVISION:
             self.apply_revision_btn.setVisible(False)
             self.apply_revision_btn.setEnabled(False)
-        # mode_frame only stays for submode row and/or legacy sync risk banner.
-        if hasattr(self, "work_mode_hint_label"):
-            self.work_mode_hint_label.setVisible(False)
-        if hasattr(self, "_mode_frame") and not is_real_page:
-            show_sub = workbench_nav_spec(nav).show_submode
-            show_sync_warn = bool(
-                is_sync
-                and hasattr(self, "sync_mode_warning")
-                and self.sync_mode_warning.isVisible()
-            )
-            self._mode_frame.setVisible(show_sub or show_sync_warn)
-        if hasattr(self, "action_panel"):
-            reflow = getattr(self.action_panel, "reflow", None)
-            if callable(reflow):
-                reflow(force=True)
-
     def _build_workbench_log_drawer(self) -> QFrame:
         """Bottom collapsible log drawer for the workbench (shares log document with diagnostics)."""
         drawer = QFrame()
@@ -4165,17 +4038,6 @@ class MainWindow(QMainWindow):
             self._revision_writeback_modes()
         )
 
-    def _current_task_category(self) -> TaskCategory:
-        return task_category_for_work_mode(self._current_work_mode())
-
-    def _set_combo_value_by_data(self, combo: NoWheelComboBox, data: str) -> None:
-        for index in range(combo.count()):
-            if combo.itemData(index) == data:
-                blocked = combo.blockSignals(True)
-                combo.setCurrentIndex(index)
-                combo.blockSignals(blocked)
-                return
-
     def _capture_mode_session(self) -> WorkbenchModeSession:
         # Align with product default (进度 tab) when tabs are unavailable.
         stage_index = _BATCH_STAGE_EXECUTE
@@ -4274,28 +4136,9 @@ class MainWindow(QMainWindow):
             item: default_work_mode_for_nav(item) for item in WORKBENCH_NAV_ORDER
         }
 
-    def _rebuild_work_task_combo(
-        self,
-        category: TaskCategory,
-        *,
-        selected_mode: WorkMode | None = None,
-    ) -> None:
-        """Legacy helper: keep hidden work_task_combo in sync for residual callers."""
-        if not hasattr(self, "work_task_combo"):
-            return
-        blocked = self.work_task_combo.blockSignals(True)
-        self.work_task_combo.clear()
-        modes = work_modes_for_category(category)
-        selected = selected_mode if selected_mode in modes else default_work_mode_for_category(category)
-        for mode in modes:
-            self.work_task_combo.addItem(work_mode_spec(mode).label, mode.value)
-        self._set_combo_value_by_data(self.work_task_combo, selected.value)
-        self.work_task_combo.blockSignals(blocked)
-
     def _sync_task_selectors_from_work_mode(self) -> None:
-        """Sync left nav + submode (+ hidden legacy combos) to the active WorkMode."""
+        """Sync the visible navigation and page-local mode selectors."""
         mode = self._current_work_mode()
-        spec = work_mode_spec(mode)
         nav_item = workbench_nav_for_work_mode(mode)
         self._workbench_nav_item = nav_item
 
@@ -4308,68 +4151,21 @@ class MainWindow(QMainWindow):
                     break
             self.workbench_nav.blockSignals(blocked)
 
-        if hasattr(self, "workbench_stack"):
-            page = self._workbench_stack_pages.get(nav_item)
-            if page is not None:
-                self.workbench_stack.setCurrentWidget(page)
-        if nav_item in {
-            WorkbenchNavItem.BATCH_TRANSLATION,
-            WorkbenchNavItem.CONTEXT,
-            WorkbenchNavItem.SYNC_TRANSLATION,
-            WorkbenchNavItem.KEYWORDS,
-            WorkbenchNavItem.REVISION,
-        }:
-            page = {
-                WorkbenchNavItem.BATCH_TRANSLATION: getattr(self, "batch_translation_page", None),
-                WorkbenchNavItem.CONTEXT: getattr(self, "context_library_page", None),
-                WorkbenchNavItem.SYNC_TRANSLATION: getattr(self, "sync_translation_page", None),
-                WorkbenchNavItem.KEYWORDS: getattr(self, "keywords_page", None),
-                WorkbenchNavItem.REVISION: getattr(self, "revision_page", None),
-            }[nav_item]
-            sessions = getattr(self, "_mode_sessions", None)
-            session = sessions.get(mode) if isinstance(sessions, dict) else None
-            if page is not None:
-                page.activate(mode, session or WorkbenchModeSession())
-                if nav_item == WorkbenchNavItem.BATCH_TRANSLATION:
-                    self._sync_batch_translation_page_controls()
-                elif nav_item == WorkbenchNavItem.SYNC_TRANSLATION:
-                    self._sync_sync_translation_page_controls()
-                elif nav_item == WorkbenchNavItem.KEYWORDS:
-                    self._sync_keywords_page_controls()
-                elif nav_item == WorkbenchNavItem.REVISION:
-                    self._sync_revision_page_controls()
-                else:
-                    page.set_task_running(
-                        bool(getattr(self, "_task_running", False))
-                    )
-
-        nav_spec = workbench_nav_spec(nav_item)
-        show_sub = nav_spec.show_submode
-        for widget in getattr(self, "_work_submode_row_widgets", ()):
-            widget.setVisible(show_sub)
-        if hasattr(self, "work_submode_combo"):
-            blocked = self.work_submode_combo.blockSignals(True)
-            self.work_submode_combo.clear()
-            for sub_mode in nav_spec.work_modes:
-                self.work_submode_combo.addItem(
-                    work_mode_submode_label(sub_mode),
-                    sub_mode.value,
-                )
-            self._set_combo_value_by_data(self.work_submode_combo, mode.value)
-            self.work_submode_combo.blockSignals(blocked)
-
-        if hasattr(self, "task_category_combo"):
-            blocked_category = self.task_category_combo.blockSignals(True)
-            # Ensure category items exist (hidden legacy combo may be empty).
-            if self.task_category_combo.count() == 0:
-                for category in TASK_CATEGORY_ORDER:
-                    self.task_category_combo.addItem(
-                        task_category_spec(category).label,
-                        category.value,
-                    )
-            self._set_combo_value_by_data(self.task_category_combo, spec.category.value)
-            self.task_category_combo.blockSignals(blocked_category)
-        self._rebuild_work_task_combo(spec.category, selected_mode=spec.mode)
+        sessions = getattr(self, "_mode_sessions", None)
+        session = sessions.get(mode) if isinstance(sessions, dict) else None
+        self._workbench_coordinator.activate(
+            mode,
+            session or WorkbenchModeSession(),
+            running=bool(getattr(self, "_task_running", False)),
+        )
+        if nav_item == WorkbenchNavItem.BATCH_TRANSLATION:
+            self._sync_batch_translation_page_controls()
+        elif nav_item == WorkbenchNavItem.SYNC_TRANSLATION:
+            self._sync_sync_translation_page_controls()
+        elif nav_item == WorkbenchNavItem.KEYWORDS:
+            self._sync_keywords_page_controls()
+        elif nav_item == WorkbenchNavItem.REVISION:
+            self._sync_revision_page_controls()
 
     def _on_workbench_nav_changed(self, row: int) -> None:
         if row < 0:
@@ -4391,15 +4187,6 @@ class MainWindow(QMainWindow):
         )
         self._set_work_mode(target_mode, refresh_manifest_writeback=True)
 
-    def _on_work_submode_changed(self) -> None:
-        if self.kill_btn.isEnabled() or self._task_running:
-            self._sync_task_selectors_from_work_mode()
-            return
-        mode = normalize_work_mode(self.work_submode_combo.currentData())
-        if mode == self._work_mode:
-            return
-        self._set_work_mode(mode, refresh_manifest_writeback=True)
-
     def _on_keywords_page_mode_selected(self, mode: WorkMode) -> None:
         """Apply the page-local batch/sync selector through the coordinator."""
         if self.kill_btn.isEnabled() or bool(getattr(self, "_task_running", False)):
@@ -4415,28 +4202,6 @@ class MainWindow(QMainWindow):
             return
         if mode in {WorkMode.REVISION, WorkMode.SYNC_REVISION}:
             self._set_work_mode(mode, refresh_manifest_writeback=True)
-
-    def _on_task_category_changed(self) -> None:
-        # Legacy path (hidden combo); keep behavior for residual callers.
-        if self.kill_btn.isEnabled():
-            self._sync_task_selectors_from_work_mode()
-            return
-        category = normalize_task_category(self.task_category_combo.currentData())
-        if category == self._current_task_category():
-            return
-        self._set_work_mode(
-            default_work_mode_for_category(category),
-            refresh_manifest_writeback=True,
-        )
-
-    def _on_work_task_changed(self) -> None:
-        if self.kill_btn.isEnabled():
-            self._sync_task_selectors_from_work_mode()
-            return
-        mode = normalize_work_mode(self.work_task_combo.currentData())
-        if mode == self._work_mode:
-            return
-        self._set_work_mode(mode, refresh_manifest_writeback=True)
 
     def _set_work_mode(
         self,
@@ -4758,7 +4523,7 @@ class MainWindow(QMainWindow):
     def _on_batch_translation_page_height_changed(self) -> None:
         """Resize the stack immediately after a page-local disclosure changes."""
         if self._current_work_mode() == WorkMode.BATCH_TRANSLATION:
-            self._apply_task_page_chrome(
+            self._refresh_active_workbench_page(
                 work_mode_spec(WorkMode.BATCH_TRANSLATION)
             )
 
@@ -4797,7 +4562,7 @@ class MainWindow(QMainWindow):
                 "split": (True, self.split_btn.isEnabled(), self.split_btn.text()),
             }
         )
-        self._apply_task_page_chrome(work_mode_spec(WorkMode.BATCH_TRANSLATION))
+        self._refresh_active_workbench_page(work_mode_spec(WorkMode.BATCH_TRANSLATION))
 
     def _sync_keywords_page_controls(self, *, running: bool | None = None) -> None:
         """Mirror coordinator-owned keyword actions onto the real page."""
@@ -4831,7 +4596,7 @@ class MainWindow(QMainWindow):
             merge_message=result_hint,
         )
         if workbench_nav_for_work_mode(mode) == WorkbenchNavItem.KEYWORDS:
-            self._apply_task_page_chrome(work_mode_spec(mode))
+            self._refresh_active_workbench_page(work_mode_spec(mode))
 
     def _sync_revision_page_controls(self, *, running: bool | None = None) -> None:
         """Mirror coordinator-owned revision actions onto the real page."""
@@ -4860,7 +4625,7 @@ class MainWindow(QMainWindow):
             result_message=result_message,
         )
         if workbench_nav_for_work_mode(mode) == WorkbenchNavItem.REVISION:
-            self._apply_task_page_chrome(work_mode_spec(mode))
+            self._refresh_active_workbench_page(work_mode_spec(mode))
 
     def _sync_sync_translation_page_controls(
         self,
@@ -4910,7 +4675,7 @@ class MainWindow(QMainWindow):
         else:
             hint = spec.not_implemented_message
         self.work_mode_hint_label.setText(hint)
-        self._apply_task_page_chrome(spec)
+        self._refresh_active_workbench_page(spec)
 
         # Prefer session-bound writeback path when restoring a page.
         session_manifest = str(self._writeback_manifest_path or "").strip() or None
@@ -5020,7 +4785,7 @@ class MainWindow(QMainWindow):
         self._update_split_submit_btn(running=running)
         self._sync_task_shortcuts()
         # Re-apply page chrome after enable flags so context cards stay correct.
-        self._apply_task_page_chrome(spec)
+        self._refresh_active_workbench_page(spec)
         self._sync_workbench_empty_states(resume_available=resume_available)
 
     def _update_timeline_steps(self, mode: WorkMode) -> None:
@@ -7461,14 +7226,8 @@ class MainWindow(QMainWindow):
             panel.setEnabled(not running)
         if hasattr(self, "settings_go_workspace_btn"):
             self.settings_go_workspace_btn.setEnabled(not running)
-        if hasattr(self, "task_category_combo"):
-            self.task_category_combo.setEnabled(not running)
-        if hasattr(self, "work_task_combo"):
-            self.work_task_combo.setEnabled(not running)
         if hasattr(self, "workbench_nav"):
             self.workbench_nav.setEnabled(not running)
-        if hasattr(self, "work_submode_combo"):
-            self.work_submode_combo.setEnabled(not running)
         self.doctor_btn.setEnabled(not running)
         self.bootstrap_work_btn.setEnabled(not running)
         self.api_btn.setEnabled(not running)
