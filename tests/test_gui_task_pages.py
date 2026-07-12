@@ -416,8 +416,8 @@ class GuiTaskPageTests(unittest.TestCase):
             actions,
             ["start", "resume", "apply", "probe", "split", "issues", "stop"],
         )
-        self.assertFalse(page.buttons["start"].isEnabled())
-        self.assertFalse(page.buttons["apply"].isEnabled())
+        for action in ("start", "resume", "apply", "probe", "split", "issues"):
+            self.assertFalse(page.buttons[action].isEnabled())
         self.assertTrue(page.buttons["stop"].isEnabled())
 
     def test_batch_issue_toggle_recalculates_stack_height(self) -> None:
@@ -433,11 +433,14 @@ class GuiTaskPageTests(unittest.TestCase):
                 "repair": (True, True, "同步修补"),
             }
         )
+        collapsed_height = page.preferred_height(self.window.workbench_stack.width())
         page.issues_toggle_btn.click()
+        expanded_height = page.preferred_height(self.window.workbench_stack.width())
 
+        self.assertGreater(expanded_height, collapsed_height)
         self.assertGreaterEqual(
             self.window.workbench_stack.maximumHeight(),
-            page.preferred_height(self.window.workbench_stack.width()),
+            expanded_height,
         )
     def test_context_page_shows_status_cards(self) -> None:
         self.window._set_work_mode(
