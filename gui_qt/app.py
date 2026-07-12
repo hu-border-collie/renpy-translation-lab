@@ -7213,6 +7213,11 @@ class MainWindow(QMainWindow):
     def _set_task_running(self, running: bool):
         was_running = bool(getattr(self, "_task_running", False))
         self._task_running = running
+        # Update the stop action before recomputing resume availability. The
+        # availability check treats an enabled stop action as an active task;
+        # leaving the old running state here would keep resume/status disabled
+        # until another UI refresh (or an application restart).
+        self.kill_btn.setEnabled(running)
         spec = work_mode_spec(self._current_work_mode())
         project_switch_enabled = not running
         if hasattr(self, "select_btn"):
@@ -7265,7 +7270,6 @@ class MainWindow(QMainWindow):
         self._update_compare_variants_btn_enabled(running=running)
         self._update_keyword_merge_btn_enabled(running=running)
         self._update_split_btn_enabled(running=running)
-        self.kill_btn.setEnabled(running)
         self._sync_sync_translation_page_controls(running=running)
         self._sync_batch_translation_page_controls(running=running)
         self._sync_keywords_page_controls(running=running)

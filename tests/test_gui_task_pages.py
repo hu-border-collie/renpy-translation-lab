@@ -420,6 +420,29 @@ class GuiTaskPageTests(unittest.TestCase):
             self.assertFalse(page.buttons[action].isEnabled())
         self.assertTrue(page.buttons["stop"].isEnabled())
 
+    def test_batch_resume_reenables_immediately_when_task_stops(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+
+        class WaitingWorkflow:
+            manifest_path = ""
+
+            @staticmethod
+            def current_step():
+                return object()
+
+        self.window._workflow = WaitingWorkflow()
+        self.window._set_task_running(True)
+        self.assertFalse(self.window.batch_translation_page.buttons["resume"].isEnabled())
+
+        self.window._set_task_running(False)
+
+        self.assertFalse(self.window.kill_btn.isEnabled())
+        self.assertTrue(self.window.resume_btn.isEnabled())
+        self.assertTrue(self.window.batch_translation_page.buttons["resume"].isEnabled())
+
     def test_batch_issue_toggle_recalculates_stack_height(self) -> None:
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,
