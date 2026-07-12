@@ -4720,6 +4720,11 @@ class MainWindow(QMainWindow):
     ) -> bool:
         if running or not spec.implemented or not bootstrap_ready:
             return False
+        if (
+            spec.mode == WorkMode.KEYWORD_EXTRACTION
+            and self.workflow_status_label.property("status") == "waiting"
+        ):
+            return False
         if self._translation_requires_doctor_check(spec.mode):
             return self._doctor_allows_translate_action()
         return True

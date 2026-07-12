@@ -290,6 +290,10 @@ class GuiTaskPageTests(unittest.TestCase):
         page = self.window.keywords_page
 
         self.assertEqual(page.resume_btn.text(), "查询云端状态")
+        self.window._set_task_running(False)
+        self.assertFalse(self.window.translate_btn.isEnabled())
+        self.assertFalse(page.start_btn.isEnabled())
+        self.assertTrue(page.resume_btn.isEnabled())
         self.window._set_task_running(True)
         self.assertFalse(page.mode_combo.isEnabled())
         self.assertFalse(page.start_btn.isEnabled())
