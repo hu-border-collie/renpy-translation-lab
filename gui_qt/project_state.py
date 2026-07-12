@@ -116,6 +116,44 @@ class ProjectState:
 
         return None
 
+    def get_latest_submitted_manifest_path_for_mode(
+        self,
+        game_root: Path,
+        work_mode: Any,
+    ) -> Path | None:
+        """Return the newest same-project manifest that already has a cloud job."""
+        from .work_modes import manifest_mode_for_work_mode
+
+        expected_mode = manifest_mode_for_work_mode(work_mode)
+        if expected_mode is None:
+            return None
+        normalized_game_root = self._normalized_path_text(game_root)
+
+        def has_cloud_job(path: Path) -> bool:
+            try:
+                manifest = self.load_manifest_file(path, lite=True)
+            except ValueError:
+                return False
+            job_name = manifest.get("job_name")
+            return isinstance(job_name, str) and bool(job_name.strip())
+
+        latest = self.get_latest_manifest_path()
+        if latest is not None:
+            manifest = read_manifest_index_fields(latest)
+            if (
+                self._manifest_matches(manifest, expected_mode, normalized_game_root)
+                and has_cloud_job(latest)
+            ):
+                return latest
+
+        for _, path, actual_mode, base_dir in self._manifest_history_index():
+            if not self._manifest_mode_matches(actual_mode, expected_mode):
+                continue
+            if base_dir != normalized_game_root:
+                continue
+            if has_cloud_job(path):
+                return path
+        return None
     def invalidate_manifest_history_cache(self) -> None:
         self._manifest_history_cache_signature = None
         self._manifest_history_entries = None

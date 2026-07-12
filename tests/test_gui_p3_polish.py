@@ -63,6 +63,31 @@ class GuiP3PolishTests(unittest.TestCase):
         self.window._update_resume_btn_enabled(running=False)
         self.assertTrue(self.window.resume_btn.isEnabled())
 
+    def test_keyword_status_query_prefers_submitted_manifest(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.KEYWORD_EXTRACTION,
+            refresh_manifest_writeback=False,
+        )
+        self.window.resume_btn.setText("查询云端状态")
+        self.window.state.get_game_root = lambda: Path("C:/game/work")  # type: ignore[method-assign]
+        self.window.state.get_latest_manifest_path_for_mode = (  # type: ignore[method-assign]
+            lambda *_a, **_k: "C:/game/work/logs/new-local/manifest.json"
+        )
+        self.window.state.get_latest_submitted_manifest_path_for_mode = (  # type: ignore[method-assign]
+            lambda *_a, **_k: "C:/game/work/logs/cloud-job/manifest.json"
+        )
+        loaded_paths: list[str] = []
+
+        def load_resume_manifest(path, **_kwargs):
+            loaded_paths.append(str(path))
+            return {"mode": "keyword_extraction", "base_dir": "C:/game/work"}
+
+        self.window.state.load_resume_manifest = load_resume_manifest  # type: ignore[method-assign]
+        self.assertEqual(self.window._resume_task_available(), (True, ""))
+        self.assertEqual(
+            loaded_paths,
+            ["C:/game/work/logs/cloud-job/manifest.json"],
+        )
     def test_doctor_empty_state_visible_before_check(self) -> None:
         self.window._doctor_check_completed = False
         self.window._sync_workbench_empty_states()

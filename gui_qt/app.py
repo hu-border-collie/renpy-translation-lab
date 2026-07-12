@@ -261,6 +261,7 @@ from .work_modes import (
     workbench_nav_spec,
 )
 from .workbench import WorkbenchPageActions
+from .workbench.batch_translation_page import BatchTranslationPage
 from .workbench.context_library_page import ContextLibraryPage
 from .workbench.keywords_page import KeywordsPage
 from .workbench.revision_page import RevisionPage
@@ -709,7 +710,16 @@ class MainWindow(QMainWindow):
         self.workbench_stack.setObjectName("workbench_stack")
         self._workbench_stack_pages: dict[WorkbenchNavItem, QWidget] = {}
         for nav_item in WORKBENCH_NAV_ORDER:
-            if nav_item == WorkbenchNavItem.CONTEXT:
+            if nav_item == WorkbenchNavItem.BATCH_TRANSLATION:
+                page = BatchTranslationPage()
+                page.set_action_callbacks(
+                    WorkbenchPageActions(action=self._on_batch_translation_page_action)
+                )
+                page.content_height_changed.connect(
+                    self._on_batch_translation_page_height_changed
+                )
+                self.batch_translation_page = page
+            elif nav_item == WorkbenchNavItem.CONTEXT:
                 page = ContextLibraryPage()
                 page.set_action_callbacks(
                     WorkbenchPageActions(
@@ -1339,10 +1349,11 @@ class MainWindow(QMainWindow):
         mode = spec.mode
         nav = workbench_nav_for_work_mode(mode)
         is_sync = mode == WorkMode.SYNC_TRANSLATION
+        is_batch = nav == WorkbenchNavItem.BATCH_TRANSLATION
         is_context = nav == WorkbenchNavItem.CONTEXT
         is_keywords = nav == WorkbenchNavItem.KEYWORDS
         is_revision = nav == WorkbenchNavItem.REVISION
-        is_real_page = is_context or nav in {WorkbenchNavItem.SYNC_TRANSLATION, WorkbenchNavItem.KEYWORDS, WorkbenchNavItem.REVISION}
+        is_real_page = is_batch or is_context or nav in {WorkbenchNavItem.SYNC_TRANSLATION, WorkbenchNavItem.KEYWORDS, WorkbenchNavItem.REVISION}
 
         if hasattr(self, "sync_mode_warning"):
             self.sync_mode_warning.setVisible(is_sync and not is_real_page)
@@ -1378,6 +1389,18 @@ class MainWindow(QMainWindow):
                     QSizePolicy.Policy.Expanding,
                     QSizePolicy.Policy.Maximum,
                 )
+            elif is_batch:
+                page = getattr(self, "batch_translation_page", None)
+                hint_h = (
+                    page.preferred_height(self.workbench_stack.width())
+                    if page is not None
+                    else 96
+                )
+                self.workbench_stack.setMaximumHeight(max(hint_h, 48))
+                self.workbench_stack.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Maximum,
+                )
             elif is_revision:
                 page = getattr(self, "revision_page", None)
                 hint_h = (
@@ -1398,6 +1421,18 @@ class MainWindow(QMainWindow):
                 )
         for widget in getattr(self, "_legacy_workbench_shell_widgets", ()):
             widget.setVisible(not is_real_page)
+        if is_batch:
+            # P5 owns batch action widgets; these legacy bars remain only as
+            # coordinator-side readiness sources during the staged migration.
+            for widget_name in (
+                "writeback_primary_bar",
+                "writeback_issues_toggle_btn",
+                "writeback_issues_badge",
+                "writeback_issues_panel",
+            ):
+                widget = getattr(self, widget_name, None)
+                if widget is not None:
+                    widget.setVisible(False)
         if is_context:
             self._refresh_context_library_panel()
 
@@ -4278,12 +4313,14 @@ class MainWindow(QMainWindow):
             if page is not None:
                 self.workbench_stack.setCurrentWidget(page)
         if nav_item in {
+            WorkbenchNavItem.BATCH_TRANSLATION,
             WorkbenchNavItem.CONTEXT,
             WorkbenchNavItem.SYNC_TRANSLATION,
             WorkbenchNavItem.KEYWORDS,
             WorkbenchNavItem.REVISION,
         }:
             page = {
+                WorkbenchNavItem.BATCH_TRANSLATION: getattr(self, "batch_translation_page", None),
                 WorkbenchNavItem.CONTEXT: getattr(self, "context_library_page", None),
                 WorkbenchNavItem.SYNC_TRANSLATION: getattr(self, "sync_translation_page", None),
                 WorkbenchNavItem.KEYWORDS: getattr(self, "keywords_page", None),
@@ -4293,7 +4330,9 @@ class MainWindow(QMainWindow):
             session = sessions.get(mode) if isinstance(sessions, dict) else None
             if page is not None:
                 page.activate(mode, session or WorkbenchModeSession())
-                if nav_item == WorkbenchNavItem.SYNC_TRANSLATION:
+                if nav_item == WorkbenchNavItem.BATCH_TRANSLATION:
+                    self._sync_batch_translation_page_controls()
+                elif nav_item == WorkbenchNavItem.SYNC_TRANSLATION:
                     self._sync_sync_translation_page_controls()
                 elif nav_item == WorkbenchNavItem.KEYWORDS:
                     self._sync_keywords_page_controls()
@@ -4459,6 +4498,20 @@ class MainWindow(QMainWindow):
     def _resume_button_is_query_mode(self) -> bool:
         return hasattr(self, "resume_btn") and self.resume_btn.text() == "查询云端状态"
 
+    def _latest_resume_manifest_path(self, game_root, spec_or_mode):
+        """Choose the cloud task behind an explicit status query when possible."""
+        mode = getattr(spec_or_mode, "mode", spec_or_mode)
+        if self._resume_button_is_query_mode():
+            get_submitted = getattr(
+                self.state,
+                "get_latest_submitted_manifest_path_for_mode",
+                None,
+            )
+            if callable(get_submitted):
+                submitted = get_submitted(game_root, mode)
+                if submitted is not None:
+                    return submitted
+        return self.state.get_latest_manifest_path_for_mode(game_root, mode)
     def _resume_task_available(self) -> tuple[bool, str]:
         """Whether 「继续」 can load a resumable task for the current mode (P3 / #166)."""
         spec = work_mode_spec(self._current_work_mode())
@@ -4472,7 +4525,7 @@ class MainWindow(QMainWindow):
         game_root = self.state.get_game_root() if hasattr(self, "state") else None
         if game_root is None:
             return False, "请先选择游戏的 work 目录。"
-        latest = self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+        latest = self._latest_resume_manifest_path(game_root, spec)
         if latest is None:
             return False, f"未找到可继续的{spec.label}任务；请先开始一个任务。"
         try:
@@ -4667,6 +4720,11 @@ class MainWindow(QMainWindow):
     ) -> bool:
         if running or not spec.implemented or not bootstrap_ready:
             return False
+        if (
+            spec.mode == WorkMode.KEYWORD_EXTRACTION
+            and self.workflow_status_label.property("status") == "waiting"
+        ):
+            return False
         if self._translation_requires_doctor_check(spec.mode):
             return self._doctor_allows_translate_action()
         return True
@@ -4674,6 +4732,72 @@ class MainWindow(QMainWindow):
     def _update_translate_button_label(self) -> None:
         self.translate_btn.setText(self._translate_button_label())
         self._sync_sync_translation_page_controls(label_only=True)
+
+    def _on_batch_translation_page_action(self, action: str) -> None:
+        """Route a P5 page-local action to the existing batch coordinator."""
+        callbacks = {
+            "start": self._on_start_translation,
+            "resume": self._on_resume_translation,
+            "stop": self._on_kill,
+            "split_submit": self._on_submit_remaining_split_packages,
+            "apply": self._on_apply_writeback,
+            "recheck": self._on_recheck_writeback,
+            "issues": self._open_check_issues,
+            "retry": self._on_retry_action,
+            "retry_followup": self._on_retry_followup_action,
+            "repair": self._on_run_repair,
+            "failure": self._open_apply_failure_report,
+            "remediation": self._open_remediation_commands,
+            "probe": self._on_run_probe,
+            "split": self._on_run_split,
+        }
+        callback = callbacks.get(action)
+        if callback is not None:
+            callback()
+
+    def _on_batch_translation_page_height_changed(self) -> None:
+        """Resize the stack immediately after a page-local disclosure changes."""
+        if self._current_work_mode() == WorkMode.BATCH_TRANSLATION:
+            self._apply_task_page_chrome(
+                work_mode_spec(WorkMode.BATCH_TRANSLATION)
+            )
+
+    def _sync_batch_translation_page_controls(
+        self,
+        *,
+        running: bool | None = None,
+    ) -> None:
+        """Mirror batch coordinator readiness onto P5's independent widgets."""
+        page = getattr(self, "batch_translation_page", None)
+        if page is None or self._current_work_mode() != WorkMode.BATCH_TRANSLATION:
+            return
+        if running is None:
+            running = bool(getattr(self, "_task_running", False)) or self.kill_btn.isEnabled()
+
+        def state(source_name: str, *, visible: bool = True) -> tuple[bool, bool, str]:
+            source = getattr(self, source_name)
+            return (visible and not source.isHidden(), source.isEnabled(), source.text())
+
+        page.set_task_running(running)
+        page.set_controls(
+            {
+                "start": (True, self.translate_btn.isEnabled(), self.translate_btn.text()),
+                "resume": (True, self.resume_btn.isEnabled(), self.resume_btn.text()),
+                "stop": (True, self.kill_btn.isEnabled(), self.kill_btn.text()),
+                "split_submit": state("split_submit_btn"),
+                "apply": (True, self.apply_btn.isEnabled(), self.apply_btn.text()),
+                "recheck": state("recheck_btn"),
+                "issues": state("check_issues_btn"),
+                "retry": state("retry_btn"),
+                "retry_followup": state("retry_followup_btn"),
+                "repair": state("repair_btn"),
+                "failure": state("apply_failure_btn"),
+                "remediation": state("remediation_btn"),
+                "probe": (True, self.probe_btn.isEnabled(), self.probe_btn.text()),
+                "split": (True, self.split_btn.isEnabled(), self.split_btn.text()),
+            }
+        )
+        self._apply_task_page_chrome(work_mode_spec(WorkMode.BATCH_TRANSLATION))
 
     def _sync_keywords_page_controls(self, *, running: bool | None = None) -> None:
         """Mirror coordinator-owned keyword actions onto the real page."""
@@ -4890,6 +5014,7 @@ class MainWindow(QMainWindow):
             running=running,
             resume_available=resume_available,
         )
+        self._sync_batch_translation_page_controls(running=running)
         self._sync_keywords_page_controls(running=running)
         self._sync_revision_page_controls(running=running)
         self._update_split_submit_btn(running=running)
@@ -6301,7 +6426,7 @@ class MainWindow(QMainWindow):
             return
 
         game_root = self.state.get_game_root()
-        latest_manifest = self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+        latest_manifest = self._latest_resume_manifest_path(game_root, spec)
         if latest_manifest is None:
             QMessageBox.information(
                 self,
@@ -7383,6 +7508,7 @@ class MainWindow(QMainWindow):
         self._update_split_btn_enabled(running=running)
         self.kill_btn.setEnabled(running)
         self._sync_sync_translation_page_controls(running=running)
+        self._sync_batch_translation_page_controls(running=running)
         self._sync_keywords_page_controls(running=running)
         self._sync_revision_page_controls(running=running)
         # Context-library prebuild CTAs stay on-page while nav is locked; gate them here.
@@ -7420,6 +7546,7 @@ class MainWindow(QMainWindow):
         self._update_resume_btn_text()
         resume_available = self._resume_task_available()
         self._update_resume_btn_enabled(resume_available=resume_available)
+        self._sync_batch_translation_page_controls()
         self._sync_keywords_page_controls()
         self._sync_revision_page_controls()
         self._sync_workbench_empty_states(resume_available=resume_available)
@@ -7494,6 +7621,7 @@ class MainWindow(QMainWindow):
             summary,
             running=self.kill_btn.isEnabled(),
         )
+        self._sync_batch_translation_page_controls()
         self._sync_keywords_page_controls()
         self._sync_revision_page_controls()
         if not self.kill_btn.isEnabled():
@@ -7549,6 +7677,7 @@ class MainWindow(QMainWindow):
             )
         )
         self._sync_sync_translation_page_controls(running=running)
+        self._sync_batch_translation_page_controls(running=running)
         self._sync_keywords_page_controls(running=running)
         self._sync_revision_page_controls(running=running)
         self._sync_task_shortcuts()

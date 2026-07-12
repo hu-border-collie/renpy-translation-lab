@@ -541,6 +541,47 @@ class GuiProjectStateTests(unittest.TestCase):
             self.assertIsNotNone(latest)
             self.assertEqual(Path(latest).resolve(), manifest3.resolve())
 
+    def test_get_latest_submitted_manifest_ignores_newer_local_package(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = self.make_state(root)
+            logs_dir = root / "logs" / "batch_jobs"
+            remote = logs_dir / "remote" / "manifest.json"
+            local = logs_dir / "new-local" / "manifest.json"
+            remote.parent.mkdir(parents=True)
+            local.parent.mkdir(parents=True)
+            remote.write_text(
+                json.dumps(
+                    {
+                        "mode": "keyword_extraction",
+                        "base_dir": "C:/correct/project",
+                        "job_name": "batches/remote-keywords",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            local.write_text(
+                json.dumps(
+                    {
+                        "mode": "keyword_extraction",
+                        "base_dir": "C:/correct/project",
+                        "job_name": "",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (logs_dir / "latest_manifest.txt").write_text(
+                str(local), encoding="utf-8"
+            )
+            state.get_logs_dir = lambda: logs_dir
+            state._normalized_path_text = lambda p: os.path.normcase(os.path.abspath(p))
+
+            submitted = state.get_latest_submitted_manifest_path_for_mode(
+                Path("C:/correct/project"),
+                WorkMode.KEYWORD_EXTRACTION,
+            )
+
+            self.assertEqual(Path(submitted).resolve(), remote.resolve())
     def test_get_latest_manifest_path_for_mode_stops_on_unreadable_latest_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

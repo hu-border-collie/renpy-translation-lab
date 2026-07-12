@@ -11,6 +11,17 @@ class GuiThemeCacheTests(unittest.TestCase):
     def tearDown(self) -> None:
         clear_stylesheet_cache()
 
+    def test_workbench_start_buttons_use_primary_theme_rules(self):
+        template = _TEMPLATE_PATH.read_text(encoding="utf-8")
+        for selector in (
+            "QPushButton#keywords_start_btn",
+            "QPushButton#revision_start_btn",
+        ):
+            self.assertIn(f"{selector},", template)
+            self.assertIn(f"{selector}:hover,", template)
+            self.assertIn(f"{selector}:pressed,", template)
+            self.assertIn(f"{selector}:disabled,", template)
+
     def test_clear_stylesheet_cache_allows_stylesheet_reload(self):
         with tempfile.TemporaryDirectory() as tmp:
             resources = Path(tmp)

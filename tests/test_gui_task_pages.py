@@ -290,6 +290,10 @@ class GuiTaskPageTests(unittest.TestCase):
         page = self.window.keywords_page
 
         self.assertEqual(page.resume_btn.text(), "查询云端状态")
+        self.window._set_task_running(False)
+        self.assertFalse(self.window.translate_btn.isEnabled())
+        self.assertFalse(page.start_btn.isEnabled())
+        self.assertTrue(page.resume_btn.isEnabled())
         self.window._set_task_running(True)
         self.assertFalse(page.mode_combo.isEnabled())
         self.assertFalse(page.start_btn.isEnabled())
@@ -376,24 +380,68 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(page.writeback_btn.isEnabled())
         self.assertTrue(page.stop_btn.isEnabled())
 
-    def test_batch_page_hides_revision_apply(self) -> None:
+    def test_batch_page_owns_actions_and_running_lock(self) -> None:
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,
             refresh_manifest_writeback=False,
         )
-        summary = WritebackSummary(
-            status="ready",
-            heading="可写回",
-            message="ok",
-            facts=[],
-            findings=[],
-            can_apply=True,
-            manifest_path="C:/batch/manifest.json",
-        )
-        self.window._set_writeback_summary(summary)
-        self.assertTrue(self.window.apply_revision_btn.isHidden())
-        self.assertFalse(self.window.apply_btn.isHidden())
+        page = self.window.batch_translation_page
+        self.assertIs(self.window.workbench_stack.currentWidget(), page)
+        self.assertTrue(self.window._workbench_actions_column.isHidden())
+        self.assertTrue(self.window.writeback_primary_bar.isHidden())
 
+        actions: list[str] = []
+        page.set_action_callbacks(WorkbenchPageActions(action=actions.append))
+        page.set_controls(
+            {
+                "start": (True, True, "开始翻译"),
+                "resume": (True, True, "继续翻译"),
+                "apply": (True, True, "写回翻译"),
+                "probe": (True, True, "试跑样本请求"),
+                "split": (True, True, "拆分翻译包"),
+                "issues": (True, True, "查看问题清单"),
+            }
+        )
+        page.buttons["start"].click()
+        page.buttons["resume"].click()
+        page.buttons["apply"].click()
+        page.buttons["probe"].click()
+        page.buttons["split"].click()
+        page.issues_toggle_btn.click()
+        page.buttons["issues"].click()
+        page.set_task_running(True)
+        page.buttons["stop"].click()
+
+        self.assertEqual(
+            actions,
+            ["start", "resume", "apply", "probe", "split", "issues", "stop"],
+        )
+        for action in ("start", "resume", "apply", "probe", "split", "issues"):
+            self.assertFalse(page.buttons[action].isEnabled())
+        self.assertTrue(page.buttons["stop"].isEnabled())
+
+    def test_batch_issue_toggle_recalculates_stack_height(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.batch_translation_page
+        page.set_controls(
+            {
+                "issues": (True, True, "查看问题清单"),
+                "retry": (True, True, "生成补译包"),
+                "repair": (True, True, "同步修补"),
+            }
+        )
+        collapsed_height = page.preferred_height(self.window.workbench_stack.width())
+        page.issues_toggle_btn.click()
+        expanded_height = page.preferred_height(self.window.workbench_stack.width())
+
+        self.assertGreater(expanded_height, collapsed_height)
+        self.assertGreaterEqual(
+            self.window.workbench_stack.maximumHeight(),
+            expanded_height,
+        )
     def test_context_page_shows_status_cards(self) -> None:
         self.window._set_work_mode(
             WorkMode.BOOTSTRAP_RAG,
