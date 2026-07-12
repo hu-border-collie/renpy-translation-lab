@@ -159,58 +159,46 @@ class GuiButtonLayoutMatrixTests(unittest.TestCase):
         self.assertIsInstance(self.window.writeback_primary_bar, FlowButtonBar)
         self.assertIsInstance(self.window.writeback_issues_panel, FlowButtonBar)
 
-    def test_result_writeback_actions_not_stacked_toolbars(self) -> None:
-        """写回翻译 + 问题处理 share one row; recovery strip is single-row when wide enough.
-
-        Windows offscreen CI often keeps the shell narrower than the requested
-        resize, so do not hard-require page width — size the flow bar directly
-        for the wrap assertion.
-        """
+    def test_batch_page_recovery_controls_wrap_without_legacy_toolbars(self) -> None:
+        """P5 keeps batch writeback/recovery actions on its real page."""
         from gui_qt.responsive_layout import widget_layout_width
 
         self.window.resize(1600, 900)
         self.window.show()
         self.window._set_work_mode(WorkMode.BATCH_TRANSLATION, refresh_manifest_writeback=False)
-        self.window._focus_workbench_status_tab(2)
-        self.window._set_writeback_issues_expanded(True)
+        for name in (
+            "recheck_btn",
+            "check_issues_btn",
+            "retry_btn",
+            "retry_followup_btn",
+            "repair_btn",
+            "apply_failure_btn",
+            "remediation_btn",
+        ):
+            getattr(self.window, name).setVisible(True)
+        self.window._sync_batch_translation_page_controls()
         for _ in range(8):
             self._app.processEvents()
-        self.window._reflow_button_bars()
-        for _ in range(6):
-            self._app.processEvents()
 
-        page = self.window.workbench_status_tabs.widget(2)
+        page = self.window.batch_translation_page
+        self.assertTrue(self.window.writeback_primary_bar.isHidden())
+        self.assertFalse(page.writeback_bar.isHidden())
+        self.assertFalse(page.buttons["apply"].isHidden())
+        self.assertFalse(page.issues_toggle_btn.isHidden())
+        page.issues_toggle_btn.click()
+        self.assertFalse(page.issues_bar.isHidden())
 
-        # Apply + 问题处理 toggle share one horizontal band (not stacked toolbars).
-        apply_tl = self.window.apply_btn.mapTo(page, self.window.apply_btn.rect().topLeft())
-        toggle_tl = self.window.writeback_issues_toggle_btn.mapTo(
-            page, self.window.writeback_issues_toggle_btn.rect().topLeft()
-        )
-        self.assertLessEqual(
-            abs(apply_tl.y() - toggle_tl.y()),
-            12,
-            msg=f"写回翻译 / 问题处理 should share a row; y={apply_tl.y()} vs {toggle_tl.y()}",
-        )
-        self.assertGreater(toggle_tl.x(), apply_tl.x())
-
-        # Force a known-wide geometry: offscreen Windows may leave the tab page ~800px.
-        panel = self.window.writeback_issues_panel
-        visible = [b for b in panel._items if not b.isHidden()]
+        panel = page.issues_bar
+        visible = [button for button in panel._items if not button.isHidden()]
         self.assertGreaterEqual(len(visible), 2)
-        needed = sum(widget_layout_width(b) for b in visible) + 8 * max(0, len(visible) - 1) + 24
-        wide = max(1200, needed + 40)
-        panel.resize(wide, 80)
+        needed = sum(widget_layout_width(button) for button in visible) + 8 * max(0, len(visible) - 1) + 24
+        panel.resize(max(1200, needed + 40), 80)
         panel.reflow(force=True)
         for _ in range(4):
             self._app.processEvents()
-        self.assertEqual(
-            panel._root.count(),
-            1,
-            msg=f"issues panel should not wrap when forced to {wide}px",
-        )
-        ys = {b.geometry().y() for b in visible if b.isVisible() or not b.isHidden()}
+        self.assertEqual(panel._root.count(), 1)
+        ys = {button.geometry().y() for button in visible}
         self.assertEqual(len(ys), 1, msg=f"recovery buttons on multiple Y rows: {sorted(ys)}")
-
 
 class FlowButtonBarUnitTests(unittest.TestCase):
     @classmethod
