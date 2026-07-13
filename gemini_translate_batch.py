@@ -47,6 +47,8 @@ BATCH_JOBS_DIR = os.path.join(LOG_DIR, 'batch_jobs')
 LATEST_MANIFEST_FILE = os.path.join(BATCH_JOBS_DIR, 'latest_manifest.txt')
 REPAIR_RUNS_DIR = os.path.join(LOG_DIR, 'repair_runs')
 SYNC_RUNS_DIR = os.path.join(LOG_DIR, 'sync_runs')
+SYNC_BACKEND = 'gemini'
+SYNC_MODEL = ''
 
 
 class DualLogger(object):
@@ -295,7 +297,7 @@ def load_batch_settings():
     global STORY_MEMORY_ENABLED, STORY_MEMORY_GRAPH_FILE, STORY_MEMORY_MAX_CONTEXT_CHARS
     global STORY_MEMORY_TOP_K_RELATIONS, STORY_MEMORY_TOP_K_TERMS
     global STORY_MEMORY_INCLUDE_SCENE_SUMMARY, _STORY_GRAPH, _STORY_GRAPH_PATH
-    global BATCH_NON_CHINESE_RULES
+    global BATCH_NON_CHINESE_RULES, SYNC_BACKEND, SYNC_MODEL
 
     config = load_json_file(legacy.CONFIG_FILE)
     translator_config = load_json_file(legacy.TRANSLATOR_CONFIG)
@@ -347,6 +349,17 @@ def load_batch_settings():
 
     BATCH_NON_CHINESE_RULES = batch_non_chinese_rules.load_non_chinese_rules(translator_config)
 
+    sync = translator_config.get('sync')
+    if not isinstance(sync, dict):
+        sync = {}
+    backend_name = str(sync.get('backend') or 'gemini').strip().lower()
+    if backend_name not in {'gemini', 'litellm'}:
+        raise SystemExit(
+            f"Unsupported sync backend: {backend_name}. Choose 'gemini' or 'litellm'."
+        )
+    SYNC_BACKEND = backend_name
+    sync_model = sync.get('model')
+    SYNC_MODEL = str(sync_model).strip() if sync_model else ''
     model_name = batch.get('model')
     if isinstance(model_name, str) and model_name.strip():
         BATCH_MODEL = model_name.strip()
@@ -7442,19 +7455,41 @@ def build_repair_request(job):
     }
 
 def run_sync_request(request_payload, model_name, api_key_index=None):
+    config = dict(request_payload.get('generation_config') or {})
+    system_instruction = request_payload.get('system_instruction')
+    if system_instruction:
+        config['system_instruction'] = system_instruction
+    safety_settings = request_payload.get('safety_settings')
+    if safety_settings:
+        config['safety_settings'] = safety_settings
+    effective_model = SYNC_MODEL or model_name
+
+    if SYNC_BACKEND == 'litellm':
+        if api_key_index is not None:
+            raise SystemExit('--api-key-index is only supported by the Gemini sync backend.')
+        from litellm_sync_backend import LiteLLMSyncBackend
+
+        result = LiteLLMSyncBackend().generate(SyncGenerationRequest(
+            model=effective_model,
+            contents=request_payload.get('contents') or [],
+            config=config,
+        ))
+        return {
+            'response_payload': result.response_payload,
+            'response_text': result.response_text,
+            'finish_reason': result.finish_reason,
+            'usage_metadata': dict(result.usage_metadata),
+            'provider': result.provider,
+            'model': result.model,
+            'execution_mode': result.execution_mode,
+        }
+
     attempts = 1 if api_key_index is not None else max(1, len(getattr(legacy, 'API_KEYS', [])))
     last_error = None
 
     for attempt in range(1, attempts + 1):
         client = create_batch_client(api_key_index=api_key_index)
         try:
-            config = dict(request_payload.get('generation_config') or {})
-            system_instruction = request_payload.get('system_instruction')
-            if system_instruction:
-                config['system_instruction'] = system_instruction
-            safety_settings = request_payload.get('safety_settings')
-            if safety_settings:
-                config['safety_settings'] = safety_settings
             backend = GeminiSyncBackend(
                 client,
                 serialize_response=serialize_unknown,
@@ -7554,6 +7589,9 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                 result_row['response'] = result.get('response_payload') or {}
                 result_row['finish_reason'] = result.get('finish_reason', '')
                 result_row['usage_metadata'] = result.get('usage_metadata') or {}
+                result_row['provider'] = result.get('provider') or SYNC_BACKEND
+                result_row['model'] = result.get('model') or SYNC_MODEL or BATCH_MODEL
+                result_row['execution_mode'] = result.get('execution_mode') or 'sync'
                 summary['successful_request_count'] += 1
                 if result.get('finish_reason') == 'MAX_TOKENS':
                     summary['max_tokens_count'] += 1
@@ -7598,7 +7636,10 @@ def make_sync_manifest(
         'execution': 'sync',
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
-        'batch_model': BATCH_MODEL,
+        'batch_model': SYNC_MODEL or BATCH_MODEL,
+        'provider': SYNC_BACKEND,
+        'model': SYNC_MODEL or BATCH_MODEL,
+        'execution_mode': 'sync',
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),

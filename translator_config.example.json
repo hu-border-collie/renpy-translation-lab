@@ -19,6 +19,7 @@
     "python_exe": ""
   },
   "sync": {
+    "backend": "gemini",
     "model": "gemini-3.1-flash-lite",
     "chunk_size": 40,
     "max_source_chars": 12000,

@@ -109,6 +109,7 @@ PRESERVE_TERMS = [
 MAX_CHARS = 12000
 MAX_ITEMS = 40
 SYNC_MAX_OUTPUT_TOKENS = 24576
+SYNC_BACKEND = "gemini"
 MIN_DELAY = 1.0  # Reduced delay for SDK
 MAX_DELAY = 3.0
 BATCH_RETRIES = 3
@@ -702,11 +703,18 @@ def load_sync_story_memory_settings(config):
 
 
 def load_sync_translation_settings(config):
-    global MAX_ITEMS, MAX_CHARS, SYNC_MAX_OUTPUT_TOKENS
+    global MAX_ITEMS, MAX_CHARS, SYNC_MAX_OUTPUT_TOKENS, SYNC_BACKEND
 
     sync = config.get("sync")
     if not isinstance(sync, dict):
         sync = {}
+
+    backend_name = str(sync.get("backend") or "gemini").strip().lower()
+    if backend_name not in {"gemini", "litellm"}:
+        raise ValueError(
+            f"Unsupported sync backend: {backend_name}. Choose 'gemini' or 'litellm'."
+        )
+    SYNC_BACKEND = backend_name
 
     custom_models = sync.get("models")
     single_model = sync.get("model")
@@ -3029,23 +3037,27 @@ def normalize_result_items(payload):
 
 
 def call_gemini_sdk(prompt, items):
-    """Calls Gemini using the current google-genai SDK."""
-    configure_genai()
+    """Calls the explicitly configured synchronous backend."""
     model_name = get_current_model()
-    
-    try:
-        client = create_genai_client()
-        
-        # Generation config
-        generation_config = {
-            "temperature": 0.2,
-            "max_output_tokens": SYNC_MAX_OUTPUT_TOKENS,
-            "response_mime_type": "application/json",
-            "response_json_schema": build_response_json_schema(items),
-        }
+    generation_config = {
+        "temperature": 0.2,
+        "max_output_tokens": SYNC_MAX_OUTPUT_TOKENS,
+        "response_mime_type": "application/json",
+        "response_json_schema": build_response_json_schema(items),
+    }
 
+    if SYNC_BACKEND == "litellm":
+        from litellm_sync_backend import LiteLLMSyncBackend
+
+        result = LiteLLMSyncBackend().generate(SyncGenerationRequest(
+            model=model_name,
+            contents=prompt,
+            config=generation_config,
+        ))
+    else:
+        configure_genai()
         backend = GeminiSyncBackend(
-            client,
+            create_genai_client(),
             serialize_response=serialize_unknown,
             extract_text=extract_text_from_response_payload,
             extract_finish_reason=extract_finish_reason,
@@ -3056,28 +3068,19 @@ def call_gemini_sdk(prompt, items):
             config=generation_config,
         ))
 
-        parsed = result.parsed
-        if parsed is not None:
-            return normalize_result_items(serialize_unknown(parsed))
+    if result.parsed is not None:
+        return normalize_result_items(serialize_unknown(result.parsed))
+    if result.response_text:
+        return normalize_result_items(parse_json_payload(result.response_text))
 
-        response_payload = serialize_unknown(response)
-        response_text = extract_text_from_response_payload(response_payload)
-        if response_text:
-            return normalize_result_items(parse_json_payload(response_text))
-
-        prompt_feedback = extract_prompt_feedback(response_payload)
-        finish_reason = result.finish_reason
-        diagnostics = []
-        if prompt_feedback:
-            diagnostics.append(f"Prompt feedback: {prompt_feedback}")
-        if finish_reason:
-            diagnostics.append(f"Finish reason: {finish_reason}")
-        detail = f" ({'; '.join(diagnostics)})" if diagnostics else ""
-        raise ValueError(f"Invalid response from API. Missing structured text{detail}.")
-
-    except Exception as e:
-        # Re-raise to be handled by retry logic
-        raise e
+    prompt_feedback = extract_prompt_feedback(result.response_payload)
+    diagnostics = []
+    if prompt_feedback:
+        diagnostics.append(f"Prompt feedback: {prompt_feedback}")
+    if result.finish_reason:
+        diagnostics.append(f"Finish reason: {result.finish_reason}")
+    detail = f" ({'; '.join(diagnostics)})" if diagnostics else ""
+    raise ValueError(f"Invalid response from API. Missing structured text{detail}.")
 
 def process_batch(batch, replacements):
     glossary_hits = retrieve_sync_glossary_hits(batch) if SYNC_RAG_ENABLED else []
