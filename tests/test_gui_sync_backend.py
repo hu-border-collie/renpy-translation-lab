@@ -1,7 +1,13 @@
 import unittest
 from unittest import mock
 
-from gui_qt.app import MainWindow
+try:
+    from gui_qt.app import MainWindow
+except ImportError as exc:
+    MainWindow = None
+    IMPORT_ERROR = exc
+else:
+    IMPORT_ERROR = None
 
 
 class _Combo:
@@ -28,6 +34,7 @@ class _State:
         return self.config
 
 
+@unittest.skipIf(MainWindow is None, f"GUI dependencies are unavailable: {IMPORT_ERROR}")
 class GuiSyncBackendTests(unittest.TestCase):
     def setUp(self):
         self.window = MainWindow.__new__(MainWindow)
