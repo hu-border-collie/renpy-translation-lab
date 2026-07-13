@@ -196,7 +196,10 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         self.assertIn("正在安装", information.call_args.args[1])
 
     def test_installed_dependency_offers_update_button(self):
-        with mock.patch("gui_qt.app.importlib.util.find_spec", return_value=object()):
+        with (
+            mock.patch("gui_qt.app.importlib.util.find_spec", return_value=object()),
+            mock.patch("gui_qt.app.installed_litellm_version", return_value="1.83.7"),
+        ):
             self.window._on_sync_backend_changed(0)
         self.assertTrue(self.window.install_litellm_btn.visible)
         self.assertEqual(self.window.install_litellm_btn.text, "更新 LiteLLM")
