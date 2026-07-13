@@ -21,13 +21,13 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._app = QApplication.instance() or QApplication([])
+        cls.window = MainWindow()
 
-    def setUp(self):
-        self.window = MainWindow()
-
-    def tearDown(self):
-        self.window.close()
-        self.window.deleteLater()
+    @classmethod
+    def tearDownClass(cls):
+        cls.window.close()
+        cls.window.deleteLater()
+        cls._app.processEvents()
 
     def test_litellm_has_independent_settings_page(self):
         self.assertIn("litellm", self.window._settings_nav_rows)
@@ -49,20 +49,27 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         )
 
     def test_empty_litellm_model_cannot_be_saved(self):
-        self.window.state = mock.Mock()
-        self.window.state.get_game_root.return_value = Path("C:/Game/work")
-        self.window.state.load_translator_config.return_value = {
-            "sync": {},
-            "batch": {},
-        }
         self.window.sync_backend_combo.setCurrentIndex(
             self.window.sync_backend_combo.findData("litellm")
         )
         self.window.litellm_model_combo.setEditText("")
-        with mock.patch("gui_qt.app.QMessageBox.information") as information:
+        with (
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=Path("C:/Game/work"),
+            ),
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value={"sync": {}, "batch": {}},
+            ),
+            mock.patch.object(self.window.state, "save_translator_config") as save_config,
+            mock.patch("gui_qt.app.QMessageBox.information") as information,
+        ):
             saved = self.window._on_save_config()
         self.assertFalse(saved)
-        self.window.state.save_translator_config.assert_not_called()
+        save_config.assert_not_called()
         information.assert_called_once()
 
     def test_models_page_is_gemini_only(self):
