@@ -45,6 +45,8 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         )
         self.assertEqual(self.window.litellm_refresh_models_btn.text(), "联网更新列表")
         self.assertEqual(self.window.litellm_test_connection_btn.text(), "测试连接")
+        self.assertTrue(self.window.litellm_version_label.wordWrap())
+        self.assertEqual(self.window.litellm_version_label.minimumWidth(), 0)
         actions = {
             action.objectName(): action
             for action in self.window.litellm_model_combo.lineEdit().actions()

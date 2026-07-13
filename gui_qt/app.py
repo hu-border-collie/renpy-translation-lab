@@ -1811,6 +1811,8 @@ class MainWindow(QMainWindow):
         version_layout.setContentsMargins(0, 0, 0, 0)
         version_layout.setSpacing(8)
         self.litellm_version_label = QLabel()
+        self.litellm_version_label.setWordWrap(True)
+        self.litellm_version_label.setMinimumWidth(0)
         self.litellm_version_label.setObjectName("config_hint_label")
         version_layout.addWidget(self.litellm_version_label, 1)
         self.litellm_check_version_btn = QPushButton("检查更新")
@@ -4309,7 +4311,7 @@ class MainWindow(QMainWindow):
             )
             label.setText(
                 f"本机 {installed}；PyPI 最新稳定版 {latest}{requirement}不支持当前 "
-                f"Python {python_version}；兼容最新版 {compatible}，{state}"
+                f"Python {python_version}；\n兼容最新版 {compatible}，{state}"
             )
         elif compatible and version_key(installed) < version_key(compatible):
             label.setText(f"本机 {installed}；最新兼容稳定版 {compatible}，建议更新。")

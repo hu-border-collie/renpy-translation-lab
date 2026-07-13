@@ -219,7 +219,7 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
             self.window._on_sync_backend_changed(0)
 
         self.assertIn("不支持当前", self.window.litellm_version_label.value)
-        self.assertIn("兼容最新版 1.83.7", self.window.litellm_version_label.value)
+        self.assertIn("\n兼容最新版 1.83.7", self.window.litellm_version_label.value)
         self.assertEqual(
             self.window.install_litellm_btn.text,
             "当前 Python 可用最新版",
