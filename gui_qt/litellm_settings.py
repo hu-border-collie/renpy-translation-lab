@@ -112,9 +112,10 @@ def provider_credential_status(
             configured=True,
             message="Ollama 通常不需要 API Key；请确保本地服务可访问。",
         )
+    available_environment_names = frozenset(environment)
     if provider == "vertex_ai":
         names = ("VERTEXAI_PROJECT", "VERTEXAI_LOCATION")
-        configured = all(str(environment.get(name, "")).strip() for name in names)
+        configured = all(name in available_environment_names for name in names)
         state = "已检测到" if configured else "未完整检测到"
         return ProviderCredentialStatus(
             provider=provider,
@@ -130,7 +131,7 @@ def provider_credential_status(
             configured=None,
             message="未内置该 provider 的凭据检测；请按 LiteLLM 与供应商文档配置环境变量。",
         )
-    configured = all(str(environment.get(name, "")).strip() for name in names)
+    configured = all(name in available_environment_names for name in names)
     state = "已检测到" if configured else "未检测到完整"
     return ProviderCredentialStatus(
         provider=provider,

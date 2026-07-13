@@ -8,6 +8,11 @@ from gui_qt.litellm_settings import (
 )
 
 
+class _PresenceOnlyEnvironment(dict[str, str]):
+    def get(self, key, default=None):
+        raise AssertionError("credential values must not be read")
+
+
 class GuiLiteLLMSettingsTests(unittest.TestCase):
     def test_provider_is_model_prefix(self):
         self.assertEqual(provider_from_model("openrouter/openai/gpt-5"), "openrouter")
@@ -25,6 +30,22 @@ class GuiLiteLLMSettingsTests(unittest.TestCase):
         status = provider_credential_status("anthropic/claude", {})
         self.assertFalse(status.configured)
         self.assertIn("ANTHROPIC_API_KEY", status.message)
+
+    def test_credential_presence_check_never_reads_values(self):
+        cases = (
+            ("openai/gpt-5", {"OPENAI_API_KEY": "secret-value"}),
+            (
+                "vertex_ai/gemini",
+                {"VERTEXAI_PROJECT": "secret-project", "VERTEXAI_LOCATION": "region"},
+            ),
+        )
+        for model, values in cases:
+            with self.subTest(model=model):
+                status = provider_credential_status(
+                    model,
+                    _PresenceOnlyEnvironment(values),
+                )
+                self.assertTrue(status.configured)
 
     def test_ollama_does_not_require_key(self):
         status = provider_credential_status("ollama/llama3", {})
