@@ -72,16 +72,38 @@ def _messages(contents: Any, config: Mapping[str, Any]) -> List[Dict[str, str]]:
 
 
 def _error_category(exc: Exception) -> str:
-    name = type(exc).__name__.lower()
+    try:
+        import litellm
+
+        typed_categories = (
+            ("rate_limit", (getattr(litellm, "RateLimitError", None),)),
+            ("service_unavailable", (
+                getattr(litellm, "ServiceUnavailableError", None),
+                getattr(litellm, "Timeout", None),
+                getattr(litellm, "APIConnectionError", None),
+            )),
+            ("authentication", (
+                getattr(litellm, "AuthenticationError", None),
+                getattr(litellm, "PermissionDeniedError", None),
+            )),
+        )
+        for category, candidates in typed_categories:
+            exception_types = tuple(
+                candidate for candidate in candidates if isinstance(candidate, type)
+            )
+            if exception_types and isinstance(exc, exception_types):
+                return category
+    except ImportError:
+        pass
+
     status = getattr(exc, "status_code", None)
-    if status == 429 or "ratelimit" in name or "quota" in name:
+    if status == 429:
         return "rate_limit"
-    if status in {502, 503, 504} or "serviceunavailable" in name or "timeout" in name:
+    if status in {502, 503, 504}:
         return "service_unavailable"
-    if status in {401, 403} or "authentication" in name or "permission" in name:
+    if status in {401, 403}:
         return "authentication"
     return "provider_error"
-
 
 class LiteLLMSyncBackend:
     """Lazy optional adapter; importing this module does not import LiteLLM."""

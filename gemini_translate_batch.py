@@ -359,7 +359,10 @@ def load_batch_settings():
         )
     SYNC_BACKEND = backend_name
     sync_model = sync.get('model')
-    SYNC_MODEL = str(sync_model).strip() if sync_model else ''
+    if isinstance(sync_model, str) and sync_model.strip():
+        SYNC_MODEL = sync_model.strip()
+    else:
+        SYNC_MODEL = ''
     model_name = batch.get('model')
     if isinstance(model_name, str) and model_name.strip():
         BATCH_MODEL = model_name.strip()
@@ -7454,6 +7457,18 @@ def build_repair_request(job):
         'request': request,
     }
 
+def _sync_result_to_dict(result):
+    return {
+        'response_payload': result.response_payload,
+        'response_text': result.response_text,
+        'finish_reason': result.finish_reason,
+        'usage_metadata': dict(result.usage_metadata),
+        'provider': result.provider,
+        'model': result.model,
+        'execution_mode': result.execution_mode,
+    }
+
+
 def run_sync_request(request_payload, model_name, api_key_index=None):
     config = dict(request_payload.get('generation_config') or {})
     system_instruction = request_payload.get('system_instruction')
@@ -7474,15 +7489,7 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
             contents=request_payload.get('contents') or [],
             config=config,
         ))
-        return {
-            'response_payload': result.response_payload,
-            'response_text': result.response_text,
-            'finish_reason': result.finish_reason,
-            'usage_metadata': dict(result.usage_metadata),
-            'provider': result.provider,
-            'model': result.model,
-            'execution_mode': result.execution_mode,
-        }
+        return _sync_result_to_dict(result)
 
     attempts = 1 if api_key_index is not None else max(1, len(getattr(legacy, 'API_KEYS', [])))
     last_error = None
@@ -7498,19 +7505,12 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
                 extract_usage=lambda payload: summarize_usage_metadata(extract_usage_metadata(payload)),
             )
             result = backend.generate(SyncGenerationRequest(
-                model=model_name,
+                model=effective_model,
                 contents=request_payload.get('contents') or [],
                 config=config,
             ))
-            return {
-                'response_payload': result.response_payload,
-                'response_text': result.response_text,
-                'finish_reason': result.finish_reason,
-                'usage_metadata': dict(result.usage_metadata),
-                'provider': result.provider,
-                'model': result.model,
-                'execution_mode': result.execution_mode,
-            }
+            return _sync_result_to_dict(result)
+
         except Exception as exc:
             last_error = exc
             retryable = is_quota_error(exc) or is_unavailable_error(exc)

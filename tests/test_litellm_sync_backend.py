@@ -84,7 +84,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
 
     def test_classifies_rate_limit_and_service_unavailable(self):
         class RateLimitError(Exception):
-            pass
+            status_code = 429
 
         backend = LiteLLMSyncBackend(completion=lambda **kwargs: (_ for _ in ()).throw(RateLimitError()))
         with self.assertRaises(LiteLLMBackendError) as captured:
