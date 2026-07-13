@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from litellm_provider_config import provider_from_model
+
 
 @dataclass(frozen=True)
 class ProviderCredentialStatus:
@@ -84,13 +86,6 @@ _PROVIDER_ENVIRONMENT: dict[str, tuple[str, ...]] = {
     "vercel_ai_gateway": ("VERCEL_AI_GATEWAY_API_KEY",),
     "xai": ("XAI_API_KEY",),
 }
-
-
-def provider_from_model(model: str) -> str:
-    text = str(model or "").strip()
-    if "/" not in text:
-        return ""
-    return text.split("/", 1)[0].strip().lower()
 
 
 def provider_credential_status(

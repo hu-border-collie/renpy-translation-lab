@@ -207,10 +207,23 @@ from .work_bootstrap_report import (
     with_game_root_persist_warning,
     work_bootstrap_to_doctor_summary,
 )
+from .litellm_worker import (
+    LiteLLMConnectionTestWorker,
+    LiteLLMModelCatalogWorker,
+)
 from .litellm_settings import (
     provider_credential_status,
     read_sync_backend_models,
     write_sync_backend_models,
+)
+from litellm_provider_config import (
+    DEFAULT_MODELS,
+    SUPPORTED_PROVIDERS,
+    ProviderCredentialStoreError,
+    delete_provider_api_key,
+    load_provider_api_key,
+    provider_from_model,
+    store_provider_api_key,
 )
 from .project_state import ProjectState
 from .theme import apply_theme, system_prefers_dark
@@ -393,6 +406,10 @@ class MainWindow(QMainWindow):
         self._handling_config_tab_leave = False
         self._task_running = False
         self._litellm_install_active = False
+        self._litellm_catalog_worker: LiteLLMModelCatalogWorker | None = None
+        self._litellm_connection_worker: LiteLLMConnectionTestWorker | None = None
+        self._litellm_catalog_models: dict[str, tuple[str, ...]] = {}
+        self._updating_litellm_provider = False
         self._games_registry_panel: GamesRegistryPanel | None = None
 
         central = QWidget()
@@ -1746,17 +1763,25 @@ class MainWindow(QMainWindow):
         self.sync_backend_combo.currentIndexChanged.connect(self._on_sync_backend_changed)
         backend_layout.addRow("同步执行后端：", self.sync_backend_combo)
 
+        self.litellm_provider_combo = NoWheelComboBox()
+        for provider, label in SUPPORTED_PROVIDERS:
+            self.litellm_provider_combo.addItem(label, provider)
+        backend_layout.addRow("Provider：", self.litellm_provider_combo)
+
         self.litellm_model_combo = NoWheelComboBox()
         self.litellm_model_combo.setEditable(True)
-        self.litellm_model_combo.addItems([
-            "openai/gpt-5",
-            "anthropic/claude-sonnet-4-5-20250929",
-            "openrouter/openai/gpt-5",
-            "xai/grok-2-latest",
-            "ollama/llama3",
-        ])
+        self.litellm_model_combo.addItems(DEFAULT_MODELS["openai"])
         self.litellm_model_combo.currentTextChanged.connect(self._on_litellm_model_changed)
-        backend_layout.addRow("LiteLLM 模型：", self.litellm_model_combo)
+        model_row = QWidget()
+        model_layout = QHBoxLayout(model_row)
+        model_layout.setContentsMargins(0, 0, 0, 0)
+        model_layout.setSpacing(8)
+        model_layout.addWidget(self.litellm_model_combo, 1)
+        self.litellm_refresh_models_btn = QPushButton("刷新列表")
+        self.litellm_refresh_models_btn.setObjectName("secondary_btn")
+        self.litellm_refresh_models_btn.clicked.connect(self._on_refresh_litellm_models)
+        model_layout.addWidget(self.litellm_refresh_models_btn)
+        backend_layout.addRow("LiteLLM 模型：", model_row)
 
         self.sync_backend_hint = QLabel()
         self.sync_backend_hint.setWordWrap(True)
@@ -1777,10 +1802,10 @@ class MainWindow(QMainWindow):
         backend_layout.addRow(self.litellm_install_progress)
         layout.addWidget(backend_box)
 
-        credentials_box, credentials_layout = self._settings_group("Provider 凭据状态")
+        credentials_box, credentials_layout = self._settings_group("Provider 凭据")
         credentials_hint = QLabel(
-            "LiteLLM 凭据与 Gemini API Key 完全分离。应用只检测当前进程的环境变量，"
-            "不会读取、显示或写入 provider 密钥。修改环境变量后请重启 GUI。"
+            "密钥与 Gemini 配置完全分离，并保存到操作系统凭据管理器；"
+            "不会写入 translator_config.json。也可继续使用 LiteLLM 约定的环境变量。"
         )
         credentials_hint.setWordWrap(True)
         credentials_hint.setObjectName("config_hint_label")
@@ -1788,11 +1813,41 @@ class MainWindow(QMainWindow):
         self.litellm_provider_label = QLabel()
         self.litellm_provider_label.setObjectName("litellm_provider_label")
         credentials_layout.addWidget(self.litellm_provider_label)
+        self.litellm_api_key_edit = QLineEdit()
+        self.litellm_api_key_edit.setObjectName("litellm_api_key_edit")
+        self.litellm_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.litellm_api_key_edit.setPlaceholderText("输入新密钥（已保存的密钥不会显示）")
+        credentials_layout.addWidget(self.litellm_api_key_edit)
+        credential_actions = QWidget()
+        credential_actions_layout = QHBoxLayout(credential_actions)
+        credential_actions_layout.setContentsMargins(0, 0, 0, 0)
+        credential_actions_layout.setSpacing(8)
+        self.litellm_save_key_btn = QPushButton("保存密钥")
+        self.litellm_save_key_btn.clicked.connect(self._on_save_litellm_key)
+        credential_actions_layout.addWidget(self.litellm_save_key_btn)
+        self.litellm_delete_key_btn = QPushButton("删除已保存密钥")
+        self.litellm_delete_key_btn.setObjectName("secondary_btn")
+        self.litellm_delete_key_btn.clicked.connect(self._on_delete_litellm_key)
+        credential_actions_layout.addWidget(self.litellm_delete_key_btn)
+        credential_actions_layout.addStretch(1)
+        credentials_layout.addWidget(credential_actions)
         self.litellm_credential_status_label = QLabel()
         self.litellm_credential_status_label.setWordWrap(True)
         self.litellm_credential_status_label.setObjectName("api_status_label")
         credentials_layout.addWidget(self.litellm_credential_status_label)
+        self.litellm_test_connection_btn = QPushButton("测试连接")
+        self.litellm_test_connection_btn.clicked.connect(self._on_test_litellm_connection)
+        credentials_layout.addWidget(self.litellm_test_connection_btn)
+        self.litellm_connection_status_label = QLabel("尚未测试连接。")
+        self.litellm_connection_status_label.setWordWrap(True)
+        self.litellm_connection_status_label.setObjectName("config_hint_label")
+        credentials_layout.addWidget(self.litellm_connection_status_label)
         layout.addWidget(credentials_box)
+
+        self.litellm_provider_combo.currentIndexChanged.connect(
+            self._on_litellm_provider_changed
+        )
+        self._refresh_litellm_credential_status()
         layout.addStretch(1)
         return page
 
@@ -4109,6 +4164,34 @@ class MainWindow(QMainWindow):
         combo = getattr(self, "litellm_model_combo", None)
         return combo.currentText().strip() if combo is not None else ""
 
+    def _current_litellm_provider(self) -> str:
+        model_provider = provider_from_model(self._litellm_model_text())
+        if model_provider:
+            return model_provider
+        combo = getattr(self, "litellm_provider_combo", None)
+        if combo is not None:
+            provider = str(combo.currentData() or "").strip().lower()
+            if provider:
+                return provider
+        return provider_from_model(self._litellm_model_text())
+
+    def _set_litellm_models(self, provider: str, models: tuple[str, ...]) -> None:
+        combo = getattr(self, "litellm_model_combo", None)
+        if combo is None:
+            return
+        current = self._litellm_model_text()
+        selected = current if provider_from_model(current) == provider else ""
+        values = models or DEFAULT_MODELS.get(provider, ())
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(list(values))
+        if selected:
+            self._set_combo_value(combo, selected)
+        elif values:
+            combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+        self._on_litellm_model_changed(combo.currentText())
+
     def _refresh_litellm_credential_status(self) -> None:
         provider_label = getattr(self, "litellm_provider_label", None)
         status_label = getattr(self, "litellm_credential_status_label", None)
@@ -4118,10 +4201,140 @@ class MainWindow(QMainWindow):
         provider_label.setText(
             f"当前 provider：{status.provider}" if status.provider else "当前 provider：尚未识别"
         )
-        status_label.setText(status.message)
+        saved_message = ""
+        if status.provider and status.provider != "ollama":
+            try:
+                saved_message = (
+                    "系统凭据管理器中已保存密钥。"
+                    if load_provider_api_key(status.provider)
+                    else "系统凭据管理器中尚未保存密钥。"
+                )
+            except ProviderCredentialStoreError as exc:
+                saved_message = str(exc)
+        status_label.setText(" ".join(part for part in (saved_message, status.message) if part))
 
     def _on_litellm_model_changed(self, _text: str) -> None:
+        provider = provider_from_model(self._litellm_model_text())
+        provider_combo = getattr(self, "litellm_provider_combo", None)
+        if provider and provider_combo is not None and not getattr(self, "_updating_litellm_provider", False):
+            index = provider_combo.findData(provider)
+            if index >= 0 and index != provider_combo.currentIndex():
+                provider_combo.blockSignals(True)
+                provider_combo.setCurrentIndex(index)
+                provider_combo.blockSignals(False)
         self._refresh_litellm_credential_status()
+
+    def _on_litellm_provider_changed(self, _index: int) -> None:
+        if self._updating_litellm_provider:
+            return
+        provider_combo = getattr(self, "litellm_provider_combo", None)
+        provider = (
+            str(provider_combo.currentData() or "").strip().lower()
+            if provider_combo is not None
+            else ""
+        )
+        self._updating_litellm_provider = True
+        try:
+            self._set_litellm_models(
+                provider,
+                self._litellm_catalog_models.get(provider, DEFAULT_MODELS.get(provider, ())),
+            )
+        finally:
+            self._updating_litellm_provider = False
+        self._refresh_litellm_credential_status()
+
+    def _on_refresh_litellm_models(self) -> None:
+        if self._litellm_catalog_worker is not None:
+            return
+        if importlib.util.find_spec("litellm") is None:
+            QMessageBox.information(self, "尚未安装 LiteLLM", "请先安装 LiteLLM。")
+            return
+        provider = self._current_litellm_provider()
+        if not provider:
+            return
+        button = getattr(self, "litellm_refresh_models_btn", None)
+        if button is not None:
+            button.setEnabled(False)
+            button.setText("正在加载…")
+        worker = LiteLLMModelCatalogWorker(provider, self)
+        worker.completed.connect(
+            lambda models, error, selected=provider: self._on_litellm_models_loaded(
+                selected, models, error
+            )
+        )
+        self._litellm_catalog_worker = worker
+        worker.start()
+
+    def _on_litellm_models_loaded(
+        self, provider: str, models: object, error: object
+    ) -> None:
+        worker = self._litellm_catalog_worker
+        self._litellm_catalog_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        button = getattr(self, "litellm_refresh_models_btn", None)
+        if button is not None:
+            button.setEnabled(True)
+            button.setText("刷新列表")
+        if error:
+            QMessageBox.warning(self, "模型列表加载失败", str(error))
+            return
+        values = tuple(str(model) for model in models)
+        self._litellm_catalog_models[provider] = values
+        if self._current_litellm_provider() == provider:
+            self._set_litellm_models(provider, values)
+        self.statusBar().showMessage(f"已加载 {len(values)} 个 {provider} 模型。", 5000)
+
+    def _on_save_litellm_key(self) -> None:
+        provider = self._current_litellm_provider()
+        api_key = self.litellm_api_key_edit.text().strip()
+        try:
+            store_provider_api_key(provider, api_key)
+        except (ValueError, ProviderCredentialStoreError) as exc:
+            QMessageBox.warning(self, "无法保存密钥", str(exc))
+            return
+        self.litellm_api_key_edit.clear()
+        self._refresh_litellm_credential_status()
+        self.statusBar().showMessage(f"已安全保存 {provider} 密钥。", 5000)
+
+    def _on_delete_litellm_key(self) -> None:
+        provider = self._current_litellm_provider()
+        try:
+            deleted = delete_provider_api_key(provider)
+        except ProviderCredentialStoreError as exc:
+            QMessageBox.warning(self, "无法删除密钥", str(exc))
+            return
+        self.litellm_api_key_edit.clear()
+        self._refresh_litellm_credential_status()
+        message = "已删除保存的密钥。" if deleted else "没有找到已保存的密钥。"
+        self.statusBar().showMessage(message, 5000)
+
+    def _on_test_litellm_connection(self) -> None:
+        if self._litellm_connection_worker is not None:
+            return
+        model = self._litellm_model_text()
+        if not model:
+            QMessageBox.information(self, "缺少模型", "请先选择或填写模型。")
+            return
+        api_key = self.litellm_api_key_edit.text().strip()
+        self.litellm_test_connection_btn.setEnabled(False)
+        self.litellm_test_connection_btn.setText("正在测试…")
+        self.litellm_connection_status_label.setText("正在后台发起最小请求…")
+        worker = LiteLLMConnectionTestWorker(model, api_key, self)
+        worker.completed.connect(self._on_litellm_connection_tested)
+        self._litellm_connection_worker = worker
+        worker.start()
+
+    def _on_litellm_connection_tested(self, success: bool, message: str) -> None:
+        worker = self._litellm_connection_worker
+        self._litellm_connection_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self.litellm_test_connection_btn.setEnabled(True)
+        self.litellm_test_connection_btn.setText("测试连接")
+        self.litellm_connection_status_label.setText(message)
+        if not success:
+            self.statusBar().showMessage("LiteLLM 连接测试失败。", 5000)
 
     def _saved_sync_backend(self) -> str:
         try:
@@ -4144,15 +4357,21 @@ class MainWindow(QMainWindow):
         installing = self._litellm_install_running()
         if backend == "litellm":
             installed = importlib.util.find_spec("litellm") is not None
+            keyring_installed = importlib.util.find_spec("keyring") is not None
             state = "正在后台安装" if installing else ("已安装" if installed else "尚未安装")
+            credential_state = "可用" if keyring_installed else "尚未安装"
             hint.setText(
                 "同步替代模式；不使用 Gemini API Key，也没有远程 Batch 恢复。"
-                f"LiteLLM：{state}。凭据从对应供应商环境变量读取。"
+                f"LiteLLM：{state}；安全凭据支持：{credential_state}。"
             )
             if install_btn is not None:
-                install_btn.setVisible(not installed)
+                install_btn.setVisible(not installed or not keyring_installed)
                 install_btn.setEnabled(not installing)
-                install_btn.setText("正在安装…" if installing else "安装 LiteLLM")
+                install_btn.setText(
+                    "正在安装…"
+                    if installing
+                    else ("安装 LiteLLM" if not installed else "安装安全凭据支持")
+                )
         else:
             hint.setText(
                 "推荐路径仍为 Gemini；同步配置位于「模型」与「密钥」页，批量离线翻译仍使用 Gemini Batch。"
@@ -4170,6 +4389,17 @@ class MainWindow(QMainWindow):
         model_combo = getattr(self, "litellm_model_combo", None)
         if model_combo is not None:
             model_combo.setEnabled(backend == "litellm" and not installing)
+        for name in (
+            "litellm_provider_combo",
+            "litellm_refresh_models_btn",
+            "litellm_api_key_edit",
+            "litellm_save_key_btn",
+            "litellm_delete_key_btn",
+            "litellm_test_connection_btn",
+        ):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setEnabled(backend == "litellm" and not installing)
         if hasattr(self, "translate_btn"):
             self._set_task_running(bool(getattr(self, "_task_running", False)))
         self._refresh_litellm_credential_status()
@@ -6407,7 +6637,7 @@ class MainWindow(QMainWindow):
                         "尚未安装 LiteLLM",
                         "当前同步后端是 LiteLLM。请先运行：\n"
                         "pip install -r requirements-litellm.txt\n\n"
-                        "供应商 API Key 请按 LiteLLM 约定设置为环境变量。",
+                        "供应商密钥可在设置 · LiteLLM 中保存，也可使用环境变量。",
                     )
                     return
             else:

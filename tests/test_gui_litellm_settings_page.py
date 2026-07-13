@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest import mock
 
 try:
-    from PySide6.QtWidgets import QApplication, QGroupBox
+    from PySide6.QtWidgets import QApplication, QGroupBox, QLineEdit
 
     from gui_qt.app import MainWindow
 except ImportError as exc:
@@ -36,7 +36,22 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertEqual(page.objectName(), "settings_litellm_scroll")
         titles = {group.title() for group in page.findChildren(QGroupBox)}
         self.assertIn("LiteLLM 同步替代后端", titles)
-        self.assertIn("Provider 凭据状态", titles)
+        self.assertIn("Provider 凭据", titles)
+        self.assertTrue(self.window.litellm_model_combo.isEditable())
+        self.assertGreater(self.window.litellm_provider_combo.count(), 1)
+        self.assertEqual(
+            self.window.litellm_api_key_edit.echoMode(),
+            QLineEdit.EchoMode.Password,
+        )
+        self.assertEqual(self.window.litellm_refresh_models_btn.text(), "刷新列表")
+        self.assertEqual(self.window.litellm_test_connection_btn.text(), "测试连接")
+
+    def test_typed_model_prefix_takes_priority_for_credentials(self):
+        self.window.litellm_provider_combo.setCurrentIndex(
+            self.window.litellm_provider_combo.findData("openai")
+        )
+        self.window.litellm_model_combo.setEditText("azure/my-deployment")
+        self.assertEqual(self.window._current_litellm_provider(), "azure")
 
     def test_gemini_key_page_does_not_contain_litellm_controls(self):
         row = self.window._settings_nav_rows["api_keys"]

@@ -59,6 +59,44 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
             {"role": "user", "content": "hello"},
         ])
 
+    def test_explicit_api_key_is_passed_without_entering_config_payload(self):
+        calls = []
+        backend = LiteLLMSyncBackend(
+            completion=lambda **kwargs: calls.append(kwargs) or {"choices": []},
+            api_key="secret-test-key",
+        )
+
+        backend.generate(SyncGenerationRequest("openai/test", "hello"))
+
+        self.assertEqual(calls[0]["api_key"], "secret-test-key")
+
+    def test_saved_provider_key_is_passed_to_litellm(self):
+        calls = []
+        backend = LiteLLMSyncBackend(
+            completion=lambda **kwargs: calls.append(kwargs) or {"choices": []}
+        )
+
+        with mock.patch(
+            "litellm_provider_config.load_provider_api_key",
+            return_value="stored-secret",
+        ) as load_key:
+            backend.generate(SyncGenerationRequest("anthropic/test", "hello"))
+
+        load_key.assert_called_once_with("anthropic")
+        self.assertEqual(calls[0]["api_key"], "stored-secret")
+
+    def test_missing_keyring_leaves_auth_to_litellm_environment(self):
+        calls = []
+        backend = LiteLLMSyncBackend(
+            completion=lambda **kwargs: calls.append(kwargs) or {"choices": []}
+        )
+        with mock.patch(
+            "litellm_provider_config.load_provider_api_key",
+            side_effect=RuntimeError("no keyring"),
+        ):
+            backend.generate(SyncGenerationRequest("openai/test", "hello"))
+        self.assertNotIn("api_key", calls[0])
+
     def test_missing_dependency_is_reported_only_when_selected(self):
         backend = LiteLLMSyncBackend()
         original_import = builtins.__import__
