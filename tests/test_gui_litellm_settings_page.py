@@ -64,6 +64,24 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window.litellm_model_combo.setEditText("gpt-custom")
         self.assertEqual(self.window._litellm_model_text(), "openai/gpt-custom")
 
+    def test_switching_provider_does_not_relabel_bare_model_as_new_provider(self):
+        openai_index = self.window.litellm_provider_combo.findData("openai")
+        anthropic_index = self.window.litellm_provider_combo.findData("anthropic")
+        self.window.litellm_provider_combo.setCurrentIndex(openai_index)
+        try:
+            self.window.litellm_model_combo.setEditText("gpt-custom")
+            self.window.litellm_provider_combo.setCurrentIndex(anthropic_index)
+
+            self.assertNotEqual(
+                self.window.litellm_model_combo.currentText(),
+                "anthropic/gpt-custom",
+            )
+            self.assertTrue(
+                self.window.litellm_model_combo.currentText().startswith("anthropic/")
+            )
+        finally:
+
+            self.window.litellm_provider_combo.setCurrentIndex(openai_index)
     def test_gemini_key_page_does_not_contain_litellm_controls(self):
         row = self.window._settings_nav_rows["api_keys"]
         page = self.window.settings_stack.widget(row)

@@ -115,7 +115,12 @@ def models_for_provider(provider: str, litellm_module: Any = None) -> tuple[str,
     for raw_model in raw_models:
         raw_model = str(raw_model or "").strip()
         metadata = cost.get(raw_model, {}) if isinstance(cost, Mapping) else {}
-        if isinstance(metadata, Mapping) and metadata.get("mode") not in _TEXT_MODES:
+        mode = (
+            str(metadata.get("mode") or "chat").strip().lower()
+            if isinstance(metadata, Mapping)
+            else "chat"
+        )
+        if mode not in _TEXT_MODES:
             continue
         if not raw_model:
             continue

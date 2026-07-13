@@ -62,6 +62,17 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
         self.assertIn("openai/gpt-prefixed", models)
         self.assertNotIn("openai/dall-e-test", models)
 
+    def test_local_catalog_treats_missing_mode_as_text_like_remote_catalog(self):
+        fake_litellm = SimpleNamespace(
+            models_by_provider={"openai": ("gpt-without-mode",)},
+            model_cost={"gpt-without-mode": {}},
+        )
+
+        self.assertEqual(
+            models_for_provider("openai", fake_litellm),
+            ("openai/gpt-without-mode",),
+        )
+
     def test_local_catalog_does_not_mix_hardcoded_default_into_real_results(self):
         fake_litellm = SimpleNamespace(
             models_by_provider={"openai": ("gpt-current",)},

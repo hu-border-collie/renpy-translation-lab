@@ -4217,7 +4217,7 @@ class MainWindow(QMainWindow):
         combo = getattr(self, "litellm_model_combo", None)
         if combo is None:
             return
-        current = self._litellm_model_text()
+        current = combo.currentText().strip()
         selected = current if provider_from_model(current) == provider else ""
         values = models or DEFAULT_MODELS.get(provider, ())
         combo.blockSignals(True)
