@@ -21,6 +21,9 @@ class _Combo:
     def setEnabled(self, value):
         self.enabled = value
 
+    def setToolTip(self, value):
+        self.tooltip = value
+
 
 class _Label:
     def __init__(self):

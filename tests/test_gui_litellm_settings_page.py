@@ -132,6 +132,19 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertIn("combo_popup_action", actions)
         self.assertFalse(actions["combo_popup_action"].icon().isNull())
 
+        gemini_index = self.window.sync_backend_combo.findData("gemini")
+        litellm_index = self.window.sync_backend_combo.findData("litellm")
+        self.window.sync_backend_combo.setCurrentIndex(gemini_index)
+        self.window.sync_backend_combo.setCurrentIndex(litellm_index)
+        try:
+            self.assertFalse(self.window.sync_model_combo.isEnabled())
+            self.assertTrue(self.window.sync_embedding_combo.isEnabled())
+            self.assertIn("LiteLLM", self.window.sync_model_combo.toolTip())
+        finally:
+            self.window.sync_backend_combo.setCurrentIndex(gemini_index)
+        self.assertTrue(self.window.sync_model_combo.isEnabled())
+        self.assertEqual(self.window.sync_model_combo.toolTip(), "")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4404,6 +4404,14 @@ class MainWindow(QMainWindow):
         model_combo = getattr(self, "litellm_model_combo", None)
         if model_combo is not None:
             model_combo.setEnabled(backend == "litellm" and not installing)
+        gemini_sync_model_combo = getattr(self, "sync_model_combo", None)
+        if gemini_sync_model_combo is not None:
+            gemini_sync_model_combo.setEnabled(backend == "gemini")
+            gemini_sync_model_combo.setToolTip(
+                "当前同步后端为 LiteLLM；切回 Gemini 后可选择此模型。"
+                if backend == "litellm"
+                else ""
+            )
         for name in (
             "litellm_provider_combo",
             "litellm_refresh_models_btn",
