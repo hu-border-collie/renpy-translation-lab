@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import QEvent, QProcess, QProcessEnvironment, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QGuiApplication, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -1692,6 +1692,19 @@ class MainWindow(QMainWindow):
         self.sync_backend_hint.setWordWrap(True)
         self.sync_backend_hint.setObjectName("config_hint_label")
         sync_layout.addRow(self.sync_backend_hint)
+
+        self.install_litellm_btn = QPushButton("安装 LiteLLM")
+        self.install_litellm_btn.setObjectName("secondary_btn")
+        self.install_litellm_btn.clicked.connect(self._on_install_litellm)
+        self.install_litellm_btn.setVisible(False)
+        sync_layout.addRow(self.install_litellm_btn)
+        self.litellm_install_progress = QProgressBar()
+        self.litellm_install_progress.setObjectName("litellm_install_progress")
+        self.litellm_install_progress.setTextVisible(True)
+        self.litellm_install_progress.setFormat("正在后台安装 LiteLLM…")
+        self.litellm_install_progress.setVisible(False)
+        sync_layout.addRow(self.litellm_install_progress)
+
         config_row.addWidget(sync_box, 1)
 
         batch_box = QGroupBox("批量离线翻译")
@@ -4056,17 +4069,129 @@ class MainWindow(QMainWindow):
         hint = getattr(self, "sync_backend_hint", None)
         if hint is None:
             return
+        install_btn = getattr(self, "install_litellm_btn", None)
+        install_progress = getattr(self, "litellm_install_progress", None)
+        installing = self._litellm_install_running()
         if backend == "litellm":
             installed = importlib.util.find_spec("litellm") is not None
-            state = "已安装" if installed else "尚未安装（pip install -r requirements-litellm.txt）"
+            state = "正在后台安装" if installing else ("已安装" if installed else "尚未安装")
             hint.setText(
                 "同步替代模式；不使用 Gemini API Key，也没有远程 Batch 恢复。"
                 f"LiteLLM：{state}。凭据从对应供应商环境变量读取。"
             )
+            if install_btn is not None:
+                install_btn.setVisible(not installed)
+                install_btn.setEnabled(not installing)
+                install_btn.setText("正在安装…" if installing else "安装 LiteLLM")
         else:
             hint.setText(
                 "推荐路径。同步任务使用 Gemini API Key；批量离线翻译仍始终使用 Gemini Batch。"
             )
+            if install_btn is not None:
+                install_btn.setVisible(False)
+        if install_progress is not None:
+            install_progress.setVisible(installing)
+            if installing:
+                # pip does not expose a trustworthy total; busy mode gives honest
+                # visual feedback without inventing a completion percentage.
+                install_progress.setRange(0, 0)
+                install_progress.setFormat("正在后台安装 LiteLLM…")
+
+        model_combo = getattr(self, "sync_model_combo", None)
+        if model_combo is not None:
+            model_combo.setEnabled(not (backend == "litellm" and installing))
+        if hasattr(self, "translate_btn"):
+            self._set_task_running(bool(getattr(self, "_task_running", False)))
+        self._refresh_litellm_install_action_gating()
+
+    def _refresh_litellm_install_action_gating(self) -> None:
+        """Disable only LiteLLM-backed task actions while installation is active."""
+        translate_btn = getattr(self, "translate_btn", None)
+        if translate_btn is None:
+            return
+        mode = self._current_work_mode()
+        installing_litellm = (
+            self._litellm_install_running()
+            and self._selected_sync_backend() == "litellm"
+            and mode in self._sync_work_modes_requiring_api_key()
+        )
+        if installing_litellm:
+            translate_btn.setEnabled(False)
+            self._sync_sync_translation_page_controls()
+            self._sync_keywords_page_controls()
+            self._sync_revision_page_controls()
+
+    def _litellm_install_running(self) -> bool:
+        process = getattr(self, "_litellm_install_process", None)
+        return (
+            process is not None
+            and process.state() != QProcess.ProcessState.NotRunning
+        )
+
+    def _on_install_litellm(self) -> None:
+        if self._litellm_install_running():
+            return
+        requirements_path = Path(__file__).resolve().parents[1] / "requirements-litellm.txt"
+        if not requirements_path.is_file():
+            QMessageBox.warning(self, "无法安装 LiteLLM", f"找不到依赖文件：{requirements_path}")
+            return
+
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        environment = QProcessEnvironment.systemEnvironment()
+        environment.insert("PYTHONIOENCODING", "utf-8")
+        environment.insert("PYTHONUTF8", "1")
+        process.setProcessEnvironment(environment)
+        process.readyReadStandardOutput.connect(self._on_litellm_install_output)
+        process.finished.connect(self._on_litellm_install_finished)
+        process.errorOccurred.connect(self._on_litellm_install_error)
+        self._litellm_install_process = process
+
+        self._show_workbench_log_drawer()
+        self._append_log(
+            f"=== 正在安装 LiteLLM ===\n{sys.executable} -m pip install -r {requirements_path}\n"
+        )
+        process.start(
+            sys.executable,
+            ["-m", "pip", "install", "-r", str(requirements_path)],
+        )
+        self._on_sync_backend_changed(-1)
+
+    def _on_litellm_install_output(self) -> None:
+        process = getattr(self, "_litellm_install_process", None)
+        if process is None:
+            return
+        text = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        if text:
+            self._append_log(text)
+
+    def _on_litellm_install_finished(self, exit_code: int, _exit_status: object) -> None:
+        process = getattr(self, "_litellm_install_process", None)
+        if process is not None:
+            self._on_litellm_install_output()
+        self._litellm_install_process = None
+        importlib.invalidate_caches()
+        if exit_code == 0 and importlib.util.find_spec("litellm") is not None:
+            self._append_log("\n[LiteLLM 安装完成]\n")
+            self.statusBar().showMessage("LiteLLM 安装完成。", 5000)
+        else:
+            self._append_log(f"\n[LiteLLM 安装失败，退出码：{exit_code}]\n")
+            QMessageBox.warning(self, "LiteLLM 安装失败", "请查看工作台日志中的 pip 输出。")
+        self._on_sync_backend_changed(-1)
+
+    def _on_litellm_install_error(self, error: object) -> None:
+        process = getattr(self, "_litellm_install_process", None)
+        message = process.errorString() if process is not None else "未知进程错误"
+        self._append_log(f"\n[LiteLLM 安装进程错误] {message}\n")
+        if error != QProcess.ProcessError.FailedToStart:
+            return
+        self._litellm_install_process = None
+        self._on_sync_backend_changed(-1)
+        QMessageBox.warning(
+            self,
+            "LiteLLM 安装失败",
+            f"无法启动安装进程：{message}\n请查看工作台日志了解详情。",
+        )
 
     def _sync_work_modes_requiring_api_key(self) -> frozenset[WorkMode]:
         return frozenset(
