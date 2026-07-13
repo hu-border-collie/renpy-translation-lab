@@ -17,6 +17,9 @@ class _Combo:
     def currentData(self):
         return self.data
 
+    def setEnabled(self, value):
+        self.enabled = value
+
 
 class _Label:
     def __init__(self):
@@ -42,6 +45,22 @@ class _Button:
         self.text = value
 
 
+class _ProgressBar:
+    def __init__(self):
+        self.visible = None
+        self.range_values = None
+        self.format = ""
+
+    def setVisible(self, value):
+        self.visible = value
+
+    def setRange(self, minimum, maximum):
+        self.range_values = (minimum, maximum)
+
+    def setFormat(self, value):
+        self.format = value
+
+
 @unittest.skipIf(MainWindow is None, f"GUI dependencies are unavailable: {IMPORT_ERROR}")
 class GuiLiteLLMInstallTests(unittest.TestCase):
     def setUp(self):
@@ -49,6 +68,9 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         self.window.sync_backend_combo = _Combo("litellm")
         self.window.sync_backend_hint = _Label()
         self.window.install_litellm_btn = _Button()
+        self.window.sync_model_combo = _Combo(None)
+        self.window.litellm_install_progress = _ProgressBar()
+        self.window._refresh_litellm_install_action_gating = mock.Mock()
 
     def test_missing_dependency_shows_enabled_install_button(self):
         with mock.patch("gui_qt.app.importlib.util.find_spec", return_value=None):
@@ -56,6 +78,19 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         self.assertTrue(self.window.install_litellm_btn.visible)
         self.assertTrue(self.window.install_litellm_btn.enabled)
         self.assertEqual(self.window.install_litellm_btn.text, "安装 LiteLLM")
+        self.assertFalse(self.window.litellm_install_progress.visible)
+        self.assertTrue(self.window.sync_model_combo.enabled)
+
+    def test_installing_shows_busy_progress_and_disables_litellm_model(self):
+        self.window._litellm_install_running = mock.Mock(return_value=True)
+        with mock.patch("gui_qt.app.importlib.util.find_spec", return_value=None):
+            self.window._on_sync_backend_changed(0)
+        self.assertTrue(self.window.litellm_install_progress.visible)
+        self.assertEqual(self.window.litellm_install_progress.range_values, (0, 0))
+        self.assertIn("后台安装", self.window.litellm_install_progress.format)
+        self.assertFalse(self.window.sync_model_combo.enabled)
+        self.assertFalse(self.window.install_litellm_btn.enabled)
+        self.assertIn("正在后台安装", self.window.sync_backend_hint.value)
 
     def test_installed_dependency_hides_install_button(self):
         with mock.patch("gui_qt.app.importlib.util.find_spec", return_value=object()):
@@ -65,8 +100,11 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
 
     def test_gemini_backend_hides_install_button(self):
         self.window.sync_backend_combo = _Combo("gemini")
+        self.window._litellm_install_running = mock.Mock(return_value=True)
         self.window._on_sync_backend_changed(0)
         self.assertFalse(self.window.install_litellm_btn.visible)
+        self.assertTrue(self.window.litellm_install_progress.visible)
+        self.assertTrue(self.window.sync_model_combo.enabled)
 
 
 if __name__ == "__main__":
