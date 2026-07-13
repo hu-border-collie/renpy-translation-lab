@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from importlib import metadata
+import re
 from typing import Any
 
 
@@ -170,3 +171,63 @@ def version_key(value: str) -> tuple[int, ...]:
             break
         numbers.append(int(digits))
     return tuple(numbers)
+
+
+_STABLE_VERSION_PATTERN = re.compile(r"^\d+(?:\.\d+)*$")
+_PYTHON_SPECIFIER_PATTERN = re.compile(r"^(<=|>=|==|!=|<|>)(\d+(?:\.\d+)*)$")
+
+
+def python_requirement_allows(
+    requirement: str,
+    python_version: tuple[int, ...],
+) -> bool:
+    """Evaluate the simple Requires-Python bounds used by LiteLLM releases."""
+    requirement = str(requirement or "").strip()
+    if not requirement:
+        return True
+    current = tuple(int(part) for part in python_version)
+    for raw_specifier in requirement.split(","):
+        specifier = raw_specifier.strip().replace(" ", "")
+        match = _PYTHON_SPECIFIER_PATTERN.fullmatch(specifier)
+        if match is None:
+            return False
+        operator, raw_version = match.groups()
+        expected = tuple(int(part) for part in raw_version.split("."))
+        width = max(len(current), len(expected))
+        left = current + (0,) * (width - len(current))
+        right = expected + (0,) * (width - len(expected))
+        allowed = {
+            "<": left < right,
+            "<=": left <= right,
+            ">": left > right,
+            ">=": left >= right,
+            "==": left == right,
+            "!=": left != right,
+        }[operator]
+        if not allowed:
+            return False
+    return True
+
+
+def latest_compatible_litellm_version(
+    releases: Mapping[str, object],
+    python_version: tuple[int, ...],
+) -> str:
+    """Return the latest stable, non-yanked release compatible with Python."""
+    compatible: list[str] = []
+    for raw_version, raw_files in releases.items():
+        version = str(raw_version or "").strip()
+        if not _STABLE_VERSION_PATTERN.fullmatch(version):
+            continue
+        if not isinstance(raw_files, list):
+            continue
+        for raw_file in raw_files:
+            if not isinstance(raw_file, Mapping) or raw_file.get("yanked"):
+                continue
+            requires_python = str(raw_file.get("requires_python") or "")
+            if python_requirement_allows(requires_python, python_version):
+                compatible.append(version)
+                break
+    if not compatible:
+        return ""
+    return max(compatible, key=version_key)

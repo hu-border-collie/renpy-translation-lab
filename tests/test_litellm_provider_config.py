@@ -5,10 +5,12 @@ from litellm_provider_config import (
     KEYRING_SERVICE,
     delete_provider_api_key,
     load_provider_api_key,
+    latest_compatible_litellm_version,
     models_for_provider,
     models_from_remote_catalog,
     version_key,
     provider_from_model,
+    python_requirement_allows,
     store_provider_api_key,
 )
 
@@ -99,6 +101,33 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
             models_from_remote_catalog("openai", catalog),
             ("openai/gpt-current", "openai/gpt-responses"),
         )
+
+    def test_python_requirement_rejects_litellm_latest_on_python_314(self):
+        self.assertFalse(
+            python_requirement_allows(">=3.10,<3.14", (3, 14, 0))
+        )
+        self.assertTrue(
+            python_requirement_allows(">=3.9,<4.0", (3, 14, 0))
+        )
+
+    def test_latest_compatible_version_respects_python_requirement(self):
+        releases = {
+            "1.83.7": [
+                {"requires_python": ">=3.9,<4.0", "yanked": False},
+            ],
+            "1.92.0": [
+                {"requires_python": ">=3.10,<3.14", "yanked": False},
+            ],
+            "1.93.0rc1": [
+                {"requires_python": ">=3.10,<4.0", "yanked": False},
+            ],
+        }
+
+        self.assertEqual(
+            latest_compatible_litellm_version(releases, (3, 14, 0)),
+            "1.83.7",
+        )
+
 
     def test_stable_versions_compare_numerically(self):
         self.assertLess(version_key("1.83.7"), version_key("1.92.0"))

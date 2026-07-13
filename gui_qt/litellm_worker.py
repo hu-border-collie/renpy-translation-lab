@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from urllib.request import Request, urlopen
 
 from PySide6.QtCore import QThread, Signal
@@ -11,6 +12,7 @@ from litellm_provider_config import (
     LITELLM_CATALOG_URL,
     LITELLM_PYPI_URL,
     installed_litellm_version,
+    latest_compatible_litellm_version,
     models_for_provider,
     models_from_remote_catalog,
 )
@@ -65,7 +67,7 @@ class LiteLLMModelCatalogWorker(QThread):
 
 
 class LiteLLMVersionWorker(QThread):
-    completed = Signal(str, str, object)
+    completed = Signal(str, str, str, str, object)
 
     def run(self) -> None:
         installed = ""
@@ -80,9 +82,14 @@ class LiteLLMVersionWorker(QThread):
             latest = str(payload.get("info", {}).get("version", "")).strip()
             if not latest:
                 raise ValueError("PyPI 未返回最新版本")
-            self.completed.emit(installed, latest, None)
+            releases = payload.get("releases", {})
+            if not isinstance(releases, dict):
+                raise ValueError("PyPI 未返回版本兼容信息")
+            compatible = latest_compatible_litellm_version(releases, sys.version_info[:3])
+            requires_python = str(payload.get("info", {}).get("requires_python") or "")
+            self.completed.emit(installed, latest, compatible, requires_python, None)
         except Exception as exc:
-            self.completed.emit(installed, "", str(exc))
+            self.completed.emit(installed, "", "", "", str(exc))
 
 
 class LiteLLMConnectionTestWorker(QThread):

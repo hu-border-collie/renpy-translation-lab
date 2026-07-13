@@ -416,6 +416,8 @@ class MainWindow(QMainWindow):
         self._litellm_catalog_worker: LiteLLMModelCatalogWorker | None = None
         self._litellm_version_worker: LiteLLMVersionWorker | None = None
         self._litellm_latest_version = ""
+        self._litellm_latest_compatible_version = ""
+        self._litellm_latest_requires_python = ""
         self._litellm_catalog_source = ""
         self._litellm_connection_worker: LiteLLMConnectionTestWorker | None = None
         self._litellm_catalog_models: dict[str, tuple[str, ...]] = {}
@@ -4287,10 +4289,32 @@ class MainWindow(QMainWindow):
             return
         installed = installed_litellm_version()
         latest = str(getattr(self, "_litellm_latest_version", "") or "")
+        compatible = str(
+            getattr(self, "_litellm_latest_compatible_version", "") or ""
+        )
+        requires_python = str(
+            getattr(self, "_litellm_latest_requires_python", "") or ""
+        )
+        python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
         if not installed:
             label.setText("尚未安装；可检查 PyPI 最新稳定版。")
         elif not latest:
             label.setText(f"本机 {installed}；尚未检查 PyPI。")
+        elif compatible and version_key(compatible) < version_key(latest):
+            requirement = f"（要求 Python {requires_python}）" if requires_python else ""
+            state = (
+                f"建议更新到 {compatible}。"
+                if version_key(installed) < version_key(compatible)
+                else "已是当前 Python 可用最新版。"
+            )
+            label.setText(
+                f"本机 {installed}；PyPI 最新稳定版 {latest}{requirement}不支持当前 "
+                f"Python {python_version}；兼容最新版 {compatible}，{state}"
+            )
+        elif compatible and version_key(installed) < version_key(compatible):
+            label.setText(f"本机 {installed}；最新兼容稳定版 {compatible}，建议更新。")
+        elif compatible:
+            label.setText(f"本机 {installed}；已是最新兼容稳定版。")
         elif version_key(installed) < version_key(latest):
             label.setText(f"本机 {installed}；最新稳定版 {latest}，建议更新。")
         else:
@@ -4312,6 +4336,8 @@ class MainWindow(QMainWindow):
         self,
         installed: str,
         latest: str,
+        compatible: str,
+        requires_python: str,
         error: object,
     ) -> None:
         worker = getattr(self, "_litellm_version_worker", None)
@@ -4321,8 +4347,9 @@ class MainWindow(QMainWindow):
         button = getattr(self, "litellm_check_version_btn", None)
         if button is not None:
             button.setText("检查更新")
-        if latest:
-            self._litellm_latest_version = latest
+        self._litellm_latest_version = latest
+        self._litellm_latest_compatible_version = compatible
+        self._litellm_latest_requires_python = requires_python
         self._refresh_litellm_version_label()
         if error:
             label = getattr(self, "litellm_version_label", None)
@@ -4465,17 +4492,37 @@ class MainWindow(QMainWindow):
             )
             if install_btn is not None:
                 latest = str(getattr(self, "_litellm_latest_version", "") or "")
-                up_to_date = bool(
-                    installed and latest and version_key(installed_version) >= version_key(latest)
+                compatible = str(
+                    getattr(self, "_litellm_latest_compatible_version", "") or ""
                 )
+                target = compatible if latest else ""
+                up_to_date = bool(
+                    installed
+                    and target
+                    and version_key(installed_version) >= version_key(target)
+                )
+                compatibility_limited = bool(
+                    latest and compatible and version_key(compatible) < version_key(latest)
+                )
+                no_compatible_release = bool(latest and not compatible)
                 install_btn.setVisible(True)
-                install_btn.setEnabled(not installing and not (up_to_date and keyring_installed))
+                install_btn.setEnabled(
+                    not installing
+                    and not no_compatible_release
+                    and not (up_to_date and keyring_installed)
+                )
                 if installing:
                     install_btn.setText("正在更新…" if installed else "正在安装…")
                 elif not installed:
                     install_btn.setText("安装 LiteLLM")
+                elif no_compatible_release:
+                    install_btn.setText("当前 Python 无兼容版本")
                 elif up_to_date and keyring_installed:
-                    install_btn.setText("已是最新版")
+                    install_btn.setText(
+                        "当前 Python 可用最新版"
+                        if compatibility_limited
+                        else "已是最新版"
+                    )
                 else:
                     install_btn.setText("更新 LiteLLM")
         else:

@@ -104,15 +104,30 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         self.assertIn("已改用本地目录", completed[0][2])
 
     def test_version_worker_reads_latest_stable_version_from_pypi(self):
-        payload = {"info": {"version": "1.92.0"}}
+        payload = {
+            "info": {"version": "1.92.0", "requires_python": ">=3.10,<3.14"},
+            "releases": {
+                "1.83.7": [
+                    {"requires_python": ">=3.9,<4.0", "yanked": False},
+                ],
+                "1.92.0": [
+                    {"requires_python": ">=3.10,<3.14", "yanked": False},
+                ],
+            },
+        }
         response = mock.MagicMock()
         response.__enter__.return_value = io.BytesIO(json.dumps(payload).encode("utf-8"))
         completed = []
         worker = LiteLLMVersionWorker()
-        worker.completed.connect(lambda installed, latest, error: completed.append((installed, latest, error)))
+        worker.completed.connect(
+            lambda installed, latest, compatible, requirement, error: completed.append(
+                (installed, latest, compatible, requirement, error)
+            )
+        )
 
         with (
             mock.patch("gui_qt.litellm_worker.urlopen", return_value=response),
+            mock.patch("gui_qt.litellm_worker.sys.version_info", (3, 14, 0)),
             mock.patch(
                 "gui_qt.litellm_worker.installed_litellm_version",
                 return_value="1.83.7",
@@ -120,13 +135,18 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         ):
             worker.run()
 
-        self.assertEqual(completed, [("1.83.7", "1.92.0", None)])
+        self.assertEqual(
+            completed,
+            [("1.83.7", "1.92.0", "1.83.7", ">=3.10,<3.14", None)],
+        )
 
     def test_version_worker_reports_metadata_errors_and_completes(self):
         completed = []
         worker = LiteLLMVersionWorker()
         worker.completed.connect(
-            lambda installed, latest, error: completed.append((installed, latest, error))
+            lambda installed, latest, compatible, requirement, error: completed.append(
+                (installed, latest, compatible, requirement, error)
+            )
         )
 
         with mock.patch(
@@ -135,7 +155,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         ):
             worker.run()
 
-        self.assertEqual(completed, [("", "", "broken metadata")])
+        self.assertEqual(completed, [("", "", "", "", "broken metadata")])
 
 if __name__ == "__main__":
     unittest.main()
