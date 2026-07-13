@@ -19,7 +19,7 @@
 
 **可选图形工作台**：
 
-除 CLI 外，仓库提供可选桌面界面：顶层 **工作台 / 设置 / 诊断日志**，工作台为**左侧任务导航**（批量翻译 · 同步翻译 · 关键词/术语 · 订正 · 上下文库）+ 右侧内容；全局项目栏切换 `game_root`；任务默认在工作台底部日志抽屉输出，不强制跳诊断。批量翻译主路径已有真实项目烟测，其余模式已实现并有自动化测试；图形依赖单独安装，不进入主 `requirements.txt`；**不装图形界面时，命令行可照常使用**。
+除 CLI 外，仓库提供可选桌面界面：顶层 **工作台 / 设置 / 诊断与工具**，工作台左侧有五个固定任务入口（批量翻译 · 同步翻译 · 关键词/术语 · 订正 · 上下文库），右侧为五个长期存在、各自持有状态控件的真实页面；全局项目栏切换 `game_root`；任务默认在工作台底部日志抽屉输出，不强制跳诊断。批量翻译主路径已有真实项目烟测，其余模式已实现并有自动化测试；图形依赖单独安装，不进入主 `requirements.txt`；**不装图形界面时，命令行可照常使用**。
 
 ```powershell
 pip install -r requirements-gui.txt
@@ -135,7 +135,7 @@ python gemini_translate_batch.py apply
 
 - 配置与运行
   - [安装与本地配置](docs/setup.md)：全局配置、**项目级**上下文开关、SDK / TL 模板。
-  - [GUI 工作台](docs/gui_workbench.md)：左导航五页、状态三栏、设置分区、诊断与工具、写回安全边界。
+  - [GUI 工作台](docs/gui_workbench.md)：左导航五个真实页面、页内状态标签、设置分区、诊断与工具、写回安全边界。
 - Batch 与安全
   - [Batch 工作流与安全检查](docs/batch_workflows.md)：manifest / identity v2、`check/apply`、订正、关键词、golden corpus。
   - [上下文系统](docs/context_systems.md)：RAG、原文索引、Story Memory、store 路径。

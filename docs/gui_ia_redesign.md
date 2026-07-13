@@ -7,6 +7,7 @@
 > 本文是 Epic #157 的**设计与交付计划 SSOT**，保留改造前问题、P0–P3 分期与验收清单，供回顾与对照。
 >
 > - **交付状态**：**P0a–P3（#158–#166）已合并**；EmptyState 修复见 [PR #177](https://github.com/hu-border-collie/renpy-translation-lab/pull/177)。
+> - **后续演进**：Epic [#176](https://github.com/hu-border-collie/renpy-translation-lab/issues/176) 已在 PR #183–#190 完成五个长期真实页面、页内独立控件、会话恢复、旧两级下拉清理和工作台协调层抽离；现行结构以 [gui_workbench.md](gui_workbench.md) 为准。
 > - **请勿**把文中的「分析与准备」「诊断页」「两级下拉子任务」等当作当前 UI 名称——那是改造前形态。
 > - **当前界面、入口与设置分区**一律以 [gui_workbench.md](gui_workbench.md) 为准。
 >
@@ -754,6 +755,7 @@ Epic #157 GUI 信息架构重组
 | 2026-07-09 | 审阅修订：P0 硬拆 a/b；`_focus_log_tab` 双语义与调用矩阵；全局栏状态契约 §3.1.1；P1 页 session 返回恢复；P2 设置字段单源与测试 |
 | 2026-07-09 | 创建 GitHub Epic #157 与子 issue #158–#166；§7 编号回填 |
 | 2026-07-09 | P0a–P1c 已合并；P1d 对齐 `gui_workbench.md` / 根 README 与当前 IA |
+| 2026-07-12 | 补记后续 Epic #176 P0–P6 完成：五个真实页面、独立页内控件、旧下拉清理与协调层抽离 |
 
 ---
 
@@ -761,5 +763,5 @@ Epic #157 GUI 信息架构重组
 
 1. ~~创建 Epic + 子 issue~~ → **#157–#166 已开**  
 2. ~~P0a–P3~~ → **#158–#166 已合并**
-3. 批量翻译主流程已有 2026-06-19 真实项目端到端烟测；由于该记录早于本轮 IA，仍需对当前五个任务入口补做并记录人工往返烟测，再勾选 [#157](https://github.com/hu-border-collie/renpy-translation-lab/issues/157) / [#166](https://github.com/hu-border-collie/renpy-translation-lab/issues/166) 验收清单并关闭 Epic。
-4. 后续真实页面化与 `app.py` 解耦按 [#176](https://github.com/hu-border-collie/renpy-translation-lab/issues/176) 拆分推进；不与本 Epic 的已交付 IA 收尾混淆。
+3. ~~补做当前五个任务入口的人工往返烟测~~ → **已于 2026-07-12 作为 #176 P7 完成并记录**；2026-06-19 的批量真实项目端到端烟测继续作为历史功能验证保留。
+4. **#176 P0–P6 已由 PR #183–#190 完成**：五页均为长期真实页面，旧两级下拉已删除，页面装配与导航协调已从 `MainWindow` 抽离。
