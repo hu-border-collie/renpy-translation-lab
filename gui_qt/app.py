@@ -387,6 +387,7 @@ class MainWindow(QMainWindow):
         self._last_main_tab_index = 0
         self._handling_config_tab_leave = False
         self._task_running = False
+        self._litellm_install_active = False
         self._games_registry_panel: GamesRegistryPanel | None = None
 
         central = QWidget()
@@ -4110,18 +4111,22 @@ class MainWindow(QMainWindow):
         if translate_btn is None:
             return
         mode = self._current_work_mode()
-        installing_litellm = (
-            self._litellm_install_running()
-            and self._selected_sync_backend() == "litellm"
-            and mode in self._sync_work_modes_requiring_api_key()
-        )
-        if installing_litellm:
+        if self._litellm_install_blocks_mode(mode):
             translate_btn.setEnabled(False)
             self._sync_sync_translation_page_controls()
             self._sync_keywords_page_controls()
             self._sync_revision_page_controls()
 
+    def _litellm_install_blocks_mode(self, mode: WorkMode) -> bool:
+        return (
+            self._litellm_install_running()
+            and self._selected_sync_backend() == "litellm"
+            and mode in self._sync_work_modes_requiring_api_key()
+        )
+
     def _litellm_install_running(self) -> bool:
+        if bool(getattr(self, "_litellm_install_active", False)):
+            return True
         process = getattr(self, "_litellm_install_process", None)
         return (
             process is not None
@@ -4146,6 +4151,7 @@ class MainWindow(QMainWindow):
         process.finished.connect(self._on_litellm_install_finished)
         process.errorOccurred.connect(self._on_litellm_install_error)
         self._litellm_install_process = process
+        self._litellm_install_active = True
 
         self._show_workbench_log_drawer()
         self._append_log(
@@ -4170,6 +4176,7 @@ class MainWindow(QMainWindow):
         if process is not None:
             self._on_litellm_install_output()
         self._litellm_install_process = None
+        self._litellm_install_active = False
         importlib.invalidate_caches()
         if exit_code == 0 and importlib.util.find_spec("litellm") is not None:
             self._append_log("\n[LiteLLM 安装完成]\n")
@@ -4186,6 +4193,7 @@ class MainWindow(QMainWindow):
         if error != QProcess.ProcessError.FailedToStart:
             return
         self._litellm_install_process = None
+        self._litellm_install_active = False
         self._on_sync_backend_changed(-1)
         QMessageBox.warning(
             self,
@@ -4655,6 +4663,8 @@ class MainWindow(QMainWindow):
         bootstrap_ready: bool,
         running: bool,
     ) -> bool:
+        if self._litellm_install_blocks_mode(spec.mode):
+            return False
         if running or not spec.implemented or not bootstrap_ready:
             return False
         if (
@@ -6276,6 +6286,13 @@ class MainWindow(QMainWindow):
 
     def _on_start_translation(self):
         spec = work_mode_spec(self._current_work_mode())
+        if self._litellm_install_blocks_mode(spec.mode):
+            QMessageBox.information(
+                self,
+                "LiteLLM 正在安装",
+                "请等待 LiteLLM 后台安装完成后再启动同步任务。其他功能仍可继续使用。",
+            )
+            return
         if not spec.implemented:
             QMessageBox.information(self, "功能开发中", spec.not_implemented_message)
             return
