@@ -4179,10 +4179,19 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "LiteLLM 安装失败", "请查看工作台日志中的 pip 输出。")
         self._on_sync_backend_changed(-1)
 
-    def _on_litellm_install_error(self, _error: object) -> None:
+    def _on_litellm_install_error(self, error: object) -> None:
         process = getattr(self, "_litellm_install_process", None)
         message = process.errorString() if process is not None else "未知进程错误"
         self._append_log(f"\n[LiteLLM 安装进程错误] {message}\n")
+        if error != QProcess.ProcessError.FailedToStart:
+            return
+        self._litellm_install_process = None
+        self._on_sync_backend_changed(-1)
+        QMessageBox.warning(
+            self,
+            "LiteLLM 安装失败",
+            f"无法启动安装进程：{message}\n请查看工作台日志了解详情。",
+        )
 
     def _sync_work_modes_requiring_api_key(self) -> frozenset[WorkMode]:
         return frozenset(

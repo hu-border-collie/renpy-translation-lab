@@ -2,7 +2,7 @@ import unittest
 from unittest import mock
 
 try:
-    from gui_qt.app import MainWindow
+    from gui_qt.app import MainWindow, QProcess
 except ImportError as exc:
     MainWindow = None
     IMPORT_ERROR = exc
@@ -43,6 +43,11 @@ class _Button:
 
     def setText(self, value):
         self.text = value
+
+
+class _Process:
+    def errorString(self):
+        return "cannot start"
 
 
 class _ProgressBar:
@@ -91,6 +96,35 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         self.assertFalse(self.window.sync_model_combo.enabled)
         self.assertFalse(self.window.install_litellm_btn.enabled)
         self.assertIn("正在后台安装", self.window.sync_backend_hint.value)
+
+    def test_failed_to_start_clears_install_state_and_restores_ui(self):
+        self.window._litellm_install_process = _Process()
+        self.window._append_log = mock.Mock()
+        self.window._on_sync_backend_changed = mock.Mock()
+        with mock.patch("gui_qt.app.QMessageBox.warning") as warning:
+            self.window._on_litellm_install_error(
+                QProcess.ProcessError.FailedToStart
+            )
+        self.assertIsNone(self.window._litellm_install_process)
+        self.window._on_sync_backend_changed.assert_called_once_with(-1)
+        warning.assert_called_once()
+        self.assertIn(
+            "cannot start",
+            self.window._append_log.call_args.args[0],
+        )
+
+    def test_non_start_error_waits_for_finished_cleanup(self):
+        process = _Process()
+        self.window._litellm_install_process = process
+        self.window._append_log = mock.Mock()
+        self.window._on_sync_backend_changed = mock.Mock()
+        with mock.patch("gui_qt.app.QMessageBox.warning") as warning:
+            self.window._on_litellm_install_error(
+                QProcess.ProcessError.Crashed
+            )
+        self.assertIs(self.window._litellm_install_process, process)
+        self.window._on_sync_backend_changed.assert_not_called()
+        warning.assert_not_called()
 
     def test_installed_dependency_hides_install_button(self):
         with mock.patch("gui_qt.app.importlib.util.find_spec", return_value=object()):
