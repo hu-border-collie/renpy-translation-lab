@@ -28,6 +28,7 @@ import translation_ab_experiment
 import story_memory
 import translation_core
 import translator_runtime as runtime
+from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
 
 try:
     from google import genai
@@ -6053,15 +6054,21 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
         usage_metadata = {}
         response_text = ''
         try:
-            response = client.models.generate_content(
+            backend = GeminiSyncBackend(
+                client,
+                serialize_response=serialize_unknown,
+                extract_text=extract_text_from_response_payload,
+                extract_finish_reason=extract_finish_reason,
+                extract_usage=lambda payload: summarize_usage_metadata(extract_usage_metadata(payload)),
+            )
+            result = backend.generate(SyncGenerationRequest(
                 model=manifest.get('batch_model') or BATCH_MODEL,
                 contents=request_payload.get('contents') or [],
                 config=config,
-            )
-            response_payload = serialize_unknown(response)
-            finish_reason = extract_finish_reason(response_payload)
-            usage_metadata = summarize_usage_metadata(extract_usage_metadata(response_payload))
-            response_text = extract_text_from_response_payload(response_payload)
+            ))
+            finish_reason = result.finish_reason
+            usage_metadata = dict(result.usage_metadata)
+            response_text = result.response_text
         except Exception as exc:
             summary['request_errors'] += 1
             parse_error = str(exc)
@@ -7448,17 +7455,26 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
             safety_settings = request_payload.get('safety_settings')
             if safety_settings:
                 config['safety_settings'] = safety_settings
-            response = client.models.generate_content(
+            backend = GeminiSyncBackend(
+                client,
+                serialize_response=serialize_unknown,
+                extract_text=extract_text_from_response_payload,
+                extract_finish_reason=extract_finish_reason,
+                extract_usage=lambda payload: summarize_usage_metadata(extract_usage_metadata(payload)),
+            )
+            result = backend.generate(SyncGenerationRequest(
                 model=model_name,
                 contents=request_payload.get('contents') or [],
                 config=config,
-            )
-            response_payload = serialize_unknown(response)
+            ))
             return {
-                'response_payload': response_payload,
-                'response_text': extract_text_from_response_payload(response_payload),
-                'finish_reason': extract_finish_reason(response_payload),
-                'usage_metadata': summarize_usage_metadata(extract_usage_metadata(response_payload)),
+                'response_payload': result.response_payload,
+                'response_text': result.response_text,
+                'finish_reason': result.finish_reason,
+                'usage_metadata': dict(result.usage_metadata),
+                'provider': result.provider,
+                'model': result.model,
+                'execution_mode': result.execution_mode,
             }
         except Exception as exc:
             last_error = exc

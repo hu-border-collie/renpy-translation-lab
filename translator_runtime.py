@@ -31,6 +31,7 @@ from rag_memory import JsonRagStore, hash_text, truncate_text
 import prompt_context
 import story_memory
 import translation_core
+from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
 
 # Configuration
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -3043,13 +3044,19 @@ def call_gemini_sdk(prompt, items):
             "response_json_schema": build_response_json_schema(items),
         }
 
-        response = client.models.generate_content(
+        backend = GeminiSyncBackend(
+            client,
+            serialize_response=serialize_unknown,
+            extract_text=extract_text_from_response_payload,
+            extract_finish_reason=extract_finish_reason,
+        )
+        result = backend.generate(SyncGenerationRequest(
             model=model_name,
             contents=prompt,
             config=generation_config,
-        )
+        ))
 
-        parsed = get_nested(response, "parsed")
+        parsed = result.parsed
         if parsed is not None:
             return normalize_result_items(serialize_unknown(parsed))
 
@@ -3059,7 +3066,7 @@ def call_gemini_sdk(prompt, items):
             return normalize_result_items(parse_json_payload(response_text))
 
         prompt_feedback = extract_prompt_feedback(response_payload)
-        finish_reason = extract_finish_reason(response_payload)
+        finish_reason = result.finish_reason
         diagnostics = []
         if prompt_feedback:
             diagnostics.append(f"Prompt feedback: {prompt_feedback}")
