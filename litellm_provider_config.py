@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from importlib import metadata
 from typing import Any
 
 
@@ -24,6 +25,11 @@ DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     "ollama": ("ollama/llama3",),
 }
 _TEXT_MODES = frozenset({"chat", "responses", "completion"})
+LITELLM_CATALOG_URL = (
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/"
+    "model_prices_and_context_window.json"
+)
+LITELLM_PYPI_URL = "https://pypi.org/pypi/litellm/json"
 
 
 class ProviderCredentialStoreError(RuntimeError):
@@ -105,7 +111,7 @@ def models_for_provider(provider: str, litellm_module: Any = None) -> tuple[str,
     by_provider = getattr(litellm_module, "models_by_provider", {})
     cost = getattr(litellm_module, "model_cost", {})
     raw_models = by_provider.get(provider, ()) if isinstance(by_provider, Mapping) else ()
-    models: set[str] = set(defaults)
+    models: set[str] = set()
     for raw_model in raw_models:
         raw_model = str(raw_model or "").strip()
         metadata = cost.get(raw_model, {}) if isinstance(cost, Mapping) else {}
@@ -115,4 +121,47 @@ def models_for_provider(provider: str, litellm_module: Any = None) -> tuple[str,
             continue
         model = raw_model if raw_model.startswith(f"{provider}/") else f"{provider}/{raw_model}"
         models.add(model)
+    return tuple(sorted(models or set(defaults), key=str.casefold))
+
+
+def models_from_remote_catalog(
+    provider: str,
+    catalog: Mapping[str, object],
+) -> tuple[str, ...]:
+    """Return provider text models from LiteLLM's current upstream catalog."""
+    provider = str(provider or "").strip().lower()
+    if not provider:
+        return ()
+    models: set[str] = set()
+    for raw_model, raw_metadata in catalog.items():
+        model = str(raw_model or "").strip()
+        if not model or not isinstance(raw_metadata, Mapping):
+            continue
+        catalog_provider = str(raw_metadata.get("litellm_provider") or "").strip().lower()
+        model_provider = provider_from_model(model)
+        if catalog_provider != provider and model_provider != provider:
+            continue
+        mode = str(raw_metadata.get("mode") or "chat").strip().lower()
+        if mode not in _TEXT_MODES:
+            continue
+        models.add(model if model_provider == provider else f"{provider}/{model}")
     return tuple(sorted(models, key=str.casefold))
+
+
+def installed_litellm_version() -> str:
+    try:
+        return metadata.version("litellm")
+    except metadata.PackageNotFoundError:
+        return ""
+
+
+def version_key(value: str) -> tuple[int, ...]:
+    """Build a sufficient comparison key for stable LiteLLM release versions."""
+    release = str(value or "").strip().split("+", 1)[0]
+    numbers: list[int] = []
+    for part in release.split("."):
+        digits = "".join(char for char in part if char.isdigit())
+        if not digits:
+            break
+        numbers.append(int(digits))
+    return tuple(numbers)

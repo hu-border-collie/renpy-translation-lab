@@ -6,6 +6,8 @@ from litellm_provider_config import (
     delete_provider_api_key,
     load_provider_api_key,
     models_for_provider,
+    models_from_remote_catalog,
+    version_key,
     provider_from_model,
     store_provider_api_key,
 )
@@ -59,6 +61,36 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
         self.assertIn("openai/gpt-text", models)
         self.assertIn("openai/gpt-prefixed", models)
         self.assertNotIn("openai/dall-e-test", models)
+
+    def test_local_catalog_does_not_mix_hardcoded_default_into_real_results(self):
+        fake_litellm = SimpleNamespace(
+            models_by_provider={"openai": ("gpt-current",)},
+            model_cost={"gpt-current": {"mode": "chat"}},
+        )
+
+        self.assertEqual(
+            models_for_provider("openai", fake_litellm),
+            ("openai/gpt-current",),
+        )
+
+    def test_remote_catalog_filters_by_provider_and_text_mode(self):
+        catalog = {
+            "gpt-current": {"litellm_provider": "openai", "mode": "chat"},
+            "openai/gpt-responses": {
+                "litellm_provider": "openai",
+                "mode": "responses",
+            },
+            "dall-e": {"litellm_provider": "openai", "mode": "image_generation"},
+            "claude": {"litellm_provider": "anthropic", "mode": "chat"},
+        }
+
+        self.assertEqual(
+            models_from_remote_catalog("openai", catalog),
+            ("openai/gpt-current", "openai/gpt-responses"),
+        )
+
+    def test_stable_versions_compare_numerically(self):
+        self.assertLess(version_key("1.83.7"), version_key("1.92.0"))
 
     def test_provider_is_derived_from_model_prefix(self):
         self.assertEqual(provider_from_model(" OpenRouter/openai/gpt-5 "), "openrouter")

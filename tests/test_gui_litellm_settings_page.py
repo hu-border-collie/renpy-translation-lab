@@ -43,7 +43,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             self.window.litellm_api_key_edit.echoMode(),
             QLineEdit.EchoMode.Password,
         )
-        self.assertEqual(self.window.litellm_refresh_models_btn.text(), "刷新列表")
+        self.assertEqual(self.window.litellm_refresh_models_btn.text(), "联网更新列表")
         self.assertEqual(self.window.litellm_test_connection_btn.text(), "测试连接")
         actions = {
             action.objectName(): action

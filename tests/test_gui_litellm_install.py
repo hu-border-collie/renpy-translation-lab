@@ -195,10 +195,11 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         information.assert_called_once()
         self.assertIn("正在安装", information.call_args.args[1])
 
-    def test_installed_dependency_hides_install_button(self):
+    def test_installed_dependency_offers_update_button(self):
         with mock.patch("gui_qt.app.importlib.util.find_spec", return_value=object()):
             self.window._on_sync_backend_changed(0)
-        self.assertFalse(self.window.install_litellm_btn.visible)
+        self.assertTrue(self.window.install_litellm_btn.visible)
+        self.assertEqual(self.window.install_litellm_btn.text, "更新 LiteLLM")
         self.assertIn("已安装", self.window.sync_backend_hint.value)
 
     def test_gemini_backend_hides_install_button(self):

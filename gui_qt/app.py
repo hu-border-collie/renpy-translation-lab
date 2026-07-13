@@ -210,6 +210,7 @@ from .work_bootstrap_report import (
 from .litellm_worker import (
     LiteLLMConnectionTestWorker,
     LiteLLMModelCatalogWorker,
+    LiteLLMVersionWorker,
 )
 from .litellm_settings import (
     provider_credential_status,
@@ -219,6 +220,8 @@ from .litellm_settings import (
 from litellm_provider_config import (
     DEFAULT_MODELS,
     SUPPORTED_PROVIDERS,
+    installed_litellm_version,
+    version_key,
     ProviderCredentialStoreError,
     delete_provider_api_key,
     load_provider_api_key,
@@ -411,6 +414,9 @@ class MainWindow(QMainWindow):
         self._task_running = False
         self._litellm_install_active = False
         self._litellm_catalog_worker: LiteLLMModelCatalogWorker | None = None
+        self._litellm_version_worker: LiteLLMVersionWorker | None = None
+        self._litellm_latest_version = ""
+        self._litellm_catalog_source = ""
         self._litellm_connection_worker: LiteLLMConnectionTestWorker | None = None
         self._litellm_catalog_models: dict[str, tuple[str, ...]] = {}
         self._updating_litellm_provider = False
@@ -1783,22 +1789,39 @@ class MainWindow(QMainWindow):
         model_layout.setContentsMargins(0, 0, 0, 0)
         model_layout.setSpacing(8)
         model_layout.addWidget(self.litellm_model_combo, 1)
-        self.litellm_refresh_models_btn = QPushButton("刷新列表")
+        self.litellm_refresh_models_btn = QPushButton("联网更新列表")
         self.litellm_refresh_models_btn.setObjectName("secondary_btn")
         self.litellm_refresh_models_btn.clicked.connect(self._on_refresh_litellm_models)
         model_layout.addWidget(self.litellm_refresh_models_btn)
         backend_layout.addRow("LiteLLM 模型：", model_row)
+        self.litellm_catalog_status_label = QLabel("目录来源：内置兜底；尚未联网更新。")
+        self.litellm_catalog_status_label.setWordWrap(True)
+        self.litellm_catalog_status_label.setObjectName("config_hint_label")
+        backend_layout.addRow(self.litellm_catalog_status_label)
 
         self.sync_backend_hint = QLabel()
         self.sync_backend_hint.setWordWrap(True)
         self.sync_backend_hint.setObjectName("config_hint_label")
         backend_layout.addRow(self.sync_backend_hint)
 
+        version_row = QWidget()
+        version_layout = QHBoxLayout(version_row)
+        version_layout.setContentsMargins(0, 0, 0, 0)
+        version_layout.setSpacing(8)
+        self.litellm_version_label = QLabel()
+        self.litellm_version_label.setObjectName("config_hint_label")
+        version_layout.addWidget(self.litellm_version_label, 1)
+        self.litellm_check_version_btn = QPushButton("检查更新")
+        self.litellm_check_version_btn.setObjectName("secondary_btn")
+        self.litellm_check_version_btn.clicked.connect(self._on_check_litellm_version)
+        version_layout.addWidget(self.litellm_check_version_btn)
         self.install_litellm_btn = QPushButton("安装 LiteLLM")
         self.install_litellm_btn.setObjectName("secondary_btn")
         self.install_litellm_btn.clicked.connect(self._on_install_litellm)
         self.install_litellm_btn.setVisible(False)
-        backend_layout.addRow(self.install_litellm_btn)
+        version_layout.addWidget(self.install_litellm_btn)
+        backend_layout.addRow("LiteLLM 版本：", version_row)
+        self._refresh_litellm_version_label()
 
         self.litellm_install_progress = QProgressBar()
         self.litellm_install_progress.setObjectName("litellm_install_progress")
@@ -4258,11 +4281,58 @@ class MainWindow(QMainWindow):
             self._updating_litellm_provider = False
         self._refresh_litellm_credential_status()
 
+    def _refresh_litellm_version_label(self) -> None:
+        label = getattr(self, "litellm_version_label", None)
+        if label is None:
+            return
+        installed = installed_litellm_version()
+        latest = str(getattr(self, "_litellm_latest_version", "") or "")
+        if not installed:
+            label.setText("尚未安装；可检查 PyPI 最新稳定版。")
+        elif not latest:
+            label.setText(f"本机 {installed}；尚未检查 PyPI。")
+        elif version_key(installed) < version_key(latest):
+            label.setText(f"本机 {installed}；最新稳定版 {latest}，建议更新。")
+        else:
+            label.setText(f"本机 {installed}；已是最新稳定版。")
+
+    def _on_check_litellm_version(self) -> None:
+        if getattr(self, "_litellm_version_worker", None) is not None:
+            return
+        button = getattr(self, "litellm_check_version_btn", None)
+        if button is not None:
+            button.setEnabled(False)
+            button.setText("正在检查…")
+        worker = LiteLLMVersionWorker(self)
+        worker.completed.connect(self._on_litellm_version_checked)
+        self._litellm_version_worker = worker
+        worker.start()
+
+    def _on_litellm_version_checked(
+        self,
+        installed: str,
+        latest: str,
+        error: object,
+    ) -> None:
+        worker = getattr(self, "_litellm_version_worker", None)
+        self._litellm_version_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        button = getattr(self, "litellm_check_version_btn", None)
+        if button is not None:
+            button.setText("检查更新")
+        if latest:
+            self._litellm_latest_version = latest
+        self._refresh_litellm_version_label()
+        if error:
+            label = getattr(self, "litellm_version_label", None)
+            if label is not None:
+                current = f"本机 {installed}" if installed else "尚未安装"
+                label.setText(f"{current}；检查更新失败，请稍后重试。")
+        self._on_sync_backend_changed(-1)
+
     def _on_refresh_litellm_models(self) -> None:
         if self._litellm_catalog_worker is not None:
-            return
-        if importlib.util.find_spec("litellm") is None:
-            QMessageBox.information(self, "尚未安装 LiteLLM", "请先安装 LiteLLM。")
             return
         provider = self._current_litellm_provider()
         if not provider:
@@ -4273,15 +4343,15 @@ class MainWindow(QMainWindow):
             button.setText("正在加载…")
         worker = LiteLLMModelCatalogWorker(provider, self)
         worker.completed.connect(
-            lambda models, error, selected=provider: self._on_litellm_models_loaded(
-                selected, models, error
+            lambda models, source, error, selected=provider: self._on_litellm_models_loaded(
+                selected, models, error, source
             )
         )
         self._litellm_catalog_worker = worker
         worker.start()
 
     def _on_litellm_models_loaded(
-        self, provider: str, models: object, error: object
+        self, provider: str, models: object, error: object, source: str = ""
     ) -> None:
         worker = self._litellm_catalog_worker
         self._litellm_catalog_worker = None
@@ -4289,16 +4359,27 @@ class MainWindow(QMainWindow):
             worker.deleteLater()
         button = getattr(self, "litellm_refresh_models_btn", None)
         if button is not None:
-            button.setText("刷新列表")
+            button.setText("联网更新列表")
         self._on_sync_backend_changed(-1)
-        if error:
+        if error and not models:
             QMessageBox.warning(self, "模型列表加载失败", str(error))
             return
         values = tuple(str(model) for model in models)
         self._litellm_catalog_models[provider] = values
+        self._litellm_catalog_source = source
+        source_label = getattr(self, "litellm_catalog_status_label", None)
+        if source_label is not None:
+            source_label.setText(
+                "目录来源：LiteLLM 官方在线目录。"
+                if source == "online"
+                else "目录来源：本机 LiteLLM 随包目录（联网失败，可能过时）。"
+            )
         if self._current_litellm_provider() == provider:
             self._set_litellm_models(provider, values)
-        self.statusBar().showMessage(f"已加载 {len(values)} 个 {provider} 模型。", 5000)
+        message = f"已加载 {len(values)} 个 {provider} 模型。"
+        if error:
+            message = f"{message} {error}"
+        self.statusBar().showMessage(message, 8000)
 
     def _on_save_litellm_key(self) -> None:
         provider = self._current_litellm_provider()
@@ -4370,8 +4451,11 @@ class MainWindow(QMainWindow):
         install_btn = getattr(self, "install_litellm_btn", None)
         install_progress = getattr(self, "litellm_install_progress", None)
         installing = self._litellm_install_running()
+        installed_version = installed_litellm_version()
+        installed = bool(installed_version) and importlib.util.find_spec("litellm") is not None
         if backend == "litellm":
-            installed = importlib.util.find_spec("litellm") is not None
+            installed_version = installed_litellm_version()
+            installed = bool(installed_version) and importlib.util.find_spec("litellm") is not None
             keyring_installed = importlib.util.find_spec("keyring") is not None
             state = "正在后台安装" if installing else ("已安装" if installed else "尚未安装")
             credential_state = "可用" if keyring_installed else "尚未安装"
@@ -4380,13 +4464,20 @@ class MainWindow(QMainWindow):
                 f"LiteLLM：{state}；安全凭据支持：{credential_state}。"
             )
             if install_btn is not None:
-                install_btn.setVisible(not installed or not keyring_installed)
-                install_btn.setEnabled(not installing)
-                install_btn.setText(
-                    "正在安装…"
-                    if installing
-                    else ("安装 LiteLLM" if not installed else "安装安全凭据支持")
+                latest = str(getattr(self, "_litellm_latest_version", "") or "")
+                up_to_date = bool(
+                    installed and latest and version_key(installed_version) >= version_key(latest)
                 )
+                install_btn.setVisible(True)
+                install_btn.setEnabled(not installing and not (up_to_date and keyring_installed))
+                if installing:
+                    install_btn.setText("正在更新…" if installed else "正在安装…")
+                elif not installed:
+                    install_btn.setText("安装 LiteLLM")
+                elif up_to_date and keyring_installed:
+                    install_btn.setText("已是最新版")
+                else:
+                    install_btn.setText("更新 LiteLLM")
         else:
             hint.setText(
                 "推荐路径仍为 Gemini；同步配置位于「模型」与「密钥」页，批量离线翻译仍使用 Gemini Batch。"
@@ -4399,7 +4490,7 @@ class MainWindow(QMainWindow):
                 # pip does not expose a trustworthy total; busy mode gives honest
                 # visual feedback without inventing a completion percentage.
                 install_progress.setRange(0, 0)
-                install_progress.setFormat("正在后台安装 LiteLLM…")
+                install_progress.setFormat("正在后台更新 LiteLLM…" if installed else "正在后台安装 LiteLLM…")
 
         model_combo = getattr(self, "litellm_model_combo", None)
         if model_combo is not None:
@@ -4423,6 +4514,10 @@ class MainWindow(QMainWindow):
             widget = getattr(self, name, None)
             if widget is not None:
                 widget.setEnabled(backend == "litellm" and not installing)
+        version_button = getattr(self, "litellm_check_version_btn", None)
+        if version_button is not None:
+            checking = getattr(self, "_litellm_version_worker", None) is not None
+            version_button.setEnabled(not installing and not checking)
         if hasattr(self, "translate_btn"):
             self._set_task_running(bool(getattr(self, "_task_running", False)))
         self._refresh_litellm_credential_status()
@@ -4475,15 +4570,18 @@ class MainWindow(QMainWindow):
         process.errorOccurred.connect(self._on_litellm_install_error)
         self._litellm_install_process = process
         self._litellm_install_active = True
+        self._litellm_install_is_update = bool(installed_litellm_version())
+        pip_args = ["-m", "pip", "install"]
+        if self._litellm_install_is_update:
+            pip_args.append("--upgrade")
+        pip_args.extend(["-r", str(requirements_path)])
 
         self._show_workbench_log_drawer()
+        action = "更新" if self._litellm_install_is_update else "安装"
         self._append_log(
-            f"=== 正在安装 LiteLLM ===\n{sys.executable} -m pip install -r {requirements_path}\n"
+            f"=== 正在{action} LiteLLM ===\n{sys.executable} {' '.join(pip_args)}\n"
         )
-        process.start(
-            sys.executable,
-            ["-m", "pip", "install", "-r", str(requirements_path)],
-        )
+        process.start(sys.executable, pip_args)
         self._on_sync_backend_changed(-1)
 
     def _on_litellm_install_output(self) -> None:
@@ -4501,13 +4599,20 @@ class MainWindow(QMainWindow):
         self._litellm_install_process = None
         self._litellm_install_active = False
         importlib.invalidate_caches()
-        if exit_code == 0 and importlib.util.find_spec("litellm") is not None:
-            self._append_log("\n[LiteLLM 安装完成]\n")
-            self.statusBar().showMessage("LiteLLM 安装完成。", 5000)
+        action = "更新" if bool(getattr(self, "_litellm_install_is_update", False)) else "安装"
+        succeeded = exit_code == 0 and bool(installed_litellm_version())
+        if succeeded:
+            self._append_log(f"\n[LiteLLM {action}完成]\n")
+            self.statusBar().showMessage(f"LiteLLM {action}完成。", 5000)
         else:
-            self._append_log(f"\n[LiteLLM 安装失败，退出码：{exit_code}]\n")
-            QMessageBox.warning(self, "LiteLLM 安装失败", "请查看工作台日志中的 pip 输出。")
+            self._append_log(f"\n[LiteLLM {action}失败，退出码：{exit_code}]\n")
+            QMessageBox.warning(self, f"LiteLLM {action}失败", "请查看工作台日志中的 pip 输出。")
+        self._refresh_litellm_version_label()
         self._on_sync_backend_changed(-1)
+        if succeeded:
+            self._on_check_litellm_version()
+            if self._selected_sync_backend() == "litellm":
+                self._on_refresh_litellm_models()
 
     def _on_litellm_install_error(self, error: object) -> None:
         process = getattr(self, "_litellm_install_process", None)

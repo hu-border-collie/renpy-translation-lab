@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import json
+from urllib.request import Request, urlopen
+
 from PySide6.QtCore import QThread, Signal
 
-from litellm_provider_config import models_for_provider
+from litellm_provider_config import (
+    LITELLM_CATALOG_URL,
+    LITELLM_PYPI_URL,
+    installed_litellm_version,
+    models_for_provider,
+    models_from_remote_catalog,
+)
 from litellm_sync_backend import LiteLLMSyncBackend
 from sync_model_backend import SyncGenerationRequest
 
 
 CONNECTION_TEST_TIMEOUT_SECONDS = 30
+CATALOG_TIMEOUT_SECONDS = 15
 
 
 def _connection_error_message(exc: Exception) -> str:
@@ -25,7 +35,7 @@ def _connection_error_message(exc: Exception) -> str:
 
 
 class LiteLLMModelCatalogWorker(QThread):
-    completed = Signal(object, object)
+    completed = Signal(object, object, object)
 
     def __init__(self, provider: str, parent=None) -> None:
         super().__init__(parent)
@@ -33,9 +43,45 @@ class LiteLLMModelCatalogWorker(QThread):
 
     def run(self) -> None:
         try:
-            self.completed.emit(models_for_provider(self.provider), None)
+            request = Request(
+                LITELLM_CATALOG_URL,
+                headers={"User-Agent": "renpy-translation-lab"},
+            )
+            with urlopen(request, timeout=CATALOG_TIMEOUT_SECONDS) as response:
+                catalog = json.load(response)
+            if not isinstance(catalog, dict):
+                raise ValueError("LiteLLM 官方目录格式无效")
+            models = models_from_remote_catalog(self.provider, catalog)
+            if not models:
+                raise ValueError(f"官方目录中没有 {self.provider} 文本模型")
+            self.completed.emit(models, "online", None)
         except Exception as exc:
-            self.completed.emit((), str(exc))
+            try:
+                models = models_for_provider(self.provider)
+            except Exception as local_exc:
+                self.completed.emit((), "", f"联网失败：{exc}；本地读取失败：{local_exc}")
+                return
+            self.completed.emit(models, "local", f"联网失败，已改用本地目录：{exc}")
+
+
+class LiteLLMVersionWorker(QThread):
+    completed = Signal(str, str, object)
+
+    def run(self) -> None:
+        installed = installed_litellm_version()
+        try:
+            request = Request(
+                LITELLM_PYPI_URL,
+                headers={"User-Agent": "renpy-translation-lab"},
+            )
+            with urlopen(request, timeout=CATALOG_TIMEOUT_SECONDS) as response:
+                payload = json.load(response)
+            latest = str(payload.get("info", {}).get("version", "")).strip()
+            if not latest:
+                raise ValueError("PyPI 未返回最新版本")
+            self.completed.emit(installed, latest, None)
+        except Exception as exc:
+            self.completed.emit(installed, "", str(exc))
 
 
 class LiteLLMConnectionTestWorker(QThread):
