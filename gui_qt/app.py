@@ -286,7 +286,11 @@ from .workflow_progress import (
     create_workflow_progress_state,
     update_workflow_progress_from_line,
 )
-from .widget_helpers import NoWheelComboBox, NoWheelTabWidget
+from .widget_helpers import (
+    NoWheelComboBox,
+    NoWheelTabWidget,
+    add_editable_combo_popup_action,
+)
 from .wizard_timeline import WizardTimeline
 from .log_highlighter import LogHighlighter
 from .status_icons import StatusBadge
@@ -1688,6 +1692,7 @@ class MainWindow(QMainWindow):
 
         self.sync_model_combo = NoWheelComboBox()
         self.sync_model_combo.setEditable(True)
+        add_editable_combo_popup_action(self.sync_model_combo)
         self.sync_model_combo.addItems([
             "gemini-3.5-flash",
             "gemini-3.1-pro-preview",
@@ -1770,6 +1775,7 @@ class MainWindow(QMainWindow):
 
         self.litellm_model_combo = NoWheelComboBox()
         self.litellm_model_combo.setEditable(True)
+        add_editable_combo_popup_action(self.litellm_model_combo)
         self.litellm_model_combo.addItems(DEFAULT_MODELS["openai"])
         self.litellm_model_combo.currentTextChanged.connect(self._on_litellm_model_changed)
         model_row = QWidget()

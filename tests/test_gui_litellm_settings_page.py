@@ -45,6 +45,12 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         )
         self.assertEqual(self.window.litellm_refresh_models_btn.text(), "刷新列表")
         self.assertEqual(self.window.litellm_test_connection_btn.text(), "测试连接")
+        actions = {
+            action.objectName(): action
+            for action in self.window.litellm_model_combo.lineEdit().actions()
+        }
+        self.assertIn("combo_popup_action", actions)
+        self.assertFalse(actions["combo_popup_action"].icon().isNull())
 
     def test_typed_model_prefix_takes_priority_for_credentials(self):
         self.window.litellm_provider_combo.setCurrentIndex(
@@ -94,6 +100,12 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertIn("Gemini 同步翻译", titles)
         self.assertIn("批量离线翻译", titles)
         self.assertNotIn("LiteLLM 同步替代后端", titles)
+        actions = {
+            action.objectName(): action
+            for action in self.window.sync_model_combo.lineEdit().actions()
+        }
+        self.assertIn("combo_popup_action", actions)
+        self.assertFalse(actions["combo_popup_action"].icon().isNull())
 
 
 if __name__ == "__main__":
