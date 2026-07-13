@@ -8,6 +8,7 @@ This is the first version shell (per #42):
 from __future__ import annotations
 
 import copy
+import importlib.util
 import os
 import sys
 import re
@@ -1661,7 +1662,14 @@ class MainWindow(QMainWindow):
         sync_layout.setSpacing(8)
         sync_layout.setContentsMargins(12, 16, 12, 12)
 
+        self.sync_backend_combo = NoWheelComboBox()
+        self.sync_backend_combo.addItem("Gemini 同步（推荐）", "gemini")
+        self.sync_backend_combo.addItem("LiteLLM 同步替代", "litellm")
+        self.sync_backend_combo.currentIndexChanged.connect(self._on_sync_backend_changed)
+        sync_layout.addRow("执行后端：", self.sync_backend_combo)
+
         self.sync_model_combo = NoWheelComboBox()
+        self.sync_model_combo.setEditable(True)
         self.sync_model_combo.addItems([
             "gemini-3.5-flash",
             "gemini-3.1-pro-preview",
@@ -1680,6 +1688,10 @@ class MainWindow(QMainWindow):
         ])
         sync_layout.addRow("RAG 向量模型：", self.sync_embedding_combo)
 
+        self.sync_backend_hint = QLabel()
+        self.sync_backend_hint.setWordWrap(True)
+        self.sync_backend_hint.setObjectName("config_hint_label")
+        sync_layout.addRow(self.sync_backend_hint)
         config_row.addWidget(sync_box, 1)
 
         batch_box = QGroupBox("批量离线翻译")
@@ -4021,6 +4033,41 @@ class MainWindow(QMainWindow):
     def _current_work_mode(self) -> WorkMode:
         return normalize_work_mode(self._work_mode)
 
+    def _selected_sync_backend(self) -> str:
+        combo = getattr(self, "sync_backend_combo", None)
+        if combo is None:
+            return "gemini"
+        value = combo.currentData()
+        return value if value in {"gemini", "litellm"} else "gemini"
+
+    def _saved_sync_backend(self) -> str:
+        try:
+            config = self.state.load_translator_config()
+        except Exception:
+            return "gemini"
+        sync = config.get("sync") if isinstance(config, dict) else None
+        if not isinstance(sync, dict):
+            return "gemini"
+        value = str(sync.get("backend") or "gemini").strip().lower()
+        return value if value in {"gemini", "litellm"} else "gemini"
+
+    def _on_sync_backend_changed(self, _index: int) -> None:
+        backend = self._selected_sync_backend()
+        hint = getattr(self, "sync_backend_hint", None)
+        if hint is None:
+            return
+        if backend == "litellm":
+            installed = importlib.util.find_spec("litellm") is not None
+            state = "已安装" if installed else "尚未安装（pip install -r requirements-litellm.txt）"
+            hint.setText(
+                "同步替代模式；不使用 Gemini API Key，也没有远程 Batch 恢复。"
+                f"LiteLLM：{state}。凭据从对应供应商环境变量读取。"
+            )
+        else:
+            hint.setText(
+                "推荐路径。同步任务使用 Gemini API Key；批量离线翻译仍始终使用 Gemini Batch。"
+            )
+
     def _sync_work_modes_requiring_api_key(self) -> frozenset[WorkMode]:
         return frozenset(
             {
@@ -5581,6 +5628,7 @@ class MainWindow(QMainWindow):
             "source_index_enabled": self.source_index_enabled_cb.isChecked(),
             "bootstrap_on_build": self.bootstrap_on_build_cb.isChecked(),
             "context_storage_location": "game" if self.context_storage_game_cb.isChecked() else "tool",
+            "sync_backend": self._selected_sync_backend(),
             "sync_model": self.sync_model_combo.currentText().strip(),
             "batch_model": self.batch_model_combo.currentText().strip(),
             "sync_embedding_model": self.sync_embedding_combo.currentText().strip(),
@@ -5752,7 +5800,12 @@ class MainWindow(QMainWindow):
         self.source_index_enabled_cb.setChecked(bool(values["source_index_enabled"]))
         self.bootstrap_on_build_cb.setChecked(bool(values["bootstrap_on_build"]))
         self.context_storage_game_cb.setChecked(values["context_storage_location"] == "game")
+        backend_combo = getattr(self, "sync_backend_combo", None)
+        backend_idx = backend_combo.findData("gemini") if backend_combo is not None else -1
+        if backend_combo is not None:
+            backend_combo.setCurrentIndex(backend_idx)
         self._set_combo_value(self.sync_model_combo, values["sync_model"])
+        self._on_sync_backend_changed(backend_idx)
         self._set_combo_value(self.batch_model_combo, values["batch_model"])
         self._set_combo_value(self.sync_embedding_combo, values["sync_embedding_model"])
         self._set_combo_value(self.batch_embedding_combo, values["batch_embedding_model"])
@@ -6129,14 +6182,26 @@ class MainWindow(QMainWindow):
             return
 
         if spec.mode in self._sync_work_modes_requiring_api_key():
-            api_key_count, _ = self.state.get_api_key_status()
-            if api_key_count == 0:
-                QMessageBox.information(
-                    self,
-                    "请先配置 API Key",
-                    "同步模式需要 Gemini API 密钥；请在设置页管理 API Key 或设置环境变量。",
-                )
-                return
+            sync_backend = self._saved_sync_backend()
+            if sync_backend == "litellm":
+                if importlib.util.find_spec("litellm") is None:
+                    QMessageBox.information(
+                        self,
+                        "尚未安装 LiteLLM",
+                        "当前同步后端是 LiteLLM。请先运行：\n"
+                        "pip install -r requirements-litellm.txt\n\n"
+                        "供应商 API Key 请按 LiteLLM 约定设置为环境变量。",
+                    )
+                    return
+            else:
+                api_key_count, _ = self.state.get_api_key_status()
+                if api_key_count == 0:
+                    QMessageBox.information(
+                        self,
+                        "请先配置 API Key",
+                        "Gemini 同步模式需要 API 密钥；请在设置页管理 API Key 或设置环境变量。",
+                    )
+                    return
 
         workflow = create_workflow(
             spec.mode,
@@ -8162,6 +8227,14 @@ class MainWindow(QMainWindow):
             self.context_storage_game_cb.setChecked(storage_location == "game")
             self._batch_thinking_config_has_key = "thinking_level" in batch_config
 
+            sync_backend = self._config_string(sync_config.get("backend", "gemini")).lower()
+            if sync_backend not in {"gemini", "litellm"}:
+                sync_backend = "gemini"
+            backend_combo = getattr(self, "sync_backend_combo", None)
+            backend_idx = backend_combo.findData(sync_backend) if backend_combo is not None else -1
+            if backend_combo is not None:
+                backend_combo.setCurrentIndex(backend_idx)
+
             sync_models = sync_config.get("models")
             sync_val = ""
             if isinstance(sync_models, list):
@@ -8176,6 +8249,7 @@ class MainWindow(QMainWindow):
             if not sync_val:
                 sync_val = str(BASIC_RECOMMENDED_VALUES["sync_model"])
             self._set_combo_value(self.sync_model_combo, sync_val)
+            self._on_sync_backend_changed(backend_idx)
 
             batch_val = self._config_string(batch_config.get("model", "")) or str(
                 BASIC_RECOMMENDED_VALUES["batch_model"]
@@ -8263,6 +8337,7 @@ class MainWindow(QMainWindow):
                 "bootstrap_on_build": self.bootstrap_on_build_cb.isChecked(),
             }
 
+            sync_config["backend"] = self._selected_sync_backend()
             sync_model = self.sync_model_combo.currentText().strip()
             sync_config["model"] = sync_model
             if "models" in sync_config:
