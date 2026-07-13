@@ -133,6 +133,7 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
 
     def test_install_blocks_all_litellm_sync_modes_but_not_batch(self):
         self.window._litellm_install_active = True
+        self.window._saved_sync_backend = mock.Mock(return_value="litellm")
         for mode in (
             WorkMode.SYNC_TRANSLATION,
             WorkMode.SYNC_KEYWORD_EXTRACTION,
@@ -142,6 +143,22 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
                 self.assertTrue(self.window._litellm_install_blocks_mode(mode))
         self.assertFalse(
             self.window._litellm_install_blocks_mode(WorkMode.BATCH_TRANSLATION)
+        )
+
+    def test_install_guard_uses_saved_litellm_when_ui_selects_gemini(self):
+        self.window._litellm_install_active = True
+        self.window.sync_backend_combo = _Combo("gemini")
+        self.window._saved_sync_backend = mock.Mock(return_value="litellm")
+        self.assertTrue(
+            self.window._litellm_install_blocks_mode(WorkMode.SYNC_TRANSLATION)
+        )
+
+    def test_install_guard_allows_saved_gemini_when_ui_selects_litellm(self):
+        self.window._litellm_install_active = True
+        self.window.sync_backend_combo = _Combo("litellm")
+        self.window._saved_sync_backend = mock.Mock(return_value="gemini")
+        self.assertFalse(
+            self.window._litellm_install_blocks_mode(WorkMode.SYNC_TRANSLATION)
         )
 
     def test_translate_availability_stays_disabled_after_ui_refresh(self):
@@ -155,13 +172,22 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
             )
         )
 
-    def test_start_action_rejects_litellm_task_during_install(self):
+    def test_start_action_checks_install_after_unsaved_config_resolution(self):
         self.window._current_work_mode = mock.Mock(
-            return_value=WorkMode.SYNC_TRANSLATION
+            return_value=WorkMode.SYNC_KEYWORD_EXTRACTION
+        )
+        self.window.state = mock.Mock()
+        self.window.state.get_game_root.return_value = "C:/Game/work"
+        self.window._confirm_unsaved_config_before_workflow = mock.Mock(
+            return_value=True
         )
         self.window._litellm_install_blocks_mode = mock.Mock(return_value=True)
         with mock.patch("gui_qt.app.QMessageBox.information") as information:
             self.window._on_start_translation()
+        self.window._confirm_unsaved_config_before_workflow.assert_called_once()
+        self.window._litellm_install_blocks_mode.assert_called_once_with(
+            WorkMode.SYNC_KEYWORD_EXTRACTION
+        )
         information.assert_called_once()
         self.assertIn("正在安装", information.call_args.args[1])
 

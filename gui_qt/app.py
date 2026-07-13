@@ -4120,7 +4120,7 @@ class MainWindow(QMainWindow):
     def _litellm_install_blocks_mode(self, mode: WorkMode) -> bool:
         return (
             self._litellm_install_running()
-            and self._selected_sync_backend() == "litellm"
+            and self._saved_sync_backend() == "litellm"
             and mode in self._sync_work_modes_requiring_api_key()
         )
 
@@ -6286,13 +6286,6 @@ class MainWindow(QMainWindow):
 
     def _on_start_translation(self):
         spec = work_mode_spec(self._current_work_mode())
-        if self._litellm_install_blocks_mode(spec.mode):
-            QMessageBox.information(
-                self,
-                "LiteLLM 正在安装",
-                "请等待 LiteLLM 后台安装完成后再启动同步任务。其他功能仍可继续使用。",
-            )
-            return
         if not spec.implemented:
             QMessageBox.information(self, "功能开发中", spec.not_implemented_message)
             return
@@ -6321,6 +6314,14 @@ class MainWindow(QMainWindow):
             return
 
         if not self._confirm_unsaved_config_before_workflow():
+            return
+
+        if self._litellm_install_blocks_mode(spec.mode):
+            QMessageBox.information(
+                self,
+                "LiteLLM 正在安装",
+                "请等待 LiteLLM 后台安装完成后再启动同步任务。其他功能仍可继续使用。",
+            )
             return
 
         if spec.mode in self._sync_work_modes_requiring_api_key():
