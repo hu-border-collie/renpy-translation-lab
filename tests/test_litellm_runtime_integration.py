@@ -1,3 +1,4 @@
+import io
 import unittest
 from unittest import mock
 
@@ -5,6 +6,61 @@ import translator_runtime as runtime
 
 
 class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
+    def test_sync_runner_does_not_require_gemini_key_for_litellm(self):
+        previous_backend = runtime.SYNC_BACKEND
+        previous_keys = runtime.API_KEYS
+
+        def select_litellm():
+            runtime.SYNC_BACKEND = "litellm"
+
+        try:
+            runtime.API_KEYS = []
+            with (
+                mock.patch.object(runtime, "load_config") as load_config,
+                mock.patch.object(
+                    runtime,
+                    "load_translator_settings",
+                    side_effect=select_litellm,
+                ),
+                mock.patch.object(runtime, "load_glossary"),
+                mock.patch.object(runtime, "run_prepare_steps"),
+                mock.patch.object(runtime.os, "walk", return_value=[]),
+                mock.patch.object(runtime, "load_progress", return_value={}),
+                mock.patch("sys.stdout", output := io.StringIO()),
+            ):
+                runtime.run_translation()
+
+            load_config.assert_called_once_with(require_api_key=False)
+            self.assertIn("Sync backend: litellm", output.getvalue())
+            self.assertIn("not required for LiteLLM", output.getvalue())
+        finally:
+            runtime.SYNC_BACKEND = previous_backend
+            runtime.API_KEYS = previous_keys
+
+    def test_sync_runner_still_requires_gemini_key_for_gemini(self):
+        previous_backend = runtime.SYNC_BACKEND
+        previous_keys = runtime.API_KEYS
+
+        def select_gemini():
+            runtime.SYNC_BACKEND = "gemini"
+
+        try:
+            runtime.API_KEYS = []
+            with (
+                mock.patch.object(runtime, "load_config"),
+                mock.patch.object(
+                    runtime,
+                    "load_translator_settings",
+                    side_effect=select_gemini,
+                ),
+                mock.patch("sys.stdout"),
+            ):
+                with self.assertRaisesRegex(SystemExit, "No API keys available"):
+                    runtime.run_translation()
+        finally:
+            runtime.SYNC_BACKEND = previous_backend
+            runtime.API_KEYS = previous_keys
+
     def test_runtime_uses_explicit_litellm_backend_without_gemini_client(self):
         fake_result = type("Result", (), {
             "parsed": None,
