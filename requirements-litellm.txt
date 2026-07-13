@@ -1,3 +1,4 @@
 # Optional synchronous alternative backend for sync keyword/revision/repair runs.
 # Gemini Batch and the default GUI/CLI do not require this dependency.
 litellm>=1.60.0
+keyring>=25.0.0

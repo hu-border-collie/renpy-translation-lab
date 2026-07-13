@@ -110,8 +110,13 @@ class LiteLLMSyncBackend:
 
     provider = "litellm"
 
-    def __init__(self, completion: Optional[Callable[..., Any]] = None) -> None:
+    def __init__(
+        self,
+        completion: Optional[Callable[..., Any]] = None,
+        api_key: Optional[str] = None,
+    ) -> None:
         self._completion = completion
+        self._api_key = str(api_key or "").strip()
 
     def _resolve_completion(self) -> Callable[..., Any]:
         if self._completion is not None:
@@ -137,6 +142,22 @@ class LiteLLMSyncBackend:
             "model": request.model,
             "messages": _messages(request.contents, config),
         }
+        api_key = self._api_key
+        if not api_key:
+            try:
+                from litellm_provider_config import (
+                    load_provider_api_key,
+                    provider_from_model,
+                )
+
+                api_key = load_provider_api_key(provider_from_model(request.model))
+            except Exception:
+                # keyring is optional; LiteLLM can still use environment variables.
+                api_key = ""
+        if api_key:
+            kwargs["api_key"] = api_key
+        if "timeout" in config:
+            kwargs["timeout"] = config["timeout"]
         if "temperature" in config:
             kwargs["temperature"] = config["temperature"]
         if "max_output_tokens" in config:

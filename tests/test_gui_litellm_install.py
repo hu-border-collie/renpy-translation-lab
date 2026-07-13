@@ -21,6 +21,9 @@ class _Combo:
     def setEnabled(self, value):
         self.enabled = value
 
+    def setToolTip(self, value):
+        self.tooltip = value
+
 
 class _Label:
     def __init__(self):
@@ -192,12 +195,36 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         information.assert_called_once()
         self.assertIn("正在安装", information.call_args.args[1])
 
-    def test_installed_dependency_hides_install_button(self):
-        with mock.patch("gui_qt.app.importlib.util.find_spec", return_value=object()):
+    def test_installed_dependency_offers_update_button(self):
+        with (
+            mock.patch("gui_qt.app.importlib.util.find_spec", return_value=object()),
+            mock.patch("gui_qt.app.installed_litellm_version", return_value="1.83.7"),
+        ):
             self.window._on_sync_backend_changed(0)
-        self.assertFalse(self.window.install_litellm_btn.visible)
+        self.assertTrue(self.window.install_litellm_btn.visible)
+        self.assertEqual(self.window.install_litellm_btn.text, "更新 LiteLLM")
         self.assertIn("已安装", self.window.sync_backend_hint.value)
 
+    def test_python_314_compatible_limit_disables_repeated_update(self):
+        self.window.litellm_version_label = _Label()
+        self.window._litellm_latest_version = "1.92.0"
+        self.window._litellm_latest_compatible_version = "1.83.7"
+        self.window._litellm_latest_requires_python = ">=3.10,<3.14"
+
+        with (
+            mock.patch("gui_qt.app.importlib.util.find_spec", return_value=object()),
+            mock.patch("gui_qt.app.installed_litellm_version", return_value="1.83.7"),
+        ):
+            self.window._refresh_litellm_version_label()
+            self.window._on_sync_backend_changed(0)
+
+        self.assertIn("不支持当前", self.window.litellm_version_label.value)
+        self.assertIn("\n兼容最新版 1.83.7", self.window.litellm_version_label.value)
+        self.assertEqual(
+            self.window.install_litellm_btn.text,
+            "当前 Python 可用最新版",
+        )
+        self.assertFalse(self.window.install_litellm_btn.enabled)
     def test_gemini_backend_hides_install_button(self):
         self.window.sync_backend_combo = _Combo("gemini")
         self.window._litellm_install_running = mock.Mock(return_value=True)
