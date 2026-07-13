@@ -33,6 +33,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
             config={
                 "temperature": 0.2,
                 "max_output_tokens": 100,
+                "timeout": 12,
                 "response_json_schema": {"type": "array"},
             },
         ))
@@ -40,6 +41,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         self.assertEqual(calls[0]["model"], "openai/gpt-test")
         self.assertEqual(calls[0]["messages"], [{"role": "user", "content": "Translate this"}])
         self.assertEqual(calls[0]["max_tokens"], 100)
+        self.assertEqual(calls[0]["timeout"], 12)
         self.assertEqual(calls[0]["response_format"]["type"], "json_schema")
         self.assertEqual(result.provider, "litellm")
         self.assertEqual(result.execution_mode, "sync")

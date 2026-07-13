@@ -58,6 +58,11 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         )
         self.window.litellm_model_combo.setEditText("azure/my-deployment")
         self.assertEqual(self.window._current_litellm_provider(), "azure")
+        self.window.litellm_provider_combo.setCurrentIndex(
+            self.window.litellm_provider_combo.findData("openai")
+        )
+        self.window.litellm_model_combo.setEditText("gpt-custom")
+        self.assertEqual(self.window._litellm_model_text(), "openai/gpt-custom")
 
     def test_gemini_key_page_does_not_contain_litellm_controls(self):
         row = self.window._settings_nav_rows["api_keys"]
@@ -92,6 +97,26 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertFalse(saved)
         save_config.assert_not_called()
         information.assert_called_once()
+
+    def test_worker_completion_reapplies_current_backend_gating(self):
+        gemini_index = self.window.sync_backend_combo.findData("gemini")
+        litellm_index = self.window.sync_backend_combo.findData("litellm")
+        self.window.sync_backend_combo.setCurrentIndex(gemini_index)
+        try:
+            self.window._litellm_connection_worker = None
+            self.window._on_litellm_connection_tested(True, "连接成功")
+            self.assertFalse(self.window.litellm_test_connection_btn.isEnabled())
+
+            self.window._litellm_catalog_worker = None
+            with mock.patch("gui_qt.app.QMessageBox.warning"):
+                self.window._on_litellm_models_loaded(
+                    "openai",
+                    (),
+                    "catalog failed",
+                )
+            self.assertFalse(self.window.litellm_refresh_models_btn.isEnabled())
+        finally:
+            self.window.sync_backend_combo.setCurrentIndex(litellm_index)
 
     def test_models_page_is_gemini_only(self):
         row = self.window._settings_nav_rows["models"]

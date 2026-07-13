@@ -156,6 +156,8 @@ class LiteLLMSyncBackend:
                 api_key = ""
         if api_key:
             kwargs["api_key"] = api_key
+        if "timeout" in config:
+            kwargs["timeout"] = config["timeout"]
         if "temperature" in config:
             kwargs["temperature"] = config["temperature"]
         if "max_output_tokens" in config:

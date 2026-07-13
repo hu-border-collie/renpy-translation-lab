@@ -9,6 +9,21 @@ from litellm_sync_backend import LiteLLMSyncBackend
 from sync_model_backend import SyncGenerationRequest
 
 
+CONNECTION_TEST_TIMEOUT_SECONDS = 30
+
+
+def _connection_error_message(exc: Exception) -> str:
+    category = str(getattr(exc, "category", "provider_error") or "provider_error")
+    details = {
+        "authentication": "身份验证失败，请检查供应商密钥。",
+        "rate_limit": "供应商限流或配额不足，请稍后重试。",
+        "service_unavailable": "供应商服务暂时不可用或请求超时。",
+        "missing_dependency": "LiteLLM 尚未正确安装。",
+        "provider_error": "请求失败，请检查模型、API Base 和网络。",
+    }
+    return f"连接失败 [{category}]: {details.get(category, details['provider_error'])}"
+
+
 class LiteLLMModelCatalogWorker(QThread):
     completed = Signal(object, object)
 
@@ -37,13 +52,14 @@ class LiteLLMConnectionTestWorker(QThread):
                 SyncGenerationRequest(
                     model=self.model,
                     contents="Reply with OK.",
-                    config={"max_output_tokens": 8, "temperature": 0},
+                    config={
+                        "max_output_tokens": 8,
+                        "temperature": 0,
+                        "timeout": CONNECTION_TEST_TIMEOUT_SECONDS,
+                    },
                 )
             )
             text = result.response_text.strip()
             self.completed.emit(True, f"连接成功。模型返回：{text[:80] or '（空响应）'}")
         except Exception as exc:
-            message = str(exc)
-            if self.api_key:
-                message = message.replace(self.api_key, "******")
-            self.completed.emit(False, f"连接失败：{message}")
+            self.completed.emit(False, _connection_error_message(exc))

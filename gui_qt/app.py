@@ -4168,7 +4168,16 @@ class MainWindow(QMainWindow):
 
     def _litellm_model_text(self) -> str:
         combo = getattr(self, "litellm_model_combo", None)
-        return combo.currentText().strip() if combo is not None else ""
+        model = combo.currentText().strip() if combo is not None else ""
+        if not model or "/" in model:
+            return model
+        provider_combo = getattr(self, "litellm_provider_combo", None)
+        provider = (
+            str(provider_combo.currentData() or "").strip().lower()
+            if provider_combo is not None
+            else ""
+        )
+        return f"{provider}/{model}" if provider else model
 
     def _current_litellm_provider(self) -> str:
         model_provider = provider_from_model(self._litellm_model_text())
@@ -4280,8 +4289,8 @@ class MainWindow(QMainWindow):
             worker.deleteLater()
         button = getattr(self, "litellm_refresh_models_btn", None)
         if button is not None:
-            button.setEnabled(True)
             button.setText("刷新列表")
+        self._on_sync_backend_changed(-1)
         if error:
             QMessageBox.warning(self, "模型列表加载失败", str(error))
             return
@@ -4336,9 +4345,9 @@ class MainWindow(QMainWindow):
         self._litellm_connection_worker = None
         if worker is not None:
             worker.deleteLater()
-        self.litellm_test_connection_btn.setEnabled(True)
         self.litellm_test_connection_btn.setText("测试连接")
         self.litellm_connection_status_label.setText(message)
+        self._on_sync_backend_changed(-1)
         if not success:
             self.statusBar().showMessage("LiteLLM 连接测试失败。", 5000)
 
