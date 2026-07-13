@@ -75,6 +75,7 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         self.window.sync_backend_hint = _Label()
         self.window.install_litellm_btn = _Button()
         self.window.sync_model_combo = _Combo(None)
+        self.window.litellm_model_combo = _Combo(None)
         self.window.litellm_install_progress = _ProgressBar()
         self.window._refresh_litellm_install_action_gating = mock.Mock()
 
@@ -85,7 +86,7 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         self.assertTrue(self.window.install_litellm_btn.enabled)
         self.assertEqual(self.window.install_litellm_btn.text, "安装 LiteLLM")
         self.assertFalse(self.window.litellm_install_progress.visible)
-        self.assertTrue(self.window.sync_model_combo.enabled)
+        self.assertTrue(self.window.litellm_model_combo.enabled)
 
     def test_installing_shows_busy_progress_and_disables_litellm_model(self):
         self.window._litellm_install_running = mock.Mock(return_value=True)
@@ -94,7 +95,7 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         self.assertTrue(self.window.litellm_install_progress.visible)
         self.assertEqual(self.window.litellm_install_progress.range_values, (0, 0))
         self.assertIn("后台安装", self.window.litellm_install_progress.format)
-        self.assertFalse(self.window.sync_model_combo.enabled)
+        self.assertFalse(self.window.litellm_model_combo.enabled)
         self.assertFalse(self.window.install_litellm_btn.enabled)
         self.assertIn("正在后台安装", self.window.sync_backend_hint.value)
 
@@ -203,7 +204,7 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         self.window._on_sync_backend_changed(0)
         self.assertFalse(self.window.install_litellm_btn.visible)
         self.assertTrue(self.window.litellm_install_progress.visible)
-        self.assertTrue(self.window.sync_model_combo.enabled)
+        self.assertFalse(self.window.litellm_model_combo.enabled)
 
 
 if __name__ == "__main__":

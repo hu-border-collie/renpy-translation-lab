@@ -207,6 +207,11 @@ from .work_bootstrap_report import (
     with_game_root_persist_warning,
     work_bootstrap_to_doctor_summary,
 )
+from .litellm_settings import (
+    provider_credential_status,
+    read_sync_backend_models,
+    write_sync_backend_models,
+)
 from .project_state import ProjectState
 from .theme import apply_theme, system_prefers_dark
 from .theme_helpers import (
@@ -1437,6 +1442,7 @@ class MainWindow(QMainWindow):
             ("project", "项目", self._build_settings_project_page()),
             ("api_keys", "密钥", self._build_settings_api_keys_page()),
             ("models", "模型", self._build_settings_models_page()),
+            ("litellm", "LiteLLM", self._build_settings_litellm_page()),
             ("context", "上下文", self._build_settings_context_page()),
             ("appearance", "外观", self._build_settings_appearance_page()),
             ("advanced", "高级", self._build_settings_advanced_page()),
@@ -1531,10 +1537,10 @@ class MainWindow(QMainWindow):
 
     def _build_settings_api_keys_page(self) -> QWidget:
         page, layout = self._settings_page("settings_api_keys")
-        api_box, api_layout = self._settings_group("API Key")
+        api_box, api_layout = self._settings_group("Gemini API Key")
 
         api_hint = QLabel(
-            "翻译任务需要 Gemini API 密钥。密钥保存在本地配置文件中，"
+            "此页面只管理 Gemini API 密钥。密钥保存在本地配置文件中，"
             "不会上传或代理。也可通过环境变量配置。"
         )
         api_hint.setWordWrap(True)
@@ -1658,16 +1664,10 @@ class MainWindow(QMainWindow):
         config_row = QHBoxLayout()
         config_row.setSpacing(16)
 
-        sync_box = QGroupBox("同步翻译")
+        sync_box = QGroupBox("Gemini 同步翻译")
         sync_layout = QFormLayout(sync_box)
         sync_layout.setSpacing(8)
         sync_layout.setContentsMargins(12, 16, 12, 12)
-
-        self.sync_backend_combo = NoWheelComboBox()
-        self.sync_backend_combo.addItem("Gemini 同步（推荐）", "gemini")
-        self.sync_backend_combo.addItem("LiteLLM 同步替代", "litellm")
-        self.sync_backend_combo.currentIndexChanged.connect(self._on_sync_backend_changed)
-        sync_layout.addRow("执行后端：", self.sync_backend_combo)
 
         self.sync_model_combo = NoWheelComboBox()
         self.sync_model_combo.setEditable(True)
@@ -1689,23 +1689,10 @@ class MainWindow(QMainWindow):
         ])
         sync_layout.addRow("RAG 向量模型：", self.sync_embedding_combo)
 
-        self.sync_backend_hint = QLabel()
-        self.sync_backend_hint.setWordWrap(True)
-        self.sync_backend_hint.setObjectName("config_hint_label")
-        sync_layout.addRow(self.sync_backend_hint)
-
-        self.install_litellm_btn = QPushButton("安装 LiteLLM")
-        self.install_litellm_btn.setObjectName("secondary_btn")
-        self.install_litellm_btn.clicked.connect(self._on_install_litellm)
-        self.install_litellm_btn.setVisible(False)
-        sync_layout.addRow(self.install_litellm_btn)
-        self.litellm_install_progress = QProgressBar()
-        self.litellm_install_progress.setObjectName("litellm_install_progress")
-        self.litellm_install_progress.setTextVisible(True)
-        self.litellm_install_progress.setFormat("正在后台安装 LiteLLM…")
-        self.litellm_install_progress.setVisible(False)
-        sync_layout.addRow(self.litellm_install_progress)
-
+        sync_hint = QLabel("此处只配置 Gemini 同步模型；LiteLLM 已移至左侧独立页面。")
+        sync_hint.setWordWrap(True)
+        sync_hint.setObjectName("config_hint_label")
+        sync_layout.addRow(sync_hint)
         config_row.addWidget(sync_box, 1)
 
         batch_box = QGroupBox("批量离线翻译")
@@ -1742,6 +1729,70 @@ class MainWindow(QMainWindow):
 
         config_row.addWidget(batch_box, 1)
         layout.addLayout(config_row)
+        layout.addStretch(1)
+        return page
+
+    def _build_settings_litellm_page(self) -> QWidget:
+        page, layout = self._settings_page("settings_litellm")
+
+        backend_box = QGroupBox("LiteLLM 同步替代后端")
+        backend_layout = QFormLayout(backend_box)
+        backend_layout.setSpacing(8)
+        backend_layout.setContentsMargins(12, 16, 12, 12)
+
+        self.sync_backend_combo = NoWheelComboBox()
+        self.sync_backend_combo.addItem("Gemini 同步（推荐）", "gemini")
+        self.sync_backend_combo.addItem("启用 LiteLLM 同步替代", "litellm")
+        self.sync_backend_combo.currentIndexChanged.connect(self._on_sync_backend_changed)
+        backend_layout.addRow("同步执行后端：", self.sync_backend_combo)
+
+        self.litellm_model_combo = NoWheelComboBox()
+        self.litellm_model_combo.setEditable(True)
+        self.litellm_model_combo.addItems([
+            "openai/gpt-5",
+            "anthropic/claude-sonnet-4-5-20250929",
+            "openrouter/openai/gpt-5",
+            "xai/grok-2-latest",
+            "ollama/llama3",
+        ])
+        self.litellm_model_combo.currentTextChanged.connect(self._on_litellm_model_changed)
+        backend_layout.addRow("LiteLLM 模型：", self.litellm_model_combo)
+
+        self.sync_backend_hint = QLabel()
+        self.sync_backend_hint.setWordWrap(True)
+        self.sync_backend_hint.setObjectName("config_hint_label")
+        backend_layout.addRow(self.sync_backend_hint)
+
+        self.install_litellm_btn = QPushButton("安装 LiteLLM")
+        self.install_litellm_btn.setObjectName("secondary_btn")
+        self.install_litellm_btn.clicked.connect(self._on_install_litellm)
+        self.install_litellm_btn.setVisible(False)
+        backend_layout.addRow(self.install_litellm_btn)
+
+        self.litellm_install_progress = QProgressBar()
+        self.litellm_install_progress.setObjectName("litellm_install_progress")
+        self.litellm_install_progress.setTextVisible(True)
+        self.litellm_install_progress.setFormat("正在后台安装 LiteLLM…")
+        self.litellm_install_progress.setVisible(False)
+        backend_layout.addRow(self.litellm_install_progress)
+        layout.addWidget(backend_box)
+
+        credentials_box, credentials_layout = self._settings_group("Provider 凭据状态")
+        credentials_hint = QLabel(
+            "LiteLLM 凭据与 Gemini API Key 完全分离。应用只检测当前进程的环境变量，"
+            "不会读取、显示或写入 provider 密钥。修改环境变量后请重启 GUI。"
+        )
+        credentials_hint.setWordWrap(True)
+        credentials_hint.setObjectName("config_hint_label")
+        credentials_layout.addWidget(credentials_hint)
+        self.litellm_provider_label = QLabel()
+        self.litellm_provider_label.setObjectName("litellm_provider_label")
+        credentials_layout.addWidget(self.litellm_provider_label)
+        self.litellm_credential_status_label = QLabel()
+        self.litellm_credential_status_label.setWordWrap(True)
+        self.litellm_credential_status_label.setObjectName("api_status_label")
+        credentials_layout.addWidget(self.litellm_credential_status_label)
+        layout.addWidget(credentials_box)
         layout.addStretch(1)
         return page
 
@@ -4054,6 +4105,24 @@ class MainWindow(QMainWindow):
         value = combo.currentData()
         return value if value in {"gemini", "litellm"} else "gemini"
 
+    def _litellm_model_text(self) -> str:
+        combo = getattr(self, "litellm_model_combo", None)
+        return combo.currentText().strip() if combo is not None else ""
+
+    def _refresh_litellm_credential_status(self) -> None:
+        provider_label = getattr(self, "litellm_provider_label", None)
+        status_label = getattr(self, "litellm_credential_status_label", None)
+        if provider_label is None or status_label is None:
+            return
+        status = provider_credential_status(self._litellm_model_text(), os.environ)
+        provider_label.setText(
+            f"当前 provider：{status.provider}" if status.provider else "当前 provider：尚未识别"
+        )
+        status_label.setText(status.message)
+
+    def _on_litellm_model_changed(self, _text: str) -> None:
+        self._refresh_litellm_credential_status()
+
     def _saved_sync_backend(self) -> str:
         try:
             config = self.state.load_translator_config()
@@ -4086,7 +4155,7 @@ class MainWindow(QMainWindow):
                 install_btn.setText("正在安装…" if installing else "安装 LiteLLM")
         else:
             hint.setText(
-                "推荐路径。同步任务使用 Gemini API Key；批量离线翻译仍始终使用 Gemini Batch。"
+                "推荐路径仍为 Gemini；同步配置位于「模型」与「密钥」页，批量离线翻译仍使用 Gemini Batch。"
             )
             if install_btn is not None:
                 install_btn.setVisible(False)
@@ -4098,11 +4167,12 @@ class MainWindow(QMainWindow):
                 install_progress.setRange(0, 0)
                 install_progress.setFormat("正在后台安装 LiteLLM…")
 
-        model_combo = getattr(self, "sync_model_combo", None)
+        model_combo = getattr(self, "litellm_model_combo", None)
         if model_combo is not None:
-            model_combo.setEnabled(not (backend == "litellm" and installing))
+            model_combo.setEnabled(backend == "litellm" and not installing)
         if hasattr(self, "translate_btn"):
             self._set_task_running(bool(getattr(self, "_task_running", False)))
+        self._refresh_litellm_credential_status()
         self._refresh_litellm_install_action_gating()
 
     def _refresh_litellm_install_action_gating(self) -> None:
@@ -5765,6 +5835,7 @@ class MainWindow(QMainWindow):
             "context_storage_location": "game" if self.context_storage_game_cb.isChecked() else "tool",
             "sync_backend": self._selected_sync_backend(),
             "sync_model": self.sync_model_combo.currentText().strip(),
+            "litellm_model": self._litellm_model_text(),
             "batch_model": self.batch_model_combo.currentText().strip(),
             "sync_embedding_model": self.sync_embedding_combo.currentText().strip(),
             "batch_embedding_model": self.batch_embedding_combo.currentText().strip(),
@@ -5940,6 +6011,9 @@ class MainWindow(QMainWindow):
         if backend_combo is not None:
             backend_combo.setCurrentIndex(backend_idx)
         self._set_combo_value(self.sync_model_combo, values["sync_model"])
+        litellm_combo = getattr(self, "litellm_model_combo", None)
+        if litellm_combo is not None:
+            self._set_combo_value(litellm_combo, "")
         self._on_sync_backend_changed(backend_idx)
         self._set_combo_value(self.batch_model_combo, values["batch_model"])
         self._set_combo_value(self.sync_embedding_combo, values["sync_embedding_model"])
@@ -8378,20 +8452,15 @@ class MainWindow(QMainWindow):
             if backend_combo is not None:
                 backend_combo.setCurrentIndex(backend_idx)
 
-            sync_models = sync_config.get("models")
-            sync_val = ""
-            if isinstance(sync_models, list):
-                for model in sync_models:
-                    sync_val = self._config_string(model)
-                    if sync_val:
-                        break
-            elif isinstance(sync_models, str):
-                sync_val = self._config_string(sync_models)
-            if not sync_val:
-                sync_val = self._config_string(sync_config.get("model", ""))
-            if not sync_val:
-                sync_val = str(BASIC_RECOMMENDED_VALUES["sync_model"])
-            self._set_combo_value(self.sync_model_combo, sync_val)
+            backend_models = read_sync_backend_models(
+                sync_config,
+                sync_backend,
+                str(BASIC_RECOMMENDED_VALUES["sync_model"]),
+            )
+            self._set_combo_value(self.sync_model_combo, backend_models.gemini_model)
+            litellm_combo = getattr(self, "litellm_model_combo", None)
+            if litellm_combo is not None:
+                self._set_combo_value(litellm_combo, backend_models.litellm_model)
             self._on_sync_backend_changed(backend_idx)
 
             batch_val = self._config_string(batch_config.get("model", "")) or str(
@@ -8480,9 +8549,22 @@ class MainWindow(QMainWindow):
                 "bootstrap_on_build": self.bootstrap_on_build_cb.isChecked(),
             }
 
-            sync_config["backend"] = self._selected_sync_backend()
-            sync_model = self.sync_model_combo.currentText().strip()
-            sync_config["model"] = sync_model
+            sync_backend = self._selected_sync_backend()
+            litellm_model = self._litellm_model_text()
+            if sync_backend == "litellm" and not litellm_model:
+                self._focus_settings_section("litellm")
+                QMessageBox.information(
+                    self,
+                    "请配置 LiteLLM 模型",
+                    "启用 LiteLLM 前，请填写带 provider 前缀的模型名称。",
+                )
+                return False
+            sync_model = write_sync_backend_models(
+                sync_config,
+                sync_backend,
+                self.sync_model_combo.currentText(),
+                litellm_model,
+            )
             if "models" in sync_config:
                 sync_models = self._sync_models_for_save(sync_config.get("models"), sync_model)
                 if sync_models:
