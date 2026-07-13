@@ -84,6 +84,22 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         finally:
 
             self.window.litellm_provider_combo.setCurrentIndex(openai_index)
+
+    def test_catalog_refresh_preserves_custom_model(self):
+        openai_index = self.window.litellm_provider_combo.findData("openai")
+        self.window.litellm_provider_combo.setCurrentIndex(openai_index)
+        self.window.litellm_model_combo.setEditText("gpt-custom")
+        self.window._litellm_catalog_worker = None
+
+        self.window._on_litellm_models_loaded(
+            "openai",
+            ("openai/gpt-current",),
+            None,
+            "online",
+        )
+
+        self.assertEqual(self.window.litellm_model_combo.currentText(), "gpt-custom")
+
     def test_gemini_key_page_does_not_contain_litellm_controls(self):
         row = self.window._settings_nav_rows["api_keys"]
         page = self.window.settings_stack.widget(row)

@@ -4217,12 +4217,18 @@ class MainWindow(QMainWindow):
                 return provider
         return provider_from_model(self._litellm_model_text())
 
-    def _set_litellm_models(self, provider: str, models: tuple[str, ...]) -> None:
+    def _set_litellm_models(
+        self,
+        provider: str,
+        models: tuple[str, ...],
+        *,
+        preserve_current: bool = False,
+    ) -> None:
         combo = getattr(self, "litellm_model_combo", None)
         if combo is None:
             return
         current = combo.currentText().strip()
-        selected = current if provider_from_model(current) == provider else ""
+        selected = current if preserve_current else ""
         values = models or DEFAULT_MODELS.get(provider, ())
         combo.blockSignals(True)
         combo.clear()
@@ -4404,7 +4410,7 @@ class MainWindow(QMainWindow):
                 else "目录来源：本机 LiteLLM 随包目录（联网失败，可能过时）。"
             )
         if self._current_litellm_provider() == provider:
-            self._set_litellm_models(provider, values)
+            self._set_litellm_models(provider, values, preserve_current=True)
         message = f"已加载 {len(values)} 个 {provider} 模型。"
         if error:
             message = f"{message} {error}"
