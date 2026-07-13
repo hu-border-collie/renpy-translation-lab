@@ -122,5 +122,20 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
 
         self.assertEqual(completed, [("1.83.7", "1.92.0", None)])
 
+    def test_version_worker_reports_metadata_errors_and_completes(self):
+        completed = []
+        worker = LiteLLMVersionWorker()
+        worker.completed.connect(
+            lambda installed, latest, error: completed.append((installed, latest, error))
+        )
+
+        with mock.patch(
+            "gui_qt.litellm_worker.installed_litellm_version",
+            side_effect=RuntimeError("broken metadata"),
+        ):
+            worker.run()
+
+        self.assertEqual(completed, [("", "", "broken metadata")])
+
 if __name__ == "__main__":
     unittest.main()

@@ -68,8 +68,9 @@ class LiteLLMVersionWorker(QThread):
     completed = Signal(str, str, object)
 
     def run(self) -> None:
-        installed = installed_litellm_version()
+        installed = ""
         try:
+            installed = installed_litellm_version()
             request = Request(
                 LITELLM_PYPI_URL,
                 headers={"User-Agent": "renpy-translation-lab"},
