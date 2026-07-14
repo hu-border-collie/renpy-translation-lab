@@ -901,7 +901,17 @@ def load_translator_settings():
     load_sync_story_memory_settings(config)
 
 
-def load_config():
+def _require_gemini_api_key():
+    if API_KEYS:
+        return
+    print("="*60)
+    print("ERROR: No valid API keys found!")
+    print("Please check api_keys.json or set GEMINI_API_KEY env vars.")
+    print("="*60)
+    raise SystemExit("No API keys available")
+
+
+def load_config(*, require_api_key=True):
     """Loads API keys and settings from api_keys.json or environment."""
     global API_KEYS, MODELS, MAX_CHARS, MAX_ITEMS, SYNC_MAX_OUTPUT_TOKENS
     global INCLUDE_FILES, INCLUDE_PREFIXES
@@ -986,12 +996,8 @@ def load_config():
         ]
         API_KEYS = [k for k in env_keys if k]
 
-    if not API_KEYS:
-        print("="*60)
-        print("ERROR: No valid API keys found!")
-        print("Please check api_keys.json or set GEMINI_API_KEY env vars.")
-        print("="*60)
-        raise SystemExit("No API keys available")
+    if require_api_key:
+        _require_gemini_api_key()
 
 
 SCRIPT_FILE_EXTENSIONS = {".rpy", ".rpym", ".rpyc", ".rpymc"}
@@ -3712,13 +3718,19 @@ def collect_tasks(lines, skip_translated=True):
     return tasks
 
 def run_translation():
-    load_config()
+    load_config(require_api_key=False)
     load_translator_settings()
+    if SYNC_BACKEND == "gemini":
+        _require_gemini_api_key()
     load_glossary()
     print("="*60)
-    print("Gemini Translator (Ren'Py)")
+    print("Synchronous Translator (Ren'Py)")
+    print(f"Sync backend: {SYNC_BACKEND}")
     print(f"Models: {MODELS}")
-    print(f"API Keys Loaded: {len(API_KEYS)}")
+    if SYNC_BACKEND == "gemini":
+        print(f"Gemini API Keys Loaded: {len(API_KEYS)}")
+    else:
+        print("Gemini API Key: not required for LiteLLM")
     print(f"Base dir: {BASE_DIR}")
     print(f"TL subdir: {TL_SUBDIR}")
     print(f"TL dir: {TL_DIR} (exists: {os.path.isdir(TL_DIR)})")

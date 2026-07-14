@@ -48,6 +48,31 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         self.assertEqual(result.finish_reason, "stop")
         self.assertEqual(result.usage_metadata["prompt_tokens"], 8)
 
+    def test_uses_json_object_for_deepseek(self):
+        calls = []
+
+        def completion(**kwargs):
+            calls.append(kwargs)
+            return {
+                "choices": [{
+                    "message": {"content": '[{"id":"a","translation":"你好"}]'},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 6},
+            }
+
+        backend = LiteLLMSyncBackend(completion=completion)
+        backend.generate(SyncGenerationRequest(
+            model="deepseek/deepseek-v4-flash",
+            contents="Translate this",
+            config={
+                "response_json_schema": {"type": "array"},
+            },
+        ))
+
+        self.assertEqual(calls[0]["model"], "deepseek/deepseek-v4-flash")
+        self.assertEqual(calls[0]["response_format"], {"type": "json_object"})
+
     def test_converts_gemini_style_system_instruction_and_contents(self):
         calls = []
         backend = LiteLLMSyncBackend(completion=lambda **kwargs: calls.append(kwargs) or {"choices": []})
