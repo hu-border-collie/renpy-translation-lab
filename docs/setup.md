@@ -111,7 +111,7 @@ python gemini_translate_batch.py doctor
 
 ## 运行模式
 
-当前更推荐优先使用 Batch 模式；同步模式仍可用，并且现在与 Batch 一样统一基于 `google-genai` SDK。同步模式的 `model/chunk_size/max_source_chars/max_output_tokens` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。
+当前更推荐优先使用 Gemini Batch 模式；同步模式可显式选择 Gemini 原生调用或可选 LiteLLM 后端。同步模式的 `backend/model/chunk_size/max_source_chars/max_output_tokens` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。LiteLLM 未安装或未启用时，不影响 Gemini Batch、doctor 或 GUI 启动。
 
 默认切块策略：
 
