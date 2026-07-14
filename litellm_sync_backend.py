@@ -2,6 +2,7 @@
 
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from litellm_provider_config import provider_from_model
 from sync_model_backend import SYNC_EXECUTION_MODE, SyncGenerationRequest, SyncGenerationResult
 
 
@@ -145,10 +146,7 @@ class LiteLLMSyncBackend:
         api_key = self._api_key
         if not api_key:
             try:
-                from litellm_provider_config import (
-                    load_provider_api_key,
-                    provider_from_model,
-                )
+                from litellm_provider_config import load_provider_api_key
 
                 api_key = load_provider_api_key(provider_from_model(request.model))
             except Exception:
@@ -164,14 +162,20 @@ class LiteLLMSyncBackend:
             kwargs["max_tokens"] = config["max_output_tokens"]
         schema = config.get("response_json_schema")
         if schema:
-            kwargs["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "translation_response",
-                    "schema": schema,
-                    "strict": True,
-                },
-            }
+            provider = provider_from_model(request.model)
+            # DeepSeek rejects json_schema even though it supports JSON mode.
+            # Other providers still benefit from downstream schema validation.
+            if provider in {"openai", "azure"}:
+                kwargs["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "translation_response",
+                        "schema": schema,
+                        "strict": True,
+                    },
+                }
+            else:
+                kwargs["response_format"] = {"type": "json_object"}
         try:
             response = self._resolve_completion()(**kwargs)
         except LiteLLMBackendError:
