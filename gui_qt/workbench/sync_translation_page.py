@@ -17,14 +17,14 @@ from .page_contract import WorkbenchPageActions
 
 
 class SyncTranslationPage(QFrame):
-    """Compact risk notice + start/stop; shared status card holds doctor/progress."""
+    """Compact risk notice and task-local start/stop controls."""
 
     supported_modes = (WorkMode.SYNC_TRANSLATION,)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("sync_translation_page")
-        # Height-for-content only — never eat space meant for the status card.
+        # Height-for-content only — keep the task page compact.
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._actions = WorkbenchPageActions()
         self._running = False

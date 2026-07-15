@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, QProcess, QProcessEnvironment, Qt, QTimer
+from PySide6.QtCore import QEvent, QProcess, QProcessEnvironment, QSize, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QGuiApplication, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QListWidget,
     QListWidgetItem,
+    QListView,
     QStackedWidget,
     QSpinBox,
     QDoubleSpinBox,
@@ -276,7 +277,7 @@ from .work_modes import (
 )
 from .workbench import WorkbenchPageActions
 from .workbench.coordinator import WorkbenchPageCoordinator
-from .workbench.batch_translation_page import BatchTranslationPage
+from .workbench.batch_translation_page import BatchActionState, BatchTranslationPage
 from .workbench.context_library_page import ContextLibraryPage
 from .workbench.keywords_page import KeywordsPage
 from .workbench.revision_page import RevisionPage
@@ -304,11 +305,7 @@ _DIAGNOSTICS_IDLE_CONTEXT_PX = 420
 _DIAGNOSTICS_IDLE_LOG_PX = 180
 _DIAGNOSTICS_RUNNING_CONTEXT_RATIO = 0.32
 
-# Workbench bottom log drawer (P0a / issue #158).
-_WORKBENCH_LOG_DRAWER_EXPANDED_HEIGHT = 180
-_WORKBENCH_LOG_DRAWER_HEADER_HEIGHT = 40
-
-# Workbench status-tab indices (shared by all task pages).
+# Dedicated status-page indices; task sessions update these values off-surface.
 _BATCH_STAGE_PREPARE = 0  # 环境检查
 _BATCH_STAGE_EXECUTE = 1  # 进度
 _BATCH_STAGE_RESULT = 2  # 写回 / 结果
@@ -316,6 +313,17 @@ _BATCH_STAGE_RESULT = 2  # 写回 / 结果
 _LOG_FLUSH_INTERVAL_MS = 80
 _LAYOUT_SYNC_DEBOUNCE_MS = 32
 _UI_PROGRESS_FLUSH_INTERVAL_MS = 100
+
+# Unified application-shell routes. The legacy tab/list widgets remain as
+# internal state adapters, while these semantic destinations drive the only
+# visible primary navigation.
+_SHELL_ROUTE_PROJECT_PREPARE = "project_prepare"
+_SHELL_ROUTE_SETTINGS = "settings"
+_SHELL_ROUTE_DIAGNOSTICS = "diagnostics"
+_SHELL_WORKBENCH_PREFIX = "workbench:"
+_SHELL_TASK_ROUTES = tuple(
+    f"{_SHELL_WORKBENCH_PREFIX}{item.value}" for item in WORKBENCH_NAV_ORDER
+)
 
 
 class MainWindow(QMainWindow):
@@ -329,7 +337,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Ren'Py Translation Lab - 图形工作台")
         self.setMinimumSize(960, 640)
-        self.resize(960, 760)
+        self.resize(1180, 780)
 
         self.state = project_state or ProjectState()
         self._diagnostics_context_fingerprint: tuple[object, ...] | None = None
@@ -409,6 +417,11 @@ class MainWindow(QMainWindow):
         self._advanced_setting_widgets: dict[str, QWidget] = {}
         self._advanced_setting_error_labels: dict[str, QLabel] = {}
         self._settings_nav_rows: dict[str, int] = {}
+        self._shell_nav_rows: dict[str, int] = {}
+        self._shell_section_items: list[QListWidgetItem] = []
+        self._shell_nav_dispatching = False
+        self._shell_special_route: str | None = None
+        self._shell_task_status_index: int | None = None
         self._last_main_tab_index = 0
         self._handling_config_tab_leave = False
         self._task_running = False
@@ -425,29 +438,38 @@ class MainWindow(QMainWindow):
         self._games_registry_panel: GamesRegistryPanel | None = None
 
         central = QWidget()
+        central.setObjectName("app_shell")
         self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(16, 16, 16, 16)
-        root_layout.setSpacing(12)
+        root_layout = QHBoxLayout(central)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        header = QLabel("Ren'Py Translation Lab · 图形工作台")
-        header.setObjectName("header_label")
-        root_layout.addWidget(header)
+        root_layout.addWidget(self._build_app_sidebar())
 
-        root_layout.addWidget(self._build_global_project_bar())
+        main = QWidget()
+        main.setObjectName("app_main")
+        main_layout = QVBoxLayout(main)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        main_layout.addWidget(self._build_page_header())
+        root_layout.addWidget(main, 1)
 
         self.tab_widget = NoWheelTabWidget()
         self.tab_widget.setObjectName("main_tabs")
-        root_layout.addWidget(self.tab_widget, 1)
+        main_layout.addWidget(self.tab_widget, 1)
 
         self._build_workbench_tab()
         self._build_config_tab()
         self._build_log_tab()
+        self.tab_widget.tabBar().hide()
+        self._populate_shell_nav()
+        self._setup_shell_status_bar()
 
         self.batch_model_combo.currentTextChanged.connect(self._on_batch_model_changed)
         self.batch_thinking_combo.currentIndexChanged.connect(self._on_batch_thinking_changed)
         self._last_main_tab_index = self.tab_widget.currentIndex()
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
+        self._sync_shell_nav_selection()
 
         # Connect runner
         self.runner.line_ready.connect(self._on_cli_line_ready)
@@ -629,6 +651,473 @@ class MainWindow(QMainWindow):
                 workflow_scroll.widget().updateGeometry()
             self.workbench_status_tabs.updateGeometry()
 
+    def _build_app_sidebar(self) -> QFrame:
+        """Build the persistent product and primary-navigation rail."""
+        sidebar = QFrame()
+        sidebar.setObjectName("app_sidebar")
+        sidebar.setFixedWidth(224)
+        self.app_sidebar = sidebar
+
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(14, 16, 14, 12)
+        layout.setSpacing(12)
+
+        brand = QWidget()
+        brand_copy_layout = QVBoxLayout(brand)
+        brand_copy_layout.setContentsMargins(0, 0, 0, 0)
+        brand_copy_layout.setSpacing(0)
+        self.sidebar_brand_title = QLabel("Ren'Py Translation Lab")
+        self.sidebar_brand_title.setObjectName("sidebar_brand_title")
+        self.sidebar_brand_subtitle = QLabel("TRANSLATION WORKBENCH")
+        self.sidebar_brand_subtitle.setObjectName("sidebar_brand_subtitle")
+        brand_copy_layout.addWidget(self.sidebar_brand_title)
+        brand_copy_layout.addWidget(self.sidebar_brand_subtitle)
+        layout.addWidget(brand)
+
+        self.shell_nav = QListWidget()
+        self.shell_nav.setObjectName("shell_nav")
+        self.shell_nav.setFrameShape(QFrame.Shape.NoFrame)
+        self.shell_nav.setSpacing(1)
+        self.shell_nav.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.shell_nav.setVerticalScrollMode(
+            QAbstractItemView.ScrollMode.ScrollPerPixel
+        )
+        self.shell_nav.currentRowChanged.connect(self._on_shell_nav_row_changed)
+        layout.addWidget(self.shell_nav, 1)
+
+        return sidebar
+
+    def _build_page_header(self) -> QFrame:
+        """Build the shared page-level header used by every shell destination."""
+        header = QFrame()
+        header.setObjectName("page_header")
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(24, 14, 20, 14)
+        layout.setSpacing(16)
+
+        copy = QVBoxLayout()
+        copy.setContentsMargins(0, 0, 0, 0)
+        copy.setSpacing(2)
+        self.shell_breadcrumb_label = QLabel("工作流 / 批量翻译")
+        self.shell_breadcrumb_label.setObjectName("shell_breadcrumb_label")
+        self.shell_page_title = QLabel("批量翻译")
+        self.shell_page_title.setObjectName("shell_page_title")
+        self.shell_page_subtitle = QLabel(
+            "配置批量任务、跟踪进度，并在检查通过后安全写回。"
+        )
+        self.shell_page_subtitle.setObjectName("shell_page_subtitle")
+        self.shell_page_subtitle.setWordWrap(True)
+        copy.addWidget(self.shell_breadcrumb_label)
+        copy.addWidget(self.shell_page_title)
+        copy.addWidget(self.shell_page_subtitle)
+        layout.addLayout(copy, 1)
+
+        self.header_task_status_label = QLabel("待命")
+        self.header_task_status_label.setObjectName("header_task_status_label")
+        self.header_task_status_label.setProperty("status", "idle")
+        layout.addWidget(
+            self.header_task_status_label,
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
+
+        self.header_log_btn = QPushButton("运行日志")
+        self.header_log_btn.setObjectName("header_log_btn")
+        self.header_log_btn.setCheckable(True)
+        self.header_log_btn.clicked.connect(self._on_header_log_clicked)
+        layout.addWidget(
+            self.header_log_btn,
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
+        return header
+
+    def _on_header_log_clicked(self) -> None:
+        """Open diagnostics and restore the checked state on repeated clicks."""
+        self._expand_diagnostics_log(switch_tab=True)
+        # When diagnostics is already current, QTabWidget emits no change signal;
+        # mirror the semantic route explicitly so a checkable button cannot drift.
+        self._sync_shell_nav_selection()
+
+    def _add_shell_section(self, label: str) -> None:
+        item = QListWidgetItem(label)
+        item.setFlags(Qt.ItemFlag.NoItemFlags)
+        item.setSizeHint(QSize(0, 30))
+        font = item.font()
+        font.setBold(True)
+        font.setPointSize(9)
+        item.setFont(font)
+        self.shell_nav.addItem(item)
+        self._shell_section_items.append(item)
+
+    def _add_shell_route(
+        self,
+        route: str,
+        label: str,
+    ) -> None:
+        item = QListWidgetItem(label)
+        item.setData(Qt.ItemDataRole.UserRole, route)
+        item.setToolTip(label)
+        self.shell_nav.addItem(item)
+        self._shell_nav_rows[route] = self.shell_nav.row(item)
+
+    def _populate_shell_nav(self) -> None:
+        """Populate the selected third-concept information architecture."""
+        self.shell_nav.clear()
+        self._shell_nav_rows = {}
+        self._shell_section_items = []
+
+        self._add_shell_section("工作流")
+        self._add_shell_route(
+            _SHELL_ROUTE_PROJECT_PREPARE,
+            "项目与环境",
+        )
+        self._add_shell_route(
+            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.BATCH_TRANSLATION.value}",
+            workbench_nav_spec(WorkbenchNavItem.BATCH_TRANSLATION).label,
+        )
+        self._add_shell_route(
+            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.SYNC_TRANSLATION.value}",
+            workbench_nav_spec(WorkbenchNavItem.SYNC_TRANSLATION).label,
+        )
+
+        self._add_shell_section("翻译资产")
+        self._add_shell_route(
+            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.KEYWORDS.value}",
+            "关键词 / 术语",
+        )
+        self._add_shell_route(
+            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.REVISION.value}",
+            workbench_nav_spec(WorkbenchNavItem.REVISION).label,
+        )
+        self._add_shell_route(
+            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.CONTEXT.value}",
+            workbench_nav_spec(WorkbenchNavItem.CONTEXT).label,
+        )
+
+        self._add_shell_section("系统")
+        self._add_shell_route(
+            _SHELL_ROUTE_SETTINGS,
+            "设置",
+        )
+        self._set_shell_nav_task_lock(False)
+
+    def _on_shell_nav_row_changed(self, row: int) -> None:
+        if row < 0 or self._shell_nav_dispatching:
+            return
+        item = self.shell_nav.item(row)
+        route = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if route:
+            self._activate_shell_route(str(route))
+
+    def _set_shell_special_route(self, route: str | None) -> None:
+        """Isolate a special status-page tab from the active task session."""
+        previous = getattr(self, "_shell_special_route", None)
+        tabs = getattr(self, "workbench_status_tabs", None)
+
+        if route is not None:
+            if previous is None and tabs is not None:
+                self._shell_task_status_index = self._current_batch_stage_index()
+            self._shell_special_route = route
+            return
+
+        self._shell_special_route = None
+        if previous is None:
+            return
+
+        # Reveal the task-owned tabs before restoring their saved index; Qt will
+        # not reliably select a tab while it is still hidden by the project route.
+        self._sync_workbench_status_surface()
+
+        saved_index = getattr(self, "_shell_task_status_index", None)
+        self._shell_task_status_index = None
+        if (
+            tabs is not None
+            and saved_index is not None
+            and 0 <= int(saved_index) < tabs.count()
+        ):
+            self._focus_workbench_status_tab(int(saved_index))
+
+    def _activate_shell_route(self, route: str) -> None:
+        """Navigate through existing state-aware entry points, then mirror selection."""
+        if not hasattr(self, "tab_widget"):
+            return
+
+        if route.startswith(_SHELL_WORKBENCH_PREFIX):
+            nav_value = route[len(_SHELL_WORKBENCH_PREFIX):]
+            nav_item = WorkbenchNavItem(nav_value)
+            if bool(getattr(self, "_task_running", False)):
+                if nav_item != workbench_nav_for_work_mode(self._current_work_mode()):
+                    self._sync_shell_nav_selection()
+                    return
+            self.tab_widget.setCurrentWidget(self._workbench_tab)
+            if self.tab_widget.currentWidget() is not self._workbench_tab:
+                self._sync_shell_nav_selection()
+                return
+            self._set_shell_special_route(None)
+            self.workbench_stack.show()
+            target_mode = self._last_mode_by_nav.get(
+                nav_item,
+                default_work_mode_for_nav(nav_item),
+            )
+            if target_mode != self._current_work_mode():
+                self._set_work_mode(target_mode, refresh_manifest_writeback=True)
+            else:
+                self._sync_task_selectors_from_work_mode()
+        elif route == _SHELL_ROUTE_PROJECT_PREPARE:
+            self.tab_widget.setCurrentWidget(self._workbench_tab)
+            if self.tab_widget.currentWidget() is not self._workbench_tab:
+                self._sync_shell_nav_selection()
+                return
+            self._set_shell_special_route(route)
+            self.workbench_stack.hide()
+            self.workbench_status_tabs.setCurrentIndex(_BATCH_STAGE_PREPARE)
+        elif route == _SHELL_ROUTE_SETTINGS:
+            self.tab_widget.setCurrentWidget(self._config_tab)
+            if self.tab_widget.currentWidget() is not self._config_tab:
+                self._sync_shell_nav_selection()
+                return
+            self._set_shell_special_route(None)
+            self.workbench_stack.show()
+        elif route == _SHELL_ROUTE_DIAGNOSTICS:
+            self.tab_widget.setCurrentWidget(self._diagnostics_tab)
+            if self.tab_widget.currentWidget() is not self._diagnostics_tab:
+                self._sync_shell_nav_selection()
+                return
+            self._set_shell_special_route(None)
+            self.workbench_stack.show()
+        self._sync_shell_nav_selection()
+
+    def _current_shell_route(self) -> str:
+        if not hasattr(self, "tab_widget"):
+            return (
+                f"{_SHELL_WORKBENCH_PREFIX}"
+                f"{WorkbenchNavItem.BATCH_TRANSLATION.value}"
+            )
+        current = self.tab_widget.currentWidget()
+        if current is getattr(self, "_config_tab", None):
+            return _SHELL_ROUTE_SETTINGS
+        if current is getattr(self, "_diagnostics_tab", None):
+            return _SHELL_ROUTE_DIAGNOSTICS
+        if current is getattr(self, "_workbench_tab", None):
+            special = getattr(self, "_shell_special_route", None)
+            if special == _SHELL_ROUTE_PROJECT_PREPARE:
+                return special
+            nav = workbench_nav_for_work_mode(self._current_work_mode())
+            return f"{_SHELL_WORKBENCH_PREFIX}{nav.value}"
+        return (
+            f"{_SHELL_WORKBENCH_PREFIX}"
+            f"{WorkbenchNavItem.BATCH_TRANSLATION.value}"
+        )
+
+    def _sync_shell_nav_selection(self) -> None:
+        nav = getattr(self, "shell_nav", None)
+        if nav is None:
+            return
+        route = self._current_shell_route()
+        self._shell_nav_dispatching = True
+        blocked = nav.blockSignals(True)
+        try:
+            row = self._shell_nav_rows.get(route)
+            if row is None:
+                nav.setCurrentRow(-1)
+                nav.clearSelection()
+            else:
+                nav.setCurrentRow(row)
+        finally:
+            nav.blockSignals(blocked)
+            self._shell_nav_dispatching = False
+        self._update_shell_header(route)
+        self.header_log_btn.setChecked(route == _SHELL_ROUTE_DIAGNOSTICS)
+        self._sync_workbench_status_surface(route)
+
+    def _update_shell_header(self, route: str) -> None:
+        descriptions = {
+            _SHELL_ROUTE_PROJECT_PREPARE: (
+                "工作流 / 项目与环境",
+                "项目与环境",
+                "选择项目、检查环境并准备 work/game 工作目录。",
+            ),
+            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.BATCH_TRANSLATION.value}": (
+                "工作流 / 批量翻译",
+                "批量翻译",
+                "配置批量任务、跟踪进度，并在检查通过后安全写回。",
+            ),
+            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.SYNC_TRANSLATION.value}": (
+                "工作流 / 同步翻译",
+                "同步翻译",
+                "直接运行同步翻译，并在同一工作台查看状态与结果。",
+            ),
+            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.KEYWORDS.value}": (
+                "翻译资产 / 关键词与术语",
+                "关键词 / 术语",
+                "提取与合并关键词资产，保留批量和同步两种执行方式。",
+            ),
+            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.REVISION.value}": (
+                "翻译资产 / 订正",
+                "订正",
+                "生成、检查并安全写回译文订正结果。",
+            ),
+            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.CONTEXT.value}": (
+                "翻译资产 / 上下文库",
+                "上下文库",
+                "管理 RAG 与源码索引，为翻译任务提供项目语境。",
+            ),
+            _SHELL_ROUTE_SETTINGS: (
+                "系统 / 设置",
+                "设置",
+                "管理工作区、模型、上下文、外观与高级参数。",
+            ),
+            _SHELL_ROUTE_DIAGNOSTICS: (
+                "系统 / 运行日志",
+                "诊断与运行日志",
+                "查看任务上下文、命令参考、任务记录和原始输出。",
+            ),
+        }
+        breadcrumb, title, subtitle = descriptions.get(
+            route,
+            descriptions[
+                f"{_SHELL_WORKBENCH_PREFIX}"
+                f"{WorkbenchNavItem.BATCH_TRANSLATION.value}"
+            ],
+        )
+        if route == _SHELL_ROUTE_SETTINGS and hasattr(self, "settings_nav"):
+            current = self.settings_nav.currentItem()
+            if current is not None:
+                breadcrumb = f"系统 / 设置 / {current.text()}"
+        self.shell_breadcrumb_label.setText(breadcrumb)
+        self.shell_page_title.setText(title)
+        self.shell_page_subtitle.setText(subtitle)
+        self._refresh_shell_status()
+
+    def _set_shell_nav_task_lock(self, running: bool) -> None:
+        nav = getattr(self, "shell_nav", None)
+        if nav is None:
+            return
+        active_task_route = (
+            f"{_SHELL_WORKBENCH_PREFIX}"
+            f"{workbench_nav_for_work_mode(self._current_work_mode()).value}"
+        )
+        for route, row in self._shell_nav_rows.items():
+            item = nav.item(row)
+            if item is None:
+                continue
+            enabled = True
+            if running and route in _SHELL_TASK_ROUTES:
+                enabled = route == active_task_route
+            flags = Qt.ItemFlag.ItemIsSelectable
+            if enabled:
+                flags |= Qt.ItemFlag.ItemIsEnabled
+            item.setFlags(flags)
+
+
+    def _work_mode_has_writeback_surface(self, mode: WorkMode | None = None) -> bool:
+        """Return whether the active workflow owns a meaningful writeback page."""
+        resolved = mode or self._current_work_mode()
+        spec = work_mode_spec(resolved)
+        return bool(
+            spec.supports_translation_writeback
+            or self._uses_revision_writeback(spec.mode)
+            or spec.mode
+            in {WorkMode.KEYWORD_EXTRACTION, WorkMode.SYNC_KEYWORD_EXTRACTION}
+        )
+
+    def _sync_workbench_status_surface(self, route: str | None = None) -> None:
+        """Compose project prep or workflow-owned status pages for the route."""
+        card = getattr(self, "workbench_status_card", None)
+        tabs = getattr(self, "workbench_status_tabs", None)
+        if card is None or tabs is None:
+            return
+
+        current_route = route or self._current_shell_route()
+        on_workbench = (
+            current_route == _SHELL_ROUTE_PROJECT_PREPARE
+            or current_route.startswith(_SHELL_WORKBENCH_PREFIX)
+        )
+        project_route = current_route == _SHELL_ROUTE_PROJECT_PREPARE
+        writeback_visible = (
+            not project_route and self._work_mode_has_writeback_surface()
+        )
+
+        project_bar = getattr(self, "global_project_bar", None)
+        if project_bar is not None:
+            project_bar.setVisible(project_route)
+        tabs.setTabVisible(_BATCH_STAGE_PREPARE, project_route)
+        tabs.setTabVisible(_BATCH_STAGE_EXECUTE, not project_route)
+        tabs.setTabVisible(_BATCH_STAGE_RESULT, writeback_visible)
+
+        target_index = tabs.currentIndex()
+        if project_route:
+            target_index = _BATCH_STAGE_PREPARE
+        elif target_index == _BATCH_STAGE_PREPARE or (
+            target_index == _BATCH_STAGE_RESULT and not writeback_visible
+        ):
+            target_index = _BATCH_STAGE_EXECUTE
+        if tabs.currentIndex() != target_index:
+            blocked = tabs.blockSignals(True)
+            tabs.setCurrentIndex(target_index)
+            tabs.blockSignals(blocked)
+            self._sync_workbench_status_chrome(stage_index=target_index)
+
+        card.setVisible(on_workbench)
+        tabs.setVisible(on_workbench)
+        card.updateGeometry()
+        primary = getattr(self, "workbench_primary", None)
+        if primary is not None and primary.layout() is not None:
+            primary.layout().invalidate()
+            primary.layout().activate()
+        self._layout_sync_timer.start()
+
+    def _setup_shell_status_bar(self) -> None:
+        status_bar = self.statusBar()
+        status_bar.setObjectName("app_status_bar")
+        self.safety_status_label = QLabel()
+        self.safety_status_label.setObjectName("safety_status_badge")
+        status_bar.addPermanentWidget(self.safety_status_label)
+        self._refresh_shell_status()
+
+    @staticmethod
+    def _repolish_widget(widget: QWidget) -> None:
+        style = widget.style()
+        if style is not None:
+            style.unpolish(widget)
+            style.polish(widget)
+        widget.update()
+
+    def _refresh_shell_status(self) -> None:
+        running = bool(getattr(self, "_task_running", False))
+        header_status = getattr(self, "header_task_status_label", None)
+        if header_status is not None:
+            header_status.setText("任务运行中" if running else "待命")
+            header_status.setProperty("status", "running" if running else "idle")
+            self._repolish_widget(header_status)
+
+        badge = getattr(self, "safety_status_label", None)
+        if badge is None:
+            return
+        summary = self._current_writeback_summary()
+        status = summary.status
+        if status == "safe":
+            if summary.can_apply:
+                kind, text = "safe", "写回门禁 · 可安全写回"
+            else:
+                kind, text = "safe", "写回门禁 · 安全完成，无需写回"
+        elif status == "applied":
+            kind, text = "safe", "写回门禁 · 已完成写回"
+        elif status == "running":
+            kind, text = "running", "写回门禁 · 检查中"
+        elif status in {"warn", "stale"}:
+            kind, text = "warning", "写回门禁 · 需要处理或重查"
+        elif status in {"block", "failed", "unknown"}:
+            kind, text = "danger", "写回门禁 · 禁止写回"
+        else:
+            kind, text = "idle", "写回门禁 · 尚未检查"
+        badge.setText(text)
+        badge.setProperty("status", kind)
+        self._repolish_widget(badge)
+
     def _build_global_project_bar(self) -> QFrame:
         """Always-visible project path + switch entries (GUI IA P0b / #159)."""
         bar = QFrame()
@@ -638,20 +1127,17 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(12, 8, 12, 8)
         outer.setSpacing(6)
 
-        path_row = QHBoxLayout()
-        path_row.setSpacing(10)
-        title = QLabel("项目：")
+        title = QLabel("当前项目")
         title.setObjectName("global_project_bar_label")
-        path_row.addWidget(title)
+        self.global_project_bar_label = title
+        outer.addWidget(title)
 
         self.global_project_path_edit = QLineEdit("尚未选择项目")
         self.global_project_path_edit.setReadOnly(True)
         self.global_project_path_edit.setObjectName("global_project_path_edit")
-        path_row.addWidget(self.global_project_path_edit, 1)
+        outer.addWidget(self.global_project_path_edit)
         # Keep legacy objectName for mono-font QSS / tests that still look up project_path_edit.
         self.project_path_edit = self.global_project_path_edit
-        outer.addLayout(path_row)
-
         # Buttons wrap under the path on narrow windows instead of colliding.
         self.global_project_actions = FlowButtonBar(spacing=8)
         self.global_project_actions.setObjectName("global_project_actions")
@@ -661,7 +1147,7 @@ class MainWindow(QMainWindow):
             "打开设置 → 工作区，从项目总表选择并切换当前 game_root。"
         )
         self.global_switch_project_btn.clicked.connect(self._on_global_switch_project)
-        self.global_project_actions.add_widget(self.global_switch_project_btn, min_width=88)
+        self.global_project_actions.add_widget(self.global_switch_project_btn, min_width=108)
 
         self.global_browse_project_btn = QPushButton("指定本地目录…")
         self.global_browse_project_btn.setObjectName("secondary_btn")
@@ -669,7 +1155,7 @@ class MainWindow(QMainWindow):
             "通过文件夹对话框指定本地路径（可与总表无关）；会立即写入 game_root。"
         )
         self.global_browse_project_btn.clicked.connect(self._on_select_project)
-        self.global_project_actions.add_widget(self.global_browse_project_btn, min_width=120)
+        self.global_project_actions.add_widget(self.global_browse_project_btn, min_width=108)
         # Alias for existing enable/disable paths that still reference select_btn.
         self.select_btn = self.global_browse_project_btn
 
@@ -678,7 +1164,7 @@ class MainWindow(QMainWindow):
         self.doctor_btn.setObjectName("secondary_btn")
         self.doctor_btn.setToolTip("环境检查 (Ctrl+D)")
         self.doctor_btn.clicked.connect(self._on_run_doctor)
-        self.global_project_actions.add_widget(self.doctor_btn, min_width=88)
+        self.global_project_actions.add_widget(self.doctor_btn, min_width=108)
 
         self.bootstrap_work_btn = QPushButton("准备工作目录")
         self.bootstrap_work_btn.setObjectName("secondary_btn")
@@ -695,6 +1181,7 @@ class MainWindow(QMainWindow):
 
     def _build_workbench_tab(self) -> None:
         tab = QWidget()
+        tab.setObjectName("workbench_tab")
         outer = QHBoxLayout(tab)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -714,6 +1201,7 @@ class MainWindow(QMainWindow):
         self.workbench_nav.blockSignals(blocked_nav)
         self.workbench_nav.currentRowChanged.connect(self._on_workbench_nav_changed)
         outer.addWidget(self.workbench_nav)
+        self.workbench_nav.hide()
 
         # Scroll the workbench body so dense chrome (stacked actions + advanced +
         # stages + writeback) never crushes buttons into each other on short windows.
@@ -723,11 +1211,13 @@ class MainWindow(QMainWindow):
         right_scroll.setFrameShape(QFrame.Shape.NoFrame)
         right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._style_themed_surface(right_scroll)
+        right_scroll.viewport().setObjectName("workbench_content_viewport")
+        self._style_themed_surface(right_scroll.viewport())
         right = QWidget()
         right.setObjectName("workbench_content")
         self._style_themed_surface(right)
         layout = QVBoxLayout(right)
-        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setContentsMargins(20, 18, 20, 20)
         layout.setSpacing(14)
         layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         right_scroll.setWidget(right)
@@ -737,6 +1227,7 @@ class MainWindow(QMainWindow):
         # remain migration placeholders until their own phase.
         self.workbench_stack = QStackedWidget()
         self.workbench_stack.setObjectName("workbench_stack")
+        self.workbench_stack.setMinimumWidth(340)
         self._workbench_stack_pages: dict[WorkbenchNavItem, QWidget] = {}
         for nav_item in WORKBENCH_NAV_ORDER:
             if nav_item == WorkbenchNavItem.BATCH_TRANSLATION:
@@ -808,9 +1299,21 @@ class MainWindow(QMainWindow):
         self._workbench_coordinator = WorkbenchPageCoordinator(
             self.workbench_stack, self._workbench_stack_pages
         )
-        layout.addWidget(self.workbench_stack)
+        self.workbench_primary = QFrame()
+        self.workbench_primary.setObjectName("workbench_primary")
+        primary_layout = QVBoxLayout(self.workbench_primary)
+        primary_layout.setContentsMargins(0, 0, 0, 0)
+        primary_layout.setSpacing(14)
+        self.project_environment_bar = self._build_global_project_bar()
+        primary_layout.addWidget(self.project_environment_bar)
+        primary_layout.addWidget(
+            self.workbench_stack,
+            0,
+            Qt.AlignmentFlag.AlignTop,
+        )
+        layout.addWidget(self.workbench_primary, 1)
 
-        # Project path lives on the global bar; keep redirect notice only on workbench.
+        # Keep redirect notice near the project/workflow content.
         self.project_redirect_label = QLabel()
         self.project_redirect_label.setWordWrap(True)
         self.project_redirect_label.setObjectName("config_hint_label")
@@ -901,8 +1404,8 @@ class MainWindow(QMainWindow):
         self.timeline.setVisible(False)
         layout.addWidget(self.timeline)
 
-        # QTabWidget border-radius is unreliable on Windows; wrap in a card
-        # frame (same pattern as action_frame / mode_frame) for real rounded corners.
+        # Route-owned status surface: environment on the project page, progress
+        # and optional writeback below each workflow page.
         status_card = QFrame()
         status_card.setObjectName("workbench_status_card")
         self.workbench_status_card = status_card
@@ -911,6 +1414,7 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Expanding,
         )
+        status_card.setMinimumWidth(300)
         status_card_layout = QVBoxLayout(status_card)
         status_card_layout.setContentsMargins(0, 0, 0, 0)
         status_card_layout.setSpacing(0)
@@ -918,6 +1422,8 @@ class MainWindow(QMainWindow):
         self.workbench_status_tabs = NoWheelTabWidget()
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
         self.workbench_status_tabs.setDocumentMode(True)
+        self.workbench_status_tabs.tabBar().setExpanding(True)
+        self.workbench_status_tabs.tabBar().setUsesScrollButtons(False)
         self.workbench_status_tabs.setMinimumHeight(200)
         self.workbench_status_tabs.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -951,6 +1457,9 @@ class MainWindow(QMainWindow):
         self._style_themed_surface(self.doctor_summary_scroll)
         self.doctor_summary_scroll.setWidgetResizable(True)
         self.doctor_summary_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.doctor_summary_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         doctor_viewport = self.doctor_summary_scroll.viewport()
         doctor_viewport.setObjectName("doctor_summary_viewport")
         self._style_themed_surface(doctor_viewport)
@@ -1008,7 +1517,7 @@ class MainWindow(QMainWindow):
 
         # P3 / #166: empty CTA before the first environment check.
         self.doctor_empty_state = EmptyStateWidget(
-            "🔍",
+            "",
             "尚未运行环境检查",
             "完成检查后这里会显示项目就绪状态与建议下一步。",
             action_text="运行环境检查",
@@ -1030,6 +1539,9 @@ class MainWindow(QMainWindow):
         self._style_themed_surface(self.workflow_scroll)
         self.workflow_scroll.setWidgetResizable(True)
         self.workflow_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.workflow_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         workflow_viewport = self.workflow_scroll.viewport()
         workflow_viewport.setObjectName("workflow_summary_viewport")
         self._style_themed_surface(workflow_viewport)
@@ -1043,7 +1555,7 @@ class MainWindow(QMainWindow):
         workflow_layout.addWidget(self.workflow_status_label)
         # P3 / #166: empty CTA when there is no project / no resumable progress yet.
         self.workflow_empty_state = EmptyStateWidget(
-            "📋",
+            "",
             "还没有任务进度",
             "选择项目并开始翻译后，这里会显示时间线与任务事实。"
             "若已有未完成的批量任务，可点「继续」。",
@@ -1132,6 +1644,9 @@ class MainWindow(QMainWindow):
         self._style_themed_surface(writeback_scroll)
         writeback_scroll.setWidgetResizable(True)
         writeback_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        writeback_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         writeback_viewport = writeback_scroll.viewport()
         writeback_viewport.setObjectName("writeback_summary_viewport")
         self._style_themed_surface(writeback_viewport)
@@ -1266,9 +1781,7 @@ class MainWindow(QMainWindow):
         self.workbench_status_tabs.addTab(writeback_tab, "写回")
 
         self.workbench_status_tabs.setCurrentIndex(_BATCH_STAGE_EXECUTE)
-        layout.addWidget(self.workbench_status_card, 1)
-
-        layout.addWidget(self._build_workbench_log_drawer())
+        primary_layout.addWidget(self.workbench_status_card)
 
         # Real pages own all visible task actions. The old action widgets remain
         # internal readiness adapters until their workflow state is made widget-free.
@@ -1278,6 +1791,7 @@ class MainWindow(QMainWindow):
         self._workbench_tab = tab
         self.tab_widget.addTab(tab, "工作台")
         self._sync_workbench_status_chrome()
+        self._sync_workbench_status_surface()
 
     def _build_batch_advanced_tools_bar(self) -> QFrame:
         """Batch execute advanced strip: probe + split (P2a / #164)."""
@@ -1377,60 +1891,6 @@ class MainWindow(QMainWindow):
         if nav == WorkbenchNavItem.REVISION:
             self.apply_revision_btn.setVisible(False)
             self.apply_revision_btn.setEnabled(False)
-    def _build_workbench_log_drawer(self) -> QFrame:
-        """Bottom collapsible log drawer for the workbench (shares log document with diagnostics)."""
-        drawer = QFrame()
-        drawer.setObjectName("workbench_log_drawer")
-        self.workbench_log_drawer = drawer
-        drawer_layout = QVBoxLayout(drawer)
-        drawer_layout.setContentsMargins(10, 6, 10, 8)
-        drawer_layout.setSpacing(6)
-
-        header = QHBoxLayout()
-        header.setSpacing(8)
-        self.workbench_log_drawer_title = QLabel("运行日志")
-        self.workbench_log_drawer_title.setObjectName("workbench_log_drawer_title")
-        header.addWidget(self.workbench_log_drawer_title)
-        header.addStretch()
-
-        self.workbench_log_open_diagnostics_btn = QPushButton("在诊断中打开")
-        self.workbench_log_open_diagnostics_btn.setObjectName("secondary_btn")
-        self.workbench_log_open_diagnostics_btn.setToolTip(
-            "打开诊断与工具查看任务上下文、命令参考与完整日志布局。"
-        )
-        self.workbench_log_open_diagnostics_btn.clicked.connect(
-            self._on_open_diagnostics_from_log_drawer
-        )
-        header.addWidget(self.workbench_log_open_diagnostics_btn)
-
-        self.workbench_log_clear_btn = QPushButton("清空")
-        self.workbench_log_clear_btn.setObjectName("secondary_btn")
-        self.workbench_log_clear_btn.clicked.connect(self._on_clear_log)
-        header.addWidget(self.workbench_log_clear_btn)
-
-        self.workbench_log_toggle_btn = QPushButton("展开")
-        self.workbench_log_toggle_btn.setObjectName("secondary_btn")
-        self.workbench_log_toggle_btn.clicked.connect(self._toggle_workbench_log_drawer)
-        header.addWidget(self.workbench_log_toggle_btn)
-        drawer_layout.addLayout(header)
-
-        self.workbench_log_body = QWidget()
-        self.workbench_log_body.setObjectName("workbench_log_body")
-        body_layout = QVBoxLayout(self.workbench_log_body)
-        body_layout.setContentsMargins(0, 0, 0, 0)
-        body_layout.setSpacing(0)
-        self.workbench_log_view = QTextEdit()
-        self.workbench_log_view.setReadOnly(True)
-        self.workbench_log_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-        self.workbench_log_view.setObjectName("workbench_log_view")
-        self.workbench_log_view.setMinimumHeight(100)
-        body_layout.addWidget(self.workbench_log_view, 1)
-        drawer_layout.addWidget(self.workbench_log_body, 1)
-
-        self._workbench_log_drawer_expanded = False
-        self._set_workbench_log_drawer_expanded(False)
-        return drawer
-
     def _style_themed_surface(self, widget: QWidget) -> None:
         widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
@@ -1443,15 +1903,25 @@ class MainWindow(QMainWindow):
         self._advanced_setting_error_labels = {}
         self._settings_nav_rows = {}
 
-        outer_layout = QHBoxLayout(tab)
+        outer_layout = QVBoxLayout(tab)
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
 
         self.settings_nav = QListWidget()
         self.settings_nav.setObjectName("settings_nav")
-        self.settings_nav.setFixedWidth(150)
+        self.settings_nav.setFixedHeight(50)
         self.settings_nav.setSpacing(2)
         self.settings_nav.setFrameShape(QFrame.Shape.NoFrame)
+        self.settings_nav.setFlow(QListView.Flow.LeftToRight)
+        self.settings_nav.setMovement(QListView.Movement.Static)
+        self.settings_nav.setResizeMode(QListView.ResizeMode.Adjust)
+        self.settings_nav.setWrapping(False)
+        self.settings_nav.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.settings_nav.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         outer_layout.addWidget(self.settings_nav)
 
         right_panel = QWidget()
@@ -2084,7 +2554,10 @@ class MainWindow(QMainWindow):
         self._style_themed_surface(context_scroll)
         context_scroll.setWidgetResizable(True)
         context_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        context_scroll.viewport().setObjectName("diagnostics_context_viewport")
+        self._style_themed_surface(context_scroll.viewport())
         context_content = QWidget()
+        context_content.setObjectName("diagnostics_context_content")
         self._style_themed_surface(context_content)
         context_layout = QVBoxLayout(context_content)
         context_layout.setContentsMargins(12, 12, 12, 12)
@@ -2130,7 +2603,10 @@ class MainWindow(QMainWindow):
         self._style_themed_surface(commands_scroll)
         commands_scroll.setWidgetResizable(True)
         commands_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        commands_scroll.viewport().setObjectName("diagnostics_commands_viewport")
+        self._style_themed_surface(commands_scroll.viewport())
         commands_content = QWidget()
+        commands_content.setObjectName("diagnostics_commands_content")
         self._style_themed_surface(commands_content)
         commands_layout = QVBoxLayout(commands_content)
         commands_layout.setContentsMargins(12, 12, 12, 12)
@@ -2181,9 +2657,6 @@ class MainWindow(QMainWindow):
         self.log_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.log_view.setObjectName("log_view")
         self.log_view.setMinimumHeight(120)
-        # Share one document with the workbench drawer so append/clear stay in sync.
-        if hasattr(self, "workbench_log_view"):
-            self.workbench_log_view.setDocument(self.log_view.document())
         self._log_highlighter = LogHighlighter(
             self.log_view.document(),
             dark=self._effective_theme_is_dark(),
@@ -2198,59 +2671,29 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter, 1)
         self.tab_widget.addTab(tab, "诊断与工具")
 
-    def _set_workbench_log_drawer_expanded(self, expanded: bool) -> None:
-        self._workbench_log_drawer_expanded = bool(expanded)
-        if not hasattr(self, "workbench_log_body"):
-            return
-        self.workbench_log_body.setVisible(expanded)
-        if hasattr(self, "workbench_log_toggle_btn"):
-            self.workbench_log_toggle_btn.setText("折叠" if expanded else "展开")
-        if hasattr(self, "workbench_log_drawer"):
-            if expanded:
-                self.workbench_log_drawer.setMinimumHeight(
-                    _WORKBENCH_LOG_DRAWER_HEADER_HEIGHT + _WORKBENCH_LOG_DRAWER_EXPANDED_HEIGHT
-                )
-                self.workbench_log_drawer.setMaximumHeight(16777215)
-                self.workbench_log_drawer.setSizePolicy(
-                    QSizePolicy.Policy.Expanding,
-                    QSizePolicy.Policy.Preferred,
-                )
-            else:
-                self.workbench_log_drawer.setMinimumHeight(0)
-                self.workbench_log_drawer.setMaximumHeight(
-                    _WORKBENCH_LOG_DRAWER_HEADER_HEIGHT + 16
-                )
-                self.workbench_log_drawer.setSizePolicy(
-                    QSizePolicy.Policy.Expanding,
-                    QSizePolicy.Policy.Fixed,
-                )
-
-    def _toggle_workbench_log_drawer(self) -> None:
-        self._set_workbench_log_drawer_expanded(not self._workbench_log_drawer_expanded)
-
     def _scroll_log_views_to_end(self) -> None:
-        for attr in ("log_view", "workbench_log_view"):
-            view = getattr(self, attr, None)
-            if view is None or not hasattr(view, "verticalScrollBar"):
-                continue
-            scrollbar = view.verticalScrollBar()
-            if scrollbar is not None:
-                scrollbar.setValue(scrollbar.maximum())
+        view = getattr(self, "log_view", None)
+        if view is None or not hasattr(view, "verticalScrollBar"):
+            return
+        scrollbar = view.verticalScrollBar()
+        if scrollbar is not None:
+            scrollbar.setValue(scrollbar.maximum())
 
-    def _focus_workbench_main_tab(self) -> None:
+    def _focus_workbench_main_tab(self, *, special_route: str | None = None) -> None:
         """Switch the top-level shell to Workbench so prep progress is visible."""
         workbench = getattr(self, "_workbench_tab", None)
         if workbench is None or not hasattr(self, "tab_widget"):
             return
         if self.tab_widget.currentWidget() is not workbench:
             self.tab_widget.setCurrentWidget(workbench)
+        if self.tab_widget.currentWidget() is workbench:
+            self._set_shell_special_route(special_route)
+            if hasattr(self, "workbench_stack"):
+                self.workbench_stack.setVisible(special_route is None)
+            self._sync_shell_nav_selection()
 
     def _show_workbench_log_drawer(self) -> None:
-        """Reveal CLI output on the workbench without switching the main tab.
-
-        Used by workbench-started tasks (translate, writeback, repair, bootstrap, …).
-        """
-        self._set_workbench_log_drawer_expanded(True)
+        """Compatibility hook: logs now live only on the diagnostics page."""
         self._scroll_log_views_to_end()
 
     def _expand_diagnostics_log(self, *, switch_tab: bool = True) -> None:
@@ -2285,31 +2728,24 @@ class MainWindow(QMainWindow):
         self._scroll_log_views_to_end()
 
     def _reveal_log_for_active_context(self) -> None:
-        """On runner errors: expand drawer, or enlarge diagnostics log if already there."""
-        on_diagnostics = (
-            getattr(self, "_diagnostics_tab", None) is not None
-            and self.tab_widget.currentWidget() is self._diagnostics_tab
-        )
-        if on_diagnostics:
-            self._expand_diagnostics_log(switch_tab=False)
-        else:
-            self._show_workbench_log_drawer()
-
-    def _on_open_diagnostics_from_log_drawer(self) -> None:
+        """On runner errors, reveal the only remaining full log surface."""
         self._expand_diagnostics_log(switch_tab=True)
-        self.statusBar().showMessage("已打开诊断日志页。", 3000)
 
     def _focus_log_tab(self) -> None:
-        """Deprecated dual-purpose helper; prefer workbench drawer or diagnostics expand.
-
-        Kept as a thin alias to the workbench drawer so accidental leftover calls no longer
-        force a main-tab switch. New code must call the explicit APIs.
-        """
-        self._show_workbench_log_drawer()
+        """Deprecated alias retained for callers that still request the log surface."""
+        self._expand_diagnostics_log(switch_tab=True)
 
     def _focus_workbench_status_tab(self, index: int) -> None:
         if not (0 <= index < self.workbench_status_tabs.count()):
             return
+        project_route = self._current_shell_route() == _SHELL_ROUTE_PROJECT_PREPARE
+        if project_route:
+            index = _BATCH_STAGE_PREPARE
+        elif index == _BATCH_STAGE_PREPARE or (
+            index == _BATCH_STAGE_RESULT
+            and not self._work_mode_has_writeback_surface()
+        ):
+            index = _BATCH_STAGE_EXECUTE
         # Avoid double chrome sync: currentChanged already calls _sync_workbench_status_chrome.
         if self.workbench_status_tabs.currentIndex() == index:
             self._sync_workbench_status_chrome(stage_index=index)
@@ -4706,6 +5142,10 @@ class MainWindow(QMainWindow):
         stage_index = _BATCH_STAGE_EXECUTE
         if hasattr(self, "workbench_status_tabs"):
             stage_index = self._current_batch_stage_index()
+        if getattr(self, "_shell_special_route", None) is not None:
+            saved_index = getattr(self, "_shell_task_status_index", None)
+            if saved_index is not None:
+                stage_index = int(saved_index)
         wf_status = ""
         wf_heading = ""
         if hasattr(self, "workflow_status_label"):
@@ -4829,6 +5269,7 @@ class MainWindow(QMainWindow):
             self._sync_keywords_page_controls()
         elif nav_item == WorkbenchNavItem.REVISION:
             self._sync_revision_page_controls()
+        self._sync_shell_nav_selection()
 
     def _on_workbench_nav_changed(self, row: int) -> None:
         if row < 0:
@@ -4875,6 +5316,9 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Activate *mode*, preserving per-mode sessions unless reset_session=True."""
         mode = normalize_work_mode(mode)
+        self._set_shell_special_route(None)
+        if hasattr(self, "workbench_stack"):
+            self.workbench_stack.show()
         previous = getattr(self, "_work_mode", None)
         if not hasattr(self, "_mode_sessions"):
             self._mode_sessions = {}
@@ -5170,14 +5614,7 @@ class MainWindow(QMainWindow):
             "resume": self._on_resume_translation,
             "stop": self._on_kill,
             "split_submit": self._on_submit_remaining_split_packages,
-            "apply": self._on_apply_writeback,
-            "recheck": self._on_recheck_writeback,
-            "issues": self._open_check_issues,
-            "retry": self._on_retry_action,
-            "retry_followup": self._on_retry_followup_action,
-            "repair": self._on_run_repair,
-            "failure": self._open_apply_failure_report,
-            "remediation": self._open_remediation_commands,
+
             "probe": self._on_run_probe,
             "split": self._on_run_split,
         }
@@ -5192,40 +5629,43 @@ class MainWindow(QMainWindow):
                 work_mode_spec(WorkMode.BATCH_TRANSLATION)
             )
 
-    def _sync_batch_translation_page_controls(
+    def _batch_translation_action_state(
         self,
         *,
         running: bool | None = None,
-    ) -> None:
-        """Mirror batch coordinator readiness onto P5's independent widgets."""
-        page = getattr(self, "batch_translation_page", None)
-        if page is None or self._current_work_mode() != WorkMode.BATCH_TRANSLATION:
-            return
+    ) -> BatchActionState:
+        """Compose the single render state consumed by the real batch page."""
         if running is None:
-            running = bool(getattr(self, "_task_running", False)) or self.kill_btn.isEnabled()
+            running = bool(getattr(self, "_task_running", False)) or (
+                hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
+            )
 
         def state(source_name: str, *, visible: bool = True) -> tuple[bool, bool, str]:
             source = getattr(self, source_name)
             return (visible and not source.isHidden(), source.isEnabled(), source.text())
 
-        page.set_task_running(running)
-        page.set_controls(
-            {
+        return BatchActionState(
+            running=running,
+            controls={
                 "start": (True, self.translate_btn.isEnabled(), self.translate_btn.text()),
                 "resume": (True, self.resume_btn.isEnabled(), self.resume_btn.text()),
                 "stop": (True, self.kill_btn.isEnabled(), self.kill_btn.text()),
                 "split_submit": state("split_submit_btn"),
-                "apply": (True, self.apply_btn.isEnabled(), self.apply_btn.text()),
-                "recheck": state("recheck_btn"),
-                "issues": state("check_issues_btn"),
-                "retry": state("retry_btn"),
-                "retry_followup": state("retry_followup_btn"),
-                "repair": state("repair_btn"),
-                "failure": state("apply_failure_btn"),
-                "remediation": state("remediation_btn"),
                 "probe": (True, self.probe_btn.isEnabled(), self.probe_btn.text()),
                 "split": (True, self.split_btn.isEnabled(), self.split_btn.text()),
-            }
+            },
+        )
+    def _sync_batch_translation_page_controls(
+        self,
+        *,
+        running: bool | None = None,
+    ) -> None:
+        """Render coordinator readiness on the real batch task page."""
+        page = getattr(self, "batch_translation_page", None)
+        if page is None or self._current_work_mode() != WorkMode.BATCH_TRANSLATION:
+            return
+        page.set_action_state(
+            self._batch_translation_action_state(running=running)
         )
         self._refresh_active_workbench_page(work_mode_spec(WorkMode.BATCH_TRANSLATION))
 
@@ -5328,10 +5768,11 @@ class MainWindow(QMainWindow):
             self.resume_btn.setText(spec.resume_button_label)
         self._update_resume_btn_text()
         self.resume_btn.setVisible(spec.supports_resume)
-        # All task pages share the same three flat status tabs; labels vary by mode.
+        # Task pages own progress and only expose writeback when the mode supports it.
         self.workbench_status_tabs.setTabText(0, "环境检查")
         self.workbench_status_tabs.setTabText(1, spec.progress_tab_label)
         self.workbench_status_tabs.setTabText(2, spec.writeback_tab_label)
+        self._sync_workbench_status_surface()
         if spec.implemented:
             if spec.is_bootstrap and not self._bootstrap_task_ready(spec):
                 hint = bootstrap_disabled_message(spec.bootstrap_kind)
@@ -5422,6 +5863,7 @@ class MainWindow(QMainWindow):
             blocked = self.workbench_status_tabs.blockSignals(True)
             self.workbench_status_tabs.setCurrentIndex(int(pending_stage))
             self.workbench_status_tabs.blockSignals(blocked)
+        self._sync_workbench_status_surface()
         self._sync_workbench_status_chrome()
 
         # Keep session bag aligned after UI refresh mutates active fields.
@@ -5966,6 +6408,14 @@ class MainWindow(QMainWindow):
         self._load_config_to_ui()
         self._active_command = ""
         self._doctor_output_lines = []
+        # Project sessions are reset below, so their status-tab snapshot must
+        # also start from the product default instead of leaking the old root.
+        if getattr(self, "_shell_special_route", None) is not None:
+            self._shell_task_status_index = _BATCH_STAGE_EXECUTE
+        else:
+            self._shell_task_status_index = None
+            if hasattr(self, "workbench_status_tabs"):
+                self._focus_workbench_status_tab(_BATCH_STAGE_EXECUTE)
         self._clear_all_mode_sessions()
         previous_mode = getattr(self, "_work_mode", WorkMode.BATCH_TRANSLATION)
         self._workbench_nav_item = workbench_nav_for_work_mode(previous_mode)
@@ -6066,6 +6516,7 @@ class MainWindow(QMainWindow):
         nav = getattr(self, "settings_nav", None)
         if nav is not None and row is not None:
             nav.setCurrentRow(row)
+        self._sync_shell_nav_selection()
 
     def _on_go_to_workspace_for_project_switch(self) -> None:
         self._focus_settings_section("workspace")
@@ -6091,6 +6542,7 @@ class MainWindow(QMainWindow):
         self._sync_settings_action_bar_enabled(task_running=self._task_running, nav_row=row)
         if self._settings_nav_rows.get("workspace") == row and self._is_config_tab_active():
             self._activate_workspace_registry_section()
+        self._sync_shell_nav_selection()
 
     def _sync_settings_action_bar_enabled(
         self,
@@ -6356,11 +6808,13 @@ class MainWindow(QMainWindow):
             and self._config_tab_has_unsaved_changes()
         ):
             if not self._confirm_leave_config_tab(previous_index):
+                self._sync_shell_nav_selection()
                 return
 
         # Commit the new tab index immediately, then defer heavy enter work so Qt
         # can paint the switched tab first (settings / diagnostics enter path).
         self._last_main_tab_index = index
+        self._sync_shell_nav_selection()
         self._schedule_main_tab_enter_effects(current_widget)
 
     def _schedule_main_tab_enter_effects(self, widget: QWidget | None) -> None:
@@ -6510,6 +6964,7 @@ class MainWindow(QMainWindow):
         path_text = str(root) if root else "（尚未选择项目）"
         if hasattr(self, "global_project_path_edit"):
             self.global_project_path_edit.setText(path_text)
+            self.global_project_path_edit.setToolTip(path_text)
         elif hasattr(self, "project_path_edit"):
             self.project_path_edit.setText(path_text)
         if not root:
@@ -6533,7 +6988,7 @@ class MainWindow(QMainWindow):
             return
 
         # Global bar can launch from Settings/Diagnostics; show status on Workbench.
-        self._focus_workbench_main_tab()
+        self._focus_workbench_main_tab(special_route=_SHELL_ROUTE_PROJECT_PREPARE)
         self._clear_log_view()
         self._active_command = "doctor"
         self._doctor_output_lines = []
@@ -6624,14 +7079,15 @@ class MainWindow(QMainWindow):
             return
 
         # Global bar can launch from Settings/Diagnostics; show status on Workbench.
-        self._focus_workbench_main_tab()
+        self._focus_workbench_main_tab(special_route=_SHELL_ROUTE_PROJECT_PREPARE)
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._active_command = "bootstrap_work"
         self._work_bootstrap_output_lines = []
         self._workflow_progress = create_workflow_progress_state("work_bootstrap")
         self._workflow_progress_base_facts = []
-        self._focus_workbench_status_tab(1)
+        # 项目与环境只有环境检查页；准备进度折叠进同一项目状态摘要。
+        self._focus_workbench_status_tab(0)
         doctor_summary = work_bootstrap_to_doctor_summary(running_work_bootstrap_summary())
         self._set_doctor_summary(doctor_summary)
         self._set_workflow_summary(
@@ -7928,6 +8384,7 @@ class MainWindow(QMainWindow):
             self.settings_go_workspace_btn.setEnabled(not running)
         if hasattr(self, "workbench_nav"):
             self.workbench_nav.setEnabled(not running)
+        self._set_shell_nav_task_lock(running)
         self.doctor_btn.setEnabled(not running)
         self.bootstrap_work_btn.setEnabled(not running)
         self.api_btn.setEnabled(not running)
@@ -7975,6 +8432,7 @@ class MainWindow(QMainWindow):
         self._sync_task_shortcuts()
         self._reflow_button_bars()
         self._sync_workbench_empty_states(resume_available=resume_available)
+        self._refresh_shell_status()
         # After a workbench/diagnostics task finishes, ease splitter back to idle.
         if was_running and not running:
             self._restore_diagnostics_splitter_idle()
@@ -8090,6 +8548,7 @@ class MainWindow(QMainWindow):
                 self.apply_revision_btn.setEnabled(
                     self._uses_revision_writeback() and summary.can_apply
                 )
+        self._refresh_shell_status()
         self._sync_layout_sizes()
 
     def _update_writeback_from_check(

@@ -59,6 +59,14 @@ def effective_widget_width(widget: QWidget, *, fallback: int = 720) -> int:
     When the bar itself still looks un-laid-out, prefer a named content ancestor
     (writeback page / status tabs) so off-stage reflow targets the real shell width.
     """
+    explicit_hint = widget.property("flowWidthHint")
+    try:
+        explicit_width = int(explicit_hint)
+    except (TypeError, ValueError):
+        explicit_width = 0
+    if explicit_width > 0:
+        return explicit_width
+
     own = int(widget.width() or 0)
     ancestor_w = 0
     parent = widget.parentWidget()
@@ -358,6 +366,7 @@ class FlowButtonBar(QFrame):
         self._trailing_stretch = True
         self._signature: tuple[object, ...] | None = None
         self._row_count = 1
+        self._reflowing = False
 
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(0, 0, 0, 0)
@@ -381,11 +390,17 @@ class FlowButtonBar(QFrame):
         self.reflow(force=True)
 
     def reflow(self, *, force: bool = False) -> None:
+        if self._reflowing:
+            return
         signature = self._layout_signature()
         if not force and signature == self._signature:
             return
         self._signature = signature
-        self._rebuild()
+        self._reflowing = True
+        try:
+            self._rebuild()
+        finally:
+            self._reflowing = False
 
     def _schedule_reflow(self) -> None:
         """Reflow after the current event so parent/tab geometry is final."""

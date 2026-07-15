@@ -45,7 +45,7 @@ class ContextLibraryPage(QFrame):
         outer.addWidget(self.page_stack)
 
         self.empty_state = EmptyStateWidget(
-            "📚",
+            "",
             "尚未启用上下文库",
             "请先在设置 · 上下文启用记忆库或原文索引并保存，然后回到这里预建。",
             action_text="打开设置 · 上下文",

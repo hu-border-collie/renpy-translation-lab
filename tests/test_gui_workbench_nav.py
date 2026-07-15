@@ -176,6 +176,7 @@ class GuiWorkbenchNavTests(unittest.TestCase):
             WorkMode.SYNC_KEYWORD_EXTRACTION,
             refresh_manifest_writeback=False,
         )
+        self.window.workbench_status_tabs.setCurrentIndex(2)
         self.window._mode_sessions[WorkMode.KEYWORD_EXTRACTION] = WorkbenchModeSession(
             writeback_manifest_path="C:/keyword-old.json",
         )
@@ -213,6 +214,8 @@ class GuiWorkbenchNavTests(unittest.TestCase):
             WorkMode.KEYWORD_EXTRACTION,
         )
         self.assertEqual(self.window._work_mode, WorkMode.KEYWORD_EXTRACTION)
+        self.assertEqual(self.window.workbench_status_tabs.currentIndex(), 1)
+        self.assertEqual(keyword_session.stage_index, 1)
 
     def test_project_switch_resets_dormant_keywords_page(self) -> None:
         self.window._set_work_mode(

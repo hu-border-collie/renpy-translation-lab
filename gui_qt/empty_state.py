@@ -45,7 +45,7 @@ class EmptyStateWidget(QWidget):
     Parameters
     ----------
     icon:
-        A single Unicode emoji / symbol rendered large.
+        Optional visual marker. Pass an empty string for a text-only state.
     title:
         Short headline (semi-bold).
     description:
@@ -100,6 +100,7 @@ class EmptyStateWidget(QWidget):
             QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Fixed,
         )
+        self._icon_label.setVisible(bool(icon))
 
         # ---- title -------------------------------------------------------
         self._title_label = QLabel(title)
@@ -161,6 +162,20 @@ class EmptyStateWidget(QWidget):
         # Opaque fill so any residual sibling chrome never bleeds through.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._reflow_content_width()
+
+    def _reflow_content_width(self) -> None:
+        """Keep centered copy inside narrow inspectors instead of overflowing."""
+        outer = self.layout()
+        margins = outer.contentsMargins() if outer is not None else None
+        horizontal_margins = (
+            margins.left() + margins.right() if margins is not None else 16
+        )
+        available = max(1, self.width() - horizontal_margins)
+        target = min(_DESC_MAX_WIDTH, available)
+        self._content.setFixedWidth(target)
+        self._title_label.setFixedWidth(target)
+        self._desc_label.setFixedWidth(target)
 
     def _reflow_desc_height(self) -> None:
         """Reserve full multi-line height for the wrapped description."""
@@ -174,6 +189,7 @@ class EmptyStateWidget(QWidget):
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._reflow_content_width()
         self._reflow_desc_height()
 
     # ------------------------------------------------------------------
@@ -212,6 +228,7 @@ class EmptyStateWidget(QWidget):
         """Re-apply theme colours every time the widget becomes visible."""
         super().showEvent(event)
         self._apply_theme_colors()
+        self._reflow_content_width()
         self._reflow_desc_height()
 
     def changeEvent(self, event):  # noqa: N802 – Qt naming convention
