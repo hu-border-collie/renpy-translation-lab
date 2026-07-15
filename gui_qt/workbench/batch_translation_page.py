@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QPushButton, QSizePolicy, QWidget
 
 from ..responsive_layout import FlowButtonBar
@@ -28,7 +27,6 @@ class BatchActionState:
 class BatchTranslationPage(QWidget):
     """Batch task controls; writeback and recovery stay on the writeback tab."""
 
-    content_height_changed = Signal()
     supported_modes = (WorkMode.BATCH_TRANSLATION,)
     _main_actions = ("start", "resume", "stop", "probe", "split")
     _split_actions = ("split_submit",)

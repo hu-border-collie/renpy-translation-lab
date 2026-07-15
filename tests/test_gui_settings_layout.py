@@ -83,6 +83,20 @@ class GuiSettingsLayoutTests(unittest.TestCase):
                     expected_width = min(page.viewport().width(), 1080)
                     self.assertGreaterEqual(body.width(), expected_width - 2)
 
+    def test_settings_navigation_items_fit_at_supported_narrow_width(self) -> None:
+        self.window.resize(960, 640)
+        _process(self._app)
+
+        viewport_rect = self.window.settings_nav.viewport().rect()
+        for row in range(self.window.settings_nav.count()):
+            item = self.window.settings_nav.item(row)
+            with self.subTest(section=item.text()):
+                self.assertTrue(
+                    viewport_rect.contains(
+                        self.window.settings_nav.visualItemRect(item)
+                    )
+                )
+
     def test_settings_forms_share_label_and_field_spacing(self) -> None:
         form_count = 0
         for page_index in range(self.window.settings_stack.count()):

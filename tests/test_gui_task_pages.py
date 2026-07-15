@@ -452,6 +452,30 @@ class GuiTaskPageTests(unittest.TestCase):
         for action in ("start", "resume", "split_submit", "probe", "split"):
             self.assertFalse(page.buttons[action].isEnabled())
         self.assertTrue(page.buttons["stop"].isEnabled())
+
+    def test_batch_writeback_actions_remain_available_on_result_tab(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window._set_writeback_summary(
+            WritebackSummary(
+                status="safe",
+                heading="ready",
+                message="ready",
+                facts=[],
+                findings=[],
+                can_apply=True,
+                manifest_path="C:/batch/manifest.json",
+            )
+        )
+        self.window._focus_workbench_status_tab(2)
+
+        self.assertFalse(self.window.writeback_primary_bar.isHidden())
+        self.assertFalse(self.window.apply_btn.isHidden())
+        self.assertTrue(self.window.apply_btn.isEnabled())
+        self.assertFalse(self.window.writeback_issues_toggle_btn.isHidden())
+
     def test_batch_resume_reenables_immediately_when_task_stops(self) -> None:
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,

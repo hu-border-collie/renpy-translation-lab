@@ -1235,9 +1235,6 @@ class MainWindow(QMainWindow):
                 page.set_action_callbacks(
                     WorkbenchPageActions(action=self._on_batch_translation_page_action)
                 )
-                page.content_height_changed.connect(
-                    self._on_batch_translation_page_height_changed
-                )
                 self.batch_translation_page = page
             elif nav_item == WorkbenchNavItem.CONTEXT:
                 page = ContextLibraryPage()
@@ -1877,14 +1874,6 @@ class MainWindow(QMainWindow):
         self.translate_btn.setVisible(False)
         self.resume_btn.setVisible(False)
         self.work_mode_hint_label.setVisible(False)
-        if nav == WorkbenchNavItem.BATCH_TRANSLATION:
-            for widget in (
-                self.writeback_primary_bar,
-                self.writeback_issues_toggle_btn,
-                self.writeback_issues_badge,
-                self.writeback_issues_panel,
-            ):
-                widget.setVisible(False)
         if nav == WorkbenchNavItem.KEYWORDS:
             self.keyword_merge_writeback_btn.setVisible(False)
             self.keyword_merge_writeback_btn.setEnabled(False)
@@ -5634,13 +5623,6 @@ class MainWindow(QMainWindow):
         callback = callbacks.get(action)
         if callback is not None:
             callback()
-
-    def _on_batch_translation_page_height_changed(self) -> None:
-        """Resize the stack immediately after a page-local disclosure changes."""
-        if self._current_work_mode() == WorkMode.BATCH_TRANSLATION:
-            self._refresh_active_workbench_page(
-                work_mode_spec(WorkMode.BATCH_TRANSLATION)
-            )
 
     def _batch_translation_action_state(
         self,
