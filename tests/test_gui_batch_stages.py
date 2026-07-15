@@ -75,7 +75,7 @@ class GuiBatchStageTests(unittest.TestCase):
         self.window._focus_workbench_status_tab(_BATCH_STAGE_PREPARE)
         self.assertEqual(
             self.window.workbench_status_tabs.currentIndex(),
-            _BATCH_STAGE_PREPARE,
+            _BATCH_STAGE_EXECUTE,
         )
 
         self.window._focus_workbench_status_tab(_BATCH_STAGE_RESULT)
@@ -108,8 +108,8 @@ class GuiBatchStageTests(unittest.TestCase):
             _BATCH_STAGE_RESULT,
         )
 
-    def test_prepare_stage_restored_with_mode_session(self) -> None:
-        """PREPARE (0) must survive nav round-trip; not collapse to default EXECUTE."""
+    def test_hidden_environment_stage_is_not_saved_as_task_progress(self) -> None:
+        """Environment belongs to the project route, so task sessions stay on progress."""
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,
             refresh_manifest_writeback=False,
@@ -117,7 +117,7 @@ class GuiBatchStageTests(unittest.TestCase):
         self.window._focus_workbench_status_tab(_BATCH_STAGE_PREPARE)
         self.assertEqual(
             self.window.workbench_status_tabs.currentIndex(),
-            _BATCH_STAGE_PREPARE,
+            _BATCH_STAGE_EXECUTE,
         )
 
         self.window._set_work_mode(
@@ -130,7 +130,7 @@ class GuiBatchStageTests(unittest.TestCase):
         )
         self.assertEqual(
             self.window.workbench_status_tabs.currentIndex(),
-            _BATCH_STAGE_PREPARE,
+            _BATCH_STAGE_EXECUTE,
         )
         self.assertEqual(self.window.workbench_status_tabs.tabText(0), "环境检查")
 
@@ -140,33 +140,38 @@ class GuiBatchStageTests(unittest.TestCase):
             refresh_manifest_writeback=False,
         )
         self.window._focus_workbench_status_tab(0)
-        self.assertEqual(self.window._current_batch_stage_index(), _BATCH_STAGE_PREPARE)
+        self.assertEqual(self.window._current_batch_stage_index(), _BATCH_STAGE_EXECUTE)
         self.window._focus_workbench_status_tab(1)
         self.assertEqual(self.window._current_batch_stage_index(), _BATCH_STAGE_EXECUTE)
         self.window._focus_workbench_status_tab(2)
         self.assertEqual(self.window._current_batch_stage_index(), _BATCH_STAGE_RESULT)
 
-    def test_advanced_tools_stay_on_batch_across_status_tabs(self) -> None:
+    def test_batch_task_groups_stay_owned_by_batch_page_across_status_tabs(self) -> None:
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,
             refresh_manifest_writeback=False,
         )
+        page = self.window.batch_translation_page
         for stage in (
-            _BATCH_STAGE_PREPARE,
             _BATCH_STAGE_EXECUTE,
             _BATCH_STAGE_RESULT,
         ):
             self.window._focus_workbench_status_tab(stage)
+            self.assertIs(self.window.workbench_stack.currentWidget(), page)
             self.assertFalse(
-                self.window.batch_advanced_frame.isHidden(),
-                msg=f"advanced tools should stay on batch (stage {stage})",
+                page.buttons["probe"].isHidden(),
+                msg=f"probe should stay on batch (stage {stage})",
+            )
+            self.assertFalse(
+                page.buttons["split"].isHidden(),
+                msg=f"split should stay on batch (stage {stage})",
             )
 
         self.window._set_work_mode(
             WorkMode.SYNC_TRANSLATION,
             refresh_manifest_writeback=False,
         )
-        self.assertTrue(self.window.batch_advanced_frame.isHidden())
+        self.assertTrue(page.isHidden())
 
 
 if __name__ == "__main__":

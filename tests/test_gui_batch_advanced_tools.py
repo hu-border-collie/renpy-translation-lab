@@ -38,35 +38,51 @@ class GuiBatchAdvancedToolsTests(unittest.TestCase):
         self.window.close()
         self.window.deleteLater()
 
-    def test_probe_and_split_live_on_workbench_not_diagnostics_panel(self) -> None:
-        self.assertTrue(hasattr(self.window, "batch_advanced_frame"))
-        self.assertIs(self.window.probe_btn.parentWidget(), self.window.batch_advanced_bar)
-        self.assertIs(self.window.split_btn.parentWidget(), self.window.batch_advanced_bar)
-        # Diagnostics panel still has A/B and keyword merge, not probe/split as children.
+    def test_probe_and_split_live_on_batch_primary_bar(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.batch_translation_page
+        self.assertIs(page.buttons["probe"].parentWidget(), page.main_bar)
+        self.assertIs(page.buttons["split"].parentWidget(), page.main_bar)
+        self.assertFalse(page.buttons["probe"].isHidden())
+        self.assertFalse(page.buttons["split"].isHidden())
+        self.assertFalse(hasattr(page, "more_toggle_btn"))
+
+        # Diagnostics keeps A/B and keyword merge, not batch package preparation.
         diag = self.window.diagnostics_action_panel
         diag_buttons = {b.text() for b in diag.findChildren(QPushButton)}
         self.assertNotIn("试跑样本请求", diag_buttons)
         self.assertNotIn("拆分翻译包", diag_buttons)
         self.assertIn("翻译 A/B 对比", diag_buttons)
 
-    def test_advanced_bar_stays_on_batch_across_status_tabs(self) -> None:
+    def test_primary_tools_stay_visible_across_batch_status_tabs(self) -> None:
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,
             refresh_manifest_writeback=False,
         )
-        for tab in (0, 1, 2):
+        page = self.window.batch_translation_page
+        for tab in (1, 2):
             self.window._focus_workbench_status_tab(tab)
             self.assertFalse(
-                self.window.batch_advanced_frame.isHidden(),
-                msg=f"advanced tools should stay on batch (status tab {tab})",
+                page.buttons["probe"].isHidden(),
+                msg=f"probe should stay on batch tab {tab}",
+            )
+            self.assertFalse(
+                page.buttons["split"].isHidden(),
+                msg=f"split should stay on batch tab {tab}",
             )
 
         self.window._set_work_mode(
             WorkMode.SYNC_TRANSLATION,
             refresh_manifest_writeback=False,
         )
-        self.assertTrue(self.window.batch_advanced_frame.isHidden())
-
+        self.assertIs(
+            self.window.workbench_stack.currentWidget(),
+            self.window.sync_translation_page,
+        )
+        self.assertTrue(page.isHidden())
     def test_split_entrypoint_uses_workbench_drawer(self) -> None:
         drawer_calls: list[bool] = []
         expand_calls: list[bool] = []

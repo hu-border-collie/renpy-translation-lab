@@ -161,12 +161,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertIn("Gemini 同步翻译", titles)
         self.assertIn("批量离线翻译", titles)
         self.assertNotIn("LiteLLM 同步替代后端", titles)
-        actions = {
-            action.objectName(): action
-            for action in self.window.sync_model_combo.lineEdit().actions()
-        }
-        self.assertIn("combo_popup_action", actions)
-        self.assertFalse(actions["combo_popup_action"].icon().isNull())
+        self.assertFalse(self.window.sync_model_combo.isEditable())
 
         gemini_index = self.window.sync_backend_combo.findData("gemini")
         litellm_index = self.window.sync_backend_combo.findData("litellm")

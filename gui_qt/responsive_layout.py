@@ -59,6 +59,14 @@ def effective_widget_width(widget: QWidget, *, fallback: int = 720) -> int:
     When the bar itself still looks un-laid-out, prefer a named content ancestor
     (writeback page / status tabs) so off-stage reflow targets the real shell width.
     """
+    explicit_hint = widget.property("flowWidthHint")
+    try:
+        explicit_width = int(explicit_hint)
+    except (TypeError, ValueError):
+        explicit_width = 0
+    if explicit_width > 0:
+        return explicit_width
+
     own = int(widget.width() or 0)
     ancestor_w = 0
     parent = widget.parentWidget()
@@ -358,6 +366,9 @@ class FlowButtonBar(QFrame):
         self._trailing_stretch = True
         self._signature: tuple[object, ...] | None = None
         self._row_count = 1
+        self._reflowing = False
+        self._reflow_pending = False
+        self._reflow_pending_force = False
 
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(0, 0, 0, 0)
@@ -381,11 +392,36 @@ class FlowButtonBar(QFrame):
         self.reflow(force=True)
 
     def reflow(self, *, force: bool = False) -> None:
-        signature = self._layout_signature()
-        if not force and signature == self._signature:
+        if self._reflowing:
+            self._reflow_pending = True
+            self._reflow_pending_force = self._reflow_pending_force or force
             return
-        self._signature = signature
-        self._rebuild()
+
+        followup = False
+        requested_force = force
+        while True:
+            signature = self._layout_signature()
+            if not requested_force and signature == self._signature:
+                return
+            self._signature = signature
+            self._reflowing = True
+            try:
+                self._rebuild()
+            finally:
+                self._reflowing = False
+
+            if not self._reflow_pending:
+                return
+            if followup:
+                self._reflow_pending = False
+                self._reflow_pending_force = False
+                self._schedule_reflow()
+                return
+
+            followup = True
+            requested_force = self._reflow_pending_force
+            self._reflow_pending = False
+            self._reflow_pending_force = False
 
     def _schedule_reflow(self) -> None:
         """Reflow after the current event so parent/tab geometry is final."""

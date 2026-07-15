@@ -165,6 +165,11 @@ class GamesRegistryPanel(QWidget):
 
         self._toolbar = FlowButtonBar(spacing=8, row_spacing=8)
         self._toolbar.setObjectName("games_registry_toolbar")
+        self._maintenance_toolbar = FlowButtonBar(spacing=8, row_spacing=8)
+        self._maintenance_toolbar.setObjectName("games_registry_maintenance_toolbar")
+        self._registry_toolbar = FlowButtonBar(spacing=8, row_spacing=8)
+        self._registry_toolbar.setObjectName("games_registry_file_toolbar")
+        self._toolbars = (self._toolbar, self._maintenance_toolbar, self._registry_toolbar)
 
         self._import_md_btn = QPushButton("从 GAMES.md 导入")
         self._import_md_btn.setObjectName("secondary_btn")
@@ -173,19 +178,19 @@ class GamesRegistryPanel(QWidget):
             "JSON 仍是日常真源；导入后建议再点「同步 GAMES.md」。"
         )
         self._import_md_btn.clicked.connect(self._import_from_games_md)
-        self._toolbar.add_widget(self._import_md_btn, min_width=100)
+        self._registry_toolbar.add_widget(self._import_md_btn, min_width=100)
 
         self._discover_btn = QPushButton("扫描新项目")
         self._discover_btn.setObjectName("secondary_btn")
         self._discover_btn.setToolTip("扫描工作区中的 Game_* 目录，并把未登记的项目加入总表")
         self._discover_btn.clicked.connect(self._discover_new_projects)
-        self._toolbar.add_widget(self._discover_btn, min_width=88)
+        self._maintenance_toolbar.add_widget(self._discover_btn, min_width=88)
 
         self._sync_md_btn = QPushButton("同步 GAMES.md")
         self._sync_md_btn.setObjectName("secondary_btn")
         self._sync_md_btn.setToolTip("用 games_registry.json 重新生成 GAMES.md 表格（覆盖表格区）")
         self._sync_md_btn.clicked.connect(self._sync_games_md)
-        self._toolbar.add_widget(self._sync_md_btn, min_width=100)
+        self._registry_toolbar.add_widget(self._sync_md_btn, min_width=100)
 
         self._refresh_current_btn = QPushButton("刷新当前")
         self._refresh_current_btn.setObjectName("secondary_btn")
@@ -220,15 +225,22 @@ class GamesRegistryPanel(QWidget):
         self._stop_refresh_btn.clicked.connect(self._on_stop_refresh)
         self._toolbar.add_widget(self._stop_refresh_btn, min_width=64)
 
-        self._toolbar.finish_setup()
-        layout.addWidget(self._toolbar)
-
-        options_row = QHBoxLayout()
         self._auto_discover_checkbox = QCheckBox("打开分区时自动扫描新项目")
         self._auto_discover_checkbox.toggled.connect(self._on_auto_discover_toggled)
-        options_row.addWidget(self._auto_discover_checkbox)
-        options_row.addStretch(1)
-        layout.addLayout(options_row)
+        self._maintenance_toolbar.add_widget(self._auto_discover_checkbox, min_width=None)
+
+        for toolbar in self._toolbars:
+            toolbar.finish_setup()
+
+        for section_text, section_toolbar in (
+            ("项目刷新", self._toolbar),
+            ("项目发现", self._maintenance_toolbar),
+            ("总表维护", self._registry_toolbar),
+        ):
+            section_label = QLabel(section_text)
+            section_label.setObjectName("settings_inline_section_label")
+            layout.addWidget(section_label)
+            layout.addWidget(section_toolbar)
 
         filter_row = QHBoxLayout()
         self._search_edit = QLineEdit()
@@ -273,13 +285,6 @@ class GamesRegistryPanel(QWidget):
         self._status_label.setObjectName("config_hint_label")
         layout.addWidget(self._status_label)
 
-        self._sync_hint_label = QLabel(
-            "同步策略：日常以 games_registry.json 为准；「同步 GAMES.md」会覆盖 Markdown 表格。"
-            "若手改了 GAMES.md，用「从 GAMES.md 导入」按路径合并回 JSON。"
-        )
-        self._sync_hint_label.setWordWrap(True)
-        self._sync_hint_label.setObjectName("config_hint_label")
-        layout.addWidget(self._sync_hint_label)
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setObjectName("games_registry_progress")
@@ -309,6 +314,7 @@ class GamesRegistryPanel(QWidget):
 
         self._edit_group = QGroupBox("项目详情")
         self._edit_group.setObjectName("games_registry_edit_group")
+        self._edit_group.setVisible(False)
         edit_layout = QFormLayout(self._edit_group)
         edit_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
@@ -397,16 +403,19 @@ class GamesRegistryPanel(QWidget):
         if self._auto_discover_on_show:
             self._maybe_auto_discover_on_open()
 
+    def _reflow_toolbars(self, *, force: bool = False) -> None:
+        for toolbar in getattr(self, "_toolbars", ()):
+            reflow = getattr(toolbar, "reflow", None)
+            if callable(reflow):
+                reflow(force=force)
+
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
         if not self._section_visible:
             self._section_visible = True
             self.activate_section()
         # Parent settings viewport width is final after show; wrap toolbar to it.
-        toolbar = getattr(self, "_toolbar", None)
-        reflow = getattr(toolbar, "reflow", None) if toolbar is not None else None
-        if callable(reflow):
-            reflow(force=True)
+        self._reflow_toolbars(force=True)
         # Re-lock combo pairs after the real style/font is applied (YaHei etc.).
         self._reflow_uniform_combos()
 
@@ -428,10 +437,7 @@ class GamesRegistryPanel(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        toolbar = getattr(self, "_toolbar", None)
-        reflow = getattr(toolbar, "reflow", None) if toolbar is not None else None
-        if callable(reflow):
-            reflow()
+        self._reflow_toolbars()
 
     def hideEvent(self, event) -> None:
         if self._is_refresh_running() and self._refresh_worker is not None:
@@ -641,6 +647,7 @@ class GamesRegistryPanel(QWidget):
     def _on_selection_changed(self) -> None:
         row = self._selected_row()
         can_use_row = row is not None and bool(row.project_id)
+        self._edit_group.setVisible(row is not None)
         self._populate_edit_panel(row)
         if not self._is_refresh_running():
             self._switch_btn.setEnabled(row is not None and bool(row.work_dir))

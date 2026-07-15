@@ -159,48 +159,39 @@ class GuiButtonLayoutMatrixTests(unittest.TestCase):
         self.assertIsInstance(self.window.writeback_primary_bar, FlowButtonBar)
         self.assertIsInstance(self.window.writeback_issues_panel, FlowButtonBar)
 
-    def test_batch_page_recovery_controls_wrap_without_legacy_toolbars(self) -> None:
-        """P5 keeps batch writeback/recovery actions on its real page."""
-        from gui_qt.responsive_layout import widget_layout_width
-
+    def test_batch_page_keeps_writeback_controls_on_status_page(self) -> None:
+        """Task actions stay on the batch page; writeback remains result-owned."""
         self.window.resize(1600, 900)
         self.window.show()
-        self.window._set_work_mode(WorkMode.BATCH_TRANSLATION, refresh_manifest_writeback=False)
-        for name in (
-            "recheck_btn",
-            "check_issues_btn",
-            "retry_btn",
-            "retry_followup_btn",
-            "repair_btn",
-            "apply_failure_btn",
-            "remediation_btn",
-        ):
-            getattr(self.window, name).setVisible(True)
-        self.window._sync_batch_translation_page_controls()
-        for _ in range(8):
-            self._app.processEvents()
-
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
         page = self.window.batch_translation_page
-        self.assertTrue(self.window.writeback_primary_bar.isHidden())
-        self.assertFalse(page.writeback_bar.isHidden())
-        self.assertFalse(page.buttons["apply"].isHidden())
-        self.assertFalse(page.issues_toggle_btn.isHidden())
-        self.assertIs(page.issues_toggle_btn.parentWidget(), page.writeback_row)
-        self.assertIs(page.writeback_bar.parentWidget(), page.writeback_row)
-        page.issues_toggle_btn.click()
-        self.assertFalse(page.issues_bar.isHidden())
 
-        panel = page.issues_bar
-        visible = [button for button in panel._items if not button.isHidden()]
-        self.assertGreaterEqual(len(visible), 2)
-        needed = sum(widget_layout_width(button) for button in visible) + 8 * max(0, len(visible) - 1) + 24
-        panel.resize(max(1200, needed + 40), 80)
-        panel.reflow(force=True)
-        for _ in range(4):
-            self._app.processEvents()
-        self.assertEqual(panel._root.count(), 1)
-        ys = {button.geometry().y() for button in visible}
-        self.assertEqual(len(ys), 1, msg=f"recovery buttons on multiple Y rows: {sorted(ys)}")
+        self.assertNotIn("apply", page.buttons)
+        self.assertFalse(hasattr(page, "writeback_row"))
+        self.assertNotIn(self.window.apply_btn, page.findChildren(QPushButton))
+        self.assertIs(
+            self.window.apply_btn.parentWidget(),
+            self.window.writeback_primary_bar,
+        )
+        self.assertEqual(
+            self.window.writeback_primary_bar.parentWidget().objectName(),
+            "workbench_writeback_page",
+        )
+
+        page.set_controls(
+            {
+                "probe": (True, True, "试跑样本请求"),
+                "split": (True, True, "拆分翻译包"),
+            }
+        )
+        self.assertIs(page.buttons["probe"].parentWidget(), page.main_bar)
+        self.assertIs(page.buttons["split"].parentWidget(), page.main_bar)
+        self.assertFalse(page.buttons["probe"].isHidden())
+        self.assertFalse(page.buttons["split"].isHidden())
+        self.assertFalse(hasattr(page, "more_toggle_btn"))
 
 class FlowButtonBarUnitTests(unittest.TestCase):
     @classmethod
@@ -237,6 +228,26 @@ class FlowButtonBarUnitTests(unittest.TestCase):
         bar.reflow(force=True)
         self._app.processEvents()
         self.assertEqual(bar._root.count(), 1)
+
+    @unittest.skipIf(QApplication is None, "GUI unavailable")
+    def test_flow_bar_runs_one_followup_for_reentrant_reflow(self) -> None:
+        bar = FlowButtonBar(spacing=8)
+        bar.add_widget(QPushButton("refresh"), min_width=100)
+        rebuild = bar._rebuild
+        rebuild_count = 0
+
+        def reentrant_rebuild() -> None:
+            nonlocal rebuild_count
+            rebuild_count += 1
+            if rebuild_count == 1:
+                bar.reflow(force=True)
+            rebuild()
+
+        bar._rebuild = reentrant_rebuild
+        bar.reflow(force=True)
+
+        self.assertEqual(rebuild_count, 2)
+        self.assertFalse(bar._reflow_pending)
 
 
 if __name__ == "__main__":

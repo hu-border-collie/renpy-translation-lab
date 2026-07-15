@@ -103,6 +103,7 @@ class GuiP3PolishTests(unittest.TestCase):
 
         self.window.resize(1100, 700)
         self.window.show()
+        self.window._activate_shell_route("project_prepare")
         for _ in range(8):
             self._app.processEvents()
         self.window._doctor_check_completed = False
@@ -142,6 +143,35 @@ class GuiP3PolishTests(unittest.TestCase):
                     msg=f"{name_a} overlaps {name_b}: {inter}",
                 )
 
+    def test_doctor_empty_state_centers_inside_narrow_status_page(self) -> None:
+        """The 360px copy block must fit the real 960px dedicated status page."""
+        from PySide6.QtCore import QPoint, QRect
+
+        self.window.resize(960, 640)
+        self.window.show()
+        self.window._activate_shell_route("project_prepare")
+        self.window._doctor_check_completed = False
+        self.window._sync_workbench_empty_states()
+        self.window.workbench_status_tabs.setCurrentIndex(0)
+        for _ in range(12):
+            self._app.processEvents()
+
+        empty = self.window.doctor_empty_state
+        widgets = [empty._title_label, empty._desc_label, empty._action_btn]
+        rects = []
+        for widget in widgets:
+            self.assertIsNotNone(widget)
+            assert widget is not None
+            rect = QRect(widget.mapTo(empty, QPoint(0, 0)), widget.size())
+            self.assertTrue(
+                empty.rect().contains(rect),
+                msg=f"{widget.objectName()} {rect} outside {empty.rect()}",
+            )
+            rects.append(rect)
+        centers = [rect.center().x() for rect in rects]
+        self.assertLessEqual(max(centers) - min(centers), 2)
+        self.assertTrue(empty._icon_label.isHidden())
+
     def test_workflow_empty_state_without_project(self) -> None:
         self.window.state.get_game_root = lambda: None  # type: ignore[method-assign]
         self.window._workflow = None
@@ -170,6 +200,7 @@ class GuiP3PolishTests(unittest.TestCase):
             "选择项目后可预建记忆库或原文索引。",
             [],
         )
+        self.window._activate_shell_route("project_prepare")
         if hasattr(self.window, "workbench_status_tabs"):
             self.window.workbench_status_tabs.setCurrentIndex(1)
         for _ in range(6):

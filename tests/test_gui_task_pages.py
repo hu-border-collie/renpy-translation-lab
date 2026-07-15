@@ -89,8 +89,14 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window.sync_mode_warning.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
         self.assertFalse(self.window.workbench_status_card.isHidden())
-        self.assertFalse(self.window.workbench_log_drawer.isHidden())
+        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(1))
+        self.assertFalse(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
+        self.assertFalse(hasattr(self.window, "workbench_log_drawer"))
         self.assertTrue(self.window.context_library_panel.isHidden())
+        self.assertGreaterEqual(
+            page.preferred_height(320),
+            page.preferred_height(900),
+        )
 
     def test_sync_page_uses_start_stop_callbacks(self) -> None:
         self.window._set_work_mode(
@@ -152,7 +158,7 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(page.start_btn.isEnabled())
         self.assertEqual(page.start_btn.text(), "生成翻译模板")
 
-    def test_sync_page_defers_progress_to_shared_status_card(self) -> None:
+    def test_sync_page_embeds_its_progress_state(self) -> None:
         self.window._set_work_mode(
             WorkMode.SYNC_TRANSLATION,
             refresh_manifest_writeback=False,
@@ -165,6 +171,8 @@ class GuiTaskPageTests(unittest.TestCase):
             "处理中…",
             ["files: 2/10"],
         )
+        self.assertFalse(self.window.workbench_status_card.isHidden())
+        self.assertEqual(self.window.workbench_status_tabs.currentIndex(), 1)
         self.assertIn("正在同步翻译", self.window.workflow_status_label.text())
         self.assertIn("files: 2/10", self.window.workflow_facts_label.text())
 
@@ -210,6 +218,8 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window._mode_frame.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
         self.assertFalse(self.window.workbench_status_card.isHidden())
+        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(1))
+        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
         self.assertTrue(self.window.keyword_merge_writeback_btn.isHidden())
         self.assertTrue(page.merge_btn.isEnabled())
         self.assertTrue(self.window.apply_revision_btn.isHidden())
@@ -322,6 +332,8 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window._mode_frame.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
         self.assertFalse(self.window.workbench_status_card.isHidden())
+        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(1))
+        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
         self.assertTrue(self.window.apply_revision_btn.isHidden())
         self.assertTrue(page.writeback_btn.isEnabled())
         self.assertTrue(self.window.apply_btn.isHidden())
@@ -388,7 +400,8 @@ class GuiTaskPageTests(unittest.TestCase):
         page = self.window.batch_translation_page
         self.assertIs(self.window.workbench_stack.currentWidget(), page)
         self.assertTrue(self.window._workbench_actions_column.isHidden())
-        self.assertTrue(self.window.writeback_primary_bar.isHidden())
+        self.assertNotIn("apply", page.buttons)
+        self.assertFalse(hasattr(page, "writeback_row"))
 
         actions: list[str] = []
         page.set_action_callbacks(WorkbenchPageActions(action=actions.append))
@@ -396,29 +409,72 @@ class GuiTaskPageTests(unittest.TestCase):
             {
                 "start": (True, True, "开始翻译"),
                 "resume": (True, True, "继续翻译"),
-                "apply": (True, True, "写回翻译"),
+                "stop": (True, False, "停止"),
+                "split_submit": (True, True, "提交剩余包"),
                 "probe": (True, True, "试跑样本请求"),
                 "split": (True, True, "拆分翻译包"),
-                "issues": (True, True, "查看问题清单"),
             }
         )
+        self.assertFalse(page.buttons["stop"].isHidden())
+        self.assertFalse(page.buttons["stop"].isEnabled())
+        self.assertFalse(page.split_frame.isHidden())
+        self.assertIs(page.buttons["probe"].parentWidget(), page.main_bar)
+        self.assertIs(page.buttons["split"].parentWidget(), page.main_bar)
+        self.assertFalse(hasattr(page, "more_toggle_btn"))
+
         page.buttons["start"].click()
         page.buttons["resume"].click()
-        page.buttons["apply"].click()
+        page.buttons["split_submit"].click()
         page.buttons["probe"].click()
         page.buttons["split"].click()
-        page.issues_toggle_btn.click()
-        page.buttons["issues"].click()
+
         page.set_task_running(True)
+        self.assertTrue(page.buttons["start"].isHidden())
+        self.assertTrue(page.buttons["resume"].isHidden())
+        self.assertFalse(page.buttons["stop"].isHidden())
+        self.assertFalse(page.buttons["stop"].isEnabled())
+        self.assertTrue(page.split_frame.isHidden())
+        page.buttons["stop"].click()
+
+        page.set_controls(
+            {
+                **page._state.controls,
+                "stop": (True, True, page._labels["stop"]),
+            }
+        )
+        self.assertTrue(page.buttons["stop"].isEnabled())
         page.buttons["stop"].click()
 
         self.assertEqual(
             actions,
-            ["start", "resume", "apply", "probe", "split", "issues", "stop"],
+            ["start", "resume", "split_submit", "probe", "split", "stop"],
         )
-        for action in ("start", "resume", "apply", "probe", "split", "issues"):
+        for action in ("start", "resume", "split_submit", "probe", "split"):
             self.assertFalse(page.buttons[action].isEnabled())
         self.assertTrue(page.buttons["stop"].isEnabled())
+
+    def test_batch_writeback_actions_remain_available_on_result_tab(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window._set_writeback_summary(
+            WritebackSummary(
+                status="safe",
+                heading="ready",
+                message="ready",
+                facts=[],
+                findings=[],
+                can_apply=True,
+                manifest_path="C:/batch/manifest.json",
+            )
+        )
+        self.window._focus_workbench_status_tab(2)
+
+        self.assertFalse(self.window.writeback_primary_bar.isHidden())
+        self.assertFalse(self.window.apply_btn.isHidden())
+        self.assertTrue(self.window.apply_btn.isEnabled())
+        self.assertFalse(self.window.writeback_issues_toggle_btn.isHidden())
 
     def test_batch_resume_reenables_immediately_when_task_stops(self) -> None:
         self.window._set_work_mode(
@@ -443,7 +499,7 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window.resume_btn.isEnabled())
         self.assertTrue(self.window.batch_translation_page.buttons["resume"].isEnabled())
 
-    def test_batch_issue_toggle_recalculates_stack_height(self) -> None:
+    def test_batch_tools_share_the_primary_responsive_bar(self) -> None:
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,
             refresh_manifest_writeback=False,
@@ -451,21 +507,23 @@ class GuiTaskPageTests(unittest.TestCase):
         page = self.window.batch_translation_page
         page.set_controls(
             {
-                "issues": (True, True, "查看问题清单"),
-                "retry": (True, True, "生成补译包"),
-                "repair": (True, True, "同步修补"),
+                "start": (True, True, "开始翻译"),
+                "stop": (True, False, "停止"),
+                "probe": (True, True, "试跑样本请求"),
+                "split": (True, True, "拆分翻译包"),
             }
         )
-        collapsed_height = page.preferred_height(self.window.workbench_stack.width())
-        page.issues_toggle_btn.click()
-        expanded_height = page.preferred_height(self.window.workbench_stack.width())
 
-        self.assertGreater(expanded_height, collapsed_height)
+        for action in ("start", "stop", "probe", "split"):
+            self.assertIs(page.buttons[action].parentWidget(), page.main_bar)
+            self.assertFalse(page.buttons[action].isHidden())
+        self.assertFalse(page.buttons["stop"].isEnabled())
+        self.assertFalse(hasattr(page, "more_toggle_btn"))
         self.assertGreaterEqual(
-            self.window.workbench_stack.maximumHeight(),
-            expanded_height,
+            page.preferred_height(320),
+            page.preferred_height(900),
         )
-    def test_context_page_shows_status_cards(self) -> None:
+    def test_context_page_shows_compact_status_rows(self) -> None:
         self.window._set_work_mode(
             WorkMode.BOOTSTRAP_RAG,
             refresh_manifest_writeback=False,
@@ -479,13 +537,25 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window._mode_frame.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
         self.assertFalse(self.window.workbench_status_card.isHidden())
+        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(1))
+        self.assertFalse(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
         self.assertFalse(hasattr(self.window, "work_submode_combo"))
         self.assertTrue(self.window.translate_btn.isHidden())
-        # Doctor / bootstrap stay on the global project bar for every task page.
-        self.assertFalse(self.window.doctor_btn.isHidden())
-        self.assertFalse(self.window.bootstrap_work_btn.isHidden())
-        self.assertIn("记忆库", self.window.context_rag_status_label.text())
-        self.assertIn("原文索引", self.window.context_source_index_status_label.text())
+        # Project-level prep actions stay on the hidden project-only bar.
+        self.assertTrue(self.window.global_project_bar.isHidden())
+        page = self.window.context_library_page
+        self.assertEqual(page.rag_status_row.title_label.text(), "记忆库")
+        self.assertEqual(page.source_index_status_row.title_label.text(), "原文索引")
+        self.assertIn("项目", self.window.context_rag_status_label.text())
+        self.assertIn("项目", self.window.context_source_index_status_label.text())
+        self.assertIs(
+            page.bootstrap_rag_btn.parentWidget(),
+            page.rag_status_row,
+        )
+        self.assertIs(
+            page.bootstrap_source_index_btn.parentWidget(),
+            page.source_index_status_row,
+        )
 
     def test_context_page_uses_callbacks_and_owns_empty_state(self) -> None:
         page = self.window.context_library_page

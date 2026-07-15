@@ -1,11 +1,8 @@
 """Persistent context-library page used by the workbench stack (#176 P1)."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
-    QHBoxLayout,
-    QLabel,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -16,6 +13,7 @@ from ..empty_state import EmptyStateWidget
 from ..work_modes import WorkMode
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
+from .task_controls import TaskPageLayout, TaskStatusActionRow
 
 
 class ContextLibraryPage(QFrame):
@@ -45,7 +43,7 @@ class ContextLibraryPage(QFrame):
         outer.addWidget(self.page_stack)
 
         self.empty_state = EmptyStateWidget(
-            "📚",
+            "",
             "尚未启用上下文库",
             "请先在设置 · 上下文启用记忆库或原文索引并保存，然后回到这里预建。",
             action_text="打开设置 · 上下文",
@@ -56,69 +54,56 @@ class ContextLibraryPage(QFrame):
 
         self.status_page = QWidget()
         self.status_page.setObjectName("context_library_status_page")
-        status_layout = QVBoxLayout(self.status_page)
-        status_layout.setContentsMargins(0, 0, 0, 0)
-        status_layout.setSpacing(8)
-        status_layout.addWidget(self._build_rag_row())
-        status_layout.addWidget(self._build_source_index_row())
+        self.status_layout = TaskPageLayout(self.status_page)
 
+        self.bootstrap_rag_btn = QPushButton("预建记忆库")
+        self.bootstrap_rag_btn.setObjectName("context_bootstrap_rag_btn")
+        self.bootstrap_rag_btn.clicked.connect(lambda: self._trigger_prebuild("rag"))
+        self.rag_status_row = TaskStatusActionRow(
+            "记忆库",
+            self.bootstrap_rag_btn,
+            parent=self.status_page,
+        )
+        self.rag_status_label = self.rag_status_row.status_label
+        self.status_layout.root.addWidget(self.rag_status_row)
+
+        self.bootstrap_source_index_btn = QPushButton("预建原文索引")
+        self.bootstrap_source_index_btn.setObjectName("context_bootstrap_source_index_btn")
+        self.bootstrap_source_index_btn.clicked.connect(
+            lambda: self._trigger_prebuild("source_index")
+        )
+        self.source_index_status_row = TaskStatusActionRow(
+            "原文索引",
+            self.bootstrap_source_index_btn,
+            parent=self.status_page,
+        )
+        self.source_index_status_label = self.source_index_status_row.status_label
+        self.status_layout.root.addWidget(self.source_index_status_row)
+
+        self.context_actions = self.status_layout.add_section(
+            "上下文任务",
+            role="context_library",
+            secondary=True,
+        )
         self.open_settings_btn = QPushButton("打开设置 · 上下文")
         self.open_settings_btn.setObjectName("secondary_btn")
         self.open_settings_btn.setToolTip(
             "开关须在设置中保存后才能预建；打开设置的「上下文」分区。"
         )
         self.open_settings_btn.clicked.connect(self._trigger_open_settings)
-        # Secondary style + hidden when idle: page already has no legacy kill row,
-        # so stop is only revealed while a prebuild is running (less visual noise).
-        # Danger stop, same family as kill_btn / sync stop; always visible, enabled while running.
+        self.context_actions.add_action(self.open_settings_btn, min_width=140)
+
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setObjectName("context_library_stop_btn")
         self.stop_btn.setToolTip("停止当前预建任务")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._trigger_stop)
-        action_row = QHBoxLayout()
-        action_row.setSpacing(8)
-        action_row.addWidget(self.open_settings_btn)
-        action_row.addStretch()
-        action_row.addWidget(self.stop_btn)
-        status_layout.addLayout(action_row)
-        status_layout.addStretch()
+        self.context_actions.add_action(self.stop_btn, min_width=80)
+        self.context_actions.finish_setup()
+
+        self.status_layout.root.addStretch(1)
         self.page_stack.addWidget(self.status_page)
         self.page_stack.setCurrentWidget(self.empty_state)
-
-    def _build_rag_row(self) -> QFrame:
-        row_frame = QFrame()
-        row_frame.setObjectName("context_library_status_row")
-        row = QHBoxLayout(row_frame)
-        row.setContentsMargins(10, 8, 10, 8)
-        row.setSpacing(8)
-        self.rag_status_label = QLabel("记忆库：—")
-        self.rag_status_label.setObjectName("summary_body_label")
-        self.rag_status_label.setWordWrap(True)
-        row.addWidget(self.rag_status_label, 1)
-        self.bootstrap_rag_btn = QPushButton("预建记忆库")
-        self.bootstrap_rag_btn.setObjectName("context_bootstrap_rag_btn")
-        self.bootstrap_rag_btn.clicked.connect(lambda: self._trigger_prebuild("rag"))
-        row.addWidget(self.bootstrap_rag_btn)
-        return row_frame
-
-    def _build_source_index_row(self) -> QFrame:
-        row_frame = QFrame()
-        row_frame.setObjectName("context_library_status_row")
-        row = QHBoxLayout(row_frame)
-        row.setContentsMargins(10, 8, 10, 8)
-        row.setSpacing(8)
-        self.source_index_status_label = QLabel("原文索引：—")
-        self.source_index_status_label.setObjectName("summary_body_label")
-        self.source_index_status_label.setWordWrap(True)
-        row.addWidget(self.source_index_status_label, 1)
-        self.bootstrap_source_index_btn = QPushButton("预建原文索引")
-        self.bootstrap_source_index_btn.setObjectName("context_bootstrap_source_index_btn")
-        self.bootstrap_source_index_btn.clicked.connect(
-            lambda: self._trigger_prebuild("source_index")
-        )
-        row.addWidget(self.bootstrap_source_index_btn)
-        return row_frame
 
     def set_action_callbacks(self, actions: WorkbenchPageActions) -> None:
         self._actions = actions
@@ -141,12 +126,12 @@ class ContextLibraryPage(QFrame):
         self._rag_enabled = rag_enabled
         self._source_index_enabled = source_index_enabled
         root_hint = game_root or "未选择项目"
-        self.rag_status_label.setText(
-            f"记忆库：{'已启用' if rag_enabled else '未启用'} · 项目 {root_hint}"
+        self.rag_status_row.set_status(
+            f"{'已启用' if rag_enabled else '未启用'} · 项目 {root_hint}"
             + ("" if rag_enabled else " · 请先在设置 · 上下文开启并保存")
         )
-        self.source_index_status_label.setText(
-            f"原文索引：{'已启用' if source_index_enabled else '未启用'} · 项目 {root_hint}"
+        self.source_index_status_row.set_status(
+            f"{'已启用' if source_index_enabled else '未启用'} · 项目 {root_hint}"
             + ("" if source_index_enabled else " · 请先在设置 · 上下文开启并保存")
         )
         self.page_stack.setCurrentWidget(
@@ -172,6 +157,7 @@ class ContextLibraryPage(QFrame):
         )
         self.open_settings_btn.setEnabled(not self._running)
         self.stop_btn.setEnabled(self._running)
+        self.context_actions.reflow()
 
     def _trigger_prebuild(self, kind: str) -> None:
         if self._running or self._actions.prebuild is None:

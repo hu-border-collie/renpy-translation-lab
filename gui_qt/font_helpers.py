@@ -13,7 +13,6 @@ MONO_FONT_SELECTORS = (
     "QLineEdit#diagnostics_path_edit",
     "QTextEdit#diagnostics_manifest_preview",
     "QTextEdit#log_view",
-    "QTextEdit#workbench_log_view",
 )
 
 UI_FONT_FILENAME = "HarmonyOS_Sans_SC_Regular.ttf"

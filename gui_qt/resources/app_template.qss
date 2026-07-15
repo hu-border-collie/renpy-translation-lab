@@ -16,6 +16,169 @@ QWidget {
     color: ${fg_primary};
 }
 
+QWidget#app_shell,
+QWidget#app_main {
+    background-color: ${bg_window};
+}
+
+QWidget#workbench_tab,
+QScrollArea#workbench_content_scroll,
+QWidget#workbench_content_viewport,
+QWidget#workbench_content,
+QFrame#workbench_primary,
+QStackedWidget#workbench_stack,
+QWidget#batch_translation_page,
+QWidget#sync_translation_page,
+QWidget#keywords_page,
+QWidget#revision_page,
+QWidget#context_library_panel {
+    background-color: ${bg_surface};
+    border: none;
+}
+
+QFrame#app_sidebar {
+    background-color: ${bg_surface_alt};
+    border: none;
+    border-right: 1px solid ${border_light};
+}
+
+QLabel#sidebar_brand_title {
+    color: ${fg_primary};
+    font-size: 13px;
+    font-weight: 800;
+}
+
+QLabel#sidebar_brand_subtitle {
+    color: ${fg_muted};
+    font-size: 9px;
+    font-weight: 700;
+}
+
+QListWidget#shell_nav {
+    background-color: transparent;
+    border: none;
+    outline: none;
+    padding: 2px 0;
+}
+
+QListWidget#shell_nav::item {
+    border: none;
+    border-radius: 6px;
+    color: ${fg_body};
+    margin: 1px 0;
+    padding: 8px 10px;
+}
+
+QListWidget#shell_nav::item:selected {
+    background-color: ${badge_info_bg};
+    color: ${accent_primary};
+    font-weight: 700;
+}
+
+QListWidget#shell_nav::item:hover:!selected {
+    background-color: ${bg_secondary_hover};
+    color: ${fg_primary};
+}
+
+QListWidget#shell_nav::item:focus {
+    background-color: ${bg_secondary_hover};
+}
+
+QListWidget#shell_nav::item:disabled {
+    background-color: transparent;
+    color: ${fg_disabled};
+}
+
+QLabel#sidebar_section_label {
+    background-color: transparent;
+    color: ${fg_muted};
+    font-size: 10px;
+    font-weight: 800;
+    padding: 10px 8px 4px 8px;
+}
+
+
+QFrame#page_header {
+    background-color: ${bg_surface};
+    border: none;
+    border-bottom: 1px solid ${border_light};
+}
+
+QLabel#shell_breadcrumb_label {
+    color: ${accent_primary};
+    font-size: 10px;
+    font-weight: 700;
+}
+
+QLabel#shell_page_title {
+    color: ${fg_primary};
+    font-size: 19px;
+    font-weight: 800;
+}
+
+QLabel#shell_page_subtitle {
+    color: ${fg_muted};
+    font-size: 12px;
+    font-weight: 400;
+}
+
+QLabel#header_task_status_label,
+QLabel#safety_status_badge {
+    border: 1px solid ${border_light};
+    border-radius: 10px;
+    color: ${fg_muted};
+    font-size: 11px;
+    font-weight: 700;
+    padding: 4px 10px;
+}
+
+QLabel#header_task_status_label[status="running"],
+QLabel#safety_status_badge[status="running"] {
+    background-color: ${badge_info_bg};
+    border-color: ${badge_info_border};
+    color: ${badge_info_fg};
+}
+
+QLabel#safety_status_badge[status="safe"] {
+    background-color: ${badge_success_bg};
+    border-color: ${badge_success_border};
+    color: ${badge_success_fg};
+}
+
+QLabel#safety_status_badge[status="warning"] {
+    background-color: ${badge_warning_bg};
+    border-color: ${badge_warning_border};
+    color: ${badge_warning_fg};
+}
+
+QLabel#safety_status_badge[status="danger"] {
+    background-color: ${badge_danger_bg};
+    border-color: ${badge_danger_border};
+    color: ${badge_danger_fg};
+}
+
+QPushButton#header_log_btn {
+    background-color: transparent;
+    border: 1px solid ${border_light};
+    color: ${fg_body};
+    min-width: 86px;
+    padding: 6px 10px;
+}
+
+QPushButton#header_log_btn:hover,
+QPushButton#header_log_btn:checked {
+    background-color: ${badge_info_bg};
+    border-color: ${badge_info_border};
+    color: ${accent_primary};
+}
+
+QStatusBar#app_status_bar {
+    background-color: ${bg_surface};
+    border-top: 1px solid ${border_light};
+    color: ${fg_muted};
+    min-height: 28px;
+}
+
 /* Header style */
 #header_label {
     font-size: 20px;
@@ -135,10 +298,10 @@ QListWidget#api_key_list::item:selected {
 
 /* Tab widget */
 QTabWidget#main_tabs::pane {
-    border: 1px solid ${border_default};
-    border-radius: 10px;
+    border: none;
+    border-radius: 0;
     background-color: ${bg_surface};
-    top: -1px;
+    top: 0;
 }
 
 QWidget#config_tab,
@@ -157,6 +320,9 @@ QWidget#settings_project_content,
 QScrollArea#settings_models_scroll,
 QWidget#settings_models_viewport,
 QWidget#settings_models_content,
+QScrollArea#settings_litellm_scroll,
+QWidget#settings_litellm_viewport,
+QWidget#settings_litellm_content,
 QScrollArea#settings_context_scroll,
 QWidget#settings_context_viewport,
 QWidget#settings_context_content,
@@ -169,38 +335,40 @@ QWidget#settings_advanced_content,
 QScrollArea#settings_workspace_scroll,
 QWidget#settings_workspace_viewport,
 QWidget#settings_workspace_content,
+QWidget#settings_page_body,
 QWidget#games_registry_panel {
     background-color: ${bg_surface};
     border: none;
 }
 
-QListWidget#settings_nav,
-QListWidget#workbench_nav {
-    background-color: ${bg_surface_alt};
+QListWidget#settings_nav {
+    background-color: ${bg_surface};
     border: none;
-    border-right: 1px solid ${border_default};
-    padding: 10px 8px;
+    border-bottom: 1px solid ${border_light};
+    padding: 8px 16px;
     outline: none;
 }
 
-QListWidget#settings_nav::item,
-QListWidget#workbench_nav::item {
+QListWidget#settings_nav::item {
     color: ${fg_body};
-    padding: 9px 10px;
-    margin: 2px 0;
+    padding: 6px 12px;
+    margin: 0 2px;
     border-radius: 6px;
 }
 
-QListWidget#settings_nav::item:selected,
-QListWidget#workbench_nav::item:selected {
-    background-color: ${bg_secondary};
-    color: ${fg_secondary_btn};
+QListWidget#settings_nav::item:selected {
+    background-color: ${badge_info_bg};
+    color: ${accent_primary};
     font-weight: 700;
 }
 
-QListWidget#settings_nav::item:hover:!selected,
-QListWidget#workbench_nav::item:hover:!selected {
+QListWidget#settings_nav::item:hover:!selected {
     background-color: ${bg_secondary_hover};
+}
+
+QListWidget#workbench_nav {
+    background-color: ${bg_surface_alt};
+    border: none;
 }
 
 QLabel#workbench_page_title {
@@ -219,7 +387,7 @@ QLabel#sync_mode_warning {
 }
 
 /* Page-local banner: single compact strip. */
-QLabel#sync_translation_risk_warning {
+QLabel#task_page_notice[tone="warning"] {
     color: ${badge_warning_fg};
     background-color: ${badge_warning_bg};
     border: 1px solid ${badge_warning_border};
@@ -242,14 +410,26 @@ QFrame#context_library_panel {
     border: none;
 }
 
-QFrame#context_library_status_row {
-    background-color: ${bg_card};
-    border: 1px solid ${border_card};
-    border-top: 1px solid ${border_card_top};
-    border-radius: 10px;
+QFrame#task_status_action_row {
+    background-color: transparent;
+    border: none;
+    border-bottom: 1px solid ${border_light};
+    border-radius: 0;
 }
 
-QFrame#batch_advanced_frame {
+QLabel#task_status_title {
+    color: ${fg_primary};
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#task_status_detail {
+    color: ${fg_body};
+    font-size: 12px;
+}
+
+QFrame#batch_advanced_frame,
+QFrame#task_control_section[sectionLevel="secondary"] {
     background-color: ${bg_surface_alt};
     border: 1px solid ${border_light};
     border-radius: 10px;
@@ -258,6 +438,13 @@ QFrame#batch_advanced_frame {
 QLabel#settings_description_label {
     color: ${fg_muted};
     font-size: 12px;
+}
+
+QLabel#settings_inline_section_label {
+    color: ${fg_secondary};
+    font-size: 11px;
+    font-weight: 700;
+    padding-top: 2px;
 }
 
 QLabel#settings_error_label {
@@ -269,6 +456,10 @@ QLabel#settings_error_label {
 QWidget#diagnostics_tab,
 QScrollArea#diagnostics_context_scroll,
 QScrollArea#diagnostics_commands_scroll,
+QWidget#diagnostics_context_viewport,
+QWidget#diagnostics_context_content,
+QWidget#diagnostics_commands_viewport,
+QWidget#diagnostics_commands_content,
 QWidget#diagnostics_log_panel {
     background-color: ${bg_surface};
     border: none;
@@ -286,8 +477,9 @@ QSplitter#diagnostics_splitter::handle:hover {
 }
 
 QTabWidget#diagnostics_inner_tabs::pane {
-    border: 1px solid ${border_default};
-    border-radius: 10px;
+    border: none;
+    border-top: 1px solid ${border_light};
+    border-radius: 0;
     background-color: ${bg_surface};
     top: -1px;
 }
@@ -454,13 +646,11 @@ QTabWidget#main_tabs QTabBar::tab:hover:!selected {
     border-bottom: 2px solid ${tab_border_hover};
 }
 
-/* Workbench status: rounded card is the outer QFrame (not QTabWidget — radius
-   on QTabWidget/::pane is ignored or painted square on Windows). */
+/* Dedicated status surface: flat page content, never a persistent inspector. */
 QFrame#workbench_status_card {
-    background-color: ${bg_card};
-    border: 1px solid ${border_card};
-    border-top: 1px solid ${border_card_top};
-    border-radius: 10px;
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
 }
 
 QTabWidget#workbench_status_tabs {
@@ -505,8 +695,8 @@ QTabWidget#workbench_status_tabs QTabBar::tab {
     background-color: transparent;
     border: none;
     border-bottom: 2px solid transparent;
-    padding: 6px 18px;
-    margin: 4px 6px 2px 6px;
+    padding: 6px 8px;
+    margin: 4px 2px 2px 2px;
     color: ${tab_fg};
     font-weight: 600;
 }
@@ -523,11 +713,19 @@ QTabWidget#workbench_status_tabs QTabBar::tab:hover:!selected {
     border-bottom: 2px solid ${tab_border_hover};
 }
 
-/* Project Path, Mode selector, and Action Frame styling (Glassmorphism Cards) */
-#global_project_bar,
+/* Project switcher belongs to the dedicated 项目与环境 page. */
+#global_project_bar {
+    background-color: ${bg_elevated};
+    border: 1px solid ${border_light};
+    border-radius: 8px;
+}
+
+
+/* Legacy workbench containers retain a restrained section treatment. */
 #project_frame,
 #mode_frame,
-#action_frame {
+#action_frame,
+QFrame#task_control_section {
     background-color: ${bg_card};
     border: 1px solid ${border_card};
     border-top: 1px solid ${border_card_top}; /* Subtle highlight rim */
@@ -546,7 +744,7 @@ QLabel#global_project_bar_label {
     border: 1px solid ${border_default};
     border-radius: 8px;
     color: ${fg_mono};
-    padding: 8px 12px;
+    padding: 6px 8px;
     font-family: "Consolas", "Courier New", monospace;
     font-size: 12px;
 }
@@ -561,11 +759,29 @@ QLabel#writeback_issues_badge {
     padding: 2px 10px;
 }
 
-QLabel#action_group_label {
+QLabel#action_group_label,
+QLabel#task_control_section_title {
     color: ${fg_muted};
     font-size: 12px;
     font-weight: 600;
     padding-right: 4px;
+}
+
+QFrame#task_mode_row {
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#task_mode_label {
+    color: ${fg_body};
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QLabel#task_result_hint {
+    color: ${fg_hint};
+    font-size: 12px;
+    padding: 0 2px;
 }
 
 QFrame#action_separator {
@@ -602,6 +818,54 @@ QLabel {
     font-weight: 500;
 }
 
+/* Shared form primitives keep native light backgrounds out of dark mode. */
+QLineEdit,
+QTextEdit,
+QPlainTextEdit,
+QSpinBox,
+QDoubleSpinBox {
+    background-color: ${bg_input};
+    border: 1px solid ${border_default};
+    border-radius: 8px;
+    color: ${fg_primary};
+    padding: 6px 10px;
+    selection-background-color: ${badge_info_bg};
+    selection-color: ${fg_primary};
+}
+
+QLineEdit:hover,
+QTextEdit:hover,
+QPlainTextEdit:hover,
+QSpinBox:hover,
+QDoubleSpinBox:hover {
+    border-color: ${border_hover};
+}
+
+QLineEdit:focus,
+QTextEdit:focus,
+QPlainTextEdit:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus {
+    background-color: ${bg_input_focus};
+    border: 2px solid ${accent_primary};
+}
+
+QLineEdit:disabled,
+QTextEdit:disabled,
+QPlainTextEdit:disabled,
+QSpinBox:disabled,
+QDoubleSpinBox:disabled {
+    background-color: ${bg_disabled};
+    border-color: ${border_light};
+    color: ${fg_disabled};
+}
+
+QLineEdit:read-only,
+QTextEdit:read-only,
+QPlainTextEdit:read-only {
+    background-color: ${bg_surface_alt};
+}
+
 /* Input Elements (ComboBox) styling */
 QComboBox {
     background-color: ${bg_input};
@@ -612,12 +876,22 @@ QComboBox {
     min-height: 22px;
 }
 
+/* Editable combos keep the same single outer border as fixed-choice combos. */
+QComboBox QLineEdit,
+QComboBox QLineEdit:hover,
+QComboBox QLineEdit:focus {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+}
+
 QComboBox:hover {
     border-color: ${accent_primary_hover};
 }
 
 QComboBox:focus {
-    border-color: ${accent_primary};
+    border: 2px solid ${accent_primary};
     background-color: ${bg_input_focus};
 }
 
@@ -673,6 +947,11 @@ QPushButton:disabled {
     background-color: ${bg_button_disabled};
     border-color: ${border_button_disabled};
     color: ${fg_button_disabled};
+}
+
+QPushButton:focus,
+QToolButton:focus {
+    border: 2px solid ${accent_primary};
 }
 
 /* Primary Action Buttons - Aurora Gradient (start / prebuild / diagnostics run) */
@@ -755,6 +1034,28 @@ QPushButton#secondary_btn:disabled {
     color: ${fg_secondary_disabled};
 }
 
+/* Explicit object-id focus rings override component border declarations. */
+QPushButton#save_config_btn:focus,
+QPushButton#api_btn:focus,
+QPushButton#translate_btn:focus,
+QPushButton#primary_btn:focus,
+QPushButton#sync_translation_start_btn:focus,
+QPushButton#keywords_start_btn:focus,
+QPushButton#revision_start_btn:focus,
+QPushButton#context_bootstrap_rag_btn:focus,
+QPushButton#context_bootstrap_source_index_btn:focus {
+    border: 2px solid ${fg_on_accent};
+}
+
+QPushButton#secondary_btn:focus,
+QPushButton#split_select_btn:focus,
+QPushButton#kill_btn:focus,
+QPushButton#sync_translation_stop_btn:focus,
+QPushButton#context_library_stop_btn:focus,
+QPushButton#apply_btn:focus,
+QPushButton#apply_revision_btn:focus {
+    border: 2px solid ${accent_primary};
+}
 /* Compact table action buttons (seamless with transparent backgrounds) */
 QPushButton#split_select_btn {
     background-color: transparent;
@@ -781,7 +1082,7 @@ QPushButton#split_select_btn:pressed {
 
 QPushButton#split_select_btn:focus {
     outline: none;
-    border: 1px solid transparent;
+    border: 2px solid ${accent_primary};
 }
 
 QPushButton#split_select_btn:disabled {
@@ -820,9 +1121,8 @@ QPushButton#context_library_stop_btn:disabled {
     color: ${fg_danger_disabled};
 }
 
-/* Log View terminal styling (diagnostics + workbench drawer share look) */
-QTextEdit#log_view,
-QTextEdit#workbench_log_view {
+/* Log View terminal styling (diagnostics only). */
+QTextEdit#log_view {
     background-color: ${bg_log};
     border: 1px solid ${border_log};
     border-radius: 10px;
@@ -830,18 +1130,6 @@ QTextEdit#workbench_log_view {
     font-family: "Consolas", "Courier New", monospace;
     font-size: 12px;
     padding: 14px;
-}
-
-QFrame#workbench_log_drawer {
-    background-color: ${bg_surface};
-    border: 1px solid ${border_default};
-    border-radius: 10px;
-}
-
-QLabel#workbench_log_drawer_title {
-    color: ${fg_section};
-    font-size: 13px;
-    font-weight: 600;
 }
 
 QLabel#doctor_facts_label {
@@ -1019,8 +1307,7 @@ QScrollBar:horizontal {
     margin: 0px;
 }
 
-QTextEdit#log_view QScrollBar:vertical,
-QTextEdit#workbench_log_view QScrollBar:vertical {
+QTextEdit#log_view QScrollBar:vertical {
     background-color: transparent;
     width: 8px;
 }

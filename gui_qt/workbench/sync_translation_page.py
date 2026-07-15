@@ -1,68 +1,53 @@
 """Persistent synchronous-translation page for the workbench stack (#176 P2)."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import (
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QSizePolicy,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QFrame, QPushButton, QSizePolicy, QWidget
 
 from ..work_modes import WorkMode
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
+from .task_controls import TaskPageLayout
 
 
 class SyncTranslationPage(QFrame):
-    """Compact risk notice + start/stop; shared status card holds doctor/progress."""
+    """Compact risk notice and task-local start/stop controls."""
 
     supported_modes = (WorkMode.SYNC_TRANSLATION,)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("sync_translation_page")
-        # Height-for-content only — never eat space meant for the status card.
+        # Height-for-content only — keep the task page compact.
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._actions = WorkbenchPageActions()
         self._running = False
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(6)
+        self.task_layout = TaskPageLayout(self)
 
-        self.risk_warning = QLabel(
+        self.risk_warning = self.task_layout.add_notice(
             "警告：可能直接修改项目文件，请先备份或在副本上试跑。"
         )
-        self.risk_warning.setObjectName("sync_translation_risk_warning")
-        self.risk_warning.setWordWrap(True)
-        self.risk_warning.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Fixed,
-        )
-        outer.addWidget(self.risk_warning)
 
-        # Compact glass action card (same look as legacy action_frame, fixed height).
-        actions = QFrame()
-        actions.setObjectName("action_frame")
-        actions.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        action_layout = QHBoxLayout(actions)
-        action_layout.setContentsMargins(12, 8, 12, 8)
-        action_layout.setSpacing(8)
+        self.actions = self.task_layout.add_section(
+            "翻译任务",
+            role="sync_translation",
+        )
         self.start_btn = QPushButton("开始同步翻译")
         self.start_btn.setObjectName("sync_translation_start_btn")
         self.start_btn.clicked.connect(self._trigger_start)
         self.start_btn.setEnabled(False)
-        action_layout.addWidget(self.start_btn)
+        self.actions.add_action(self.start_btn, min_width=120)
+
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setObjectName("sync_translation_stop_btn")
         self.stop_btn.clicked.connect(self._trigger_stop)
         self.stop_btn.setEnabled(False)
-        action_layout.addWidget(self.stop_btn)
-        action_layout.addStretch()
-        outer.addWidget(actions)
+        self.actions.add_action(self.stop_btn, min_width=80)
+        self.actions.finish_setup()
+
+    def preferred_height(self, width: int) -> int:
+        """Return the word-wrap-aware content height for the current width."""
+        return self.task_layout.preferred_height(width)
 
     def sizeHint(self):  # noqa: N802
         """Keep stack sizing honest — QStackedWidget takes max of all pages."""
@@ -71,12 +56,8 @@ class SyncTranslationPage(QFrame):
     def minimumSizeHint(self):  # noqa: N802
         from PySide6.QtCore import QSize
 
-        # warning + spacing + compact action card (padding + button)
-        w = super().minimumSizeHint().width()
-        btn_h = max(self.start_btn.sizeHint().height(), 32)
-        action_h = btn_h + 16  # 8px vertical padding × 2
-        h = self.risk_warning.sizeHint().height() + 6 + action_h
-        return QSize(max(w, 200), h)
+        hint = super().minimumSizeHint()
+        return QSize(max(hint.width(), 200), hint.height())
 
     def set_action_callbacks(self, actions: WorkbenchPageActions) -> None:
         self._actions = actions

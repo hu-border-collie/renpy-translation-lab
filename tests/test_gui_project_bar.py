@@ -42,7 +42,22 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         self.assertTrue(hasattr(self.window, "global_project_path_edit"))
         self.assertTrue(hasattr(self.window, "global_switch_project_btn"))
         self.assertTrue(hasattr(self.window, "global_browse_project_btn"))
+        for button in (
+            self.window.global_switch_project_btn,
+            self.window.global_browse_project_btn,
+            self.window.doctor_btn,
+            self.window.bootstrap_work_btn,
+        ):
+            self.assertGreaterEqual(button.minimumWidth(), 108)
+
         # Project-level prep lives on the global bar with directory switch.
+        self.assertEqual(self.window.global_switch_project_btn.text(), "切换项目")
+        self.assertEqual(
+            self.window.global_browse_project_btn.text(), "指定本地目录…"
+        )
+        self.assertEqual(self.window.doctor_btn.text(), "环境检查")
+        self.assertEqual(self.window.bootstrap_work_btn.text(), "准备工作目录")
+
         self.assertFalse(self.window.doctor_btn.isHidden())
         self.assertFalse(self.window.bootstrap_work_btn.isHidden())
         self.assertIs(
@@ -57,6 +72,15 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         self.assertIs(self.window.select_btn, self.window.global_browse_project_btn)
         self.assertIs(self.window.project_path_edit, self.window.global_project_path_edit)
 
+    def test_registry_settings_are_labeled_as_project_list(self) -> None:
+        row = self.window._settings_nav_rows["workspace"]
+        self.assertEqual(self.window.settings_nav.item(row).text(), "项目列表")
+        self.assertIn("项目列表", self.window.global_switch_project_btn.toolTip())
+        self.assertEqual(
+            self.window.settings_go_workspace_btn.text(),
+            "在项目列表切换…",
+        )
+
     def test_task_running_disables_global_prep_buttons(self) -> None:
         self.window._set_task_running(True)
         self.assertFalse(self.window.doctor_btn.isEnabled())
@@ -67,7 +91,7 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
 
     def test_global_prep_actions_switch_to_workbench_tab(self) -> None:
         """Doctor / bootstrap from Settings/Diagnostics must reveal Workbench UI."""
-        from gui_qt.app import _BATCH_STAGE_EXECUTE, _BATCH_STAGE_PREPARE
+        from gui_qt.app import _BATCH_STAGE_PREPARE
 
         workbench = self.window._workbench_tab
         config = self.window._config_tab
@@ -120,9 +144,21 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         self.assertIs(self.window.tab_widget.currentWidget(), workbench)
         self.assertEqual(
             self.window.workbench_status_tabs.currentIndex(),
-            _BATCH_STAGE_EXECUTE,
+            _BATCH_STAGE_PREPARE,
         )
         self.assertEqual(runner_calls, [["bootstrap-work"]])
+
+    def test_project_bar_only_appears_on_project_environment_route(self) -> None:
+        self.assertTrue(self.window.global_project_bar.isHidden())
+        self.assertIs(
+            self.window.global_project_bar.parentWidget(),
+            self.window.workbench_primary,
+        )
+
+        self.window._activate_shell_route("project_prepare")
+
+        self.assertFalse(self.window.global_project_bar.isHidden())
+        self.assertTrue(self.window.workbench_stack.isHidden())
 
     def test_refresh_project_label_updates_global_bar(self) -> None:
         self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
