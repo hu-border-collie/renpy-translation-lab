@@ -158,7 +158,8 @@ class BatchTranslationPage(QWidget):
 
         stop = self.buttons["stop"]
         stop.setVisible(True)
-        stop.setEnabled(running)
+        stop_enabled = controls.get("stop", (True, False, self._labels["stop"]))[1]
+        stop.setEnabled(running and bool(stop_enabled))
 
         split_visible = not self.buttons["split_submit"].isHidden() and not running
         self.split_frame.setVisible(split_visible)
@@ -180,7 +181,11 @@ class BatchTranslationPage(QWidget):
 
     def _trigger(self, action: str) -> None:
         if action == "stop":
-            if self._state.running and self._actions.action is not None:
+            if (
+                self._state.running
+                and self.buttons[action].isEnabled()
+                and self._actions.action is not None
+            ):
                 self._actions.action(action)
             return
         if (

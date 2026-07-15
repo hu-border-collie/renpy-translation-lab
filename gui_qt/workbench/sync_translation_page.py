@@ -45,6 +45,10 @@ class SyncTranslationPage(QFrame):
         self.actions.add_action(self.stop_btn, min_width=80)
         self.actions.finish_setup()
 
+    def preferred_height(self, width: int) -> int:
+        """Return the word-wrap-aware content height for the current width."""
+        return self.task_layout.preferred_height(width)
+
     def sizeHint(self):  # noqa: N802
         """Keep stack sizing honest — QStackedWidget takes max of all pages."""
         return self.minimumSizeHint()

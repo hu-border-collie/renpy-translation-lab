@@ -161,6 +161,7 @@ class GamesRegistryPanel(QWidget):
         self._switch_btn.clicked.connect(self._switch_to_selected)
         self._switch_btn.setEnabled(False)
         title_row.addWidget(self._switch_btn)
+        layout.addLayout(title_row)
 
         self._toolbar = FlowButtonBar(spacing=8, row_spacing=8)
         self._toolbar.setObjectName("games_registry_toolbar")
@@ -242,7 +243,6 @@ class GamesRegistryPanel(QWidget):
             layout.addWidget(section_toolbar)
 
         filter_row = QHBoxLayout()
-        layout.addLayout(title_row)
         self._search_edit = QLineEdit()
         self._search_edit.setPlaceholderText("搜索项目、路径、备注、状态…")
         self._search_edit.textChanged.connect(self._apply_filters)

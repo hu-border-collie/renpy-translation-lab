@@ -367,6 +367,8 @@ class FlowButtonBar(QFrame):
         self._signature: tuple[object, ...] | None = None
         self._row_count = 1
         self._reflowing = False
+        self._reflow_pending = False
+        self._reflow_pending_force = False
 
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(0, 0, 0, 0)
@@ -391,16 +393,35 @@ class FlowButtonBar(QFrame):
 
     def reflow(self, *, force: bool = False) -> None:
         if self._reflowing:
+            self._reflow_pending = True
+            self._reflow_pending_force = self._reflow_pending_force or force
             return
-        signature = self._layout_signature()
-        if not force and signature == self._signature:
-            return
-        self._signature = signature
-        self._reflowing = True
-        try:
-            self._rebuild()
-        finally:
-            self._reflowing = False
+
+        followup = False
+        requested_force = force
+        while True:
+            signature = self._layout_signature()
+            if not requested_force and signature == self._signature:
+                return
+            self._signature = signature
+            self._reflowing = True
+            try:
+                self._rebuild()
+            finally:
+                self._reflowing = False
+
+            if not self._reflow_pending:
+                return
+            if followup:
+                self._reflow_pending = False
+                self._reflow_pending_force = False
+                self._schedule_reflow()
+                return
+
+            followup = True
+            requested_force = self._reflow_pending_force
+            self._reflow_pending = False
+            self._reflow_pending_force = False
 
     def _schedule_reflow(self) -> None:
         """Reflow after the current event so parent/tab geometry is final."""

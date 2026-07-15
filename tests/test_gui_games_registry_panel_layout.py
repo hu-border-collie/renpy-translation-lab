@@ -79,6 +79,11 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
 
     def test_workspace_actions_are_grouped_and_details_follow_selection(self) -> None:
         panel = self.window._games_registry_panel
+        root_layout = panel.layout()
+        title_row = root_layout.itemAt(0).layout()
+        self.assertEqual(
+            title_row.itemAt(0).widget().objectName(), "diagnostics_section_label"
+        )
         self.assertEqual(
             [
                 widget.text() if hasattr(widget, "text") else widget.objectName()

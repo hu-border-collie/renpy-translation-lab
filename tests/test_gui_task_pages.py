@@ -93,6 +93,10 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
         self.assertFalse(hasattr(self.window, "workbench_log_drawer"))
         self.assertTrue(self.window.context_library_panel.isHidden())
+        self.assertGreaterEqual(
+            page.preferred_height(320),
+            page.preferred_height(900),
+        )
 
     def test_sync_page_uses_start_stop_callbacks(self) -> None:
         self.window._set_work_mode(
@@ -428,7 +432,17 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(page.buttons["start"].isHidden())
         self.assertTrue(page.buttons["resume"].isHidden())
         self.assertFalse(page.buttons["stop"].isHidden())
+        self.assertFalse(page.buttons["stop"].isEnabled())
         self.assertTrue(page.split_frame.isHidden())
+        page.buttons["stop"].click()
+
+        page.set_controls(
+            {
+                **page._state.controls,
+                "stop": (True, True, page._labels["stop"]),
+            }
+        )
+        self.assertTrue(page.buttons["stop"].isEnabled())
         page.buttons["stop"].click()
 
         self.assertEqual(

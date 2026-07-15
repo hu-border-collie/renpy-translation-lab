@@ -436,15 +436,15 @@ QFrame#task_control_section[sectionLevel="secondary"] {
 }
 
 QLabel#settings_description_label {
+    color: ${fg_muted};
+    font-size: 12px;
+}
+
 QLabel#settings_inline_section_label {
     color: ${fg_secondary};
     font-size: 11px;
     font-weight: 700;
     padding-top: 2px;
-}
-
-    color: ${fg_muted};
-    font-size: 12px;
 }
 
 QLabel#settings_error_label {
@@ -1082,7 +1082,7 @@ QPushButton#split_select_btn:pressed {
 
 QPushButton#split_select_btn:focus {
     outline: none;
-    border: 1px solid transparent;
+    border: 2px solid ${accent_primary};
 }
 
 QPushButton#split_select_btn:disabled {

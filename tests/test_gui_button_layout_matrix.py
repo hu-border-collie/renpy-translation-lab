@@ -229,6 +229,26 @@ class FlowButtonBarUnitTests(unittest.TestCase):
         self._app.processEvents()
         self.assertEqual(bar._root.count(), 1)
 
+    @unittest.skipIf(QApplication is None, "GUI unavailable")
+    def test_flow_bar_runs_one_followup_for_reentrant_reflow(self) -> None:
+        bar = FlowButtonBar(spacing=8)
+        bar.add_widget(QPushButton("refresh"), min_width=100)
+        rebuild = bar._rebuild
+        rebuild_count = 0
+
+        def reentrant_rebuild() -> None:
+            nonlocal rebuild_count
+            rebuild_count += 1
+            if rebuild_count == 1:
+                bar.reflow(force=True)
+            rebuild()
+
+        bar._rebuild = reentrant_rebuild
+        bar.reflow(force=True)
+
+        self.assertEqual(rebuild_count, 2)
+        self.assertFalse(bar._reflow_pending)
+
 
 if __name__ == "__main__":
     unittest.main()
