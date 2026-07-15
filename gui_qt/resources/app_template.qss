@@ -335,6 +335,7 @@ QWidget#settings_advanced_content,
 QScrollArea#settings_workspace_scroll,
 QWidget#settings_workspace_viewport,
 QWidget#settings_workspace_content,
+QWidget#settings_page_body,
 QWidget#games_registry_panel {
     background-color: ${bg_surface};
     border: none;
@@ -386,7 +387,7 @@ QLabel#sync_mode_warning {
 }
 
 /* Page-local banner: single compact strip. */
-QLabel#sync_translation_risk_warning {
+QLabel#task_page_notice[tone="warning"] {
     color: ${badge_warning_fg};
     background-color: ${badge_warning_bg};
     border: 1px solid ${badge_warning_border};
@@ -409,21 +410,39 @@ QFrame#context_library_panel {
     border: none;
 }
 
-QFrame#context_library_status_row {
-    background-color: ${bg_card};
-    border: 1px solid ${border_card};
-    border-top: 1px solid ${border_card_top};
-    border-radius: 10px;
+QFrame#task_status_action_row {
+    background-color: transparent;
+    border: none;
+    border-bottom: 1px solid ${border_light};
+    border-radius: 0;
+}
+
+QLabel#task_status_title {
+    color: ${fg_primary};
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#task_status_detail {
+    color: ${fg_body};
+    font-size: 12px;
 }
 
 QFrame#batch_advanced_frame,
-QFrame#batch_split_frame {
+QFrame#task_control_section[sectionLevel="secondary"] {
     background-color: ${bg_surface_alt};
     border: 1px solid ${border_light};
     border-radius: 10px;
 }
 
 QLabel#settings_description_label {
+QLabel#settings_inline_section_label {
+    color: ${fg_secondary};
+    font-size: 11px;
+    font-weight: 700;
+    padding-top: 2px;
+}
+
     color: ${fg_muted};
     font-size: 12px;
 }
@@ -458,8 +477,9 @@ QSplitter#diagnostics_splitter::handle:hover {
 }
 
 QTabWidget#diagnostics_inner_tabs::pane {
-    border: 1px solid ${border_default};
-    border-radius: 10px;
+    border: none;
+    border-top: 1px solid ${border_light};
+    border-radius: 0;
     background-color: ${bg_surface};
     top: -1px;
 }
@@ -704,7 +724,8 @@ QTabWidget#workbench_status_tabs QTabBar::tab:hover:!selected {
 /* Legacy workbench containers retain a restrained section treatment. */
 #project_frame,
 #mode_frame,
-#action_frame {
+#action_frame,
+QFrame#task_control_section {
     background-color: ${bg_card};
     border: 1px solid ${border_card};
     border-top: 1px solid ${border_card_top}; /* Subtle highlight rim */
@@ -738,11 +759,29 @@ QLabel#writeback_issues_badge {
     padding: 2px 10px;
 }
 
-QLabel#action_group_label {
+QLabel#action_group_label,
+QLabel#task_control_section_title {
     color: ${fg_muted};
     font-size: 12px;
     font-weight: 600;
     padding-right: 4px;
+}
+
+QFrame#task_mode_row {
+    background-color: transparent;
+    border: none;
+}
+
+QLabel#task_mode_label {
+    color: ${fg_body};
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QLabel#task_result_hint {
+    color: ${fg_hint};
+    font-size: 12px;
+    padding: 0 2px;
 }
 
 QFrame#action_separator {
@@ -808,7 +847,7 @@ QPlainTextEdit:focus,
 QSpinBox:focus,
 QDoubleSpinBox:focus {
     background-color: ${bg_input_focus};
-    border-color: ${accent_primary};
+    border: 2px solid ${accent_primary};
 }
 
 QLineEdit:disabled,
@@ -837,12 +876,22 @@ QComboBox {
     min-height: 22px;
 }
 
+/* Editable combos keep the same single outer border as fixed-choice combos. */
+QComboBox QLineEdit,
+QComboBox QLineEdit:hover,
+QComboBox QLineEdit:focus {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+}
+
 QComboBox:hover {
     border-color: ${accent_primary_hover};
 }
 
 QComboBox:focus {
-    border-color: ${accent_primary};
+    border: 2px solid ${accent_primary};
     background-color: ${bg_input_focus};
 }
 
@@ -902,7 +951,7 @@ QPushButton:disabled {
 
 QPushButton:focus,
 QToolButton:focus {
-    border: 1px solid ${accent_primary};
+    border: 2px solid ${accent_primary};
 }
 
 /* Primary Action Buttons - Aurora Gradient (start / prebuild / diagnostics run) */
@@ -985,6 +1034,28 @@ QPushButton#secondary_btn:disabled {
     color: ${fg_secondary_disabled};
 }
 
+/* Explicit object-id focus rings override component border declarations. */
+QPushButton#save_config_btn:focus,
+QPushButton#api_btn:focus,
+QPushButton#translate_btn:focus,
+QPushButton#primary_btn:focus,
+QPushButton#sync_translation_start_btn:focus,
+QPushButton#keywords_start_btn:focus,
+QPushButton#revision_start_btn:focus,
+QPushButton#context_bootstrap_rag_btn:focus,
+QPushButton#context_bootstrap_source_index_btn:focus {
+    border: 2px solid ${fg_on_accent};
+}
+
+QPushButton#secondary_btn:focus,
+QPushButton#split_select_btn:focus,
+QPushButton#kill_btn:focus,
+QPushButton#sync_translation_stop_btn:focus,
+QPushButton#context_library_stop_btn:focus,
+QPushButton#apply_btn:focus,
+QPushButton#apply_revision_btn:focus {
+    border: 2px solid ${accent_primary};
+}
 /* Compact table action buttons (seamless with transparent backgrounds) */
 QPushButton#split_select_btn {
     background-color: transparent;

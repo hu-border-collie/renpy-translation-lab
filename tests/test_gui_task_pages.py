@@ -485,7 +485,7 @@ class GuiTaskPageTests(unittest.TestCase):
             page.preferred_height(320),
             page.preferred_height(900),
         )
-    def test_context_page_shows_status_cards(self) -> None:
+    def test_context_page_shows_compact_status_rows(self) -> None:
         self.window._set_work_mode(
             WorkMode.BOOTSTRAP_RAG,
             refresh_manifest_writeback=False,
@@ -505,8 +505,19 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window.translate_btn.isHidden())
         # Project-level prep actions stay on the hidden project-only bar.
         self.assertTrue(self.window.global_project_bar.isHidden())
-        self.assertIn("记忆库", self.window.context_rag_status_label.text())
-        self.assertIn("原文索引", self.window.context_source_index_status_label.text())
+        page = self.window.context_library_page
+        self.assertEqual(page.rag_status_row.title_label.text(), "记忆库")
+        self.assertEqual(page.source_index_status_row.title_label.text(), "原文索引")
+        self.assertIn("项目", self.window.context_rag_status_label.text())
+        self.assertIn("项目", self.window.context_source_index_status_label.text())
+        self.assertIs(
+            page.bootstrap_rag_btn.parentWidget(),
+            page.rag_status_row,
+        )
+        self.assertIs(
+            page.bootstrap_source_index_btn.parentWidget(),
+            page.source_index_status_row,
+        )
 
     def test_context_page_uses_callbacks_and_owns_empty_state(self) -> None:
         page = self.window.context_library_page

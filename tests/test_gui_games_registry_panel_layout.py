@@ -77,6 +77,42 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
                     hits.append((name_a, name_b))
         self.assertEqual(hits, [])
 
+    def test_workspace_actions_are_grouped_and_details_follow_selection(self) -> None:
+        panel = self.window._games_registry_panel
+        self.assertEqual(
+            [
+                widget.text() if hasattr(widget, "text") else widget.objectName()
+                for widget in panel._toolbar._items
+            ],
+            ["刷新当前", "刷新全部", "games_registry_mode_host", "停止"],
+        )
+        self.assertEqual(
+            [
+                widget.text() if hasattr(widget, "text") else widget.objectName()
+                for widget in panel._maintenance_toolbar._items
+            ],
+            ["扫描新项目", "打开分区时自动扫描新项目"],
+        )
+        self.assertEqual(
+            [widget.text() for widget in panel._registry_toolbar._items],
+            ["从 GAMES.md 导入", "同步 GAMES.md"],
+        )
+
+        self.window.resize(960, 700)
+        self.window.show()
+        self.window._focus_settings_section("workspace")
+        for _ in range(12):
+            self._app.processEvents()
+        panel._table.clearSelection()
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertTrue(panel._edit_group.isHidden())
+        if panel._table.rowCount() > 0:
+            panel._table.selectRow(0)
+            for _ in range(4):
+                self._app.processEvents()
+            self.assertFalse(panel._edit_group.isHidden())
+
     def test_workspace_status_and_filter_combos_share_widths(self) -> None:
         """Play/translation status and engine/translation filters must match widths."""
         from gui_qt.games_registry_panel import _combo_natural_width

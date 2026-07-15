@@ -1,20 +1,12 @@
 """Persistent revision page for the workbench stack (#176 P4)."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import (
-    QComboBox,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QSizePolicy,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QComboBox, QFrame, QPushButton, QSizePolicy, QWidget
 
 from ..work_modes import WorkMode, work_mode_submode_label
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
+from .task_controls import TaskPageLayout
 
 
 class RevisionPage(QFrame):
@@ -30,61 +22,55 @@ class RevisionPage(QFrame):
         self._running = False
         self._active_mode = WorkMode.REVISION
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(6)
+        self.task_layout = TaskPageLayout(self)
 
-        mode_row = QHBoxLayout()
-        mode_row.setSpacing(8)
-        mode_row.addWidget(QLabel("订正模式："))
         self.mode_combo = QComboBox()
         self.mode_combo.setObjectName("revision_mode_combo")
         for mode in self.supported_modes:
             self.mode_combo.addItem(work_mode_submode_label(mode), mode.value)
         self.mode_combo.currentIndexChanged.connect(self._trigger_mode_change)
-        mode_row.addWidget(self.mode_combo, 1)
-        outer.addLayout(mode_row)
+        self.mode_label = self.task_layout.add_mode_selector(
+            "订正模式：",
+            self.mode_combo,
+        )
 
-        actions = QFrame()
-        actions.setObjectName("action_frame")
-        action_layout = QHBoxLayout(actions)
-        action_layout.setContentsMargins(12, 8, 12, 8)
-        action_layout.setSpacing(8)
+        self.actions = self.task_layout.add_section(
+            "订正任务",
+            role="revision",
+        )
         self.start_btn = QPushButton("生成订正预览")
         self.start_btn.setObjectName("revision_start_btn")
         self.start_btn.setEnabled(False)
         self.start_btn.clicked.connect(self._trigger_start)
-        action_layout.addWidget(self.start_btn)
+        self.actions.add_action(self.start_btn, min_width=120)
+
         self.resume_btn = QPushButton("继续订正")
         self.resume_btn.setObjectName("revision_resume_btn")
         self.resume_btn.setEnabled(False)
         self.resume_btn.clicked.connect(self._trigger_resume)
-        action_layout.addWidget(self.resume_btn)
+        self.actions.add_action(self.resume_btn, min_width=108)
+
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setObjectName("revision_stop_btn")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._trigger_stop)
-        action_layout.addWidget(self.stop_btn)
+        self.actions.add_action(self.stop_btn, min_width=80)
+
         self.writeback_btn = QPushButton("写回订正")
         self.writeback_btn.setObjectName("revision_writeback_btn")
         self.writeback_btn.setEnabled(False)
         self.writeback_btn.setToolTip("仅在订正预览通过后写回；不会使用翻译写回入口。")
         self.writeback_btn.clicked.connect(self._trigger_writeback)
-        action_layout.addWidget(self.writeback_btn)
-        action_layout.addStretch()
-        outer.addWidget(actions)
+        self.actions.add_action(self.writeback_btn, min_width=108)
+        self.actions.finish_setup()
 
-        self.result_hint = QLabel("生成预览后，可在此确认订正结果并安全写回。")
-        self.result_hint.setObjectName("config_hint_label")
-        self.result_hint.setWordWrap(True)
-        outer.addWidget(self.result_hint)
+        self.result_hint = self.task_layout.add_result_hint(
+            "生成预览后，可在此确认订正结果并安全写回。"
+        )
 
     def preferred_height(self, width: int) -> int:
         """Return the layout's word-wrap-aware height for the current page width."""
-        layout = self.layout()
-        if layout is None:
-            return self.sizeHint().height()
-        return max(self.minimumSizeHint().height(), layout.heightForWidth(max(width, 260)))
+        return self.task_layout.preferred_height(width)
 
     def set_action_callbacks(self, actions: WorkbenchPageActions) -> None:
         self._actions = actions
@@ -125,6 +111,7 @@ class RevisionPage(QFrame):
         self.resume_btn.setEnabled(resume_enabled and not self._running)
         self.writeback_btn.setEnabled(writeback_enabled and not self._running)
         self.result_hint.setText(result_message)
+        self.task_layout.reflow()
         self.updateGeometry()
 
     def reset_project(self) -> None:

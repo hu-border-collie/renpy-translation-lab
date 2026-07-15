@@ -72,6 +72,15 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         self.assertIs(self.window.select_btn, self.window.global_browse_project_btn)
         self.assertIs(self.window.project_path_edit, self.window.global_project_path_edit)
 
+    def test_registry_settings_are_labeled_as_project_list(self) -> None:
+        row = self.window._settings_nav_rows["workspace"]
+        self.assertEqual(self.window.settings_nav.item(row).text(), "项目列表")
+        self.assertIn("项目列表", self.window.global_switch_project_btn.toolTip())
+        self.assertEqual(
+            self.window.settings_go_workspace_btn.text(),
+            "在项目列表切换…",
+        )
+
     def test_task_running_disables_global_prep_buttons(self) -> None:
         self.window._set_task_running(True)
         self.assertFalse(self.window.doctor_btn.isEnabled())

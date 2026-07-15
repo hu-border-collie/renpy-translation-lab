@@ -42,8 +42,8 @@ LIGHT_TOKENS: dict[str, str] = {
     "fg_hint": "#4b5563",
     "fg_body": "#374151",
     "fg_mono": "#334155",
-    "fg_disabled": "#94a3b8",
-    "fg_disabled_strong": "#cbd5e1",
+    "fg_disabled": "#64748b",
+    "fg_disabled_strong": "#475569",
     "fg_on_accent": "#ffffff",
 
     # -- Borders ---------------------------------------------------------------
@@ -103,7 +103,7 @@ LIGHT_TOKENS: dict[str, str] = {
     "bg_button_pressed": "#f1f5f9",
     "bg_button_disabled": "#f1f5f9",
     "border_button_disabled": "#e2e8f0",
-    "fg_button_disabled": "#cbd5e1",
+    "fg_button_disabled": "#475569",
 
     # -- Secondary buttons (mirror of defaults but explicit) -------------------
     "bg_secondary": "#ffffff",
@@ -115,7 +115,7 @@ LIGHT_TOKENS: dict[str, str] = {
     "bg_secondary_pressed": "#f1f5f9",
     "bg_secondary_disabled": "#f1f5f9",
     "border_secondary_disabled": "#e2e8f0",
-    "fg_secondary_disabled": "#cbd5e1",
+    "fg_secondary_disabled": "#475569",
 
     # -- Split select button ---------------------------------------------------
     "fg_split_select": "#475569",
@@ -123,7 +123,7 @@ LIGHT_TOKENS: dict[str, str] = {
     "border_split_select_hover": "rgba(100, 116, 139, 0.25)",
     "fg_split_select_hover": "#0f172a",
     "bg_split_select_pressed": "rgba(100, 116, 139, 0.18)",
-    "fg_split_select_disabled": "#cbd5e1",
+    "fg_split_select_disabled": "#475569",
 
     # -- Danger button (kill) --------------------------------------------------
     "gradient_danger_start": "#dc2626",
@@ -249,8 +249,8 @@ DARK_TOKENS: dict[str, str] = {
     "fg_hint": "#9ca3af",
     "fg_body": "#d1d5db",
     "fg_mono": "#d1d5db",
-    "fg_disabled": "#6b7280",
-    "fg_disabled_strong": "#6b7280",
+    "fg_disabled": "#9ca3af",
+    "fg_disabled_strong": "#d1d5db",
     "fg_on_accent": "#ffffff",
 
     # -- Borders ---------------------------------------------------------------
@@ -310,7 +310,7 @@ DARK_TOKENS: dict[str, str] = {
     "bg_button_pressed": "#111827",
     "bg_button_disabled": "#111827",
     "border_button_disabled": "#1f2937",
-    "fg_button_disabled": "#6b7280",
+    "fg_button_disabled": "#9ca3af",
 
     # -- Secondary buttons -----------------------------------------------------
     "bg_secondary": "#1f2937",
@@ -322,7 +322,7 @@ DARK_TOKENS: dict[str, str] = {
     "bg_secondary_pressed": "#111827",
     "bg_secondary_disabled": "#111827",
     "border_secondary_disabled": "#1f2937",
-    "fg_secondary_disabled": "#6b7280",
+    "fg_secondary_disabled": "#9ca3af",
 
     # -- Split select button ---------------------------------------------------
     "fg_split_select": "#38bdf8",
@@ -330,7 +330,7 @@ DARK_TOKENS: dict[str, str] = {
     "border_split_select_hover": "rgba(148, 163, 184, 0.30)",
     "fg_split_select_hover": "#e2e8f0",
     "bg_split_select_pressed": "rgba(148, 163, 184, 0.22)",
-    "fg_split_select_disabled": "#4b5563",
+    "fg_split_select_disabled": "#9ca3af",
 
     # -- Danger button (kill) --------------------------------------------------
     "gradient_danger_start": "#dc2626",

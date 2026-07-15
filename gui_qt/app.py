@@ -968,7 +968,7 @@ class MainWindow(QMainWindow):
             _SHELL_ROUTE_SETTINGS: (
                 "系统 / 设置",
                 "设置",
-                "管理工作区、模型、上下文、外观与高级参数。",
+                "管理项目列表、当前项目参数、模型、上下文、外观与高级参数。",
             ),
             _SHELL_ROUTE_DIAGNOSTICS: (
                 "系统 / 运行日志",
@@ -1144,7 +1144,7 @@ class MainWindow(QMainWindow):
         self.global_switch_project_btn = QPushButton("切换项目")
         self.global_switch_project_btn.setObjectName("secondary_btn")
         self.global_switch_project_btn.setToolTip(
-            "打开设置 → 工作区，从项目总表选择并切换当前 game_root。"
+            "打开设置 → 项目列表，从项目总表选择并切换当前 game_root。"
         )
         self.global_switch_project_btn.clicked.connect(self._on_global_switch_project)
         self.global_project_actions.add_widget(self.global_switch_project_btn, min_width=108)
@@ -1902,6 +1902,7 @@ class MainWindow(QMainWindow):
         self._advanced_setting_widgets = {}
         self._advanced_setting_error_labels = {}
         self._settings_nav_rows = {}
+        self._settings_page_bodies: dict[str, QWidget] = {}
 
         outer_layout = QVBoxLayout(tab)
         outer_layout.setContentsMargins(0, 0, 0, 0)
@@ -1937,7 +1938,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.settings_stack, 1)
 
         pages = [
-            ("workspace", "工作区", self._build_settings_workspace_page()),
+            ("workspace", "项目列表", self._build_settings_workspace_page()),
             ("project", "项目", self._build_settings_project_page()),
             ("api_keys", "密钥", self._build_settings_api_keys_page()),
             ("models", "模型", self._build_settings_models_page()),
@@ -1962,7 +1963,7 @@ class MainWindow(QMainWindow):
         self.reload_config_btn.setObjectName("secondary_btn")
         self.reload_config_btn.setToolTip(
             "从 translator_config.json 重新载入设置页字段。"
-            "「工作区」总表操作即时写入 registry，不受此按钮影响。"
+            "「项目列表」操作即时写入 registry，不受此按钮影响。"
         )
         self.reload_config_btn.clicked.connect(self._on_reload_config)
         action_layout.addWidget(self.reload_config_btn)
@@ -1970,7 +1971,7 @@ class MainWindow(QMainWindow):
         self.restore_defaults_btn.setObjectName("secondary_btn")
         self.restore_defaults_btn.setToolTip(
             "将模型、上下文主开关、高级参数等恢复为推荐值（仅填入界面，需再点保存）。"
-            "不改写工作区 registry。"
+            "不改写项目列表 registry。"
         )
         self.restore_defaults_btn.clicked.connect(self._on_restore_recommended_config)
         action_layout.addWidget(self.restore_defaults_btn)
@@ -1978,7 +1979,7 @@ class MainWindow(QMainWindow):
         self.save_config_btn.setObjectName("save_config_btn")
         self.save_config_btn.setToolTip(
             "写入 translator_config.json（项目/模型/上下文/高级/外观等）。"
-            "「工作区」扫描与切换项目即时生效，无需此按钮。"
+            "「项目列表」扫描与切换项目即时生效，无需此按钮。"
         )
         self.save_config_btn.clicked.connect(self._on_save_config)
         action_layout.addWidget(self.save_config_btn)
@@ -1994,6 +1995,7 @@ class MainWindow(QMainWindow):
         self._style_themed_surface(scroll)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         viewport = scroll.viewport()
         viewport.setObjectName(f"{object_name}_viewport")
         self._style_themed_surface(viewport)
@@ -2001,9 +2003,29 @@ class MainWindow(QMainWindow):
         content = QWidget()
         content.setObjectName(f"{object_name}_content")
         self._style_themed_surface(content)
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(16, 16, 16, 16)
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+
+        body = QWidget()
+        body.setObjectName("settings_page_body")
+        body.setProperty("settingsPage", object_name)
+        body.setMaximumWidth(1080)
+        body.setMinimumWidth(0)
+        body.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.MinimumExpanding,
+        )
+        self._style_themed_surface(body)
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(20, 18, 20, 20)
         layout.setSpacing(14)
+        # Let the settings body consume the available viewport width. Supplying
+        # an alignment here keeps the widget at its size hint and compresses forms.
+        content_layout.addWidget(body, 1)
+        content_layout.addStretch(0)
+        self._settings_page_bodies[object_name] = body
+
         scroll.setWidget(content)
         return scroll, layout
 
@@ -2011,14 +2033,29 @@ class MainWindow(QMainWindow):
         group = QGroupBox(title)
         layout = QVBoxLayout(group)
         layout.setSpacing(10)
-        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setContentsMargins(14, 18, 14, 14)
         return group, layout
+
+    def _settings_form(self, group: QGroupBox) -> QFormLayout:
+        form = QFormLayout(group)
+        form.setObjectName("settings_form")
+        form.setContentsMargins(14, 18, 14, 14)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(10)
+        form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setLabelAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        return form
 
     def _build_settings_workspace_page(self) -> QWidget:
         page, layout = self._settings_page("settings_workspace")
         hint = QLabel(
-            "浏览和切换 Ren'Py 工作区内的游戏项目。"
-            "当前 work 目录只能在这里切换；切换后会自动打开「项目」分区以调整术语表、准备流程等参数。"
+            "扫描、浏览和切换 Ren'Py 工作区内的游戏项目。"
+            "项目列表操作即时生效；切换后会自动打开「项目」分区以调整术语表、准备流程等参数。"
         )
         hint.setWordWrap(True)
         hint.setObjectName("config_hint_label")
@@ -2067,23 +2104,21 @@ class MainWindow(QMainWindow):
         page, layout = self._settings_page("settings_project")
         hint = QLabel(
             "配置当前选中项目的 translator_config.json 参数。"
-            "切换 work 目录请前往「工作区」；此处只调整术语表、翻译目录、过滤器和准备流程。"
+            "切换 work 目录请前往「项目列表」；此处只调整术语表、翻译目录、过滤器和准备流程。"
         )
         hint.setWordWrap(True)
         hint.setObjectName("config_hint_label")
         layout.addWidget(hint)
 
         current_box = QGroupBox("当前项目")
-        current_form = QFormLayout(current_box)
-        current_form.setSpacing(8)
-        current_form.setContentsMargins(12, 16, 12, 12)
+        current_form = self._settings_form(current_box)
         self.settings_project_root_value = QLabel("（尚未选择项目）")
         self.settings_project_root_value.setWordWrap(True)
         self.settings_project_root_value.setObjectName("settings_project_root_value")
         current_form.addRow("游戏 work 目录：", self.settings_project_root_value)
         switch_row = QHBoxLayout()
         switch_row.addStretch(1)
-        self.settings_go_workspace_btn = QPushButton("在工作区切换…")
+        self.settings_go_workspace_btn = QPushButton("在项目列表切换…")
         self.settings_go_workspace_btn.setObjectName("secondary_btn")
         self.settings_go_workspace_btn.clicked.connect(self._on_go_to_workspace_for_project_switch)
         switch_row.addWidget(self.settings_go_workspace_btn)
@@ -2092,10 +2127,7 @@ class MainWindow(QMainWindow):
 
         for group_title in ("项目与资源", "准备流程"):
             group = QGroupBox(group_title)
-            form = QFormLayout(group)
-            form.setSpacing(8)
-            form.setContentsMargins(12, 16, 12, 12)
-            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            form = self._settings_form(group)
             for field in [
                 item
                 for item in ADVANCED_SETTING_FIELDS
@@ -2160,17 +2192,10 @@ class MainWindow(QMainWindow):
 
     def _build_settings_models_page(self) -> QWidget:
         page, layout = self._settings_page("settings_models")
-        config_row = QHBoxLayout()
-        config_row.setSpacing(16)
-
         sync_box = QGroupBox("Gemini 同步翻译")
-        sync_layout = QFormLayout(sync_box)
-        sync_layout.setSpacing(8)
-        sync_layout.setContentsMargins(12, 16, 12, 12)
+        sync_layout = self._settings_form(sync_box)
 
         self.sync_model_combo = NoWheelComboBox()
-        self.sync_model_combo.setEditable(True)
-        add_editable_combo_popup_action(self.sync_model_combo)
         self.sync_model_combo.addItems([
             "gemini-3.5-flash",
             "gemini-3.1-pro-preview",
@@ -2193,12 +2218,10 @@ class MainWindow(QMainWindow):
         sync_hint.setWordWrap(True)
         sync_hint.setObjectName("config_hint_label")
         sync_layout.addRow(sync_hint)
-        config_row.addWidget(sync_box, 1)
+        layout.addWidget(sync_box)
 
         batch_box = QGroupBox("批量离线翻译")
-        batch_layout = QFormLayout(batch_box)
-        batch_layout.setSpacing(8)
-        batch_layout.setContentsMargins(12, 16, 12, 12)
+        batch_layout = self._settings_form(batch_box)
 
         self.batch_model_combo = NoWheelComboBox()
         self.batch_model_combo.addItems([
@@ -2227,8 +2250,7 @@ class MainWindow(QMainWindow):
         self.batch_thinking_combo.addItem("高", "high")
         batch_layout.addRow("思考程度：", self.batch_thinking_combo)
 
-        config_row.addWidget(batch_box, 1)
-        layout.addLayout(config_row)
+        layout.addWidget(batch_box)
         layout.addStretch(1)
         return page
 
@@ -2236,9 +2258,7 @@ class MainWindow(QMainWindow):
         page, layout = self._settings_page("settings_litellm")
 
         backend_box = QGroupBox("LiteLLM 同步替代后端")
-        backend_layout = QFormLayout(backend_box)
-        backend_layout.setSpacing(8)
-        backend_layout.setContentsMargins(12, 16, 12, 12)
+        backend_layout = self._settings_form(backend_box)
 
         self.sync_backend_combo = NoWheelComboBox()
         self.sync_backend_combo.addItem("Gemini 同步（推荐）", "gemini")
@@ -2357,9 +2377,7 @@ class MainWindow(QMainWindow):
     def _build_settings_appearance_page(self) -> QWidget:
         page, layout = self._settings_page("settings_appearance")
         appearance_box = QGroupBox("外观")
-        appearance_layout = QFormLayout(appearance_box)
-        appearance_layout.setSpacing(8)
-        appearance_layout.setContentsMargins(12, 16, 12, 12)
+        appearance_layout = self._settings_form(appearance_box)
         self.theme_combo = NoWheelComboBox()
         self.theme_combo.addItem("跟随系统", THEME_SYSTEM)
         self.theme_combo.addItem("浅色", "light")
@@ -2395,10 +2413,7 @@ class MainWindow(QMainWindow):
             if group_title in skipped_categories:
                 continue
             group = QGroupBox(group_title)
-            form = QFormLayout(group)
-            form.setSpacing(8)
-            form.setContentsMargins(12, 16, 12, 12)
-            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            form = self._settings_form(group)
             for field in fields:
                 if field.key in CONTEXT_PRIMARY_SETTING_KEYS:
                     continue
@@ -2479,45 +2494,41 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
 
         diag_hint = QLabel(
-            "上方可查看任务上下文、命令参考与任务记录；下方显示原始命令输出。"
-            "工作台任务运行时默认留在工作台并展开底部日志抽屉；"
-            "试跑 / 拆分在「批量翻译 · 翻译进度 · 高级工具」；"
-            "术语合并在「关键词 / 术语」结果区；本页保留刷新、A/B 对比与清空日志。"
+            "查看当前任务的上下文、复现命令、任务记录与原始命令输出。"
         )
+        self.diagnostics_hint_label = diag_hint
         diag_hint.setWordWrap(True)
         diag_hint.setObjectName("config_hint_label")
         diag_hint.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         layout.addWidget(diag_hint)
 
-        action_frame = QFrame()
-        action_frame.setObjectName("action_frame")
-        action_outer = QVBoxLayout(action_frame)
-        action_outer.setContentsMargins(12, 10, 12, 10)
-        action_outer.setSpacing(8)
-
-        self.diagnostics_action_panel = ResponsiveActionPanel(
-            prep_label="上下文",
-            translate_label="工具",
-            compact_width=720,
-        )
+        self.diagnostics_action_panel = FlowButtonBar(spacing=8, row_spacing=8)
+        self.diagnostics_action_panel.setObjectName("diagnostics_action_panel")
         diagnostics_action_panel = self.diagnostics_action_panel
-        self.refresh_diagnostics_btn = diagnostics_action_panel.add_prep_button(
-            QPushButton("刷新上下文")
-        )
+
+        self.refresh_diagnostics_btn = QPushButton("刷新上下文")
         self.refresh_diagnostics_btn.setObjectName("secondary_btn")
+        self.refresh_diagnostics_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.refresh_diagnostics_btn.clicked.connect(
             lambda: self._refresh_diagnostics_context(force=True)
         )
-
-        self.compare_variants_btn = diagnostics_action_panel.add_translate_button(
-            QPushButton("翻译 A/B 对比")
+        diagnostics_action_panel.add_widget(
+            self.refresh_diagnostics_btn,
+            min_width=108,
         )
+
+        self.compare_variants_btn = QPushButton("翻译 A/B 对比")
         self.compare_variants_btn.setObjectName("secondary_btn")
+        self.compare_variants_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.compare_variants_btn.setToolTip(
             "用同一批 manifest chunk 并排比较多个配置变体的同步译文，不会写回游戏文件。"
         )
         self.compare_variants_btn.clicked.connect(self._on_run_compare_variants)
         self.compare_variants_btn.setEnabled(False)
+        diagnostics_action_panel.add_widget(
+            self.compare_variants_btn,
+            min_width=120,
+        )
 
         # P2b: glossary merge primary entry is workbench · 关键词; keep attribute for
         # enable helpers but do not place a diagnostics toolbar button.
@@ -2527,14 +2538,13 @@ class MainWindow(QMainWindow):
         self.keyword_merge_btn.setEnabled(False)
         self.keyword_merge_btn.clicked.connect(self._on_open_keyword_merge)
 
-        self.clear_log_btn = diagnostics_action_panel.add_translate_trailing(
-            QPushButton("清空日志")
-        )
+        self.clear_log_btn = QPushButton("清空日志")
         self.clear_log_btn.setObjectName("secondary_btn")
+        self.clear_log_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.clear_log_btn.clicked.connect(self._on_clear_log)
+        diagnostics_action_panel.add_widget(self.clear_log_btn, min_width=108)
         diagnostics_action_panel.finish_setup()
-        action_outer.addWidget(diagnostics_action_panel)
-        layout.addWidget(action_frame)
+        layout.addWidget(diagnostics_action_panel)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.setObjectName("diagnostics_splitter")
@@ -2543,6 +2553,9 @@ class MainWindow(QMainWindow):
 
         self.diagnostics_inner_tabs = NoWheelTabWidget()
         self.diagnostics_inner_tabs.setObjectName("diagnostics_inner_tabs")
+        self.diagnostics_inner_tabs.tabBar().setFocusPolicy(
+            Qt.FocusPolicy.StrongFocus
+        )
 
         context_tab = QWidget()
         context_tab.setObjectName("diagnostics_context_page")
@@ -6350,7 +6363,7 @@ class MainWindow(QMainWindow):
         if self._task_running:
             return
         self._on_go_to_workspace_for_project_switch()
-        self.statusBar().showMessage("请在工作区列表中选择项目并「切换到此项目」。", 5000)
+        self.statusBar().showMessage("请在项目列表中选择项目并「切换到此项目」。", 5000)
 
     def _on_select_project(self):
         if self._task_running:
@@ -6503,7 +6516,7 @@ class MainWindow(QMainWindow):
         panel = getattr(self, "_games_registry_panel", None)
         if panel is not None:
             panel.set_current_game_root(self.state.get_game_root())
-        self._show_settings_status("已切换工作区项目", 5000)
+        self._show_settings_status("已切换项目", 5000)
         self._focus_settings_section("project")
         return True
 

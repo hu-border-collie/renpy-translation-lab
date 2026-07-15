@@ -5,19 +5,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (
-    QFrame,
-    QLabel,
-    QPushButton,
-    QSizePolicy,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QPushButton, QSizePolicy, QWidget
 
 from ..responsive_layout import FlowButtonBar
 from ..work_modes import WorkMode
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
+from .task_controls import TaskControlSection, TaskPageLayout
 
 
 ControlState = tuple[bool, bool, str]
@@ -55,20 +49,13 @@ class BatchTranslationPage(QWidget):
         self._state = BatchActionState()
         self.buttons: dict[str, QPushButton] = {}
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(8)
-
-        self.main_frame = QFrame()
-        self.main_frame.setObjectName("action_frame")
-        main_layout = QVBoxLayout(self.main_frame)
-        main_layout.setContentsMargins(12, 10, 12, 10)
-        main_layout.setSpacing(8)
-        main_title = QLabel("翻译任务")
-        main_title.setObjectName("action_group_label")
-        main_layout.addWidget(main_title)
-        self.main_bar = self._build_bar(
-            "batch_main_actions",
+        self.task_layout = TaskPageLayout(self)
+        self.main_frame = self.task_layout.add_section(
+            "翻译任务",
+            role="batch_main",
+        )
+        self.main_bar = self._populate_section(
+            self.main_frame,
             self._main_actions,
             min_widths={
                 "start": 108,
@@ -78,25 +65,18 @@ class BatchTranslationPage(QWidget):
                 "split": 108,
             },
         )
-        main_layout.addWidget(self.main_bar)
-        outer.addWidget(self.main_frame)
 
-        self.split_frame = QFrame()
-        self.split_frame.setObjectName("batch_split_frame")
-        split_layout = QVBoxLayout(self.split_frame)
-        split_layout.setContentsMargins(12, 10, 12, 10)
-        split_layout.setSpacing(6)
-        split_title = QLabel("拆分任务")
-        split_title.setObjectName("action_group_label")
-        split_layout.addWidget(split_title)
-        self.split_bar = self._build_bar(
-            "batch_split_actions",
+        self.split_frame = self.task_layout.add_section(
+            "拆分任务",
+            role="batch_split",
+            secondary=True,
+        )
+        self.split_bar = self._populate_section(
+            self.split_frame,
             self._split_actions,
             min_widths={"split_submit": 108},
         )
-        split_layout.addWidget(self.split_bar)
         self.split_frame.setVisible(False)
-        outer.addWidget(self.split_frame)
 
 
     def _make_button(self, key: str) -> QPushButton:
@@ -112,33 +92,23 @@ class BatchTranslationPage(QWidget):
         self.buttons[key] = button
         return button
 
-    def _build_bar(
+    def _populate_section(
         self,
-        role: str,
+        section: TaskControlSection,
         keys: tuple[str, ...],
         *,
         min_widths: Mapping[str, int] | None = None,
     ) -> FlowButtonBar:
-        bar = FlowButtonBar(spacing=8, row_spacing=8)
-        bar.setObjectName(role)
-        bar.setProperty("batch_role", role)
         widths = min_widths or {}
         for key in keys:
             button = self._make_button(key)
-            bar.add_widget(button, min_width=widths.get(key, 88))
-        bar.finish_setup()
-        return bar
+            section.add_action(button, min_width=widths.get(key, 88))
+        section.finish_setup()
+        return section.action_bar
 
     def preferred_height(self, width: int) -> int:
         """Return content height after responsive action rows have reflowed."""
-        for bar in (self.main_bar, self.split_bar):
-            bar.reflow(force=True)
-        layout = self.layout()
-        if layout is None:
-            return self.sizeHint().height()
-        return max(
-            self.minimumSizeHint().height(), layout.heightForWidth(max(width, 260))
-        )
+        return self.task_layout.preferred_height(width)
 
     def set_action_callbacks(self, actions: WorkbenchPageActions) -> None:
         self._actions = actions
