@@ -46,9 +46,6 @@ def translation_probe_ready(
     mode_text = mode.strip() if isinstance(mode, str) else _MANIFEST_MODE_TRANSLATION
     if mode_text != _MANIFEST_MODE_TRANSLATION:
         return False, "试跑样本请求仅支持批量翻译任务记录。"
-    version = manifest.get("version", 1)
-    if version != 1:
-        return False, "当前仅支持 version 1 的翻译任务记录。"
     input_jsonl = manifest.get("input_jsonl_path")
     if not isinstance(input_jsonl, str) or not input_jsonl.strip():
         return False, "任务记录缺少 requests.jsonl 路径，无法试跑样本请求。"

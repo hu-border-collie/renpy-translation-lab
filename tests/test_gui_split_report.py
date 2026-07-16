@@ -71,7 +71,12 @@ class GuiSplitReportTests(unittest.TestCase):
     def test_translation_split_ready_requires_chunks(self):
         ready, message = translation_split_ready(
             r"C:\pkg\manifest.json",
-            {"mode": "translation", "version": 1, "chunks": []},
+            {
+                "mode": "translation",
+                "version": 1,
+                "input_jsonl_path": r"C:\pkg\requests.jsonl",
+                "chunks": [],
+            },
         )
         self.assertFalse(ready)
         self.assertIn("块", message)
@@ -79,7 +84,26 @@ class GuiSplitReportTests(unittest.TestCase):
     def test_translation_split_ready_accepts_translation_manifest(self):
         ready, message = translation_split_ready(
             r"C:\pkg\manifest.json",
-            {"mode": "translation", "version": 1, "chunks": [{"key": "a"}]},
+            {
+                "mode": "translation",
+                "version": 1,
+                "input_jsonl_path": r"C:\pkg\requests.jsonl",
+                "chunks": [{"key": "a"}],
+            },
+        )
+        self.assertTrue(ready)
+        self.assertEqual(message, "")
+
+    def test_translation_split_ready_accepts_lite_v2_translation_manifest(self):
+        ready, message = translation_split_ready(
+            r"C:\pkg\manifest.json",
+            {
+                "mode": "translation",
+                "version": 2,
+                "manifest_version": 2,
+                "input_jsonl_path": r"C:\pkg\requests.jsonl",
+                "summary": {"chunk_count": 4},
+            },
         )
         self.assertTrue(ready)
         self.assertEqual(message, "")

@@ -47,12 +47,21 @@ def translation_split_ready(
     mode_text = mode.strip() if isinstance(mode, str) else _MANIFEST_MODE_TRANSLATION
     if mode_text != _MANIFEST_MODE_TRANSLATION:
         return False, "拆分翻译包仅支持批量翻译任务记录。"
-    version = manifest.get("version", 1)
-    if version != 1:
-        return False, "当前仅支持 version 1 的翻译任务记录。"
     chunks = manifest.get("chunks")
-    if not isinstance(chunks, list) or not chunks:
+    summary = manifest.get("summary")
+    summary_chunk_count = (
+        summary.get("chunk_count", 0)
+        if isinstance(summary, dict)
+        else 0
+    )
+    has_chunks = isinstance(chunks, list) and bool(chunks)
+    if not has_chunks and not (
+        isinstance(summary_chunk_count, int) and summary_chunk_count > 0
+    ):
         return False, "任务记录中没有可拆分的块。"
+    input_jsonl = manifest.get("input_jsonl_path")
+    if not isinstance(input_jsonl, str) or not input_jsonl.strip():
+        return False, "任务记录缺少 requests.jsonl 路径，无法拆分翻译包。"
     return True, ""
 
 
