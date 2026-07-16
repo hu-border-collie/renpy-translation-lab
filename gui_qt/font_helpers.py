@@ -44,12 +44,12 @@ def user_fonts_dir() -> Path:
         return Path(override).expanduser()
     if sys.platform == "win32":
         cache_root = Path(
-            os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
+            os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local"
         )
     elif sys.platform == "darwin":
         cache_root = Path.home() / "Library" / "Caches"
     else:
-        cache_root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        cache_root = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
     return cache_root / "renpy-translation-lab" / "fonts"
 
 

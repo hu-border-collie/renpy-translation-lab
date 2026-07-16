@@ -29,6 +29,26 @@ class GuiFontHelpersTests(unittest.TestCase):
         ):
             self.assertEqual(user_fonts_dir(), Path("custom-fonts"))
 
+    def test_user_fonts_dir_treats_empty_cache_environment_as_unset(self):
+        cases = (
+            ("win32", "LOCALAPPDATA", Path("home/AppData/Local")),
+            ("linux", "XDG_CACHE_HOME", Path("home/.cache")),
+        )
+        for platform, environment_key, expected_root in cases:
+            with self.subTest(platform=platform), mock.patch.dict(
+                "os.environ",
+                {
+                    "RENPY_TRANSLATION_LAB_FONT_DIR": "",
+                    environment_key: "",
+                },
+            ), mock.patch("gui_qt.font_helpers.sys.platform", platform), mock.patch(
+                "gui_qt.font_helpers.Path.home", return_value=Path("home")
+            ):
+                self.assertEqual(
+                    user_fonts_dir(),
+                    expected_root / "renpy-translation-lab" / "fonts",
+                )
+
     def test_build_font_stylesheet_empty_when_no_families(self):
         self.assertEqual(build_font_stylesheet(GuiFontFamilies()), "")
 
