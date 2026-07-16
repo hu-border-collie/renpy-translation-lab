@@ -1,7 +1,6 @@
 """Build a deterministic source ZIP for a tagged release.
 
-Unlike GitHub's automatically generated source archives, this builder expands
-Git LFS pointers so the bundled GUI fonts are usable after extraction.
+Historical refs may contain Git LFS pointers; those are expanded when present.
 """
 
 from __future__ import annotations
@@ -169,7 +168,7 @@ def build_release(ref: str, output_dir: Path) -> tuple[Path, Path, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build a source release ZIP with expanded Git LFS files.")
+    parser = argparse.ArgumentParser(description="Build a deterministic source release ZIP.")
     parser.add_argument("--ref", default="HEAD", help="Git ref to package (default: HEAD).")
     parser.add_argument(
         "--output-dir",

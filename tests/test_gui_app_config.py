@@ -1400,6 +1400,110 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(error_label.text, "")
         self.assertEqual(status_bar.messages[-1][0], "已恢复推荐值，保存后生效。")
 
+    def test_download_recommended_fonts_starts_background_worker(self):
+        class FakeWidget:
+            def __init__(self):
+                self.enabled = True
+                self.text = ""
+                self.visible = False
+
+            def setEnabled(self, value):
+                self.enabled = value
+
+            def setText(self, value):
+                self.text = value
+
+            def setVisible(self, value):
+                self.visible = value
+
+        class FakeSignal:
+            def __init__(self):
+                self.callback = None
+
+            def connect(self, callback):
+                self.callback = callback
+
+        class FakeWorker:
+            def __init__(self, parent):
+                self.parent = parent
+                self.completed = FakeSignal()
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+        button = FakeWidget()
+        label = FakeWidget()
+        progress = FakeWidget()
+        self.window._font_install_worker = None
+        self.window.download_fonts_btn = button
+        self.window.font_install_status_label = label
+        self.window.font_install_progress = progress
+
+        from gui_qt.app import QMessageBox
+
+        with (
+            mock.patch(
+                "gui_qt.app.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ),
+            mock.patch("gui_qt.app.FontInstallWorker", FakeWorker),
+        ):
+            self.window._on_download_recommended_fonts()
+
+        worker = self.window._font_install_worker
+        self.assertIsInstance(worker, FakeWorker)
+        self.assertTrue(worker.started)
+        self.assertEqual(worker.completed.callback, self.window._on_recommended_fonts_downloaded)
+        self.assertFalse(button.enabled)
+        self.assertEqual(button.text, "正在下载…")
+        self.assertTrue(progress.visible)
+        self.assertIn("正在从字体发布者", label.text)
+
+    def test_recommended_fonts_download_failure_keeps_system_fallback(self):
+        class FakeWidget:
+            def __init__(self):
+                self.text = ""
+                self.visible = True
+
+            def setText(self, value):
+                self.text = value
+
+            def setVisible(self, value):
+                self.visible = value
+
+        class FakeWorker:
+            def __init__(self):
+                self.deleted = False
+
+            def deleteLater(self):
+                self.deleted = True
+
+        worker = FakeWorker()
+        label = FakeWidget()
+        progress = FakeWidget()
+        messages = []
+        self.window._font_install_worker = worker
+        self.window.font_install_status_label = label
+        self.window.font_install_progress = progress
+        self.window._refresh_font_install_status = lambda: None
+        self.window._show_settings_status = lambda message, timeout: messages.append(
+            (message, timeout)
+        )
+
+        from gui_qt.font_worker import FontInstallResult
+
+        self.window._on_recommended_fonts_downloaded(
+            FontInstallResult(False, error="network down")
+        )
+
+        self.assertIsNone(self.window._font_install_worker)
+        self.assertTrue(worker.deleted)
+        self.assertFalse(progress.visible)
+        self.assertIn("系统字体回退", label.text)
+        self.assertIn("network down", label.text)
+        self.assertIn("下载失败", messages[-1][0])
+
     def test_theme_change_previews_without_persisting(self):
         class FakeCombo:
             def currentData(self):
