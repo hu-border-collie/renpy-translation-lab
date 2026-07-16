@@ -34,6 +34,7 @@ downloads/
 *.tmp
 *.bak
 *.orig
+/gui_qt/resources/fonts/*.ttf
 
 # RAG / memory
 rag_store/

@@ -30,30 +30,22 @@ python -m gui_qt
 
 如果未安装 PySide6，`python -m gui_qt` 会打印安装提示并退出；这不会影响 CLI。
 
-### 字体（Git LFS）
+### 可选字体
 
-GUI 字体位于 `gui_qt/resources/fonts/`，通过 **Git LFS** 存储（约 32 MB）：
+GUI 推荐使用以下字体，但字体文件不随仓库分发，也不再使用 Git LFS：
 
 - 界面正文：`HarmonyOS Sans SC`（见 `HarmonyOS_Sans_LICENSE.txt`）
 - 等宽区域（项目路径、诊断日志、CLI 命令、任务记录、API Key 列表）：`LXGW WenKai Mono GB`（见 `LXGW_WenKai_OFL.txt`）
 
-克隆仓库后请先安装并拉取 LFS 对象：
+程序未安装字体也能正常启动，并自动回退到系统 `Segoe UI` 与 `Cascadia Mono` / `Consolas`。如需获得一致的中文显示效果，可在 GUI 的「设置 → 外观 → 推荐字体」点击「下载推荐字体」。界面会先说明官方来源与预计流量，再在后台下载、校验并提示重启。
+
+也可以显式运行：
 
 ```powershell
-git lfs install
-git clone <repo-url>
-cd renpy-translation-lab
-git lfs pull
+python scripts/download_gui_fonts.py
 ```
 
-若已克隆过普通 git 仓库，补拉字体：
-
-```powershell
-git lfs install
-git lfs pull
-```
-
-启动 GUI 时自动加载字体；若 LFS 对象缺失或加载失败，会回退到系统 `Segoe UI` 与 `Consolas`。
+下载工具只访问[华为 HarmonyOS 设计资源](https://developer.huawei.com/consumer/cn/design/resource/)和[霞鹜文楷 GB 官方 Release](https://github.com/lxgw/LxgwWenkaiGB/releases)，使用固定版本与 SHA-256 校验后写入当前用户缓存目录。解压华为官方 RAR 包需要系统提供 `tar` 或 `bsdtar`；缺少时工具会明确报错。它不会在首次启动时静默联网；下载完成后重启 GUI 即可加载字体。许可证文本仍保留在 `gui_qt/resources/fonts/`。
 
 ## 主流程
 

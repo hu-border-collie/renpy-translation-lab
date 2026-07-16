@@ -189,6 +189,9 @@ from .doctor_report import (
     summarize_doctor_report,
 )
 from .doctor_worker import DoctorWorker, DoctorWorkerResult
+from .font_helpers import optional_fonts_installed, user_fonts_dir
+from .font_worker import FontInstallResult, FontInstallWorker
+
 from .games_registry_actions import handle_post_apply_registry_update
 from .games_registry_panel import GamesRegistryPanel
 from .games_registry_doctor_compare import compare_registry_with_doctor_report
@@ -434,6 +437,7 @@ class MainWindow(QMainWindow):
         self._litellm_latest_requires_python = ""
         self._litellm_catalog_source = ""
         self._litellm_connection_worker: LiteLLMConnectionTestWorker | None = None
+        self._font_install_worker: FontInstallWorker | None = None
         self._litellm_catalog_models: dict[str, tuple[str, ...]] = {}
         self._updating_litellm_provider = False
         self._games_registry_panel: GamesRegistryPanel | None = None
@@ -2379,6 +2383,37 @@ class MainWindow(QMainWindow):
         hint.setObjectName("config_hint_label")
         appearance_layout.addRow("", hint)
         layout.addWidget(appearance_box)
+
+        fonts_box = QGroupBox("推荐字体")
+        fonts_layout = self._settings_form(fonts_box)
+        self.font_install_status_label = QLabel()
+        self.font_install_status_label.setWordWrap(True)
+        self.font_install_status_label.setObjectName("config_hint_label")
+        fonts_layout.addRow("安装状态：", self.font_install_status_label)
+
+        font_actions = QWidget()
+        font_actions_layout = QHBoxLayout(font_actions)
+        font_actions_layout.setContentsMargins(0, 0, 0, 0)
+        font_actions_layout.setSpacing(8)
+        self.download_fonts_btn = QPushButton("下载推荐字体")
+        self.download_fonts_btn.setObjectName("secondary_btn")
+        self.download_fonts_btn.setToolTip(
+            "从华为和霞鹜文楷官方来源下载固定版本字体，并执行 SHA-256 校验。"
+        )
+        self.download_fonts_btn.clicked.connect(self._on_download_recommended_fonts)
+        font_actions_layout.addWidget(self.download_fonts_btn)
+        font_actions_layout.addStretch(1)
+        fonts_layout.addRow("", font_actions)
+
+        self.font_install_progress = QProgressBar()
+        self.font_install_progress.setObjectName("font_install_progress")
+        self.font_install_progress.setRange(0, 0)
+        self.font_install_progress.setFormat("正在后台下载并校验推荐字体…")
+        self.font_install_progress.setVisible(False)
+        fonts_layout.addRow(self.font_install_progress)
+        layout.addWidget(fonts_box)
+        self._refresh_font_install_status()
+
         layout.addStretch(1)
         return page
 
@@ -6648,6 +6683,86 @@ class MainWindow(QMainWindow):
             except TypeError:
                 return str(value)
         return str(value or "")
+
+
+    def _refresh_font_install_status(self) -> None:
+        label = getattr(self, "font_install_status_label", None)
+        button = getattr(self, "download_fonts_btn", None)
+        if label is None:
+            return
+        installed = optional_fonts_installed()
+        if installed:
+            label.setText(
+                f"已安装到 {user_fonts_dir()}。GUI 将使用 HarmonyOS Sans SC 和 "
+                "LXGW WenKai Mono GB。"
+            )
+        else:
+            label.setText(
+                "尚未完整安装推荐字体；当前使用系统字体回退，不影响 GUI 功能。"
+            )
+        if button is not None and getattr(self, "_font_install_worker", None) is None:
+            button.setEnabled(True)
+            button.setText("重新下载推荐字体" if installed else "下载推荐字体")
+
+    def _on_download_recommended_fonts(self) -> None:
+        if getattr(self, "_font_install_worker", None) is not None:
+            return
+        reply = QMessageBox.question(
+            self,
+            "下载推荐字体",
+            (
+                "将从华为官方资源下载 HarmonyOS Sans，并从霞鹜文楷官方 Release "
+                "下载 LXGW WenKai Mono GB。\n\n"
+                "预计下载约 80 MB；下载后会校验 SHA-256，并保存到当前用户缓存目录。"
+                "是否继续？"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        button = getattr(self, "download_fonts_btn", None)
+        if button is not None:
+            button.setEnabled(False)
+            button.setText("正在下载…")
+        label = getattr(self, "font_install_status_label", None)
+        if label is not None:
+            label.setText("正在从字体发布者的官方来源下载并校验，请稍候…")
+        progress = getattr(self, "font_install_progress", None)
+        if progress is not None:
+            progress.setVisible(True)
+
+        worker = FontInstallWorker(self)
+        worker.completed.connect(self._on_recommended_fonts_downloaded)
+        self._font_install_worker = worker
+        worker.start()
+
+    def _on_recommended_fonts_downloaded(self, result: FontInstallResult) -> None:
+        worker = getattr(self, "_font_install_worker", None)
+        self._font_install_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        progress = getattr(self, "font_install_progress", None)
+        if progress is not None:
+            progress.setVisible(False)
+        self._refresh_font_install_status()
+        if result.ok:
+            self._show_settings_status("推荐字体下载完成；重启 GUI 后生效。", 8000)
+            QMessageBox.information(
+                self,
+                "字体安装完成",
+                "HarmonyOS Sans SC 和 LXGW WenKai Mono GB 已安装。\n"
+                "请重启 GUI 以加载推荐字体。",
+            )
+            return
+        label = getattr(self, "font_install_status_label", None)
+        if label is not None:
+            label.setText(
+                "字体下载失败，GUI 将继续使用系统字体回退。\n"
+                f"错误：{result.error}"
+            )
+        self._show_settings_status("推荐字体下载失败；已继续使用系统字体。", 8000)
 
     def _show_advanced_setting_errors(self, errors: dict[str, str]) -> None:
         labels = getattr(self, "_advanced_setting_error_labels", {})

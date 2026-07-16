@@ -44,7 +44,7 @@ python -m gui_qt
 
 ### 1. 安装
 
-正式发行版可从 [GitHub Releases](https://github.com/hu-border-collie/renpy-translation-lab/releases) 下载带完整 Git LFS 字体的 `source.zip` 并按随附 SHA-256 文件校验；也可以克隆对应 tag：
+正式发行版可从 [GitHub Releases](https://github.com/hu-border-collie/renpy-translation-lab/releases) 下载 `source.zip` 并按随附 SHA-256 文件校验；也可以克隆对应 tag。GUI 推荐字体改为从发布者官方来源按需下载，详见 [GUI 工作台文档](docs/gui_workbench.md#可选字体)。
 
 ```bash
 git clone https://github.com/hu-border-collie/renpy-translation-lab.git

@@ -1,8 +1,10 @@
-"""Bundled GUI font loading."""
+"""Optional GUI font loading with system-font fallback."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
+import sys
 
 MONO_FONT_SELECTORS = (
     "QListWidget#api_key_list",
@@ -35,6 +37,39 @@ def bundled_fonts_dir(resources_dir: Path) -> Path:
     return resources_dir / "fonts"
 
 
+def user_fonts_dir() -> Path:
+    """Return the per-user directory used by ``download_gui_fonts.py``."""
+    override = os.environ.get("RENPY_TRANSLATION_LAB_FONT_DIR")
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "win32":
+        cache_root = Path(
+            os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
+        )
+    elif sys.platform == "darwin":
+        cache_root = Path.home() / "Library" / "Caches"
+    else:
+        cache_root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return cache_root / "renpy-translation-lab" / "fonts"
+
+
+def optional_font_files() -> tuple[Path, Path]:
+    fonts_dir = user_fonts_dir()
+    return fonts_dir / UI_FONT_FILENAME, fonts_dir / MONO_FONT_FILENAME
+
+
+def optional_fonts_installed() -> bool:
+    return all(path.is_file() for path in optional_font_files())
+
+
+def _font_path(resources_dir: Path, filename: str) -> Path:
+    for fonts_dir in (user_fonts_dir(), bundled_fonts_dir(resources_dir)):
+        candidate = fonts_dir / filename
+        if candidate.is_file():
+            return candidate
+    return user_fonts_dir() / filename
+
+
 def _qss_family_name(family: str) -> str:
     escaped = family.replace('"', '\\"')
     return f'"{escaped}"'
@@ -55,9 +90,8 @@ def _load_font_family(font_path: Path) -> str:
 
 
 def load_gui_fonts(resources_dir: Path) -> GuiFontFamilies:
-    fonts_dir = bundled_fonts_dir(resources_dir)
-    ui_family = _load_font_family(fonts_dir / UI_FONT_FILENAME)
-    mono_family = _load_font_family(fonts_dir / MONO_FONT_FILENAME)
+    ui_family = _load_font_family(_font_path(resources_dir, UI_FONT_FILENAME))
+    mono_family = _load_font_family(_font_path(resources_dir, MONO_FONT_FILENAME))
     return GuiFontFamilies(ui_family=ui_family, mono_family=mono_family)
 
 
