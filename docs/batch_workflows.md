@@ -18,7 +18,7 @@
 - 术语表中的固定译法、保留英文名/缩写、玩家名比较行等启发式规则
 - 特定 UI/制作人员名单文件路径上的静态文本（`batch.non_chinese_validation` 白名单，build 时写入 manifest `non_chinese_rules`）
 
-可在 `translator_config.json` 的 `batch.non_chinese_validation` 中覆盖或追加路径；GUI 高级设置提供「非中文白名单追加路径」。默认白名单与当前 After Class / Glory Hounds 项目兼容。
+可在 `translator_config.json` 的 `batch.non_chinese_validation` 中覆盖或追加路径；GUI 高级设置提供「非中文白名单追加路径」。默认白名单已覆盖真实项目烟测中遇到的常见 UI / 制作人员名单路径。
 
 若目标语言为日语、韩语等，`No Chinese characters` 失败可能属于预期行为，需要调整校验策略或白名单。换语言前请先跑 `doctor` 确认 TL 路径，并在 `check` 结果中逐项确认失败原因。
 
@@ -104,7 +104,7 @@ python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<pac
 
 `compare-variants` 用同一批 manifest chunk 在**同步模式**下跑多个配置变体，生成并排 Markdown 报告，**不会写回** `.rpy` 或 `glossary.json`。适合比较 Story Memory、RAG、macro setting 等上下文层对译文的影响。
 
-图形界面入口见 [GUI 工作台 · 翻译 A/B 对比](gui_workbench.md#翻译-ab-对比)：在顶层「诊断与工具」页工具栏打开，通过对话框选择 baseline 与 Story Memory / RAG / 原文索引的强制开/关变体，无需手写 `variants.json`。
+图形界面入口见 [GUI 工作台 · 翻译 A/B 对比](gui_workbench.md#翻译-ab-对比)：在「诊断与运行日志」页工具栏打开，通过对话框选择 baseline 与 Story Memory / RAG / 原文索引的强制开/关变体，无需手写 `variants.json`。
 
 ```bash
 python gemini_translate_batch.py compare-variants logs/batch_jobs/<package>/manifest.json \

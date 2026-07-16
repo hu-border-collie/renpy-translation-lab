@@ -6,12 +6,15 @@
 
 ## 本地配置文件
 
-把示例文件复制为本地配置：
+工具级配置放在仓库根目录：
 
 - `api_keys.example.json` -> `api_keys.json`
 - `translator_config.example.json` -> `translator_config.json`
-- `glossary.example.json` -> `glossary.json`
-- `macro_setting.example.md` -> `macro_setting.md`
+
+项目资产放在当前 `game_root`（通常就是游戏的 `work` 目录）：
+
+- `glossary.example.json` -> `<game_root>/glossary.json`
+- `macro_setting.example.md` -> `<game_root>/macro_setting.md`
 
 这些文件通常包含 API key、本地游戏路径、项目私有术语或剧情设定，不应提交到公开仓库。
 
@@ -20,8 +23,9 @@
 - `api_keys.json` 保存 Gemini API Key；旧的 `batch_size/max_chars` 等字段仍兼容，但不再推荐写在这里。
 - `translator_config.json` 保存**工具级**设置：当前 `game_root`、模型、include 过滤、同步 / Batch 分块参数，以及 RAG/原文索引的**全局默认值**（当前项目尚未写过项目文件时使用）。
 - **按项目生效**的批量上下文开关见下一节 `project_context_settings.json`。
-- `glossary.json` 通常包含项目私有术语；不存在时脚本会退回内置默认术语规则。
-- `macro_setting.md` 往往包含剧情、角色口吻、世界观约束，可供 Batch 的 `macro_setting_file` 使用。
+- `glossary.json` 通常包含项目私有术语；不存在时脚本会退回内置默认术语规则。`translator_config.json` 的 `glossary_file` 应指向当前项目的文件。
+- `macro_setting.md` 往往包含剧情、角色口吻、世界观约束，可供 Batch 的 `batch.macro_setting_file` 使用。
+- GUI 切换项目时会把上述两个路径同步到当前 `work` 目录；纯 CLI 使用者若保留相对路径，请确保仓库根目录没有同名旧资产，或直接填写绝对路径，避免加载到其他项目的文件。
 
 ## 项目级上下文开关
 

@@ -2,6 +2,8 @@
 
 根目录 `README.md` 负责快速上手和项目定位；本目录收纳配置、Batch、上下文、GUI 与项目边界等专题说明。
 
+**当前状态：稳定版。** 稳定范围、验证记录、交付方式与不覆盖事项见 [项目说明](project_notes.md)。
+
 **读文档时**：用户手册以「现行」一组为准；标为历史的文稿只作设计/审计背景，不要当当前界面说明。
 
 ## 推荐阅读（现行）
@@ -22,7 +24,7 @@
 ### 现行：配置与 GUI
 
 - [安装与本地配置](setup.md)：`translator_config.json`、**按项目**的 `project_context_settings.json`、work 目录、SDK / TL 模板。
-- [GUI 工作台](gui_workbench.md)：当前 PySide6 界面（左导航五个真实页面、页内状态标签、设置分区、诊断与工具、写回安全边界）。
+- [GUI 工作台](gui_workbench.md)：当前 PySide6 界面（统一侧边导航、项目与环境、任务页、设置、诊断与运行日志、写回安全边界）。
 - [工作区项目总表](games_registry.md)：`games_registry.json` / `GAMES.md`、CLI 与 GUI 刷新边界。
 
 ### 现行：Batch、上下文与检查
@@ -44,6 +46,7 @@
 
 - [GUI 信息架构重组计划](gui_ia_redesign.md)：Epic #157 的 P0–P3 历史设计 SSOT，并记录后续 #176 页面化交付衔接。文中「分析与准备」「诊断页」等多为改造前用语。
 - [翻译全生命周期审计](translation_workflow_audit.md)：流水线与门禁的代码审计快照，可能落后于最新实现细节。
+- [Design QA 验收记录](../design-qa.md)：2026-07 统一侧边导航与页面归属的视觉/自动化验收快照；不是用户手册。
 
 ## 配置分层（速查）
 
