@@ -1,14 +1,17 @@
 # -*- coding: utf-8 -*-
 import argparse
 
+from project_version import __version__
 import translator_runtime as runtime
 from translator_runtime import *  # noqa: F401,F403
 
 
 def build_arg_parser():
-    return argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         description="Synchronous translator for Ren'Py tl files using the google-genai SDK."
     )
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
+    return parser
 
 
 def main(argv=None):

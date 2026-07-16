@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QToolButton,
 )
+from project_version import __version__
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
 from .responsive_layout import FlowButtonBar, ResponsiveActionPanel
@@ -9544,6 +9545,8 @@ def run_app(argv: list[str] | None = None) -> int:
         argv = sys.argv
 
     app = QApplication(argv)
+    app.setApplicationName("Ren'Py Translation Lab")
+    app.setApplicationVersion(__version__)
     resources_dir = Path(__file__).resolve().parent / "resources"
     project_state = ProjectState()
     try:
