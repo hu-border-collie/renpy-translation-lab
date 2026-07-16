@@ -3,9 +3,16 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gui_qt.font_worker import FontInstallResult, run_font_install
+try:
+    from gui_qt.font_worker import FontInstallResult, run_font_install
+except ImportError as exc:
+    FontInstallResult = None  # type: ignore[assignment,misc]
+    IMPORT_ERROR = exc
+else:
+    IMPORT_ERROR = None
 
 
+@unittest.skipIf(FontInstallResult is None, f"GUI dependencies are unavailable: {IMPORT_ERROR}")
 class FontWorkerTests(unittest.TestCase):
     def test_run_font_install_returns_installed_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:
