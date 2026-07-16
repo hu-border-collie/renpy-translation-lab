@@ -28,6 +28,7 @@ import translation_ab_experiment
 import story_memory
 import translation_core
 import translator_runtime as runtime
+from project_version import __version__
 from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
 
 try:
@@ -9082,6 +9083,7 @@ def build_arg_parser():
     parser = argparse.ArgumentParser(
         description='Batch translator for Ren\'Py tl files using Gemini Batch API.'
     )
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     subparsers = parser.add_subparsers(dest='command')
 
     subparsers.add_parser('doctor', help='Inspect prepare, SDK, and TL template compatibility without writing files.')

@@ -2,7 +2,7 @@
 
 一个面向 Ren'Py 视觉小说的翻译工作台，聚焦 Gemini Batch 作业流、上下文增强、轻量 RAG 记忆层和写回前安全校验。
 
-**当前状态：稳定版。** 核心 Batch 流程已经在约 11 万英文词规模的真实 Ren'Py 项目上完整跑通：从预建上下文、生成 Batch 包、提交和下载结果，到 `check` 安全校验、retry 合并和 `apply` 写回。CLI 仍是事实来源和高级用户主路径；仓库另提供稳定的可选图形工作台降低普通流程门槛。当前正式交付方式是从源码安装运行，暂不提供零配置安装包。
+**当前状态：稳定版（v1.0.0）。** 核心 Batch 流程已经在约 11 万英文词规模的真实 Ren'Py 项目上完整跑通：从预建上下文、生成 Batch 包、提交和下载结果，到 `check` 安全校验、retry 合并和 `apply` 写回。CLI 仍是事实来源和高级用户主路径；仓库另提供稳定的可选图形工作台降低普通流程门槛。当前正式交付方式是从源码安装运行，暂不提供零配置安装包。版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 这是什么
 
@@ -43,6 +43,8 @@ python -m gui_qt
 ## 快速开始
 
 ### 1. 安装
+
+正式发行版可从 [GitHub Releases](https://github.com/hu-border-collie/renpy-translation-lab/releases) 下载带完整 Git LFS 字体的 `source.zip` 并按随附 SHA-256 文件校验；也可以克隆对应 tag：
 
 ```bash
 git clone https://github.com/hu-border-collie/renpy-translation-lab.git
