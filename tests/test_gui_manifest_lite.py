@@ -7,6 +7,8 @@ from gui_qt.manifest_lite import (
     read_manifest_index_fields,
     read_manifest_lite,
 )
+from gui_qt.probe_report import translation_probe_ready
+from gui_qt.split_report import translation_split_ready
 
 
 class GuiManifestLiteTests(unittest.TestCase):
@@ -14,8 +16,12 @@ class GuiManifestLiteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "manifest.json"
             payload = {
+                "version": 2,
+                "manifest_version": 2,
+                "core_schema_version": 2,
                 "mode": "translation",
                 "base_dir": "C:/game/work",
+                "input_jsonl_path": "C:/pkg/requests.jsonl",
                 "job_name": "batches/demo",
                 "job_state": "JOB_STATE_SUCCEEDED",
                 "summary": {"item_count": 12, "chunk_count": 3, "file_count": 2},
@@ -29,11 +35,17 @@ class GuiManifestLiteTests(unittest.TestCase):
             lite = read_manifest_lite(path)
 
             self.assertEqual(lite.get("mode"), "translation")
+            self.assertEqual(lite.get("version"), 2)
+            self.assertEqual(lite.get("manifest_version"), 2)
+            self.assertEqual(lite.get("core_schema_version"), 2)
+            self.assertEqual(lite.get("input_jsonl_path"), "C:/pkg/requests.jsonl")
             self.assertEqual(lite.get("job_state"), "JOB_STATE_SUCCEEDED")
             self.assertEqual(lite.get("summary", {}).get("item_count"), 12)
             self.assertEqual(lite.get("last_check_summary", {}).get("safety_level"), "safe")
             self.assertEqual(lite.get("applied_at"), "2026-06-30T12:00:00")
             self.assertNotIn("chunks", lite)
+            self.assertTrue(translation_probe_ready(str(path), lite)[0])
+            self.assertTrue(translation_split_ready(str(path), lite)[0])
 
     def test_read_manifest_lite_skips_chunks_beyond_head_window(self):
         with tempfile.TemporaryDirectory() as tmp:

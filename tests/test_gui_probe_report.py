@@ -106,6 +106,19 @@ class GuiProbeReportTests(unittest.TestCase):
         self.assertTrue(ready)
         self.assertEqual(message, "")
 
+    def test_translation_probe_ready_accepts_v2_translation_manifest(self):
+        ready, message = translation_probe_ready(
+            r"C:\pkg\manifest.json",
+            {
+                "mode": "translation",
+                "version": 2,
+                "manifest_version": 2,
+                "input_jsonl_path": r"C:\pkg\requests.jsonl",
+            },
+        )
+        self.assertTrue(ready)
+        self.assertEqual(message, "")
+
 
 if __name__ == "__main__":
     unittest.main()

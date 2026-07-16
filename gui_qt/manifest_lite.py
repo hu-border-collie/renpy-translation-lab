@@ -20,13 +20,20 @@ _HEAD_SCALAR_KEYS = (
     "mode",
     "base_dir",
     "display_name",
+    "input_jsonl_path",
     "job_name",
     "job_state",
     "job_error",
     "result_jsonl_path",
     "retry_of_manifest",
 )
-_HEAD_INT_KEYS = ("split_index", "split_total")
+_HEAD_INT_KEYS = (
+    "version",
+    "manifest_version",
+    "core_schema_version",
+    "split_index",
+    "split_total",
+)
 
 _TAIL_OBJECT_KEYS = (
     "last_check_summary",
