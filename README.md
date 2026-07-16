@@ -72,7 +72,7 @@ pip install -r requirements.txt
 - `glossary.example.json` -> `<work>/glossary.json`
 - `macro_setting.example.md` -> `<work>/macro_setting.md`（可选）
 
-至少需要提供 Gemini API key，并让 `translator_config.json`、`GAME_ROOT` 或 `SA_GAME_ROOT` 指向目标游戏的 `work` 目录。`glossary_file` 与 `batch.macro_setting_file` 应指向该项目的资产；GUI 切换项目时会同步这些路径。详细配置说明见 [安装与本地配置](docs/setup.md)。
+至少需要提供 Gemini API key，并让 `translator_config.json` 中的 `game_root` 字段，或环境变量 `GAME_ROOT` / `SA_GAME_ROOT` 指向目标游戏的 `work` 目录。`glossary_file` 与 `batch.macro_setting_file` 应指向该项目的资产；GUI 切换项目时会同步这些路径。详细配置说明见 [安装与本地配置](docs/setup.md)。
 
 ### 3. 准备项目目录
 
