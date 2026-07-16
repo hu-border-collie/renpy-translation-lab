@@ -9,7 +9,7 @@
 | 能力 | 负责方 |
 | --- | --- |
 | 浏览 / 切换工作区内多个项目 | **Games Registry**（本功能） |
-| 检查**当前**项目能否开始翻译 | 工作台「环境检查」（`collect_doctor_report`） |
+| 检查**当前**项目能否开始翻译 | 「项目与环境」的环境检查（`collect_doctor_report`） |
 | 批量翻译、写回、安全检查 | 现有 CLI + GUI 主流程 |
 
 Registry 回答的是：「工作区里有哪些项目？各自路径、版本、游玩 / 翻译状态大致如何？」  
@@ -135,9 +135,9 @@ python games_registry.py show --project game_example
 
 若当前项目不在总表中，会跳过 registry 记录（不影响写回本身）。
 
-### 环境检查（工作台）
+### 环境检查（项目与环境）
 
-工作台 **「环境检查」** 在后台对**当前选中项目**运行 `collect_doctor_report()`，并渲染完整摘要（warnings、记忆库、待译、建议等），用于解锁「开始翻译」。
+「项目与环境」的 **环境检查** 在后台对**当前选中项目**运行 `collect_doctor_report()`，并渲染完整摘要（warnings、记忆库、待译、建议等），用于解锁「开始翻译」。
 
 这与 registry 深度刷新**共用同一 doctor 引擎**，但：
 
