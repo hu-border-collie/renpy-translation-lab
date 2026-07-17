@@ -235,6 +235,7 @@ from litellm_provider_config import (
 )
 from .project_state import ProjectState
 from .theme import apply_theme, system_prefers_dark
+from .icon_provider import set_tabler_button_icon
 from .theme_helpers import (
     DEFAULT_THEME_PREFERENCE,
     THEME_DARK,
@@ -469,6 +470,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.tabBar().hide()
         self._populate_shell_nav()
         self._setup_shell_status_bar()
+        self._refresh_action_icons()
 
         self.batch_model_combo.currentTextChanged.connect(self._on_batch_model_changed)
         self.batch_thinking_combo.currentIndexChanged.connect(self._on_batch_thinking_changed)
@@ -2964,6 +2966,89 @@ class MainWindow(QMainWindow):
             resolve_effective_theme(self._theme_preference, system_is_dark=system_is_dark)
             == THEME_DARK
         )
+
+    def _refresh_action_icons(self) -> None:
+        """Apply the restrained Tabler action-icon set for the active theme."""
+        dark = self._effective_theme_is_dark()
+        resources_dir = self._resources_dir
+
+        specs: list[tuple[object, str, str]] = [
+            (getattr(self, "header_log_btn", None), "file-text", "default"),
+            (getattr(self, "global_switch_project_btn", None), "folder-open", "default"),
+            (getattr(self, "global_browse_project_btn", None), "folder-open", "default"),
+            (getattr(self, "doctor_btn", None), "stethoscope", "default"),
+            (getattr(self, "bootstrap_work_btn", None), "folder-cog", "default"),
+            (getattr(self, "translate_btn", None), "language", "on_accent"),
+            (getattr(self, "resume_btn", None), "player-play", "default"),
+            (getattr(self, "kill_btn", None), "player-stop", "danger"),
+            (getattr(self, "apply_btn", None), "file-import", "success"),
+            (getattr(self, "apply_revision_btn", None), "file-import", "success"),
+            (getattr(self, "recheck_btn", None), "refresh", "default"),
+            (getattr(self, "reload_config_btn", None), "refresh", "default"),
+            (getattr(self, "save_config_btn", None), "device-floppy", "on_accent"),
+        ]
+
+        batch_page = getattr(self, "batch_translation_page", None)
+        if batch_page is not None:
+            specs.extend(
+                (
+                    (batch_page.buttons.get("start"), "language", "on_accent"),
+                    (batch_page.buttons.get("resume"), "player-play", "default"),
+                    (batch_page.buttons.get("stop"), "player-stop", "danger"),
+                )
+            )
+
+        sync_page = getattr(self, "sync_translation_page", None)
+        if sync_page is not None:
+            specs.extend(
+                (
+                    (sync_page.start_btn, "language", "on_accent"),
+                    (sync_page.stop_btn, "player-stop", "danger"),
+                )
+            )
+
+        keywords_page = getattr(self, "keywords_page", None)
+        if keywords_page is not None:
+            specs.extend(
+                (
+                    (keywords_page.start_btn, "language", "on_accent"),
+                    (keywords_page.resume_btn, "player-play", "default"),
+                    (keywords_page.stop_btn, "player-stop", "default"),
+                    (keywords_page.merge_btn, "file-import", "default"),
+                )
+            )
+
+        revision_page = getattr(self, "revision_page", None)
+        if revision_page is not None:
+            specs.extend(
+                (
+                    (revision_page.start_btn, "file-text", "on_accent"),
+                    (revision_page.resume_btn, "player-play", "default"),
+                    (revision_page.stop_btn, "player-stop", "default"),
+                    (revision_page.writeback_btn, "file-import", "default"),
+                )
+            )
+
+        context_page = getattr(self, "context_library_page", None)
+        if context_page is not None:
+            specs.extend(
+                (
+                    (context_page.bootstrap_rag_btn, "folder-cog", "on_accent"),
+                    (context_page.bootstrap_source_index_btn, "folder-cog", "on_accent"),
+                    (context_page.open_settings_btn, "folder-cog", "default"),
+                    (context_page.stop_btn, "player-stop", "danger"),
+                )
+            )
+
+        for button, name, role in specs:
+            if isinstance(button, QPushButton):
+                set_tabler_button_icon(
+                    button,
+                    resources_dir,
+                    name,
+                    dark=dark,
+                    role=role,
+                )
 
     def _refresh_split_status_table_after_theme_change(self) -> None:
         self._configure_split_status_table_hover_palette()
@@ -9370,6 +9455,7 @@ class MainWindow(QMainWindow):
         try:
             resources_dir = getattr(self, "_resources_dir", Path(__file__).resolve().parent / "resources")
             apply_theme(qt_app, resources_dir, self._theme_preference)
+            self._refresh_action_icons()
             if hasattr(self, "_log_highlighter"):
                 self._log_highlighter.update_theme(self._effective_theme_is_dark())
             QTimer.singleShot(0, self._refresh_split_status_table_after_theme_change)

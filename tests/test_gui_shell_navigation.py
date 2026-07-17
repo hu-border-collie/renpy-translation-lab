@@ -76,6 +76,11 @@ class GuiShellNavigationTests(unittest.TestCase):
             self.assertTrue(item.icon().isNull(), route)
             self.assertTrue(item.text(), route)
 
+        # Tabler icons are reserved for actions; navigation stays text-led.
+        self.assertFalse(self.window.header_log_btn.icon().isNull())
+        self.assertFalse(self.window.batch_translation_page.buttons["start"].icon().isNull())
+        self.assertFalse(self.window.save_config_btn.icon().isNull())
+
         self.window._activate_shell_route("project_prepare")
         self.assertFalse(self.window.global_project_bar.isHidden())
 
