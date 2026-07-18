@@ -16,7 +16,8 @@
     "refresh_existing_template": true,
     "language": "schinese",
     "renpy_sdk_dir": "",
-    "python_exe": ""
+    "python_exe": "",
+    "allow_shell_commands": false
   },
   "sync": {
     "backend": "gemini",

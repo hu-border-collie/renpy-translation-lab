@@ -650,7 +650,8 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "prepare_unpack_command",
         ("prepare", "unpack_command"),
         "自定义解包命令",
-        "可填命令字符串，或 JSON 数组。留空使用内置解包流程。",
+        "推荐 JSON 数组 argv，例如 [\"python\", \"unpack.py\", \"{archive}\"]。"
+        "字符串形式会走 shell，需同时开启「允许 shell 字符串命令」。留空使用内置解包。",
         "json",
         "",
         "准备流程",
@@ -660,11 +661,22 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "prepare_template_command",
         ("prepare", "template_command"),
         "自定义模板命令",
-        "可填命令字符串，或 JSON 数组。留空使用内置模板流程。",
+        "推荐 JSON 数组 argv，例如 [\"python\", \"{launcher_py}\", \"{base_dir}\", \"translate\", \"{language}\"]。"
+        "字符串形式会走 shell，需同时开启「允许 shell 字符串命令」。留空使用内置模板流程。",
         "json",
         "",
         "准备流程",
         allow_empty=True,
+    ),
+    SettingField(
+        "prepare_allow_shell_commands",
+        ("prepare", "allow_shell_commands"),
+        "允许 shell 字符串命令（高风险）",
+        "开启后，自定义准备命令才可用 shell 字符串执行。"
+        "translator_config.json 视为可执行本地配置；仅在完全信任该配置时启用。默认关闭。",
+        "bool",
+        False,
+        "准备流程",
     ),
     SettingField(
         "batch_retry_chunk_size",

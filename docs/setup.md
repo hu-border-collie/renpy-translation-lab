@@ -81,6 +81,8 @@ Game_Example/
 
 不要用 Ren'Py 的 `--empty` 生成空模板。本工具的初译流程需要目标行保留原文，之后再把目标行或 `new` 行替换成中文。
 
+**信任边界：** `translator_config.json` 是**可执行的本地配置**，不只是数据文件。`prepare.unpack_command` / `prepare.template_command` 会在准备阶段在本机运行。推荐使用 **argv 列表**；shell 字符串命令默认拒绝，只有显式设置 `prepare.allow_shell_commands: true` 后才允许（doctor / GUI 会标高风险）。不要加载来源不明的项目配置。
+
 可以通过 `translator_config.json` 或环境变量 `RENPY_SDK_DIR` 指定 SDK 位置；如果没有配置，脚本会尝试在 `game_root` 附近和工具工作区里自动查找 `renpy-*-sdk`：
 
 ```json
@@ -92,7 +94,15 @@ Game_Example/
     "generate_template": true,
     "refresh_existing_template": true,
     "language": "schinese",
-    "renpy_sdk_dir": "C:/RenPy/renpy-8.5.2-sdk"
+    "renpy_sdk_dir": "C:/RenPy/renpy-8.5.2-sdk",
+    "template_command": [
+      "{python_exe}",
+      "{launcher_py}",
+      "{base_dir}",
+      "translate",
+      "{language}"
+    ],
+    "allow_shell_commands": false
   }
 }
 ```
