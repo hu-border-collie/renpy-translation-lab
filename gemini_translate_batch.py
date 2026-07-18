@@ -8185,11 +8185,7 @@ DOCTOR_STRING_BLOCK_RE = re.compile(r'^translate\s+\S+\s+strings\s*:')
 
 
 def _stringify_command(command):
-    if command is None:
-        return ''
-    if isinstance(command, list):
-        return ' '.join(str(part) for part in command)
-    return str(command)
+    return legacy.describe_prepare_command(command)
 
 
 def collect_tl_doctor_counts():
@@ -8877,6 +8873,27 @@ def collect_doctor_report():
         else:
             warnings.append('Ren\'Py SDK/game launcher not found; existing TL files can still be processed.')
 
+    # Custom prepare commands are a trusted local execution boundary.
+    allow_shell = bool(getattr(legacy, 'PREP_ALLOW_SHELL_COMMANDS', False))
+    shell_command_fields = []
+    if legacy.prepare_command_uses_shell(getattr(legacy, 'PREP_UNPACK_COMMAND', None)):
+        shell_command_fields.append('prepare.unpack_command')
+    if legacy.prepare_command_uses_shell(getattr(legacy, 'PREP_TEMPLATE_COMMAND', None)):
+        shell_command_fields.append('prepare.template_command')
+    if allow_shell:
+        warnings.append(
+            'HIGH RISK: prepare.allow_shell_commands is enabled. '
+            'translator_config.json is executable local configuration and shell-string '
+            'prepare commands can run arbitrary system commands during prepare. '
+            'Prefer argv lists and disable shell mode unless you fully trust this config.'
+        )
+    if shell_command_fields:
+        warnings.append(
+            'HIGH RISK: shell-string prepare command(s) configured: '
+            + ', '.join(shell_command_fields)
+            + '. Resolved commands run under game_root with shell=True.'
+        )
+
     if tl_path_invalid:
         mode = 'blocked_invalid_tl_subdir'
     elif has_tl_files:
@@ -8931,9 +8948,13 @@ def collect_doctor_report():
         'can_generate_template': can_generate_template,
         'template_command_kind': template_info.get('kind', ''),
         'template_command': _stringify_command(template_info.get('command')),
+        'template_command_cwd': template_info.get('cwd', ''),
+        'template_command_shell': bool(template_info.get('shell')),
         'template_reason': template_info.get('reason', ''),
         'python_exe': template_info.get('python_exe', ''),
         'launcher_py': template_info.get('launcher_py', ''),
+        'allow_shell_commands': allow_shell,
+        'shell_prepare_command_fields': list(shell_command_fields),
         'mode': mode,
         'counts': counts,
         'pending_task_count': pending_task_count,
@@ -8988,8 +9009,14 @@ def print_doctor_report(report):
     if report['can_generate_template']:
         print(f"- Template generation: available ({report['template_command_kind']})")
         print(f"- Template command: {report['template_command']}")
+        if report.get('template_command_cwd'):
+            print(f"- Template cwd: {report['template_command_cwd']}")
+        if report.get('template_command_shell'):
+            print('- Template shell: True (HIGH RISK)')
     else:
         print(f"- Template generation: unavailable ({report['template_reason'] or 'no command resolved'})")
+    if report.get('allow_shell_commands'):
+        print('- Allow shell prepare commands: True (HIGH RISK; trusted local config only)')
     print(f"- Mode: {report['mode']}")
     print(f"- Is work root: {report.get('is_work_root', False)}")
     print(

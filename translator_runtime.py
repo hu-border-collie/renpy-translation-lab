@@ -68,6 +68,8 @@ PREP_LAUNCHER_PY = ""
 PREP_PYTHON_EXE = ""
 PREP_UNPACK_COMMAND = None
 PREP_TEMPLATE_COMMAND = None
+# String prepare commands run with shell=True only when this opt-in is set.
+PREP_ALLOW_SHELL_COMMANDS = False
 LOG_DIR = os.path.join(ROOT_DIR, "logs")
 FAILED_LOG = os.path.join(LOG_DIR, "translation_failures_v2.jsonl")
 PROGRESS_LOG = os.path.join(LOG_DIR, "translation_progress_v2.json")
@@ -605,22 +607,67 @@ def resolve_story_memory_graph_path(value):
     return _resolve_preferred_path_from_bases(value, (ROOT_DIR, BASE_DIR, TOOL_DIR))
 
 
-def _coerce_command(value):
+class InvalidPrepareCommandError(ValueError):
+    """Raised when a prepare command is malformed or shell mode is not allowed."""
+
+
+def _coerce_command(value, *, field_name="command", allow_shell=False):
+    """Normalize a prepare command to an argv list or (opt-in) shell string.
+
+    Preferred form is a JSON/argv list such as ``["python", "unpack.py"]``.
+    Plain strings are executed with ``shell=True`` only when *allow_shell* is
+    true (``prepare.allow_shell_commands``).
+    """
     if value is None:
         return None
     if isinstance(value, str):
         text = value.strip()
-        return text if text else None
+        if not text:
+            return None
+        if not allow_shell:
+            raise InvalidPrepareCommandError(
+                f"{field_name} is a shell string, but prepare.allow_shell_commands "
+                "is not enabled. Prefer an argv list "
+                '(example: ["python", "script.py", "{base_dir}"]) or set '
+                "prepare.allow_shell_commands to true for trusted local configs only."
+            )
+        return text
     if isinstance(value, list):
         cmd = []
         for item in value:
             if item is None:
                 continue
+            if not isinstance(item, (str, int, float)):
+                raise InvalidPrepareCommandError(
+                    f"{field_name} argv entries must be strings "
+                    f"(got {type(item).__name__})."
+                )
             token = str(item).strip()
             if token:
                 cmd.append(token)
         return cmd or None
-    return None
+    raise InvalidPrepareCommandError(
+        f"{field_name} must be an argv list or (with allow_shell_commands) a string; "
+        f"got {type(value).__name__}."
+    )
+
+
+def describe_prepare_command(command):
+    """Return a single-line display string for logs and doctor reports."""
+    if command is None:
+        return ""
+    if isinstance(command, str):
+        return command
+    if isinstance(command, (list, tuple)):
+        try:
+            return subprocess.list2cmdline([str(part) for part in command])
+        except Exception:
+            return " ".join(str(part) for part in command)
+    return str(command)
+
+
+def prepare_command_uses_shell(command):
+    return isinstance(command, str)
 
 
 def refresh_derived_terms():
@@ -862,6 +909,7 @@ def load_translator_settings():
     global BASE_DIR, TL_DIR, TL_SUBDIR, ENV_GAME_ROOT, WORK_GAME_DIR, SOURCE_GAME_DIR, GLOSSARY_FILE
     global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_REFRESH_EXISTING_TEMPLATE, PREP_LANGUAGE
     global PREP_RENPY_SDK_DIR, PREP_LAUNCHER_PY, PREP_PYTHON_EXE, PREP_UNPACK_COMMAND, PREP_TEMPLATE_COMMAND
+    global PREP_ALLOW_SHELL_COMMANDS
 
     config = {}
     if os.path.exists(TRANSLATOR_CONFIG):
@@ -975,8 +1023,25 @@ def load_translator_settings():
     else:
         PREP_PYTHON_EXE = ""
 
-    PREP_UNPACK_COMMAND = _coerce_command(prepare.get("unpack_command"))
-    PREP_TEMPLATE_COMMAND = _coerce_command(prepare.get("template_command"))
+    PREP_ALLOW_SHELL_COMMANDS = _coerce_bool(prepare.get("allow_shell_commands"), False)
+    try:
+        PREP_UNPACK_COMMAND = _coerce_command(
+            prepare.get("unpack_command"),
+            field_name="prepare.unpack_command",
+            allow_shell=PREP_ALLOW_SHELL_COMMANDS,
+        )
+        PREP_TEMPLATE_COMMAND = _coerce_command(
+            prepare.get("template_command"),
+            field_name="prepare.template_command",
+            allow_shell=PREP_ALLOW_SHELL_COMMANDS,
+        )
+    except InvalidPrepareCommandError as exc:
+        raise SystemExit(
+            "ERROR: Invalid prepare command configuration. "
+            "translator_config.json is executable local configuration: custom prepare "
+            "commands can run arbitrary processes. Prefer argv lists and enable "
+            f"prepare.allow_shell_commands only for trusted shell strings. Details: {exc}"
+        ) from exc
     load_include_filters_from_config(config)
     load_sync_translation_settings(config)
     load_sync_rag_settings(config)
@@ -1670,14 +1735,30 @@ def _render_prepare_command(command, variables):
             rendered.append(_fmt(token))
         return rendered, False
 
-    rendered = _fmt(command)
-    return rendered, True
+    if isinstance(command, str):
+        if not PREP_ALLOW_SHELL_COMMANDS:
+            raise RuntimeError(
+                "Shell string prepare commands require prepare.allow_shell_commands=true"
+            )
+        return _fmt(command), True
+
+    raise RuntimeError(f"Unsupported prepare command type: {type(command).__name__}")
 
 
 def _run_prepare_command(command, cwd, step_name):
-    use_shell = isinstance(command, str)
-    shown = command if use_shell else " ".join(command)
-    print(f"[Prepare] {step_name}: {shown}")
+    use_shell = prepare_command_uses_shell(command)
+    if use_shell and not PREP_ALLOW_SHELL_COMMANDS:
+        print(
+            f"[Prepare] {step_name} refused: shell string commands require "
+            "prepare.allow_shell_commands=true (trusted local config only)."
+        )
+        return False
+
+    shown = describe_prepare_command(command)
+    print(f"[Prepare] {step_name}")
+    print(f"[Prepare]   cwd: {cwd}")
+    print(f"[Prepare]   shell: {use_shell}")
+    print(f"[Prepare]   command: {shown}")
 
     try:
         result = subprocess.run(command, cwd=cwd, shell=use_shell, check=False)
@@ -1710,7 +1791,7 @@ def get_prepare_template_command_info(source_game_dir=""):
 
     if PREP_TEMPLATE_COMMAND:
         try:
-            rendered, _ = _render_prepare_command(PREP_TEMPLATE_COMMAND, variables)
+            rendered, use_shell = _render_prepare_command(PREP_TEMPLATE_COMMAND, variables)
         except Exception as e:
             return {
                 "available": False,
@@ -1720,6 +1801,8 @@ def get_prepare_template_command_info(source_game_dir=""):
                 "cwd": BASE_DIR,
                 "python_exe": python_exe,
                 "launcher_py": launcher_py,
+                "shell": False,
+                "allow_shell_commands": PREP_ALLOW_SHELL_COMMANDS,
             }
         return {
             "available": True,
@@ -1729,6 +1812,8 @@ def get_prepare_template_command_info(source_game_dir=""):
             "cwd": BASE_DIR,
             "python_exe": python_exe,
             "launcher_py": launcher_py,
+            "shell": use_shell,
+            "allow_shell_commands": PREP_ALLOW_SHELL_COMMANDS,
         }
 
     if not launcher_py:
@@ -1740,6 +1825,8 @@ def get_prepare_template_command_info(source_game_dir=""):
             "cwd": BASE_DIR,
             "python_exe": python_exe,
             "launcher_py": "",
+            "shell": False,
+            "allow_shell_commands": PREP_ALLOW_SHELL_COMMANDS,
         }
 
     if _is_sdk_launcher(launcher_py):
@@ -1766,6 +1853,8 @@ def get_prepare_template_command_info(source_game_dir=""):
         "cwd": cwd,
         "python_exe": python_exe,
         "launcher_py": launcher_py,
+        "shell": False,
+        "allow_shell_commands": PREP_ALLOW_SHELL_COMMANDS,
     }
 
 
