@@ -17,6 +17,14 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+from atomic_io import (
+    atomic_write_json,
+    atomic_write_jsonl,
+    atomic_write_text,
+    file_sha256,
+    result_artifact_is_complete,
+    sha256_text,
+)
 from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
 import batch_cost_estimate
 import batch_non_chinese_rules
@@ -520,8 +528,7 @@ def load_progress():
 
 def save_progress(progress):
     ensure_batch_dirs()
-    with open(PROGRESS_LOG, 'w', encoding='utf-8') as handle:
-        json.dump(progress, handle, ensure_ascii=False, indent=2)
+    atomic_write_json(PROGRESS_LOG, progress, ensure_ascii=False, indent=2)
 
 
 def update_progress(file_key, translated_lines):
@@ -1542,8 +1549,7 @@ def manifest_path_for_target(target):
 
 def remember_latest_manifest(manifest_path):
     ensure_batch_dirs()
-    with open(LATEST_MANIFEST_FILE, 'w', encoding='utf-8') as handle:
-        handle.write(manifest_path)
+    atomic_write_text(LATEST_MANIFEST_FILE, str(manifest_path))
 
 
 def load_manifest(target=None):
@@ -1644,8 +1650,7 @@ def save_manifest(manifest, update_latest=True):
     data = dict(manifest)
     data.pop('_manifest_path', None)
     data.pop('_package_dir', None)
-    with open(manifest_path, 'w', encoding='utf-8') as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=2)
+    atomic_write_json(manifest_path, data, ensure_ascii=False, indent=2)
     if update_latest:
         remember_latest_manifest(manifest_path)
 
@@ -2020,20 +2025,11 @@ def annotate_failure_entries(entries):
 
 
 def write_json_report(path, payload):
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    atomic_write_json(path, payload, ensure_ascii=False, indent=2)
 
 
 def write_jsonl_report(path, entries):
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as handle:
-        for entry in entries:
-            handle.write(json.dumps(entry, ensure_ascii=False) + '\n')
+    atomic_write_jsonl(path, entries, ensure_ascii=False)
 
 
 def write_check_failure_report(manifest, failure_entries):
@@ -2287,8 +2283,7 @@ def write_status_snapshot(manifest, batch_job):
         'batch_stats': extract_batch_stats(batch_job),
         'job': serialize_unknown(batch_job),
     }
-    with open(snapshot_path, 'w', encoding='utf-8') as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    atomic_write_json(snapshot_path, payload, ensure_ascii=False, indent=2)
     manifest['last_status_snapshot_path'] = snapshot_path
 
 def collect_files_to_process():
@@ -4385,9 +4380,14 @@ def download_results(target=None, force=False):
         raise SystemExit(f'Batch job is not succeeded yet: {state}')
 
     result_path = resolve_manifest_result_path(manifest)
+    expected_sha = manifest.get('result_jsonl_sha256')
     if os.path.isfile(result_path) and not force:
-        print(f'Result file already exists: {result_path}')
-        return result_path
+        if result_artifact_is_complete(result_path, expected_sha):
+            print(f'Result file already exists: {result_path}')
+            return result_path
+        print(
+            f'Result file looks incomplete or corrupt (will re-download): {result_path}'
+        )
 
     result_file_name = manifest.get('result_file_name')
     if not result_file_name:
@@ -4397,11 +4397,17 @@ def download_results(target=None, force=False):
     print(f'Downloading result file: {result_file_name}')
     downloaded = client.files.download(file=result_file_name)
     text = decode_downloaded_content(downloaded)
+    if not isinstance(text, str):
+        text = str(text)
+    content_sha = sha256_text(text)
 
-    with open(result_path, 'w', encoding='utf-8') as handle:
-        handle.write(text)
+    # Atomic replace so a crash cannot leave a truncated results.jsonl that
+    # later download runs would skip without --force.
+    atomic_write_text(result_path, text)
+    atomic_write_text(f'{result_path}.sha256', content_sha + '\n')
 
     manifest['result_jsonl_path'] = result_path
+    manifest['result_jsonl_sha256'] = content_sha
     manifest['downloaded_at'] = datetime.now().isoformat(timespec='seconds')
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
@@ -7627,15 +7633,12 @@ def select_chunk_window(chunks, limit=0, offset=0):
 
 
 def write_request_rows(path, request_rows):
-    with open(path, 'w', encoding='utf-8') as handle:
-        for row in request_rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+    atomic_write_jsonl(path, request_rows, ensure_ascii=False)
 
 
 def write_manifest_file(package_dir, manifest, update_latest=True):
     manifest_path = os.path.join(package_dir, 'manifest.json')
-    with open(manifest_path, 'w', encoding='utf-8') as handle:
-        json.dump(manifest, handle, ensure_ascii=False, indent=2)
+    atomic_write_json(manifest_path, manifest, ensure_ascii=False, indent=2)
     if update_latest:
         remember_latest_manifest(manifest_path)
     return manifest_path
@@ -7652,43 +7655,47 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
         'missing_text_count': 0,
         'reason_counts': {},
     }
-    os.makedirs(os.path.dirname(result_path), exist_ok=True)
-    with open(result_path, 'w', encoding='utf-8') as handle:
-        for index, row in enumerate(request_rows, start=1):
-            key = row.get('key', f'sync-{index}')
-            print(f'[{index}/{len(request_rows)}] {key}')
-            result_row = {'key': key}
-            try:
-                result = run_sync_request(
-                    row.get('request') or {},
-                    manifest.get('batch_model') or BATCH_MODEL,
-                    api_key_index=api_key_index,
-                )
-                result_row['response'] = result.get('response_payload') or {}
-                result_row['finish_reason'] = result.get('finish_reason', '')
-                result_row['usage_metadata'] = result.get('usage_metadata') or {}
-                result_row['provider'] = result.get('provider') or SYNC_BACKEND
-                result_row['model'] = result.get('model') or SYNC_MODEL or BATCH_MODEL
-                result_row['execution_mode'] = result.get('execution_mode') or 'sync'
-                summary['successful_request_count'] += 1
-                if result.get('finish_reason') == 'MAX_TOKENS':
-                    summary['max_tokens_count'] += 1
-                    bump_counter(summary['reason_counts'], 'max_tokens')
-                if not result.get('response_text'):
-                    summary['missing_text_count'] += 1
-                    bump_counter(summary['reason_counts'], 'missing_response_text')
-                print(f"  finish_reason: {result.get('finish_reason') or '(none)'}")
-            except Exception as exc:
-                summary['failed_request_count'] += 1
-                bump_counter(summary['reason_counts'], 'request_error')
-                result_row['error'] = str(exc)
-                print(f'  error: {str(exc)[:160]}')
-            handle.write(json.dumps(result_row, ensure_ascii=False) + '\n')
+    result_rows = []
+    for index, row in enumerate(request_rows, start=1):
+        key = row.get('key', f'sync-{index}')
+        print(f'[{index}/{len(request_rows)}] {key}')
+        result_row = {'key': key}
+        try:
+            result = run_sync_request(
+                row.get('request') or {},
+                manifest.get('batch_model') or BATCH_MODEL,
+                api_key_index=api_key_index,
+            )
+            result_row['response'] = result.get('response_payload') or {}
+            result_row['finish_reason'] = result.get('finish_reason', '')
+            result_row['usage_metadata'] = result.get('usage_metadata') or {}
+            result_row['provider'] = result.get('provider') or SYNC_BACKEND
+            result_row['model'] = result.get('model') or SYNC_MODEL or BATCH_MODEL
+            result_row['execution_mode'] = result.get('execution_mode') or 'sync'
+            summary['successful_request_count'] += 1
+            if result.get('finish_reason') == 'MAX_TOKENS':
+                summary['max_tokens_count'] += 1
+                bump_counter(summary['reason_counts'], 'max_tokens')
+            if not result.get('response_text'):
+                summary['missing_text_count'] += 1
+                bump_counter(summary['reason_counts'], 'missing_response_text')
+            print(f"  finish_reason: {result.get('finish_reason') or '(none)'}")
+        except Exception as exc:
+            summary['failed_request_count'] += 1
+            bump_counter(summary['reason_counts'], 'request_error')
+            result_row['error'] = str(exc)
+            print(f'  error: {str(exc)[:160]}')
+        result_rows.append(result_row)
+
+    atomic_write_jsonl(result_path, result_rows, ensure_ascii=False)
+    content_sha = file_sha256(result_path)
+    atomic_write_text(f'{result_path}.sha256', content_sha + '\n')
 
     manifest['sync_completed_at'] = datetime.now().isoformat(timespec='seconds')
     manifest['job_state'] = 'SYNC_COMPLETED' if summary['failed_request_count'] == 0 else 'SYNC_PARTIAL'
     manifest['sync_summary'] = summary
     manifest['result_jsonl_path'] = result_path
+    manifest['result_jsonl_sha256'] = content_sha
     save_manifest(manifest, update_latest=False)
     return manifest
 
