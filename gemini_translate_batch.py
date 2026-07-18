@@ -8336,6 +8336,8 @@ def collect_doctor_workflow_state(report):
     """Return a normal workflow state separately from actionable recommendations."""
     if report.get('layout_status') != 'ready':
         return ''
+    if report.get('mode') == 'blocked_invalid_tl_subdir':
+        return ''
     has_tl = int((report.get('counts') or {}).get('rpy_files') or 0) > 0
     if not has_tl:
         return ''
@@ -8354,6 +8356,10 @@ def collect_doctor_workflow_state(report):
 
 def collect_doctor_recommendations(report):
     recommendations = []
+
+    if report.get('mode') == 'blocked_invalid_tl_subdir':
+        # Path escape is a hard config error; surface it via warnings only.
+        return recommendations
 
     layout_status = report.get('layout_status', '')
     if layout_status == 'switch_to_work':
@@ -8762,14 +8768,46 @@ def collect_doctor_project_assets_warnings(project_assets):
 def collect_doctor_report():
     source_game_dir = legacy._guess_source_game_dir()
     template_info = legacy.get_prepare_template_command_info(source_game_dir)
-    counts = collect_tl_doctor_counts()
-    tl_exists = os.path.isdir(legacy.TL_DIR)
-    has_tl_files = counts['rpy_files'] > 0
     can_generate_template = bool(template_info.get('available'))
     original_game_dir = legacy.resolve_original_game_dir()
     work_bootstrap_allowed, work_dir, _ = legacy.work_dir_bootstrap_allowed()
 
     warnings = []
+    tl_path_invalid = False
+    try:
+        legacy.ensure_tl_dir_within_base(
+            legacy.BASE_DIR,
+            legacy.TL_DIR,
+            tl_subdir=legacy.TL_SUBDIR,
+        )
+        legacy.normalize_tl_subdir(legacy.TL_SUBDIR)
+    except Exception as exc:
+        # Catch InvalidTlSubdirError and any unexpected path errors so doctor
+        # still returns a structured report instead of crashing mid-scan.
+        tl_path_invalid = True
+        warnings.append(
+            f'Invalid tl_subdir / TL_DIR boundary: {exc}. '
+            "Fix translator_config.json tl_subdir so it is a relative path under "
+            "game_root with no '..' segments (example: 'game/tl/schinese'). "
+            'Build/apply must not proceed until this is fixed.'
+        )
+
+    # Do not walk TL_DIR when it may escape the project root.
+    if tl_path_invalid:
+        counts = {
+            'rpy_files': 0,
+            'translate_blocks': 0,
+            'string_sections': 0,
+            'old_lines': 0,
+            'new_lines': 0,
+            'commented_original_lines': 0,
+        }
+        tl_exists = False
+        has_tl_files = False
+    else:
+        counts = collect_tl_doctor_counts()
+        tl_exists = os.path.isdir(legacy.TL_DIR)
+        has_tl_files = counts['rpy_files'] > 0
 
     legacy_manifests = []
     if os.path.isdir(BATCH_JOBS_DIR):
@@ -8832,7 +8870,9 @@ def collect_doctor_report():
         else:
             warnings.append('Ren\'Py SDK/game launcher not found; existing TL files can still be processed.')
 
-    if has_tl_files:
+    if tl_path_invalid:
+        mode = 'blocked_invalid_tl_subdir'
+    elif has_tl_files:
         mode = 'existing_tl_only'
     elif can_generate_template:
         mode = 'can_generate_template'
@@ -8843,7 +8883,8 @@ def collect_doctor_report():
     pending_file_count = 0
     translated_task_count = 0
     total_task_count = 0
-    if has_tl_files:
+    # Avoid walking a TL tree that may sit outside the project root.
+    if has_tl_files and not tl_path_invalid:
         try:
             file_jobs = collect_pending_file_jobs(include_complete_files=True)
             progress = summarize_translation_progress(file_jobs)

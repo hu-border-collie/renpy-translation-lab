@@ -295,6 +295,68 @@ def _normalize_rel_path(value):
     return value
 
 
+class InvalidTlSubdirError(ValueError):
+    """Raised when ``tl_subdir`` is not a safe project-relative path."""
+
+
+def normalize_tl_subdir(value):
+    """Normalize and validate ``translator_config.json`` ``tl_subdir``.
+
+    Accepts only relative paths that stay under the project root after join:
+    absolute paths, drive-qualified paths, UNC paths, and any ``.`` / ``..``
+    segment are rejected. Returns a forward-slash relative path.
+    """
+    if value is None:
+        raise InvalidTlSubdirError("tl_subdir is missing")
+
+    original = str(value).strip()
+    if not original:
+        raise InvalidTlSubdirError("tl_subdir is empty")
+
+    text = original.replace("\\", "/")
+
+    # Reject absolute / drive / UNC before stripping roots. On Windows,
+    # os.path.isabs('/tmp/...') can be False, so also reject a leading '/'.
+    if (
+        os.path.isabs(original)
+        or text.startswith("/")
+        or re.match(r"^[A-Za-z]:", text)
+    ):
+        raise InvalidTlSubdirError(
+            f"tl_subdir must be a relative path inside the game root, not absolute: {original!r}"
+        )
+
+    while text.startswith("./"):
+        text = text[2:]
+    if not text or text.startswith("/"):
+        raise InvalidTlSubdirError(
+            f"tl_subdir is empty or absolute after normalization: {original!r}"
+        )
+
+    parts = [part for part in text.split("/") if part]
+    if not parts:
+        raise InvalidTlSubdirError(
+            f"tl_subdir is empty after normalization: {original!r}"
+        )
+    if any(part in {".", ".."} for part in parts):
+        raise InvalidTlSubdirError(
+            "tl_subdir must not contain '.' or '..' path segments "
+            f"(got {original!r}). Use a path relative to game_root such as 'game/tl/schinese'."
+        )
+    return "/".join(parts)
+
+
+def ensure_tl_dir_within_base(base_dir, tl_dir, *, tl_subdir=None):
+    """Require the resolved TL directory to remain inside the project base dir."""
+    if _path_contains_path(base_dir, tl_dir):
+        return
+    detail = f", tl_subdir={tl_subdir!r}" if tl_subdir is not None else ""
+    raise InvalidTlSubdirError(
+        "TL_DIR must remain inside BASE_DIR"
+        f"{detail}: base_dir={base_dir!r}, tl_dir={tl_dir!r}"
+    )
+
+
 def _dedupe_keep_order(items):
     seen = set()
     result = []
@@ -844,10 +906,29 @@ def load_translator_settings():
         GLOSSARY_FILE = DEFAULT_GLOSSARY_FILE
 
     tl_subdir = config.get("tl_subdir")
-    if isinstance(tl_subdir, str) and tl_subdir.strip():
-        TL_SUBDIR = _normalize_rel_path(tl_subdir)
+    try:
+        candidate_subdir = TL_SUBDIR
+        if isinstance(tl_subdir, str) and tl_subdir.strip():
+            candidate_subdir = normalize_tl_subdir(tl_subdir)
+        else:
+            # Keep the active/default value, but re-validate so a previously
+            # accepted path still cannot escape after game_root changes.
+            candidate_subdir = normalize_tl_subdir(candidate_subdir)
+        candidate_tl_dir = _canonical_abs_path(os.path.join(BASE_DIR, candidate_subdir))
+        ensure_tl_dir_within_base(
+            BASE_DIR,
+            candidate_tl_dir,
+            tl_subdir=candidate_subdir,
+        )
+    except InvalidTlSubdirError as exc:
+        raise SystemExit(
+            "ERROR: Invalid tl_subdir configuration. "
+            "tl_subdir must be a relative path under game_root with no '..' segments "
+            f"(example: 'game/tl/schinese'). Details: {exc}"
+        ) from exc
 
-    TL_DIR = _canonical_abs_path(os.path.join(BASE_DIR, TL_SUBDIR))
+    TL_SUBDIR = candidate_subdir
+    TL_DIR = candidate_tl_dir
     WORK_GAME_DIR = _canonical_abs_path(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
 
     prepare = config.get("prepare")
@@ -1164,7 +1245,9 @@ def _apply_game_root(work_dir):
     normalized = _canonical_abs_path(work_dir)
     ENV_GAME_ROOT = normalized
     BASE_DIR = normalized
-    TL_DIR = _canonical_abs_path(os.path.join(BASE_DIR, TL_SUBDIR))
+    candidate_tl_dir = _canonical_abs_path(os.path.join(BASE_DIR, TL_SUBDIR))
+    ensure_tl_dir_within_base(BASE_DIR, candidate_tl_dir, tl_subdir=TL_SUBDIR)
+    TL_DIR = candidate_tl_dir
     WORK_GAME_DIR = _canonical_abs_path(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
 
 

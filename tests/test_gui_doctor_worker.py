@@ -54,6 +54,15 @@ class GuiDoctorWorkerTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("boom", result.error)
 
+    def test_run_doctor_check_surfaces_systemexit_from_settings(self):
+        with mock.patch(
+            "translator_runtime.load_translator_settings",
+            side_effect=SystemExit("ERROR: Invalid tl_subdir configuration."),
+        ):
+            result = run_doctor_check()
+        self.assertFalse(result.ok)
+        self.assertIn("Invalid tl_subdir", result.error)
+
     def test_worker_delegates_to_run_doctor_check(self):
         worker = DoctorWorker()
         payload = DoctorWorkerResult(True, {"mode": "ready"}, "log")

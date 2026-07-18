@@ -37,6 +37,11 @@ def run_doctor_check() -> DoctorWorkerResult:
         return DoctorWorkerResult(True, report, buffer.getvalue())
     except Exception as exc:
         return DoctorWorkerResult(False, None, "", f"环境检查失败：{exc}")
+    except SystemExit as exc:
+        # load_translator_settings raises SystemExit for hard config errors
+        # (e.g. tl_subdir escaping the project root).
+        detail = exc.code if isinstance(exc.code, str) else (str(exc) or "配置错误")
+        return DoctorWorkerResult(False, None, "", f"环境检查失败：{detail}")
 
 
 class DoctorWorker(QThread):
