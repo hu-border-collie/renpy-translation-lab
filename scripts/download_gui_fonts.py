@@ -43,6 +43,17 @@ class FontInstallError(RuntimeError):
     pass
 
 
+# HarmonyOS ships as .rar; GNU tar cannot extract it. Prefer libarchive bsdtar.
+RAR_EXTRACTOR_INSTALL_HINT = (
+    "需要支持 RAR 的解压工具（libarchive 的 bsdtar）。\n"
+    "Ubuntu/Debian: sudo apt-get install libarchive-tools\n"
+    "Fedora: sudo dnf install bsdtar\n"
+    "Arch: sudo pacman -S libarchive\n"
+    "macOS: 系统自带 tar 通常已是 libarchive bsdtar\n"
+    "Windows: 安装 libarchive 并将 bsdtar 加入 PATH"
+)
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -68,28 +79,91 @@ def _download(url: str, destination: Path) -> None:
         raise FontInstallError(f"下载失败：{url}\n{exc}") from exc
 
 
+def _tool_version_text(executable: str) -> str:
+    """Return combined stdout/stderr from ``executable --version`` (best effort)."""
+    try:
+        completed = subprocess.run(
+            [executable, "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (
+        completed.stdout.decode("utf-8", errors="replace")
+        + "\n"
+        + completed.stderr.decode("utf-8", errors="replace")
+    )
+
+
+def _tool_supports_rar(executable: str) -> bool:
+    """Return True when *executable* is libarchive bsdtar (RAR-capable).
+
+    GNU tar is common on Linux and cannot extract RAR archives. macOS ``tar`` is
+    usually bsdtar from libarchive and reports that in ``--version``.
+    """
+    if not executable:
+        return False
+    basename = Path(executable).name.lower()
+    version_text = _tool_version_text(executable).lower()
+    if "gnu tar" in version_text:
+        return False
+    if "bsdtar" in basename or "bsdtar" in version_text:
+        return True
+    if "libarchive" in version_text:
+        return True
+    return False
+
+
 def _archive_tool() -> str:
+    """Locate a RAR-capable archive tool (libarchive bsdtar).
+
+    Candidates are checked in order: ``bsdtar``, then ``tar``. The first tool
+    whose version identifies as libarchive/bsdtar is used. GNU tar alone is
+    rejected with install guidance.
+    """
+    candidates: list[str] = []
     for name in ("bsdtar", "tar"):
         executable = shutil.which(name)
-        if executable:
+        if executable and executable not in candidates:
+            candidates.append(executable)
+
+    for executable in candidates:
+        if _tool_supports_rar(executable):
             return executable
-    raise FontInstallError("找不到 tar 或 bsdtar，无法解压华为官方 RAR 字体包。")
+
+    if candidates:
+        found = ", ".join(candidates)
+        raise FontInstallError(
+            "找到了归档工具，但不支持解压 RAR（常见于仅安装 GNU tar 的 Linux）："
+            f" {found}\n{RAR_EXTRACTOR_INSTALL_HINT}"
+        )
+    raise FontInstallError(
+        f"找不到 bsdtar（libarchive），无法解压华为官方 RAR 字体包。\n"
+        f"{RAR_EXTRACTOR_INSTALL_HINT}"
+    )
 
 
 def _extract_member(archive: Path, member: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp_path = destination.with_suffix(destination.suffix + ".tmp")
+    extractor = _archive_tool()
     try:
         with temp_path.open("wb") as output:
             completed = subprocess.run(
-                [_archive_tool(), "-xOf", str(archive), member],
+                [extractor, "-xOf", str(archive), member],
                 stdout=output,
                 stderr=subprocess.PIPE,
                 check=False,
             )
         if completed.returncode != 0:
             detail = completed.stderr.decode("utf-8", errors="replace").strip()
-            raise FontInstallError(f"无法从华为字体包解压 {member}：{detail}")
+            raise FontInstallError(
+                f"无法从华为字体包解压 {member}（工具: {extractor}）：{detail}\n"
+                f"{RAR_EXTRACTOR_INSTALL_HINT}"
+            )
         _verify(temp_path, HARMONYOS_FONT_SHA256, "HarmonyOS Sans SC 字体")
         os.replace(temp_path, destination)
     finally:
