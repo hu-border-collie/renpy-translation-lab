@@ -102,7 +102,7 @@ BATCH_NON_CHINESE_RULES = batch_non_chinese_rules.normalize_non_chinese_rules(No
 MANIFEST_MODE_TRANSLATION = 'translation'
 MANIFEST_MODE_KEYWORD_EXTRACTION = 'keyword_extraction'
 MANIFEST_MODE_REVISION = 'revision'
-CHECK_CONTRACT_VERSION = 1
+CHECK_CONTRACT_VERSION = 2
 CHECK_SAFETY_SAFE = 'safe'
 CHECK_SAFETY_WARN = 'warn'
 CHECK_SAFETY_BLOCK = 'block'
@@ -757,11 +757,83 @@ def collect_chunk_known_terms(chunk):
     return terms
 
 
+def _canonical_manifest_dir(value, field_name):
+    if not isinstance(value, str) or not value.strip():
+        return ''
+    raw = value.strip()
+    if not os.path.isabs(raw):
+        raise SystemExit(f'Manifest {field_name} must be an absolute path: {raw}')
+    return _canonical_abs_path(raw)
+
+
+def _infer_legacy_manifest_tl_dir(manifest):
+    candidates = []
+    files_info = manifest.get('files') if isinstance(manifest, dict) else {}
+    if not isinstance(files_info, dict):
+        return ''
+    for file_key, file_info in files_info.items():
+        path_value = file_info.get('path') if isinstance(file_info, dict) else ''
+        if not isinstance(path_value, str) or not path_value.strip() or not os.path.isabs(path_value):
+            continue
+        rel_path = normalize_safe_rel_path(file_key, f'manifest file key {file_key}')
+        candidate = _canonical_abs_path(path_value)
+        for _part in Path(rel_path).parts:
+            candidate = os.path.dirname(candidate)
+        resolved = resolve_path_under_dir(candidate, rel_path, f'manifest file key {file_key}')
+        if _normalized_abs_path(resolved) != _normalized_abs_path(path_value):
+            raise SystemExit(
+                f'Unsafe legacy manifest file path for {file_key}: '
+                'path escapes the inferred translation directory or does not match its file key.'
+            )
+        candidates.append(_canonical_abs_path(candidate))
+    if not candidates:
+        return ''
+    first = candidates[0]
+    if any(_normalized_abs_path(candidate) != _normalized_abs_path(first) for candidate in candidates[1:]):
+        raise SystemExit('Legacy manifest file paths do not share one translation directory.')
+    return first
+
+
+def manifest_project_identity(manifest):
+    if not isinstance(manifest, dict):
+        raise SystemExit('Manifest project identity is missing; rebuild the batch package.')
+    manifest_tl_dir = _canonical_manifest_dir(manifest.get('tl_dir'), 'tl_dir')
+    identity_source = 'manifest'
+    if not manifest_tl_dir:
+        manifest_tl_dir = _infer_legacy_manifest_tl_dir(manifest)
+        identity_source = 'legacy_file_paths'
+    if not manifest_tl_dir:
+        raise SystemExit(
+            'Manifest project identity is missing and cannot be inferred from absolute file paths; '
+            'rebuild the batch package before check/apply.'
+        )
+    return {
+        'base_dir': _canonical_manifest_dir(manifest.get('base_dir'), 'base_dir'),
+        'tl_dir': manifest_tl_dir,
+        'source': identity_source,
+    }
+
+
+def require_manifest_project_match(manifest, command_name):
+    identity = manifest_project_identity(manifest)
+    active_tl_dir = _canonical_abs_path(legacy.TL_DIR)
+    if _normalized_abs_path(identity['tl_dir']) != _normalized_abs_path(active_tl_dir):
+        raise SystemExit(
+            f'{command_name} refused: manifest project does not match the active project '
+            f'(manifest tl_dir={identity["tl_dir"]}, active tl_dir={active_tl_dir}).'
+        )
+    if identity['base_dir']:
+        active_base_dir = _canonical_abs_path(legacy.BASE_DIR)
+        if _normalized_abs_path(identity['base_dir']) != _normalized_abs_path(active_base_dir):
+            raise SystemExit(
+                f'{command_name} refused: manifest project does not match the active project '
+                f'(manifest base_dir={identity["base_dir"]}, active base_dir={active_base_dir}).'
+            )
+    return identity
+
+
 def _manifest_tl_base_dir(manifest):
-    base_dir = manifest.get('tl_dir') if isinstance(manifest, dict) else ''
-    if isinstance(base_dir, str) and base_dir.strip():
-        return base_dir.strip()
-    return legacy.TL_DIR
+    return manifest_project_identity(manifest)['tl_dir']
 
 
 def _manifest_file_path_for_chunk(manifest, chunk):
@@ -1560,10 +1632,11 @@ def resolve_manifest_result_path(manifest):
 
 
 def resolve_manifest_file_path(manifest, file_key, file_info):
+    tl_dir = _manifest_tl_base_dir(manifest)
     path_value = file_info.get('path') if isinstance(file_info, dict) else ''
     if path_value:
-        return resolve_path_under_dir(legacy.TL_DIR, path_value, f'manifest file path for {file_key}')
-    return resolve_path_under_dir(legacy.TL_DIR, file_key, f'manifest file key {file_key}')
+        return resolve_path_under_dir(tl_dir, path_value, f'manifest file path for {file_key}')
+    return resolve_path_under_dir(tl_dir, file_key, f'manifest file key {file_key}')
 
 
 def save_manifest(manifest, update_latest=True):
@@ -1819,6 +1892,7 @@ def manifest_target_shape(manifest):
 def build_check_fingerprint(manifest):
     result_path = resolve_manifest_result_path(manifest)
     package_dir = manifest.get('_package_dir', '')
+    project_identity = manifest_project_identity(manifest)
     payload = {
         'check_contract_version': CHECK_CONTRACT_VERSION,
         'manifest_path': os.path.abspath(manifest.get('_manifest_path', '')) if manifest.get('_manifest_path') else '',
@@ -1828,6 +1902,7 @@ def build_check_fingerprint(manifest):
         'core_schema_version': manifest.get('core_schema_version', 1),
         'batch_model': manifest.get('batch_model', ''),
         'settings': manifest.get('settings') or {},
+        'project': project_identity,
         'result': file_content_fingerprint(result_path),
         'target_shape': manifest_target_shape(manifest),
     }
@@ -6152,6 +6227,7 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
 def check_results(target=None):
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'check')
+    require_manifest_project_match(manifest, 'check')
     _replacements, _translated, failure_entries, summary = collect_result_actions(manifest, validate_sources=True)
     attach_check_contract(manifest, summary)
     check_report_path = write_check_failure_report(manifest, failure_entries)
@@ -6171,6 +6247,7 @@ def apply_results(target=None, force=False):
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'apply')
     if manifest.get('applied_at') and not force:
         raise SystemExit('Manifest was already applied. Re-run apply with --force to bypass this guard; source validation still applies.')
+    require_manifest_project_match(manifest, 'apply')
     require_safe_check_for_apply(manifest)
 
     replacements_by_file, translated_lines_by_file, failure_entries, summary = collect_result_actions(
