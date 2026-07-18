@@ -1964,6 +1964,8 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir_b)),
             ):
                 with self.assertRaisesRegex(SystemExit, 'does not match the active project'):
+                    batch_mod.check_results(str(manifest_path))
+                with self.assertRaisesRegex(SystemExit, 'does not match the active project'):
                     batch_mod.apply_results(str(manifest_path))
 
             self.assertEqual(target_a.read_text(encoding='utf-8'), source_line)
@@ -2002,6 +2004,8 @@ class BatchRepairRegressionTests(unittest.TestCase):
             with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
                 with self.assertRaisesRegex(SystemExit, 'project identity is missing'):
                     batch_mod.check_results(str(manifest_path))
+                with self.assertRaisesRegex(SystemExit, 'project identity is missing'):
+                    batch_mod.apply_results(str(manifest_path))
 
     def test_apply_results_rejects_manifest_file_path_outside_tl_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
