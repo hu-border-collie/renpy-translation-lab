@@ -27,6 +27,7 @@ def locked_runtime_state():
     with _runtime_state_lock:
         yield
 
+from atomic_io import atomic_write_json, atomic_write_lines
 from rag_memory import JsonRagStore, hash_text, truncate_text
 import prompt_context
 import story_memory
@@ -2516,8 +2517,7 @@ def load_progress():
 
 def save_progress(progress):
     try:
-        with open(PROGRESS_LOG, "w", encoding="utf-8-sig") as handle:
-            json.dump(progress, handle, ensure_ascii=False, indent=2)
+        atomic_write_json(PROGRESS_LOG, progress, encoding="utf-8-sig", ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"Warning: Could not save progress: {e}")
 
@@ -2612,7 +2612,11 @@ def _upgrade_legacy_progress_keys(progress, file_paths):
 
 
 def commit_replacements(path, lines, replacements):
-    """Writes the replacements to the file."""
+    """Apply replacements in memory, then atomically replace the target file.
+
+    Writes to a same-directory temp file, fsyncs, and uses ``os.replace`` so a
+    crash or I/O error cannot leave a truncated ``.rpy`` behind.
+    """
     if not replacements:
         return
 
@@ -2634,8 +2638,7 @@ def commit_replacements(path, lines, replacements):
             line = line[:start] + quote_with(normalized, quote, prefix=prefix) + line[end:]
         lines[line_idx] = line
 
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.writelines(lines)
+    atomic_write_lines(path, lines, encoding="utf-8")
 
 
 def sync_rag_hash_key(text):
