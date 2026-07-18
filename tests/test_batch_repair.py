@@ -1879,6 +1879,130 @@ class BatchRepairRegressionTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, 'parent directory'):
                 batch_mod.resolve_manifest_result_path(manifest)
 
+    def test_apply_results_rejects_manifest_from_different_active_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_a = root / 'project-a'
+            project_b = root / 'project-b'
+            tl_dir_a = project_a / 'game' / 'tl' / 'schinese'
+            tl_dir_b = project_b / 'game' / 'tl' / 'schinese'
+            package_dir = root / 'package'
+            tl_dir_a.mkdir(parents=True)
+            tl_dir_b.mkdir(parents=True)
+            package_dir.mkdir()
+            source_line = '    e "Hello"\n'
+            target_a = tl_dir_a / 'script.rpy'
+            target_b = tl_dir_b / 'script.rpy'
+            target_a.write_text(source_line, encoding='utf-8')
+            target_b.write_text(source_line, encoding='utf-8')
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            start = source_line.index('"Hello"')
+            end = start + len('"Hello"')
+            response_text = json.dumps(
+                [{'id': f'script.rpy:0:{start}', 'translation': '\u4f60\u597d'}],
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'chunk-1',
+                        'response': {
+                            'candidates': [
+                                {'content': {'parts': [{'text': response_text}]}}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'version': 1,
+                        'manifest_version': 1,
+                        'base_dir': str(project_a),
+                        'tl_dir': str(tl_dir_a),
+                        'files': {'script.rpy': {'path': 'script.rpy'}},
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'chunk-1',
+                                'file_rel_path': 'script.rpy',
+                                'items': [
+                                    {
+                                        'id': f'script.rpy:0:{start}',
+                                        'line': 0,
+                                        'start': start,
+                                        'end': end,
+                                        'text': 'Hello',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(project_a)),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir_a)),
+            ):
+                checked = batch_mod.check_results(str(manifest_path))
+
+            fingerprint = checked['last_check_summary']['check_fingerprint']
+            self.assertEqual(fingerprint['project']['base_dir'], str(project_a.resolve()))
+            self.assertEqual(fingerprint['project']['tl_dir'], str(tl_dir_a.resolve()))
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(project_b)),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir_b)),
+            ):
+                with self.assertRaisesRegex(SystemExit, 'does not match the active project'):
+                    batch_mod.apply_results(str(manifest_path))
+
+            self.assertEqual(target_a.read_text(encoding='utf-8'), source_line)
+            self.assertEqual(target_b.read_text(encoding='utf-8'), source_line)
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(project_a)),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir_a)),
+                mock.patch.object(batch_mod, 'update_progress'),
+            ):
+                batch_mod.apply_results(str(manifest_path))
+
+            self.assertIn('\u4f60\u597d', target_a.read_text(encoding='utf-8'))
+            self.assertEqual(target_b.read_text(encoding='utf-8'), source_line)
+
+    def test_check_results_rejects_unbound_legacy_relative_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'game' / 'tl' / 'schinese'
+            package_dir = root / 'package'
+            tl_dir.mkdir(parents=True)
+            package_dir.mkdir()
+            manifest_path = package_dir / 'manifest.json'
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'files': {'script.rpy': {'path': 'script.rpy'}},
+                        'result_jsonl_path': 'results.jsonl',
+                        'chunks': [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                with self.assertRaisesRegex(SystemExit, 'project identity is missing'):
+                    batch_mod.check_results(str(manifest_path))
+
     def test_apply_results_rejects_manifest_file_path_outside_tl_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
