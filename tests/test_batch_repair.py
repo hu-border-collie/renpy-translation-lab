@@ -31,8 +31,37 @@ UPDATE_GOLDEN_REVISION_ENV = 'UPDATE_GOLDEN_REVISION'
 UPDATE_GOLDEN_KEYWORD_ENV = 'UPDATE_GOLDEN_KEYWORD'
 
 
-
 class BatchRepairRegressionTests(unittest.TestCase):
+    def test_apply_revisions_rejects_mismatched_active_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = {
+                'mode': batch_mod.MANIFEST_MODE_REVISION,
+                'base_dir': str(root / 'project-a'),
+                'tl_dir': str(root / 'project-a' / 'game' / 'tl' / 'schinese'),
+            }
+            with (
+                mock.patch.object(batch_mod, 'load_manifest', return_value=manifest),
+                mock.patch.object(
+                    batch_mod.legacy,
+                    'BASE_DIR',
+                    str(root / 'project-b'),
+                ),
+                mock.patch.object(
+                    batch_mod.legacy,
+                    'TL_DIR',
+                    str(root / 'project-b' / 'game' / 'tl' / 'schinese'),
+                ),
+                mock.patch.object(batch_mod, 'collect_revision_actions') as collect_mock,
+            ):
+                with self.assertRaisesRegex(
+                    SystemExit,
+                    'manifest project does not match the active project',
+                ):
+                    batch_mod.apply_revisions('manifest.json')
+
+            collect_mock.assert_not_called()
+
     def test_parse_json_payload_recovers_prefixed_keyword_object(self):
         payload = batch_mod.parse_json_payload(
             'Earlier attempt: []\n'
