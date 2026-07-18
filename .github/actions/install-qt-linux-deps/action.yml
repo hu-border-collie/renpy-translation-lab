@@ -11,5 +11,6 @@ runs:
           libglib2.0-0 \
           libxkbcommon0 \
           libdbus-1-3 \
-          libfontconfig1
+          libfontconfig1 \
+          libarchive-tools
       shell: bash
