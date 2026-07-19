@@ -27,6 +27,35 @@ jobs:
       - name: Verify dependency lock manifest
         run: python -B scripts/compile_dependency_locks.py --check
 
+  litellm-lock-install:
+    name: LiteLLM lock install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            lock: requirements-lock/py311-linux-litellm.txt
+          - os: windows-latest
+            lock: requirements-lock/py311-windows-litellm.txt
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: ${{ matrix.lock }}
+
+      - name: Install locked LiteLLM profile
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r "${{ matrix.lock }}"
+
   unittest:
     runs-on: ${{ matrix.os }}
     strategy:

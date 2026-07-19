@@ -17,6 +17,25 @@ class DependencyLockTests(unittest.TestCase):
         errors = locks.verify_manifest_payload(manifest)
         self.assertTrue(any("manually edited lock" in error for error in errors))
 
+    def test_manifest_detects_a_manually_changed_source_hash(self):
+        manifest = json.loads(locks.MANIFEST_PATH.read_text(encoding="utf-8"))
+        first_source = next(iter(manifest["sources"]))
+        manifest["sources"][first_source] = "0" * 64
+        errors = locks.verify_manifest_payload(manifest)
+        self.assertTrue(any("manually edited source" in error for error in errors))
+
+    def test_manifest_detects_stale_generator_metadata(self):
+        manifest = json.loads(locks.MANIFEST_PATH.read_text(encoding="utf-8"))
+        manifest["generator"]["version"] = "0.0.0"
+        errors = locks.verify_manifest_payload(manifest)
+        self.assertIn("manifest generator is stale", errors)
+
+    def test_manifest_detects_source_path_set_drift(self):
+        manifest = json.loads(locks.MANIFEST_PATH.read_text(encoding="utf-8"))
+        manifest["sources"]["unexpected-requirements.txt"] = "0" * 64
+        errors = locks.verify_manifest_payload(manifest)
+        self.assertIn("manifest sources path set is stale", errors)
+
     def test_source_hash_normalizes_platform_line_endings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "requirements.txt"
@@ -72,9 +91,23 @@ class DependencyLockTests(unittest.TestCase):
         workflow = (
             locks.REPO_ROOT / ".github" / "workflows" / "tests.yml"
         ).read_text(encoding="utf-8")
+        provider_workflow = (
+            locks.REPO_ROOT
+            / ".github"
+            / "workflows"
+            / "provider-contract-smoke.yml"
+        ).read_text(encoding="utf-8")
         self.assertIn("compile_dependency_locks.py --check", workflow)
         self.assertIn("--require-hashes", workflow)
+        self.assertIn("requirements-lock/py311-cli.txt", workflow)
         self.assertIn("py311-gui.txt", workflow)
+        self.assertIn("requirements-lock/py311-linux-litellm.txt", workflow)
+        self.assertIn("requirements-lock/py311-windows-litellm.txt", workflow)
+        self.assertIn("--require-hashes", provider_workflow)
+        self.assertIn(
+            "requirements-lock/py311-linux-litellm.txt",
+            provider_workflow,
+        )
         self.assertNotIn("py311-windows-gui.txt", workflow)
         self.assertNotIn("py311-linux-gui.txt", workflow)
 

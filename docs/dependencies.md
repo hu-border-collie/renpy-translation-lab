@@ -48,4 +48,11 @@ python scripts/compile_dependency_locks.py --check
 - 生成锁被手工修改；
 - 生成器版本、Python 基线或 profile 集合发生变化。
 
-CI 还会在 Windows/Linux 测试任务中用 `pip --require-hashes` 安装对应锁，验证干净环境可解析。
+CI 覆盖锁文件的方式如下；完整任务映射见 `docs/ci.md`：
+
+- `dependency-locks` 离线检查 manifest、输入、生成器元数据与全部锁是否同步；
+- `unittest` 在 Windows/Linux 安装通用 `py311-gui.txt`，`cli-without-gui` 与 `gui` 在 Linux 分别安装 `py311-cli.txt` 和 `py311-gui.txt`；
+- `litellm-lock-install` 在 Windows/Linux 分别安装对应 LiteLLM 平台锁；
+- 定时 `provider-contract-smoke` 安装 Linux LiteLLM 锁后才执行真实 provider 请求。
+
+上述安装均使用 `pip --require-hashes`；pull request 中的 LiteLLM 任务只验证干净环境安装，不访问 provider API。
