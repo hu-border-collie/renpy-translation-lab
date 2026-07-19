@@ -12,7 +12,6 @@ import glob
 import pickle
 import shutil
 import subprocess
-import zlib
 import threading
 from collections import Counter
 from contextlib import contextmanager
@@ -30,6 +29,14 @@ def locked_runtime_state():
 
 from atomic_io import atomic_write_json, atomic_write_lines, file_sha256
 from rag_memory import JsonRagStore, hash_text, truncate_text
+from rpa_safety import (
+    DEFAULT_RPA_LIMITS,
+    RpaExtractionBudget,
+    copy_member,
+    decode_and_validate_index,
+    member_output_size,
+    read_bounded_compressed_index,
+)
 import prompt_context
 import story_memory
 import sync_translation_preview
@@ -1531,96 +1538,94 @@ def _load_pickle_blob(blob):
     return _RestrictedRpaUnpickler(io.BytesIO(blob), encoding="bytes").load()
 
 
-def _validate_rpa_index(raw_index):
-    if not isinstance(raw_index, dict):
-        raise RuntimeError("Invalid RPA index: expected a dictionary.")
-    return raw_index
-
-
-def _read_rpa_index(archive_path):
+def _read_rpa_index(archive_path, limits=DEFAULT_RPA_LIMITS):
     with open(archive_path, "rb") as infile:
+        archive_size = os.fstat(infile.fileno()).st_size
         header = infile.read(40)
 
         if header.startswith(b"RPA-3.0 "):
             offset = int(header[8:24], 16)
             key = int(header[25:33], 16)
-            infile.seek(offset)
-            raw_index = _validate_rpa_index(_load_pickle_blob(zlib.decompress(infile.read())))
-
-            index = {}
-            for name, chunks in raw_index.items():
-                decoded_chunks = []
-                for chunk in chunks:
-                    if len(chunk) == 2:
-                        start = b""
-                        chunk_offset, chunk_len = chunk
-                    else:
-                        chunk_offset, chunk_len, start = chunk
-                        if start is None:
-                            start = b""
-                        elif not isinstance(start, bytes):
-                            start = str(start).encode("latin-1", errors="ignore")
-
-                    decoded_chunks.append((int(chunk_offset) ^ key, int(chunk_len) ^ key, start))
-                index[name] = decoded_chunks
-
-            return index
+            payload = read_bounded_compressed_index(
+                infile,
+                offset,
+                archive_size,
+                limits,
+            )
+            return decode_and_validate_index(
+                _load_pickle_blob(payload),
+                archive_size,
+                key=key,
+                limits=limits,
+            )
 
         if header.startswith(b"RPA-2.0 "):
             infile.seek(0)
             line = infile.read(24)
             offset = int(line[8:], 16)
-            infile.seek(offset)
-            raw_index = _validate_rpa_index(_load_pickle_blob(zlib.decompress(infile.read())))
-
-            index = {}
-            for name, chunks in raw_index.items():
-                decoded_chunks = []
-                for chunk in chunks:
-                    chunk_offset, chunk_len = chunk[:2]
-                    start = b""
-                    if len(chunk) >= 3:
-                        start = chunk[2] or b""
-                        if not isinstance(start, bytes):
-                            start = str(start).encode("latin-1", errors="ignore")
-                    decoded_chunks.append((int(chunk_offset), int(chunk_len), start))
-                index[name] = decoded_chunks
-
-            return index
+            payload = read_bounded_compressed_index(
+                infile,
+                offset,
+                archive_size,
+                limits,
+            )
+            return decode_and_validate_index(
+                _load_pickle_blob(payload),
+                archive_size,
+                limits=limits,
+            )
 
     raise RuntimeError("Unsupported RPA format (expecting RPA-3.0 or RPA-2.0).")
 
 
-def _extract_rpa_scripts(archive_path, target_game_dir):
-    index = _read_rpa_index(archive_path)
+def _extract_rpa_scripts(
+    archive_path,
+    target_game_dir,
+    limits=DEFAULT_RPA_LIMITS,
+    extraction_budget=None,
+):
+    index = _read_rpa_index(archive_path, limits=limits)
     target_root = os.path.abspath(target_game_dir)
     extracted = 0
+    planned = []
+    total_output = 0
+
+    for raw_name, chunks in index.items():
+        rel = _safe_archive_relpath(raw_name)
+        if not rel:
+            continue
+        if os.path.splitext(rel)[1].lower() not in SCRIPT_FILE_EXTENSIONS:
+            continue
+
+        out_path = os.path.abspath(os.path.join(target_root, rel))
+        try:
+            if os.path.commonpath([target_root, out_path]) != target_root:
+                continue
+        except ValueError:
+            continue
+
+        if os.path.exists(out_path):
+            continue
+
+        total_output += member_output_size(chunks)
+        planned.append((out_path, chunks))
+
+    if extraction_budget is None:
+        extraction_budget = RpaExtractionBudget(limits.max_total_extraction_bytes)
+    extraction_budget.reserve(total_output)
 
     with open(archive_path, "rb") as source:
-        for raw_name, chunks in index.items():
-            rel = _safe_archive_relpath(raw_name)
-            if not rel:
-                continue
-            if os.path.splitext(rel)[1].lower() not in SCRIPT_FILE_EXTENSIONS:
-                continue
-
-            out_path = os.path.abspath(os.path.join(target_root, rel))
-            try:
-                if os.path.commonpath([target_root, out_path]) != target_root:
-                    continue
-            except ValueError:
-                continue
-
-            if os.path.exists(out_path):
-                continue
-
+        for out_path, chunks in planned:
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            with open(out_path, "wb") as target:
-                for chunk_offset, chunk_len, start in chunks:
-                    if start:
-                        target.write(start)
-                    source.seek(chunk_offset)
-                    target.write(source.read(chunk_len))
+            try:
+                with open(out_path, "wb") as target:
+                    copy_member(source, target, chunks, limits)
+            except Exception:
+                try:
+                    os.remove(out_path)
+                except FileNotFoundError:
+                    pass
+                raise
             extracted += 1
 
     return extracted
@@ -1957,9 +1962,16 @@ def run_prepare_steps():
                 _run_unpack_command(PREP_UNPACK_COMMAND, archives, source_game_dir)
             else:
                 total_extracted = 0
+                extraction_budget = RpaExtractionBudget(
+                    DEFAULT_RPA_LIMITS.max_total_extraction_bytes
+                )
                 for archive in archives:
                     try:
-                        extracted = _extract_rpa_scripts(archive, WORK_GAME_DIR)
+                        extracted = _extract_rpa_scripts(
+                            archive,
+                            WORK_GAME_DIR,
+                            extraction_budget=extraction_budget,
+                        )
                         total_extracted += extracted
                         print(f"[Prepare] Extracted {extracted} script files from {os.path.basename(archive)}.")
                     except Exception as e:
