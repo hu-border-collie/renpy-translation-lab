@@ -19,6 +19,7 @@
 | 项目边界与安全 | [项目说明](project_notes.md) |
 | 查看版本变化 | [变更日志](../CHANGELOG.md) · [v1.0.0 发行说明](releases/v1.0.0.md) |
 | 参与开发 / AI 协作 | 根目录 [CONTRIBUTING.md](../CONTRIBUTING.md)（含 **CLI / GUI 同步**） |
+| 理解 PR 门禁与定时集成 | [CI 与定时集成检查](ci.md) |
 
 ## 文档分组
 
@@ -38,6 +39,7 @@
 ### 现行：分析与项目状态
 
 - [关系与语义分析](relation_analysis.md)
+- [CI 与定时集成检查](ci.md)
 - [项目说明](project_notes.md)
 - [story_graph.example.json](story_graph.example.json) · [story_graph.schema.json](story_graph.schema.json)
 
