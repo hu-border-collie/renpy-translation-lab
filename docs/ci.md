@@ -41,3 +41,28 @@ xvfb-run -a python -B scripts/run_renpy_integration.py --sdk /path/to/renpy-8.5.
 ```
 
 SDK 缺失、模板没有生成、lint 失败或 testcase 失败都会返回非零退出码和明确诊断。
+
+## 外部 provider 契约 smoke
+
+`.github/workflows/provider-contract-smoke.yml` 每周定时运行，也可手动触发；它不在普通 pull request 上运行。runner 覆盖 Gemini 直连，以及生产 LiteLLM provider 目录中的 OpenAI、Anthropic、OpenRouter、DeepSeek 和 xAI。Ollama 依赖本地服务，不属于外部凭据 smoke。
+
+仓库可按需配置以下 Actions secrets：
+
+- `PROVIDER_SMOKE_GEMINI_API_KEY`
+- `PROVIDER_SMOKE_OPENAI_API_KEY`
+- `PROVIDER_SMOKE_ANTHROPIC_API_KEY`
+- `PROVIDER_SMOKE_OPENROUTER_API_KEY`
+- `PROVIDER_SMOKE_DEEPSEEK_API_KEY`
+- `PROVIDER_SMOKE_XAI_API_KEY`
+
+未配置的 provider 会打印 `SKIP` 并成功结束；至少配置一个 secret 时，对应 provider 会经过生产 adapter 发出一次请求，验证返回文本仍可解析为约定 JSON。任何配置过的 provider 失败都会打印 provider 名称和 `authentication`、`rate_limit`、`service_unavailable`、`invalid_response` 或 `provider_error` 分类，并让工作流失败。
+
+每个 provider 的硬限制为 1 次请求、64 个输出 token、30 秒客户端超时；单次保守规划成本上限为 0.01 USD，六个 provider 全部配置时每轮估算不超过 0.06 USD。实际价格以 provider 当期计费为准。smoke 不读取或写入游戏项目文件。
+
+本地可使用 provider 原生环境变量运行，例如：
+
+```powershell
+$env:OPENAI_API_KEY = "..."
+python -B scripts/run_provider_contract_smoke.py --provider openai
+Remove-Item Env:OPENAI_API_KEY
+```
