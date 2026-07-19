@@ -44,6 +44,12 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_text_file(path: Path) -> str:
+    """Hash a text input after normalizing platform line endings to LF."""
+    content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(content).hexdigest()
+
+
 def lock_relative_path(platform: str, profile: str) -> str:
     return f"requirements-lock/py311-{platform}-{profile}.txt"
 
@@ -62,7 +68,7 @@ def manifest_payload(repo_root: Path = REPO_ROOT) -> dict[str, object]:
         "generator": {"name": "uv", "version": UV_VERSION},
         "python_version": PYTHON_VERSION,
         "sources": {
-            relative: sha256_file(repo_root / relative)
+            relative: sha256_text_file(repo_root / relative)
             for relative in OWNED_SOURCES
         },
         "locks": {
@@ -117,7 +123,8 @@ def verify_manifest_payload(
             if not path.is_file():
                 errors.append(f"missing {group[:-1]} file: {relative}")
                 continue
-            actual = sha256_file(path)
+            digest = sha256_text_file if group == "sources" else sha256_file
+            actual = digest(path)
             if recorded.get(relative) != actual:
                 errors.append(f"stale or manually edited {group[:-1]}: {relative}")
     return errors

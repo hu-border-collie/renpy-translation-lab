@@ -1,5 +1,7 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from scripts import compile_dependency_locks as locks
 
@@ -14,6 +16,15 @@ class DependencyLockTests(unittest.TestCase):
         manifest["locks"][first_lock] = "0" * 64
         errors = locks.verify_manifest_payload(manifest)
         self.assertTrue(any("manually edited lock" in error for error in errors))
+
+    def test_source_hash_normalizes_platform_line_endings(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "requirements.txt"
+            digests = []
+            for content in (b"one\ntwo\n", b"one\r\ntwo\r\n", b"one\rtwo\r"):
+                path.write_bytes(content)
+                digests.append(locks.sha256_text_file(path))
+            self.assertEqual(len(set(digests)), 1)
 
     def test_relation_analyzer_uses_repository_owned_inputs(self):
         relation = (
