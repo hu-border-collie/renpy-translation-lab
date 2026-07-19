@@ -26,6 +26,11 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
                 mock.patch.object(runtime, "run_prepare_steps"),
                 mock.patch.object(runtime.os, "walk", return_value=[]),
                 mock.patch.object(runtime, "load_progress", return_value={}),
+                mock.patch.object(
+                    runtime.sync_translation_preview,
+                    "create_sync_preview",
+                    return_value=("manifest.json", {"summary": {}}),
+                ),
                 mock.patch("sys.stdout", output := io.StringIO()),
             ):
                 runtime.run_translation()

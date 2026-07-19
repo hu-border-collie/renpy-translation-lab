@@ -152,6 +152,7 @@ from .split_report import (
     translation_split_ready,
 )
 from .split_batch_workflow import SplitBatchQueueWorkflow
+from .sync_translation_workflow import SyncTranslationWorkflow
 from .split_status_delegate import SPLIT_ACTION_DATA_ROLE, SplitStatusActionDelegate
 from .split_status_table_helpers import is_split_action_column, split_action_item_payload
 from .retry_preview_dialog import RetryPreviewDialog
@@ -1265,6 +1266,7 @@ class MainWindow(QMainWindow):
                     WorkbenchPageActions(
                         start=self._on_start_translation,
                         stop=self._on_kill,
+                        writeback=self._on_apply_sync_translation,
                     )
                 )
                 self.sync_translation_page = page
@@ -1342,7 +1344,7 @@ class MainWindow(QMainWindow):
 
         # Sync-only risk banner (P1c / #162 · §3.2.2).
         self.sync_mode_warning = QLabel(
-            "警告：同步翻译可能直接修改项目文件，请先备份或在副本上试跑。"
+            "同步翻译默认只生成差异预览；确认预览后才会修改项目脚本。"
         )
         self.sync_mode_warning.setObjectName("sync_mode_warning")
         self.sync_mode_warning.setWordWrap(True)
@@ -6289,7 +6291,7 @@ class MainWindow(QMainWindow):
         spec = work_mode_spec(self._current_work_mode())
         if spec.mode == WorkMode.BATCH_TRANSLATION and step.key == "build":
             return "source_index_build"
-        if spec.mode == WorkMode.SYNC_TRANSLATION and step.key == "run":
+        if spec.mode == WorkMode.SYNC_TRANSLATION and step.key in {"preview", "apply"}:
             return "sync_translation"
         if spec.mode in {WorkMode.SYNC_KEYWORD_EXTRACTION, WorkMode.SYNC_REVISION}:
             return "sync_requests"
@@ -7497,6 +7499,8 @@ class MainWindow(QMainWindow):
         self._show_workbench_log_drawer()
         self._clear_completed_manifest_snapshot()
         self._writeback_manifest_path = ""
+        if spec.mode == WorkMode.SYNC_TRANSLATION:
+            self.sync_translation_page.clear_preview()
         if spec.supports_translation_writeback:
             self._set_writeback_summary(stale_writeback_summary())
         else:
@@ -8347,6 +8351,36 @@ class MainWindow(QMainWindow):
         self.runner.run(
             self.state.get_batch_script_path(),
             ["apply", manifest_path],
+        )
+
+    def _on_apply_sync_translation(self) -> None:
+        if self._current_work_mode() != WorkMode.SYNC_TRANSLATION:
+            QMessageBox.information(self, "当前模式不支持", "请先切换到同步翻译。")
+            return
+        manifest_path = self.sync_translation_page.preview_manifest_path()
+        if not manifest_path:
+            QMessageBox.information(self, "无法写回", "请先生成包含变更的同步翻译预览。")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "确认写回同步翻译",
+            "即将重新校验项目、源文件和预览制品，然后修改项目脚本。\n\n"
+            f"预览清单：{manifest_path}\n\n"
+            "如果脚本在预览后发生变化，写回会自动拒绝。是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self._clear_log_view()
+        self._show_workbench_log_drawer()
+        workflow = SyncTranslationWorkflow.apply_existing(manifest_path)
+        self._begin_translation_workflow(
+            workflow,
+            log_heading="正在写回同步翻译预览",
+            status_tab=1,
         )
 
     def _on_apply_revision(self) -> None:
@@ -9240,6 +9274,16 @@ class MainWindow(QMainWindow):
 
         restore_latest_manifest_path = getattr(self._workflow, "restore_latest_manifest_path", "")
         update = self._workflow.complete_current_step(exit_code, step_output)
+
+        is_sync_translation_workflow = isinstance(self._workflow, SyncTranslationWorkflow)
+        if is_sync_translation_workflow and step_key == "preview" and exit_code == 0:
+            preview_count_match = re.search(r"^Preview files:\s*(\d+)\s*$", step_output, re.MULTILINE)
+            preview_count = int(preview_count_match.group(1)) if preview_count_match else 0
+            self.sync_translation_page.set_preview_ready(
+                self._workflow.manifest_path if preview_count > 0 else ""
+            )
+        elif is_sync_translation_workflow and step_key == "apply" and update.status == "done":
+            self.sync_translation_page.clear_preview()
 
         if restore_latest_manifest_path and not update.should_continue:
             try:

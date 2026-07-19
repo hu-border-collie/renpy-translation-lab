@@ -82,10 +82,12 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertIs(self.window.workbench_stack.currentWidget(), page)
         self.assertFalse(self.window.workbench_stack.isHidden())
         self.assertFalse(page.risk_warning.isHidden())
-        self.assertIn("备份", page.risk_warning.text())
+        self.assertIn("不会修改", page.risk_warning.text())
         self.assertEqual(page.start_btn.text(), "开始同步翻译")
         self.assertEqual(page.start_btn.objectName(), "sync_translation_start_btn")
         self.assertEqual(page.stop_btn.objectName(), "sync_translation_stop_btn")
+        self.assertEqual(page.apply_btn.objectName(), "sync_translation_apply_btn")
+        self.assertFalse(page.apply_btn.isEnabled())
         self.assertTrue(self.window.sync_mode_warning.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
         self.assertFalse(self.window.workbench_status_card.isHidden())
@@ -106,21 +108,27 @@ class GuiTaskPageTests(unittest.TestCase):
         page = self.window.sync_translation_page
         starts: list[bool] = []
         stops: list[bool] = []
+        writebacks: list[bool] = []
         page.set_action_callbacks(
             WorkbenchPageActions(
                 start=lambda: starts.append(True),
                 stop=lambda: stops.append(True),
+                writeback=lambda: writebacks.append(True),
             )
         )
         page.set_start_enabled(True)
         page.start_btn.click()
         page.set_task_running(True)
         page.stop_btn.click()
+        page.set_task_running(False)
+        page.set_preview_ready("C:/run/manifest.json")
+        page.apply_btn.click()
 
         self.assertEqual(starts, [True])
         self.assertEqual(stops, [True])
+        self.assertEqual(writebacks, [True])
         self.assertFalse(page.start_btn.isEnabled())
-        self.assertTrue(page.stop_btn.isEnabled())
+        self.assertFalse(page.stop_btn.isEnabled())
 
     def test_sync_page_start_enabled_after_doctor_summary(self) -> None:
         self.window._set_work_mode(

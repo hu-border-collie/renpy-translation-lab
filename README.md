@@ -108,6 +108,8 @@ python gemini_translate_batch.py doctor
 
 ```bash
 python gemini_translate.py
+# 检查命令输出给出的 preview.diff 后，再显式写回：
+python gemini_translate.py --apply logs/sync_runs/<run>/manifest.json
 ```
 
 Batch 模式：
@@ -128,6 +130,8 @@ python gemini_translate_batch.py apply
 说明：
 
 - `python gemini_translate.py --help` 会显示同步脚本的最小 CLI 帮助。
+- 同步脚本默认只在 `logs/sync_runs/` 生成源文件快照、候选文件和统一 diff，不修改 `.rpy`；只有显式 `--apply MANIFEST` 才会在项目、源文件和制品复核通过后原子写回。
+- 若预览前需要执行配置中的解包或模板生成步骤，显式使用 `python gemini_translate.py --prepare`；普通预览不会隐式运行这些会修改工作目录的准备步骤。
 - `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出。
 - Batch 产物默认会写到本地 `logs/` 目录。
 - `probe` 是可选的提交前小样本检查；确认 API、模型和请求格式正常后再 `submit`。
@@ -163,7 +167,7 @@ python gemini_translate_batch.py apply
 如果使用图形工作台，可按左导航选择流程：
 
 - **批量翻译**（已有 2026-06-19 真实项目烟测）：`选择项目 -> 设置 -> 环境检查 -> 可选上下文库预建 -> 翻译进度(开始翻译) -> 写回(检查/写回)`
-- **同步翻译**（已有 2026-07-14 LiteLLM + DeepSeek 小规模真实供应商烟测）：即时调用 `gemini_translate.py`，可显式选择 Gemini 或 LiteLLM；会直接修改副本，无批量 `check/apply` 闸门
+- **同步翻译**（已有 2026-07-14 LiteLLM + DeepSeek 小规模真实供应商烟测）：调用 `gemini_translate.py` 并可显式选择 Gemini 或 LiteLLM；默认生成 diff 预览，确认后再显式写回
 - **关键词 / 术语**（批量|同步）：只生成报告，经「合并到 glossary」写入术语表（GUI 已实现，尚无独立真实项目烟测）
 - **订正**（批量|同步）：预览后通过「写回订正」单独写回，与普通翻译写回分离（GUI 已实现，尚无独立真实项目烟测）
 - **上下文库**：状态卡上预建记忆库 / 原文索引（须先在设置 · 上下文开启并保存）

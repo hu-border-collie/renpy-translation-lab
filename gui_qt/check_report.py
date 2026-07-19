@@ -363,8 +363,8 @@ def idle_writeback_summary_for_work_mode(mode) -> WritebackSummary:
     if not spec.supports_translation_writeback:
         if spec.mode == WorkMode.SYNC_TRANSLATION:
             message = (
-                "同步翻译可能直接改项目文件；"
-                "请先在副本或备份上试跑，详情见诊断与工具。"
+                "同步翻译默认只生成差异预览；"
+                "确认预览后才会通过同步任务页写回。"
             )
         elif spec.mode == WorkMode.KEYWORD_EXTRACTION:
             message = "关键词模式只生成报告，不会修改游戏脚本。"
