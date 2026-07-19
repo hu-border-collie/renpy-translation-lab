@@ -1,0 +1,6 @@
+# Shared numeric, plotting, and image dependencies.
+# Version ownership: this file.
+numpy==2.4.2
+matplotlib==3.10.8
+scikit-learn==1.8.0
+pillow==12.2.0

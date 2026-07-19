@@ -33,13 +33,13 @@
 
 ## 依赖
 
-基础依赖：
+基础依赖版本由根目录 `requirements-core.txt` 统一维护：
 - `numpy`
 - `matplotlib`
 - `scikit-learn`
 - `pillow`
 
-仅 `semantic` 模式额外需要：
+仅 `semantic` 模式额外需要，由 `requirements-genai.txt` 统一维护：
 - `google-genai`
 
 安装时直接使用仓库根目录的 [requirements.txt](../requirements.txt) 即可。

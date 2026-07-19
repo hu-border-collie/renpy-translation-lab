@@ -1,0 +1,3 @@
+# Shared Google GenAI SDK dependency.
+# Version ownership: this file.
+google-genai==1.57.0
