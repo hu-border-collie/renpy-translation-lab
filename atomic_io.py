@@ -204,6 +204,65 @@ def _cleanup_transaction_entries(entries: Iterable[dict[str, Any]]) -> None:
         _remove_if_present(str(entry.get("backup_path") or ""))
 
 
+def _validate_transaction_journal(
+    payload: Any,
+    journal: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        raise AtomicWriteTransactionError(
+            f"Invalid writeback transaction journal: {journal}"
+        )
+
+    state = payload.get("state")
+    entries = payload.get("entries")
+    if state not in {"prepared", "committed"} or not isinstance(entries, list):
+        raise AtomicWriteTransactionError(
+            f"Invalid writeback transaction journal: {journal}"
+        )
+
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise AtomicWriteTransactionError(
+                f"Invalid entry {index} in writeback transaction journal: {journal}"
+            )
+        target = entry.get("target")
+        staged_path = entry.get("staged_path")
+        backup_path = entry.get("backup_path")
+        existed = entry.get("existed")
+        if (
+            not isinstance(target, str)
+            or not target
+            or not isinstance(staged_path, str)
+            or not staged_path
+            or not isinstance(backup_path, str)
+            or not isinstance(existed, bool)
+            or (existed and not backup_path)
+        ):
+            raise AtomicWriteTransactionError(
+                f"Invalid entry {index} in writeback transaction journal: {journal}"
+            )
+
+    return state, entries
+
+
+def _restore_backup_copy(backup_path: str, target: str) -> None:
+    directory = os.path.dirname(target) or "."
+    fd, restore_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(target)}.",
+        suffix=".txn.restore",
+        dir=directory,
+    )
+    os.close(fd)
+    try:
+        shutil.copy2(backup_path, restore_path)
+        with open(restore_path, "rb+") as handle:
+            os.fsync(handle.fileno())
+        os.replace(restore_path, target)
+    except Exception:
+        _remove_if_present(restore_path)
+        raise
+
+
 def recover_atomic_write_transaction(
     journal_path: str | os.PathLike[str],
 ) -> bool:
@@ -223,19 +282,14 @@ def recover_atomic_write_transaction(
             f"Could not read writeback transaction journal {journal}: {exc}"
         ) from exc
 
-    state = payload.get("state")
-    entries = payload.get("entries")
-    if state not in {"prepared", "committed"} or not isinstance(entries, list):
-        raise AtomicWriteTransactionError(
-            f"Invalid writeback transaction journal: {journal}"
-        )
+    state, entries = _validate_transaction_journal(payload, journal)
 
     if state == "prepared":
         for entry in reversed(entries):
-            target = str(entry.get("target") or "")
-            staged_path = str(entry.get("staged_path") or "")
-            backup_path = str(entry.get("backup_path") or "")
-            existed = bool(entry.get("existed"))
+            target = entry["target"]
+            staged_path = entry["staged_path"]
+            backup_path = entry["backup_path"]
+            existed = entry["existed"]
             # os.replace consumes the staged path. Its absence therefore means
             # this target was already committed before interruption.
             if staged_path and os.path.exists(staged_path):
@@ -245,7 +299,7 @@ def recover_atomic_write_transaction(
                     raise AtomicWriteTransactionError(
                         f"Missing rollback backup for {target}: {backup_path or '(none)'}"
                     )
-                os.replace(backup_path, target)
+                _restore_backup_copy(backup_path, target)
             else:
                 _remove_if_present(target)
 

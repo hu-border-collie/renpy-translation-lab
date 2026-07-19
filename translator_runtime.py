@@ -2716,7 +2716,7 @@ def render_replacement_lines(lines, replacements):
                 prefix = ""
             else:
                 start, end, translated, prefix, quote = repl[:5]
-            if start < 0 or end > len(line):
+            if start < 0 or end > len(line) or start > end:
                 continue
             normalized = apply_normalization(translated) if USE_TRANSLATION_MEMORY else translated
             line = line[:start] + quote_with(normalized, quote, prefix=prefix) + line[end:]
