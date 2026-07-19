@@ -14,9 +14,11 @@ LOCK_DIR = REPO_ROOT / "requirements-lock"
 MANIFEST_PATH = LOCK_DIR / "manifest.json"
 UV_VERSION = "0.11.29"
 PYTHON_VERSION = "3.11"
-PROFILES: dict[str, tuple[str, ...]] = {
+COMMON_PROFILES: dict[str, tuple[str, ...]] = {
     "cli": ("requirements.txt",),
     "gui": ("requirements.txt", "requirements-gui.txt"),
+}
+PLATFORM_PROFILES: dict[str, tuple[str, ...]] = {
     "litellm": ("requirements.txt", "requirements-litellm.txt"),
 }
 PLATFORMS = {
@@ -50,16 +52,29 @@ def sha256_text_file(path: Path) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def lock_relative_path(platform: str, profile: str) -> str:
+def common_lock_relative_path(profile: str) -> str:
+    return f"requirements-lock/py311-{profile}.txt"
+
+
+def platform_lock_relative_path(platform: str, profile: str) -> str:
     return f"requirements-lock/py311-{platform}-{profile}.txt"
 
 
-def expected_locks() -> tuple[str, ...]:
-    return tuple(
-        lock_relative_path(platform, profile)
-        for platform in PLATFORMS
-        for profile in PROFILES
+def lock_targets() -> tuple[tuple[str, tuple[str, ...], str | None], ...]:
+    common = tuple(
+        (common_lock_relative_path(profile), inputs, None)
+        for profile, inputs in COMMON_PROFILES.items()
     )
+    platform_specific = tuple(
+        (platform_lock_relative_path(platform, profile), inputs, uv_platform)
+        for platform, uv_platform in PLATFORMS.items()
+        for profile, inputs in PLATFORM_PROFILES.items()
+    )
+    return common + platform_specific
+
+
+def expected_locks() -> tuple[str, ...]:
+    return tuple(relative for relative, _inputs, _platform in lock_targets())
 
 
 def manifest_payload(repo_root: Path = REPO_ROOT) -> dict[str, object]:
@@ -148,33 +163,34 @@ def verify_uv(uv_command: str) -> None:
 def generate_locks(uv_command: str, *, upgrade: bool = False) -> None:
     verify_uv(uv_command)
     LOCK_DIR.mkdir(parents=True, exist_ok=True)
-    for platform, uv_platform in PLATFORMS.items():
-        for profile, inputs in PROFILES.items():
-            output = REPO_ROOT / lock_relative_path(platform, profile)
-            command = [
-                uv_command,
-                "pip",
-                "compile",
-                *inputs,
-                "--python-version",
-                PYTHON_VERSION,
-                "--python-platform",
-                uv_platform,
-                "--generate-hashes",
-                "--no-annotate",
-                "--no-header",
-                "--only-binary",
-                ":all:",
-                "--output-file",
-                str(output),
-                "--quiet",
-            ]
-            if upgrade:
-                command.append("--upgrade")
-            print(f"Generating {output.relative_to(REPO_ROOT)}")
-            subprocess.run(command, cwd=REPO_ROOT, check=True)
-            if "--hash=sha256:" not in output.read_text(encoding="utf-8"):
-                raise RuntimeError(f"generated lock has no hashes: {output}")
+    for relative, inputs, uv_platform in lock_targets():
+        output = REPO_ROOT / relative
+        command = [
+            uv_command,
+            "pip",
+            "compile",
+            *inputs,
+            "--python-version",
+            PYTHON_VERSION,
+            "--generate-hashes",
+            "--no-annotate",
+            "--no-header",
+            "--only-binary",
+            ":all:",
+            "--output-file",
+            str(output),
+            "--quiet",
+        ]
+        if uv_platform is None:
+            command.append("--universal")
+        else:
+            command.extend(("--python-platform", uv_platform))
+        if upgrade:
+            command.append("--upgrade")
+        print(f"Generating {output.relative_to(REPO_ROOT)}")
+        subprocess.run(command, cwd=REPO_ROOT, check=True)
+        if "--hash=sha256:" not in output.read_text(encoding="utf-8"):
+            raise RuntimeError(f"generated lock has no hashes: {output}")
 
     MANIFEST_PATH.write_text(
         json.dumps(manifest_payload(), indent=2, sort_keys=True) + "\n",

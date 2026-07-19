@@ -33,9 +33,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            lock: requirements-lock/py311-linux-gui.txt
+            lock: requirements-lock/py311-gui.txt
           - os: windows-latest
-            lock: requirements-lock/py311-windows-gui.txt
+            lock: requirements-lock/py311-gui.txt
 
     steps:
       - name: Check out repository
@@ -84,12 +84,12 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: |
-            requirements-lock/py311-linux-cli.txt
+            requirements-lock/py311-cli.txt
 
       - name: Install CLI dependencies only
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --require-hashes -r requirements-lock/py311-linux-cli.txt
+          python -m pip install --require-hashes -r requirements-lock/py311-cli.txt
 
       - name: Verify PySide6 is not installed
         run: |
@@ -139,12 +139,12 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: requirements-lock/py311-linux-gui.txt
+          cache-dependency-path: requirements-lock/py311-gui.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --require-hashes -r requirements-lock/py311-linux-gui.txt
+          python -m pip install --require-hashes -r requirements-lock/py311-gui.txt
 
       - name: Install Qt runtime dependencies (Linux)
         uses: ./.github/actions/install-qt-linux-deps

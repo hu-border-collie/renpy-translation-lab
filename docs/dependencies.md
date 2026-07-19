@@ -20,17 +20,17 @@
 哈希锁以 Python 3.11、x86-64 Windows 与 glibc 2.34+ Linux 为受验证目标。Linux 下限来自 PySide6 6.11.1 提供的 wheel。选择平台与功能 profile：
 
 ```powershell
-# Windows CLI
-python -m pip install --require-hashes -r requirements-lock/py311-windows-cli.txt
+# Windows/Linux CLI
+python -m pip install --require-hashes -r requirements-lock/py311-cli.txt
 
-# Windows GUI
-python -m pip install --require-hashes -r requirements-lock/py311-windows-gui.txt
+# Windows/Linux GUI
+python -m pip install --require-hashes -r requirements-lock/py311-gui.txt
 
 # Windows CLI + LiteLLM
 python -m pip install --require-hashes -r requirements-lock/py311-windows-litellm.txt
 ```
 
-Linux 使用对应的 `py311-linux-*.txt`。其他 Python 版本仍可从直接 requirements 安装，但不属于提交锁覆盖的可复现环境。
+Linux LiteLLM 使用 `py311-linux-litellm.txt`。CLI/GUI 的通用锁由 uv universal resolution 生成；只有依赖树确实不同的 LiteLLM 保留平台锁。其他 Python 版本仍可从直接 requirements 安装，但不属于提交锁覆盖的可复现环境。
 
 ## 生成与校验
 
@@ -42,7 +42,7 @@ python scripts/compile_dependency_locks.py --upgrade
 python scripts/compile_dependency_locks.py --check
 ```
 
-普通重生成不传 `--upgrade`，会尽量保留现有传递版本；有意更新依赖时才使用 `--upgrade`。生成器明确解析 Python 3.11 的 Windows/Linux profile，并为每个发行文件写入 SHA-256。`.gitattributes` 强制依赖输入、锁和生成器使用 LF，确保 Windows/Linux checkout 的字节摘要一致。`requirements-lock/manifest.json` 同时记录该规则、所有直接输入和锁文件的摘要，因此 CI 能在不访问网络的情况下发现：
+普通重生成不传 `--upgrade`，会尽量保留现有传递版本；有意更新依赖时才使用 `--upgrade`。生成器为 CLI/GUI 生成 Python 3.11 universal lock，并分别解析 Windows/Linux LiteLLM profile，为每个发行文件写入 SHA-256。`.gitattributes` 强制依赖输入、锁和生成器使用 LF，确保 Windows/Linux checkout 的字节摘要一致。`requirements-lock/manifest.json` 同时记录该规则、所有直接输入和锁文件的摘要，因此 CI 能在不访问网络的情况下发现：
 
 - 直接 requirements 已修改但锁未重生成；
 - 生成锁被手工修改；

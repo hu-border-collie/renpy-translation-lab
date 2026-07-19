@@ -54,7 +54,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-上述命令使用人工维护的直接依赖入口。Python 3.11 的 Windows/Linux 可复现安装可改用提交的 `requirements-lock/py311-<platform>-cli.txt`；GUI 与 LiteLLM 也有独立 profile。详见[依赖输入与哈希锁](docs/dependencies.md)。
+上述命令使用人工维护的直接依赖入口。Python 3.11 的 Windows/Linux 可复现安装可改用提交的 `requirements-lock/py311-cli.txt`；GUI 使用通用锁，LiteLLM 使用平台锁。详见[依赖输入与哈希锁](docs/dependencies.md)。
 
 Windows PowerShell:
 

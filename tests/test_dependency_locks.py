@@ -51,19 +51,20 @@ class DependencyLockTests(unittest.TestCase):
             )
 
     def test_lock_profiles_keep_optional_dependencies_isolated(self):
+        cli = (
+            locks.REPO_ROOT / locks.common_lock_relative_path("cli")
+        ).read_text(encoding="utf-8")
+        gui = (
+            locks.REPO_ROOT / locks.common_lock_relative_path("gui")
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("pyside6==", cli)
+        self.assertNotIn("litellm==", cli)
+        self.assertIn("pyside6==6.11.1", gui)
         for platform in locks.PLATFORMS:
-            cli = (
-                locks.REPO_ROOT / locks.lock_relative_path(platform, "cli")
-            ).read_text(encoding="utf-8")
-            gui = (
-                locks.REPO_ROOT / locks.lock_relative_path(platform, "gui")
-            ).read_text(encoding="utf-8")
             litellm = (
-                locks.REPO_ROOT / locks.lock_relative_path(platform, "litellm")
+                locks.REPO_ROOT
+                / locks.platform_lock_relative_path(platform, "litellm")
             ).read_text(encoding="utf-8")
-            self.assertNotIn("pyside6==", cli)
-            self.assertNotIn("litellm==", cli)
-            self.assertIn("pyside6==6.11.1", gui)
             self.assertIn("litellm==1.83.7", litellm)
             self.assertIn("keyring==25.7.0", litellm)
 
@@ -73,8 +74,9 @@ class DependencyLockTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("compile_dependency_locks.py --check", workflow)
         self.assertIn("--require-hashes", workflow)
-        self.assertIn("py311-windows-gui.txt", workflow)
-        self.assertIn("py311-linux-gui.txt", workflow)
+        self.assertIn("py311-gui.txt", workflow)
+        self.assertNotIn("py311-windows-gui.txt", workflow)
+        self.assertNotIn("py311-linux-gui.txt", workflow)
 
 
 if __name__ == "__main__":

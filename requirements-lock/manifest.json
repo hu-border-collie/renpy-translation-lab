@@ -4,11 +4,9 @@
     "version": "0.11.29"
   },
   "locks": {
-    "requirements-lock/py311-linux-cli.txt": "6af7ade5f227755a2c7d5a852df5ad2d55316d43d56d8ac1d90b7edf53fb01a6",
-    "requirements-lock/py311-linux-gui.txt": "bba967719d10b21d2c39dbb8bde4457f68f3bb04b7fc9953c720a26509ed3065",
+    "requirements-lock/py311-cli.txt": "08d8d0009b90de737736b00a6693fe5372c5c56040e51c33a89e1b4491de2f06",
+    "requirements-lock/py311-gui.txt": "a0d218f949884aae4d7e74382a5c3fed2d34d234d3289d8ebf3f9c2e9fa7827c",
     "requirements-lock/py311-linux-litellm.txt": "6f1f83d07bafda0fda4a3dd43c501bd524aceb58546576b6f1a7d46dd97b29a8",
-    "requirements-lock/py311-windows-cli.txt": "6af7ade5f227755a2c7d5a852df5ad2d55316d43d56d8ac1d90b7edf53fb01a6",
-    "requirements-lock/py311-windows-gui.txt": "bba967719d10b21d2c39dbb8bde4457f68f3bb04b7fc9953c720a26509ed3065",
     "requirements-lock/py311-windows-litellm.txt": "a71a9c3e79c0219db1d4418512032e43fdadf171807bd00178084f8e5923c0ce"
   },
   "python_version": "3.11",
@@ -22,6 +20,6 @@
     "requirements-gui.txt": "6c6d2e38eaedecf6e1152115abef1305bca7430c1522768bdb2055e8e08c8305",
     "requirements-litellm.txt": "7790852dec5aabc5e60d5384a698590eedd6e01da7bf7ba8eb57cc32a2a84d5b",
     "requirements.txt": "bce130f6487a6e57c171924754e17ccee6e3529dde361a676f83526e86ab25f0",
-    "scripts/compile_dependency_locks.py": "cbd4cede902639b37e5fae0322a2c5a1a5e0d74f7c28101d52c4fb7c622c8010"
+    "scripts/compile_dependency_locks.py": "8c6bc56c976c42a5120cece5415bbb01402e42bffd8e6f83cfab798b7aaf33b8"
   }
 }
