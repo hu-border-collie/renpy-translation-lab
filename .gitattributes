@@ -1,0 +1,6 @@
+.gitattributes text eol=lf
+requirements*.txt text eol=lf
+requirements-lock/*.txt text eol=lf
+requirements-lock/*.json text eol=lf
+relation_analyzer/requirements*.txt text eol=lf
+scripts/compile_dependency_locks.py text eol=lf

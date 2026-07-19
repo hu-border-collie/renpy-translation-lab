@@ -1,0 +1,27 @@
+{
+  "generator": {
+    "name": "uv",
+    "version": "0.11.29"
+  },
+  "locks": {
+    "requirements-lock/py311-linux-cli.txt": "6af7ade5f227755a2c7d5a852df5ad2d55316d43d56d8ac1d90b7edf53fb01a6",
+    "requirements-lock/py311-linux-gui.txt": "bba967719d10b21d2c39dbb8bde4457f68f3bb04b7fc9953c720a26509ed3065",
+    "requirements-lock/py311-linux-litellm.txt": "6f1f83d07bafda0fda4a3dd43c501bd524aceb58546576b6f1a7d46dd97b29a8",
+    "requirements-lock/py311-windows-cli.txt": "6af7ade5f227755a2c7d5a852df5ad2d55316d43d56d8ac1d90b7edf53fb01a6",
+    "requirements-lock/py311-windows-gui.txt": "bba967719d10b21d2c39dbb8bde4457f68f3bb04b7fc9953c720a26509ed3065",
+    "requirements-lock/py311-windows-litellm.txt": "a71a9c3e79c0219db1d4418512032e43fdadf171807bd00178084f8e5923c0ce"
+  },
+  "python_version": "3.11",
+  "schema_version": 1,
+  "sources": {
+    ".gitattributes": "9dc611dd702aec358b7bcd364e48de10dec1789d1de7448b5cde2fcda2ec0ecd",
+    "relation_analyzer/requirements-semantic.txt": "c78cf701f57778a7bb72dd6ba73c522c392caba51261ea2ec97fde1ddb98d9b0",
+    "relation_analyzer/requirements.txt": "6ee4344c082b458070face5321dc4cdf26132622d16e35fd2880bac349945b6d",
+    "requirements-core.txt": "a4856dca1aad096b0ccba2031af6bf61db4977f13fc89aec95d4fb9f99e94af4",
+    "requirements-genai.txt": "5633e28ace0a4ae97ef23cc2932b9aa54ab8c5ca1f6ba4c114a17206bc9fed45",
+    "requirements-gui.txt": "ee71cc7bf21b6fd303b5dd5fabaed5e3adbf95777f9bd7621ef4c72cf9c7229e",
+    "requirements-litellm.txt": "4d847d44479b7435223bafac2bdc1253745ba195e8cd2b55ce40cf1605e5b36f",
+    "requirements.txt": "bce130f6487a6e57c171924754e17ccee6e3529dde361a676f83526e86ab25f0",
+    "scripts/compile_dependency_locks.py": "48456249f35acb020e7b426b109535ae03f2a652cebe2e7a34be55005e2c6dd5"
+  }
+}

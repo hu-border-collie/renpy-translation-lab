@@ -1,1 +1,2 @@
-google-genai
+# Semantic mode adds the repository-owned Google GenAI dependency.
+-r ../requirements-genai.txt
