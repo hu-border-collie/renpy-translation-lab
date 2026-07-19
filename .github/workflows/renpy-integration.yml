@@ -1,0 +1,50 @@
+name: Ren'Py integration
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renpy-integration
+  cancel-in-progress: false
+
+jobs:
+  fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RENPY_VERSION: "8.5.2"
+      RENPY_ARCHIVE_SHA256: "cf9ed145e5b32521a4b2caddb4cd3073c64259ac51e1f7aab94a8a8ff72b55c4"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install virtual display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends xvfb xauth libgl1-mesa-dri libglu1-mesa
+
+      - name: Download and verify pinned Ren'Py SDK
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/renpy-${RENPY_VERSION}-sdk.tar.bz2"
+          curl --fail --location --retry 3 --output "$archive" \
+            "https://www.renpy.org/dl/${RENPY_VERSION}/renpy-${RENPY_VERSION}-sdk.tar.bz2"
+          echo "${RENPY_ARCHIVE_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xjf "$archive" -C "$RUNNER_TEMP"
+
+      - name: Run real SDK fixture integration
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          SDL_AUDIODRIVER: dummy
+        run: |
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" \
+            python -B scripts/run_renpy_integration.py \
+              --sdk "$RUNNER_TEMP/renpy-${RENPY_VERSION}-sdk"
