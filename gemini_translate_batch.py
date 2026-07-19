@@ -20,9 +20,11 @@ if SCRIPT_DIR not in sys.path:
 from atomic_io import (
     atomic_write_json,
     atomic_write_jsonl,
+    atomic_write_many_lines,
     atomic_write_text,
     file_sha256,
     result_artifact_is_complete,
+    recover_atomic_write_transaction,
     sha256_text,
 )
 from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
@@ -6254,6 +6256,12 @@ def apply_results(target=None, force=False):
     if manifest.get('applied_at') and not force:
         raise SystemExit('Manifest was already applied. Re-run apply with --force to bypass this guard; source validation still applies.')
     require_manifest_project_match(manifest, 'apply')
+
+    transaction_path = os.path.join(
+        manifest['_package_dir'],
+        '.apply_writeback_transaction.json',
+    )
+    recover_atomic_write_transaction(transaction_path)
     require_safe_check_for_apply(manifest)
 
     replacements_by_file, translated_lines_by_file, failure_entries, summary = collect_result_actions(
@@ -6325,11 +6333,29 @@ def apply_results(target=None, force=False):
         save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
         raise SystemExit(f'Apply refused because source revalidation is not safe. Report: {report_path}')
 
+    writeback_files = []
+    for file_key, replacements in revalidated_replacements_by_file.items():
+        if not replacements:
+            continue
+        writeback_files.append(
+            (
+                revalidated_file_paths[file_key],
+                legacy.render_replacement_lines(
+                    revalidated_file_lines[file_key],
+                    replacements,
+                ),
+            )
+        )
+    if writeback_files:
+        atomic_write_many_lines(
+            writeback_files,
+            journal_path=transaction_path,
+            encoding='utf-8',
+        )
+
     for file_key, replacements in revalidated_replacements_by_file.items():
         file_path = revalidated_file_paths[file_key]
         lines = revalidated_file_lines[file_key]
-        if replacements:
-            legacy.commit_replacements(file_path, lines, replacements)
         line_numbers = sorted(revalidated_line_numbers_by_file[file_key])
         update_progress(file_key, line_numbers)
         applied_files += 1
@@ -6380,6 +6406,13 @@ def apply_revisions(target=None, force=False):
     if manifest.get('revision_applied_at') and not force:
         raise SystemExit('Revision manifest was already applied. Re-run apply-revisions with --force to bypass this guard; source validation still applies.')
 
+    require_manifest_project_match(manifest, 'apply-revisions')
+    transaction_path = os.path.join(
+        manifest['_package_dir'],
+        '.revision_writeback_transaction.json',
+    )
+    recover_atomic_write_transaction(transaction_path)
+
     replacements_by_file, _revised_lines_by_file, failure_entries, summary, preview_entries = collect_revision_actions(
         manifest,
         validate_sources=True,
@@ -6390,6 +6423,8 @@ def apply_revisions(target=None, force=False):
     final_pending_files = 0
     final_pending_lines = 0
     rag_jobs = []
+    writeback_files = []
+    revision_updates = []
     for file_key, replacements in replacements_by_file.items():
         file_info = manifest['files'].get(file_key)
         if not file_info:
@@ -6413,8 +6448,20 @@ def apply_revisions(target=None, force=False):
         if not replacements and not line_numbers_set:
             continue
         if replacements:
-            legacy.commit_replacements(file_path, lines, replacements)
+            writeback_files.append(
+                (file_path, legacy.render_replacement_lines(lines, replacements))
+            )
         line_numbers = sorted(line_numbers_set)
+        revision_updates.append((file_key, line_numbers, file_path))
+
+    if writeback_files:
+        atomic_write_many_lines(
+            writeback_files,
+            journal_path=transaction_path,
+            encoding='utf-8',
+        )
+
+    for file_key, line_numbers, file_path in revision_updates:
         update_progress(file_key, line_numbers)
         applied_files += 1
         applied_lines += len(line_numbers)

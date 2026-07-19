@@ -2700,6 +2700,30 @@ def _upgrade_legacy_progress_keys(progress, file_paths):
     return progress
 
 
+def render_replacement_lines(lines, replacements):
+    """Return replacement output without modifying the caller's source lines."""
+    rendered = list(lines)
+    if not replacements:
+        return rendered
+
+    for line_idx, repls in replacements.items():
+        if line_idx >= len(rendered):
+            continue
+        line = rendered[line_idx]
+        for repl in sorted(repls, key=lambda x: x[0], reverse=True):
+            if len(repl) == 4:
+                start, end, translated, quote = repl
+                prefix = ""
+            else:
+                start, end, translated, prefix, quote = repl[:5]
+            if start < 0 or end > len(line) or start > end:
+                continue
+            normalized = apply_normalization(translated) if USE_TRANSLATION_MEMORY else translated
+            line = line[:start] + quote_with(normalized, quote, prefix=prefix) + line[end:]
+        rendered[line_idx] = line
+    return rendered
+
+
 def commit_replacements(path, lines, replacements):
     """Apply replacements in memory, then atomically replace the target file.
 
@@ -2709,25 +2733,9 @@ def commit_replacements(path, lines, replacements):
     if not replacements:
         return
 
-    for line_idx, repls in replacements.items():
-        if line_idx >= len(lines):
-            continue
-        line = lines[line_idx]
-        # Sort replacements by start position descending to avoid index shifting
-        for repl in sorted(repls, key=lambda x: x[0], reverse=True):
-            if len(repl) == 4:
-                start, end, translated, quote = repl
-                prefix = ""
-            else:
-                start, end, translated, prefix, quote = repl[:5]
-            # Safety check indices
-            if start < 0 or end > len(line):
-                continue
-            normalized = apply_normalization(translated) if USE_TRANSLATION_MEMORY else translated
-            line = line[:start] + quote_with(normalized, quote, prefix=prefix) + line[end:]
-        lines[line_idx] = line
-
-    atomic_write_lines(path, lines, encoding="utf-8")
+    rendered = render_replacement_lines(lines, replacements)
+    lines[:] = rendered
+    atomic_write_lines(path, rendered, encoding="utf-8")
 
 
 def sync_rag_hash_key(text):

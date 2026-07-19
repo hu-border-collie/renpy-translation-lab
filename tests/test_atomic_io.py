@@ -64,8 +64,252 @@ class AtomicIoHelperTests(unittest.TestCase):
             self.assertTrue(atomic_io.result_artifact_is_complete(path, digest))
             self.assertFalse(atomic_io.result_artifact_is_complete(path, '0' * 64))
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX mode bits are not available on Windows')
+    def test_atomic_write_preserves_existing_file_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'script.rpy'
+            path.write_text('old\n', encoding='utf-8')
+            path.chmod(0o644)
+
+            atomic_io.atomic_write_text(path, 'new\n')
+
+            self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+
+    def test_atomic_write_many_lines_commits_all_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / 'first.rpy'
+            second = root / 'second.rpy'
+            journal = root / 'writeback-transaction.json'
+            first.write_text('first old\n', encoding='utf-8')
+            second.write_text('second old\n', encoding='utf-8')
+
+            atomic_io.atomic_write_many_lines(
+                [
+                    (first, ['first new\n']),
+                    (second, ['second new\n']),
+                ],
+                journal_path=journal,
+            )
+
+            self.assertEqual(first.read_text(encoding='utf-8'), 'first new\n')
+            self.assertEqual(second.read_text(encoding='utf-8'), 'second new\n')
+            self.assertFalse(journal.exists())
+            self.assertEqual(list(root.glob('*.txn.*')), [])
+
+    def test_atomic_write_many_lines_rolls_back_prior_replacements(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / 'first.rpy'
+            second = root / 'second.rpy'
+            journal = root / 'writeback-transaction.json'
+            first.write_text('first old\n', encoding='utf-8')
+            second.write_text('second old\n', encoding='utf-8')
+            real_replace = atomic_io.os.replace
+            failed = False
+
+            def fail_second_staged_replace(source, destination):
+                nonlocal failed
+                if (
+                    not failed
+                    and os.path.abspath(os.fspath(destination)) == os.path.abspath(second)
+                    and str(source).endswith('.txn.tmp')
+                ):
+                    failed = True
+                    raise OSError('second replace failed')
+                return real_replace(source, destination)
+
+            with mock.patch.object(
+                atomic_io.os,
+                'replace',
+                side_effect=fail_second_staged_replace,
+            ):
+                with self.assertRaisesRegex(OSError, 'second replace failed'):
+                    atomic_io.atomic_write_many_lines(
+                        [
+                            (first, ['first new\n']),
+                            (second, ['second new\n']),
+                        ],
+                        journal_path=journal,
+                    )
+
+            self.assertEqual(first.read_text(encoding='utf-8'), 'first old\n')
+            self.assertEqual(second.read_text(encoding='utf-8'), 'second old\n')
+            self.assertFalse(journal.exists())
+            self.assertEqual(list(root.glob('*.txn.*')), [])
+
+    def test_recover_prepared_transaction_rolls_back_consumed_stage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'script.rpy'
+            backup = root / '.script.rpy.demo.txn.bak'
+            staged = root / '.script.rpy.demo.txn.tmp'
+            journal = root / 'writeback-transaction.json'
+            target.write_text('new\n', encoding='utf-8')
+            backup.write_text('old\n', encoding='utf-8')
+            journal.write_text(
+                json.dumps(
+                    {
+                        'version': 1,
+                        'state': 'prepared',
+                        'entries': [
+                            {
+                                'target': str(target),
+                                'staged_path': str(staged),
+                                'backup_path': str(backup),
+                                'existed': True,
+                            }
+                        ],
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            recovered = atomic_io.recover_atomic_write_transaction(journal)
+
+            self.assertTrue(recovered)
+            self.assertEqual(target.read_text(encoding='utf-8'), 'old\n')
+            self.assertFalse(backup.exists())
+            self.assertFalse(journal.exists())
+
+    def test_recover_rejects_malformed_journal_before_rollback(self):
+        malformed_payloads = [
+            [],
+            {'version': 2, 'state': 'prepared', 'entries': []},
+            {'version': 1, 'state': 'prepared', 'entries': ['invalid']},
+            {
+                'version': 1,
+                'state': 'prepared',
+                'entries': [
+                    {
+                        'target': 'target.rpy',
+                        'staged_path': 'staged.tmp',
+                        'backup_path': 'backup.bak',
+                        'existed': 1,
+                    }
+                ],
+            },
+        ]
+
+        for payload in malformed_payloads:
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as tmp:
+                journal = Path(tmp) / 'writeback-transaction.json'
+                journal.write_text(json.dumps(payload), encoding='utf-8')
+
+                with self.assertRaises(atomic_io.AtomicWriteTransactionError):
+                    atomic_io.recover_atomic_write_transaction(journal)
+
+                self.assertTrue(journal.exists())
+
+    def test_recover_validates_all_entries_before_mutating_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'created.rpy'
+            journal = root / 'writeback-transaction.json'
+            target.write_text('keep\n', encoding='utf-8')
+            journal.write_text(
+                json.dumps(
+                    {
+                        'version': 1,
+                        'state': 'prepared',
+                        'entries': [
+                            {
+                                'target': 123,
+                                'staged_path': 'invalid.tmp',
+                                'backup_path': '',
+                                'existed': False,
+                            },
+                            {
+                                'target': str(target),
+                                'staged_path': str(root / 'consumed.tmp'),
+                                'backup_path': '',
+                                'existed': False,
+                            },
+                        ],
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            with self.assertRaises(atomic_io.AtomicWriteTransactionError):
+                atomic_io.recover_atomic_write_transaction(journal)
+
+            self.assertEqual(target.read_text(encoding='utf-8'), 'keep\n')
+            self.assertTrue(journal.exists())
+
+    def test_recover_prepared_transaction_is_retryable_after_partial_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / 'first.rpy'
+            second = root / 'second.rpy'
+            first_backup = root / '.first.rpy.demo.txn.bak'
+            second_backup = root / '.second.rpy.demo.txn.bak'
+            first_staged = root / '.first.rpy.demo.txn.tmp'
+            second_staged = root / '.second.rpy.demo.txn.tmp'
+            journal = root / 'writeback-transaction.json'
+            first.write_text('first new\n', encoding='utf-8')
+            second.write_text('second new\n', encoding='utf-8')
+            first_backup.write_text('first old\n', encoding='utf-8')
+            second_backup.write_text('second old\n', encoding='utf-8')
+            journal.write_text(
+                json.dumps(
+                    {
+                        'version': 1,
+                        'state': 'prepared',
+                        'entries': [
+                            {
+                                'target': str(second),
+                                'staged_path': str(second_staged),
+                                'backup_path': str(second_backup),
+                                'existed': True,
+                            },
+                            {
+                                'target': str(first),
+                                'staged_path': str(first_staged),
+                                'backup_path': str(first_backup),
+                                'existed': True,
+                            },
+                        ],
+                    }
+                ),
+                encoding='utf-8',
+            )
+            real_replace = atomic_io.os.replace
+
+            def fail_second_restore(source, destination):
+                if os.path.abspath(os.fspath(destination)) == os.path.abspath(second):
+                    raise OSError('second restore failed')
+                return real_replace(source, destination)
+
+            with mock.patch.object(
+                atomic_io.os,
+                'replace',
+                side_effect=fail_second_restore,
+            ):
+                with self.assertRaisesRegex(OSError, 'second restore failed'):
+                    atomic_io.recover_atomic_write_transaction(journal)
+
+            self.assertEqual(first.read_text(encoding='utf-8'), 'first old\n')
+            self.assertEqual(second.read_text(encoding='utf-8'), 'second new\n')
+            self.assertTrue(first_backup.exists())
+            self.assertTrue(second_backup.exists())
+            self.assertTrue(journal.exists())
+
+            self.assertTrue(atomic_io.recover_atomic_write_transaction(journal))
+            self.assertEqual(first.read_text(encoding='utf-8'), 'first old\n')
+            self.assertEqual(second.read_text(encoding='utf-8'), 'second old\n')
+            self.assertFalse(first_backup.exists())
+            self.assertFalse(second_backup.exists())
+            self.assertFalse(journal.exists())
+
 
 class CommitReplacementsAtomicTests(unittest.TestCase):
+    def test_render_replacement_lines_skips_inverted_range(self):
+        lines = ['    "Hello"\n']
+        replacements = {0: [(11, 4, '你好', '', '"')]}
+
+        self.assertEqual(runtime.render_replacement_lines(lines, replacements), lines)
+
     def test_commit_replacements_writes_atomically(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'script.rpy'
