@@ -143,8 +143,8 @@ def run_integration(
 
         def invoke(command: str, *arguments: str) -> None:
             command_runner(
-                launcher
-                + [
+                [
+                    *launcher,
                     "--savedir",
                     str(savedir),
                     str(project_dir),
