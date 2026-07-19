@@ -205,6 +205,7 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                 active_tl_dir=tl_dir,
             )
             self.assertEqual(applied["state"], "applied")
+            self.assertEqual((tl_dir / "a.rpy").read_text(encoding="utf-8"), '    "你好 1"\n')
             self.assertEqual((tl_dir / "b.rpy").read_text(encoding="utf-8"), '    "你好 2"\n')
 
 
