@@ -586,10 +586,11 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
     def test_rpa_index_loads_primitive_pickle_index(self):
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = Path(tmp) / 'archive.rpa'
-            raw_index = {'game/script.rpy': [(123, 4, b'')]}
+            data = b'test'
+            raw_index = {'game/script.rpy': [(34, len(data), b'')]}
             payload = zlib.compress(pickle.dumps(raw_index, protocol=4))
-            header = b'RPA-3.0 %016x %08x\n' % (34, 0)
-            archive_path.write_bytes(header + payload)
+            header = b'RPA-3.0 %016x %08x\n' % (34 + len(data), 0)
+            archive_path.write_bytes(header + data + payload)
 
             index = runtime._read_rpa_index(str(archive_path))
 
@@ -1031,9 +1032,15 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 runtime.run_prepare_steps()
 
             self.assertTrue((base / 'game' / 'tl' / 'schinese' / 'script.rpy').is_file())
-            extract_mock.assert_called_once_with(
-                runtime.canonical_abs_path(archive),
-                work_game_dir,
+            extract_mock.assert_called_once()
+            args, kwargs = extract_mock.call_args
+            self.assertEqual(
+                args,
+                (runtime.canonical_abs_path(archive), work_game_dir),
+            )
+            self.assertIsInstance(
+                kwargs["extraction_budget"],
+                runtime.RpaExtractionBudget,
             )
 
     def test_prepare_missing_tl_without_launcher_errors(self):

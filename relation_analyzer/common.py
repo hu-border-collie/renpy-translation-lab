@@ -10,8 +10,14 @@ import re
 import sys
 import time
 import tokenize
-import zlib
 from pathlib import Path
+
+from rpa_safety import (
+    DEFAULT_RPA_LIMITS,
+    decode_and_validate_index,
+    read_bounded_compressed_index,
+    read_member_bytes,
+)
 
 # ====== 路径 ======
 MODULE_DIR = Path(__file__).resolve().parent
@@ -288,75 +294,66 @@ class _RestrictedUnpickler(pickle.Unpickler):
 def load_pickle_blob(blob):
     return _RestrictedUnpickler(io.BytesIO(blob)).load()
 
-def read_rpa_index(archive_path):
+def read_rpa_index(archive_path, limits=DEFAULT_RPA_LIMITS):
     archive_path = str(archive_path)
-    cached = _ARCHIVE_INDEX_CACHE.get(archive_path)
+    stat = os.stat(archive_path)
+    cache_key = (archive_path, stat.st_size, stat.st_mtime_ns, limits)
+    cached = _ARCHIVE_INDEX_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
     with open(archive_path, 'rb') as infile:
+        archive_size = os.fstat(infile.fileno()).st_size
         header = infile.read(40)
 
         if header.startswith(b'RPA-3.0 '):
             offset = int(header[8:24], 16)
             key = int(header[25:33], 16)
-            infile.seek(offset)
-            raw_index = load_pickle_blob(zlib.decompress(infile.read()))
-            index = {}
-            for name, chunks in raw_index.items():
-                decoded_chunks = []
-                for chunk in chunks:
-                    if len(chunk) == 2:
-                        start = b''
-                        chunk_offset, chunk_len = chunk
-                    else:
-                        chunk_offset, chunk_len, start = chunk
-                        if start is None:
-                            start = b''
-                        elif not isinstance(start, bytes):
-                            start = str(start).encode('latin-1', errors='ignore')
-                    decoded_chunks.append((int(chunk_offset) ^ key, int(chunk_len) ^ key, start))
-                index[str(name)] = decoded_chunks
-            _ARCHIVE_INDEX_CACHE[archive_path] = index
+            payload = read_bounded_compressed_index(
+                infile,
+                offset,
+                archive_size,
+                limits,
+            )
+            index = decode_and_validate_index(
+                load_pickle_blob(payload),
+                archive_size,
+                key=key,
+                stringify_names=True,
+                limits=limits,
+            )
+            _ARCHIVE_INDEX_CACHE[cache_key] = index
             return index
 
         if header.startswith(b'RPA-2.0 '):
             infile.seek(0)
             line = infile.read(24)
             offset = int(line[8:], 16)
-            infile.seek(offset)
-            raw_index = load_pickle_blob(zlib.decompress(infile.read()))
-            index = {}
-            for name, chunks in raw_index.items():
-                decoded_chunks = []
-                for chunk in chunks:
-                    chunk_offset, chunk_len = chunk[:2]
-                    start = b''
-                    if len(chunk) >= 3:
-                        start = chunk[2] or b''
-                        if not isinstance(start, bytes):
-                            start = str(start).encode('latin-1', errors='ignore')
-                    decoded_chunks.append((int(chunk_offset), int(chunk_len), start))
-                index[str(name)] = decoded_chunks
-            _ARCHIVE_INDEX_CACHE[archive_path] = index
+            payload = read_bounded_compressed_index(
+                infile,
+                offset,
+                archive_size,
+                limits,
+            )
+            index = decode_and_validate_index(
+                load_pickle_blob(payload),
+                archive_size,
+                stringify_names=True,
+                limits=limits,
+            )
+            _ARCHIVE_INDEX_CACHE[cache_key] = index
             return index
 
     raise RuntimeError('Unsupported RPA format (expecting RPA-3.0 or RPA-2.0).')
 
-def read_rpa_member(archive_path, member_name):
-    index = read_rpa_index(archive_path)
+def read_rpa_member(archive_path, member_name, limits=DEFAULT_RPA_LIMITS):
+    index = read_rpa_index(archive_path, limits=limits)
     chunks = index.get(member_name)
     if not chunks:
         return None
 
-    data = bytearray()
     with open(archive_path, 'rb') as source:
-        for chunk_offset, chunk_len, start in chunks:
-            if start:
-                data.extend(start)
-            source.seek(chunk_offset)
-            data.extend(source.read(chunk_len))
-    return bytes(data)
+        return read_member_bytes(source, chunks, limits)
 
 def find_archive_for_input(input_path):
     path = Path(input_path)
