@@ -162,18 +162,15 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                     active_tl_dir=tl_dir,
                 )
 
-    def test_apply_can_resume_after_later_atomic_write_failure(self):
+    def test_apply_rolls_back_transaction_failure_and_can_retry(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tl_dir, manifest_path, _manifest = self._create_preview(root, ("a.rpy", "b.rpy"))
-            real_write = preview.atomic_write_text
-
-            def fail_second_target(path, text, **kwargs):
-                if Path(path) == tl_dir / "b.rpy":
-                    raise OSError("disk full")
-                return real_write(path, text, **kwargs)
-
-            with mock.patch.object(preview, "atomic_write_text", side_effect=fail_second_target):
+            with mock.patch.object(
+                preview,
+                "atomic_write_many_lines",
+                side_effect=OSError("disk full"),
+            ):
                 with self.assertRaisesRegex(OSError, "disk full"):
                     preview.apply_sync_preview(
                         manifest_path,
@@ -181,7 +178,7 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                         active_tl_dir=tl_dir,
                     )
 
-            self.assertEqual((tl_dir / "a.rpy").read_text(encoding="utf-8"), '    "你好 1"\n')
+            self.assertEqual((tl_dir / "a.rpy").read_text(encoding="utf-8"), '    "Hello 1"\n')
             self.assertEqual((tl_dir / "b.rpy").read_text(encoding="utf-8"), '    "Hello 2"\n')
 
             applied = preview.apply_sync_preview(

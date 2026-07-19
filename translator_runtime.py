@@ -2725,25 +2725,28 @@ def _upgrade_legacy_progress_keys(progress, file_paths):
     return progress
 
 
-def apply_replacements_to_lines(lines, replacements):
-    """Return translated lines without modifying the source file."""
-    updated = list(lines)
+def render_replacement_lines(lines, replacements):
+    """Return replacement output without modifying the caller's source lines."""
+    rendered = list(lines)
+    if not replacements:
+        return rendered
+
     for line_idx, repls in replacements.items():
-        if line_idx >= len(updated):
+        if line_idx >= len(rendered):
             continue
-        line = updated[line_idx]
+        line = rendered[line_idx]
         for repl in sorted(repls, key=lambda x: x[0], reverse=True):
             if len(repl) == 4:
                 start, end, translated, quote = repl
                 prefix = ""
             else:
                 start, end, translated, prefix, quote = repl[:5]
-            if start < 0 or end > len(line):
+            if start < 0 or end > len(line) or start > end:
                 continue
             normalized = apply_normalization(translated) if USE_TRANSLATION_MEMORY else translated
             line = line[:start] + quote_with(normalized, quote, prefix=prefix) + line[end:]
-        updated[line_idx] = line
-    return updated
+        rendered[line_idx] = line
+    return rendered
 
 
 def commit_replacements(path, lines, replacements):
@@ -2755,8 +2758,9 @@ def commit_replacements(path, lines, replacements):
     if not replacements:
         return
 
-    lines[:] = apply_replacements_to_lines(lines, replacements)
-    atomic_write_lines(path, lines, encoding="utf-8")
+    rendered = render_replacement_lines(lines, replacements)
+    lines[:] = rendered
+    atomic_write_lines(path, rendered, encoding="utf-8")
 
 
 def sync_rag_hash_key(text):
@@ -4048,7 +4052,7 @@ def run_translation(*, prepare=False):
 
         if replacements:
             normalized_entries = _normalize_progress_entries(successful_entries)
-            preview_lines = apply_replacements_to_lines(lines, replacements)
+            preview_lines = render_replacement_lines(lines, replacements)
             preview_files.append(
                 {
                     "relative_path": progress_key,

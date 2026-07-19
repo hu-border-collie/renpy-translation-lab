@@ -10,7 +10,14 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
-from atomic_io import atomic_write_json, atomic_write_text, file_sha256, sha256_text
+from atomic_io import (
+    atomic_write_json,
+    atomic_write_many_lines,
+    atomic_write_text,
+    file_sha256,
+    recover_atomic_write_transaction,
+    sha256_text,
+)
 
 
 SCHEMA = "sync_translation_preview"
@@ -240,6 +247,9 @@ def apply_sync_preview(
     active_tl_dir: str | os.PathLike[str],
     on_file_applied: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    manifest_file = Path(manifest_path).resolve()
+    transaction_path = manifest_file.parent / ".sync_writeback_transaction.json"
+    recover_atomic_write_transaction(transaction_path)
     manifest, prepared = prepare_sync_preview_apply(
         manifest_path,
         active_project_root=active_project_root,
@@ -247,17 +257,25 @@ def apply_sync_preview(
     )
     applied_paths: list[str] = []
     try:
+        writes = [
+            (item["target"], item["preview_text"].splitlines(keepends=True))
+            for item in prepared
+            if not item["already_applied"]
+        ]
+        if writes:
+            atomic_write_many_lines(
+                writes,
+                journal_path=transaction_path,
+                encoding="utf-8",
+            )
         for item in prepared:
             entry = item["entry"]
-            if not item["already_applied"]:
-                atomic_write_text(item["target"], item["preview_text"], encoding="utf-8")
             applied_paths.append(entry["relative_path"])
             if on_file_applied is not None:
                 on_file_applied(entry)
     except Exception as exc:
         manifest["state"] = "apply_failed"
         manifest["last_apply_failure"] = str(exc)
-        manifest["partially_applied_files"] = applied_paths
         atomic_write_json(manifest["_manifest_path"], _public_manifest(manifest), ensure_ascii=False, indent=2)
         raise
 
@@ -265,7 +283,6 @@ def apply_sync_preview(
     manifest["applied_at"] = datetime.now(timezone.utc).isoformat()
     manifest["applied_files"] = applied_paths
     manifest.pop("last_apply_failure", None)
-    manifest.pop("partially_applied_files", None)
     atomic_write_json(manifest["_manifest_path"], _public_manifest(manifest), ensure_ascii=False, indent=2)
     return manifest
 
