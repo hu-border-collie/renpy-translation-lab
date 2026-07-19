@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import zlib
 import threading
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -27,10 +28,11 @@ def locked_runtime_state():
     with _runtime_state_lock:
         yield
 
-from atomic_io import atomic_write_json, atomic_write_lines
+from atomic_io import atomic_write_json, atomic_write_lines, file_sha256
 from rag_memory import JsonRagStore, hash_text, truncate_text
 import prompt_context
 import story_memory
+import sync_translation_preview
 import translation_core
 from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
 
@@ -205,6 +207,9 @@ NON_TRANSLATABLE_SYMBOLS = re.compile(r"^[^A-Za-z0-9\u4e00-\u9fff]+$")
 RENPY_TAG_RE = re.compile(r"\{[^}]*\}")
 RENPY_FIELD_RE = re.compile(r"\[[^\]]+\]")
 RENPY_FIELD_TOKEN_RE = re.compile(r"\[(?P<name>[^\]!:]+)(?:![^\]]*)?\]")
+PERCENT_FORMAT_TOKEN_RE = re.compile(
+    r"%(?:\([^)]+\))?[#0 +\-]?(?:\d+|\*)?(?:\.\d+|\.\*)?[hlL]?[A-Za-z]"
+)
 WORD_TOKEN_RE = re.compile(r"[A-Za-z]+")
 VOWEL_RE = re.compile(r"[aeiou]", re.IGNORECASE)
 REPEATED_CHAR_RE = re.compile(r"(.)\\1{2,}")
@@ -2576,6 +2581,26 @@ def validate_translation(original, translated):
     if missing:
         return False, f"Preserved terms missing: {', '.join(missing)}"
 
+    original_tokens = Counter(
+        RENPY_TAG_RE.findall(original)
+        + RENPY_FIELD_RE.findall(original)
+        + PERCENT_FORMAT_TOKEN_RE.findall(original)
+    )
+    translated_tokens = Counter(
+        RENPY_TAG_RE.findall(translated)
+        + RENPY_FIELD_RE.findall(translated)
+        + PERCENT_FORMAT_TOKEN_RE.findall(translated)
+    )
+    if original_tokens != translated_tokens:
+        missing_tokens = list((original_tokens - translated_tokens).elements())
+        added_tokens = list((translated_tokens - original_tokens).elements())
+        details = []
+        if missing_tokens:
+            details.append(f"missing {', '.join(missing_tokens)}")
+        if added_tokens:
+            details.append(f"added {', '.join(added_tokens)}")
+        return False, f"Ren'Py placeholders/tags changed: {'; '.join(details)}"
+
     # If original is purely non-translatable, allow untouched output
     if is_non_translatable(original):
         return True, "OK"
@@ -2700,6 +2725,27 @@ def _upgrade_legacy_progress_keys(progress, file_paths):
     return progress
 
 
+def apply_replacements_to_lines(lines, replacements):
+    """Return translated lines without modifying the source file."""
+    updated = list(lines)
+    for line_idx, repls in replacements.items():
+        if line_idx >= len(updated):
+            continue
+        line = updated[line_idx]
+        for repl in sorted(repls, key=lambda x: x[0], reverse=True):
+            if len(repl) == 4:
+                start, end, translated, quote = repl
+                prefix = ""
+            else:
+                start, end, translated, prefix, quote = repl[:5]
+            if start < 0 or end > len(line):
+                continue
+            normalized = apply_normalization(translated) if USE_TRANSLATION_MEMORY else translated
+            line = line[:start] + quote_with(normalized, quote, prefix=prefix) + line[end:]
+        updated[line_idx] = line
+    return updated
+
+
 def commit_replacements(path, lines, replacements):
     """Apply replacements in memory, then atomically replace the target file.
 
@@ -2709,24 +2755,7 @@ def commit_replacements(path, lines, replacements):
     if not replacements:
         return
 
-    for line_idx, repls in replacements.items():
-        if line_idx >= len(lines):
-            continue
-        line = lines[line_idx]
-        # Sort replacements by start position descending to avoid index shifting
-        for repl in sorted(repls, key=lambda x: x[0], reverse=True):
-            if len(repl) == 4:
-                start, end, translated, quote = repl
-                prefix = ""
-            else:
-                start, end, translated, prefix, quote = repl[:5]
-            # Safety check indices
-            if start < 0 or end > len(line):
-                continue
-            normalized = apply_normalization(translated) if USE_TRANSLATION_MEMORY else translated
-            line = line[:start] + quote_with(normalized, quote, prefix=prefix) + line[end:]
-        lines[line_idx] = line
-
+    lines[:] = apply_replacements_to_lines(lines, replacements)
     atomic_write_lines(path, lines, encoding="utf-8")
 
 
@@ -3892,14 +3921,43 @@ def collect_tasks(lines, skip_translated=True):
     tasks, _progress = collect_tasks_with_progress(lines, skip_translated=skip_translated)
     return tasks
 
-def run_translation():
+def apply_sync_translation_preview(manifest_path):
+    """Apply a generated sync preview after validating every source file."""
+    load_config(require_api_key=False)
+    load_translator_settings()
+
+    def record_progress(entry):
+        update_progress(entry["relative_path"], entry.get("progress_entries") or [])
+        translated_path = os.path.join(TL_DIR, *entry["relative_path"].split("/"))
+        maybe_update_sync_rag_store(translated_path, full_file=True)
+
+    try:
+        manifest = sync_translation_preview.apply_sync_preview(
+            manifest_path,
+            active_project_root=BASE_DIR,
+            active_tl_dir=TL_DIR,
+            on_file_applied=record_progress,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"Sync apply blocked: {exc}") from exc
+
+    summary = manifest.get("summary") or {}
+    print(f"Sync apply manifest: {os.path.abspath(manifest_path)}")
+    print(f"Applied files: {len(manifest.get('applied_files') or [])}")
+    print(f"Applied translations: {int(summary.get('translated_items') or 0)}")
+    print("Sync translation apply complete.")
+    return manifest
+
+
+def run_translation(*, prepare=False):
+    """Translate into a reviewable preview package without changing project scripts."""
     load_config(require_api_key=False)
     load_translator_settings()
     if SYNC_BACKEND == "gemini":
         _require_gemini_api_key()
     load_glossary()
-    print("="*60)
-    print("Synchronous Translator (Ren'Py)")
+    print("=" * 60)
+    print("Synchronous Translator Preview (Ren'Py)")
     print(f"Sync backend: {SYNC_BACKEND}")
     print(f"Models: {MODELS}")
     if SYNC_BACKEND == "gemini":
@@ -3910,83 +3968,51 @@ def run_translation():
     print(f"TL subdir: {TL_SUBDIR}")
     print(f"TL dir: {TL_DIR} (exists: {os.path.isdir(TL_DIR)})")
     print(f"Progress log: {PROGRESS_LOG}")
-    print(f"Translator config: {TRANSLATOR_CONFIG} (exists: {os.path.isfile(TRANSLATOR_CONFIG)})")
-    print(f"Glossary: {GLOSSARY_FILE} (exists: {os.path.isfile(GLOSSARY_FILE)})")
-    print(f"Prepare enabled: {PREP_ENABLED}")
-    print(f"Prepare source game dir: {SOURCE_GAME_DIR or '(auto)'}")
-    print(f"Prepare language: {PREP_LANGUAGE}")
-    print(f"Prepare generate template: {PREP_GENERATE_TEMPLATE}")
-    print(f"Prepare refresh existing template: {PREP_REFRESH_EXISTING_TEMPLATE}")
-    print(f"Prepare Ren'Py SDK dir: {PREP_RENPY_SDK_DIR or '(not configured)'}")
-    print("="*60)
+    print("=" * 60)
 
-    run_prepare_steps()
+    if prepare:
+        run_prepare_steps()
+    elif PREP_ENABLED:
+        print("Prepare step skipped in preview mode; use --prepare explicitly if needed.")
     if not os.path.isdir(TL_DIR):
-        print("WARNING: TL_DIR does not exist after prepare step.")
+        print("WARNING: TL_DIR does not exist in preview mode.")
 
-    # Walk directory
     files_to_process = []
     for root, _, files in os.walk(TL_DIR):
-        for file in files:
-            if file.endswith(".rpy"):
-                file_path = os.path.join(root, file)
-                rel = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
-                if INCLUDE_FILES or INCLUDE_PREFIXES:
-                    allowed = False
-                    if INCLUDE_FILES and rel in INCLUDE_FILES:
-                        allowed = True
-                    if not allowed and INCLUDE_PREFIXES:
-                        for prefix in INCLUDE_PREFIXES:
-                            if rel.startswith(prefix):
-                                allowed = True
-                                break
-                    if not allowed:
-                        continue
-                files_to_process.append(file_path)
-
+        for filename in files:
+            if not filename.endswith(".rpy"):
+                continue
+            file_path = os.path.join(root, filename)
+            relative_path = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
+            if INCLUDE_FILES or INCLUDE_PREFIXES:
+                allowed = bool(INCLUDE_FILES and relative_path in INCLUDE_FILES)
+                if not allowed and INCLUDE_PREFIXES:
+                    allowed = any(relative_path.startswith(prefix) for prefix in INCLUDE_PREFIXES)
+                if not allowed:
+                    continue
+            files_to_process.append(file_path)
+    files_to_process.sort(key=lambda value: os.path.normcase(os.path.abspath(value)))
     print(f"Found {len(files_to_process)} files.")
 
-    # Load global progress
     global_progress = _upgrade_legacy_progress_keys(load_progress(), files_to_process)
-
+    preview_files = []
     for file_path in files_to_process:
         filename = os.path.basename(file_path)
         progress_key = _progress_key_for_path(file_path)
         print(f"\nProcessing: {filename}")
+        source_sha256 = file_sha256(file_path)
+        with open(file_path, "r", encoding="utf-8-sig") as handle:
+            lines = handle.readlines()
 
-        with open(file_path, "r", encoding="utf-8-sig") as f:
-            lines = f.readlines()
-
-        # Collect tasks
-        raw_tasks = collect_tasks(lines)
         completed_entries = set(_normalize_progress_entries(global_progress.get(progress_key, [])))
-
         tasks = []
-        for task in raw_tasks:
+        for task in collect_tasks(lines):
             if is_non_translatable(task["text"]):
                 continue
             progress_entry = task.get("progress_entry") or _progress_entry_for_task(task)
             if progress_entry in completed_entries or _progress_line_entry(task["line"]) in completed_entries:
-                if not FORCE_RETRANSLATE_ENGLISH:
+                if not FORCE_RETRANSLATE_ENGLISH or not is_english_like(task["text"]):
                     continue
-                if not is_english_like(task["text"]):
-                    continue
-            tasks.append(task)
-
-        if not tasks:
-            print("  No new lines to translate.")
-            continue
-
-        print(f"  Found {len(tasks)} lines to translate.")
-
-        # Process in batches
-        replacements = {}
-        batch = []
-        current_batch_chars = 0
-        sync_rag_needs_file_refresh = False
-
-        for task in tasks:
-            # Update ID to be unique per file and string literal
             task["id"] = translation_core.build_identity_v2(
                 progress_key,
                 task.get("block_name", "_global"),
@@ -3996,38 +4022,57 @@ def run_translation():
             )
             task["progress_entry"] = _progress_entry_for_task(task)
             task["file_rel_path"] = progress_key
+            tasks.append(task)
 
+        if not tasks:
+            print("  No new lines to translate.")
+            continue
+        print(f"  Found {len(tasks)} lines to translate.")
+
+        replacements = {}
+        successful_entries = []
+        batch = []
+        current_batch_chars = 0
+        for task in tasks:
             task_len = len(task["text"])
-
-            if len(batch) >= MAX_ITEMS or (current_batch_chars + task_len > MAX_CHARS):
-                successful_entries = process_batch_with_retry(batch, replacements)
-                if successful_entries:
-                    commit_replacements(file_path, lines, replacements)
-                    update_progress(progress_key, successful_entries)
-                    maybe_update_sync_rag_store(file_path, tasks=batch)
-                    sync_rag_needs_file_refresh = True
-                    completed_entries.update(_normalize_progress_entries(successful_entries))
-                    global_progress[progress_key] = sorted(completed_entries)
-                    replacements = {}
-
+            if batch and (
+                len(batch) >= MAX_ITEMS or current_batch_chars + task_len > MAX_CHARS
+            ):
+                successful_entries.extend(process_batch_with_retry(batch, replacements))
                 batch = []
                 current_batch_chars = 0
-
             batch.append(task)
             current_batch_chars += task_len
-
-        # Final batch
         if batch:
-            successful_entries = process_batch_with_retry(batch, replacements)
-            if successful_entries:
-                commit_replacements(file_path, lines, replacements)
-                update_progress(progress_key, successful_entries)
-                maybe_update_sync_rag_store(file_path, tasks=batch)
-                sync_rag_needs_file_refresh = True
-                completed_entries.update(_normalize_progress_entries(successful_entries))
-                global_progress[progress_key] = sorted(completed_entries)
+            successful_entries.extend(process_batch_with_retry(batch, replacements))
 
-        if sync_rag_needs_file_refresh:
-            maybe_update_sync_rag_store(file_path, full_file=True)
+        if replacements:
+            normalized_entries = _normalize_progress_entries(successful_entries)
+            preview_lines = apply_replacements_to_lines(lines, replacements)
+            preview_files.append(
+                {
+                    "relative_path": progress_key,
+                    "source_text": "".join(lines),
+                    "source_sha256": source_sha256,
+                    "preview_text": "".join(preview_lines),
+                    "progress_entries": normalized_entries,
+                    "translated_items": len(normalized_entries),
+                }
+            )
+        print(f"  Previewed {filename}.")
 
-        print(f"  Done with {filename}.")
+    manifest_path, manifest = sync_translation_preview.create_sync_preview(
+        log_dir=LOG_DIR,
+        project_root=BASE_DIR,
+        tl_dir=TL_DIR,
+        files=preview_files,
+    )
+    report_path = os.path.join(os.path.dirname(manifest_path), "preview.diff")
+    summary = manifest.get("summary") or {}
+    print(f"Sync preview manifest: {manifest_path}")
+    print(f"Sync preview report: {report_path}")
+    print(f"Preview files: {int(summary.get('files_changed') or 0)}")
+    print(f"Preview translations: {int(summary.get('translated_items') or 0)}")
+    print("Preview status: safe")
+    print("No project scripts were modified. Review the diff, then run with --apply MANIFEST.")
+    return manifest_path

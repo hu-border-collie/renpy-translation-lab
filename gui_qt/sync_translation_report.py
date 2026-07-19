@@ -6,7 +6,12 @@ import re
 from .translation_workflow import WorkflowUpdate
 
 
-def summarize_sync_translation_output(output: str, exit_code: int) -> WorkflowUpdate:
+def summarize_sync_translation_output(
+    output: str,
+    exit_code: int,
+    *,
+    operation: str = "preview",
+) -> WorkflowUpdate:
     if exit_code != 0:
         return WorkflowUpdate(
             status="failed",
@@ -24,7 +29,22 @@ def summarize_sync_translation_output(output: str, exit_code: int) -> WorkflowUp
         )
 
     facts = _collect_facts(output)
-    files_done = len(re.findall(r"^\s*Done with .+\.$", output, re.MULTILINE))
+    if operation == "apply":
+        if "Sync translation apply complete." not in output:
+            return WorkflowUpdate(
+                status="failed",
+                heading="同步翻译写回未完成",
+                message="写回命令没有返回完成标记，请查看原始输出。",
+                facts=facts,
+            )
+        return WorkflowUpdate(
+            status="done",
+            heading="同步翻译已写回",
+            message="预览已通过项目与源文件复核，并原子写入项目脚本。",
+            facts=facts,
+        )
+
+    files_done = len(re.findall(r"^\s*Previewed .+\.$", output, re.MULTILINE))
     lines_to_translate = sum(
         int(match.group(1))
         for match in re.finditer(r"Found (\d+) lines to translate\.", output)
@@ -58,7 +78,15 @@ def summarize_sync_translation_output(output: str, exit_code: int) -> WorkflowUp
             facts=facts,
         )
 
-    message = "同步翻译已完成；译文已写入项目文件，建议在游戏中抽查。"
+    if "Sync preview manifest:" not in output or "Preview status: safe" not in output:
+        return WorkflowUpdate(
+            status="failed",
+            heading="同步翻译预览未完成",
+            message="没有生成可写回的安全预览，请查看下方原始输出。",
+            facts=facts,
+        )
+
+    message = "同步翻译预览已生成；项目脚本尚未修改。请检查 diff 后再确认写回。"
     if files_done:
         message = f"已处理 {files_done} 个文件。{message}"
     if lines_to_translate > 0 and translated_count < lines_to_translate:
@@ -67,14 +95,14 @@ def summarize_sync_translation_output(output: str, exit_code: int) -> WorkflowUp
         )
         return WorkflowUpdate(
             status="warning",
-            heading="同步翻译部分完成",
+            heading="同步翻译预览部分完成",
             message=message,
             facts=facts,
         )
 
     return WorkflowUpdate(
         status="done",
-        heading="同步翻译完成",
+        heading="同步翻译预览可写回",
         message=message,
         facts=facts,
     )
@@ -97,10 +125,13 @@ def _collect_facts(output: str) -> list[str]:
     for pattern, label in (
         (r"^Found (\d+) files\.$", "待处理文件"),
         (r"^Progress log: (.+)$", "进度日志"),
+        (r"^Sync preview manifest: (.+)$", "预览清单"),
+        (r"^Sync preview report: (.+)$", "差异报告"),
+        (r"^Applied files: (\d+)$", "已写回文件"),
     ):
         match = re.search(pattern, output, re.MULTILINE)
         if match:
-            if label == "待处理文件":
+            if label in {"待处理文件", "已写回文件"}:
                 facts.append(f"{label}：{match.group(1)} 个")
             else:
                 facts.append(f"{label}：{match.group(1).strip()}")
