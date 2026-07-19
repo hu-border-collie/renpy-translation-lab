@@ -241,7 +241,7 @@ build -> submit -> status -> download -> check
 
 ### 同步翻译
 
-在左导航选择 **同步翻译**，点击「**开始同步翻译**」。GUI 先无参数调用 `gemini_translate.py`，在 `logs/sync_runs/` 生成绑定当前项目的 manifest、源文件快照、候选文件和 `preview.diff`，此时不会修改项目脚本。预览包含变更时，页面启用「**确认并写回预览**」；用户确认后 GUI 调用 `gemini_translate.py --apply MANIFEST`，写回前重新核对当前项目、翻译目录、全部源文件哈希和预览制品哈希。任何项目切换、源文件变化或制品篡改都会阻止写回。配置仍来自 `translator_config.json` 的 `sync.*` 段；Gemini 后端使用现有 Gemini API Key，LiteLLM 后端使用「设置 → LiteLLM」中保存的供应商凭据或 LiteLLM 约定的环境变量。
+在左导航选择 **同步翻译**，点击「**开始同步翻译**」。GUI 先无参数调用 `gemini_translate.py`，在 `logs/sync_runs/` 生成绑定当前项目的 manifest、源文件快照、候选文件和 `preview.diff`，此时不会修改项目脚本。预览包含变更时，页面启用「**确认并写回预览**」；用户确认后 GUI 调用 `gemini_translate.py --apply MANIFEST`，写回前重新核对当前项目、翻译目录、manifest 中所有预览文件对应的源快照哈希和预览制品哈希。任何项目切换、源文件变化或制品篡改都会阻止写回。配置仍来自 `translator_config.json` 的 `sync.*` 段；Gemini 后端使用现有 Gemini API Key，LiteLLM 后端使用「设置 → LiteLLM」中保存的供应商凭据或 LiteLLM 约定的环境变量。
 
 #### LiteLLM 同步替代边界
 

@@ -208,7 +208,8 @@ RENPY_TAG_RE = re.compile(r"\{[^}]*\}")
 RENPY_FIELD_RE = re.compile(r"\[[^\]]+\]")
 RENPY_FIELD_TOKEN_RE = re.compile(r"\[(?P<name>[^\]!:]+)(?:![^\]]*)?\]")
 PERCENT_FORMAT_TOKEN_RE = re.compile(
-    r"%(?:\([^)]+\))?[#0 +\-]?(?:\d+|\*)?(?:\.\d+|\.\*)?[hlL]?[A-Za-z]"
+    r"%(?:\([^)]+\))?[#0 +\-]*(?:\d+|\*)?(?:\.\d+|\.\*)?[hlL]?"
+    r"[diouxXeEfFgGcrsa](?![A-Za-z])"
 )
 WORD_TOKEN_RE = re.compile(r"[A-Za-z]+")
 VOWEL_RE = re.compile(r"[aeiou]", re.IGNORECASE)

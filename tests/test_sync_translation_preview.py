@@ -64,6 +64,24 @@ class SyncTranslationPreviewTests(unittest.TestCase):
         )
         self.assertTrue(valid, message)
 
+    def test_sync_validation_ignores_literal_percent_text(self):
+        samples = (
+            ("Save 50% off", "五折优惠"),
+            ("Get a 20%discount", "享受八折优惠"),
+            ("The price is 50% lower", "价格降低一半"),
+        )
+
+        for original, translated in samples:
+            with self.subTest(original=original):
+                valid, message = runtime.validate_translation(original, translated)
+                self.assertTrue(valid, message)
+
+        valid, message = runtime.validate_translation(
+            "Hello %s, you have %(count)d items",
+            "你好 %s，你有 %(count)d 件物品",
+        )
+        self.assertTrue(valid, message)
+
     def test_runtime_default_generates_preview_without_source_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
