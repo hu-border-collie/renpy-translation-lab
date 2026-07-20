@@ -7644,11 +7644,9 @@ class MainWindow(QMainWindow):
     def _config_tab_has_unsaved_changes(self) -> bool:
         if getattr(self, "_loading_config_to_ui", False):
             return False
+        # Cold start leaves an empty snapshot until settings pages materialize
+        # and load config into widgets — empty means "nothing editable yet".
         if not getattr(self, "_config_ui_saved_snapshot", None):
-            return False
-        # No dirty check until config-bearing settings pages exist.
-        built = getattr(self, "_settings_pages_built", set())
-        if not (_SETTINGS_CONFIG_PAGE_KEYS & built):
             return False
         return self._current_config_ui_snapshot() != self._config_ui_saved_snapshot
 

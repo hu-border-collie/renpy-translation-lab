@@ -412,7 +412,7 @@ class FlowButtonBar(QFrame):
         # wrap measurement against the final shell width.
         if not self.isVisible():
             self._signature = None
-            self._rebuild(cheap=True)
+            self._rebuild_cheap()
             return
         self.reflow(force=True)
 
@@ -431,7 +431,8 @@ class FlowButtonBar(QFrame):
             self._signature = signature
             self._reflowing = True
             try:
-                self._rebuild(cheap=False)
+                # Keep _rebuild() kwarg-free so unit-test reentrant wrappers stay valid.
+                self._rebuild()
             finally:
                 self._reflowing = False
 
@@ -481,25 +482,29 @@ class FlowButtonBar(QFrame):
             row.addStretch(1)
         return row
 
-    def _rebuild(self, *, cheap: bool = False) -> None:
+    def _rebuild_cheap(self) -> None:
+        """Single-row placehold used before first show (avoids sizeHint work)."""
         clear_layout(self._root)
         items = self._visible_items()
         if not items:
             self._row_count = 0
             self.setMinimumHeight(0)
             return
+        row = self._new_row()
+        for widget in items:
+            row.addWidget(widget)
+        if self._trailing_stretch:
+            row.addStretch(1)
+        self._root.addLayout(row)
+        self._row_count = 1
+        self.setMinimumHeight(38)
 
-        # Cheap path: one row only (used before first show). Full wrap reflow
-        # happens on show/resize with real geometry.
-        if cheap:
-            row = self._new_row()
-            for widget in items:
-                row.addWidget(widget)
-            if self._trailing_stretch:
-                row.addStretch(1)
-            self._root.addLayout(row)
-            self._row_count = 1
-            self.setMinimumHeight(38)
+    def _rebuild(self) -> None:
+        clear_layout(self._root)
+        items = self._visible_items()
+        if not items:
+            self._row_count = 0
+            self.setMinimumHeight(0)
             return
 
         available = max(120, effective_widget_width(self, fallback=800) - 8)

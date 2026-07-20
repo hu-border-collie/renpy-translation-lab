@@ -91,6 +91,8 @@ class GuiContextPrimaryUiTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.window = MainWindow()
+        # Context primary widgets live on lazy settings pages.
+        self.window._ensure_settings_pages_for_config()
 
     def tearDown(self) -> None:
         self.window.close()
