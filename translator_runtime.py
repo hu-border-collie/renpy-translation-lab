@@ -15,10 +15,13 @@ import subprocess
 import threading
 from collections import Counter
 from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Optional
 
 _runtime_state_lock = threading.Lock()
+_active_runtime_config: Optional["RuntimeConfig"] = None
 
 
 @contextmanager
@@ -58,20 +61,47 @@ else:
     DATA_DIR = os.path.join(ROOT_DIR, "data")
     CONFIG_FILE = os.path.join(DATA_DIR, "api_keys.json")
 ENV_GAME_ROOT = os.environ.get("GAME_ROOT") or os.environ.get("SA_GAME_ROOT")
-DEFAULT_TL_SUBDIR = os.path.join("game", "tl", "schinese")
+# Forward-slash form matches normalize_tl_subdir() output on all platforms.
+DEFAULT_TL_SUBDIR = "game/tl/schinese"
+DEFAULT_PREP_LANGUAGE = "schinese"
+DEFAULT_CONTEXT_STORAGE_LOCATION = "tool"
+DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME = "translation_context"
+DEFAULT_MODELS = [
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-3-pro-preview",
+    "gemini-2.5-pro",
+]
+DEFAULT_MAX_CHARS = 12000
+DEFAULT_MAX_ITEMS = 40
+DEFAULT_SYNC_MAX_OUTPUT_TOKENS = 24576
+DEFAULT_SYNC_BACKEND = "gemini"
+DEFAULT_SYNC_RAG_EMBEDDING_MODEL = "gemini-embedding-001"
+DEFAULT_SYNC_RAG_QUERY_TASK_TYPE = "RETRIEVAL_QUERY"
+DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE = "RETRIEVAL_DOCUMENT"
+DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY = 768
+DEFAULT_SYNC_RAG_TOP_K_HISTORY = 4
+DEFAULT_SYNC_RAG_TOP_K_TERMS = 8
+DEFAULT_SYNC_RAG_MIN_SIMILARITY = 0.72
+DEFAULT_SYNC_RAG_SEGMENT_LINES = 4
+DEFAULT_SYNC_RAG_HISTORY_CHAR_LIMIT = 220
+DEFAULT_SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = 800
+DEFAULT_SYNC_STORY_MEMORY_TOP_K_RELATIONS = 4
+DEFAULT_SYNC_STORY_MEMORY_TOP_K_TERMS = 8
+
 TL_SUBDIR = DEFAULT_TL_SUBDIR
 BASE_DIR = os.path.abspath(ENV_GAME_ROOT) if ENV_GAME_ROOT else os.path.abspath(os.path.join(ROOT_DIR, ".."))
 TL_DIR = os.path.abspath(os.path.join(BASE_DIR, TL_SUBDIR))
 WORK_GAME_SUBDIR = "game"
 WORK_GAME_DIR = os.path.abspath(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
-CONTEXT_STORAGE_LOCATION = "tool"
-CONTEXT_STORAGE_GAME_DIR_NAME = "translation_context"
+CONTEXT_STORAGE_LOCATION = DEFAULT_CONTEXT_STORAGE_LOCATION
+CONTEXT_STORAGE_GAME_DIR_NAME = DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME
 SOURCE_GAME_DIR = ""
 PREP_ENABLED = True
 PREP_UNPACK_RPA = True
 PREP_GENERATE_TEMPLATE = True
 PREP_REFRESH_EXISTING_TEMPLATE = True
-PREP_LANGUAGE = "schinese"
+PREP_LANGUAGE = DEFAULT_PREP_LANGUAGE
 PREP_RENPY_SDK_DIR = ""
 PREP_LAUNCHER_PY = ""
 PREP_PYTHON_EXE = ""
@@ -101,12 +131,7 @@ class DualLogger(object):
         self.log.flush()
 
 # Model definitions (Priority Order)
-MODELS = [
-    "gemini-3.1-flash-lite",
-    "gemini-3-flash-preview",
-    "gemini-3-pro-preview",
-    "gemini-2.5-pro"
-]
+MODELS = list(DEFAULT_MODELS)
 
 # Runtime State
 CURRENT_KEY_INDEX = 0
@@ -118,10 +143,10 @@ PRESERVE_TERMS = [
 ]
 
 # Config Defaults
-MAX_CHARS = 12000
-MAX_ITEMS = 40
-SYNC_MAX_OUTPUT_TOKENS = 24576
-SYNC_BACKEND = "gemini"
+MAX_CHARS = DEFAULT_MAX_CHARS
+MAX_ITEMS = DEFAULT_MAX_ITEMS
+SYNC_MAX_OUTPUT_TOKENS = DEFAULT_SYNC_MAX_OUTPUT_TOKENS
+SYNC_BACKEND = DEFAULT_SYNC_BACKEND
 MIN_DELAY = 1.0  # Reduced delay for SDK
 MAX_DELAY = 3.0
 BATCH_RETRIES = 3
@@ -134,15 +159,15 @@ USE_TRANSLATION_MEMORY = True
 # sync script remains a lightweight repair/smoke-test path unless configured.
 SYNC_RAG_ENABLED = False
 SYNC_RAG_STORE_DIR = ""
-SYNC_RAG_EMBEDDING_MODEL = "gemini-embedding-001"
-SYNC_RAG_QUERY_TASK_TYPE = "RETRIEVAL_QUERY"
-SYNC_RAG_DOCUMENT_TASK_TYPE = "RETRIEVAL_DOCUMENT"
-SYNC_RAG_OUTPUT_DIMENSIONALITY = 768
-SYNC_RAG_TOP_K_HISTORY = 4
-SYNC_RAG_TOP_K_TERMS = 8
-SYNC_RAG_MIN_SIMILARITY = 0.72
-SYNC_RAG_SEGMENT_LINES = 4
-SYNC_RAG_HISTORY_CHAR_LIMIT = 220
+SYNC_RAG_EMBEDDING_MODEL = DEFAULT_SYNC_RAG_EMBEDDING_MODEL
+SYNC_RAG_QUERY_TASK_TYPE = DEFAULT_SYNC_RAG_QUERY_TASK_TYPE
+SYNC_RAG_DOCUMENT_TASK_TYPE = DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE
+SYNC_RAG_OUTPUT_DIMENSIONALITY = DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY
+SYNC_RAG_TOP_K_HISTORY = DEFAULT_SYNC_RAG_TOP_K_HISTORY
+SYNC_RAG_TOP_K_TERMS = DEFAULT_SYNC_RAG_TOP_K_TERMS
+SYNC_RAG_MIN_SIMILARITY = DEFAULT_SYNC_RAG_MIN_SIMILARITY
+SYNC_RAG_SEGMENT_LINES = DEFAULT_SYNC_RAG_SEGMENT_LINES
+SYNC_RAG_HISTORY_CHAR_LIMIT = DEFAULT_SYNC_RAG_HISTORY_CHAR_LIMIT
 SYNC_RAG_UPDATE_ON_SUCCESS = True
 SYNC_RAG_QUALITY_STATE = "sync_applied"
 _SYNC_RAG_STORE = None
@@ -151,9 +176,9 @@ _SYNC_RAG_STORE = None
 # default to keep sync repair and smoke-test runs lightweight unless configured.
 SYNC_STORY_MEMORY_ENABLED = False
 SYNC_STORY_MEMORY_GRAPH_FILE = ""
-SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = 800
-SYNC_STORY_MEMORY_TOP_K_RELATIONS = 4
-SYNC_STORY_MEMORY_TOP_K_TERMS = 8
+SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = DEFAULT_SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS
+SYNC_STORY_MEMORY_TOP_K_RELATIONS = DEFAULT_SYNC_STORY_MEMORY_TOP_K_RELATIONS
+SYNC_STORY_MEMORY_TOP_K_TERMS = DEFAULT_SYNC_STORY_MEMORY_TOP_K_TERMS
 SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY = True
 _SYNC_STORY_GRAPH = None
 _SYNC_STORY_GRAPH_PATH = ""
@@ -917,20 +942,411 @@ def load_include_filters_from_config(config):
         print(f"Using include_prefixes allowlist ({len(INCLUDE_PREFIXES)}).")
 
 
+@dataclass
+class RuntimeConfig:
+    """Fresh per-project/job runtime configuration.
+
+    Loaders always start from :func:`default_runtime_config` (or an explicit
+    base config) and then apply validated overrides. Module-level globals remain
+    as a CLI compatibility facade via :func:`apply_runtime_config`.
+    """
+
+    env_game_root: str = ""
+    base_dir: str = ""
+    tl_subdir: str = field(default_factory=lambda: DEFAULT_TL_SUBDIR)
+    tl_dir: str = ""
+    work_game_dir: str = ""
+    source_game_dir: str = ""
+    glossary_file: str = field(default_factory=lambda: DEFAULT_GLOSSARY_FILE)
+
+    prep_enabled: bool = True
+    prep_unpack_rpa: bool = True
+    prep_generate_template: bool = True
+    prep_refresh_existing_template: bool = True
+    prep_language: str = DEFAULT_PREP_LANGUAGE
+    prep_renpy_sdk_dir: str = ""
+    prep_launcher_py: str = ""
+    prep_python_exe: str = ""
+    prep_unpack_command: Any = None
+    prep_template_command: Any = None
+    prep_allow_shell_commands: bool = False
+
+    context_storage_location: str = DEFAULT_CONTEXT_STORAGE_LOCATION
+    context_storage_game_dir_name: str = DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME
+
+    api_keys: list = field(default_factory=list)
+    models: list = field(default_factory=lambda: list(DEFAULT_MODELS))
+    current_key_index: int = 0
+    current_model_index: int = 0
+
+    max_chars: int = DEFAULT_MAX_CHARS
+    max_items: int = DEFAULT_MAX_ITEMS
+    sync_max_output_tokens: int = DEFAULT_SYNC_MAX_OUTPUT_TOKENS
+    sync_backend: str = DEFAULT_SYNC_BACKEND
+
+    include_files: set = field(default_factory=set)
+    include_prefixes: set = field(default_factory=set)
+
+    sync_rag_enabled: bool = False
+    sync_rag_store_dir: str = ""
+    sync_rag_embedding_model: str = DEFAULT_SYNC_RAG_EMBEDDING_MODEL
+    sync_rag_query_task_type: str = DEFAULT_SYNC_RAG_QUERY_TASK_TYPE
+    sync_rag_document_task_type: str = DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE
+    sync_rag_output_dimensionality: int = DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY
+    sync_rag_top_k_history: int = DEFAULT_SYNC_RAG_TOP_K_HISTORY
+    sync_rag_top_k_terms: int = DEFAULT_SYNC_RAG_TOP_K_TERMS
+    sync_rag_min_similarity: float = DEFAULT_SYNC_RAG_MIN_SIMILARITY
+    sync_rag_segment_lines: int = DEFAULT_SYNC_RAG_SEGMENT_LINES
+    sync_rag_history_char_limit: int = DEFAULT_SYNC_RAG_HISTORY_CHAR_LIMIT
+    sync_rag_update_on_success: bool = True
+
+    sync_story_memory_enabled: bool = False
+    sync_story_memory_graph_file: str = ""
+    sync_story_memory_max_context_chars: int = DEFAULT_SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS
+    sync_story_memory_top_k_relations: int = DEFAULT_SYNC_STORY_MEMORY_TOP_K_RELATIONS
+    sync_story_memory_top_k_terms: int = DEFAULT_SYNC_STORY_MEMORY_TOP_K_TERMS
+    sync_story_memory_include_scene_summary: bool = True
+
+    def copy(self) -> "RuntimeConfig":
+        """Return a deep-ish copy so nested containers are not shared."""
+        return replace(
+            self,
+            api_keys=list(self.api_keys),
+            models=list(self.models),
+            include_files=set(self.include_files),
+            include_prefixes=set(self.include_prefixes),
+            prep_unpack_command=(
+                list(self.prep_unpack_command)
+                if isinstance(self.prep_unpack_command, list)
+                else self.prep_unpack_command
+            ),
+            prep_template_command=(
+                list(self.prep_template_command)
+                if isinstance(self.prep_template_command, list)
+                else self.prep_template_command
+            ),
+        )
+
+
+# Alias used by the issue description / external docs.
+ProjectContext = RuntimeConfig
+
+
+def default_runtime_config() -> RuntimeConfig:
+    """Build a fresh config object with code defaults (no file I/O)."""
+    default_base = os.path.abspath(
+        ENV_GAME_ROOT if ENV_GAME_ROOT else os.path.join(ROOT_DIR, "..")
+    )
+    tl_subdir = DEFAULT_TL_SUBDIR
+    return RuntimeConfig(
+        env_game_root=ENV_GAME_ROOT or "",
+        base_dir=default_base,
+        tl_subdir=tl_subdir,
+        tl_dir=os.path.abspath(os.path.join(default_base, tl_subdir)),
+        work_game_dir=os.path.abspath(os.path.join(default_base, WORK_GAME_SUBDIR)),
+        glossary_file=DEFAULT_GLOSSARY_FILE,
+        models=list(DEFAULT_MODELS),
+        max_chars=DEFAULT_MAX_CHARS,
+        max_items=DEFAULT_MAX_ITEMS,
+        sync_max_output_tokens=DEFAULT_SYNC_MAX_OUTPUT_TOKENS,
+        sync_backend=DEFAULT_SYNC_BACKEND,
+        prep_language=DEFAULT_PREP_LANGUAGE,
+        context_storage_location=DEFAULT_CONTEXT_STORAGE_LOCATION,
+        context_storage_game_dir_name=DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME,
+    )
+
+
+def snapshot_runtime_config() -> RuntimeConfig:
+    """Capture the current module-level globals into a RuntimeConfig object."""
+    return RuntimeConfig(
+        env_game_root=ENV_GAME_ROOT or "",
+        base_dir=BASE_DIR,
+        tl_subdir=TL_SUBDIR,
+        tl_dir=TL_DIR,
+        work_game_dir=WORK_GAME_DIR,
+        source_game_dir=SOURCE_GAME_DIR,
+        glossary_file=GLOSSARY_FILE,
+        prep_enabled=PREP_ENABLED,
+        prep_unpack_rpa=PREP_UNPACK_RPA,
+        prep_generate_template=PREP_GENERATE_TEMPLATE,
+        prep_refresh_existing_template=PREP_REFRESH_EXISTING_TEMPLATE,
+        prep_language=PREP_LANGUAGE,
+        prep_renpy_sdk_dir=PREP_RENPY_SDK_DIR,
+        prep_launcher_py=PREP_LAUNCHER_PY,
+        prep_python_exe=PREP_PYTHON_EXE,
+        prep_unpack_command=(
+            list(PREP_UNPACK_COMMAND)
+            if isinstance(PREP_UNPACK_COMMAND, list)
+            else PREP_UNPACK_COMMAND
+        ),
+        prep_template_command=(
+            list(PREP_TEMPLATE_COMMAND)
+            if isinstance(PREP_TEMPLATE_COMMAND, list)
+            else PREP_TEMPLATE_COMMAND
+        ),
+        prep_allow_shell_commands=PREP_ALLOW_SHELL_COMMANDS,
+        context_storage_location=CONTEXT_STORAGE_LOCATION,
+        context_storage_game_dir_name=CONTEXT_STORAGE_GAME_DIR_NAME,
+        api_keys=list(API_KEYS),
+        models=list(MODELS),
+        current_key_index=CURRENT_KEY_INDEX,
+        current_model_index=CURRENT_MODEL_INDEX,
+        max_chars=MAX_CHARS,
+        max_items=MAX_ITEMS,
+        sync_max_output_tokens=SYNC_MAX_OUTPUT_TOKENS,
+        sync_backend=SYNC_BACKEND,
+        include_files=set(INCLUDE_FILES),
+        include_prefixes=set(INCLUDE_PREFIXES),
+        sync_rag_enabled=SYNC_RAG_ENABLED,
+        sync_rag_store_dir=SYNC_RAG_STORE_DIR,
+        sync_rag_embedding_model=SYNC_RAG_EMBEDDING_MODEL,
+        sync_rag_query_task_type=SYNC_RAG_QUERY_TASK_TYPE,
+        sync_rag_document_task_type=SYNC_RAG_DOCUMENT_TASK_TYPE,
+        sync_rag_output_dimensionality=SYNC_RAG_OUTPUT_DIMENSIONALITY,
+        sync_rag_top_k_history=SYNC_RAG_TOP_K_HISTORY,
+        sync_rag_top_k_terms=SYNC_RAG_TOP_K_TERMS,
+        sync_rag_min_similarity=SYNC_RAG_MIN_SIMILARITY,
+        sync_rag_segment_lines=SYNC_RAG_SEGMENT_LINES,
+        sync_rag_history_char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
+        sync_rag_update_on_success=SYNC_RAG_UPDATE_ON_SUCCESS,
+        sync_story_memory_enabled=SYNC_STORY_MEMORY_ENABLED,
+        sync_story_memory_graph_file=SYNC_STORY_MEMORY_GRAPH_FILE,
+        sync_story_memory_max_context_chars=SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
+        sync_story_memory_top_k_relations=SYNC_STORY_MEMORY_TOP_K_RELATIONS,
+        sync_story_memory_top_k_terms=SYNC_STORY_MEMORY_TOP_K_TERMS,
+        sync_story_memory_include_scene_summary=SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY,
+    )
+
+
+def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
+    """Publish a RuntimeConfig onto module-level globals (CLI compatibility)."""
+    global ENV_GAME_ROOT, BASE_DIR, TL_SUBDIR, TL_DIR, WORK_GAME_DIR, SOURCE_GAME_DIR
+    global GLOSSARY_FILE
+    global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_REFRESH_EXISTING_TEMPLATE
+    global PREP_LANGUAGE, PREP_RENPY_SDK_DIR, PREP_LAUNCHER_PY, PREP_PYTHON_EXE
+    global PREP_UNPACK_COMMAND, PREP_TEMPLATE_COMMAND, PREP_ALLOW_SHELL_COMMANDS
+    global CONTEXT_STORAGE_LOCATION, CONTEXT_STORAGE_GAME_DIR_NAME
+    global API_KEYS, MODELS, CURRENT_KEY_INDEX, CURRENT_MODEL_INDEX
+    global MAX_CHARS, MAX_ITEMS, SYNC_MAX_OUTPUT_TOKENS, SYNC_BACKEND
+    global INCLUDE_FILES, INCLUDE_PREFIXES
+    global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
+    global SYNC_RAG_QUERY_TASK_TYPE, SYNC_RAG_DOCUMENT_TASK_TYPE
+    global SYNC_RAG_OUTPUT_DIMENSIONALITY, SYNC_RAG_TOP_K_HISTORY, SYNC_RAG_TOP_K_TERMS
+    global SYNC_RAG_MIN_SIMILARITY, SYNC_RAG_SEGMENT_LINES, SYNC_RAG_HISTORY_CHAR_LIMIT
+    global SYNC_RAG_UPDATE_ON_SUCCESS, _SYNC_RAG_STORE
+    global SYNC_STORY_MEMORY_ENABLED, SYNC_STORY_MEMORY_GRAPH_FILE
+    global SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS, SYNC_STORY_MEMORY_TOP_K_RELATIONS
+    global SYNC_STORY_MEMORY_TOP_K_TERMS, SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY
+    global _SYNC_STORY_GRAPH, _SYNC_STORY_GRAPH_PATH, _active_runtime_config
+
+    if not isinstance(config, RuntimeConfig):
+        raise TypeError(f"Expected RuntimeConfig, got {type(config)!r}")
+
+    applied = config.copy()
+    with locked_runtime_state():
+        ENV_GAME_ROOT = applied.env_game_root or None
+        BASE_DIR = applied.base_dir
+        TL_SUBDIR = applied.tl_subdir
+        TL_DIR = applied.tl_dir
+        WORK_GAME_DIR = applied.work_game_dir
+        SOURCE_GAME_DIR = applied.source_game_dir
+        GLOSSARY_FILE = applied.glossary_file or DEFAULT_GLOSSARY_FILE
+
+        PREP_ENABLED = applied.prep_enabled
+        PREP_UNPACK_RPA = applied.prep_unpack_rpa
+        PREP_GENERATE_TEMPLATE = applied.prep_generate_template
+        PREP_REFRESH_EXISTING_TEMPLATE = applied.prep_refresh_existing_template
+        PREP_LANGUAGE = applied.prep_language or DEFAULT_PREP_LANGUAGE
+        PREP_RENPY_SDK_DIR = applied.prep_renpy_sdk_dir
+        PREP_LAUNCHER_PY = applied.prep_launcher_py
+        PREP_PYTHON_EXE = applied.prep_python_exe
+        PREP_UNPACK_COMMAND = applied.prep_unpack_command
+        PREP_TEMPLATE_COMMAND = applied.prep_template_command
+        PREP_ALLOW_SHELL_COMMANDS = applied.prep_allow_shell_commands
+
+        CONTEXT_STORAGE_LOCATION = applied.context_storage_location
+        CONTEXT_STORAGE_GAME_DIR_NAME = applied.context_storage_game_dir_name
+
+        API_KEYS = list(applied.api_keys)
+        MODELS = list(applied.models) if applied.models else list(DEFAULT_MODELS)
+        CURRENT_KEY_INDEX = int(applied.current_key_index or 0)
+        CURRENT_MODEL_INDEX = int(applied.current_model_index or 0)
+
+        MAX_CHARS = int(applied.max_chars)
+        MAX_ITEMS = int(applied.max_items)
+        SYNC_MAX_OUTPUT_TOKENS = int(applied.sync_max_output_tokens)
+        SYNC_BACKEND = applied.sync_backend or DEFAULT_SYNC_BACKEND
+
+        INCLUDE_FILES = set(applied.include_files)
+        INCLUDE_PREFIXES = set(applied.include_prefixes)
+
+        SYNC_RAG_ENABLED = applied.sync_rag_enabled
+        SYNC_RAG_STORE_DIR = applied.sync_rag_store_dir
+        SYNC_RAG_EMBEDDING_MODEL = applied.sync_rag_embedding_model
+        SYNC_RAG_QUERY_TASK_TYPE = applied.sync_rag_query_task_type
+        SYNC_RAG_DOCUMENT_TASK_TYPE = applied.sync_rag_document_task_type
+        SYNC_RAG_OUTPUT_DIMENSIONALITY = applied.sync_rag_output_dimensionality
+        SYNC_RAG_TOP_K_HISTORY = applied.sync_rag_top_k_history
+        SYNC_RAG_TOP_K_TERMS = applied.sync_rag_top_k_terms
+        SYNC_RAG_MIN_SIMILARITY = applied.sync_rag_min_similarity
+        SYNC_RAG_SEGMENT_LINES = applied.sync_rag_segment_lines
+        SYNC_RAG_HISTORY_CHAR_LIMIT = applied.sync_rag_history_char_limit
+        SYNC_RAG_UPDATE_ON_SUCCESS = applied.sync_rag_update_on_success
+        _SYNC_RAG_STORE = None
+
+        SYNC_STORY_MEMORY_ENABLED = applied.sync_story_memory_enabled
+        SYNC_STORY_MEMORY_GRAPH_FILE = applied.sync_story_memory_graph_file
+        SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = applied.sync_story_memory_max_context_chars
+        SYNC_STORY_MEMORY_TOP_K_RELATIONS = applied.sync_story_memory_top_k_relations
+        SYNC_STORY_MEMORY_TOP_K_TERMS = applied.sync_story_memory_top_k_terms
+        SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY = applied.sync_story_memory_include_scene_summary
+        _SYNC_STORY_GRAPH = None
+        _SYNC_STORY_GRAPH_PATH = ""
+
+        _active_runtime_config = applied.copy()
+    return applied
+
+
+def get_runtime_config() -> RuntimeConfig:
+    """Return the last applied RuntimeConfig, or a snapshot of current globals."""
+    if _active_runtime_config is not None:
+        return _active_runtime_config.copy()
+    return snapshot_runtime_config()
+
+
+def _read_json_object(path: str, *, label: str) -> dict:
+    """Read a JSON object from disk. Missing file → {}; invalid JSON → {} with warning."""
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8-sig") as handle:
+            data = json.load(handle)
+    except Exception as exc:
+        print(f"Warning: Failed to load {label}: {exc}")
+        return {}
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        print(f"Warning: {label} root must be a JSON object; ignoring.")
+        return {}
+    return data
+
+
+def _filter_api_keys(raw_keys) -> list:
+    if not isinstance(raw_keys, (list, tuple)):
+        return []
+    return [
+        key
+        for key in raw_keys
+        if isinstance(key, str) and key.strip() and not _is_placeholder_api_key(key)
+    ]
+
+
+def _api_keys_from_env() -> list:
+    env_keys = [
+        os.environ.get("GEMINI_API_KEY"),
+        os.environ.get("GEMINI_API_KEY_2"),
+        os.environ.get("GEMINI_API_KEY_3"),
+    ]
+    return [key for key in env_keys if key]
+
+
+def _normalize_model_list(values) -> list:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        values = [values]
+    models = []
+    for value in values:
+        model = str(value).strip()
+        if model:
+            models.append(model)
+    return models
+
+
+def _reset_project_settings_to_defaults():
+    """Clear project/prepare globals that must not leak across reloads.
+
+    Include filters and MAX_*/MODELS are intentionally left alone so the legacy
+    ``load_config()`` → ``load_translator_settings()`` cascade still works.
+    Call :func:`load_runtime_config` for a pure defaults-first rebuild.
+    """
+    global TL_SUBDIR, PREP_LANGUAGE, SOURCE_GAME_DIR, GLOSSARY_FILE
+    global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_REFRESH_EXISTING_TEMPLATE
+    global PREP_RENPY_SDK_DIR, PREP_LAUNCHER_PY, PREP_PYTHON_EXE
+    global PREP_UNPACK_COMMAND, PREP_TEMPLATE_COMMAND, PREP_ALLOW_SHELL_COMMANDS
+    global CONTEXT_STORAGE_LOCATION, CONTEXT_STORAGE_GAME_DIR_NAME
+    global SYNC_BACKEND
+    global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
+    global SYNC_RAG_QUERY_TASK_TYPE, SYNC_RAG_DOCUMENT_TASK_TYPE
+    global SYNC_RAG_OUTPUT_DIMENSIONALITY, SYNC_RAG_TOP_K_HISTORY, SYNC_RAG_TOP_K_TERMS
+    global SYNC_RAG_MIN_SIMILARITY, SYNC_RAG_SEGMENT_LINES, SYNC_RAG_HISTORY_CHAR_LIMIT
+    global SYNC_RAG_UPDATE_ON_SUCCESS, _SYNC_RAG_STORE
+    global SYNC_STORY_MEMORY_ENABLED, SYNC_STORY_MEMORY_GRAPH_FILE
+    global SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS, SYNC_STORY_MEMORY_TOP_K_RELATIONS
+    global SYNC_STORY_MEMORY_TOP_K_TERMS, SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY
+    global _SYNC_STORY_GRAPH, _SYNC_STORY_GRAPH_PATH
+
+    # Paths/language/prepare always recompute from defaults + current config.
+    TL_SUBDIR = DEFAULT_TL_SUBDIR
+    PREP_LANGUAGE = DEFAULT_PREP_LANGUAGE
+    SOURCE_GAME_DIR = ""
+    GLOSSARY_FILE = DEFAULT_GLOSSARY_FILE
+    PREP_ENABLED = True
+    PREP_UNPACK_RPA = True
+    PREP_GENERATE_TEMPLATE = True
+    PREP_REFRESH_EXISTING_TEMPLATE = True
+    PREP_RENPY_SDK_DIR = ""
+    PREP_LAUNCHER_PY = ""
+    PREP_PYTHON_EXE = ""
+    PREP_UNPACK_COMMAND = None
+    PREP_TEMPLATE_COMMAND = None
+    PREP_ALLOW_SHELL_COMMANDS = False
+    CONTEXT_STORAGE_LOCATION = DEFAULT_CONTEXT_STORAGE_LOCATION
+    CONTEXT_STORAGE_GAME_DIR_NAME = DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME
+
+    # RAG / story memory always recompute from translator_config.sync defaults.
+    SYNC_BACKEND = DEFAULT_SYNC_BACKEND
+    SYNC_RAG_ENABLED = False
+    SYNC_RAG_STORE_DIR = ""
+    SYNC_RAG_EMBEDDING_MODEL = DEFAULT_SYNC_RAG_EMBEDDING_MODEL
+    SYNC_RAG_QUERY_TASK_TYPE = DEFAULT_SYNC_RAG_QUERY_TASK_TYPE
+    SYNC_RAG_DOCUMENT_TASK_TYPE = DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE
+    SYNC_RAG_OUTPUT_DIMENSIONALITY = DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY
+    SYNC_RAG_TOP_K_HISTORY = DEFAULT_SYNC_RAG_TOP_K_HISTORY
+    SYNC_RAG_TOP_K_TERMS = DEFAULT_SYNC_RAG_TOP_K_TERMS
+    SYNC_RAG_MIN_SIMILARITY = DEFAULT_SYNC_RAG_MIN_SIMILARITY
+    SYNC_RAG_SEGMENT_LINES = DEFAULT_SYNC_RAG_SEGMENT_LINES
+    SYNC_RAG_HISTORY_CHAR_LIMIT = DEFAULT_SYNC_RAG_HISTORY_CHAR_LIMIT
+    SYNC_RAG_UPDATE_ON_SUCCESS = True
+    _SYNC_RAG_STORE = None
+
+    SYNC_STORY_MEMORY_ENABLED = False
+    SYNC_STORY_MEMORY_GRAPH_FILE = ""
+    SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = DEFAULT_SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS
+    SYNC_STORY_MEMORY_TOP_K_RELATIONS = DEFAULT_SYNC_STORY_MEMORY_TOP_K_RELATIONS
+    SYNC_STORY_MEMORY_TOP_K_TERMS = DEFAULT_SYNC_STORY_MEMORY_TOP_K_TERMS
+    SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY = True
+    _SYNC_STORY_GRAPH = None
+    _SYNC_STORY_GRAPH_PATH = ""
+
+
 def load_translator_settings():
-    """Loads per-game settings (game root, tl subdir) from translator_config.json or env."""
+    """Loads per-game settings (game root, tl subdir) from translator_config.json or env.
+
+    Always starts from code defaults for project/path/prepare fields so omitted
+    keys cannot retain values from a previous load (issue #216).
+    """
     global BASE_DIR, TL_DIR, TL_SUBDIR, ENV_GAME_ROOT, WORK_GAME_DIR, SOURCE_GAME_DIR, GLOSSARY_FILE
     global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_REFRESH_EXISTING_TEMPLATE, PREP_LANGUAGE
     global PREP_RENPY_SDK_DIR, PREP_LAUNCHER_PY, PREP_PYTHON_EXE, PREP_UNPACK_COMMAND, PREP_TEMPLATE_COMMAND
     global PREP_ALLOW_SHELL_COMMANDS
+    global _active_runtime_config
 
-    config = {}
-    if os.path.exists(TRANSLATOR_CONFIG):
-        try:
-            with open(TRANSLATOR_CONFIG, "r", encoding="utf-8-sig") as handle:
-                config = json.load(handle) or {}
-        except Exception as e:
-            print(f"Warning: Failed to load translator config: {e}")
+    # Defaults first — then validated overrides from the current config file.
+    _reset_project_settings_to_defaults()
+
+    config = _read_json_object(TRANSLATOR_CONFIG, label="translator config")
 
     game_root = config.get("game_root")
     if isinstance(game_root, str) and game_root.strip():
@@ -969,12 +1385,11 @@ def load_translator_settings():
 
     tl_subdir = config.get("tl_subdir")
     try:
-        candidate_subdir = TL_SUBDIR
+        # Always start from DEFAULT_TL_SUBDIR (not the previous load's value).
+        candidate_subdir = DEFAULT_TL_SUBDIR
         if isinstance(tl_subdir, str) and tl_subdir.strip():
             candidate_subdir = normalize_tl_subdir(tl_subdir)
         else:
-            # Keep the active/default value, but re-validate so a previously
-            # accepted path still cannot escape after game_root changes.
             candidate_subdir = normalize_tl_subdir(candidate_subdir)
         candidate_tl_dir = _canonical_abs_path(os.path.join(BASE_DIR, candidate_subdir))
         ensure_tl_dir_within_base(
@@ -1005,6 +1420,9 @@ def load_translator_settings():
     prep_language = prepare.get("language")
     if isinstance(prep_language, str) and prep_language.strip():
         PREP_LANGUAGE = prep_language.strip()
+    else:
+        # Omitted language must not retain a previous project's target language.
+        PREP_LANGUAGE = DEFAULT_PREP_LANGUAGE
 
     renpy_sdk_dir = prepare.get("renpy_sdk_dir")
     if not (isinstance(renpy_sdk_dir, str) and renpy_sdk_dir.strip()):
@@ -1059,6 +1477,7 @@ def load_translator_settings():
     load_sync_translation_settings(config)
     load_sync_rag_settings(config)
     load_sync_story_memory_settings(config)
+    _active_runtime_config = snapshot_runtime_config()
 
 
 def _require_gemini_api_key():
@@ -1072,15 +1491,26 @@ def _require_gemini_api_key():
 
 
 def load_config(*, require_api_key=True):
-    """Loads API keys and settings from api_keys.json or environment."""
+    """Loads API keys and settings from api_keys.json or environment.
+
+    Always rebuilds API_KEYS from the current file + env so a previous load
+    cannot leave stale credentials active (issue #216).
+    """
     global API_KEYS, MODELS, MAX_CHARS, MAX_ITEMS, SYNC_MAX_OUTPUT_TOKENS
-    global INCLUDE_FILES, INCLUDE_PREFIXES
-    
+    global INCLUDE_FILES, INCLUDE_PREFIXES, CURRENT_KEY_INDEX, CURRENT_MODEL_INDEX
+    global _active_runtime_config
+
+    # Credentials always start empty and are rebuilt from the current sources.
+    API_KEYS = []
+    CURRENT_KEY_INDEX = 0
+
     # Try loading from JSON
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
                 config = json.load(f)
+                if not isinstance(config, dict):
+                    raise TypeError("api_keys config root must be a JSON object")
                 keys = config.get("api_keys", [])
                 custom_models = config.get("models", [])
                 single_model = config.get("model")
@@ -1092,14 +1522,12 @@ def load_config(*, require_api_key=True):
                 sync_max_output_tokens = config.get("sync_max_output_tokens")
                 include_files = config.get("include_files")
                 include_prefixes = config.get("include_prefixes")
-                
-                if keys:
-                    API_KEYS = [
-                        k for k in keys
-                        if isinstance(k, str) and k.strip() and not _is_placeholder_api_key(k)
-                    ]
+
+                # Always assign (even when empty) so previous keys cannot stick.
+                API_KEYS = _filter_api_keys(keys)
+                if API_KEYS:
                     print(f"Loaded {len(API_KEYS)} API keys from config file.")
-                
+
                 if not custom_models and single_model:
                     custom_models = [single_model]
                 elif isinstance(custom_models, str):
@@ -1142,22 +1570,41 @@ def load_config(*, require_api_key=True):
                 if "include_prefixes" in config:
                     INCLUDE_PREFIXES = coerce_normalized_rel_path_set(include_prefixes)
                     print(f"Using include_prefixes allowlist ({len(INCLUDE_PREFIXES)}).")
-                    
+
         except Exception as e:
             print(f"Warning: Failed to load config file: {e}")
+            # Failed parse must not keep previously loaded keys.
+            API_KEYS = []
+            CURRENT_KEY_INDEX = 0
 
     # Fallback to Environment Variables if no keys found
     if not API_KEYS:
         print("Checking environment variables for keys...")
-        env_keys = [
-            os.environ.get("GEMINI_API_KEY"),
-            os.environ.get("GEMINI_API_KEY_2"),
-            os.environ.get("GEMINI_API_KEY_3"),
-        ]
-        API_KEYS = [k for k in env_keys if k]
+        API_KEYS = _api_keys_from_env()
 
     if require_api_key:
         _require_gemini_api_key()
+
+    _active_runtime_config = snapshot_runtime_config()
+
+
+def load_runtime_config(*, require_api_key=True) -> RuntimeConfig:
+    """Load a fresh RuntimeConfig from defaults + api_keys + translator_config.
+
+    Preferred entry point for long-lived hosts (GUI workers, tests, embedded
+    use). Compatibility wrappers :func:`load_config` and
+    :func:`load_translator_settings` still exist for CLI callers.
+    """
+    # Start from pure defaults so omitted fields cannot leak across projects.
+    base = default_runtime_config()
+    apply_runtime_config(base)
+    load_config(require_api_key=False)
+    load_translator_settings()
+    if require_api_key:
+        _require_gemini_api_key()
+    config = snapshot_runtime_config()
+    apply_runtime_config(config)
+    return config
 
 
 SCRIPT_FILE_EXTENSIONS = {".rpy", ".rpym", ".rpyc", ".rpymc"}
