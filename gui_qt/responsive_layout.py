@@ -40,13 +40,18 @@ _configure_action_button = configure_action_button
 
 
 def widget_layout_width(widget: QWidget, *, fallback: int = 88) -> int:
-    """Best-effort horizontal space a control needs in a flow row."""
-    if not widget.isVisibleTo(widget.parentWidget() or widget):
-        # Still measure hidden widgets that will be shown later via reflow.
-        pass
+    """Best-effort horizontal space a control needs in a flow row.
+
+    Prefer an explicit ``minimumWidth`` (set by ``configure_action_button`` /
+    call sites) over ``sizeHint()``. Under an application stylesheet,
+    ``QPushButton.sizeHint()`` is surprisingly expensive and dominated cold
+    GUI construction when dozens of flow bars reflow during ``finish_setup``.
+    """
+    min_w = int(widget.minimumWidth() or 0)
+    if min_w > 0:
+        return min_w
     hint = widget.sizeHint()
-    min_w = widget.minimumWidth()
-    width = max(min_w, hint.width() if hint.isValid() and hint.width() > 0 else 0)
+    width = hint.width() if hint.isValid() and hint.width() > 0 else 0
     if width <= 0:
         width = fallback
     return width
@@ -402,6 +407,13 @@ class FlowButtonBar(QFrame):
         self._trailing_stretch = enabled
 
     def finish_setup(self) -> None:
+        # During cold construction the bar is usually not visible yet; do a
+        # cheap single-row placehold and let showEvent/resize perform the real
+        # wrap measurement against the final shell width.
+        if not self.isVisible():
+            self._signature = None
+            self._rebuild(cheap=True)
+            return
         self.reflow(force=True)
 
     def reflow(self, *, force: bool = False) -> None:
@@ -419,7 +431,7 @@ class FlowButtonBar(QFrame):
             self._signature = signature
             self._reflowing = True
             try:
-                self._rebuild()
+                self._rebuild(cheap=False)
             finally:
                 self._reflowing = False
 
@@ -469,12 +481,25 @@ class FlowButtonBar(QFrame):
             row.addStretch(1)
         return row
 
-    def _rebuild(self) -> None:
+    def _rebuild(self, *, cheap: bool = False) -> None:
         clear_layout(self._root)
         items = self._visible_items()
         if not items:
             self._row_count = 0
             self.setMinimumHeight(0)
+            return
+
+        # Cheap path: one row only (used before first show). Full wrap reflow
+        # happens on show/resize with real geometry.
+        if cheap:
+            row = self._new_row()
+            for widget in items:
+                row.addWidget(widget)
+            if self._trailing_stretch:
+                row.addStretch(1)
+            self._root.addLayout(row)
+            self._row_count = 1
+            self.setMinimumHeight(38)
             return
 
         available = max(120, effective_widget_width(self, fallback=800) - 8)
@@ -505,17 +530,13 @@ class FlowButtonBar(QFrame):
 
     def _sync_minimum_height(self) -> None:
         """Reserve full height for wrapped rows so parents cannot crush them."""
+        # Avoid QWidget.sizeHint under stylesheets (expensive); themed action
+        # buttons are pinned near 36–38px tall via QSS / configure_action_button.
         row_h = 38
         for widget in self._visible_items():
-            hint = widget.sizeHint()
-            if hint.isValid() and hint.height() > 0:
-                row_h = max(row_h, hint.height())
-            row_h = max(row_h, widget.minimumHeight())
+            row_h = max(row_h, int(widget.minimumHeight() or 0), 32)
         rows = max(1, self._row_count)
         height = rows * row_h + max(0, rows - 1) * self._row_spacing
-        hint = self._root.sizeHint()
-        if hint.isValid():
-            height = max(height, hint.height())
         self.setMinimumHeight(height)
         self.updateGeometry()
         _activate_ancestor_layouts(self, max_depth=6, invalidate=True)

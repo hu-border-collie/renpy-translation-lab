@@ -346,6 +346,76 @@ _SHELL_TASK_ROUTES = tuple(
     f"{_SHELL_WORKBENCH_PREFIX}{item.value}" for item in WORKBENCH_NAV_ORDER
 )
 
+# Settings sections: (key, nav label, builder method name).
+# Pages are built on first visit (or when config load/save needs them).
+_SETTINGS_PAGE_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("workspace", "项目列表", "_build_settings_workspace_page"),
+    ("project", "项目", "_build_settings_project_page"),
+    ("api_keys", "密钥", "_build_settings_api_keys_page"),
+    ("models", "模型", "_build_settings_models_page"),
+    ("litellm", "LiteLLM", "_build_settings_litellm_page"),
+    ("extensions", "扩展", "_build_settings_extensions_page"),
+    ("context", "上下文", "_build_settings_context_page"),
+    ("appearance", "外观", "_build_settings_appearance_page"),
+    ("shortcuts", "快捷键", "_build_settings_shortcuts_page"),
+    ("advanced", "高级", "_build_settings_advanced_page"),
+)
+# Sections that hold translator_config / dirty-snapshot fields.
+_SETTINGS_CONFIG_PAGE_KEYS = frozenset(
+    {
+        "project",
+        "api_keys",
+        "models",
+        "litellm",
+        "context",
+        "appearance",
+        "advanced",
+    }
+)
+# Attribute → settings section for lazy materialization (tests + direct access).
+_SETTINGS_LAZY_ATTR_TO_PAGE: dict[str, str] = {
+    "_games_registry_panel": "workspace",
+    "api_status_label": "api_keys",
+    "api_btn": "api_keys",
+    "settings_project_root_value": "project",
+    "settings_go_workspace_btn": "project",
+    "rag_enabled_cb": "context",
+    "source_index_enabled_cb": "context",
+    "bootstrap_on_build_cb": "context",
+    "context_storage_game_cb": "context",
+    "sync_model_combo": "models",
+    "sync_embedding_combo": "models",
+    "batch_model_combo": "models",
+    "batch_embedding_combo": "models",
+    "batch_thinking_combo": "models",
+    "sync_backend_combo": "litellm",
+    "litellm_provider_combo": "litellm",
+    "litellm_model_combo": "litellm",
+    "litellm_refresh_models_btn": "litellm",
+    "litellm_catalog_status_label": "litellm",
+    "sync_backend_hint": "litellm",
+    "litellm_version_label": "litellm",
+    "litellm_check_version_btn": "litellm",
+    "install_litellm_btn": "litellm",
+    "litellm_install_progress": "litellm",
+    "litellm_provider_label": "litellm",
+    "litellm_api_key_edit": "litellm",
+    "litellm_save_key_btn": "litellm",
+    "litellm_delete_key_btn": "litellm",
+    "litellm_credential_status_label": "litellm",
+    "litellm_test_connection_btn": "litellm",
+    "litellm_connection_status_label": "litellm",
+    "relation_analyzer_status_label": "extensions",
+    "relation_analyzer_failure_label": "extensions",
+    "relation_analyzer_install_btn": "extensions",
+    "relation_analyzer_docs_btn": "extensions",
+    "relation_analyzer_install_progress": "extensions",
+    "theme_combo": "appearance",
+    "font_install_status_label": "appearance",
+    "download_fonts_btn": "appearance",
+    "font_install_progress": "appearance",
+}
+
 
 class MainWindow(QMainWindow):
     def __init__(
@@ -456,10 +526,14 @@ class MainWindow(QMainWindow):
         self._font_install_worker: FontInstallWorker | None = None
         self._litellm_catalog_models: dict[str, tuple[str, ...]] = {}
         self._updating_litellm_provider = False
-        self._games_registry_panel: GamesRegistryPanel | None = None
+        # _games_registry_panel is intentionally NOT set here so attribute access
+        # triggers __getattr__ lazy materialization of 设置 · 项目列表.
         self._litellm_install: OptionalFeatureInstallController | None = None
         self._relation_analyzer_install: OptionalFeatureInstallController | None = None
         self._optional_feature_last_failed: set[str] = set()
+        self._settings_pages_built: set[str] = set()
+        self._settings_models_signals_wired = False
+        self._settings_lazy_resolving = False
 
         central = QWidget()
         central.setObjectName("app_shell")
@@ -490,8 +564,8 @@ class MainWindow(QMainWindow):
         self._setup_shell_status_bar()
         self._refresh_action_icons()
 
-        self.batch_model_combo.currentTextChanged.connect(self._on_batch_model_changed)
-        self.batch_thinking_combo.currentIndexChanged.connect(self._on_batch_thinking_changed)
+        # batch_model / thinking signals are wired when the models settings page
+        # is first built (lazy settings pages).
         self._last_main_tab_index = self.tab_widget.currentIndex()
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         self._sync_shell_nav_selection()
@@ -503,9 +577,12 @@ class MainWindow(QMainWindow):
 
         self._refresh_project_label()
         self._show_pending_game_root_redirect_notice()
-        self._refresh_api_status()
-        self._load_config_to_ui()
-        self._set_doctor_summary(idle_summary())
+        # Settings widgets are lazy: skip API label / full config→UI until a
+        # settings section is materialized (or save/reload needs it). Cold start
+        # only paints the workbench shell; settings pages build on first visit.
+        # Idle chrome only — skip resume/manifest disk walks until deferred
+        # startup refresh (see _deferred_startup_refresh).
+        self._set_doctor_summary(idle_summary(), resume_available=(False, ""))
         QTimer.singleShot(0, self._deferred_startup_refresh)
         QTimer.singleShot(0, self._sync_work_mode_hint_height)
 
@@ -1284,7 +1361,12 @@ class MainWindow(QMainWindow):
             in {WorkMode.KEYWORD_EXTRACTION, WorkMode.SYNC_KEYWORD_EXTRACTION}
         )
 
-    def _sync_workbench_status_surface(self, route: str | None = None) -> None:
+    def _sync_workbench_status_surface(
+        self,
+        route: str | None = None,
+        *,
+        refresh_readiness: bool = True,
+    ) -> None:
         """Compose project prep or workflow-owned status pages for the route."""
         card = getattr(self, "workbench_status_card", None)
         tabs = getattr(self, "workbench_status_tabs", None)
@@ -1319,7 +1401,10 @@ class MainWindow(QMainWindow):
             blocked = tabs.blockSignals(True)
             tabs.setCurrentIndex(target_index)
             tabs.blockSignals(blocked)
-            self._sync_workbench_status_chrome(stage_index=target_index)
+            self._sync_workbench_status_chrome(
+                stage_index=target_index,
+                refresh_readiness=refresh_readiness,
+            )
 
         card.setVisible(on_workbench)
         tabs.setVisible(on_workbench)
@@ -1702,7 +1787,9 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Expanding,
         )
-        self.workbench_status_tabs.currentChanged.connect(self._on_workbench_status_tab_changed)
+        # Connect currentChanged after all status tabs exist and the initial
+        # index is set — addTab/setCurrentIndex would otherwise fire chrome
+        # sync (manifest history walk) during cold construction.
         status_card_layout.addWidget(self.workbench_status_tabs)
 
         doctor_tab = QWidget()
@@ -1764,13 +1851,14 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Fixed,
             QSizePolicy.Policy.Fixed,
         )
-        # Pin width to the wider of the two states so expand/collapse does not nudge layout.
+        # Pin width so ▸/▾ expand/collapse does not nudge layout.
+        # Measure only the stable Chinese label — never pass ▾/▸ to
+        # QFontMetrics.horizontalAdvance at cold start: the first resolve of
+        # those decorative glyphs can cost hundreds of ms via font fallback.
         _toggle_fm = self.doctor_details_toggle.fontMetrics()
-        _toggle_w = max(
-            _toggle_fm.horizontalAdvance("▾ 更多详情"),
-            _toggle_fm.horizontalAdvance("▸ 更多详情"),
-        ) + 8
-        self.doctor_details_toggle.setFixedWidth(max(_toggle_w, 88))
+        _label_w = _toggle_fm.horizontalAdvance("更多详情")
+        _marker_w = max(_toggle_fm.averageCharWidth() * 2, 16)
+        self.doctor_details_toggle.setFixedWidth(max(_label_w + _marker_w + 8, 96))
         self.doctor_details_toggle.setVisible(False)
         self.doctor_details_toggle.clicked.connect(self._on_doctor_details_clicked)
         doctor_content_layout.addWidget(
@@ -2059,7 +2147,14 @@ class MainWindow(QMainWindow):
         writeback_layout.addStretch()
         self.workbench_status_tabs.addTab(writeback_tab, "写回")
 
+        # Select default stage before wiring currentChanged so construction does
+        # not pay for per-tab chrome + manifest readiness scans.
+        blocked_status = self.workbench_status_tabs.blockSignals(True)
         self.workbench_status_tabs.setCurrentIndex(_BATCH_STAGE_EXECUTE)
+        self.workbench_status_tabs.blockSignals(blocked_status)
+        self.workbench_status_tabs.currentChanged.connect(
+            self._on_workbench_status_tab_changed
+        )
         primary_layout.addWidget(self.workbench_status_card)
 
         # Real pages own all visible task actions. The old action widgets remain
@@ -2069,8 +2164,9 @@ class MainWindow(QMainWindow):
 
         self._workbench_tab = tab
         self.tab_widget.addTab(tab, "工作台")
-        self._sync_workbench_status_chrome()
-        self._sync_workbench_status_surface()
+        # Visibility/layout only — probe/split readiness waits for deferred startup.
+        self._sync_workbench_status_chrome(refresh_readiness=False)
+        self._sync_workbench_status_surface(refresh_readiness=False)
 
     def _build_batch_advanced_tools_bar(self) -> QFrame:
         """Batch execute advanced strip: probe + split (P2a / #164)."""
@@ -2206,22 +2302,18 @@ class MainWindow(QMainWindow):
         self.settings_stack.setObjectName("settings_stack")
         right_layout.addWidget(self.settings_stack, 1)
 
-        pages = [
-            ("workspace", "项目列表", self._build_settings_workspace_page()),
-            ("project", "项目", self._build_settings_project_page()),
-            ("api_keys", "密钥", self._build_settings_api_keys_page()),
-            ("models", "模型", self._build_settings_models_page()),
-            ("litellm", "LiteLLM", self._build_settings_litellm_page()),
-            ("extensions", "扩展", self._build_settings_extensions_page()),
-            ("context", "上下文", self._build_settings_context_page()),
-            ("appearance", "外观", self._build_settings_appearance_page()),
-            ("shortcuts", "快捷键", self._build_settings_shortcuts_page()),
-            ("advanced", "高级", self._build_settings_advanced_page()),
-        ]
-        for index, (key, label, page) in enumerate(pages):
+        self._settings_pages_built = set()
+        self._settings_page_builders: dict[str, str] = {
+            key: builder for key, _label, builder in _SETTINGS_PAGE_SPECS
+        }
+        # Placeholder stack pages — real content replaces them on first visit.
+        for index, (key, label, _builder) in enumerate(_SETTINGS_PAGE_SPECS):
             self._settings_nav_rows[key] = index
             self.settings_nav.addItem(label)
-            self.settings_stack.addWidget(page)
+            placeholder = QWidget()
+            placeholder.setObjectName(f"settings_{key}_placeholder")
+            self._style_themed_surface(placeholder)
+            self.settings_stack.addWidget(placeholder)
         self.settings_nav.currentRowChanged.connect(self._on_settings_nav_row_changed)
 
         action_bar = QFrame()
@@ -2256,9 +2348,119 @@ class MainWindow(QMainWindow):
         action_layout.addWidget(self.save_config_btn)
         right_layout.addWidget(action_bar)
 
+        # Select first section without building it yet (signals blocked).
+        blocked = self.settings_nav.blockSignals(True)
         self.settings_nav.setCurrentRow(0)
+        self.settings_nav.blockSignals(blocked)
+        self.settings_stack.setCurrentIndex(0)
 
         self.tab_widget.addTab(tab, "设置")
+
+    def __getattr__(self, name: str) -> Any:
+        """Materialize lazy settings pages when tests/code access their widgets."""
+        if name.startswith("_") and name not in _SETTINGS_LAZY_ATTR_TO_PAGE:
+            raise AttributeError(
+                f"{type(self).__name__!s} has no attribute {name!r}"
+            )
+        page_key = _SETTINGS_LAZY_ATTR_TO_PAGE.get(name)
+        if page_key is None or getattr(self, "_settings_lazy_resolving", False):
+            raise AttributeError(
+                f"{type(self).__name__!s} has no attribute {name!r}"
+            )
+        self._settings_lazy_resolving = True
+        try:
+            if page_key in _SETTINGS_CONFIG_PAGE_KEYS:
+                self._ensure_settings_pages_for_config()
+            else:
+                self._ensure_settings_page(page_key)
+        finally:
+            self._settings_lazy_resolving = False
+        try:
+            return object.__getattribute__(self, name)
+        except AttributeError as exc:
+            raise AttributeError(
+                f"{type(self).__name__!s} has no attribute {name!r}"
+            ) from exc
+
+    def _settings_lazy_ready(self) -> bool:
+        """True when the full settings shell exists (not a MainWindow.__new__ stub)."""
+        return bool(
+            getattr(self, "_settings_page_builders", None)
+            and getattr(self, "settings_stack", None) is not None
+            and "state" in self.__dict__
+        )
+
+    def _ensure_settings_page(self, key: str, *, populate: bool = True) -> None:
+        """Build one settings section and swap it into the settings stack."""
+        if not self._settings_lazy_ready():
+            return
+        built = getattr(self, "_settings_pages_built", None)
+        if built is None:
+            return
+        if key in built:
+            return
+        if populate and key in _SETTINGS_CONFIG_PAGE_KEYS:
+            self._ensure_settings_pages_for_config()
+            return
+        builders = getattr(self, "_settings_page_builders", {})
+        builder_name = builders.get(key)
+        rows = getattr(self, "_settings_nav_rows", {})
+        index = rows.get(key)
+        stack = getattr(self, "settings_stack", None)
+        if builder_name is None or index is None or stack is None:
+            return
+        builder = getattr(self, builder_name, None)
+        if not callable(builder):
+            return
+        page = builder()
+        old = stack.widget(index)
+        current_index = stack.currentIndex()
+        if old is not None:
+            stack.removeWidget(old)
+            old.deleteLater()
+        stack.insertWidget(index, page)
+        if current_index == index:
+            stack.setCurrentIndex(index)
+        built.add(key)
+        if key == "models":
+            self._wire_settings_models_signals()
+        if key == "workspace":
+            # Inherit current task gate if panel was built after a run started.
+            panel = self.__dict__.get("_games_registry_panel")
+            if panel is not None and bool(getattr(self, "_task_running", False)):
+                set_gate = getattr(panel, "set_host_task_running", None)
+                if callable(set_gate):
+                    set_gate(True)
+
+    def _ensure_settings_pages_for_config(self) -> None:
+        """Ensure every section that participates in config load/save/dirty."""
+        if not self._settings_lazy_ready():
+            return
+        built = getattr(self, "_settings_pages_built", set())
+        pending = [
+            key
+            for key, _label, _builder in _SETTINGS_PAGE_SPECS
+            if key in _SETTINGS_CONFIG_PAGE_KEYS and key not in built
+        ]
+        for key in pending:
+            self._ensure_settings_page(key, populate=False)
+        if pending and not getattr(self, "_loading_config_to_ui", False):
+            self._load_config_to_ui(refresh_task_gates=False)
+            if hasattr(self, "api_status_label"):
+                self._refresh_api_status()
+
+    def _wire_settings_models_signals(self) -> None:
+        if getattr(self, "_settings_models_signals_wired", False):
+            return
+        if not hasattr(self, "batch_model_combo") or not hasattr(
+            self, "batch_thinking_combo"
+        ):
+            return
+        self.batch_model_combo.currentTextChanged.connect(self._on_batch_model_changed)
+        self.batch_thinking_combo.currentIndexChanged.connect(
+            self._on_batch_thinking_changed
+        )
+        self._settings_models_signals_wired = True
 
     def _settings_page(self, object_name: str) -> tuple[QScrollArea, QVBoxLayout]:
         scroll = QScrollArea()
@@ -3290,25 +3492,49 @@ class MainWindow(QMainWindow):
             return _BATCH_STAGE_EXECUTE
         return max(_BATCH_STAGE_PREPARE, min(_BATCH_STAGE_RESULT, index))
 
-    def _sync_workbench_status_chrome(self, *, stage_index: int | None = None) -> None:
+    def _sync_workbench_status_chrome(
+        self,
+        *,
+        stage_index: int | None = None,
+        refresh_readiness: bool = True,
+    ) -> None:
         """Sync tab-dependent chrome (batch advanced tools, result reflow)."""
         if stage_index is None:
             stage_index = self._current_batch_stage_index()
         stage_index = max(_BATCH_STAGE_PREPARE, min(_BATCH_STAGE_RESULT, stage_index))
-        self._sync_batch_advanced_tools_chrome(stage_index=stage_index)
+        self._sync_batch_advanced_tools_chrome(
+            stage_index=stage_index,
+            refresh_readiness=refresh_readiness,
+        )
         # Result tab hosts writeback flow bars that may have reflowed while off-tab.
         if stage_index == _BATCH_STAGE_RESULT:
             self._reflow_button_bars()
 
     # Back-compat alias for older call sites / tests.
-    def _sync_batch_stage_chrome(self, *, stage_index: int | None = None) -> None:
-        self._sync_workbench_status_chrome(stage_index=stage_index)
+    def _sync_batch_stage_chrome(
+        self,
+        *,
+        stage_index: int | None = None,
+        refresh_readiness: bool = True,
+    ) -> None:
+        self._sync_workbench_status_chrome(
+            stage_index=stage_index,
+            refresh_readiness=refresh_readiness,
+        )
 
-    def _sync_batch_advanced_tools_chrome(self, *, stage_index: int | None = None) -> None:
+    def _sync_batch_advanced_tools_chrome(
+        self,
+        *,
+        stage_index: int | None = None,
+        refresh_readiness: bool = True,
+    ) -> None:
         """Show probe/split whenever batch translation is active (under main actions).
 
         Stays on the workbench action column (not diagnostics): batch-only tools that
         prepare packages before / around a run, always reachable without tab switching.
+
+        When ``refresh_readiness`` is False, only visibility/layout is updated —
+        probe/split enablement (which may walk manifest history) is deferred.
         """
         if not hasattr(self, "batch_advanced_frame"):
             return
@@ -3320,7 +3546,7 @@ class MainWindow(QMainWindow):
             reflow = getattr(self.batch_advanced_bar, "reflow", None)
             if callable(reflow):
                 reflow(force=True)
-        if show:
+        if show and refresh_readiness:
             running = (
                 bool(getattr(self, "_task_running", False))
                 or (hasattr(self, "kill_btn") and self.kill_btn.isEnabled())
@@ -5630,7 +5856,11 @@ class MainWindow(QMainWindow):
         if version_button is not None:
             checking = getattr(self, "_litellm_version_worker", None) is not None
             version_button.setEnabled(not installing and not checking)
-        if hasattr(self, "translate_btn"):
+        # Skip while loading config into widgets: _load_config_to_ui decides
+        # whether to re-gate after the load (and cold start defers that work).
+        if hasattr(self, "translate_btn") and not getattr(
+            self, "_loading_config_to_ui", False
+        ):
             self._set_task_running(bool(getattr(self, "_task_running", False)))
         self._refresh_litellm_credential_status()
         self._refresh_litellm_install_action_gating()
@@ -7116,10 +7346,14 @@ class MainWindow(QMainWindow):
             settings_index = self.tab_widget.indexOf(self._config_tab)
             if settings_index >= 0:
                 self.tab_widget.setCurrentIndex(settings_index)
+        self._ensure_settings_page(key)
         row = getattr(self, "_settings_nav_rows", {}).get(key)
         nav = getattr(self, "settings_nav", None)
         if nav is not None and row is not None:
             nav.setCurrentRow(row)
+            stack = getattr(self, "settings_stack", None)
+            if stack is not None:
+                stack.setCurrentIndex(row)
         self._sync_shell_nav_selection()
 
     def _on_go_to_workspace_for_project_switch(self) -> None:
@@ -7133,7 +7367,9 @@ class MainWindow(QMainWindow):
         return tab_widget.currentWidget() is config_tab
 
     def _activate_workspace_registry_section(self) -> None:
-        panel = getattr(self, "_games_registry_panel", None)
+        # Materialize workspace page if the user navigated there.
+        self._ensure_settings_page("workspace")
+        panel = self.__dict__.get("_games_registry_panel")
         if panel is None:
             return
         panel.set_current_game_root(self.state.get_game_root())
@@ -7142,6 +7378,13 @@ class MainWindow(QMainWindow):
     def _on_settings_nav_row_changed(self, row: int) -> None:
         if row < 0:
             return
+        key = None
+        for page_key, index in getattr(self, "_settings_nav_rows", {}).items():
+            if index == row:
+                key = page_key
+                break
+        if key is not None:
+            self._ensure_settings_page(key)
         self.settings_stack.setCurrentIndex(row)
         self._sync_settings_action_bar_enabled(task_running=self._task_running, nav_row=row)
         if self._settings_nav_rows.get("workspace") == row and self._is_config_tab_active():
@@ -7169,6 +7412,10 @@ class MainWindow(QMainWindow):
             self.reload_config_btn.setEnabled(not task_running)
 
     def _refresh_api_status(self) -> None:
+        # Do not materialize the keys page just to refresh a hidden label.
+        label = self._settings_widget("api_status_label") if hasattr(self, "_settings_widget") else self.__dict__.get("api_status_label")
+        if label is None:
+            return
         # Load keys once — get_api_key_status reuses the same list.
         file_keys = self.state.load_api_keys()
         count, source = self.state.get_api_key_status(file_keys=file_keys)
@@ -7185,7 +7432,7 @@ class MainWindow(QMainWindow):
             if masked:
                 message += f"\n{masked}"
 
-        self.api_status_label.setText(message)
+        label.setText(message)
 
     def _current_theme_preference_from_ui(self) -> str:
         combo = getattr(self, "theme_combo", None)
@@ -7399,6 +7646,10 @@ class MainWindow(QMainWindow):
             return False
         if not getattr(self, "_config_ui_saved_snapshot", None):
             return False
+        # No dirty check until config-bearing settings pages exist.
+        built = getattr(self, "_settings_pages_built", set())
+        if not (_SETTINGS_CONFIG_PAGE_KEYS & built):
+            return False
         return self._current_config_ui_snapshot() != self._config_ui_saved_snapshot
 
     def _confirm_unsaved_config_before_workflow(self) -> bool:
@@ -7468,7 +7719,8 @@ class MainWindow(QMainWindow):
                 return True
             clicked = stay_btn
         elif clicked is discard_btn:
-            self._load_config_to_ui()
+            if _SETTINGS_CONFIG_PAGE_KEYS & getattr(self, "_settings_pages_built", set()):
+                self._load_config_to_ui()
             return True
 
         self._handling_config_tab_leave = True
@@ -7533,8 +7785,16 @@ class MainWindow(QMainWindow):
             return
 
         if widget is self._config_tab:
-            self._refresh_api_status()
             nav = getattr(self, "settings_nav", None)
+            row = nav.currentRow() if nav is not None else 0
+            key = None
+            for page_key, index in getattr(self, "_settings_nav_rows", {}).items():
+                if index == row:
+                    key = page_key
+                    break
+            if key is not None:
+                self._ensure_settings_page(key)
+            self._refresh_api_status()
             if (
                 nav is not None
                 and self._settings_nav_rows.get("workspace") == nav.currentRow()
@@ -7547,11 +7807,13 @@ class MainWindow(QMainWindow):
 
 
     def _on_reload_config(self) -> None:
+        self._ensure_settings_pages_for_config()
         self._load_config_to_ui()
         self._refresh_api_status()
         self._show_settings_status("已重新加载已保存设置。")
 
     def _on_restore_recommended_config(self) -> None:
+        self._ensure_settings_pages_for_config()
         values = BASIC_RECOMMENDED_VALUES
         self.rag_enabled_cb.setChecked(bool(values["rag_enabled"]))
         self.source_index_enabled_cb.setChecked(bool(values["source_index_enabled"]))
@@ -7634,7 +7896,8 @@ class MainWindow(QMainWindow):
         self._show_game_root_redirect_notice(original, effective)
 
     def _refresh_settings_project_root_display(self) -> None:
-        label = getattr(self, "settings_project_root_value", None)
+        # Never lazy-materialize the project settings page just to update a label.
+        label = self.__dict__.get("settings_project_root_value")
         if label is None:
             return
         root = self.state.get_game_root()
@@ -9136,7 +9399,8 @@ class MainWindow(QMainWindow):
             self.global_browse_project_btn.setEnabled(project_switch_enabled)
         if hasattr(self, "global_switch_project_btn"):
             self.global_switch_project_btn.setEnabled(project_switch_enabled)
-        panel = getattr(self, "_games_registry_panel", None)
+        # Use __dict__ so task-running gates never force-build 设置 · 项目列表.
+        panel = self.__dict__.get("_games_registry_panel")
         if panel is not None:
             # Browse/filter stay usable; only switch/mutate paths are gated.
             set_gate = getattr(panel, "set_host_task_running", None)
@@ -9144,16 +9408,19 @@ class MainWindow(QMainWindow):
                 set_gate(running)
             else:
                 panel.setEnabled(not running)
-        if hasattr(self, "settings_go_workspace_btn"):
+        go_workspace = self._settings_widget("settings_go_workspace_btn")
+        if go_workspace is not None:
             # Settings entry stays openable; workspace switch is gated in-panel.
-            self.settings_go_workspace_btn.setEnabled(True)
+            go_workspace.setEnabled(True)
         # Doctor does not freeze shell/context browsing; keep nav usable.
         if hasattr(self, "workbench_nav"):
             self.workbench_nav.setEnabled(not self._context_switching_locked())
         self._set_shell_nav_task_lock(running)
         self._sync_doctor_prep_button_chrome()
         self._sync_bootstrap_prep_button_chrome()
-        self.api_btn.setEnabled(not running)
+        api_btn = self._settings_widget("api_btn")
+        if api_btn is not None:
+            api_btn.setEnabled(not running)
         bootstrap_ready = self._bootstrap_task_ready(spec)
         self.translate_btn.setEnabled(
             self._translate_button_enabled(
@@ -9343,7 +9610,12 @@ class MainWindow(QMainWindow):
         if summary.status not in {"idle", "running", "stale"}:
             self._focus_workbench_status_tab(2)
 
-    def _set_doctor_summary(self, summary: DoctorSummary):
+    def _set_doctor_summary(
+        self,
+        summary: DoctorSummary,
+        *,
+        resume_available: tuple[bool, str] | None = None,
+    ) -> None:
         self._doctor_summary_mode = summary.mode
         self._doctor_summary_status = summary.status
         self.doctor_status_label.set_status(summary.status, summary.heading)
@@ -9366,7 +9638,9 @@ class MainWindow(QMainWindow):
         self._sync_keywords_page_controls(running=running)
         self._sync_revision_page_controls(running=running)
         self._sync_task_shortcuts()
-        self._sync_workbench_empty_states()
+        # When resume_available is provided (including cold-start False), skip
+        # _resume_task_available's manifest history walk.
+        self._sync_workbench_empty_states(resume_available=resume_available)
         self._sync_layout_sizes()
 
     def _on_runner_error(self, message: str):
@@ -10072,11 +10346,32 @@ class MainWindow(QMainWindow):
             return
         self._apply_theme()
 
-    def _load_config_to_ui(self):
+    def _settings_widget(self, name: str) -> Any:
+        """Return a settings widget only if its page is already built.
+
+        Does not trigger lazy materialization (unlike normal attribute access).
+        """
+        return self.__dict__.get(name)
+
+    def _load_config_to_ui(self, *, refresh_task_gates: bool = True) -> None:
+        """Push translator_config into settings widgets that already exist.
+
+        When ``refresh_task_gates`` is False (cold start), skip probe/resume
+        readiness walks; ``_deferred_startup_refresh`` applies them after show.
+        Missing lazy settings widgets are skipped — call
+        ``_ensure_settings_pages_for_config()`` first for a full UI sync.
+        """
         self._loading_config_to_ui = True
         try:
             config = self.state.load_translator_config()
             self._load_theme_to_ui(config)
+            # Nothing else to fill until config-bearing pages exist.
+            # Use __dict__ so we do not trigger lazy materialization here.
+            if (
+                self._settings_widget("rag_enabled_cb") is None
+                and self._settings_widget("batch_model_combo") is None
+            ):
+                return
             sync_config = self._config_section(config, "sync")
             batch_config = self._config_section(config, "batch")
             sync_rag_config = self._config_section(sync_config, "rag")
@@ -10085,20 +10380,28 @@ class MainWindow(QMainWindow):
                 config,
                 game_root=self._game_root_str_for_flags(),
             )
-            self.rag_enabled_cb.setChecked(context_flags["rag_enabled"])
-            self.source_index_enabled_cb.setChecked(context_flags["source_index_enabled"])
-            self.bootstrap_on_build_cb.setChecked(context_flags["bootstrap_on_build"])
+            rag_cb = self._settings_widget("rag_enabled_cb")
+            if rag_cb is not None:
+                rag_cb.setChecked(context_flags["rag_enabled"])
+            source_cb = self._settings_widget("source_index_enabled_cb")
+            if source_cb is not None:
+                source_cb.setChecked(context_flags["source_index_enabled"])
+            bootstrap_cb = self._settings_widget("bootstrap_on_build_cb")
+            if bootstrap_cb is not None:
+                bootstrap_cb.setChecked(context_flags["bootstrap_on_build"])
             storage_config = self._config_section(config, "context_storage")
             storage_location = normalize_context_storage_location(
                 storage_config.get("location", config.get("context_storage_location", ""))
             )
-            self.context_storage_game_cb.setChecked(storage_location == "game")
+            storage_cb = self._settings_widget("context_storage_game_cb")
+            if storage_cb is not None:
+                storage_cb.setChecked(storage_location == "game")
             self._batch_thinking_config_has_key = "thinking_level" in batch_config
 
             sync_backend = self._config_string(sync_config.get("backend", "gemini")).lower()
             if sync_backend not in {"gemini", "litellm"}:
                 sync_backend = "gemini"
-            backend_combo = getattr(self, "sync_backend_combo", None)
+            backend_combo = self._settings_widget("sync_backend_combo")
             backend_idx = backend_combo.findData(sync_backend) if backend_combo is not None else -1
             if backend_combo is not None:
                 backend_combo.setCurrentIndex(backend_idx)
@@ -10108,41 +10411,58 @@ class MainWindow(QMainWindow):
                 sync_backend,
                 str(BASIC_RECOMMENDED_VALUES["sync_model"]),
             )
-            self._set_combo_value(self.sync_model_combo, backend_models.gemini_model)
-            litellm_combo = getattr(self, "litellm_model_combo", None)
+            sync_model = self._settings_widget("sync_model_combo")
+            if sync_model is not None:
+                self._set_combo_value(sync_model, backend_models.gemini_model)
+            litellm_combo = self._settings_widget("litellm_model_combo")
             if litellm_combo is not None:
                 self._set_combo_value(litellm_combo, backend_models.litellm_model)
-            self._on_sync_backend_changed(backend_idx)
+            if backend_combo is not None:
+                self._on_sync_backend_changed(backend_idx)
 
             batch_val = self._config_string(batch_config.get("model", "")) or str(
                 BASIC_RECOMMENDED_VALUES["batch_model"]
             )
-            self._set_combo_value(self.batch_model_combo, batch_val)
+            batch_model = self._settings_widget("batch_model_combo")
+            if batch_model is not None:
+                self._set_combo_value(batch_model, batch_val)
 
             sync_emb_val = self._config_string(sync_rag_config.get("embedding_model", "")) or str(
                 BASIC_RECOMMENDED_VALUES["sync_embedding_model"]
             )
-            self._set_combo_value(self.sync_embedding_combo, sync_emb_val)
+            sync_emb = self._settings_widget("sync_embedding_combo")
+            if sync_emb is not None:
+                self._set_combo_value(sync_emb, sync_emb_val)
 
             batch_emb_val = self._config_string(batch_rag_config.get("embedding_model", "")) or str(
                 BASIC_RECOMMENDED_VALUES["batch_embedding_model"]
             )
-            self._set_combo_value(self.batch_embedding_combo, batch_emb_val)
+            batch_emb = self._settings_widget("batch_embedding_combo")
+            if batch_emb is not None:
+                self._set_combo_value(batch_emb, batch_emb_val)
 
-            self._on_batch_model_changed(batch_val)
-            thinking_val = self._batch_thinking_value_for_load(batch_config, batch_val)
-            self._set_batch_thinking_value(thinking_val)
+            if batch_model is not None:
+                self._on_batch_model_changed(batch_val)
+                thinking_val = self._batch_thinking_value_for_load(batch_config, batch_val)
+                self._set_batch_thinking_value(thinking_val)
             advanced_values = read_advanced_settings(config)
             get_game_root = getattr(self.state, "get_game_root", None)
             current_game_root = get_game_root() if callable(get_game_root) else None
             if current_game_root and not self._config_string(advanced_values.get("game_root")):
                 advanced_values["game_root"] = str(current_game_root)
-            self._load_advanced_settings_to_ui(advanced_values)
-            self._clear_advanced_setting_errors()
+            if self.__dict__.get("_advanced_setting_widgets"):
+                self._load_advanced_settings_to_ui(advanced_values)
+                self._clear_advanced_setting_errors()
         finally:
             self._batch_thinking_user_changed = False
             self._loading_config_to_ui = False
-        self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
+        if (
+            self._settings_widget("rag_enabled_cb") is not None
+            or self._settings_widget("batch_model_combo") is not None
+        ):
+            self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
+        if refresh_task_gates and "translate_btn" in self.__dict__:
+            self._set_task_running(bool(getattr(self, "_task_running", False)))
 
     def _on_batch_model_changed(self, text: str):
         is_thinking_supported = self._supports_batch_thinking(text)
@@ -10168,6 +10488,7 @@ class MainWindow(QMainWindow):
         if not self.state.get_game_root():
             QMessageBox.information(self, "未选择项目", "请先选择游戏的 work 目录。")
             return False
+        self._ensure_settings_pages_for_config()
 
         try:
             config = self.state.load_translator_config()
@@ -10338,16 +10659,22 @@ def run_app(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"警告：无法读取主题配置，将使用系统跟随：{exc}")
         theme_preference = DEFAULT_THEME_PREFERENCE
-    try:
-        apply_theme(app, resources_dir, theme_preference)
-    except OSError as exc:
-        print(f"警告：无法加载 GUI 样式表：{exc}")
 
+    # Build the widget tree *before* applying the app stylesheet. Under a large
+    # QSS, every QStackedWidget/QBoxLayout.addWidget pays style-polish cost and
+    # dominated cold startup (~0.5s). One setStyleSheet after construction is
+    # cheaper and matches the first painted theme.
     win = MainWindow(
         qt_app=app,
         resources_dir=resources_dir,
         project_state=project_state,
     )
+    win._theme_preference = normalize_theme_preference(theme_preference)
+    try:
+        apply_theme(app, resources_dir, theme_preference)
+    except OSError as exc:
+        print(f"警告：无法加载 GUI 样式表：{exc}")
+
     app.styleHints().colorSchemeChanged.connect(win._on_system_color_scheme_changed)
     win.show()
     return app.exec()
