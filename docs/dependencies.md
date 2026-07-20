@@ -56,3 +56,7 @@ CI 覆盖锁文件的方式如下；完整任务映射见 `docs/ci.md`：
 - 定时 `provider-contract-smoke` 安装 Linux LiteLLM 锁后才执行真实 provider 请求。
 
 上述安装均使用 `pip --require-hashes`；pull request 中的 LiteLLM 任务只验证干净环境安装，不访问 provider API。
+
+## 依赖漏洞审计
+
+PR 的 `quality` 任务会对全部提交的哈希锁运行 `pip-audit`（见 [CI 与定时集成检查](ci.md)）。已知、已接受的例外写在 `quality/pip-audit-exceptions.json`；每条需说明原因与复查日期。清除例外的正确方式是在独立依赖升级 PR 中抬高 pin 并重生成锁，而不是在应用功能 PR 里顺手改版本。

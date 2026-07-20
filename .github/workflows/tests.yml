@@ -27,6 +27,34 @@ jobs:
       - name: Verify dependency lock manifest
         run: python -B scripts/compile_dependency_locks.py --check
 
+  quality:
+    name: Lint, type-check, dependency audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install quality tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Print quality gate policy
+        run: python -B scripts/run_quality_gates.py policy
+
+      - name: Run blocking quality gates
+        run: python -B scripts/run_quality_gates.py all
+
   litellm-lock-install:
     name: LiteLLM lock install (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

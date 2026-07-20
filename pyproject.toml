@@ -1,0 +1,53 @@
+[project]
+name = "renpy-translation-lab"
+version = "1.0.0"
+description = "Ren'Py translation workbench (CLI + optional GUI)"
+requires-python = ">=3.11"
+
+# ---------------------------------------------------------------------------
+# Quality gates (issue #230)
+#
+# Blocking scopes are intentionally narrow. Expand only after measuring a new
+# baseline and recording existing debt — do not flip on repo-wide noisy rules
+# without an exception / staging plan. See docs/ci.md.
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = [
+  ".venv",
+  "dist",
+  "logs",
+  "agent-tools",
+  "terminals",
+  "mcps",
+  "__pycache__",
+]
+
+[tool.ruff.lint]
+# Default rule set for the narrow `scripts/` blocking gate.
+# Keep this to correctness-oriented pyflakes/pycodestyle; expand (I/UP/B/SIM,
+# broader paths) only after measuring a baseline and staging debt.
+select = ["E", "F"]
+ignore = [
+  "E501", # line length — not enforced while historical modules stay unformatted
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Path bootstrap before importing repository modules.
+"scripts/run_provider_contract_smoke.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+ignore_missing_imports = true
+follow_imports = "skip"
+pretty = true
+show_error_codes = true
+# Blocking type-check paths are selected by scripts/run_quality_gates.py.
+# Keep this config conservative so expanding the path list is the only lever.
+
+[tool.pip-audit]
+# Exception IDs live in quality/pip-audit-exceptions.json (see that file and
+# scripts/run_quality_gates.py). Do not bury ignores only in CI YAML.

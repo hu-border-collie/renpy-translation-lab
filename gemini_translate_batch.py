@@ -3101,11 +3101,10 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
         manifest['story_memory_enabled'] = True
         manifest['story_memory_graph_file'] = STORY_MEMORY_GRAPH_FILE
         manifest['story_memory_settings'] = {
-            'top_k_terms': STORY_MEMORY_TOP_K_TERMS,
-            'top_k_characters': STORY_MEMORY_TOP_K_CHARACTERS,
-            'top_k_relations': STORY_MEMORY_TOP_K_RELATIONS,
-            'top_k_scenes': STORY_MEMORY_TOP_K_SCENES,
             'max_context_chars': STORY_MEMORY_MAX_CONTEXT_CHARS,
+            'top_k_relations': STORY_MEMORY_TOP_K_RELATIONS,
+            'top_k_terms': STORY_MEMORY_TOP_K_TERMS,
+            'include_scene_summary': STORY_MEMORY_INCLUDE_SCENE_SUMMARY,
         }
         manifest['story_memory_summary'] = summarize_batch_story_memory(chunks)
 
@@ -7916,11 +7915,10 @@ def sync_revisions(
         extra_fields['story_memory_enabled'] = True
         extra_fields['story_memory_graph_file'] = STORY_MEMORY_GRAPH_FILE
         extra_fields['story_memory_settings'] = {
-            'top_k_terms': STORY_MEMORY_TOP_K_TERMS,
-            'top_k_characters': STORY_MEMORY_TOP_K_CHARACTERS,
-            'top_k_relations': STORY_MEMORY_TOP_K_RELATIONS,
-            'top_k_scenes': STORY_MEMORY_TOP_K_SCENES,
             'max_context_chars': STORY_MEMORY_MAX_CONTEXT_CHARS,
+            'top_k_relations': STORY_MEMORY_TOP_K_RELATIONS,
+            'top_k_terms': STORY_MEMORY_TOP_K_TERMS,
+            'include_scene_summary': STORY_MEMORY_INCLUDE_SCENE_SUMMARY,
         }
         extra_fields['story_memory_summary'] = summarize_batch_story_memory(chunks)
     manifest_path = make_sync_manifest(
