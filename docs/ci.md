@@ -4,15 +4,54 @@
 
 `.github/workflows/tests.yml` 在 pull request 和 `main` push 上运行。各任务使用的依赖锁如下：
 
-| 任务 | runner | 哈希锁 / 检查 |
-|---|---|---|
-| `dependency-locks` | Linux | 离线校验 `manifest.json`、输入摘要、锁摘要与生成器元数据 |
-| `litellm-lock-install` | Linux / Windows | 分别安装 `py311-linux-litellm.txt` / `py311-windows-litellm.txt` |
-| `unittest` | Linux / Windows | 安装 `py311-gui.txt` 并运行完整 unittest |
-| `cli-without-gui` | Linux | 安装 `py311-cli.txt`，确认没有 PySide6 并运行 CLI 测试 |
-| `gui` | Linux | 安装 `py311-gui.txt` 并运行 offscreen GUI 测试 |
+| 任务 | runner | 哈希锁 / 检查 | 门禁级别 |
+|---|---|---|---|
+| `dependency-locks` | Linux | 离线校验 `manifest.json`、输入摘要、锁摘要与生成器元数据 | **blocking** |
+| `quality` | Linux | lint / type-check / dependency audit（见下文） | **blocking** |
+| `litellm-lock-install` | Linux / Windows | 分别安装 `py311-linux-litellm.txt` / `py311-windows-litellm.txt` | **blocking** |
+| `unittest` | Linux / Windows | 安装 `py311-gui.txt` 并运行完整 unittest | **blocking** |
+| `cli-without-gui` | Linux | 安装 `py311-cli.txt`，确认没有 PySide6 并运行 CLI 测试 | **blocking** |
+| `gui` | Linux | 安装 `py311-gui.txt` 并运行 offscreen GUI 测试 | **blocking** |
 
-所有安装均使用 `pip --require-hashes`。这些检查不访问供应商 API，也不下载 Ren'Py SDK，必须保持确定、快速并作为合并门禁。
+所有产品依赖安装均使用 `pip --require-hashes`。这些检查不访问供应商 API，也不下载 Ren'Py SDK，必须保持确定、快速并作为合并门禁。
+
+## Lint / 类型检查 / 依赖审计（quality）
+
+`quality` 任务安装 `requirements-dev.txt` 中的固定工具版本，并运行：
+
+```bash
+python -B scripts/run_quality_gates.py all
+```
+
+| 检查 | 范围 | 级别 | 说明 |
+|---|---|---|---|
+| ruff scoped | `scripts/` | **blocking** | `pyproject.toml` 中的 E/F 规则（忽略 E501） |
+| ruff critical | 全仓库 | **blocking** | 仅 `E9,F63,F7,F82`（语法 / 未定义名等正确性） |
+| mypy scoped | `scripts/` | **blocking** | `follow_imports = skip`，不递归类型检查产品主树 |
+| pip-audit | 全部 `requirements-lock/*.txt` | **blocking** | 读取 `quality/pip-audit-exceptions.json` 例外清单 |
+
+**Advisory（不阻挡 PR，可本地运行）：**
+
+```bash
+python -B scripts/run_quality_gates.py advisory-lint
+```
+
+全仓库 E/F 统计用于观察历史债务；当前默认 **不** 作为 PR 失败条件。扩大 blocking 范围前应先测量基线、记录债务，并单独开 PR，不要与功能改动混在一起。
+
+### 依赖审计例外策略
+
+- 例外集中写在 `quality/pip-audit-exceptions.json`，每条必须包含 `id`、`package`、`reason`、`review_by`。
+- 新增漏洞若无例外，`quality` 任务失败。
+- 优先在**独立依赖升级 PR** 中抬 pin 并重生成锁，而不是长期堆积 ignore。
+- 不要把无关应用代码清理塞进「扩大 quality 范围」的同一 PR。
+
+本地安装质量工具：
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -B scripts/run_quality_gates.py policy
+python -B scripts/run_quality_gates.py all
+```
 
 ## Ren'Py 真实 SDK 集成
 
