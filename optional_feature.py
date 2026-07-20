@@ -1,12 +1,17 @@
 """Optional feature dependency status and install command helpers.
 
-Status is derived from package metadata in the active environment — never from a
-persisted "enabled" flag. Probe paths avoid importing heavy native libraries
-(NumPy, Matplotlib, scikit-learn, Pillow) into long-lived processes.
+Status is derived from package metadata and importability checks in the active
+environment — never from a persisted "enabled" flag. Probe paths use
+``importlib.util.find_spec`` (and package metadata) so long-lived processes do
+not load heavy native libraries such as NumPy or SciPy.
 """
 
 from __future__ import annotations
 
+import importlib.util
+import shlex
+import subprocess
+import sys
 from dataclasses import dataclass
 from enum import Enum
 from importlib import metadata
@@ -28,7 +33,12 @@ class FeatureInstallState(str, Enum):
 
 @dataclass(frozen=True)
 class PackageRequirement:
-    """A direct distribution required by an optional feature."""
+    """A distribution required by an optional feature.
+
+    ``version`` may be empty for presence-only transitive runtime deps (e.g.
+    SciPy pulled in by scikit-learn). Those still participate in install
+    completeness probes but never produce an "update available" pin mismatch.
+    """
 
     distribution: str
     version: str
@@ -47,6 +57,26 @@ class PackageRequirement:
         except metadata.PackageNotFoundError:
             return ""
 
+    def import_names_available(self) -> bool:
+        """Return True when every required top-level module can be found.
+
+        Uses ``find_spec`` only — does not import native extensions into the
+        current process.
+        """
+        names = self.import_names or _default_import_names(self.distribution)
+        for name in names:
+            try:
+                if importlib.util.find_spec(name) is None:
+                    return False
+            except (ImportError, ModuleNotFoundError, ValueError):
+                # Broken/partial installs can raise while resolving the spec.
+                return False
+        return True
+
+    def is_present(self) -> bool:
+        """True only when both distribution metadata and import modules exist."""
+        return self.metadata_present() and self.import_names_available()
+
 
 @dataclass(frozen=True)
 class OptionalFeatureSpec:
@@ -62,10 +92,10 @@ class OptionalFeatureSpec:
     docs_relative_path: str = ""
 
     def lock_path(self, repo_root: Path = REPO_ROOT) -> Path:
-        return repo_root / self.lock_relative_path
+        return (Path(repo_root) / self.lock_relative_path).resolve()
 
     def requirements_path(self, repo_root: Path = REPO_ROOT) -> Path:
-        return repo_root / self.requirements_relative_path
+        return (Path(repo_root) / self.requirements_relative_path).resolve()
 
 
 @dataclass(frozen=True)
@@ -108,6 +138,9 @@ def _default_import_names(distribution: str) -> tuple[str, ...]:
         "pillow": ("PIL",),
         "google-genai": ("google.genai",),
         "pyside6": ("PySide6",),
+        "scipy": ("scipy",),
+        "numpy": ("numpy",),
+        "matplotlib": ("matplotlib",),
     }
     if normalized in mapping:
         return mapping[normalized]
@@ -115,22 +148,34 @@ def _default_import_names(distribution: str) -> tuple[str, ...]:
 
 
 def relation_analyzer_feature(repo_root: Path = REPO_ROOT) -> OptionalFeatureSpec:
-    requirements_path = repo_root / "requirements-relation-analyzer.txt"
-    packages = _parse_pinned_requirements(requirements_path)
+    requirements_path = Path(repo_root) / "requirements-relation-analyzer.txt"
+    packages = list(_parse_pinned_requirements(requirements_path))
+    # SciPy is required at runtime (scikit-learn / plotting) even though it is
+    # only a transitive lock entry. Probe it so a broken/partial env is
+    # reported as repairable rather than "已启用".
+    if not any(pkg.distribution.lower().replace("_", "-") == "scipy" for pkg in packages):
+        packages.append(
+            PackageRequirement(
+                distribution="scipy",
+                version="",
+                import_names=("scipy",),
+            )
+        )
+    package_tuple = tuple(packages)
     return OptionalFeatureSpec(
         feature_id="relation_analyzer",
         display_name="关系分析器",
-        packages=packages,
+        packages=package_tuple,
         lock_relative_path="requirements-lock/py311-relation-analyzer.txt",
         requirements_relative_path="requirements-relation-analyzer.txt",
         purpose="从 Ren'Py TL 目录提取人物关系与语义相似度图（独立 CLI：extract_relations.py）。",
-        components=tuple(pkg.distribution for pkg in packages) + ("scipy（scikit-learn 传递）",),
+        components=tuple(pkg.distribution for pkg in package_tuple),
         docs_relative_path="docs/relation_analysis.md",
     )
 
 
 def litellm_feature(repo_root: Path = REPO_ROOT) -> OptionalFeatureSpec:
-    requirements_path = repo_root / "requirements-litellm.txt"
+    requirements_path = Path(repo_root) / "requirements-litellm.txt"
     packages = _parse_pinned_requirements(requirements_path)
     return OptionalFeatureSpec(
         feature_id="litellm",
@@ -150,7 +195,7 @@ def probe_feature(
     installing: bool = False,
     last_failed: bool = False,
 ) -> FeatureStatus:
-    """Derive install state from package metadata without importing heavy modules."""
+    """Derive install state without importing heavy native modules."""
     if installing:
         return FeatureStatus(
             feature_id=feature.feature_id,
@@ -226,11 +271,17 @@ def _installed_versions(packages: Iterable[PackageRequirement]) -> dict[str, str
 
 
 def _missing_packages(packages: Iterable[PackageRequirement]) -> tuple[str, ...]:
-    return tuple(
-        package.distribution
-        for package in packages
-        if not package.metadata_present()
-    )
+    missing: list[str] = []
+    for package in packages:
+        if package.is_present():
+            continue
+        # Prefer a precise label when only the import surface is broken.
+        if package.metadata_present() and not package.import_names_available():
+            names = package.import_names or _default_import_names(package.distribution)
+            missing.append(f"{package.distribution}（模块不可用：{', '.join(names)}）")
+        else:
+            missing.append(package.distribution)
+    return tuple(missing)
 
 
 def _outdated_packages(
@@ -239,6 +290,9 @@ def _outdated_packages(
 ) -> tuple[str, ...]:
     outdated: list[str] = []
     for package in packages:
+        if not package.version:
+            # Presence-only transitive requirements (e.g. scipy).
+            continue
         current = installed_versions.get(package.distribution, "")
         if not current:
             continue
@@ -253,6 +307,14 @@ def _normalize_version(value: str) -> str:
     return str(value or "").strip().split("+", 1)[0]
 
 
+def format_shell_command(parts: Iterable[str]) -> str:
+    """Format an argv list as a pasteable shell command for the current OS."""
+    argv = [str(part) for part in parts]
+    if sys.platform == "win32":
+        return subprocess.list2cmdline(argv)
+    return " ".join(shlex.quote(part) for part in argv)
+
+
 def hash_checked_install_command(
     feature: OptionalFeatureSpec,
     *,
@@ -262,21 +324,47 @@ def hash_checked_install_command(
     """Return the supported reproducible install command for Python 3.11 locks."""
     lock_path = feature.lock_path(repo_root)
     if lock_path.is_file():
-        rel = feature.lock_relative_path.replace("\\", "/")
-        return (
-            f"{python_executable} -m pip install --require-hashes -r {rel}"
+        return format_shell_command(
+            [
+                python_executable,
+                "-m",
+                "pip",
+                "install",
+                "--require-hashes",
+                "-r",
+                str(lock_path),
+            ]
         )
-    rel = feature.requirements_relative_path.replace("\\", "/")
-    return f"{python_executable} -m pip install -r {rel}"
+    requirements_path = feature.requirements_path(repo_root)
+    return format_shell_command(
+        [
+            python_executable,
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            str(requirements_path),
+        ]
+    )
 
 
 def development_install_command(
     feature: OptionalFeatureSpec,
     *,
     python_executable: str = "python",
+    repo_root: Path = REPO_ROOT,
 ) -> str:
-    rel = feature.requirements_relative_path.replace("\\", "/")
-    return f"{python_executable} -m pip install -r {rel}"
+    requirements_path = feature.requirements_path(repo_root)
+    return format_shell_command(
+        [
+            python_executable,
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            str(requirements_path),
+        ]
+    )
 
 
 def missing_feature_cli_message(
@@ -295,6 +383,7 @@ def missing_feature_cli_message(
     dev_command = development_install_command(
         feature,
         python_executable=python_executable,
+        repo_root=repo_root,
     )
     lines = [
         f"❌ 缺少可选功能「{feature.display_name}」的依赖。",
