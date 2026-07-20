@@ -42,6 +42,9 @@ class LiteLLMModelCatalogWorker(QThread):
     def __init__(self, provider: str, parent=None) -> None:
         super().__init__(parent)
         self.provider = provider
+        # Network I/O already yields the GIL; keep the worker low-priority so
+        # the settings form stays snappy while the catalog request is in flight.
+        self.setPriority(QThread.Priority.LowPriority)
 
     def run(self) -> None:
         try:
@@ -68,6 +71,10 @@ class LiteLLMModelCatalogWorker(QThread):
 
 class LiteLLMVersionWorker(QThread):
     completed = Signal(str, str, str, str, object)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setPriority(QThread.Priority.LowPriority)
 
     def run(self) -> None:
         installed = ""
@@ -99,6 +106,7 @@ class LiteLLMConnectionTestWorker(QThread):
         super().__init__(parent)
         self.model = model
         self.api_key = api_key
+        self.setPriority(QThread.Priority.LowPriority)
 
     def run(self) -> None:
         try:

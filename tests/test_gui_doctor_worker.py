@@ -127,7 +127,7 @@ class GuiDoctorWorkerTests(unittest.TestCase):
         import translator_runtime as runtime
 
         cfg = runtime.default_runtime_config()
-        worker = DoctorWorker(config=cfg)
+        worker = DoctorWorker(config=cfg, isolate_process=False)
         payload = DoctorWorkerResult(True, {"mode": "ready"}, "log")
         with mock.patch(
             "gui_qt.doctor_worker.run_doctor_check",
@@ -135,6 +135,39 @@ class GuiDoctorWorkerTests(unittest.TestCase):
         ) as run_mock:
             worker.run()
         run_mock.assert_called_once_with(cfg)
+
+    def test_worker_uses_subprocess_isolation_by_default(self):
+        import translator_runtime as runtime
+
+        cfg = runtime.default_runtime_config()
+        worker = DoctorWorker(config=cfg)
+        payload = DoctorWorkerResult(True, {"mode": "ready"}, "log")
+        with mock.patch(
+            "gui_qt.doctor_worker.run_doctor_check_in_subprocess",
+            return_value=payload,
+        ) as run_mock, mock.patch(
+            "gui_qt.doctor_worker.run_doctor_check",
+        ) as inproc_mock:
+            worker.run()
+        run_mock.assert_called_once()
+        self.assertIs(run_mock.call_args.args[0], cfg)
+        inproc_mock.assert_not_called()
+
+    def test_worker_falls_back_to_inprocess_when_isolation_fails(self):
+        import translator_runtime as runtime
+
+        cfg = runtime.default_runtime_config()
+        worker = DoctorWorker(config=cfg)
+        payload = DoctorWorkerResult(True, {"mode": "ready"}, "log")
+        with mock.patch(
+            "gui_qt.doctor_worker.run_doctor_check_in_subprocess",
+            side_effect=RuntimeError("spawn failed"),
+        ), mock.patch(
+            "gui_qt.doctor_worker.run_doctor_check",
+            return_value=payload,
+        ) as inproc_mock:
+            worker.run()
+        inproc_mock.assert_called_once_with(cfg)
 
 
 if __name__ == "__main__":

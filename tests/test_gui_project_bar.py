@@ -85,9 +85,18 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         self.window._set_task_running(True)
         self.assertFalse(self.window.doctor_btn.isEnabled())
         self.assertFalse(self.window.bootstrap_work_btn.isEnabled())
+        # Settings entry and project list browse stay available; switch is gated.
+        self.assertTrue(self.window.settings_go_workspace_btn.isEnabled())
+        panel = self.window._games_registry_panel
+        self.assertIsNotNone(panel)
+        assert panel is not None
+        self.assertTrue(panel.isEnabled())
+        self.assertTrue(panel._host_task_running)
+        self.assertFalse(panel._switch_btn.isEnabled())
         self.window._set_task_running(False)
         self.assertTrue(self.window.doctor_btn.isEnabled())
         self.assertTrue(self.window.bootstrap_work_btn.isEnabled())
+        self.assertFalse(panel._host_task_running)
 
     def test_global_prep_actions_switch_to_workbench_tab(self) -> None:
         """Doctor / bootstrap from Settings/Diagnostics must reveal Workbench UI."""
@@ -244,6 +253,12 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         panel = self.window.writeback_issues_panel
         self.assertIn(self.window.recheck_btn, panel._items)
         self.assertNotIn(self.window.recheck_btn, self.window.writeback_primary_bar._items)
+
+    def test_writeback_issues_panel_is_right_aligned(self) -> None:
+        panel = self.window.writeback_issues_panel
+        self.assertEqual(panel._align, "right")
+        self.assertTrue(panel._leading_stretch)
+        self.assertFalse(panel._trailing_stretch)
 
 
 if __name__ == "__main__":

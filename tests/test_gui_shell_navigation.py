@@ -224,6 +224,144 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.window._active_command = ""
         self.window._set_task_running(False)
 
+    @patch("gui_qt.app.DoctorWorker")
+    def test_doctor_running_allows_shell_page_navigation(self, worker_cls) -> None:
+        """Environment check must not trap the user on 项目与环境."""
+        worker = worker_cls.return_value
+        worker.isRunning = MagicMock(return_value=True)
+        worker.completed.connect = MagicMock()
+        worker.start = MagicMock()
+        self.window.state.get_game_root = lambda: Path("C:/DemoGame/work")
+        self.window._confirm_unsaved_config_before_workflow = lambda: True
+        self.window._activate_shell_route("project_prepare")
+
+        self.window._on_run_doctor()
+        self.assertEqual(self.window._active_command, "doctor")
+        self.assertTrue(self.window._task_running)
+        self.assertFalse(self.window._context_switching_locked())
+
+        for route in self.window._shell_nav_rows:
+            self.assertTrue(
+                bool(self._route_item(route).flags() & Qt.ItemFlag.ItemIsEnabled),
+                route,
+            )
+
+        keywords_route = _workbench_route(WorkbenchNavItem.KEYWORDS)
+        settings_route = "settings"
+        batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)
+
+        self.window._activate_shell_route(keywords_route)
+        self.assertEqual(self.window._current_shell_route(), keywords_route)
+        self.assertFalse(self.window.workbench_stack.isHidden())
+
+        self.window._activate_shell_route(settings_route)
+        self.assertEqual(self.window._current_shell_route(), settings_route)
+
+        self.window._activate_shell_route(batch_route)
+        self.assertEqual(self.window._current_shell_route(), batch_route)
+
+        self.window._activate_shell_route("project_prepare")
+        self.assertEqual(self.window._current_shell_route(), "project_prepare")
+        self.assertTrue(self.window.workbench_stack.isHidden())
+
+        # Global cancel remains available; project-bar doctor becomes red "停止检查".
+        self.assertTrue(self.window.kill_btn.isEnabled())
+        self.assertTrue(self.window.doctor_btn.isEnabled())
+        self.assertEqual(self.window.doctor_btn.text(), "停止检查")
+        self.assertEqual(self.window.doctor_btn.objectName(), "doctor_stop_btn")
+        self.assertEqual(self.window.header_task_status_label.text(), "环境检查中")
+        self.assertFalse(self.window.translate_btn.isEnabled())
+        # Task pages must not pretend they own the doctor job.
+        self.assertFalse(self.window._task_page_running_chrome())
+        self.assertFalse(self.window.batch_translation_page.buttons["stop"].isEnabled())
+        self.assertFalse(self.window.keywords_page.stop_btn.isEnabled())
+        self.assertFalse(self.window.sync_translation_page.stop_btn.isEnabled())
+        self.assertFalse(self.window.revision_page.stop_btn.isEnabled())
+        self.assertFalse(self.window.context_library_page.stop_btn.isEnabled())
+
+        self.window._doctor_worker = None
+        self.window._active_command = ""
+        self.window._set_task_running(False)
+        self.assertEqual(self.window.doctor_btn.text(), "环境检查")
+        self.assertEqual(self.window.doctor_btn.objectName(), "secondary_btn")
+
+    @patch("gui_qt.app.DoctorWorker")
+    def test_doctor_running_uses_soft_work_mode_switch(self, worker_cls) -> None:
+        """Page switches during doctor must not reload manifests from disk."""
+        worker = worker_cls.return_value
+        worker.isRunning = MagicMock(return_value=True)
+        worker.completed.connect = MagicMock()
+        worker.start = MagicMock()
+        self.window.state.get_game_root = lambda: Path("C:/DemoGame/work")
+        self.window._confirm_unsaved_config_before_workflow = lambda: True
+        self.window._activate_shell_route("project_prepare")
+        self.window._on_run_doctor()
+
+        keywords_route = _workbench_route(WorkbenchNavItem.KEYWORDS)
+        with patch.object(self.window, "_set_work_mode") as set_mode:
+            self.window._activate_shell_route(keywords_route)
+            set_mode.assert_called()
+            kwargs = set_mode.call_args.kwargs
+            self.assertFalse(kwargs.get("refresh_manifest_writeback", True))
+
+        self.window._doctor_worker = None
+        self.window._active_command = ""
+        self.window._set_task_running(False)
+
+    @patch("gui_qt.app.DoctorWorker")
+    def test_doctor_stop_control_stays_on_project_bar(self, worker_cls) -> None:
+        """Cancel environment check from 项目与环境, not via foreign page stop buttons."""
+        worker = worker_cls.return_value
+        worker.isRunning = MagicMock(return_value=True)
+        worker.completed.connect = MagicMock()
+        worker.start = MagicMock()
+        self.window.state.get_game_root = lambda: Path("C:/DemoGame/work")
+        self.window._confirm_unsaved_config_before_workflow = lambda: True
+        self.window._activate_shell_route("project_prepare")
+        self.window._on_run_doctor()
+
+        batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)
+        self.window._activate_shell_route(batch_route)
+        # Idle-style chrome: start remains visible (disabled), stop is not armed.
+        start = self.window.batch_translation_page.buttons["start"]
+        stop = self.window.batch_translation_page.buttons["stop"]
+        self.assertFalse(start.isHidden())
+        self.assertFalse(start.isEnabled())
+        self.assertFalse(stop.isEnabled())
+
+        self.window._activate_shell_route("project_prepare")
+        self.assertEqual(self.window.doctor_btn.text(), "停止检查")
+        with patch.object(self.window, "_on_kill") as on_kill:
+            self.window.doctor_btn.click()
+            on_kill.assert_called_once_with()
+
+        self.window._doctor_worker = None
+        self.window._active_command = ""
+        self.window._set_task_running(False)
+
+    def test_generate_template_uses_project_bar_cancel(self) -> None:
+        self.window.state.get_game_root = lambda: Path("C:/DemoGame/work")
+        self.window._confirm_unsaved_config_before_workflow = lambda: True
+        self.window.runner.run = MagicMock()
+
+        self.window._on_generate_template()
+
+        self.assertEqual(self.window._active_command, "generate_template")
+        self.assertEqual(self.window._current_shell_route(), "project_prepare")
+        self.assertEqual(self.window.doctor_btn.text(), "停止生成")
+        self.assertEqual(self.window.doctor_btn.objectName(), "doctor_stop_btn")
+        self.assertTrue(self.window.doctor_btn.isEnabled())
+        self.assertEqual(self.window.header_task_status_label.text(), "生成模板中")
+        self.assertEqual(self.window.kill_btn.text(), "停止生成")
+        with patch.object(self.window, "_on_kill") as on_kill:
+            self.window.doctor_btn.click()
+            on_kill.assert_called_once_with()
+
+        self.window._active_command = ""
+        self.window._set_task_running(False)
+        self.assertEqual(self.window.doctor_btn.text(), "环境检查")
+        self.assertEqual(self.window.kill_btn.text(), "停止")
+
     def test_bootstrap_launch_preserves_and_can_return_to_project_route(self) -> None:
         self.window.state.get_game_root = lambda: Path("C:/DemoGame/work")
         self.window._confirm_unsaved_config_before_workflow = lambda: True
@@ -235,6 +373,11 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.assertEqual(self.window.workbench_status_tabs.currentIndex(), 0)
         project_item = self._route_item("project_prepare")
         self.assertTrue(bool(project_item.flags() & Qt.ItemFlag.ItemIsEnabled))
+        # Visible cancel on project bar (legacy kill lives on a hidden panel).
+        self.assertEqual(self.window.bootstrap_work_btn.text(), "停止准备")
+        self.assertEqual(self.window.bootstrap_work_btn.objectName(), "bootstrap_stop_btn")
+        self.assertTrue(self.window.bootstrap_work_btn.isEnabled())
+        self.assertEqual(self.window.header_task_status_label.text(), "准备工作目录中")
         self.window._activate_shell_route("settings")
         self.window._activate_shell_route("project_prepare")
         self.assertEqual(self.window._current_shell_route(), "project_prepare")
@@ -242,6 +385,8 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.window.runner.run.assert_called_once()
         self.window._active_command = ""
         self.window._set_task_running(False)
+        self.assertEqual(self.window.bootstrap_work_btn.text(), "准备工作目录")
+        self.assertEqual(self.window.bootstrap_work_btn.objectName(), "secondary_btn")
         for route in self.window._shell_nav_rows:
             self.assertTrue(
                 bool(self._route_item(route).flags() & Qt.ItemFlag.ItemIsEnabled),
@@ -279,6 +424,31 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.assertTrue(tab_bar.isTabVisible(1))
         self.assertTrue(tab_bar.isTabVisible(2))
         self.assertEqual(self.window.workbench_status_tabs.currentIndex(), 2)
+
+    def test_workflow_empty_cta_navigates_to_project_prepare(self) -> None:
+        """Task-page empty CTA must open 项目与环境, not a hidden status tab."""
+        batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)
+        self.window._activate_shell_route(batch_route)
+        self.window.state.get_game_root = lambda: None  # type: ignore[method-assign]
+        self.window._workflow = None
+        self.window._writeback_manifest_path = ""
+        self.window._sync_workbench_empty_states()
+
+        empty = self.window.workflow_empty_state
+        self.assertFalse(empty.isHidden())
+        btn = empty._action_btn
+        self.assertIsNotNone(btn)
+        assert btn is not None
+        self.assertEqual(btn.text(), "去环境检查")
+
+        btn.click()
+        self._app.processEvents()
+
+        self.assertEqual(self.window._current_shell_route(), "project_prepare")
+        self.assertEqual(self.window.workbench_status_tabs.currentIndex(), 0)
+        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(0))
+        self.assertTrue(self.window.workbench_stack.isHidden())
+        self.assertFalse(self.window.global_project_bar.isHidden())
 
     def test_project_route_does_not_pollute_task_status_sessions(self) -> None:
         batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)

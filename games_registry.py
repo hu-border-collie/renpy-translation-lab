@@ -532,7 +532,29 @@ def _temporary_game_root(work_dir: str) -> Iterator[None]:
             runtime.apply_runtime_config(previous)
 
 
-def _doctor_layout_snapshot(game_root: str, has_tl: bool) -> tuple[str, str]:
+def _doctor_layout_snapshot_entry(game_root: str, result_queue) -> None:
+    """Top-level spawn entry so deep refresh does not hold the GUI process GIL."""
+    try:
+        import gemini_translate_batch as batch_mod
+    except Exception as exc:
+        result_queue.put(("__error__", f"doctor module import failed for {game_root}: {exc}"))
+        return
+    try:
+        with _temporary_game_root(game_root):
+            report = batch_mod.collect_doctor_report()
+        result_queue.put(
+            (
+                str(report.get("layout_status") or ""),
+                str(report.get("mode") or ""),
+            )
+        )
+    except Exception as exc:
+        result_queue.put(
+            ("__error__", f"doctor report collection failed for {game_root}: {exc}")
+        )
+
+
+def _doctor_layout_snapshot_inprocess(game_root: str) -> tuple[str, str]:
     try:
         import gemini_translate_batch as batch_mod
     except Exception as exc:
@@ -553,6 +575,64 @@ def _doctor_layout_snapshot(game_root: str, has_tl: bool) -> tuple[str, str]:
         return "", ""
 
     return str(report.get("layout_status") or ""), str(report.get("mode") or "")
+
+
+def _doctor_layout_snapshot(game_root: str, has_tl: bool) -> tuple[str, str]:
+    """Run doctor layout/mode probe, preferring a child process for GUI hosts.
+
+    Deep registry refresh previously called ``collect_doctor_report`` inside a
+    QThread in the GUI process, which starves the event loop via the GIL. Spawn
+    isolation keeps Settings browseable during depth refresh.
+    """
+    del has_tl  # retained for call-site compatibility
+    try:
+        import multiprocessing as mp
+
+        ctx = mp.get_context("spawn")
+        result_queue = ctx.Queue(1)
+        proc = ctx.Process(
+            target=_doctor_layout_snapshot_entry,
+            args=(game_root, result_queue),
+            daemon=True,
+        )
+        proc.start()
+        proc.join(timeout=900)
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=2)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(timeout=1)
+            warnings.warn(
+                f"doctor layout snapshot timed out for {game_root}",
+                stacklevel=2,
+            )
+            return "", ""
+        try:
+            payload = result_queue.get(timeout=1.0)
+        except Exception:
+            warnings.warn(
+                f"doctor layout snapshot returned no result for {game_root}",
+                stacklevel=2,
+            )
+            return "", ""
+        if (
+            isinstance(payload, tuple)
+            and len(payload) == 2
+            and payload[0] == "__error__"
+        ):
+            warnings.warn(str(payload[1]), stacklevel=2)
+            return "", ""
+        if isinstance(payload, tuple) and len(payload) == 2:
+            return str(payload[0] or ""), str(payload[1] or "")
+        return "", ""
+    except Exception as exc:
+        warnings.warn(
+            f"doctor layout snapshot subprocess failed for {game_root}: {exc}; "
+            "falling back to in-process doctor",
+            stacklevel=2,
+        )
+        return _doctor_layout_snapshot_inprocess(game_root)
 
 
 def suggest_translation_status(project: dict[str, Any], auto: dict[str, Any]) -> str:

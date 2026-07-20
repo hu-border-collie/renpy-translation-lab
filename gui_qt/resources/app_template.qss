@@ -1050,7 +1050,11 @@ QPushButton#context_bootstrap_source_index_btn:focus {
 QPushButton#secondary_btn:focus,
 QPushButton#split_select_btn:focus,
 QPushButton#kill_btn:focus,
+QPushButton#doctor_stop_btn:focus,
+QPushButton#bootstrap_stop_btn:focus,
 QPushButton#sync_translation_stop_btn:focus,
+QPushButton#keywords_stop_btn:focus,
+QPushButton#revision_stop_btn:focus,
 QPushButton#context_library_stop_btn:focus,
 QPushButton#apply_btn:focus,
 QPushButton#apply_revision_btn:focus {
@@ -1093,7 +1097,11 @@ QPushButton#split_select_btn:disabled {
 
 /* Danger Action Button (stop / kill) */
 QPushButton#kill_btn,
+QPushButton#doctor_stop_btn,
+QPushButton#bootstrap_stop_btn,
 QPushButton#sync_translation_stop_btn,
+QPushButton#keywords_stop_btn,
+QPushButton#revision_stop_btn,
 QPushButton#context_library_stop_btn {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 ${gradient_danger_start}, stop:1 ${gradient_danger_end});
     border: none;
@@ -1102,19 +1110,31 @@ QPushButton#context_library_stop_btn {
 }
 
 QPushButton#kill_btn:hover,
+QPushButton#doctor_stop_btn:hover,
+QPushButton#bootstrap_stop_btn:hover,
 QPushButton#sync_translation_stop_btn:hover,
+QPushButton#keywords_stop_btn:hover,
+QPushButton#revision_stop_btn:hover,
 QPushButton#context_library_stop_btn:hover {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 ${gradient_danger_hover_start}, stop:1 ${gradient_danger_hover_end});
 }
 
 QPushButton#kill_btn:pressed,
+QPushButton#doctor_stop_btn:pressed,
+QPushButton#bootstrap_stop_btn:pressed,
 QPushButton#sync_translation_stop_btn:pressed,
+QPushButton#keywords_stop_btn:pressed,
+QPushButton#revision_stop_btn:pressed,
 QPushButton#context_library_stop_btn:pressed {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 ${gradient_danger_pressed_start}, stop:1 ${gradient_danger_pressed_end});
 }
 
 QPushButton#kill_btn:disabled,
+QPushButton#doctor_stop_btn:disabled,
+QPushButton#bootstrap_stop_btn:disabled,
 QPushButton#sync_translation_stop_btn:disabled,
+QPushButton#keywords_stop_btn:disabled,
+QPushButton#revision_stop_btn:disabled,
 QPushButton#context_library_stop_btn:disabled {
     background-color: ${bg_danger_disabled};
     border: 1px solid ${border_danger_disabled};
