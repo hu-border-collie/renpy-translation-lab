@@ -93,12 +93,12 @@ class ContextLibraryPage(QFrame):
         self.open_settings_btn.clicked.connect(self._trigger_open_settings)
         self.context_actions.add_action(self.open_settings_btn, min_width=140)
 
-        self.stop_btn = QPushButton("停止")
+        self.stop_btn = QPushButton("停止预建")
         self.stop_btn.setObjectName("context_library_stop_btn")
         self.stop_btn.setToolTip("停止当前预建任务")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._trigger_stop)
-        self.context_actions.add_action(self.stop_btn, min_width=80)
+        self.context_actions.add_action(self.stop_btn, min_width=100)
         self.context_actions.finish_setup()
 
         self.status_layout.root.addStretch(1)

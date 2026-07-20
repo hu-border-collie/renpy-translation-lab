@@ -350,6 +350,11 @@ class FlowButtonBar(QFrame):
 
     Intended for primary writeback actions, recovery tools, global project
     actions, and other flat button strips that previously overflowed.
+
+    ``align`` controls horizontal placement of each row's controls:
+    - ``"left"`` (default): trailing stretch, buttons hug the left edge
+    - ``"right"``: leading stretch, buttons hug the right edge (e.g. under
+      a right-side 「问题处理」 toggle)
     """
 
     def __init__(
@@ -357,13 +362,18 @@ class FlowButtonBar(QFrame):
         *,
         spacing: int = 8,
         row_spacing: int = 8,
+        align: str = "left",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        if align not in {"left", "right"}:
+            raise ValueError(f"Unsupported FlowButtonBar align: {align!r}")
         self._spacing = spacing
         self._row_spacing = row_spacing
         self._items: list[QWidget] = []
-        self._trailing_stretch = True
+        self._align = align
+        self._trailing_stretch = align == "left"
+        self._leading_stretch = align == "right"
         self._signature: tuple[object, ...] | None = None
         self._row_count = 1
         self._reflowing = False
@@ -386,6 +396,9 @@ class FlowButtonBar(QFrame):
         return widget
 
     def add_stretch_end(self, enabled: bool = True) -> None:
+        """Keep a trailing stretch (left-aligned rows). Ignored when align=right."""
+        if self._align == "right":
+            return
         self._trailing_stretch = enabled
 
     def finish_setup(self) -> None:
@@ -442,12 +455,19 @@ class FlowButtonBar(QFrame):
         visible = tuple(
             (id(w), w.isHidden(), widget_layout_width(w)) for w in self._items
         )
-        return (available, visible)
+        return (available, self._align, visible)
 
     def _visible_items(self) -> list[QWidget]:
         # Prefer explicitly non-hidden widgets; before first show treat all as visible.
         shown = [w for w in self._items if not w.isHidden()]
         return shown if shown else list(self._items)
+
+    def _new_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(self._spacing)
+        if self._leading_stretch:
+            row.addStretch(1)
+        return row
 
     def _rebuild(self) -> None:
         clear_layout(self._root)
@@ -458,8 +478,7 @@ class FlowButtonBar(QFrame):
             return
 
         available = max(120, effective_widget_width(self, fallback=800) - 8)
-        row = QHBoxLayout()
-        row.setSpacing(self._spacing)
+        row = self._new_row()
         used = 0
         rows = 0
 
@@ -469,9 +488,7 @@ class FlowButtonBar(QFrame):
                 current.addStretch(1)
             self._root.addLayout(current)
             rows += 1
-            nxt = QHBoxLayout()
-            nxt.setSpacing(self._spacing)
-            return nxt
+            return self._new_row()
 
         for widget in items:
             need = widget_layout_width(widget) + (self._spacing if used else 0)

@@ -517,10 +517,87 @@ class MainWindow(QMainWindow):
             "图形界面是可选组件；核心命令行不受影响。"
         )
 
+    def _shell_nav_shortcut_entries(self) -> list[tuple[str, str]]:
+        """Canonical sidebar destinations for navigation shortcuts.
+
+        Fixed order matching ``_populate_shell_nav`` so the Settings catalog can
+        be built before the shell list is populated, and stays aligned with IA.
+        """
+        return [
+            (_SHELL_ROUTE_PROJECT_PREPARE, "项目与环境"),
+            (
+                f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.BATCH_TRANSLATION.value}",
+                workbench_nav_spec(WorkbenchNavItem.BATCH_TRANSLATION).label,
+            ),
+            (
+                f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.SYNC_TRANSLATION.value}",
+                workbench_nav_spec(WorkbenchNavItem.SYNC_TRANSLATION).label,
+            ),
+            (
+                f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.KEYWORDS.value}",
+                "关键词 / 术语",
+            ),
+            (
+                f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.REVISION.value}",
+                workbench_nav_spec(WorkbenchNavItem.REVISION).label,
+            ),
+            (
+                f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.CONTEXT.value}",
+                workbench_nav_spec(WorkbenchNavItem.CONTEXT).label,
+            ),
+            (_SHELL_ROUTE_SETTINGS, "设置"),
+        ]
+
+    def _shortcut_catalog(self) -> list[tuple[str, list[tuple[str, str]]]]:
+        """Human-readable shortcut groups for the Settings · 快捷键 page.
+
+        Mirrors the current shell IA (sidebar routes + page-header diagnostics),
+        not the legacy hidden main-tab indices.
+        """
+        nav_rows: list[tuple[str, str]] = []
+        for index, (_route, label) in enumerate(
+            self._shell_nav_shortcut_entries(),
+            start=1,
+        ):
+            if index > 9:
+                break
+            nav_rows.append((f"Ctrl+{index}", f"打开「{label}」"))
+        nav_rows.append(("Ctrl+0", "打开「诊断与运行日志」"))
+
+        return [
+            (
+                "任务",
+                [
+                    ("Ctrl+D", "环境检查（运行中变为停止检查）"),
+                    (
+                        "Ctrl+T",
+                        "开始当前任务（翻译 / 生成模板 / 提取等，取决于当前页）",
+                    ),
+                    (
+                        "Ctrl+K",
+                        "停止当前任务（含环境检查、准备工作目录、生成模板、预建）",
+                    ),
+                ],
+            ),
+            (
+                "导航",
+                nav_rows,
+            ),
+            (
+                "日志与设置",
+                [
+                    ("Ctrl+L", "打开「诊断与运行日志」"),
+                    ("Ctrl+Shift+L", "清空诊断日志输出"),
+                    ("Ctrl+S", "保存设置（仅在「设置」页有效）"),
+                ],
+            ),
+        ]
+
     def _setup_shortcuts(self) -> None:
-        """Bind global keyboard shortcuts and update button tooltips."""
+        """Bind global keyboard shortcuts aligned with the shell information architecture."""
         self._doctor_shortcut = QShortcut(QKeySequence("Ctrl+D"), self)
-        self._doctor_shortcut.activated.connect(self._on_run_doctor)
+        # Use the project-bar dispatcher so Ctrl+D can also cancel doctor / template.
+        self._doctor_shortcut.activated.connect(self._on_doctor_button_clicked)
 
         self._translate_shortcut = QShortcut(QKeySequence("Ctrl+T"), self)
         self._translate_shortcut.activated.connect(self._on_start_translation)
@@ -528,27 +605,48 @@ class MainWindow(QMainWindow):
         self._kill_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
         self._kill_shortcut.activated.connect(self._on_kill)
 
-        clear_log_shortcut = QShortcut(QKeySequence("Ctrl+L"), self)
-        clear_log_shortcut.activated.connect(self._on_clear_log)
+        self._open_diagnostics_shortcut = QShortcut(QKeySequence("Ctrl+L"), self)
+        self._open_diagnostics_shortcut.activated.connect(
+            lambda: self._activate_shell_route(_SHELL_ROUTE_DIAGNOSTICS)
+        )
+
+        self._clear_log_shortcut = QShortcut(QKeySequence("Ctrl+Shift+L"), self)
+        self._clear_log_shortcut.activated.connect(self._on_clear_log)
 
         # Config save — only active when config tab is shown
         self._save_config_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
         self._save_config_shortcut.activated.connect(self._shortcut_save_config)
 
-        # Tab switching
-        for i in range(min(3, self.tab_widget.count())):
-            sc = QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self)
-            sc.activated.connect(lambda idx=i: self.tab_widget.setCurrentIndex(idx))
+        # Primary shell destinations (sidebar order), not legacy main-tab indices.
+        self._shell_route_shortcuts: list[QShortcut] = []
+        for index, (route, _label) in enumerate(
+            self._shell_nav_shortcut_entries(),
+            start=1,
+        ):
+            if index > 9:
+                break
+            sc = QShortcut(QKeySequence(f"Ctrl+{index}"), self)
+            sc.activated.connect(
+                lambda checked=False, target=route: self._activate_shell_route(target)
+            )
+            self._shell_route_shortcuts.append(sc)
+
+        self._diagnostics_nav_shortcut = QShortcut(QKeySequence("Ctrl+0"), self)
+        self._diagnostics_nav_shortcut.activated.connect(
+            lambda: self._activate_shell_route(_SHELL_ROUTE_DIAGNOSTICS)
+        )
 
         # Button tooltips with shortcut hints
         if hasattr(self, "doctor_btn"):
             self.doctor_btn.setToolTip("环境检查 (Ctrl+D)")
         if hasattr(self, "translate_btn"):
-            self.translate_btn.setToolTip("开始翻译 (Ctrl+T)")
+            self.translate_btn.setToolTip("开始当前任务 (Ctrl+T)")
         if hasattr(self, "kill_btn"):
             self.kill_btn.setToolTip("停止任务 (Ctrl+K)")
+        if hasattr(self, "header_log_btn"):
+            self.header_log_btn.setToolTip("诊断与运行日志 (Ctrl+L / Ctrl+0)")
         if hasattr(self, "clear_log_btn"):
-            self.clear_log_btn.setToolTip("清空日志 (Ctrl+L)")
+            self.clear_log_btn.setToolTip("清空日志 (Ctrl+Shift+L)")
         if hasattr(self, "save_config_btn"):
             self.save_config_btn.setToolTip("保存设置 (Ctrl+S)")
 
@@ -873,7 +971,7 @@ class MainWindow(QMainWindow):
         if route.startswith(_SHELL_WORKBENCH_PREFIX):
             nav_value = route[len(_SHELL_WORKBENCH_PREFIX):]
             nav_item = WorkbenchNavItem(nav_value)
-            if bool(getattr(self, "_task_running", False)):
+            if self._context_switching_locked():
                 if nav_item != workbench_nav_for_work_mode(self._current_work_mode()):
                     self._sync_shell_nav_selection()
                     return
@@ -888,7 +986,14 @@ class MainWindow(QMainWindow):
                 default_work_mode_for_nav(nav_item),
             )
             if target_mode != self._current_work_mode():
-                self._set_work_mode(target_mode, refresh_manifest_writeback=True)
+                # During 环境检查, restore from session snapshots only. Disk
+                # manifest reloads on the UI thread compete with doctor work and
+                # make page switches feel frozen.
+                refresh_disk = not self._is_doctor_active()
+                self._set_work_mode(
+                    target_mode,
+                    refresh_manifest_writeback=refresh_disk,
+                )
             else:
                 self._sync_task_selectors_from_work_mode()
         elif route == _SHELL_ROUTE_PROJECT_PREPARE:
@@ -1017,10 +1122,140 @@ class MainWindow(QMainWindow):
         self.shell_page_subtitle.setText(subtitle)
         self._refresh_shell_status()
 
+    def _is_doctor_active(self) -> bool:
+        """True while an environment check owns the global task slot."""
+        if getattr(self, "_active_command", "") == "doctor":
+            return True
+        return self._is_doctor_running()
+
+    def _context_switching_locked(self) -> bool:
+        """Whether a running job should freeze workbench context switches.
+
+        Environment check (doctor) is a read-only prep diagnostic: keep shell
+        navigation free so users can browse other pages while it finishes.
+        """
+        if not bool(getattr(self, "_task_running", False)):
+            return False
+        if self._is_doctor_active():
+            return False
+        return True
+
+    def _task_page_running_chrome(self) -> bool:
+        """Whether task pages should show page-owned stop / running chrome.
+
+        Doctor is a project-prep job. Translation and asset pages must not look
+        like they own it (which previously enabled mismatched stop buttons).
+        """
+        if not bool(getattr(self, "_task_running", False)):
+            return False
+        if self._is_doctor_active():
+            return False
+        return True
+
+    def _is_bootstrap_work_active(self) -> bool:
+        """True while 准备工作目录 owns the global task slot."""
+        return getattr(self, "_active_command", "") == "bootstrap_work"
+
+    def _is_generate_template_active(self) -> bool:
+        return getattr(self, "_active_command", "") == "generate_template"
+
+    def _task_stop_button_label(self) -> str:
+        """Contextual stop label for page-local and legacy kill controls."""
+        command = getattr(self, "_active_command", "")
+        if command == "generate_template":
+            return "停止生成"
+        if command in {"bootstrap_rag", "bootstrap_source_index"}:
+            return "停止预建"
+        if command == "bootstrap_work":
+            return "停止准备"
+        if command == "doctor":
+            return "停止检查"
+        return "停止"
+
+    def _sync_doctor_prep_button_chrome(self) -> None:
+        """Project-bar doctor control: run check / cancel doctor or template gen."""
+        if not hasattr(self, "doctor_btn"):
+            return
+        # generate-template results land in the doctor summary surface; reuse the
+        # project-bar control so cancel stays visible when status is focused there.
+        if self._is_generate_template_active():
+            self.doctor_btn.setText("停止生成")
+            self.doctor_btn.setObjectName("doctor_stop_btn")
+            self.doctor_btn.setEnabled(True)
+            self.doctor_btn.setToolTip("停止生成翻译模板 (Ctrl+K)")
+            self._repolish_widget(self.doctor_btn)
+            self._apply_doctor_prep_button_icon(stopping=True)
+            return
+        if self._is_doctor_active():
+            self.doctor_btn.setText("停止检查")
+            self.doctor_btn.setObjectName("doctor_stop_btn")
+            self.doctor_btn.setEnabled(True)
+            self.doctor_btn.setToolTip("停止环境检查 (Ctrl+K)")
+            self._repolish_widget(self.doctor_btn)
+            self._apply_doctor_prep_button_icon(stopping=True)
+            return
+        running = bool(getattr(self, "_task_running", False))
+        self.doctor_btn.setText("环境检查")
+        self.doctor_btn.setObjectName("secondary_btn")
+        self.doctor_btn.setEnabled(not running)
+        self.doctor_btn.setToolTip("环境检查 (Ctrl+D)")
+        self._repolish_widget(self.doctor_btn)
+        self._apply_doctor_prep_button_icon(stopping=False)
+
+    def _apply_doctor_prep_button_icon(self, *, stopping: bool) -> None:
+        """Use the red stop icon while cancelling 环境检查; stethoscope otherwise."""
+        if not hasattr(self, "doctor_btn") or not hasattr(self, "_resources_dir"):
+            return
+        set_tabler_button_icon(
+            self.doctor_btn,
+            self._resources_dir,
+            "player-stop" if stopping else "stethoscope",
+            dark=self._effective_theme_is_dark(),
+            role="danger" if stopping else "default",
+        )
+
+    def _sync_bootstrap_prep_button_chrome(self) -> None:
+        """Project-bar bootstrap control: prepare work dir, or cancel while active.
+
+        Legacy kill_btn lives on a hidden action panel; without this chrome the
+        user has no visible cancel on 项目与环境 during 准备工作目录.
+        """
+        if not hasattr(self, "bootstrap_work_btn"):
+            return
+        if self._is_bootstrap_work_active():
+            self.bootstrap_work_btn.setText("停止准备")
+            self.bootstrap_work_btn.setObjectName("bootstrap_stop_btn")
+            self.bootstrap_work_btn.setEnabled(True)
+            self.bootstrap_work_btn.setToolTip("停止准备工作目录 (Ctrl+K)")
+            self._repolish_widget(self.bootstrap_work_btn)
+            self._apply_bootstrap_prep_button_icon(stopping=True)
+            return
+        running = bool(getattr(self, "_task_running", False))
+        self.bootstrap_work_btn.setText("准备工作目录")
+        self.bootstrap_work_btn.setObjectName("secondary_btn")
+        self.bootstrap_work_btn.setEnabled(not running)
+        self.bootstrap_work_btn.setToolTip(
+            "从 original/game 复制到 work/game（若已存在则按 CLI 规则跳过或更新）。"
+        )
+        self._repolish_widget(self.bootstrap_work_btn)
+        self._apply_bootstrap_prep_button_icon(stopping=False)
+
+    def _apply_bootstrap_prep_button_icon(self, *, stopping: bool) -> None:
+        if not hasattr(self, "bootstrap_work_btn") or not hasattr(self, "_resources_dir"):
+            return
+        set_tabler_button_icon(
+            self.bootstrap_work_btn,
+            self._resources_dir,
+            "player-stop" if stopping else "folder-cog",
+            dark=self._effective_theme_is_dark(),
+            role="danger" if stopping else "default",
+        )
+
     def _set_shell_nav_task_lock(self, running: bool) -> None:
         nav = getattr(self, "shell_nav", None)
         if nav is None:
             return
+        lock_task_routes = running and self._context_switching_locked()
         active_task_route = (
             f"{_SHELL_WORKBENCH_PREFIX}"
             f"{workbench_nav_for_work_mode(self._current_work_mode()).value}"
@@ -1030,7 +1265,7 @@ class MainWindow(QMainWindow):
             if item is None:
                 continue
             enabled = True
-            if running and route in _SHELL_TASK_ROUTES:
+            if lock_task_routes and route in _SHELL_TASK_ROUTES:
                 enabled = route == active_task_route
             flags = Qt.ItemFlag.ItemIsSelectable
             if enabled:
@@ -1115,7 +1350,22 @@ class MainWindow(QMainWindow):
         running = bool(getattr(self, "_task_running", False))
         header_status = getattr(self, "header_task_status_label", None)
         if header_status is not None:
-            header_status.setText("任务运行中" if running else "待命")
+            if not running:
+                status_text = "待命"
+            elif self._is_doctor_active():
+                status_text = "环境检查中"
+            elif self._is_bootstrap_work_active():
+                status_text = "准备工作目录中"
+            elif self._is_generate_template_active():
+                status_text = "生成模板中"
+            elif getattr(self, "_active_command", "") in {
+                "bootstrap_rag",
+                "bootstrap_source_index",
+            }:
+                status_text = "预建中"
+            else:
+                status_text = "任务运行中"
+            header_status.setText(status_text)
             header_status.setProperty("status", "running" if running else "idle")
             self._repolish_widget(header_status)
 
@@ -1188,7 +1438,7 @@ class MainWindow(QMainWindow):
         self.doctor_btn = QPushButton("环境检查")
         self.doctor_btn.setObjectName("secondary_btn")
         self.doctor_btn.setToolTip("环境检查 (Ctrl+D)")
-        self.doctor_btn.clicked.connect(self._on_run_doctor)
+        self.doctor_btn.clicked.connect(self._on_doctor_button_clicked)
         self.global_project_actions.add_widget(self.doctor_btn, min_width=108)
 
         self.bootstrap_work_btn = QPushButton("准备工作目录")
@@ -1196,7 +1446,7 @@ class MainWindow(QMainWindow):
         self.bootstrap_work_btn.setToolTip(
             "从 original/game 复制到 work/game（若已存在则按 CLI 规则跳过或更新）。"
         )
-        self.bootstrap_work_btn.clicked.connect(self._on_bootstrap_work)
+        self.bootstrap_work_btn.clicked.connect(self._on_bootstrap_button_clicked)
         self.global_project_actions.add_widget(self.bootstrap_work_btn, min_width=108)
 
         self.global_project_actions.finish_setup()
@@ -1585,8 +1835,11 @@ class MainWindow(QMainWindow):
             action_text="去环境检查",
         )
         self.workflow_empty_state.setObjectName("workflow_empty_state")
+        # Environment check lives on the project-prepare shell route; the
+        # prepare status tab is hidden on task pages, so tab-index focus alone
+        # would be remapped to 进度 and appear to do nothing.
         self.workflow_empty_state.action_clicked.connect(
-            lambda: self._focus_workbench_status_tab(_BATCH_STAGE_PREPARE)
+            lambda: self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
         )
         workflow_layout.addWidget(self.workflow_empty_state)
         self.workflow_empty_state.setVisible(False)
@@ -1748,7 +2001,10 @@ class MainWindow(QMainWindow):
         primary_row.addWidget(self.writeback_issues_badge, 0)
         writeback_layout.addLayout(primary_row)
 
-        self.writeback_issues_panel = FlowButtonBar(spacing=8, row_spacing=8)
+        # Right-align under the primary-row 「问题处理」 toggle.
+        self.writeback_issues_panel = FlowButtonBar(
+            spacing=8, row_spacing=8, align="right"
+        )
         self.writeback_issues_panel.setObjectName("writeback_issues_panel")
         self.check_issues_btn = QPushButton("查看问题清单")
         self.check_issues_btn.setObjectName("secondary_btn")
@@ -1879,9 +2135,7 @@ class MainWindow(QMainWindow):
             idx_on = bool(flags.get("source_index_enabled"))
             game_root = self.state.get_game_root() if hasattr(self, "state") else None
             if running is None:
-                running = bool(getattr(self, "_task_running", False)) or (
-                    hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
-                )
+                running = self._task_page_running_chrome()
             page.set_context_status(
                 rag_enabled=rag_on,
                 source_index_enabled=idx_on,
@@ -1961,6 +2215,7 @@ class MainWindow(QMainWindow):
             ("extensions", "扩展", self._build_settings_extensions_page()),
             ("context", "上下文", self._build_settings_context_page()),
             ("appearance", "外观", self._build_settings_appearance_page()),
+            ("shortcuts", "快捷键", self._build_settings_shortcuts_page()),
             ("advanced", "高级", self._build_settings_advanced_page()),
         ]
         for index, (key, label, page) in enumerate(pages):
@@ -2621,6 +2876,33 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return page
 
+    def _build_settings_shortcuts_page(self) -> QWidget:
+        """Read-only catalog of global GUI keyboard shortcuts."""
+        page, layout = self._settings_page("settings_shortcuts")
+        intro = QLabel(
+            "以下为图形工作台当前生效的全局快捷键。"
+            "任务类快捷键会在对应按钮禁用时同步关闭；"
+            "导航类快捷键在任务运行中会遵循锁定规则（不可切换到其它任务页）。"
+        )
+        intro.setWordWrap(True)
+        intro.setObjectName("config_hint_label")
+        layout.addWidget(intro)
+
+        for group_title, rows in self._shortcut_catalog():
+            box = QGroupBox(group_title)
+            form = self._settings_form(box)
+            for key, meaning in rows:
+                value = QLabel(meaning)
+                value.setWordWrap(True)
+                value.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                form.addRow(f"{key}：", value)
+            layout.addWidget(box)
+
+        layout.addStretch(1)
+        return page
+
     def _build_settings_advanced_page(self) -> QWidget:
         page, layout = self._settings_page("settings_advanced")
         hint = QLabel(
@@ -3178,8 +3460,22 @@ class MainWindow(QMainWindow):
             (getattr(self, "header_log_btn", None), "file-text", "default"),
             (getattr(self, "global_switch_project_btn", None), "folder-open", "default"),
             (getattr(self, "global_browse_project_btn", None), "folder-open", "default"),
-            (getattr(self, "doctor_btn", None), "stethoscope", "default"),
-            (getattr(self, "bootstrap_work_btn", None), "folder-cog", "default"),
+            (
+                getattr(self, "doctor_btn", None),
+                *(
+                    ("player-stop", "danger")
+                    if self._is_doctor_active() or self._is_generate_template_active()
+                    else ("stethoscope", "default")
+                ),
+            ),
+            (
+                getattr(self, "bootstrap_work_btn", None),
+                *(
+                    ("player-stop", "danger")
+                    if self._is_bootstrap_work_active()
+                    else ("folder-cog", "default")
+                ),
+            ),
             (getattr(self, "translate_btn", None), "language", "on_accent"),
             (getattr(self, "resume_btn", None), "player-play", "default"),
             (getattr(self, "kill_btn", None), "player-stop", "danger"),
@@ -3215,7 +3511,7 @@ class MainWindow(QMainWindow):
                 (
                     (keywords_page.start_btn, "language", "on_accent"),
                     (keywords_page.resume_btn, "player-play", "default"),
-                    (keywords_page.stop_btn, "player-stop", "default"),
+                    (keywords_page.stop_btn, "player-stop", "danger"),
                     (keywords_page.merge_btn, "file-import", "default"),
                 )
             )
@@ -3226,7 +3522,7 @@ class MainWindow(QMainWindow):
                 (
                     (revision_page.start_btn, "file-text", "on_accent"),
                     (revision_page.resume_btn, "player-play", "default"),
-                    (revision_page.stop_btn, "player-stop", "default"),
+                    (revision_page.stop_btn, "player-stop", "danger"),
                     (revision_page.writeback_btn, "file-import", "default"),
                 )
             )
@@ -5555,7 +5851,7 @@ class MainWindow(QMainWindow):
         self._workbench_coordinator.activate(
             mode,
             session or WorkbenchModeSession(),
-            running=bool(getattr(self, "_task_running", False)),
+            running=self._task_page_running_chrome(),
         )
         if nav_item == WorkbenchNavItem.BATCH_TRANSLATION:
             self._sync_batch_translation_page_controls()
@@ -5570,7 +5866,7 @@ class MainWindow(QMainWindow):
     def _on_workbench_nav_changed(self, row: int) -> None:
         if row < 0:
             return
-        if self.kill_btn.isEnabled() or self._task_running:
+        if self._context_switching_locked():
             self._sync_task_selectors_from_work_mode()
             return
         item = self.workbench_nav.item(row)
@@ -5589,7 +5885,7 @@ class MainWindow(QMainWindow):
 
     def _on_keywords_page_mode_selected(self, mode: WorkMode) -> None:
         """Apply the page-local batch/sync selector through the coordinator."""
-        if self.kill_btn.isEnabled() or bool(getattr(self, "_task_running", False)):
+        if self._context_switching_locked():
             self._sync_task_selectors_from_work_mode()
             return
         if mode in {WorkMode.KEYWORD_EXTRACTION, WorkMode.SYNC_KEYWORD_EXTRACTION}:
@@ -5597,7 +5893,7 @@ class MainWindow(QMainWindow):
 
     def _on_revision_page_mode_selected(self, mode: WorkMode) -> None:
         """Apply the page-local revision batch/sync selector through the coordinator."""
-        if self.kill_btn.isEnabled() or bool(getattr(self, "_task_running", False)):
+        if self._context_switching_locked():
             self._sync_task_selectors_from_work_mode()
             return
         if mode in {WorkMode.REVISION, WorkMode.SYNC_REVISION}:
@@ -5925,20 +6221,23 @@ class MainWindow(QMainWindow):
     ) -> BatchActionState:
         """Compose the single render state consumed by the real batch page."""
         if running is None:
-            running = bool(getattr(self, "_task_running", False)) or (
-                hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
-            )
+            running = self._task_page_running_chrome()
 
         def state(source_name: str, *, visible: bool = True) -> tuple[bool, bool, str]:
             source = getattr(self, source_name)
             return (visible and not source.isHidden(), source.isEnabled(), source.text())
 
+        stop_label = (
+            self._task_stop_button_label()
+            if running
+            else (self.kill_btn.text() if hasattr(self, "kill_btn") else "停止")
+        )
         return BatchActionState(
             running=running,
             controls={
                 "start": (True, self.translate_btn.isEnabled(), self.translate_btn.text()),
                 "resume": (True, self.resume_btn.isEnabled(), self.resume_btn.text()),
-                "stop": (True, self.kill_btn.isEnabled(), self.kill_btn.text()),
+                "stop": (True, self.kill_btn.isEnabled(), stop_label),
                 "split_submit": state("split_submit_btn"),
                 "probe": (True, self.probe_btn.isEnabled(), self.probe_btn.text()),
                 "split": (True, self.split_btn.isEnabled(), self.split_btn.text()),
@@ -5967,7 +6266,7 @@ class MainWindow(QMainWindow):
         if mode not in {WorkMode.KEYWORD_EXTRACTION, WorkMode.SYNC_KEYWORD_EXTRACTION}:
             return
         if running is None:
-            running = bool(getattr(self, "_task_running", False)) or self.kill_btn.isEnabled()
+            running = self._task_page_running_chrome()
         candidates_path = self._resolve_keyword_merge_candidates_path()
         glossary_path = self._resolve_keyword_merge_glossary_path()
         merge_ready, merge_message = keyword_merge_ready(
@@ -5981,6 +6280,10 @@ class MainWindow(QMainWindow):
         else:
             result_hint = "提取完成后，可在此合并审核通过的术语候选。"
         page.set_task_running(running)
+        if hasattr(page, "stop_btn"):
+            page.stop_btn.setText(
+                self._task_stop_button_label() if running else "停止"
+            )
         page.set_controls(
             start_enabled=self.translate_btn.isEnabled(),
             resume_enabled=self.resume_btn.isEnabled(),
@@ -6001,7 +6304,7 @@ class MainWindow(QMainWindow):
         if mode not in {WorkMode.REVISION, WorkMode.SYNC_REVISION}:
             return
         if running is None:
-            running = bool(getattr(self, "_task_running", False)) or self.kill_btn.isEnabled()
+            running = self._task_page_running_chrome()
         summary = self._current_writeback_summary()
         if summary.can_apply:
             result_message = summary.message or "订正预览已通过，可安全写回。"
@@ -6010,6 +6313,10 @@ class MainWindow(QMainWindow):
         else:
             result_message = "生成预览后，可在此确认订正结果并安全写回。"
         page.set_task_running(running)
+        if hasattr(page, "stop_btn"):
+            page.stop_btn.setText(
+                self._task_stop_button_label() if running else "停止"
+            )
         page.set_controls(
             start_enabled=self.translate_btn.isEnabled(),
             resume_enabled=self.resume_btn.isEnabled(),
@@ -6035,10 +6342,12 @@ class MainWindow(QMainWindow):
         if label_only:
             return
         if running is None:
-            running = bool(getattr(self, "_task_running", False)) or (
-                hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
-            )
+            running = self._task_page_running_chrome()
         sync_page.set_task_running(running)
+        if hasattr(sync_page, "stop_btn"):
+            sync_page.stop_btn.setText(
+                self._task_stop_button_label() if running else "停止"
+            )
         sync_page.set_start_enabled(self.translate_btn.isEnabled())
 
     def _apply_work_mode_ui(
@@ -6157,7 +6466,11 @@ class MainWindow(QMainWindow):
 
         # Keep session bag aligned after UI refresh mutates active fields.
         self._mode_sessions[spec.mode] = self._capture_mode_session()
-        running = self.kill_btn.isEnabled()
+        # Global job gate (disables start/resume) vs page-owned stop chrome.
+        running = bool(getattr(self, "_task_running", False)) or (
+            hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
+        )
+        page_running = self._task_page_running_chrome()
         bootstrap_ready = self._bootstrap_task_ready(spec)
         self.translate_btn.setEnabled(
             self._translate_button_enabled(
@@ -6167,7 +6480,7 @@ class MainWindow(QMainWindow):
             )
         )
         if spec.mode == WorkMode.SYNC_TRANSLATION:
-            self._sync_sync_translation_page_controls(running=running)
+            self._sync_sync_translation_page_controls(running=page_running)
         resume_available = (
             (False, "任务运行中。") if running else self._resume_task_available()
         )
@@ -6175,9 +6488,9 @@ class MainWindow(QMainWindow):
             running=running,
             resume_available=resume_available,
         )
-        self._sync_batch_translation_page_controls(running=running)
-        self._sync_keywords_page_controls(running=running)
-        self._sync_revision_page_controls(running=running)
+        self._sync_batch_translation_page_controls(running=page_running)
+        self._sync_keywords_page_controls(running=page_running)
+        self._sync_revision_page_controls(running=page_running)
         self._update_split_submit_btn(running=running)
         self._sync_task_shortcuts()
         # Re-apply page chrome after enable flags so context cards stay correct.
@@ -6666,7 +6979,9 @@ class MainWindow(QMainWindow):
             pass
         if worker.isRunning():
             worker.requestInterruption()
-            worker.wait(100)
+            # Subprocess isolation needs a moment to terminate the child; keep
+            # this short so cancel stays snappy if the worker is already done.
+            worker.wait(1500)
         self._doctor_worker = None
         if self._active_command == "doctor":
             self._active_command = ""
@@ -7343,6 +7658,20 @@ class MainWindow(QMainWindow):
     def _is_doctor_running(self) -> bool:
         return self._doctor_worker is not None and self._doctor_worker.isRunning()
 
+    def _on_doctor_button_clicked(self) -> None:
+        """Project-bar CTA: start 环境检查, or cancel doctor/template jobs."""
+        if self._is_doctor_active() or self._is_generate_template_active():
+            self._on_kill()
+            return
+        self._on_run_doctor()
+
+    def _on_bootstrap_button_clicked(self) -> None:
+        """Project-bar CTA: start 准备工作目录, or cancel while it is running."""
+        if self._is_bootstrap_work_active():
+            self._on_kill()
+            return
+        self._on_bootstrap_work()
+
     def _snapshot_runtime_config_for_job(self):
         """Build a frozen RuntimeConfig for an in-process background job.
 
@@ -7506,11 +7835,13 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Status + cancel live on 项目与环境 (doctor summary surface).
+        self._focus_workbench_main_tab(special_route=_SHELL_ROUTE_PROJECT_PREPARE)
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._active_command = "generate_template"
         self._template_generation_output_lines = []
-        self._focus_workbench_status_tab(1)
+        self._focus_workbench_status_tab(0)
         running_summary = running_template_generation_summary()
         doctor_summary = template_generation_to_doctor_summary(running_summary)
         self._set_doctor_summary(doctor_summary)
@@ -8795,6 +9126,8 @@ class MainWindow(QMainWindow):
         # leaving the old running state here would keep resume/status disabled
         # until another UI refresh (or an application restart).
         self.kill_btn.setEnabled(running)
+        if hasattr(self, "kill_btn"):
+            self.kill_btn.setText(self._task_stop_button_label() if running else "停止")
         spec = work_mode_spec(self._current_work_mode())
         project_switch_enabled = not running
         if hasattr(self, "select_btn"):
@@ -8805,14 +9138,21 @@ class MainWindow(QMainWindow):
             self.global_switch_project_btn.setEnabled(project_switch_enabled)
         panel = getattr(self, "_games_registry_panel", None)
         if panel is not None:
-            panel.setEnabled(not running)
+            # Browse/filter stay usable; only switch/mutate paths are gated.
+            set_gate = getattr(panel, "set_host_task_running", None)
+            if callable(set_gate):
+                set_gate(running)
+            else:
+                panel.setEnabled(not running)
         if hasattr(self, "settings_go_workspace_btn"):
-            self.settings_go_workspace_btn.setEnabled(not running)
+            # Settings entry stays openable; workspace switch is gated in-panel.
+            self.settings_go_workspace_btn.setEnabled(True)
+        # Doctor does not freeze shell/context browsing; keep nav usable.
         if hasattr(self, "workbench_nav"):
-            self.workbench_nav.setEnabled(not running)
+            self.workbench_nav.setEnabled(not self._context_switching_locked())
         self._set_shell_nav_task_lock(running)
-        self.doctor_btn.setEnabled(not running)
-        self.bootstrap_work_btn.setEnabled(not running)
+        self._sync_doctor_prep_button_chrome()
+        self._sync_bootstrap_prep_button_chrome()
         self.api_btn.setEnabled(not running)
         bootstrap_ready = self._bootstrap_task_ready(spec)
         self.translate_btn.setEnabled(
@@ -8848,13 +9188,15 @@ class MainWindow(QMainWindow):
         self._update_compare_variants_btn_enabled(running=running)
         self._update_keyword_merge_btn_enabled(running=running)
         self._update_split_btn_enabled(running=running)
-        self._sync_sync_translation_page_controls(running=running)
-        self._sync_batch_translation_page_controls(running=running)
-        self._sync_keywords_page_controls(running=running)
-        self._sync_revision_page_controls(running=running)
+        # Task pages only show stop chrome for page-owned jobs, not doctor.
+        page_running = self._task_page_running_chrome()
+        self._sync_sync_translation_page_controls(running=page_running)
+        self._sync_batch_translation_page_controls(running=page_running)
+        self._sync_keywords_page_controls(running=page_running)
+        self._sync_revision_page_controls(running=page_running)
         # Context-library prebuild CTAs stay on-page while nav is locked; gate them here.
         if hasattr(self, "context_library_panel"):
-            self._refresh_context_library_panel(running=running)
+            self._refresh_context_library_panel(running=page_running)
         self._sync_task_shortcuts()
         self._reflow_button_bars()
         self._sync_workbench_empty_states(resume_available=resume_available)

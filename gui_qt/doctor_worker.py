@@ -1,7 +1,15 @@
-"""Background worker for in-process doctor checks."""
+"""Background worker for doctor checks.
+
+Heavy TL scans used to run in a QThread inside the GUI process. That still
+starves the UI: pure-Python file walks hold the GIL, so page switches during
+环境检查 feel frozen. Prefer a short-lived child process so the GUI keeps a
+responsive event loop; fall back to in-process execution when isolation is
+disabled (tests) or process start fails.
+"""
 from __future__ import annotations
 
 import io
+import multiprocessing as mp
 from contextlib import redirect_stdout
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
@@ -55,8 +63,69 @@ def run_doctor_check(config: RuntimeConfig | None = None) -> DoctorWorkerResult:
         return DoctorWorkerResult(False, None, "", f"环境检查失败：{exc}")
 
 
+def _doctor_process_entry(
+    config: RuntimeConfig | None,
+    result_queue: Any,
+) -> None:
+    """Top-level entry for spawn workers (must stay picklable)."""
+    try:
+        result_queue.put(run_doctor_check(config))
+    except BaseException as exc:  # pragma: no cover - defensive process boundary
+        result_queue.put(
+            DoctorWorkerResult(False, None, "", f"环境检查失败：{exc}")
+        )
+
+
+def run_doctor_check_in_subprocess(
+    config: RuntimeConfig | None = None,
+    *,
+    should_cancel=None,
+    join_timeout_s: float = 0.05,
+) -> DoctorWorkerResult:
+    """Run :func:`run_doctor_check` in a child process.
+
+    ``should_cancel`` is an optional zero-arg callable polled while waiting; when
+    it returns true the child is terminated and a cancelled result is returned.
+    """
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue(1)
+    proc = ctx.Process(
+        target=_doctor_process_entry,
+        args=(config, result_queue),
+        daemon=True,
+    )
+    proc.start()
+    try:
+        while proc.is_alive():
+            if should_cancel is not None and should_cancel():
+                _terminate_process(proc)
+                return DoctorWorkerResult(False, None, "", "环境检查已取消。")
+            proc.join(timeout=join_timeout_s)
+        try:
+            return result_queue.get(timeout=1.0)
+        except Exception:
+            code = proc.exitcode
+            return DoctorWorkerResult(
+                False,
+                None,
+                "",
+                f"环境检查进程异常退出（code={code}）。",
+            )
+    finally:
+        if proc.is_alive():
+            _terminate_process(proc)
+
+
+def _terminate_process(proc: mp.Process) -> None:
+    proc.terminate()
+    proc.join(timeout=2.0)
+    if proc.is_alive():
+        proc.kill()
+        proc.join(timeout=1.0)
+
+
 class DoctorWorker(QThread):
-    """Run collect_doctor_report() off the UI thread against a config snapshot."""
+    """Run collect_doctor_report() without starving the GUI event loop."""
 
     completed = Signal(object)
 
@@ -64,10 +133,29 @@ class DoctorWorker(QThread):
         self,
         config: RuntimeConfig | None = None,
         parent=None,
+        *,
+        isolate_process: bool = True,
     ) -> None:
         super().__init__(parent)
         # Freeze whatever the UI/host passed; do not re-read UI state in run().
         self._config = config
+        # Child process keeps the GUI process GIL free during TL scans.
+        self._isolate_process = isolate_process
 
     def run(self) -> None:
-        self.completed.emit(run_doctor_check(self._config))
+        if self._isolate_process:
+            try:
+                result = run_doctor_check_in_subprocess(
+                    self._config,
+                    should_cancel=self.isInterruptionRequested,
+                )
+            except Exception:
+                # Spawn/import failures should not brick 环境检查 entirely.
+                if self.isInterruptionRequested():
+                    result = DoctorWorkerResult(False, None, "", "环境检查已取消。")
+                else:
+                    result = run_doctor_check(self._config)
+        else:
+            result = run_doctor_check(self._config)
+        if not self.isInterruptionRequested():
+            self.completed.emit(result)

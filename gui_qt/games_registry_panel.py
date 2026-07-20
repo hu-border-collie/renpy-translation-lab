@@ -144,6 +144,11 @@ class GamesRegistryPanel(QWidget):
         self._auto_discover_on_show = auto_discover_on_show
         self._section_visible = False
         self._registry_disk_signature: tuple[str, int] | None = None
+        # When the main workbench has a job running, keep browse/filter usable and
+        # only gate switch / mutate actions (issue: whole-panel disable was too coarse).
+        self._host_task_running = False
+        # Explicit UI busy flag: set before the worker starts and cleared on completion.
+        self._refresh_ui_busy = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -649,11 +654,25 @@ class GamesRegistryPanel(QWidget):
         can_use_row = row is not None and bool(row.project_id)
         self._edit_group.setVisible(row is not None)
         self._populate_edit_panel(row)
-        if not self._is_refresh_running():
+        refresh_busy = bool(self._refresh_ui_busy) or self._is_refresh_running()
+        if not refresh_busy and not self._host_task_running:
             self._switch_btn.setEnabled(row is not None and bool(row.work_dir))
             self._refresh_current_btn.setEnabled(can_use_row)
             self._save_fields_btn.setEnabled(can_use_row)
             self._delete_project_btn.setEnabled(can_use_row)
+        elif not refresh_busy and self._host_task_running:
+            self._switch_btn.setEnabled(False)
+            self._refresh_current_btn.setEnabled(False)
+            self._save_fields_btn.setEnabled(False)
+            self._delete_project_btn.setEnabled(False)
+            # Keep detail fields read-only while host task runs.
+            for widget in (
+                self._name_edit,
+                self._play_status_combo,
+                self._translation_status_combo,
+                self._notes_edit,
+            ):
+                widget.setEnabled(False)
 
     def _selected_refresh_mode(self) -> str:
         mode = self._refresh_mode_combo.currentData()
@@ -661,8 +680,24 @@ class GamesRegistryPanel(QWidget):
             return str(mode)
         return REFRESH_MODE_LITE
 
-    def _set_maintenance_busy(self, busy: bool) -> None:
+    def set_host_task_running(self, running: bool) -> None:
+        """Allow browse while a workbench job runs; block switch/mutate only."""
+        self._host_task_running = bool(running)
+        self._apply_interaction_gate()
+
+    def _apply_interaction_gate(self) -> None:
+        """Combine local refresh-busy and host workbench-running gates."""
+        # Prefer the explicit UI flag so buttons lock as soon as refresh is
+        # requested, even before the QThread reports isRunning().
+        refresh_busy = bool(self._refresh_ui_busy) or self._is_refresh_running()
+        host_busy = self._host_task_running
+        mutate_blocked = refresh_busy or host_busy
+
         for widget in (
+            self._refresh_current_btn,
+            self._refresh_all_btn,
+            self._refresh_mode_combo,
+            self._switch_btn,
             self._import_md_btn,
             self._discover_btn,
             self._sync_md_btn,
@@ -672,30 +707,39 @@ class GamesRegistryPanel(QWidget):
             self._play_status_combo,
             self._translation_status_combo,
             self._notes_edit,
+            self._auto_discover_checkbox,
+        ):
+            widget.setEnabled(not mutate_blocked)
+
+        # Browse/filter remain available during host jobs; only local refresh
+        # keeps the table interactive (scroll/read while refresh runs).
+        for widget in (
             self._search_edit,
             self._engine_filter_combo,
             self._translation_filter_combo,
             self._sort_combo,
-            self._auto_discover_checkbox,
         ):
-            widget.setEnabled(not busy)
+            widget.setEnabled(not refresh_busy)
+        # Table stays enabled during refresh so users can still scroll the list.
+        self._table.setEnabled(True)
+
+        self._stop_refresh_btn.setEnabled(refresh_busy)
+        if not refresh_busy:
+            self._on_selection_changed()
+            if host_busy:
+                self._switch_btn.setEnabled(False)
+                self._refresh_current_btn.setEnabled(False)
+                self._save_fields_btn.setEnabled(False)
+                self._delete_project_btn.setEnabled(False)
 
     def _set_refresh_busy(self, busy: bool) -> None:
-        for widget in (
-            self._refresh_current_btn,
-            self._refresh_all_btn,
-            self._refresh_mode_combo,
-            self._switch_btn,
-        ):
-            widget.setEnabled(not busy)
-        self._set_maintenance_busy(busy)
-        self._stop_refresh_btn.setEnabled(busy)
+        self._refresh_ui_busy = bool(busy)
         self._progress_bar.setVisible(busy)
         if busy:
             self._progress_bar.setValue(0)
         else:
             self._progress_bar.setFormat("准备刷新…")
-            self._on_selection_changed()
+        self._apply_interaction_gate()
 
     def _on_auto_discover_toggled(self, checked: bool) -> None:
         if self._is_refresh_running():
@@ -892,7 +936,7 @@ class GamesRegistryPanel(QWidget):
         self._status_label.setText(message)
 
     def _on_row_activated(self, row_index: int, _column: int) -> None:
-        if self._is_refresh_running():
+        if self._is_refresh_running() or self._host_task_running:
             return
         if row_index < 0 or row_index >= len(self._filtered_rows):
             return
@@ -900,7 +944,7 @@ class GamesRegistryPanel(QWidget):
         self._switch_to_selected()
 
     def _switch_to_selected(self) -> None:
-        if self._is_refresh_running():
+        if self._is_refresh_running() or self._host_task_running:
             return
         row = self._selected_row()
         if row is None or not row.work_dir:

@@ -261,6 +261,44 @@ class GamesRegistryTests(unittest.TestCase):
             self.assertEqual(auto["refresh_mode"], registry.REFRESH_MODE_DEEP)
             self.assertEqual(auto["doctor_layout"], "ready")
 
+    def test_doctor_layout_snapshot_prefers_subprocess(self):
+        class _FakeQueue:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def get(self, timeout=None):
+                return self._payload
+
+        class _FakeProcess:
+            def __init__(self, *args, **kwargs):
+                self._alive = True
+
+            def start(self):
+                self._alive = False
+
+            def join(self, timeout=None):
+                return None
+
+            def is_alive(self):
+                return self._alive
+
+            def terminate(self):
+                self._alive = False
+
+            def kill(self):
+                self._alive = False
+
+        class _FakeCtx:
+            def Queue(self, maxsize=0):
+                return _FakeQueue(("ready", "existing_tl_only"))
+
+            def Process(self, **kwargs):
+                return _FakeProcess()
+
+        with mock.patch("multiprocessing.get_context", return_value=_FakeCtx()):
+            layout, mode = registry._doctor_layout_snapshot("C:/game/work", True)
+        self.assertEqual((layout, mode), ("ready", "existing_tl_only"))
+
     def test_refresh_all_stops_when_cancelled(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

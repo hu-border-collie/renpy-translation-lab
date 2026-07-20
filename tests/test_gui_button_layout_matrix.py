@@ -230,6 +230,34 @@ class FlowButtonBarUnitTests(unittest.TestCase):
         self.assertEqual(bar._root.count(), 1)
 
     @unittest.skipIf(QApplication is None, "GUI unavailable")
+    def test_flow_bar_right_align_puts_stretch_before_buttons(self) -> None:
+        from PySide6.QtWidgets import QHBoxLayout, QSpacerItem
+
+        bar = FlowButtonBar(spacing=8, align="right")
+        buttons = []
+        for label in ("查看问题清单", "重新检查", "补救命令"):
+            btn = QPushButton(label)
+            buttons.append(btn)
+            bar.add_widget(btn, min_width=100)
+        bar.finish_setup()
+        bar.resize(900, 80)
+        bar.show()
+        self._app.processEvents()
+        bar.reflow(force=True)
+        self._app.processEvents()
+
+        self.assertEqual(bar._root.count(), 1)
+        row = bar._root.itemAt(0).layout()
+        self.assertIsInstance(row, QHBoxLayout)
+        assert row is not None
+        # First item is leading stretch; buttons follow so the strip hugs the right.
+        first = row.itemAt(0)
+        self.assertIsNotNone(first)
+        self.assertIsInstance(first.spacerItem(), QSpacerItem)
+        self.assertEqual(row.itemAt(1).widget(), buttons[0])
+        self.assertEqual(row.itemAt(row.count() - 1).widget(), buttons[-1])
+
+    @unittest.skipIf(QApplication is None, "GUI unavailable")
     def test_flow_bar_runs_one_followup_for_reentrant_reflow(self) -> None:
         bar = FlowButtonBar(spacing=8)
         bar.add_widget(QPushButton("refresh"), min_width=100)

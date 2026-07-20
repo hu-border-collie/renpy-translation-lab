@@ -51,9 +51,62 @@ class GuiSettingsLayoutTests(unittest.TestCase):
             "settings_extensions",
             "settings_context",
             "settings_appearance",
+            "settings_shortcuts",
             "settings_advanced",
         }
         self.assertEqual(set(self.window._settings_page_bodies), expected)
+
+    def test_shortcuts_section_lists_core_bindings(self) -> None:
+        from PySide6.QtWidgets import QLabel
+
+        row = self.window._settings_nav_rows.get("shortcuts")
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(self.window.settings_nav.item(row).text(), "快捷键")
+        self.window.settings_nav.setCurrentRow(row)
+        _process(self._app, 5)
+        body = self.window._settings_page_bodies["settings_shortcuts"]
+        labels = [
+            widget.text()
+            for widget in body.findChildren(QLabel)
+            if widget.text().strip()
+        ]
+        joined = "\n".join(labels)
+        for needle in (
+            "Ctrl+D",
+            "Ctrl+T",
+            "Ctrl+K",
+            "Ctrl+L",
+            "Ctrl+Shift+L",
+            "Ctrl+S",
+            "Ctrl+1",
+            "Ctrl+2",
+            "Ctrl+3",
+            "Ctrl+7",
+            "Ctrl+0",
+            "项目与环境",
+            "批量翻译",
+            "设置",
+            "诊断与运行日志",
+            "导航",
+        ):
+            self.assertIn(needle, joined, msg=needle)
+
+    def test_number_shortcuts_activate_shell_routes_not_legacy_tabs(self) -> None:
+        """Ctrl+N must follow sidebar IA, not the hidden main tab indices."""
+        entries = self.window._shell_nav_shortcut_entries()
+        self.assertGreaterEqual(len(entries), 7)
+        self.assertEqual(entries[0][0], "project_prepare")
+        self.assertEqual(entries[0][1], "项目与环境")
+        self.assertTrue(entries[1][0].startswith("workbench:"))
+        self.assertEqual(entries[6][0], "settings")
+
+        self.window._activate_shell_route(entries[0][0])
+        self.assertEqual(self.window._current_shell_route(), "project_prepare")
+        self.window._activate_shell_route(entries[1][0])
+        self.assertEqual(self.window._current_shell_route(), entries[1][0])
+        self.window._activate_shell_route("diagnostics")
+        self.assertEqual(self.window._current_shell_route(), "diagnostics")
 
         for key, body in self.window._settings_page_bodies.items():
             with self.subTest(section=key):
