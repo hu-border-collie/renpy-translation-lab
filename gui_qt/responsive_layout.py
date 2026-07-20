@@ -539,7 +539,7 @@ class FlowButtonBar(QFrame):
         # buttons are pinned near 36–38px tall via QSS / configure_action_button.
         row_h = 38
         for widget in self._visible_items():
-            row_h = max(row_h, int(widget.minimumHeight() or 0), 32)
+            row_h = max(row_h, int(widget.minimumHeight() or 0))
         rows = max(1, self._row_count)
         height = rows * row_h + max(0, rows - 1) * self._row_spacing
         self.setMinimumHeight(height)

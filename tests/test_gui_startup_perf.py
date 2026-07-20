@@ -61,6 +61,15 @@ class GuiStartupPerfTests(unittest.TestCase):
             assert page is not None
             self.assertEqual(page.objectName(), f"settings_{key}_placeholder")
 
+    def test_load_config_to_ui_does_not_materialize_settings_pages(self) -> None:
+        """_load_theme_to_ui must not getattr(theme_combo) into full config build."""
+        self.window = MainWindow()
+        self.assertEqual(self.window._settings_pages_built, set())
+        self.window._load_config_to_ui(refresh_task_gates=False)
+        self.assertEqual(self.window._settings_pages_built, set())
+        self.assertNotIn("theme_combo", self.window.__dict__)
+        self.assertNotIn("batch_model_combo", self.window.__dict__)
+
     def test_opening_workspace_builds_only_workspace(self) -> None:
         self.window = MainWindow()
         self.window._focus_settings_section("workspace")

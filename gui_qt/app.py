@@ -7435,7 +7435,8 @@ class MainWindow(QMainWindow):
         label.setText(message)
 
     def _current_theme_preference_from_ui(self) -> str:
-        combo = getattr(self, "theme_combo", None)
+        # Do not materialize Settings · 外观 just to read a theme preference.
+        combo = self._settings_widget("theme_combo")
         if combo is not None:
             try:
                 preference = combo.currentData()
@@ -10270,7 +10271,9 @@ class MainWindow(QMainWindow):
             combo.setCurrentIndex(combo.count() - 1)
 
     def _set_theme_combo_value(self, value: str) -> None:
-        combo = getattr(self, "theme_combo", None)
+        # Use __dict__ lookup so _load_config_to_ui / project switch never force
+        # construction of every config settings page via theme_combo getattr.
+        combo = self._settings_widget("theme_combo")
         if combo is None:
             return
         theme = normalize_theme_preference(value)
