@@ -19,6 +19,7 @@ from optional_feature import (
     FeatureStatus,
     OptionalFeatureSpec,
     hash_checked_install_command,
+    litellm_feature,
     probe_feature,
     relation_analyzer_feature,
 )
@@ -36,8 +37,6 @@ class OptionalFeatureInstallController(QObject):
 
     _active_feature_id: str | None = None
     _active_controller: "OptionalFeatureInstallController | None" = None
-    # Set by non-controller install paths (e.g. LiteLLM page) sharing the mutex.
-    _external_install_active: bool = False
 
     def __init__(
         self,
@@ -60,8 +59,6 @@ class OptionalFeatureInstallController(QObject):
 
     @classmethod
     def any_install_running(cls) -> bool:
-        if cls._external_install_active:
-            return True
         controller = cls._active_controller
         if controller is None:
             return False
@@ -143,9 +140,15 @@ class OptionalFeatureInstallController(QObject):
         *,
         upgrade: bool | None,
     ) -> tuple[list[str] | None, str]:
-        lock_path = self.feature.lock_path(self.repo_root)
+        lock_relative = str(self.feature.lock_relative_path or "").strip()
+        lock_path = self.feature.lock_path(self.repo_root) if lock_relative else None
         requirements_path = self.feature.requirements_path(self.repo_root)
-        use_lock = self.prefer_hash_lock and lock_path.is_file()
+        use_lock = bool(
+            self.prefer_hash_lock
+            and lock_relative
+            and lock_path is not None
+            and lock_path.is_file()
+        )
         target = lock_path if use_lock else requirements_path
         if not target.is_file():
             return None, f"找不到依赖文件：{target}"
@@ -236,6 +239,21 @@ def build_relation_analyzer_controller(
         parent=parent,
         repo_root=repo_root,
         prefer_hash_lock=True,
+    )
+
+
+def build_litellm_controller(
+    parent: QObject | None = None,
+    *,
+    repo_root: Path = REPO_ROOT,
+) -> OptionalFeatureInstallController:
+    """LiteLLM uses the platform hash lock when available, else requirements.txt."""
+    feature = litellm_feature(repo_root)
+    return OptionalFeatureInstallController(
+        feature,
+        parent=parent,
+        repo_root=repo_root,
+        prefer_hash_lock=bool(feature.lock_relative_path),
     )
 
 

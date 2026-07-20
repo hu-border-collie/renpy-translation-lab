@@ -13,9 +13,15 @@ try:
     from gui_qt.optional_feature_install import (
         OptionalFeatureInstallController,
         action_enabled_for_status,
+        build_litellm_controller,
     )
     from gui_qt.work_modes import WorkMode
-    from optional_feature import FeatureInstallState, FeatureStatus, relation_analyzer_feature
+    from optional_feature import (
+        FeatureInstallState,
+        FeatureStatus,
+        litellm_feature,
+        relation_analyzer_feature,
+    )
 except ImportError as exc:
     QApplication = None  # type: ignore[assignment,misc]
     MainWindow = None  # type: ignore[assignment,misc]
@@ -53,7 +59,6 @@ class GuiOptionalFeatureInstallTests(unittest.TestCase):
     def setUp(self) -> None:
         OptionalFeatureInstallController._active_feature_id = None
         OptionalFeatureInstallController._active_controller = None
-        OptionalFeatureInstallController._external_install_active = False
         self.window = MainWindow()
         self.window.resize(1400, 900)
         self.window.show()
@@ -66,7 +71,6 @@ class GuiOptionalFeatureInstallTests(unittest.TestCase):
     def tearDown(self) -> None:
         OptionalFeatureInstallController._active_feature_id = None
         OptionalFeatureInstallController._active_controller = None
-        OptionalFeatureInstallController._external_install_active = False
         self.window.close()
         self.window.deleteLater()
 
@@ -191,13 +195,61 @@ class GuiOptionalFeatureInstallTests(unittest.TestCase):
             action_enabled_for_status(_status(FeatureInstallState.INSTALLING))
         )
 
-    def test_controller_blocks_concurrent_external_install(self) -> None:
-        controller = OptionalFeatureInstallController(relation_analyzer_feature())
-        OptionalFeatureInstallController._external_install_active = True
-        OptionalFeatureInstallController._active_feature_id = "litellm"
-        started, message = controller.start_install()
+    def test_controller_blocks_concurrent_optional_feature_install(self) -> None:
+        analyzer = OptionalFeatureInstallController(relation_analyzer_feature())
+        litellm = build_litellm_controller()
+        analyzer._active = True
+        OptionalFeatureInstallController._active_controller = analyzer
+        OptionalFeatureInstallController._active_feature_id = "relation_analyzer"
+        started, message = litellm.start_install()
         self.assertFalse(started)
-        self.assertIn("litellm", message)
+        self.assertIn("relation_analyzer", message)
+
+    def test_litellm_builder_prefers_platform_lock_when_available(self) -> None:
+        feature = litellm_feature()
+        controller = build_litellm_controller()
+        self.assertEqual(controller.feature.feature_id, "litellm")
+        if feature.lock_relative_path:
+            self.assertTrue(controller.prefer_hash_lock)
+            self.assertTrue(feature.lock_path().is_file())
+        else:
+            self.assertFalse(controller.prefer_hash_lock)
+
+    def test_failed_to_start_emits_finished_and_releases_mutex(self) -> None:
+        controller = OptionalFeatureInstallController(relation_analyzer_feature())
+        finished = mock.Mock()
+        controller.finished.connect(finished)
+        process = mock.Mock()
+        process.errorString.return_value = "cannot start"
+        controller._process = process
+        controller._active = True
+        OptionalFeatureInstallController._active_controller = controller
+        OptionalFeatureInstallController._active_feature_id = "relation_analyzer"
+        from PySide6.QtCore import QProcess
+
+        controller._on_error(QProcess.ProcessError.FailedToStart)
+        self.assertFalse(controller.is_running())
+        self.assertIsNone(OptionalFeatureInstallController._active_controller)
+        finished.assert_called_once()
+        self.assertFalse(finished.call_args.args[1])
+        self.assertIn("cannot start", finished.call_args.args[2])
+
+    def test_non_start_error_waits_for_finished_cleanup(self) -> None:
+        controller = OptionalFeatureInstallController(relation_analyzer_feature())
+        finished = mock.Mock()
+        controller.finished.connect(finished)
+        process = mock.Mock()
+        process.errorString.return_value = "crashed"
+        controller._process = process
+        controller._active = True
+        OptionalFeatureInstallController._active_controller = controller
+        OptionalFeatureInstallController._active_feature_id = "relation_analyzer"
+        from PySide6.QtCore import QProcess
+
+        controller._on_error(QProcess.ProcessError.Crashed)
+        self.assertTrue(controller.is_running())
+        self.assertIs(OptionalFeatureInstallController._active_controller, controller)
+        finished.assert_not_called()
 
 
 if __name__ == "__main__":
