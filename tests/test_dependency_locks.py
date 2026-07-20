@@ -52,8 +52,13 @@ class DependencyLockTests(unittest.TestCase):
         semantic = (
             locks.REPO_ROOT / "relation_analyzer" / "requirements-semantic.txt"
         ).read_text(encoding="utf-8")
-        self.assertIn("-r ../requirements-core.txt", relation)
+        self.assertIn("-r ../requirements-relation-analyzer.txt", relation)
+        self.assertIn("-r ../requirements-relation-analyzer.txt", semantic)
         self.assertIn("-r ../requirements-genai.txt", semantic)
+        root = (locks.REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+        self.assertNotIn("requirements-core.txt", root)
+        self.assertNotIn("requirements-relation-analyzer.txt", root)
+        self.assertIn("requirements-genai.txt", root)
 
     def test_every_lock_uses_hashes_and_exact_versions(self):
         for relative in locks.expected_locks():
@@ -76,9 +81,19 @@ class DependencyLockTests(unittest.TestCase):
         gui = (
             locks.REPO_ROOT / locks.common_lock_relative_path("gui")
         ).read_text(encoding="utf-8")
+        analyzer = (
+            locks.REPO_ROOT / locks.common_lock_relative_path("relation-analyzer")
+        ).read_text(encoding="utf-8")
         self.assertNotIn("pyside6==", cli)
         self.assertNotIn("litellm==", cli)
         self.assertIn("pyside6==6.11.1", gui)
+        self.assertIn("numpy==", analyzer)
+        self.assertIn("matplotlib==", analyzer)
+        self.assertIn("scikit-learn==", analyzer)
+        self.assertIn("pillow==", analyzer)
+        for ordinary in (cli, gui):
+            for package in locks.ANALYZER_ONLY_DISTRIBUTIONS:
+                self.assertNotIn(f"{package}==", ordinary, package)
         for platform in locks.PLATFORMS:
             litellm = (
                 locks.REPO_ROOT
@@ -86,6 +101,8 @@ class DependencyLockTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
             self.assertIn("litellm==1.83.7", litellm)
             self.assertIn("keyring==25.7.0", litellm)
+            for package in locks.ANALYZER_ONLY_DISTRIBUTIONS:
+                self.assertNotIn(f"{package}==", litellm, package)
 
     def test_ci_installs_hash_checked_platform_locks(self):
         workflow = (
@@ -101,8 +118,10 @@ class DependencyLockTests(unittest.TestCase):
         self.assertIn("--require-hashes", workflow)
         self.assertIn("requirements-lock/py311-cli.txt", workflow)
         self.assertIn("py311-gui.txt", workflow)
+        self.assertIn("requirements-lock/py311-relation-analyzer.txt", workflow)
         self.assertIn("requirements-lock/py311-linux-litellm.txt", workflow)
         self.assertIn("requirements-lock/py311-windows-litellm.txt", workflow)
+        self.assertIn("relation-analyzer:", workflow)
         self.assertIn("--require-hashes", provider_workflow)
         self.assertIn(
             "requirements-lock/py311-linux-litellm.txt",

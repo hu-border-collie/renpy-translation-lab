@@ -265,13 +265,29 @@ def save_cached_embedding(cache_bucket, text, vector):
         np.save(handle, np.asarray(vector, dtype=np.float32))
     temp_path.replace(cache_path)
 
+def _missing_analyzer_dependency_exit(package_name: str) -> SystemExit:
+    from optional_feature import (
+        missing_feature_cli_message,
+        relation_analyzer_feature,
+    )
+
+    return SystemExit(
+        missing_feature_cli_message(
+            relation_analyzer_feature(TOOL_ROOT),
+            python_executable=sys.executable,
+            repo_root=TOOL_ROOT,
+            detail=f"缺少：{package_name}。",
+        )
+    )
+
+
 def load_numpy():
     global _NUMPY
     if _NUMPY is None:
         try:
             import numpy as imported_numpy
-        except ImportError as exc:
-            raise SystemExit("❌ 缺少依赖 numpy，请先安装：pip install numpy") from exc
+        except ImportError:
+            raise _missing_analyzer_dependency_exit("numpy") from None
         _NUMPY = imported_numpy
     return _NUMPY
 
@@ -280,8 +296,8 @@ def load_image_libs():
     if _IMAGE_LIBS is None:
         try:
             from PIL import Image as imported_image
-        except ImportError as exc:
-            raise SystemExit("\u274c \u7f3a\u5c11\u4f9d\u8d56 pillow\uff0c\u8bf7\u5148\u5b89\u88c5\uff1apip install pillow") from exc
+        except ImportError:
+            raise _missing_analyzer_dependency_exit("pillow") from None
         _IMAGE_LIBS = imported_image
     return _IMAGE_LIBS
 
@@ -483,14 +499,14 @@ def load_plot_libs():
             import matplotlib.pyplot as imported_pyplot
             from matplotlib.offsetbox import AnnotationBbox as imported_annotation_bbox
             from matplotlib.offsetbox import OffsetImage as imported_offset_image
-        except ImportError as exc:
-            raise SystemExit("\u274c \u7f3a\u5c11\u4f9d\u8d56 matplotlib\uff0c\u8bf7\u5148\u5b89\u88c5\uff1apip install matplotlib") from exc
+        except ImportError:
+            raise _missing_analyzer_dependency_exit("matplotlib") from None
 
         try:
             from sklearn.decomposition import PCA as imported_pca
             from sklearn.metrics.pairwise import cosine_similarity as imported_cosine_similarity
-        except ImportError as exc:
-            raise SystemExit("\u274c \u7f3a\u5c11\u4f9d\u8d56 scikit-learn\uff0c\u8bf7\u5148\u5b89\u88c5\uff1apip install scikit-learn") from exc
+        except ImportError:
+            raise _missing_analyzer_dependency_exit("scikit-learn") from None
 
         _PLOT_LIBS = (
             imported_pyplot,
@@ -507,8 +523,14 @@ def load_embedding_libs():
         try:
             from google import genai as imported_genai
             from google.genai import types as imported_types
-        except ImportError as exc:
-            raise SystemExit("❌ 缺少依赖 google-genai，请先安装：pip install google-genai") from exc
+        except ImportError:
+            raise SystemExit(
+                "❌ 缺少依赖 google-genai（semantic 模式需要）。\n"
+                "请安装：\n"
+                f"  {sys.executable} -m pip install --require-hashes -r requirements-lock/py311-cli.txt\n"
+                "或：\n"
+                f"  {sys.executable} -m pip install -r requirements-genai.txt"
+            ) from None
         _EMBEDDING_LIBS = (imported_genai, imported_types)
     return _EMBEDDING_LIBS
 

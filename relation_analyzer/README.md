@@ -33,7 +33,9 @@
 
 ## 依赖
 
-基础依赖版本由根目录 `requirements-core.txt` 统一维护：
+关系分析器是**可选功能**，不包含在普通 CLI / GUI 安装中。
+
+基础依赖版本由根目录 `requirements-relation-analyzer.txt` 统一维护：
 - `numpy`
 - `matplotlib`
 - `scikit-learn`
@@ -42,4 +44,25 @@
 仅 `semantic` 模式额外需要，由 `requirements-genai.txt` 统一维护：
 - `google-genai`
 
-安装时直接使用仓库根目录的 [requirements.txt](../requirements.txt) 即可。
+### 安装
+
+推荐 Python 3.11 哈希锁：
+
+```powershell
+# relation 模式
+python -m pip install --require-hashes -r requirements-lock/py311-relation-analyzer.txt
+
+# semantic 模式：分析器 + GenAI
+python -m pip install --require-hashes -r requirements-lock/py311-relation-analyzer.txt
+python -m pip install --require-hashes -r requirements-lock/py311-cli.txt
+```
+
+开发入口：
+
+```powershell
+pip install -r requirements-relation-analyzer.txt
+# 或 semantic：
+pip install -r relation_analyzer/requirements-semantic.txt
+```
+
+GUI 用户可在 **设置 → 扩展** 中安装 / 修复 / 更新关系分析器。依赖缺失时，`extract_relations.py` 会以无 traceback 的方式打印上述安装命令，不会静默安装。

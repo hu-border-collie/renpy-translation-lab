@@ -26,4 +26,19 @@ python extract_relations.py /path/to/game/tl/schinese --mode semantic
 - `relation` 模式不需要 Gemini API。
 - `semantic` 模式需要有效的 Gemini API key。
 
+## 可选依赖
+
+关系分析器**不是**普通翻译安装的一部分。需额外安装：
+
+```powershell
+# relation
+python -m pip install --require-hashes -r requirements-lock/py311-relation-analyzer.txt
+
+# semantic = 分析器 + GenAI
+python -m pip install --require-hashes -r requirements-lock/py311-relation-analyzer.txt
+python -m pip install --require-hashes -r requirements-lock/py311-cli.txt
+```
+
+GUI：**设置 → 扩展 → 关系分析器** 可安装 / 修复 / 更新。依赖缺失时 CLI 会打印安装命令并以非零退出码结束，不会自动安装。
+
 更具体的模块说明见 [`relation_analyzer/README.md`](../relation_analyzer/README.md)。

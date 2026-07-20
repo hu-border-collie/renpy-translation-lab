@@ -44,6 +44,13 @@ def main():
     if args.mode == 'relation' and args.relation_window_size <= 0:
         raise SystemExit('❌ relation-window-size 必须大于 0。')
 
+    # Fail fast with an actionable install command; never silent-install.
+    from optional_feature import ensure_relation_analyzer_dependencies
+
+    ensure_relation_analyzer_dependencies(python_executable=sys.executable, repo_root=TOOL_ROOT)
+    if args.mode == 'semantic':
+        load_embedding_libs()
+
     units = load_text_units(input_path, args.context_window)
     print(f"📚 成功读取输入，共抽取到 {len(units)} 个有效剧情片段。")
 

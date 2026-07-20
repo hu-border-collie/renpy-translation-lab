@@ -2,6 +2,7 @@ import csv
 import json
 import tempfile
 import unittest
+from importlib import metadata
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,6 +13,21 @@ from relation_analyzer.parsing import extract_character_definitions, extract_uni
 from relation_analyzer.plotting import project_vectors_2d
 from relation_analyzer.relations import compute_relation_data, write_relation_csv
 from relation_analyzer.story_seed import build_story_graph_seed, write_story_graph_seed
+
+
+def _analyzer_stack_installed() -> bool:
+    for name in ("numpy", "matplotlib", "scikit-learn", "pillow"):
+        try:
+            metadata.version(name)
+        except metadata.PackageNotFoundError:
+            return False
+    return True
+
+
+_REQUIRES_ANALYZER = unittest.skipUnless(
+    _analyzer_stack_installed(),
+    "relation analyzer optional deps not installed",
+)
 
 
 class RelationAnalyzerTests(unittest.TestCase):
@@ -87,6 +103,7 @@ class RelationAnalyzerTests(unittest.TestCase):
         ]
         self.assertEqual(infer_characters_from_units(units, 2), ['Andrew', 'Spencer'])
 
+    @_REQUIRES_ANALYZER
     def test_compute_relation_data_builds_nonzero_pair_scores(self):
         units = [
             {'source': 'scene_1.rpy', 'line_no': 1, 'speaker': 'spencer_no_side', 'speaker_name': 'Spencer', 'text': 'Ian, are you there?', 'context': 'Spencer: Ian, are you there?'},
@@ -100,6 +117,7 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertGreater(pair_rows[frozenset(('Andrew', 'Spencer'))]['mention'], 0.0)
         self.assertEqual(data['characters'], ['Spencer', 'Ian', 'Andrew'])
 
+    @_REQUIRES_ANALYZER
     def test_compute_relation_data_deduplicates_character_list(self):
         units = [
             {'source': 'scene_1.rpy', 'line_no': 1, 'speaker': 'ian', 'speaker_name': 'Ian', 'text': 'Hello Spencer.', 'context': 'Ian: Hello Spencer.'},
@@ -112,6 +130,7 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertEqual(data['pair_rows'][0]['left'], 'Ian')
         self.assertEqual(data['pair_rows'][0]['right'], 'Spencer')
 
+    @_REQUIRES_ANALYZER
     def test_build_story_graph_seed_exports_reviewable_candidates(self):
         units = [
             {'source': 'scene_1.rpy', 'line_no': 1, 'speaker': 'eileen_side', 'speaker_name': 'Eileen', 'text': 'Noah, open the gate.', 'context': 'Eileen: Noah, open the gate.'},
@@ -137,6 +156,7 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertIn('scene_1.rpy', relation['seed_stats']['source_files'])
         self.assertTrue(relation['seed_stats']['needs_human_review'])
 
+    @_REQUIRES_ANALYZER
     def test_build_story_graph_seed_uses_character_aliases_for_speaker_ids(self):
         units = [
             {'source': 'scene_1.rpy', 'line_no': 1, 'speaker': 'e', 'speaker_name': 'Eileen', 'text': 'Noah, open the gate.', 'context': 'Eileen: Noah, open the gate.'},
@@ -148,6 +168,7 @@ class RelationAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(seed['characters']['艾琳']['speaker_ids'], ['e'])
 
+    @_REQUIRES_ANALYZER
     def test_build_story_graph_seed_uses_relative_source_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -163,6 +184,7 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertEqual(seed['characters']['e']['seed_stats']['source_files'], ['scene_1.rpy'])
         self.assertEqual(seed['relations'][0]['seed_stats']['source_files'], ['scene_1.rpy'])
 
+    @_REQUIRES_ANALYZER
     def test_build_story_graph_seed_filters_zero_evidence_pairs(self):
         units = [
             {'source': 'scene_1.rpy', 'line_no': 1, 'speaker': 'a', 'speaker_name': 'A', 'text': 'Solo.', 'context': 'A: Solo.'},
@@ -178,6 +200,7 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertIn(('a', 'c'), relation_pairs)
         self.assertIn(('b', 'c'), relation_pairs)
 
+    @_REQUIRES_ANALYZER
     def test_write_story_graph_seed_creates_parent_directory(self):
         units = [
             {'source': 'scene_1.rpy', 'line_no': 1, 'speaker': 'e', 'speaker_name': 'E', 'text': 'Hello Noah.', 'context': 'E: Hello Noah.'},
@@ -342,6 +365,7 @@ class RelationAnalyzerTests(unittest.TestCase):
             self.assertIsNone(units[1]['speaker'])
             self.assertEqual(units[1]['text'], 'After.')
 
+    @_REQUIRES_ANALYZER
     def test_project_vectors_2d_handles_one_dimensional_embeddings(self):
         class FakePCA:
             def __init__(self, n_components):
@@ -376,7 +400,8 @@ class RelationAnalyzerTests(unittest.TestCase):
             csv_output=None,
             story_seed_output=None,
         )
-        with patch.object(cli, 'parse_args', return_value=args), \
+        with patch('optional_feature.ensure_relation_analyzer_dependencies'), \
+             patch.object(cli, 'parse_args', return_value=args), \
              patch.object(cli, 'resolve_path', side_effect=lambda value: Path(value)), \
              patch.object(cli, 'load_text_units', return_value=[{'text': 'x'}]), \
              patch.object(cli, 'compute_relation_data', return_value={'characters': ['Solo']}):
@@ -406,7 +431,8 @@ class RelationAnalyzerTests(unittest.TestCase):
         units = [{'source': 'scene.rpy', 'line_no': 1, 'speaker': 'e', 'speaker_name': 'E', 'text': 'Hello.', 'context': 'E: Hello.'}]
         relation_data = {'characters': ['E', 'Noah'], 'pair_rows': [], 'segment_size': 12, 'pair_source_files': {}}
 
-        with patch.object(cli, 'parse_args', return_value=args), \
+        with patch('optional_feature.ensure_relation_analyzer_dependencies'), \
+             patch.object(cli, 'parse_args', return_value=args), \
              patch.object(cli, 'resolve_path', side_effect=lambda value: Path(value)), \
              patch.object(cli, 'load_text_units', return_value=units), \
              patch.object(cli, 'compute_relation_data', return_value=relation_data), \
@@ -440,7 +466,9 @@ class RelationAnalyzerTests(unittest.TestCase):
             csv_output=None,
             story_seed_output=None,
         )
-        with patch.object(cli, 'parse_args', return_value=args), \
+        with patch('optional_feature.ensure_relation_analyzer_dependencies'), \
+             patch.object(cli, 'load_embedding_libs'), \
+             patch.object(cli, 'parse_args', return_value=args), \
              patch.object(cli, 'resolve_path', side_effect=lambda value: Path(value)), \
              patch.object(cli, 'load_text_units', return_value=[{'text': 'x'}]), \
              patch.object(cli, 'collect_character_texts', return_value={'Solo': ['x'], 'Missing': []}), \
@@ -477,6 +505,7 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertEqual(rows[0]['right'], 'B"Two')
         self.assertEqual(rows[0]['dominant_component'], '提及,对话')
 
+    @_REQUIRES_ANALYZER
     def test_embed_texts_rotates_past_retry_count_until_valid_key(self):
         class FakeModels:
             def __init__(self, behavior):
@@ -528,6 +557,7 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertEqual(embeddings.shape, (1, 2))
         self.assertEqual(embeddings.tolist(), [[1.0, 2.0]])
 
+    @_REQUIRES_ANALYZER
     def test_embed_texts_uses_cache_without_loading_gemini_client(self):
         cached_vector = __import__('numpy').array([3.0, 4.0], dtype=float)
 

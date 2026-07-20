@@ -1,2 +1,3 @@
-# Semantic mode adds the repository-owned Google GenAI dependency.
+# Semantic mode composes analyzer + Google GenAI inputs (no version copies).
+-r ../requirements-relation-analyzer.txt
 -r ../requirements-genai.txt

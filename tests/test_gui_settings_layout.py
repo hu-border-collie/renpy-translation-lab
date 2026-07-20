@@ -48,6 +48,7 @@ class GuiSettingsLayoutTests(unittest.TestCase):
             "settings_api_keys",
             "settings_models",
             "settings_litellm",
+            "settings_extensions",
             "settings_context",
             "settings_appearance",
             "settings_advanced",

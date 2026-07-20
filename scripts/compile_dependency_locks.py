@@ -17,6 +17,7 @@ PYTHON_VERSION = "3.11"
 COMMON_PROFILES: dict[str, tuple[str, ...]] = {
     "cli": ("requirements.txt",),
     "gui": ("requirements.txt", "requirements-gui.txt"),
+    "relation-analyzer": ("requirements-relation-analyzer.txt",),
 }
 PLATFORM_PROFILES: dict[str, tuple[str, ...]] = {
     "litellm": ("requirements.txt", "requirements-litellm.txt"),
@@ -25,10 +26,18 @@ PLATFORMS = {
     "windows": "windows",
     "linux": "x86_64-manylinux_2_34",
 }
+# Distributions owned only by the optional relation-analyzer profile.
+ANALYZER_ONLY_DISTRIBUTIONS = (
+    "numpy",
+    "matplotlib",
+    "scikit-learn",
+    "scipy",
+    "pillow",
+)
 OWNED_SOURCES = (
     ".gitattributes",
     "requirements.txt",
-    "requirements-core.txt",
+    "requirements-relation-analyzer.txt",
     "requirements-genai.txt",
     "requirements-gui.txt",
     "requirements-litellm.txt",
