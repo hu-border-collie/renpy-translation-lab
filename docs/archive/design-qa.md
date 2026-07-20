@@ -1,8 +1,8 @@
 # Design QA — 项目页与工作流状态归属
 
-文档地图：[docs/README.md](docs/README.md) · 现行用户手册：[GUI 工作台](docs/gui_workbench.md)
+文档地图：[docs/README.md](../README.md) · 现行用户手册：[GUI 工作台](../gui_workbench.md) · 归档索引：[archive/README.md](README.md)
 
-> 本文是 2026-07 统一侧边导航改造的验收快照，不替代现行用户手册。
+> 本文已归档到 `docs/archive/`。2026-07 统一侧边导航改造的验收快照，不替代现行用户手册。
 
 ## 最终制品
 

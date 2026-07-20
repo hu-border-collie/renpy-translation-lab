@@ -1,15 +1,15 @@
 # GUI 信息架构重组计划
 
-文档地图：[docs/README.md](README.md) · **现行界面说明**：[GUI 工作台](gui_workbench.md)
+文档地图：[docs/README.md](../README.md) · **现行界面说明**：[GUI 工作台](../gui_workbench.md) · 归档索引：[archive/README.md](README.md)
 
 > ## 历史文档（非现行用户手册）
 >
-> 本文是 Epic #157 的**设计与交付计划 SSOT**，保留改造前问题、P0–P3 分期与验收清单，供回顾与对照。
+> 本文已归档到 `docs/archive/`。Epic #157 的**设计与交付计划 SSOT**，保留改造前问题、P0–P3 分期与验收清单，供回顾与对照。
 >
 > - **交付状态**：**P0a–P3（#158–#166）已合并**；EmptyState 修复见 [PR #177](https://github.com/hu-border-collie/renpy-translation-lab/pull/177)。
-> - **后续演进**：Epic [#176](https://github.com/hu-border-collie/renpy-translation-lab/issues/176) 已在 PR #183–#190 完成五个长期真实页面、页内独立控件、会话恢复、旧两级下拉清理和工作台协调层抽离；现行结构以 [gui_workbench.md](gui_workbench.md) 为准。
+> - **后续演进**：Epic [#176](https://github.com/hu-border-collie/renpy-translation-lab/issues/176) 已在 PR #183–#190 完成五个长期真实页面、页内独立控件、会话恢复、旧两级下拉清理和工作台协调层抽离；现行结构以 [gui_workbench.md](../gui_workbench.md) 为准。
 > - **请勿**把文中的「分析与准备」「诊断页」「两级下拉子任务」等当作当前 UI 名称——那是改造前形态。
-> - **当前界面、入口与设置分区**一律以 [gui_workbench.md](gui_workbench.md) 为准。
+> - **当前界面、入口与设置分区**一律以 [gui_workbench.md](../gui_workbench.md) 为准。
 >
 > **Epic**：[#157](https://github.com/hu-border-collie/renpy-translation-lab/issues/157)  
 > **性质**：仅 GUI 布局 / 信息架构；**不改变** CLI 语义、`check → apply` 安全合约、manifest 字段。
@@ -718,7 +718,7 @@ Epic #157 GUI 信息架构重组
 
 | 文档 | 动作 |
 |------|------|
-| 本文 `docs/gui_ia_redesign.md` | 计划 SSOT；阶段完成后更新「状态」 |
+| 本文 `docs/archive/gui_ia_redesign.md` | 历史计划 SSOT（已归档）；阶段状态见文首横幅 |
 | `docs/gui_workbench.md` | P1 后按新 IA 重写「主界面」；**P0a** 后先补「工作台日志抽屉 / 工作台任务不强制跳诊断 / 诊断内工具仍放大日志」 |
 | `docs/README.md` | 已链到本文 |
 | 根 `README.md` | 若仍写「三个 Tab + 任务类型下拉」，P1 后改一句 |

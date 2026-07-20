@@ -4,7 +4,7 @@
 
 **当前状态：稳定版。** 稳定范围、验证记录、交付方式与不覆盖事项见 [项目说明](project_notes.md)。
 
-**读文档时**：用户手册以「现行」一组为准；标为历史的文稿只作设计/审计背景，不要当当前界面说明。
+**读文档时**：用户手册以「现行」一组为准；[archive/](archive/README.md) 中的历史文稿只作设计/审计背景，不要当当前界面说明。
 
 ## 推荐阅读（现行）
 
@@ -45,13 +45,13 @@
 - [项目说明](project_notes.md)
 - [story_graph.example.json](story_graph.example.json) · [story_graph.schema.json](story_graph.schema.json)
 
-### 历史参考（非现行用户手册）
+### 历史参考（已归档）
 
-下列文档**保留为过程与审计记录**，界面与交付状态以 [GUI 工作台](gui_workbench.md) 和代码为准。
+下列文档在 [archive/](archive/README.md)，**保留为过程与审计记录**；界面与交付状态以 [GUI 工作台](gui_workbench.md) 和代码为准。
 
-- [GUI 信息架构重组计划](gui_ia_redesign.md)：Epic #157 的 P0–P3 历史设计 SSOT，并记录后续 #176 页面化交付衔接。文中「分析与准备」「诊断页」等多为改造前用语。
-- [翻译全生命周期审计](translation_workflow_audit.md)：流水线与门禁的代码审计快照，可能落后于最新实现细节。
-- [Design QA 验收记录](../design-qa.md)：2026-07 统一侧边导航与页面归属的视觉/自动化验收快照；不是用户手册。
+- [GUI 信息架构重组计划](archive/gui_ia_redesign.md)：Epic #157 的 P0–P3 历史设计 SSOT，并记录后续 #176 页面化交付衔接。文中「分析与准备」「诊断页」等多为改造前用语。
+- [翻译全生命周期审计](archive/translation_workflow_audit.md)：流水线与门禁的代码审计快照，可能落后于最新实现细节。
+- [Design QA 验收记录](archive/design-qa.md)：2026-07 统一侧边导航与页面归属的视觉/自动化验收快照；不是用户手册。
 
 ## 配置分层（速查）
 
@@ -66,4 +66,4 @@
 
 - 改 GUI 入口名称或设置分区时，**同步改** `gui_workbench.md` 与 `gui_qt/user_copy.py` 中的用户文案。
 - 改 doctor 规则时，同步 `doctor_recommendations.md` 与测试。
-- 历史文稿只加状态横幅、不整篇改写成新手册，避免与「现行」重复维护。
+- 历史文稿放在 `archive/`，只加状态横幅或修断链，不整篇改写成新手册，避免与「现行」重复维护。
