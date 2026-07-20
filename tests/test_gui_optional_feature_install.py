@@ -141,7 +141,21 @@ class GuiOptionalFeatureInstallTests(unittest.TestCase):
     def test_process_failure_marks_failed_and_restores_action(self) -> None:
         controller = self.window._ensure_relation_analyzer_install_controller()
         self.window._append_log = mock.Mock()
-        with mock.patch("gui_qt.app.QMessageBox.warning") as warning:
+        # Force a FAILED probe so this is independent of whether packages are
+        # already present in the local interpreter (INSTALLED ignores last_failed).
+        failed_status = _status(FeatureInstallState.FAILED, action="修复安装")
+        with (
+            mock.patch("gui_qt.app.QMessageBox.warning") as warning,
+            mock.patch(
+                "optional_feature.probe_feature",
+                return_value=failed_status,
+            ),
+            mock.patch.object(
+                controller,
+                "current_status",
+                return_value=failed_status,
+            ),
+        ):
             controller.finished.emit(
                 "relation_analyzer",
                 False,
@@ -149,10 +163,10 @@ class GuiOptionalFeatureInstallTests(unittest.TestCase):
             )
             for _ in range(4):
                 self._app.processEvents()
-        warning.assert_called_once()
-        self.assertIn("relation_analyzer", self.window._optional_feature_last_failed)
-        self.window._refresh_relation_analyzer_extension_ui()
-        self.assertTrue(self.window.relation_analyzer_install_btn.isEnabled())
+            warning.assert_called_once()
+            self.assertIn("relation_analyzer", self.window._optional_feature_last_failed)
+            self.window._refresh_relation_analyzer_extension_ui()
+            self.assertTrue(self.window.relation_analyzer_install_btn.isEnabled())
 
     def test_translation_actions_remain_available_while_analyzer_installs(self) -> None:
         controller = self.window._ensure_relation_analyzer_install_controller()
