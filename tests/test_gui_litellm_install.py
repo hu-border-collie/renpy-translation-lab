@@ -2,7 +2,8 @@ import unittest
 from unittest import mock
 
 try:
-    from gui_qt.app import MainWindow, QProcess
+    from gui_qt.app import MainWindow
+    from gui_qt.optional_feature_install import OptionalFeatureInstallController
     from gui_qt.work_modes import WorkMode
 except ImportError as exc:
     MainWindow = None
@@ -49,11 +50,6 @@ class _Button:
         self.text = value
 
 
-class _Process:
-    def errorString(self):
-        return "cannot start"
-
-
 class _ProgressBar:
     def __init__(self):
         self.visible = None
@@ -73,6 +69,8 @@ class _ProgressBar:
 @unittest.skipIf(MainWindow is None, f"GUI dependencies are unavailable: {IMPORT_ERROR}")
 class GuiLiteLLMInstallTests(unittest.TestCase):
     def setUp(self):
+        OptionalFeatureInstallController._active_feature_id = None
+        OptionalFeatureInstallController._active_controller = None
         self.window = MainWindow.__new__(MainWindow)
         self.window.sync_backend_combo = _Combo("litellm")
         self.window.sync_backend_hint = _Label()
@@ -80,7 +78,13 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         self.window.sync_model_combo = _Combo(None)
         self.window.litellm_model_combo = _Combo(None)
         self.window.litellm_install_progress = _ProgressBar()
+        self.window._litellm_install = None
+        self.window._litellm_install_active = False
         self.window._refresh_litellm_install_action_gating = mock.Mock()
+
+    def tearDown(self):
+        OptionalFeatureInstallController._active_feature_id = None
+        OptionalFeatureInstallController._active_controller = None
 
     def test_missing_dependency_shows_enabled_install_button(self):
         with mock.patch("gui_qt.app.importlib.util.find_spec", return_value=None):
@@ -102,38 +106,64 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         self.assertFalse(self.window.install_litellm_btn.enabled)
         self.assertIn("正在后台安装", self.window.sync_backend_hint.value)
 
-    def test_failed_to_start_clears_install_state_and_restores_ui(self):
-        self.window._litellm_install_process = _Process()
-        self.window._litellm_install_active = True
-        self.window._append_log = mock.Mock()
+    def test_failed_install_restores_ui_via_controller_finished(self):
         self.window._on_sync_backend_changed = mock.Mock()
+        self.window._refresh_litellm_version_label = mock.Mock()
+        self.window._on_check_litellm_version = mock.Mock()
+        self.window._selected_sync_backend = mock.Mock(return_value="gemini")
+        self.window.statusBar = mock.Mock(return_value=mock.Mock())
         with mock.patch("gui_qt.app.QMessageBox.warning") as warning:
-            self.window._on_litellm_install_error(
-                QProcess.ProcessError.FailedToStart
+            self.window._on_litellm_install_finished(
+                "litellm",
+                False,
+                "无法启动安装进程：cannot start",
             )
-        self.assertIsNone(self.window._litellm_install_process)
-        self.assertFalse(self.window._litellm_install_active)
         self.window._on_sync_backend_changed.assert_called_once_with(-1)
         warning.assert_called_once()
-        self.assertIn(
-            "cannot start",
-            self.window._append_log.call_args.args[0],
-        )
+        self.assertEqual(warning.call_args.args[1], "LiteLLM 安装失败")
+        self.assertIn("cannot start", warning.call_args.args[2])
 
-    def test_non_start_error_waits_for_finished_cleanup(self):
-        process = _Process()
-        self.window._litellm_install_process = process
-        self.window._litellm_install_active = True
-        self.window._append_log = mock.Mock()
+    def test_successful_install_refreshes_version_and_models(self):
         self.window._on_sync_backend_changed = mock.Mock()
+        self.window._refresh_litellm_version_label = mock.Mock()
+        self.window._on_check_litellm_version = mock.Mock()
+        self.window._on_refresh_litellm_models = mock.Mock()
+        self.window._selected_sync_backend = mock.Mock(return_value="litellm")
+        status_bar = mock.Mock()
+        self.window.statusBar = mock.Mock(return_value=status_bar)
         with mock.patch("gui_qt.app.QMessageBox.warning") as warning:
-            self.window._on_litellm_install_error(
-                QProcess.ProcessError.Crashed
+            self.window._on_litellm_install_finished(
+                "litellm",
+                True,
+                "LiteLLM 安装完成。",
             )
-        self.assertIs(self.window._litellm_install_process, process)
-        self.assertTrue(self.window._litellm_install_active)
-        self.window._on_sync_backend_changed.assert_not_called()
         warning.assert_not_called()
+        status_bar.showMessage.assert_called_once()
+        self.window._refresh_litellm_version_label.assert_called_once()
+        self.window._on_check_litellm_version.assert_called_once()
+        self.window._on_refresh_litellm_models.assert_called_once()
+        self.window._on_sync_backend_changed.assert_called_once_with(-1)
+
+    def test_install_uses_shared_optional_feature_controller(self):
+        controller = mock.Mock()
+        controller.is_running.return_value = False
+        controller.start_install.return_value = (True, "started")
+        self.window._ensure_litellm_install_controller = mock.Mock(
+            return_value=controller
+        )
+        self.window._on_sync_backend_changed = mock.Mock()
+        self.window._on_install_litellm()
+        controller.start_install.assert_called_once_with()
+        self.window._on_sync_backend_changed.assert_called_once_with(-1)
+
+    def test_install_blocks_when_controller_reports_busy(self):
+        controller = mock.Mock()
+        controller.is_running.return_value = True
+        self.window._ensure_litellm_install_controller = mock.Mock(
+            return_value=controller
+        )
+        self.window._on_install_litellm()
+        controller.start_install.assert_not_called()
 
     def test_install_blocks_all_litellm_sync_modes_but_not_batch(self):
         self.window._litellm_install_active = True
@@ -225,6 +255,7 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
             "当前 Python 可用最新版",
         )
         self.assertFalse(self.window.install_litellm_btn.enabled)
+
     def test_gemini_backend_hides_install_button(self):
         self.window.sync_backend_combo = _Combo("gemini")
         self.window._litellm_install_running = mock.Mock(return_value=True)

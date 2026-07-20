@@ -246,6 +246,7 @@ from optional_feature import FeatureInstallState, FeatureStatus
 from .optional_feature_install import (
     OptionalFeatureInstallController,
     action_enabled_for_status,
+    build_litellm_controller,
     build_relation_analyzer_controller,
 )
 from .project_state import ProjectState
@@ -445,7 +446,6 @@ class MainWindow(QMainWindow):
         self._last_main_tab_index = 0
         self._handling_config_tab_leave = False
         self._task_running = False
-        self._litellm_install_active = False
         self._litellm_catalog_worker: LiteLLMModelCatalogWorker | None = None
         self._litellm_version_worker: LiteLLMVersionWorker | None = None
         self._litellm_latest_version = ""
@@ -457,6 +457,7 @@ class MainWindow(QMainWindow):
         self._litellm_catalog_models: dict[str, tuple[str, ...]] = {}
         self._updating_litellm_provider = False
         self._games_registry_panel: GamesRegistryPanel | None = None
+        self._litellm_install: OptionalFeatureInstallController | None = None
         self._relation_analyzer_install: OptionalFeatureInstallController | None = None
         self._optional_feature_last_failed: set[str] = set()
 
@@ -5357,114 +5358,63 @@ class MainWindow(QMainWindow):
             and mode in self._sync_work_modes_requiring_api_key()
         )
 
+    def _ensure_litellm_install_controller(self) -> OptionalFeatureInstallController:
+        controller = getattr(self, "_litellm_install", None)
+        if controller is not None:
+            return controller
+        controller = build_litellm_controller(self)
+        controller.output_received.connect(self._on_optional_feature_install_output)
+        controller.state_changed.connect(self._on_litellm_install_state_changed)
+        controller.finished.connect(self._on_litellm_install_finished)
+        self._litellm_install = controller
+        return controller
+
     def _litellm_install_running(self) -> bool:
-        if bool(getattr(self, "_litellm_install_active", False)):
+        controller = getattr(self, "_litellm_install", None)
+        if controller is not None and controller.is_running():
             return True
-        process = getattr(self, "_litellm_install_process", None)
-        return (
-            process is not None
-            and process.state() != QProcess.ProcessState.NotRunning
-        )
+        # Lightweight unit tests may force busy state without a QProcess.
+        return bool(getattr(self, "_litellm_install_active", False))
 
     def _on_install_litellm(self) -> None:
-        if self._litellm_install_running():
+        controller = self._ensure_litellm_install_controller()
+        if controller.is_running():
             return
-        if OptionalFeatureInstallController.any_install_running():
-            other = OptionalFeatureInstallController.active_feature_id() or "另一可选功能"
-            QMessageBox.information(
-                self,
-                "无法安装 LiteLLM",
-                f"已有可选功能正在安装（{other}），请完成后再试。",
-            )
+        started, message = controller.start_install()
+        if not started:
+            QMessageBox.information(self, "无法安装 LiteLLM", message)
             return
-        requirements_path = Path(__file__).resolve().parents[1] / "requirements-litellm.txt"
-        if not requirements_path.is_file():
-            QMessageBox.warning(self, "无法安装 LiteLLM", f"找不到依赖文件：{requirements_path}")
-            return
-
-        process = QProcess(self)
-        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        environment = QProcessEnvironment.systemEnvironment()
-        environment.insert("PYTHONIOENCODING", "utf-8")
-        environment.insert("PYTHONUTF8", "1")
-        process.setProcessEnvironment(environment)
-        process.readyReadStandardOutput.connect(self._on_litellm_install_output)
-        process.finished.connect(self._on_litellm_install_finished)
-        process.errorOccurred.connect(self._on_litellm_install_error)
-        self._litellm_install_process = process
-        self._litellm_install_active = True
-        self._litellm_install_is_update = bool(installed_litellm_version())
-        # Share the optional-feature install mutex so concurrent pip installs
-        # (e.g. relation analyzer) cannot race the same environment.
-        OptionalFeatureInstallController._active_feature_id = "litellm"
-        OptionalFeatureInstallController._active_controller = None
-        OptionalFeatureInstallController._external_install_active = True
-        pip_args = ["-m", "pip", "install"]
-        if self._litellm_install_is_update:
-            pip_args.append("--upgrade")
-        pip_args.extend(["-r", str(requirements_path)])
-
-        self._show_workbench_log_drawer()
-        action = "更新" if self._litellm_install_is_update else "安装"
-        self._append_log(
-            f"=== 正在{action} LiteLLM ===\n{sys.executable} {' '.join(pip_args)}\n"
-        )
-        process.start(sys.executable, pip_args)
         self._on_sync_backend_changed(-1)
 
-    def _on_litellm_install_output(self) -> None:
-        process = getattr(self, "_litellm_install_process", None)
-        if process is None:
+    def _on_litellm_install_state_changed(
+        self,
+        _feature_id: str,
+        _status: FeatureStatus,
+    ) -> None:
+        self._on_sync_backend_changed(-1)
+
+    def _on_litellm_install_finished(
+        self,
+        feature_id: str,
+        succeeded: bool,
+        message: str,
+    ) -> None:
+        if feature_id != "litellm":
             return
-        text = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
-        if text:
-            self._append_log(text)
-
-    def _clear_external_optional_install_mutex(self) -> None:
-        if getattr(OptionalFeatureInstallController, "_external_install_active", False):
-            OptionalFeatureInstallController._external_install_active = False
-            if OptionalFeatureInstallController._active_feature_id == "litellm":
-                OptionalFeatureInstallController._active_feature_id = None
-                OptionalFeatureInstallController._active_controller = None
-
-    def _on_litellm_install_finished(self, exit_code: int, _exit_status: object) -> None:
-        process = getattr(self, "_litellm_install_process", None)
-        if process is not None:
-            self._on_litellm_install_output()
-        self._litellm_install_process = None
-        self._litellm_install_active = False
-        self._clear_external_optional_install_mutex()
-        importlib.invalidate_caches()
-        action = "更新" if bool(getattr(self, "_litellm_install_is_update", False)) else "安装"
-        succeeded = exit_code == 0 and bool(installed_litellm_version())
         if succeeded:
-            self._append_log(f"\n[LiteLLM {action}完成]\n")
-            self.statusBar().showMessage(f"LiteLLM {action}完成。", 5000)
+            self.statusBar().showMessage(message, 5000)
         else:
-            self._append_log(f"\n[LiteLLM {action}失败，退出码：{exit_code}]\n")
-            QMessageBox.warning(self, f"LiteLLM {action}失败", "请查看工作台日志中的 pip 输出。")
+            QMessageBox.warning(
+                self,
+                "LiteLLM 安装失败",
+                f"{message}\n请查看工作台日志中的 pip 输出。",
+            )
         self._refresh_litellm_version_label()
         self._on_sync_backend_changed(-1)
         if succeeded:
             self._on_check_litellm_version()
             if self._selected_sync_backend() == "litellm":
                 self._on_refresh_litellm_models()
-
-    def _on_litellm_install_error(self, error: object) -> None:
-        process = getattr(self, "_litellm_install_process", None)
-        message = process.errorString() if process is not None else "未知进程错误"
-        self._append_log(f"\n[LiteLLM 安装进程错误] {message}\n")
-        if error != QProcess.ProcessError.FailedToStart:
-            return
-        self._litellm_install_process = None
-        self._litellm_install_active = False
-        self._clear_external_optional_install_mutex()
-        self._on_sync_backend_changed(-1)
-        QMessageBox.warning(
-            self,
-            "LiteLLM 安装失败",
-            f"无法启动安装进程：{message}\n请查看工作台日志了解详情。",
-        )
 
     def _sync_work_modes_requiring_api_key(self) -> frozenset[WorkMode]:
         return frozenset(

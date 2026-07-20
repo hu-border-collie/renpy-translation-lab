@@ -174,14 +174,27 @@ def relation_analyzer_feature(repo_root: Path = REPO_ROOT) -> OptionalFeatureSpe
     )
 
 
+def litellm_lock_relative_path() -> str:
+    """Return the committed platform lock for the current OS, if any."""
+    if sys.platform == "win32":
+        return "requirements-lock/py311-windows-litellm.txt"
+    if sys.platform.startswith("linux"):
+        return "requirements-lock/py311-linux-litellm.txt"
+    return ""
+
+
 def litellm_feature(repo_root: Path = REPO_ROOT) -> OptionalFeatureSpec:
     requirements_path = Path(repo_root) / "requirements-litellm.txt"
     packages = _parse_pinned_requirements(requirements_path)
+    lock_relative = litellm_lock_relative_path()
+    lock_path = Path(repo_root) / lock_relative if lock_relative else None
+    if lock_path is not None and not lock_path.is_file():
+        lock_relative = ""
     return OptionalFeatureSpec(
         feature_id="litellm",
         display_name="LiteLLM",
         packages=packages,
-        lock_relative_path="",  # platform-specific; GUI currently uses unpinned requirements
+        lock_relative_path=lock_relative,
         requirements_relative_path="requirements-litellm.txt",
         purpose="可选同步翻译后端（OpenAI 兼容等 provider）。",
         components=tuple(pkg.distribution for pkg in packages),
