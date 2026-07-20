@@ -20,13 +20,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-_runtime_state_lock = threading.Lock()
+# RLock so apply_runtime_config can nest inside locked_runtime_state /
+# runtime_config_scope without deadlocking (GUI workers hold the outer lock).
+_runtime_state_lock = threading.RLock()
 _active_runtime_config: Optional["RuntimeConfig"] = None
 
 
 @contextmanager
 def locked_runtime_state():
-    """Serialize temporary BASE_DIR overrides across worker threads."""
+    """Serialize temporary BASE_DIR / runtime-config overrides across workers."""
     with _runtime_state_lock:
         yield
 
@@ -1212,6 +1214,48 @@ def get_runtime_config() -> RuntimeConfig:
     if _active_runtime_config is not None:
         return _active_runtime_config.copy()
     return snapshot_runtime_config()
+
+
+@contextmanager
+def runtime_config_scope(
+    config: Optional["RuntimeConfig"] = None,
+    *,
+    reload_translator_settings: bool = False,
+    reload_runtime_config: bool = False,
+    require_api_key: bool = False,
+):
+    """Temporarily publish a job-scoped RuntimeConfig, then restore the previous one.
+
+    Long-lived hosts (GUI workers, registry scans) should use this so a job runs
+    against a frozen configuration snapshot without permanently mutating process
+    globals for other concurrent or subsequent work.
+
+    Args:
+        config: Explicit config to apply for the duration of the ``with`` block.
+            When provided, disk loaders are not run unless a reload flag is also set.
+        reload_translator_settings: When ``config`` is omitted, reload project
+            settings from ``translator_config.json`` (and leave API keys as-is).
+        reload_runtime_config: When ``config`` is omitted, call
+            :func:`load_runtime_config` for a full defaults-first rebuild.
+        require_api_key: Forwarded to :func:`load_runtime_config` when reloading.
+    """
+    if reload_translator_settings and reload_runtime_config:
+        raise ValueError(
+            "reload_translator_settings and reload_runtime_config are mutually exclusive"
+        )
+
+    with locked_runtime_state():
+        previous = snapshot_runtime_config()
+        try:
+            if config is not None:
+                apply_runtime_config(config)
+            elif reload_runtime_config:
+                load_runtime_config(require_api_key=require_api_key)
+            elif reload_translator_settings:
+                load_translator_settings()
+            yield snapshot_runtime_config()
+        finally:
+            apply_runtime_config(previous)
 
 
 def _read_json_object(path: str, *, label: str) -> dict:

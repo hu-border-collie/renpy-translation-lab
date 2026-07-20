@@ -63,15 +63,78 @@ class GuiDoctorWorkerTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("Invalid tl_subdir", result.error)
 
-    def test_worker_delegates_to_run_doctor_check(self):
-        worker = DoctorWorker()
+    def test_run_doctor_check_applies_explicit_config_without_disk_reload(self):
+        import translator_runtime as runtime
+
+        report = {"mode": "ready"}
+        cfg = runtime.default_runtime_config()
+        cfg.prep_language = "korean"
+        cfg.tl_subdir = "game/tl/korean"
+        cfg.base_dir = "C:/games/Example/work"
+        cfg.tl_dir = "C:/games/Example/work/game/tl/korean"
+        cfg.work_game_dir = "C:/games/Example/work/game"
+
+        with mock.patch(
+            "gemini_translate_batch.collect_doctor_report",
+            return_value=report,
+        ), mock.patch(
+            "gemini_translate_batch.load_batch_settings",
+        ), mock.patch(
+            "gemini_translate_batch.print_doctor_report",
+        ), mock.patch(
+            "translator_runtime.load_translator_settings",
+        ) as load_settings, mock.patch(
+            "translator_runtime.load_glossary",
+        ):
+            result = run_doctor_check(cfg)
+
+        self.assertTrue(result.ok)
+        load_settings.assert_not_called()
+
+    def test_run_doctor_check_restores_previous_globals(self):
+        import translator_runtime as runtime
+
+        previous_lang = runtime.PREP_LANGUAGE
+        previous_subdir = runtime.TL_SUBDIR
+        report = {"mode": "ready"}
+        cfg = runtime.default_runtime_config()
+        cfg.prep_language = "japanese"
+        cfg.tl_subdir = "game/tl/japanese"
+        cfg.base_dir = runtime.BASE_DIR
+        cfg.tl_dir = runtime.TL_DIR
+        cfg.work_game_dir = runtime.WORK_GAME_DIR
+
+        try:
+            with mock.patch(
+                "gemini_translate_batch.collect_doctor_report",
+                return_value=report,
+            ), mock.patch(
+                "gemini_translate_batch.load_batch_settings",
+            ), mock.patch(
+                "gemini_translate_batch.print_doctor_report",
+            ), mock.patch(
+                "translator_runtime.load_glossary",
+            ):
+                result = run_doctor_check(cfg)
+            self.assertTrue(result.ok)
+            self.assertEqual(runtime.PREP_LANGUAGE, previous_lang)
+            self.assertEqual(runtime.TL_SUBDIR, previous_subdir)
+        finally:
+            runtime.PREP_LANGUAGE = previous_lang
+            runtime.TL_SUBDIR = previous_subdir
+
+    def test_worker_passes_config_to_run_doctor_check(self):
+        import translator_runtime as runtime
+
+        cfg = runtime.default_runtime_config()
+        worker = DoctorWorker(config=cfg)
         payload = DoctorWorkerResult(True, {"mode": "ready"}, "log")
         with mock.patch(
             "gui_qt.doctor_worker.run_doctor_check",
             return_value=payload,
         ) as run_mock:
             worker.run()
-        run_mock.assert_called_once()
+        run_mock.assert_called_once_with(cfg)
 
 
 if __name__ == "__main__":

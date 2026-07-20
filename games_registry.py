@@ -503,15 +503,33 @@ def scan_project_auto(
 
 @contextmanager
 def _temporary_game_root(work_dir: str) -> Iterator[None]:
+    """Point runtime paths at ``work_dir`` for the block, then fully restore.
+
+    Snapshots the full :class:`~translator_runtime.RuntimeConfig` so temporary
+    path overrides cannot leak into the caller's process globals
+    (issue #216 phase 2).
+    """
     import translator_runtime as runtime
 
     with runtime.locked_runtime_state():
-        previous = runtime.BASE_DIR
-        runtime._apply_game_root(work_dir)
+        previous = runtime.snapshot_runtime_config()
+        # Derive a job-scoped config with the temporary work root while keeping
+        # the caller's language/tl_subdir and other project knobs.
+        job = previous.copy()
+        normalized = runtime._canonical_abs_path(work_dir)
+        job.env_game_root = normalized
+        job.base_dir = normalized
+        job.tl_dir = runtime._canonical_abs_path(
+            os.path.join(normalized, job.tl_subdir or runtime.DEFAULT_TL_SUBDIR)
+        )
+        job.work_game_dir = runtime._canonical_abs_path(
+            os.path.join(normalized, runtime.WORK_GAME_SUBDIR)
+        )
         try:
+            runtime.apply_runtime_config(job)
             yield
         finally:
-            runtime._apply_game_root(previous)
+            runtime.apply_runtime_config(previous)
 
 
 def _doctor_layout_snapshot(game_root: str, has_tl: bool) -> tuple[str, str]:

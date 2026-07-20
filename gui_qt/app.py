@@ -7172,6 +7172,27 @@ class MainWindow(QMainWindow):
     def _is_doctor_running(self) -> bool:
         return self._doctor_worker is not None and self._doctor_worker.isRunning()
 
+    def _snapshot_runtime_config_for_job(self):
+        """Build a frozen RuntimeConfig for an in-process background job.
+
+        Reloads translator settings under the runtime lock so the snapshot
+        matches the current project on disk, then returns an independent copy.
+        Returns None if runtime cannot be imported (worker will reload itself).
+        """
+        try:
+            import translator_runtime as legacy
+        except Exception:
+            return None
+        try:
+            with legacy.locked_runtime_state():
+                legacy.load_translator_settings()
+                return legacy.snapshot_runtime_config()
+        except SystemExit:
+            # Hard config errors surface again inside the worker with user-facing text.
+            return None
+        except Exception:
+            return None
+
     def _on_run_doctor(self):
         if not self._confirm_unsaved_config_before_workflow():
             return
@@ -7196,7 +7217,11 @@ class MainWindow(QMainWindow):
         self._append_log("=== 正在运行环境检查（collect_doctor_report）===\n")
         self._set_task_running(True)
 
-        self._doctor_worker = DoctorWorker(parent=self)
+        # Snapshot current process runtime for this job so a later project switch
+        # (or disk reload) cannot mutate globals mid-doctor. The worker restores
+        # prior globals after the check (issue #216 phase 2).
+        doctor_config = self._snapshot_runtime_config_for_job()
+        self._doctor_worker = DoctorWorker(config=doctor_config, parent=self)
         self._doctor_worker.completed.connect(self._on_doctor_completed)
         self._doctor_worker.start()
 

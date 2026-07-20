@@ -312,5 +312,72 @@ class DefaultsFirstReloadTests(unittest.TestCase):
             _restore_sensitive_runtime(snapshot)
 
 
+class RuntimeConfigScopeTests(unittest.TestCase):
+    def test_scope_applies_config_and_restores_previous(self):
+        snapshot = _snapshot_sensitive_runtime()
+        try:
+            before = runtime.snapshot_runtime_config()
+            job = before.copy()
+            job.prep_language = "korean"
+            job.api_keys = ["scope-key"]
+            seen = {}
+            with runtime.runtime_config_scope(job) as active:
+                seen["lang"] = runtime.PREP_LANGUAGE
+                seen["keys"] = list(runtime.API_KEYS)
+                seen["active_lang"] = active.prep_language
+            self.assertEqual(seen["lang"], "korean")
+            self.assertEqual(seen["keys"], ["scope-key"])
+            self.assertEqual(seen["active_lang"], "korean")
+            self.assertEqual(runtime.PREP_LANGUAGE, before.prep_language)
+            self.assertEqual(runtime.API_KEYS, before.api_keys)
+        finally:
+            _restore_sensitive_runtime(snapshot)
+
+    def test_scope_restores_after_exception(self):
+        snapshot = _snapshot_sensitive_runtime()
+        try:
+            before_lang = runtime.PREP_LANGUAGE
+            job = runtime.snapshot_runtime_config().copy()
+            job.prep_language = "japanese"
+            with self.assertRaises(RuntimeError):
+                with runtime.runtime_config_scope(job):
+                    self.assertEqual(runtime.PREP_LANGUAGE, "japanese")
+                    raise RuntimeError("job failed")
+            self.assertEqual(runtime.PREP_LANGUAGE, before_lang)
+        finally:
+            _restore_sensitive_runtime(snapshot)
+
+    def test_scope_reload_translator_settings_is_restored(self):
+        snapshot = _snapshot_sensitive_runtime()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                workspace = Path(tmp)
+                work = workspace / "work"
+                work.mkdir()
+                config_path = workspace / "translator_config.json"
+                config_path.write_text(
+                    json.dumps(
+                        {
+                            "game_root": str(work),
+                            "tl_subdir": "game/tl/japanese",
+                            "prepare": {"language": "japanese"},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                before_lang = runtime.PREP_LANGUAGE
+                with (
+                    mock.patch.object(runtime, "TRANSLATOR_CONFIG", str(config_path)),
+                    mock.patch.object(runtime, "ROOT_DIR", str(workspace / "tool")),
+                    mock.patch.object(runtime, "TOOL_DIR", str(workspace / "tool")),
+                    mock.patch.dict(os.environ, {}, clear=True),
+                ):
+                    with runtime.runtime_config_scope(reload_translator_settings=True):
+                        self.assertEqual(runtime.PREP_LANGUAGE, "japanese")
+                    self.assertEqual(runtime.PREP_LANGUAGE, before_lang)
+        finally:
+            _restore_sensitive_runtime(snapshot)
+
+
 if __name__ == "__main__":
     unittest.main()
