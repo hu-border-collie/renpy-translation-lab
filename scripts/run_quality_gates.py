@@ -33,6 +33,7 @@ MYPY_SCOPED_PATHS = ("scripts",)
 AUDIT_LOCKS = (
     "requirements-lock/py311-cli.txt",
     "requirements-lock/py311-gui.txt",
+    "requirements-lock/py311-relation-analyzer.txt",
     "requirements-lock/py311-linux-litellm.txt",
     "requirements-lock/py311-windows-litellm.txt",
 )

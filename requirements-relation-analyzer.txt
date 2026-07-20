@@ -1,0 +1,7 @@
+# Optional relation/semantic analyzer scientific stack.
+# Version ownership: this file.
+# Not part of ordinary CLI/GUI/LiteLLM installs.
+numpy==2.4.2
+matplotlib==3.10.8
+scikit-learn==1.8.0
+pillow==12.2.0

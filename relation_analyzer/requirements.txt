@@ -1,2 +1,2 @@
-# Relation mode uses the repository-owned core dependency set.
--r ../requirements-core.txt
+# Relation mode uses the repository-owned analyzer dependency set.
+-r ../requirements-relation-analyzer.txt

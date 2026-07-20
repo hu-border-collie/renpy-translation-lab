@@ -16,8 +16,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, QProcess, QProcessEnvironment, QSize, Qt, QTimer
-from PySide6.QtGui import QBrush, QColor, QGuiApplication, QKeySequence, QPalette, QShortcut
+from PySide6.QtCore import QEvent, QProcess, QProcessEnvironment, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QDesktopServices,
+    QGuiApplication,
+    QKeySequence,
+    QPalette,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -234,6 +242,12 @@ from litellm_provider_config import (
     provider_from_model,
     store_provider_api_key,
 )
+from optional_feature import FeatureInstallState, FeatureStatus
+from .optional_feature_install import (
+    OptionalFeatureInstallController,
+    action_enabled_for_status,
+    build_relation_analyzer_controller,
+)
 from .project_state import ProjectState
 from .theme import apply_theme, system_prefers_dark
 from .icon_provider import set_tabler_button_icon
@@ -443,6 +457,8 @@ class MainWindow(QMainWindow):
         self._litellm_catalog_models: dict[str, tuple[str, ...]] = {}
         self._updating_litellm_provider = False
         self._games_registry_panel: GamesRegistryPanel | None = None
+        self._relation_analyzer_install: OptionalFeatureInstallController | None = None
+        self._optional_feature_last_failed: set[str] = set()
 
         central = QWidget()
         central.setObjectName("app_shell")
@@ -1941,6 +1957,7 @@ class MainWindow(QMainWindow):
             ("api_keys", "密钥", self._build_settings_api_keys_page()),
             ("models", "模型", self._build_settings_models_page()),
             ("litellm", "LiteLLM", self._build_settings_litellm_page()),
+            ("extensions", "扩展", self._build_settings_extensions_page()),
             ("context", "上下文", self._build_settings_context_page()),
             ("appearance", "外观", self._build_settings_appearance_page()),
             ("advanced", "高级", self._build_settings_advanced_page()),
@@ -2251,6 +2268,188 @@ class MainWindow(QMainWindow):
         layout.addWidget(batch_box)
         layout.addStretch(1)
         return page
+
+    def _build_settings_extensions_page(self) -> QWidget:
+        page, layout = self._settings_page("settings_extensions")
+        hint = QLabel(
+            "扩展是按需安装的可选能力。是否启用取决于当前 Python 环境中的安装状态，"
+            "不会单独保存“已启用”开关。安装在后台进行，不会阻止普通翻译任务。"
+        )
+        hint.setWordWrap(True)
+        hint.setObjectName("config_hint_label")
+        layout.addWidget(hint)
+
+        card, card_layout = self._settings_group("关系分析器")
+        card.setObjectName("relation_analyzer_extension_card")
+
+        purpose = QLabel(
+            "从 Ren'Py TL 目录提取人物关系与语义相似度图。"
+            "包含 NumPy、Matplotlib、scikit-learn、Pillow 等科学/图像组件；"
+            "通过独立 CLI（extract_relations.py）运行，不会把重型库加载进 GUI 进程。"
+        )
+        purpose.setWordWrap(True)
+        purpose.setObjectName("config_hint_label")
+        card_layout.addWidget(purpose)
+
+        components = QLabel(
+            "组件：numpy · matplotlib · scikit-learn · pillow（及 scipy 传递依赖）"
+        )
+        components.setWordWrap(True)
+        components.setObjectName("config_hint_label")
+        card_layout.addWidget(components)
+
+        self.relation_analyzer_status_label = QLabel()
+        self.relation_analyzer_status_label.setObjectName("relation_analyzer_status_label")
+        self.relation_analyzer_status_label.setWordWrap(True)
+        card_layout.addWidget(self.relation_analyzer_status_label)
+
+        self.relation_analyzer_failure_label = QLabel()
+        self.relation_analyzer_failure_label.setObjectName("relation_analyzer_failure_label")
+        self.relation_analyzer_failure_label.setWordWrap(True)
+        self.relation_analyzer_failure_label.setVisible(False)
+        card_layout.addWidget(self.relation_analyzer_failure_label)
+
+        action_row = QWidget()
+        action_layout = QHBoxLayout(action_row)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(8)
+        self.relation_analyzer_install_btn = QPushButton("安装并启用")
+        self.relation_analyzer_install_btn.setObjectName("relation_analyzer_install_btn")
+        self.relation_analyzer_install_btn.clicked.connect(
+            self._on_install_relation_analyzer
+        )
+        action_layout.addWidget(self.relation_analyzer_install_btn)
+        self.relation_analyzer_docs_btn = QPushButton("使用说明")
+        self.relation_analyzer_docs_btn.setObjectName("secondary_btn")
+        self.relation_analyzer_docs_btn.clicked.connect(
+            self._on_open_relation_analyzer_docs
+        )
+        action_layout.addWidget(self.relation_analyzer_docs_btn)
+        action_layout.addStretch(1)
+        card_layout.addWidget(action_row)
+
+        self.relation_analyzer_install_progress = QProgressBar()
+        self.relation_analyzer_install_progress.setObjectName(
+            "relation_analyzer_install_progress"
+        )
+        self.relation_analyzer_install_progress.setTextVisible(True)
+        self.relation_analyzer_install_progress.setFormat("正在后台安装关系分析器…")
+        self.relation_analyzer_install_progress.setVisible(False)
+        card_layout.addWidget(self.relation_analyzer_install_progress)
+
+        layout.addWidget(card)
+        layout.addStretch(1)
+
+        self._ensure_relation_analyzer_install_controller()
+        self._refresh_relation_analyzer_extension_ui()
+        return page
+
+    def _ensure_relation_analyzer_install_controller(self) -> OptionalFeatureInstallController:
+        controller = getattr(self, "_relation_analyzer_install", None)
+        if controller is not None:
+            return controller
+        controller = build_relation_analyzer_controller(self)
+        controller.output_received.connect(self._on_optional_feature_install_output)
+        controller.state_changed.connect(self._on_relation_analyzer_status_changed)
+        controller.finished.connect(self._on_relation_analyzer_install_finished)
+        self._relation_analyzer_install = controller
+        return controller
+
+    def _on_optional_feature_install_output(self, text: str) -> None:
+        if text.startswith("==="):
+            self._show_workbench_log_drawer()
+        self._append_log(text)
+
+    def _on_relation_analyzer_status_changed(
+        self,
+        _feature_id: str,
+        status: FeatureStatus,
+    ) -> None:
+        self._apply_relation_analyzer_status(status)
+
+    def _on_relation_analyzer_install_finished(
+        self,
+        feature_id: str,
+        succeeded: bool,
+        message: str,
+    ) -> None:
+        if succeeded:
+            self._optional_feature_last_failed.discard(feature_id)
+            self.statusBar().showMessage(message, 5000)
+        else:
+            self._optional_feature_last_failed.add(feature_id)
+            QMessageBox.warning(self, "关系分析器安装失败", message + "\n请查看工作台日志中的 pip 输出。")
+        self._refresh_relation_analyzer_extension_ui()
+
+    def _refresh_relation_analyzer_extension_ui(self) -> None:
+        if not hasattr(self, "relation_analyzer_status_label"):
+            return
+        controller = self._ensure_relation_analyzer_install_controller()
+        status = controller.current_status()
+        if controller.feature.feature_id in self._optional_feature_last_failed:
+            # Re-probe with failed overlay when not actively installing.
+            if status.state != FeatureInstallState.INSTALLING:
+                from optional_feature import probe_feature
+
+                status = probe_feature(
+                    controller.feature,
+                    installing=False,
+                    last_failed=True,
+                )
+        self._apply_relation_analyzer_status(status)
+
+    def _apply_relation_analyzer_status(self, status: FeatureStatus) -> None:
+        label = getattr(self, "relation_analyzer_status_label", None)
+        button = getattr(self, "relation_analyzer_install_btn", None)
+        progress = getattr(self, "relation_analyzer_install_progress", None)
+        failure = getattr(self, "relation_analyzer_failure_label", None)
+        if label is None or button is None:
+            return
+
+        versions = ""
+        if status.installed_versions:
+            versions = "；已装：" + "、".join(
+                f"{name} {version}"
+                for name, version in sorted(status.installed_versions.items())
+            )
+        label.setText(f"状态：{status.message}{versions}")
+
+        installing = status.state == FeatureInstallState.INSTALLING
+        button.setText(status.action_label)
+        button.setEnabled(action_enabled_for_status(status))
+        if progress is not None:
+            progress.setVisible(installing)
+            if installing:
+                progress.setRange(0, 0)
+                progress.setFormat("正在后台安装关系分析器…")
+
+        if failure is not None:
+            show_failure = status.state == FeatureInstallState.FAILED
+            failure.setVisible(show_failure)
+            if show_failure:
+                failure.setText("最近一次安装失败。请查看工作台日志中的 pip 输出后重试。")
+
+    def _on_install_relation_analyzer(self) -> None:
+        controller = self._ensure_relation_analyzer_install_controller()
+        if controller.is_running():
+            return
+        started, message = controller.start_install()
+        if not started:
+            QMessageBox.information(self, "无法开始安装", message)
+            return
+        self._refresh_relation_analyzer_extension_ui()
+
+    def _on_open_relation_analyzer_docs(self) -> None:
+        controller = self._ensure_relation_analyzer_install_controller()
+        docs = controller.repo_root / controller.feature.docs_relative_path
+        if docs.is_file():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(docs)))
+            return
+        QMessageBox.information(
+            self,
+            "使用说明",
+            "请参阅 docs/relation_analysis.md 与 relation_analyzer/README.md。",
+        )
 
     def _build_settings_litellm_page(self) -> QWidget:
         page, layout = self._settings_page("settings_litellm")
@@ -5170,6 +5369,14 @@ class MainWindow(QMainWindow):
     def _on_install_litellm(self) -> None:
         if self._litellm_install_running():
             return
+        if OptionalFeatureInstallController.any_install_running():
+            other = OptionalFeatureInstallController.active_feature_id() or "另一可选功能"
+            QMessageBox.information(
+                self,
+                "无法安装 LiteLLM",
+                f"已有可选功能正在安装（{other}），请完成后再试。",
+            )
+            return
         requirements_path = Path(__file__).resolve().parents[1] / "requirements-litellm.txt"
         if not requirements_path.is_file():
             QMessageBox.warning(self, "无法安装 LiteLLM", f"找不到依赖文件：{requirements_path}")
@@ -5187,6 +5394,11 @@ class MainWindow(QMainWindow):
         self._litellm_install_process = process
         self._litellm_install_active = True
         self._litellm_install_is_update = bool(installed_litellm_version())
+        # Share the optional-feature install mutex so concurrent pip installs
+        # (e.g. relation analyzer) cannot race the same environment.
+        OptionalFeatureInstallController._active_feature_id = "litellm"
+        OptionalFeatureInstallController._active_controller = None
+        OptionalFeatureInstallController._external_install_active = True
         pip_args = ["-m", "pip", "install"]
         if self._litellm_install_is_update:
             pip_args.append("--upgrade")
@@ -5208,12 +5420,20 @@ class MainWindow(QMainWindow):
         if text:
             self._append_log(text)
 
+    def _clear_external_optional_install_mutex(self) -> None:
+        if getattr(OptionalFeatureInstallController, "_external_install_active", False):
+            OptionalFeatureInstallController._external_install_active = False
+            if OptionalFeatureInstallController._active_feature_id == "litellm":
+                OptionalFeatureInstallController._active_feature_id = None
+                OptionalFeatureInstallController._active_controller = None
+
     def _on_litellm_install_finished(self, exit_code: int, _exit_status: object) -> None:
         process = getattr(self, "_litellm_install_process", None)
         if process is not None:
             self._on_litellm_install_output()
         self._litellm_install_process = None
         self._litellm_install_active = False
+        self._clear_external_optional_install_mutex()
         importlib.invalidate_caches()
         action = "更新" if bool(getattr(self, "_litellm_install_is_update", False)) else "安装"
         succeeded = exit_code == 0 and bool(installed_litellm_version())
@@ -5238,6 +5458,7 @@ class MainWindow(QMainWindow):
             return
         self._litellm_install_process = None
         self._litellm_install_active = False
+        self._clear_external_optional_install_mutex()
         self._on_sync_backend_changed(-1)
         QMessageBox.warning(
             self,

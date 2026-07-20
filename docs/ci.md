@@ -10,7 +10,8 @@
 | `quality` | Linux | lint / type-check / dependency audit（见下文） | **blocking** |
 | `litellm-lock-install` | Linux / Windows | 分别安装 `py311-linux-litellm.txt` / `py311-windows-litellm.txt` | **blocking** |
 | `unittest` | Linux / Windows | 安装 `py311-gui.txt` 并运行完整 unittest | **blocking** |
-| `cli-without-gui` | Linux | 安装 `py311-cli.txt`，确认没有 PySide6 并运行 CLI 测试 | **blocking** |
+| `cli-without-gui` | Linux | 安装 `py311-cli.txt`，确认没有 PySide6 / 分析器包，并运行 CLI 测试 | **blocking** |
+| `relation-analyzer` | Linux | 安装 `py311-relation-analyzer.txt` + `py311-cli.txt`，运行分析器与 RPA 测试 | **blocking** |
 | `gui` | Linux | 安装 `py311-gui.txt` 并运行 offscreen GUI 测试 | **blocking** |
 
 所有产品依赖安装均使用 `pip --require-hashes`。这些检查不访问供应商 API，也不下载 Ren'Py SDK，必须保持确定、快速并作为合并门禁。

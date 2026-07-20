@@ -6,7 +6,7 @@
       "id": "PYSEC-2026-2253",
       "package": "pillow",
       "fix_versions": ["12.3.0"],
-      "reason": "Direct pin pillow==12.2.0 in requirements-core.txt (CLI/GUI). Upgrade is a dedicated dependency PR with lock regeneration.",
+      "reason": "Direct pin pillow==12.2.0 in requirements-relation-analyzer.txt (optional analyzer profile only). Upgrade is a dedicated dependency PR with lock regeneration.",
       "review_by": "2026-08-20"
     },
     {
