@@ -275,6 +275,37 @@ def _copy_tree(
     return copied
 
 
+def _zip_budget_exceeded_message(max_uncompressed_bytes: int) -> str:
+    return f"zip 未压缩体积超过上限（{max_uncompressed_bytes} 字节），已中止。"
+
+
+def _copy_stream_with_byte_cap(
+    src,
+    dst,
+    *,
+    total_bytes: int,
+    max_uncompressed_bytes: int,
+    should_cancel: CancelCheck | None = None,
+    chunk_size: int = 1024 * 1024,
+) -> int:
+    """Stream src→dst while enforcing an uncompressed byte budget.
+
+    Counts **bytes actually written** so understated ZipInfo.file_size cannot
+    bypass the cap. Returns the updated cumulative total.
+    """
+    while True:
+        if _is_cancelled(should_cancel):
+            raise InterruptedError("操作已取消")
+        chunk = src.read(chunk_size)
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        if total_bytes > max_uncompressed_bytes:
+            raise ValueError(_zip_budget_exceeded_message(max_uncompressed_bytes))
+        dst.write(chunk)
+    return total_bytes
+
+
 def _extract_zip_to_staging(
     zip_path: Path,
     staging_root: Path,
@@ -303,14 +334,19 @@ def _extract_zip_to_staging(
             out_path = staging_root / Path(rel)
             if not _path_is_within(staging_root, out_path):
                 continue
-            total_bytes += max(int(info.file_size), 0)
-            if total_bytes > max_uncompressed_bytes:
-                raise ValueError(
-                    f"zip 未压缩体积超过上限（{max_uncompressed_bytes} 字节），已中止。"
-                )
+            # Soft early reject from central directory; hard cap is on written bytes.
+            declared = max(int(info.file_size), 0)
+            if total_bytes + declared > max_uncompressed_bytes:
+                raise ValueError(_zip_budget_exceeded_message(max_uncompressed_bytes))
             out_path.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(info, "r") as src, open(out_path, "wb") as dst:
-                shutil.copyfileobj(src, dst)
+                total_bytes = _copy_stream_with_byte_cap(
+                    src,
+                    dst,
+                    total_bytes=total_bytes,
+                    max_uncompressed_bytes=max_uncompressed_bytes,
+                    should_cancel=should_cancel,
+                )
             extracted += 1
             if extracted == 1 or extracted == total or extracted % 50 == 0:
                 _emit(on_progress, extracted, total, f"解压 {extracted}/{total}")

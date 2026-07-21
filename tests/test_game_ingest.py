@@ -1,6 +1,7 @@
 """Tests for single-game ingest into Game_* layout + registry."""
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
@@ -133,6 +134,36 @@ class GameIngestMaterializeTests(unittest.TestCase):
             self.assertTrue(result.ok, result.message)
             self.assertFalse((workspace / "evil.txt").exists())
             self.assertFalse((workspace.parent / "evil.txt").exists())
+
+    def test_zip_uncompressed_cap_rejects_oversized_declared_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            zip_path = Path(tmp) / "big.zip"
+            payload = b"x" * 8192
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+                zf.writestr("game/options.rpy", payload.decode("latin-1"))
+            staging = Path(tmp) / "staging"
+            with self.assertRaises(ValueError) as ctx:
+                game_ingest._extract_zip_to_staging(
+                    zip_path,
+                    staging,
+                    max_uncompressed_bytes=1024,
+                )
+            self.assertIn("未压缩体积超过上限", str(ctx.exception))
+
+    def test_copy_stream_caps_actual_bytes_even_when_declared_was_zero(self):
+        """Hard budget counts written bytes (understated ZipInfo.file_size)."""
+        src = io.BytesIO(b"y" * 4096)
+        dst = io.BytesIO()
+        with self.assertRaises(ValueError) as ctx:
+            game_ingest._copy_stream_with_byte_cap(
+                src,
+                dst,
+                total_bytes=0,
+                max_uncompressed_bytes=1024,
+                chunk_size=256,
+            )
+        self.assertIn("未压缩体积超过上限", str(ctx.exception))
+        self.assertLessEqual(len(dst.getvalue()), 1024)
 
     def test_conflict_when_folder_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
