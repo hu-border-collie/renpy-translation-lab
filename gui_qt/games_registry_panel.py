@@ -589,9 +589,11 @@ class GamesRegistryPanel(QWidget):
         if not directory:
             return
         chosen = Path(canonical_abs_path(directory))
-        self.set_workspace_root(chosen)
         if self._on_workspace_changed is not None:
+            # Host persists first and re-syncs this panel (including failure revert).
             self._on_workspace_changed(chosen)
+            return
+        self.set_workspace_root(chosen)
 
     def activate_section(self) -> None:
         """Refresh view when the settings nav selects the workspace section."""
@@ -974,7 +976,7 @@ class GamesRegistryPanel(QWidget):
                 row,
                 self._current_game_root,
             )
-            if show_doctor and self._workspace_root is not None:
+            if show_doctor:
                 doctor_layout = str(doctor_report.get("layout_status") or "").strip()
                 doctor_mode = str(doctor_report.get("mode") or "").strip()
                 self._doctor_check_layout_label.setText(
@@ -983,10 +985,14 @@ class GamesRegistryPanel(QWidget):
                 self._doctor_check_mode_label.setText(
                     format_doctor_mode_label(doctor_mode) if doctor_mode else "—"
                 )
-                compare = compare_registry_with_doctor_report(
-                    self._workspace_root,
-                    game_root=self._current_game_root,
-                    report=doctor_report,
+                compare = (
+                    compare_registry_with_doctor_report(
+                        self._workspace_root,
+                        game_root=self._current_game_root,
+                        report=doctor_report,
+                    )
+                    if self._workspace_root is not None
+                    else None
                 )
             else:
                 self._doctor_check_layout_label.setText("—")

@@ -405,15 +405,17 @@ class ProjectState:
 
     def clear_workspace_root(self) -> None:
         """Clear configured workspace (registry features stay gated until set again)."""
-        self._workspace_root = None
         if not self.config_path.exists():
+            self._workspace_root = None
             return
         try:
             data = self._read_json_object(self.config_path, "translator_config.json")
             data.pop("workspace_root", None)
             self._write_json_object(self.config_path, data)
         except Exception:
-            pass
+            # Keep in-memory value if disk write failed (same order as set_workspace_root).
+            return
+        self._workspace_root = None
 
     def _load_workspace_root_from_config(self) -> None:
         if not self.config_path.exists():

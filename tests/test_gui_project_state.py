@@ -25,6 +25,7 @@ class GuiProjectStateTests(unittest.TestCase):
         state.config_path = root / "translator_config.json"
         state._game_root = None
         state._game_root_redirect_from = None
+        state._workspace_root = None
         state._manifest_file_cache = {}
         return state
 
@@ -734,6 +735,67 @@ class GuiProjectStateTests(unittest.TestCase):
 
             self.assertEqual(first.get("mode"), "translation")
             self.assertIsNot(second, first)
+
+    def test_workspace_root_defaults_unset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = self.make_state(Path(tmp))
+            self.assertIsNone(state.get_workspace_root())
+
+    def test_set_and_clear_workspace_root_persists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "ws"
+            workspace.mkdir()
+            state = self.make_state(root)
+            state.config_path.write_text("{}", encoding="utf-8")
+
+            saved = state.set_workspace_root(workspace)
+            self.assert_same_path(saved, workspace)
+            self.assert_same_path(state.get_workspace_root(), workspace)
+            data = json.loads(state.config_path.read_text(encoding="utf-8"))
+            self.assert_same_path(data["workspace_root"], workspace)
+
+            state.clear_workspace_root()
+            self.assertIsNone(state.get_workspace_root())
+            data = json.loads(state.config_path.read_text(encoding="utf-8"))
+            self.assertNotIn("workspace_root", data)
+
+    def test_clear_workspace_root_keeps_memory_when_write_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "ws"
+            workspace.mkdir()
+            state = self.make_state(root)
+            state.config_path.write_text(
+                json.dumps({"workspace_root": str(workspace)}),
+                encoding="utf-8",
+            )
+            state._workspace_root = workspace.resolve()
+
+            with patch.object(
+                state,
+                "_write_json_object",
+                side_effect=ValueError("Failed to write JSON file"),
+            ):
+                state.clear_workspace_root()
+
+            self.assert_same_path(state.get_workspace_root(), workspace)
+            data = json.loads(state.config_path.read_text(encoding="utf-8"))
+            self.assert_same_path(data["workspace_root"], workspace)
+
+    def test_load_workspace_root_from_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "ws"
+            workspace.mkdir()
+            state = self.make_state(root)
+            state.config_path.write_text(
+                json.dumps({"workspace_root": str(workspace)}),
+                encoding="utf-8",
+            )
+            state._load_workspace_root_from_config()
+            self.assert_same_path(state.get_workspace_root(), workspace)
+
 
 if __name__ == "__main__":
     unittest.main()

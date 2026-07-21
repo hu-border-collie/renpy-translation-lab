@@ -42,7 +42,13 @@ class GuiGamesRegistryViewTests(unittest.TestCase):
             self.assertIn("扫描新项目", message)
 
     def test_load_registry_rows_reports_unset_workspace(self):
-        rows, message = load_registry_rows(workspace_root=None)
+        from unittest import mock
+
+        with mock.patch(
+            "gui_qt.games_registry_view.default_workspace_root",
+            return_value=None,
+        ):
+            rows, message = load_registry_rows(workspace_root=None)
         self.assertEqual(rows, [])
         self.assertIn("工作区未设置", message)
 

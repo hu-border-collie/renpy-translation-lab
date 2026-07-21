@@ -7451,17 +7451,18 @@ class MainWindow(QMainWindow):
 
     def _on_workspace_changed(self, workspace_root: Path) -> None:
         """Persist explicit workspace selection from the project list panel."""
+        panel = self.__dict__.get("_games_registry_panel")
         try:
             self.state.set_workspace_root(workspace_root)
         except ValueError as exc:
+            # Revert panel UI if it already showed the unpersisted path.
+            if panel is not None and hasattr(panel, "set_workspace_root"):
+                panel.set_workspace_root(self.state.get_workspace_root())
             QMessageBox.warning(self, "无法更新工作区", str(exc))
             self._append_log(f"更新 workspace_root 失败：{exc}")
             return
-        panel = self.__dict__.get("_games_registry_panel")
         if panel is not None and hasattr(panel, "set_workspace_root"):
-            # Panel already applied the path; ensure it matches persisted value.
-            if panel.workspace_root() != self.state.get_workspace_root():
-                panel.set_workspace_root(self.state.get_workspace_root())
+            panel.set_workspace_root(self.state.get_workspace_root())
         self._append_log(f"工作区已设置为：{workspace_root}")
         self.statusBar().showMessage(f"工作区：{workspace_root}", 5000)
 

@@ -17,11 +17,9 @@ from games_registry import (
     format_doctor_mode_label,
     format_layout_status_label,
     get_registry_preferences,
-    load_configured_workspace_root,
     load_registry,
     resolve_doctor_mode,
     resolve_layout_status,
-    translator_config_path,
 )
 from translator_runtime import canonical_abs_path, resolve_effective_game_root
 
@@ -86,25 +84,6 @@ class RegistryRow:
         if not self.in_renpy_pipeline:
             parts.append("不纳入 Ren'Py 汉化流程")
         return "\n".join(part for part in parts if part.strip())
-
-
-def resolve_workspace_root(
-    tool_root: Path | None = None,
-    *,
-    configured: Path | str | None = None,
-    config_path: Path | None = None,
-) -> Path | None:
-    """Return the explicit workspace root, or None when unset.
-
-    Never falls back to the parent of the tool package. Prefer *configured*
-    (e.g. from ProjectState), then translator_config.json next to the tool.
-    """
-    if configured is not None and str(configured).strip():
-        return Path(str(configured).strip()).expanduser().resolve()
-    cfg = config_path
-    if cfg is None and tool_root is not None:
-        cfg = translator_config_path(tool_root)
-    return load_configured_workspace_root(cfg)
 
 
 def resolve_registry_path(workspace_root: Path | None = None) -> Path:
