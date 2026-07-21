@@ -599,9 +599,11 @@ class GamesRegistryTests(unittest.TestCase):
             parser = registry.build_arg_parser()
             args = parser.parse_args(["--workspace", str(workspace), "show"])
             resolved_ws, registry_path, md_path = registry.resolve_paths(args)
-            self.assertEqual(resolved_ws, workspace.resolve())
-            self.assertEqual(registry_path, workspace / registry.REGISTRY_FILENAME)
-            self.assertEqual(md_path, workspace / registry.GAMES_MD_FILENAME)
+            # Windows tempfile may use 8.3 short paths; compare fully resolved forms.
+            expected_ws = workspace.resolve()
+            self.assertEqual(resolved_ws, expected_ws)
+            self.assertEqual(registry_path.resolve(), (expected_ws / registry.REGISTRY_FILENAME))
+            self.assertEqual(md_path.resolve(), (expected_ws / registry.GAMES_MD_FILENAME))
 
 
 if __name__ == "__main__":
