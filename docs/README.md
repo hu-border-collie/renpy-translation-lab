@@ -45,6 +45,12 @@
 - [项目说明](project_notes.md)
 - [story_graph.example.json](story_graph.example.json) · [story_graph.schema.json](story_graph.schema.json)
 
+### 规划中（非用户手册）
+
+进行中的设计与路线图在 [plans/](plans/README.md)。落地后应写入现行手册，旧稿可迁 [archive/](archive/README.md)。
+
+- [文译参考对照与 Batch 主路径增强计划](plans/wenyi_reference_and_batch_roadmap.md)
+
 ### 历史参考（已归档）
 
 下列文档在 [archive/](archive/README.md)，**保留为过程与审计记录**；界面与交付状态以 [GUI 工作台](gui_workbench.md) 和代码为准。

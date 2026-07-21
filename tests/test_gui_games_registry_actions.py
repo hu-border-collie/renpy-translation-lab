@@ -12,6 +12,7 @@ from gui_qt.games_registry_actions import (
     delete_registry_project,
     discover_registry_projects,
     import_registry_from_games_md,
+    ingest_registry_project,
     record_apply_batch_for_game_root,
     refresh_registry_projects,
     render_registry_games_md,
@@ -221,6 +222,29 @@ class GuiGamesRegistryActionsTests(unittest.TestCase):
             self.assertTrue(result.ok)
             data = registry.load_registry(workspace / registry.REGISTRY_FILENAME)
             self.assertTrue(data["preferences"]["auto_discover_on_open"])
+
+    def test_ingest_registry_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "ws"
+            workspace.mkdir()
+            source = Path(tmp) / "src"
+            game = source / "game"
+            game.mkdir(parents=True)
+            (game / "options.rpy").write_text("define config.version = '1'\n", encoding="utf-8")
+
+            result = ingest_registry_project(
+                workspace,
+                source=source,
+                game_name="GUI Ingest",
+            )
+            self.assertTrue(result.ok, result.message)
+            self.assertEqual(result.project_path, "Game_GUIIngest")
+            self.assertTrue(result.project_id)
+            self.assertTrue(
+                (workspace / "Game_GUIIngest" / "original" / "game" / "options.rpy").is_file()
+            )
+            data = registry.load_registry(workspace / registry.REGISTRY_FILENAME)
+            self.assertEqual(data["projects"][0]["name"], "GUI Ingest")
 
 
 if __name__ == "__main__":

@@ -14,9 +14,10 @@ try:
     from PySide6.QtWidgets import QApplication
 
     from gui_qt.games_registry_actions import RegistryActionResult
-    from gui_qt.games_registry_worker import RegistryRefreshWorker
+    from gui_qt.games_registry_worker import RegistryIngestWorker, RegistryRefreshWorker
 except ImportError as exc:
     RegistryRefreshWorker = None  # type: ignore[assignment,misc]
+    RegistryIngestWorker = None  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
@@ -83,6 +84,49 @@ class GuiGamesRegistryWorkerTests(unittest.TestCase):
             )
             worker.request_stop()
             self.assertTrue(worker._should_cancel())
+
+    def test_ingest_worker_emits_completed_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            source = Path(tmp) / "src"
+            source.mkdir()
+            worker = RegistryIngestWorker(
+                workspace_root=workspace,
+                source=source,
+                game_name="Demo",
+            )
+            with mock.patch(
+                "gui_qt.games_registry_worker.ingest_registry_project",
+                return_value=RegistryActionResult(
+                    True, "imported", project_id="game_demo", project_path="Game_Demo"
+                ),
+            ) as ingest_mock:
+                results: list[RegistryActionResult] = []
+                worker.completed.connect(results.append)
+                worker.run()
+                ingest_mock.assert_called_once()
+            self.assertEqual(len(results), 1)
+            self.assertTrue(results[0].ok)
+            self.assertEqual(results[0].project_path, "Game_Demo")
+
+    def test_ingest_worker_emits_failure_when_action_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            worker = RegistryIngestWorker(
+                workspace_root=workspace,
+                source=Path(tmp) / "missing",
+                game_name="Demo",
+            )
+            with mock.patch(
+                "gui_qt.games_registry_worker.ingest_registry_project",
+                side_effect=RuntimeError("boom"),
+            ):
+                results: list[RegistryActionResult] = []
+                worker.completed.connect(results.append)
+                worker.run()
+            self.assertEqual(len(results), 1)
+            self.assertFalse(results[0].ok)
+            self.assertIn("boom", results[0].message)
 
 
 if __name__ == "__main__":

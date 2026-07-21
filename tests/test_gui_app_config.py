@@ -980,26 +980,33 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(activated, [True])
         self.assertEqual(self.window._last_main_tab_index, 1)
 
-    def test_on_registry_switch_project_focuses_project_section(self):
+    def test_on_registry_switch_project_stays_on_workspace_section(self):
         switched = []
         focused = []
+        panel_roots = []
 
         class FakePanel:
-            def set_current_game_root(self, _root):
-                pass
+            def set_current_game_root(self, root):
+                panel_roots.append(root)
 
         self.window._switch_game_root = lambda target: switched.append(target) or True
         self.window._focus_settings_section = lambda key: focused.append(key)
         self.window._show_settings_status = lambda *_args, **_kwargs: None
         self.window._confirm_unsaved_config_before_registry_switch = lambda: True
         self.window._games_registry_panel = FakePanel()
-        self.window.state = type("FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")})()
+        self.window.state = type(
+            "FakeState",
+            (),
+            {"get_game_root": lambda self: Path("C:/Game/work")},
+        )()
 
         result = self.window._on_registry_switch_project("C:/Game/work")
 
         self.assertTrue(result)
         self.assertEqual(switched, ["C:/Game/work"])
-        self.assertEqual(focused, ["project"])
+        # Stay on 项目列表 — do not auto-jump to 项目 settings.
+        self.assertEqual(focused, [])
+        self.assertEqual(panel_roots, [Path("C:/Game/work")])
 
     def test_on_registry_switch_project_blocked_when_unsaved_changes_cancelled(self):
         from unittest.mock import patch

@@ -13,6 +13,8 @@ from games_registry import (
     default_registry_path,
     default_workspace_root,
     discover_new_project_paths,
+    format_doctor_mode_label,
+    format_layout_status_label,
     get_registry_preferences,
     load_registry,
     resolve_doctor_mode,
@@ -20,7 +22,15 @@ from games_registry import (
 )
 from translator_runtime import canonical_abs_path, resolve_effective_game_root
 
-REGISTRY_TABLE_COLUMNS = ("项目", "路径", "版本", "目录状态", "游玩", "翻译")
+# Table column presets live in games_registry_table (EUI + Carbon resource list).
+# Re-export for older imports.
+from .games_registry_table import (  # noqa: E402
+    REGISTRY_PREF_TABLE_COLUMN_WIDTHS,
+    REGISTRY_PREF_TABLE_COLUMN_WIDTHS_LEGACY,
+    REGISTRY_TABLE_COLUMNS,
+    REGISTRY_TABLE_DEFAULT_WIDTHS,
+    REGISTRY_TABLE_PATH_COLUMN,
+)
 
 REGISTRY_SORT_NAME_ASC = "name_asc"
 REGISTRY_SORT_NAME_DESC = "name_desc"
@@ -138,7 +148,7 @@ def registry_row_from_project(workspace_root: Path, project: dict[str, Any]) -> 
         name=str(project.get("name") or ""),
         path=path,
         version=str(project.get("version") or "待确认"),
-        layout_status=resolve_layout_status(project) or "待确认",
+        layout_status=format_layout_status_label(resolve_layout_status(project)),
         play_status=str(project.get("play_status") or "待确认"),
         translation_status=str(project.get("translation_status") or "待确认"),
         notes=str(project.get("notes") or ""),
@@ -147,7 +157,7 @@ def registry_row_from_project(workspace_root: Path, project: dict[str, Any]) -> 
         work_dir=resolve_project_work_dir(workspace_root, path).as_posix() if path else "",
         auto_summary=format_auto_summary(auto),
         translation_status_source=status_source,
-        doctor_mode=resolve_doctor_mode(project),
+        doctor_mode=format_doctor_mode_label(resolve_doctor_mode(project)),
         last_refresh_at=str(auto.get("last_refresh_at") or ""),
     )
 

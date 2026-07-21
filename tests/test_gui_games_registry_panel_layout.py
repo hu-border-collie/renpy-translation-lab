@@ -96,7 +96,7 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
                 widget.text() if hasattr(widget, "text") else widget.objectName()
                 for widget in panel._maintenance_toolbar._items
             ],
-            ["扫描新项目", "打开分区时自动扫描新项目"],
+            ["扫描新项目", "导入游戏…", "打开分区时自动扫描新项目"],
         )
         self.assertEqual(
             [widget.text() for widget in panel._registry_toolbar._items],
@@ -117,6 +117,75 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
             for _ in range(4):
                 self._app.processEvents()
             self.assertFalse(panel._edit_group.isHidden())
+
+    def test_table_column_path_is_last_stretch_and_drag_clamps_eui_min(self) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QHeaderView
+
+        from gui_qt.games_registry_table import REGISTRY_TABLE_PATH_COLUMN
+
+        self.window.resize(1200, 800)
+        self.window.show()
+        self.window._focus_settings_section("workspace")
+        for _ in range(12):
+            self._app.processEvents()
+        panel = self.window._games_registry_panel
+        assert panel is not None
+        header = panel._table.horizontalHeader()
+        # Path is last flex column (EUI: one flex; Carbon-style resource list).
+        self.assertEqual(REGISTRY_TABLE_PATH_COLUMN, panel._table.columnCount() - 1)
+        self.assertTrue(header.stretchLastSection())
+        self.assertEqual(
+            header.sectionResizeMode(REGISTRY_TABLE_PATH_COLUMN),
+            QHeaderView.ResizeMode.Stretch,
+        )
+        self.assertEqual(
+            header.sectionResizeMode(0),
+            QHeaderView.ResizeMode.Interactive,
+        )
+        # Layout status (enum) min must cover longest known label sample.
+        layout_min = panel._header_min_width(1)
+        self.assertGreaterEqual(layout_min, panel._header_min_width(0))
+
+        panel._reset_table_column_layout()
+        min_name = panel._header_min_width(0)
+        # Shrink below header min → clamp.
+        panel._on_table_section_resized(0, 200, 10)
+        self.assertGreaterEqual(panel._table.columnWidth(0), min_name)
+        # Path stretch: resize handler is a no-op.
+        path_col = REGISTRY_TABLE_PATH_COLUMN
+        path_before = panel._table.columnWidth(path_col)
+        panel._on_table_section_resized(path_col, path_before, path_before + 80)
+        # Widen name freely; path absorbs leftover via last-section Stretch.
+        panel._on_table_section_resized(0, min_name, min_name + 60)
+        self.assertEqual(panel._table.columnWidth(0), min_name + 60)
+
+        self.assertEqual(
+            panel._table.textElideMode(),
+            Qt.TextElideMode.ElideRight,
+        )
+        # Headers: 项目 | 目录状态 | 版本 | 游玩 | 翻译 | 路径
+        headers = [
+            panel._table.horizontalHeaderItem(i).text()
+            for i in range(panel._table.columnCount())
+        ]
+        self.assertEqual(
+            headers,
+            ["项目", "目录状态", "版本", "游玩", "翻译", "路径"],
+        )
+
+    def test_detail_translation_status_matches_annotated_table_value(self) -> None:
+        """Annotated statuses like 已完成（6.7 增量） must not collapse to 待确认."""
+        from gui_qt.games_registry_panel import _set_status_combo_value
+        from gui_qt.widget_helpers import NoWheelComboBox
+        from games_registry import TRANSLATION_STATUSES
+
+        combo = NoWheelComboBox()
+        combo.addItems(sorted(TRANSLATION_STATUSES))
+        _set_status_combo_value(combo, "已完成（6.7 增量）")
+        self.assertEqual(combo.currentText(), "已完成（6.7 增量）")
+        _set_status_combo_value(combo, "已完成")
+        self.assertEqual(combo.currentText(), "已完成")
 
     def test_workspace_status_and_filter_combos_share_widths(self) -> None:
         """Play/translation status and engine/translation filters must match widths."""

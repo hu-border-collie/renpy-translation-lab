@@ -7,6 +7,7 @@ Commands::
 
     python games_registry.py import-md
     python games_registry.py discover
+    python games_registry.py ingest --source path/to/game_or.zip
     python games_registry.py refresh --all
     python games_registry.py refresh --project glory_hounds
     python games_registry.py render-md
@@ -84,7 +85,7 @@ GAMES_MD_HEADER = """# 游戏状态总表
 
 - 游玩状态：`未玩` / `进行中` / `已玩完` / `弃置` / `待确认`
 - 翻译状态：`未开始` / `待提取` / `待反编译` / `待翻译` / `翻译中` / `待润色` / `已完成` / `待确认`
-- 当前版本：优先取当前基线发行版的 `build_info.json` 或 `options.rpy`；没有明确游戏版本时再参考归档包名、启动器名或构建目录名。`script_version.txt` 是 Ren'Py 引擎版本，不作为游戏版本。
+- 当前版本：优先取 `build_info.json`（含 Ren'Py 常见的 `game/cache/build_info.json`）或 `options.rpy` 的 `config.version`。`script_version.txt` 是 Ren'Py 引擎版本，不作为游戏版本。
 - 术语提取：`glossary.json` / `macro_setting.md` / `extracted_keywords/` / 系列 `shared/` 术语表 / 对话提取批次，均记入备注。
 
 ## 项目状态
@@ -240,7 +241,77 @@ def discover_new_project_paths(workspace_root: Path, registry: dict[str, Any]) -
     ]
 
 
+# Machine codes stay English (doctor / compare); UI and GAMES.md show Chinese.
+LAYOUT_STATUS_LABELS: dict[str, str] = {
+    "ready": "就绪",
+    "attention": "需关注",
+    "switch_to_work": "建议使用 work",
+    "failed": "不可用",
+    "non_renpy": "非 Ren'Py",
+}
+# Reverse map for Chinese short labels and a few legacy free-form phrases.
+_LAYOUT_STATUS_ALIASES: dict[str, str] = {
+    **{label: code for code, label in LAYOUT_STATUS_LABELS.items()},
+    "待确认": "",
+    "已整理": "ready",
+    "已建 work": "attention",
+    "Unity 包": "non_renpy",
+}
+DOCTOR_MODE_LABELS: dict[str, str] = {
+    "existing_tl_only": "已有 TL 模板",
+    "can_generate_template": "可生成模板",
+    "blocked_missing_template": "缺少模板且无法生成",
+}
+
+
+def canonicalize_layout_status(raw: str) -> str:
+    """Map free-form Chinese notes / labels to a short machine code when possible.
+
+    Returns empty string when unknown / placeholder. Unknown free-form text that
+    cannot be classified is returned unchanged so callers can still display it.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if text in LAYOUT_STATUS_LABELS:
+        return text
+    if text in _LAYOUT_STATUS_ALIASES:
+        return _LAYOUT_STATUS_ALIASES[text]
+
+    compact = text.replace("`", "").replace(" ", "")
+    lower = text.lower()
+
+    if any(
+        marker in lower
+        for marker in (
+            "非 ren",
+            "non ren",
+            "unity",
+            "tyrano",
+            "nw.js",
+            "nwjs",
+            "package.nw",
+        )
+    ):
+        return "non_renpy"
+    if "switch_to_work" in lower or "建议使用 work" in text or "请改用 work" in text:
+        return "switch_to_work"
+    if text == "ready" or text == "就绪" or "检查通过" in text:
+        return "ready"
+    if text == "failed" or text == "不可用" or "检查失败" in text or "损坏" in text:
+        return "failed"
+    if text == "attention" or text == "需关注" or "需处理" in text:
+        return "attention"
+    # Legacy long notes like「已建 original/work/build；…」
+    if "已建" in compact or "已整理" in compact or "已建original" in compact.lower():
+        if any(marker in lower for marker in ("非 ren", "unity", "tyrano", "nw")):
+            return "non_renpy"
+        return "attention"
+    return text
+
+
 def resolve_layout_status(project: dict[str, Any]) -> str:
+    """Raw layout value for storage / doctor compare (code or legacy free-form)."""
     layout = str(project.get("layout_status") or "").strip()
     if layout:
         return layout
@@ -248,9 +319,34 @@ def resolve_layout_status(project: dict[str, Any]) -> str:
     return str(auto.get("doctor_layout") or "").strip()
 
 
+def format_layout_status_label(raw: str) -> str:
+    """Human-readable layout status for tables and GAMES.md (always short Chinese)."""
+    text = str(raw or "").strip()
+    if not text:
+        return "待确认"
+    code = canonicalize_layout_status(text)
+    if code in LAYOUT_STATUS_LABELS:
+        return LAYOUT_STATUS_LABELS[code]
+    if not code:
+        return "待确认"
+    # Unknown free-form: keep short; never show multi-sentence legacy blobs in UI.
+    if len(code) > 16 or "；" in code or ";" in code:
+        return "需关注"
+    return code
+
+
 def resolve_doctor_mode(project: dict[str, Any]) -> str:
+    """Raw doctor mode code (English machine token)."""
     auto = project.get("auto") if isinstance(project.get("auto"), dict) else {}
     return str(auto.get("doctor_mode") or "").strip()
+
+
+def format_doctor_mode_label(raw: str) -> str:
+    """Human-readable doctor / template mode for UI."""
+    text = str(raw or "").strip()
+    if not text:
+        return "—"
+    return DOCTOR_MODE_LABELS.get(text, text)
 
 
 def sync_layout_status_from_auto(project: dict[str, Any]) -> None:
@@ -258,6 +354,21 @@ def sync_layout_status_from_auto(project: dict[str, Any]) -> None:
     doctor_layout = str(auto.get("doctor_layout") or "").strip()
     if doctor_layout:
         project["layout_status"] = doctor_layout
+        return
+
+    # Non-Ren'Py (or doctor skipped): prefer a short machine code over free-form notes.
+    in_pipeline = project.get("in_renpy_pipeline")
+    if in_pipeline is None:
+        in_pipeline = auto.get("in_renpy_pipeline", True)
+    engine = str(project.get("engine") or auto.get("engine") or "").lower()
+    if not in_pipeline or engine in {"unity", "tyrano", "other"}:
+        project["layout_status"] = "non_renpy"
+        return
+
+    current = str(project.get("layout_status") or "").strip()
+    code = canonicalize_layout_status(current)
+    if code in LAYOUT_STATUS_LABELS:
+        project["layout_status"] = code
 
 
 def infer_engine(project_root: Path) -> tuple[str, bool]:
@@ -297,10 +408,14 @@ def _read_text(path: Path) -> str:
 
 
 def detect_game_version(project_root: Path) -> tuple[str, str]:
+    # Ren'Py commonly writes build_info under game/cache/ (not always game/ root).
     candidates = [
         project_root / "original" / "game" / "build_info.json",
+        project_root / "original" / "game" / "cache" / "build_info.json",
         project_root / "work" / "game" / "build_info.json",
+        project_root / "work" / "game" / "cache" / "build_info.json",
         project_root / "build" / "build_info.json",
+        project_root / "build" / "game" / "cache" / "build_info.json",
         project_root / "original" / "game" / "options.rpy",
         project_root / "work" / "game" / "options.rpy",
     ]
@@ -321,7 +436,9 @@ def detect_game_version(project_root: Path) -> tuple[str, str]:
             match = VERSION_CONFIG_RE.search(_read_text(candidate))
             if match and match.group(1).strip():
                 return match.group(1).strip(), "detected"
-    return "", "manual"
+    # Not "manual": an empty detect must remain re-tryable on later refresh.
+    # (Older rows used version="待确认" + source="manual", which blocked updates.)
+    return "", "pending"
 
 
 def collect_tl_counts(tl_dir: Path) -> dict[str, int]:
@@ -909,11 +1026,18 @@ def refresh_project(
     auto = scan_project_auto(workspace_root, project, deep=deep)
     project["auto"] = auto
 
-    if project.get("version_source") != "manual" or not project.get("version"):
+    current_version = str(project.get("version") or "").strip()
+    version_is_placeholder = current_version in {"", "待确认"}
+    # Only skip re-detect when the user explicitly set a real manual version.
+    if project.get("version_source") != "manual" or version_is_placeholder:
         detected_version, source = detect_game_version(workspace_root / project["path"])
         if detected_version:
             project["version"] = detected_version
             project["version_source"] = source
+        elif version_is_placeholder:
+            project["version"] = "待确认"
+            if project.get("version_source") != "manual":
+                project["version_source"] = source or "pending"
 
     if project.get("translation_status_source") != "manual":
         project["translation_status"] = suggest_translation_status(project, auto)
@@ -1000,7 +1124,9 @@ def render_games_md(registry: dict[str, Any]) -> str:
         name = _escape_md_table_cell(project.get("name", ""))
         path = _escape_md_table_cell(project.get("path", ""))
         version = _escape_md_table_cell(project.get("version") or "待确认")
-        layout = _escape_md_table_cell(resolve_layout_status(project))
+        layout = _escape_md_table_cell(
+            format_layout_status_label(resolve_layout_status(project))
+        )
         play = _escape_md_table_cell(project.get("play_status", "待确认"))
         translation = _escape_md_table_cell(render_translation_status(project))
         notes = _escape_md_table_cell(render_notes(project))
@@ -1109,6 +1235,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Run a refresh on each newly discovered project",
     )
 
+    ingest_parser = subparsers.add_parser(
+        "ingest",
+        help="Copy a game directory or .zip into Game_*/original/work/build and register it",
+    )
+    ingest_parser.add_argument(
+        "--source",
+        type=Path,
+        required=True,
+        help="Path to an unpacked game directory or a .zip archive",
+    )
+    ingest_parser.add_argument(
+        "--name",
+        "--game-name",
+        dest="game_name",
+        default=None,
+        help="Game display name (drives final Game_* folder; default: from source name)",
+    )
+    ingest_parser.add_argument(
+        "--deep",
+        action="store_true",
+        help="Run a deep doctor refresh after registering (default: lite filesystem scan)",
+    )
+
     refresh_parser = subparsers.add_parser("refresh", help="Refresh auto-detected project fields")
     refresh_group = refresh_parser.add_mutually_exclusive_group(required=True)
     refresh_group.add_argument("--all", action="store_true", help="Refresh every project")
@@ -1174,6 +1323,36 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  + {rel_path}")
         else:
             print("No new workspace projects discovered.")
+        return 0
+
+    if args.command == "ingest":
+        import game_ingest
+
+        mode = REFRESH_MODE_DEEP if getattr(args, "deep", False) else REFRESH_MODE_LITE
+
+        def _ingest_progress(current: int, total: int, name: str) -> None:
+            print(f"[{current}/{total}] {name}", flush=True)
+
+        result = game_ingest.ingest_game(
+            source=args.source,
+            workspace_root=workspace,
+            registry_path=registry_path,
+            game_name=getattr(args, "game_name", None),
+            refresh=True,
+            mode=mode,
+            on_progress=_ingest_progress,
+        )
+        if not result.ok:
+            print(result.message, file=sys.stderr)
+            return 1
+        print(result.message)
+        if result.folder_name:
+            print(f"  folder: {result.folder_name}")
+        if result.project_id:
+            print(f"  id: {result.project_id}")
+        if result.game_name:
+            print(f"  name: {result.game_name}")
+        print(f"  registry: {registry_path}")
         return 0
 
     registry = load_registry(registry_path)
