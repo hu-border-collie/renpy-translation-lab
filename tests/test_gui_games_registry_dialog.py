@@ -57,6 +57,88 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             self.assertEqual(len(switched), 1)
             self.assertTrue(switched[0].endswith("Game_Example"))
 
+    def test_panel_empty_workspace_shows_empty_state_and_blocks_actions(self):
+        panel = GamesRegistryPanel(None, workspace_root=None, auto_discover_on_show=False)
+        self.assertIsNone(panel.workspace_root())
+        # isHidden() reflects setVisible without requiring a shown parent window.
+        self.assertFalse(panel._workspace_empty_state.isHidden())
+        self.assertTrue(panel._workspace_body.isHidden())
+        with mock.patch(
+            "gui_qt.games_registry_panel.message_box_information"
+        ) as info:
+            self.assertIsNone(panel._require_workspace())
+            info.assert_called()
+        with mock.patch(
+            "gui_qt.games_registry_panel.message_box_information"
+        ) as info:
+            with mock.patch(
+                "gui_qt.games_registry_panel.discover_registry_projects"
+            ) as discover:
+                panel._discover_new_projects()
+                discover.assert_not_called()
+                info.assert_called()
+
+    def test_panel_host_task_disables_choose_workspace_and_empty_action(self):
+        panel = GamesRegistryPanel(None, workspace_root=None, auto_discover_on_show=False)
+        panel.set_host_task_running(True)
+        self.assertFalse(panel._choose_workspace_btn.isEnabled())
+        if panel._workspace_empty_state._action_btn is not None:
+            self.assertFalse(panel._workspace_empty_state._action_btn.isEnabled())
+        panel.set_host_task_running(False)
+        self.assertTrue(panel._choose_workspace_btn.isEnabled())
+
+    def test_panel_choose_workspace_host_success_and_revert_on_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "ws"
+            workspace.mkdir()
+
+            # Mirror MainWindow._on_workspace_changed success path.
+            def on_ok(path: Path, panel_ref: list) -> None:
+                panel_ref[0].set_workspace_root(path)
+
+            panel_box: list = []
+            panel = GamesRegistryPanel(
+                None,
+                workspace_root=None,
+                on_workspace_changed=lambda p: on_ok(p, panel_box),
+                auto_discover_on_show=False,
+            )
+            panel_box.append(panel)
+            with mock.patch(
+                "gui_qt.games_registry_panel.QFileDialog.getExistingDirectory",
+                return_value=str(workspace),
+            ):
+                panel._choose_workspace()
+            self.assertIsNotNone(panel.workspace_root())
+            self.assertEqual(
+                Path(panel.workspace_root()).resolve(),
+                workspace.resolve(),
+            )
+            self.assertTrue(panel._workspace_empty_state.isHidden())
+            self.assertFalse(panel._workspace_body.isHidden())
+
+            # Failure path: host reverts to previous (None).
+            def on_fail(path: Path, panel_ref: list) -> None:
+                # Simulate persist failure: keep previous root.
+                panel_ref[0].set_workspace_root(None)
+
+            panel2_box: list = []
+            panel2 = GamesRegistryPanel(
+                None,
+                workspace_root=None,
+                on_workspace_changed=lambda p: on_fail(p, panel2_box),
+                auto_discover_on_show=False,
+            )
+            panel2_box.append(panel2)
+            with mock.patch(
+                "gui_qt.games_registry_panel.QFileDialog.getExistingDirectory",
+                return_value=str(workspace),
+            ):
+                panel2._choose_workspace()
+            self.assertIsNone(panel2.workspace_root())
+            self.assertFalse(panel2._workspace_empty_state.isHidden())
+            self.assertTrue(panel2._workspace_body.isHidden())
+
     def test_dialog_loads_rows_and_accepts_switch(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

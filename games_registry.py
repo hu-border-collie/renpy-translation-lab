@@ -107,19 +107,104 @@ TL_OLD_LINE_RE = re.compile(r'^\s*old\s+"')
 TL_COMMENT_SOURCE_RE = re.compile(r"^\s*#\s+")
 
 
-def default_workspace_root() -> Path:
-    tool_root = Path(__file__).resolve().parent
-    return tool_root.parent
+def tool_package_root() -> Path:
+    """Directory that contains games_registry.py (the tool / repo root)."""
+    return Path(__file__).resolve().parent
+
+
+def default_workspace_root() -> Path | None:
+    """Return the configured workspace, or None when unset.
+
+    Workspace is **never** inferred from the tool install path (e.g. parent of
+    ``renpy-translation-lab``). Callers must pass ``--workspace``, load
+    ``workspace_root`` from ``translator_config.json``, or require an explicit
+    GUI selection.
+    """
+    return load_configured_workspace_root()
+
+
+def translator_config_path(tool_root: Path | None = None) -> Path:
+    root = tool_root if tool_root is not None else tool_package_root()
+    return Path(root) / "translator_config.json"
+
+
+def load_configured_workspace_root(config_path: Path | None = None) -> Path | None:
+    """Load absolute workspace path from translator_config.json, if present."""
+    path = Path(config_path) if config_path is not None else translator_config_path()
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig") or "{}")
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    raw = data.get("workspace_root")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    # Normalize at load so relative values do not depend on process CWD later.
+    return Path(raw.strip()).expanduser().resolve()
+
+
+def save_configured_workspace_root(
+    workspace: Path | str,
+    config_path: Path | None = None,
+) -> Path:
+    """Persist workspace_root into translator_config.json; return resolved path.
+
+    Refuses to clobber an unreadable existing config (does not rewrite as a
+    one-key object). Callers should treat parse/OS errors as hard failures.
+    """
+    path = Path(config_path) if config_path is not None else translator_config_path()
+    resolved = Path(workspace).expanduser().resolve()
+    data: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8-sig") or "{}")
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Cannot update workspace_root: failed to read {path}: {exc}"
+            ) from exc
+        if not isinstance(loaded, dict):
+            raise ValueError(
+                f"Cannot update workspace_root: {path} root must be a JSON object."
+            )
+        data = loaded
+    data["workspace_root"] = resolved.as_posix()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return resolved
+
+
+WORKSPACE_REQUIRED_MESSAGE = (
+    "工作区未设置。请使用 --workspace 指定目录，"
+    "或在 translator_config.json 中设置 workspace_root。"
+)
+
+
+def require_workspace_root(workspace: Path | str | None = None) -> Path:
+    """Resolve an explicit or configured workspace, or raise ValueError."""
+    if workspace is not None and str(workspace).strip():
+        return Path(workspace).expanduser().resolve()
+    configured = load_configured_workspace_root()
+    if configured is not None:
+        return configured.expanduser().resolve()
+    raise ValueError(WORKSPACE_REQUIRED_MESSAGE)
 
 
 def default_registry_path(workspace: Path | None = None) -> Path:
-    root = workspace or default_workspace_root()
-    return root / REGISTRY_FILENAME
+    root = workspace if workspace is not None else default_workspace_root()
+    if root is None:
+        raise ValueError(WORKSPACE_REQUIRED_MESSAGE)
+    return Path(root) / REGISTRY_FILENAME
 
 
 def default_games_md_path(workspace: Path | None = None) -> Path:
-    root = workspace or default_workspace_root()
-    return root / GAMES_MD_FILENAME
+    root = workspace if workspace is not None else default_workspace_root()
+    if root is None:
+        raise ValueError(WORKSPACE_REQUIRED_MESSAGE)
+    return Path(root) / GAMES_MD_FILENAME
 
 
 def utc_now_iso() -> str:
@@ -1206,7 +1291,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--workspace",
         type=Path,
         default=None,
-        help="RenPy workspace root (default: parent of renpy-translation-lab)",
+        help=(
+            "RenPy workspace root (required unless workspace_root is set in "
+            "translator_config.json; never defaults to the tool parent directory)"
+        ),
     )
     parser.add_argument(
         "--registry",
@@ -1281,7 +1369,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def resolve_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
-    workspace = args.workspace or default_workspace_root()
+    try:
+        workspace = require_workspace_root(args.workspace)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
     registry_path = args.registry or default_registry_path(workspace)
     md_path = default_games_md_path(workspace)
     return workspace, registry_path, md_path

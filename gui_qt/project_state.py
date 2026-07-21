@@ -43,7 +43,9 @@ class ProjectState:
 
         self._game_root: Path | None = None
         self._game_root_redirect_from: Path | None = None
+        self._workspace_root: Path | None = None
         self._manifest_file_cache: dict[str, tuple[int, dict[str, Any]]] = {}
+        self._load_workspace_root_from_config()
         self._load_game_root_from_config()
 
     # --- Path helpers ---
@@ -58,9 +60,8 @@ class ProjectState:
         return self.sync_script
 
     def get_cli_root_dir(self) -> Path:
-        if (self.tool_root / "api_keys.json").exists():
-            return self.tool_root
-        return self.tool_root.parent
+        """Always the tool package root (keys, logs live under the tool)."""
+        return self.tool_root
 
     def get_logs_dir(self) -> Path:
         return self.get_cli_root_dir() / "logs" / "batch_jobs"
@@ -329,10 +330,8 @@ class ProjectState:
         return os.path.normcase(canonical_abs_path(str(path)))
 
     def _resolve_api_keys_path(self) -> Path:
-        root_api_keys = self.tool_root / "api_keys.json"
-        if root_api_keys.exists():
-            return root_api_keys
-        return self.tool_root.parent / "data" / "api_keys.json"
+        """Keys are only read from the tool root; no parent/data fallback."""
+        return self.tool_root / "api_keys.json"
 
     def _path_without_resolve(self, path: str | Path) -> Path:
         candidate = Path(path).expanduser()
@@ -390,6 +389,51 @@ class ProjectState:
             except OSError:
                 pass
             raise ValueError(f"Failed to write JSON file: {path}") from exc
+
+    # --- Workspace root (multi-project area) ---
+
+    def get_workspace_root(self) -> Path | None:
+        """Return the explicit workspace root, or None when unset."""
+        return self._workspace_root
+
+    def set_workspace_root(self, path: str | Path) -> Path:
+        """Update workspace root and persist it to translator_config.json."""
+        p = Path(canonical_abs_path(str(self._path_without_resolve(path))))
+        self._save_workspace_root_to_config(p)
+        self._workspace_root = p
+        return p
+
+    def clear_workspace_root(self) -> None:
+        """Clear configured workspace (registry features stay gated until set again)."""
+        if not self.config_path.exists():
+            self._workspace_root = None
+            return
+        try:
+            data = self._read_json_object(self.config_path, "translator_config.json")
+            data.pop("workspace_root", None)
+            self._write_json_object(self.config_path, data)
+        except Exception:
+            # Keep in-memory value if disk write failed (same order as set_workspace_root).
+            return
+        self._workspace_root = None
+
+    def _load_workspace_root_from_config(self) -> None:
+        if not self.config_path.exists():
+            return
+        try:
+            data = json.loads(self.config_path.read_text(encoding="utf-8-sig") or "{}")
+            raw = data.get("workspace_root")
+            if isinstance(raw, str) and raw.strip():
+                # Match CLI: expand ~ then canonicalize (absolute/stable path).
+                expanded = Path(raw.strip()).expanduser()
+                self._workspace_root = Path(canonical_abs_path(str(expanded)))
+        except Exception:
+            pass
+
+    def _save_workspace_root_to_config(self, workspace_root: Path) -> None:
+        data = self._read_json_object(self.config_path, "translator_config.json")
+        data["workspace_root"] = canonical_abs_path(str(workspace_root))
+        self._write_json_object(self.config_path, data)
 
     # --- Game root (project directory) ---
 

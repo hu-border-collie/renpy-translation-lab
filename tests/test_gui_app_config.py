@@ -1196,25 +1196,28 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         fake_layout = MagicMock()
         with patch.object(MainWindow, "_settings_page", return_value=(fake_page, fake_layout)):
             with patch("gui_qt.app.GamesRegistryPanel") as panel_cls:
-                with patch("gui_qt.app.resolve_workspace_root", return_value=Path("C:/workspace")):
-                    with patch("gui_qt.app.QLabel", return_value=MagicMock()):
-                        self.window.state = type(
-                            "FakeState",
-                            (),
-                            {
-                                "get_tool_root": lambda self: Path("C:/tool"),
-                                "get_game_root": lambda self: Path("C:/Game/work"),
-                            },
-                        )()
-                        self.window._current_registry_doctor_report = lambda: None
-                        self.window._on_registry_switch_project = lambda _target: True
+                with patch("gui_qt.app.QLabel", return_value=MagicMock()):
+                    self.window.state = type(
+                        "FakeState",
+                        (),
+                        {
+                            "get_tool_root": lambda self: Path("C:/tool"),
+                            "get_game_root": lambda self: Path("C:/Game/work"),
+                            "get_workspace_root": lambda self: Path("C:/workspace"),
+                        },
+                    )()
+                    self.window._current_registry_doctor_report = lambda: None
+                    self.window._on_registry_switch_project = lambda _target: True
+                    self.window._on_workspace_changed = lambda _path: None
 
-                        self.window._build_settings_workspace_page()
+                    self.window._build_settings_workspace_page()
 
         panel_cls.assert_called_once()
+        kwargs = panel_cls.call_args.kwargs
+        self.assertEqual(kwargs.get("workspace_root"), Path("C:/workspace"))
         self.assertNotIn(
             "auto_discover_on_show",
-            panel_cls.call_args.kwargs,
+            kwargs,
             "workspace panel should use default auto_discover_on_show=True",
         )
 

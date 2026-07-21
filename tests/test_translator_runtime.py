@@ -667,6 +667,32 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'renpy-translation-lab')),
             ):
                 self.assertEqual(runtime._discover_renpy_sdk_dir(), str(sdk))
+                self.assertEqual(
+                    runtime.discover_renpy_sdk_dir(
+                        game_root=str(base),
+                        tool_root=str(workspace / 'renpy-translation-lab'),
+                        workspace_root=str(workspace),
+                        include_runtime_defaults=False,
+                    ),
+                    str(sdk),
+                )
+
+    def test_discover_renpy_sdk_candidates_lists_and_sorts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            older = workspace / 'renpy-8.9-sdk'
+            newer = workspace / 'renpy-8.10-sdk'
+            for sdk in (older, newer):
+                sdk.mkdir(parents=True)
+                (sdk / 'renpy.py').write_text('import renpy.bootstrap\n', encoding='utf-8')
+            (workspace / 'not-sdk').mkdir()
+            candidates = runtime.discover_renpy_sdk_candidates(
+                [str(workspace)],
+                include_runtime_defaults=False,
+            )
+            self.assertEqual(candidates, [str(newer), str(older)])
+            self.assertTrue(runtime.is_renpy_sdk_dir(str(newer)))
+            self.assertFalse(runtime.is_renpy_sdk_dir(str(workspace / 'not-sdk')))
 
     def test_prepare_discovers_newest_sdk_by_parsed_version(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -686,7 +712,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             ):
                 self.assertEqual(runtime._discover_renpy_sdk_dir(), str(newer))
 
-    def test_prepare_invalid_configured_sdk_falls_back_to_discovery(self):
+    def test_prepare_invalid_configured_sdk_does_not_auto_discover(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             base = workspace / 'Game_Example' / 'work'
@@ -709,10 +735,131 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
                 mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'renpy-translation-lab')),
                 mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'renpy-translation-lab')),
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
                 mock.patch.dict(os.environ, {}, clear=True),
             ):
                 runtime.load_translator_settings()
-                self.assertEqual(runtime.PREP_RENPY_SDK_DIR, str(sdk))
+                # Nearby SDK must not be used unless explicitly configured or found via GUI search.
+                self.assertEqual(runtime.PREP_RENPY_SDK_DIR, '')
+
+    def test_prepare_empty_sdk_does_not_auto_discover_nearby(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            base = workspace / 'Game_Example' / 'work'
+            sdk = workspace / 'renpy-8.5.2-sdk'
+            sdk.mkdir(parents=True)
+            (sdk / 'renpy.py').write_text('import renpy.bootstrap\n', encoding='utf-8')
+            base.mkdir(parents=True)
+            config_path = workspace / 'translator_config.json'
+            config_path.write_text(
+                json.dumps({'game_root': str(base), 'prepare': {'renpy_sdk_dir': ''}}),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'renpy-translation-lab')),
+                mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'renpy-translation-lab')),
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.dict(os.environ, {}, clear=True),
+            ):
+                runtime.load_translator_settings()
+                self.assertEqual(runtime.PREP_RENPY_SDK_DIR, '')
+
+    def test_load_settings_without_game_root_does_not_use_tool_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tool = Path(tmp) / 'renpy-translation-lab'
+            tool.mkdir()
+            config_path = tool / 'translator_config.json'
+            config_path.write_text(json.dumps({'prepare': {}}), encoding='utf-8')
+            parent_decoy = Path(tmp) / 'should_not_be_base'
+            parent_decoy.mkdir()
+
+            with (
+                mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                mock.patch.object(runtime, 'ROOT_DIR', str(tool)),
+                mock.patch.object(runtime, 'TOOL_DIR', str(tool)),
+                mock.patch.dict(os.environ, {}, clear=True),
+            ):
+                runtime.load_translator_settings()
+                self.assertEqual(runtime.BASE_DIR, '')
+                self.assertEqual(runtime.TL_DIR, '')
+                self.assertEqual(runtime.WORK_GAME_DIR, '')
+                self.assertNotEqual(
+                    os.path.normcase(os.path.abspath(runtime.BASE_DIR or '')),
+                    os.path.normcase(str(Path(tmp).resolve())),
+                )
+
+    def test_empty_base_dir_path_helpers_do_not_use_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd_work = Path(tmp) / 'work'
+            cwd_work.mkdir()
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(tmp)
+                with mock.patch.object(runtime, 'BASE_DIR', ''):
+                    with self.assertRaises(runtime.MissingGameRootError):
+                        runtime.resolve_work_dir()
+                    with self.assertRaises(runtime.MissingGameRootError):
+                        runtime.resolve_project_root()
+                    with self.assertRaises(SystemExit) as ctx:
+                        runtime.run_prepare_steps()
+                    self.assertIn('game_root', str(ctx.exception).lower())
+                    result = runtime.bootstrap_work_from_original()
+                    self.assertEqual(result['status'], 'failed')
+                    self.assertIn('game_root', result['message'].lower())
+                    self.assertEqual(runtime._resolve_prepare_launcher(), '')
+                    self.assertEqual(
+                        runtime._resolve_path('', '../original/game'),
+                        '',
+                    )
+                    self.assertEqual(runtime.guess_project_slug(), 'unset')
+                    self.assertEqual(
+                        runtime._project_slug_from_base_dir(''),
+                        'unset',
+                    )
+                    # Must not have created a project layout via CWD fallback.
+                    self.assertFalse((Path(tmp) / 'original').exists())
+            finally:
+                os.chdir(old_cwd)
+
+    def test_game_context_store_falls_back_to_unset_slug_layout(self):
+        with mock.patch.object(runtime, 'BASE_DIR', ''), mock.patch.object(
+            runtime, 'CONTEXT_STORAGE_LOCATION', 'game'
+        ), mock.patch.object(runtime, 'LOG_DIR', '/tmp/tool-logs'):
+            path = runtime.get_default_context_store_dir('rag_store')
+            self.assertTrue(path.replace('\\', '/').endswith('rag_store/unset'))
+
+    def test_invalid_configured_sdk_warns_and_stays_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            base = workspace / 'Game_Example' / 'work'
+            base.mkdir(parents=True)
+            nearby = workspace / 'renpy-8.5.2-sdk'
+            nearby.mkdir()
+            (nearby / 'renpy.py').write_text('import renpy.bootstrap\n', encoding='utf-8')
+            config_path = workspace / 'translator_config.json'
+            config_path.write_text(
+                json.dumps(
+                    {
+                        'game_root': str(base),
+                        'prepare': {'renpy_sdk_dir': str(workspace / 'missing-sdk')},
+                    }
+                ),
+                encoding='utf-8',
+            )
+            buf = io.StringIO()
+            with (
+                mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'tool')),
+                mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'tool')),
+                mock.patch.object(runtime, 'BASE_DIR', str(base)),
+                mock.patch.dict(os.environ, {}, clear=True),
+                mock.patch('sys.stdout', buf),
+            ):
+                runtime.load_translator_settings()
+                self.assertEqual(runtime.PREP_RENPY_SDK_DIR, '')
+            self.assertIn('not a valid SDK', buf.getvalue())
 
     def test_translator_config_sync_settings_override_sync_defaults(self):
         old_values = {

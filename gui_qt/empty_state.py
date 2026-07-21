@@ -164,6 +164,11 @@ class EmptyStateWidget(QWidget):
         self._content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._reflow_content_width()
 
+    def set_action_enabled(self, enabled: bool) -> None:
+        """Enable/disable the optional action button (if present)."""
+        if self._action_btn is not None:
+            self._action_btn.setEnabled(bool(enabled))
+
     def _reflow_content_width(self) -> None:
         """Keep centered copy inside narrow inspectors instead of overflowing."""
         outer = self.layout()

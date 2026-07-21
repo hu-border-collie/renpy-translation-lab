@@ -669,11 +669,8 @@ def slugify(text):
 
 
 def guess_project_slug():
-    base_name = os.path.basename(os.path.abspath(legacy.BASE_DIR))
-    if base_name.lower() == 'work':
-        parent = os.path.basename(os.path.dirname(os.path.abspath(legacy.BASE_DIR)))
-        return slugify(parent or base_name)
-    return slugify(base_name)
+    # Use runtime helper so empty BASE_DIR yields "unset", never CWD basename.
+    return legacy.guess_project_slug()
 
 
 def hash_key(text):
