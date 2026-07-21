@@ -50,18 +50,15 @@ from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
 
 # Configuration
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
+# Tool layout is flat under the package root only — no parent-directory fallback
+# for keys, logs, or a default game_root.
 FLAT_CONFIG = os.path.join(TOOL_DIR, "api_keys.json")
 TRANSLATOR_CONFIG = os.path.join(TOOL_DIR, "translator_config.json")
 DEFAULT_GLOSSARY_FILE = os.path.join(TOOL_DIR, "glossary.json")
 GLOSSARY_FILE = DEFAULT_GLOSSARY_FILE
-if os.path.isfile(FLAT_CONFIG):
-    ROOT_DIR = TOOL_DIR
-    DATA_DIR = TOOL_DIR
-    CONFIG_FILE = FLAT_CONFIG
-else:
-    ROOT_DIR = os.path.abspath(os.path.join(TOOL_DIR, ".."))
-    DATA_DIR = os.path.join(ROOT_DIR, "data")
-    CONFIG_FILE = os.path.join(DATA_DIR, "api_keys.json")
+ROOT_DIR = TOOL_DIR
+DATA_DIR = TOOL_DIR
+CONFIG_FILE = FLAT_CONFIG
 ENV_GAME_ROOT = os.environ.get("GAME_ROOT") or os.environ.get("SA_GAME_ROOT")
 # Forward-slash form matches normalize_tl_subdir() output on all platforms.
 DEFAULT_TL_SUBDIR = "game/tl/schinese"
@@ -92,10 +89,13 @@ DEFAULT_SYNC_STORY_MEMORY_TOP_K_RELATIONS = 4
 DEFAULT_SYNC_STORY_MEMORY_TOP_K_TERMS = 8
 
 TL_SUBDIR = DEFAULT_TL_SUBDIR
-BASE_DIR = os.path.abspath(ENV_GAME_ROOT) if ENV_GAME_ROOT else os.path.abspath(os.path.join(ROOT_DIR, ".."))
-TL_DIR = os.path.abspath(os.path.join(BASE_DIR, TL_SUBDIR))
+# Empty until GAME_ROOT / translator_config.game_root is set — never invent parent of tool.
+BASE_DIR = os.path.abspath(ENV_GAME_ROOT) if ENV_GAME_ROOT else ""
+TL_DIR = os.path.abspath(os.path.join(BASE_DIR, TL_SUBDIR)) if BASE_DIR else ""
 WORK_GAME_SUBDIR = "game"
-WORK_GAME_DIR = os.path.abspath(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
+WORK_GAME_DIR = (
+    os.path.abspath(os.path.join(BASE_DIR, WORK_GAME_SUBDIR)) if BASE_DIR else ""
+)
 CONTEXT_STORAGE_LOCATION = DEFAULT_CONTEXT_STORAGE_LOCATION
 CONTEXT_STORAGE_GAME_DIR_NAME = DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME
 SOURCE_GAME_DIR = ""
@@ -600,7 +600,8 @@ def _renpy_sdk_sort_key(path):
     )
 
 
-def _is_renpy_sdk_dir(path):
+def is_renpy_sdk_dir(path):
+    """Return True when *path* looks like a Ren'Py SDK root (contains renpy.py)."""
     return bool(
         path
         and os.path.isdir(path)
@@ -608,39 +609,136 @@ def _is_renpy_sdk_dir(path):
     )
 
 
-def _discover_renpy_sdk_dir():
-    if _is_filesystem_root(BASE_DIR):
-        return ""
+# Keep private alias used by older tests / internal call sites.
+_is_renpy_sdk_dir = is_renpy_sdk_dir
 
-    base_dirs = _dedupe_keep_order(
-        [
-            BASE_DIR,
-            os.path.dirname(BASE_DIR),
-            os.path.dirname(os.path.dirname(BASE_DIR)),
-            ROOT_DIR,
-            os.path.dirname(ROOT_DIR),
-            TOOL_DIR,
-        ]
-    )
-    candidates = []
-    for base_dir in base_dirs:
+
+def renpy_sdk_search_roots(
+    *,
+    game_root: str | None = None,
+    tool_root: str | None = None,
+    workspace_root: str | None = None,
+    include_runtime_defaults: bool = True,
+) -> list[str]:
+    """Build de-duplicated directory list used when looking for a Ren'Py SDK.
+
+    Roots are only *search bases* (each folder and its immediate children are
+    scanned for ``renpy-*-sdk``). This is not the multi-project workspace
+    contract; callers that want a specific workspace may pass
+    ``workspace_root`` explicitly.
+    """
+    roots: list[str] = []
+
+    def _add(path: str | None) -> None:
+        if not path:
+            return
+        text = os.path.abspath(str(path))
+        if text and text not in roots:
+            roots.append(text)
+
+    def _add_with_parents(path: str | None, *, parents: int = 0) -> None:
+        if not path:
+            return
+        current = os.path.abspath(str(path))
+        _add(current)
+        for _ in range(max(0, parents)):
+            parent = os.path.dirname(current)
+            if not parent or parent == current:
+                break
+            _add(parent)
+            current = parent
+
+    if include_runtime_defaults:
+        # Match historical prepare discovery: game work dir + parents, tool/root.
+        if not _is_filesystem_root(BASE_DIR):
+            _add_with_parents(BASE_DIR, parents=2)
+        _add(ROOT_DIR)
+        if ROOT_DIR and not _is_filesystem_root(ROOT_DIR):
+            _add(os.path.dirname(ROOT_DIR))
+        _add(TOOL_DIR)
+
+    _add_with_parents(game_root, parents=2)
+    _add(tool_root)
+    if tool_root and not _is_filesystem_root(tool_root):
+        _add(os.path.dirname(os.path.abspath(str(tool_root))))
+    _add(workspace_root)
+
+    return [path for path in roots if path and os.path.isdir(path)]
+
+
+def discover_renpy_sdk_candidates(
+    search_roots: list[str] | None = None,
+    *,
+    game_root: str | None = None,
+    tool_root: str | None = None,
+    workspace_root: str | None = None,
+    include_runtime_defaults: bool = True,
+) -> list[str]:
+    """Return valid Ren'Py SDK directories under *search_roots*, newest first.
+
+    When *search_roots* is omitted, roots are derived from runtime globals and
+    any explicit ``game_root`` / ``tool_root`` / ``workspace_root`` arguments.
+    """
+    if search_roots is None:
+        roots = renpy_sdk_search_roots(
+            game_root=game_root,
+            tool_root=tool_root,
+            workspace_root=workspace_root,
+            include_runtime_defaults=include_runtime_defaults,
+        )
+    else:
+        roots = _dedupe_keep_order(
+            [os.path.abspath(str(path)) for path in search_roots if path]
+        )
+
+    found: list[str] = []
+    for base_dir in roots:
         if not base_dir or not os.path.isdir(base_dir):
             continue
-        if os.path.isfile(os.path.join(base_dir, "renpy.py")):
-            candidates.append(base_dir)
+        if is_renpy_sdk_dir(base_dir):
+            found.append(base_dir)
         for pattern in ("renpy-*-sdk", "renpy-*sdk", "renpy-sdk"):
-            candidates.extend(glob.glob(os.path.join(base_dir, pattern)))
+            found.extend(glob.glob(os.path.join(base_dir, pattern)))
 
-    candidates = sorted(
+    return sorted(
         {
             os.path.abspath(candidate)
-            for candidate in candidates
-            if _is_renpy_sdk_dir(candidate)
+            for candidate in found
+            if is_renpy_sdk_dir(candidate)
         },
         key=_renpy_sdk_sort_key,
         reverse=True,
     )
+
+
+def discover_renpy_sdk_dir(
+    search_roots: list[str] | None = None,
+    *,
+    game_root: str | None = None,
+    tool_root: str | None = None,
+    workspace_root: str | None = None,
+    include_runtime_defaults: bool = True,
+) -> str:
+    """Return the best matching Ren'Py SDK directory, or empty string."""
+    candidates = discover_renpy_sdk_candidates(
+        search_roots,
+        game_root=game_root,
+        tool_root=tool_root,
+        workspace_root=workspace_root,
+        include_runtime_defaults=include_runtime_defaults,
+    )
     return candidates[0] if candidates else ""
+
+
+def _discover_renpy_sdk_dir():
+    """Explicit-scan helper (GUI「查找 SDK」/ tests). Not used by prepare load.
+
+    Prepare never calls this; empty ``renpy_sdk_dir`` stays empty until the user
+    configures a path or runs interactive discovery.
+    """
+    if _is_filesystem_root(BASE_DIR):
+        return ""
+    return discover_renpy_sdk_dir(include_runtime_defaults=True)
 
 
 def resolve_story_memory_graph_path(value):
@@ -1036,16 +1134,20 @@ ProjectContext = RuntimeConfig
 
 def default_runtime_config() -> RuntimeConfig:
     """Build a fresh config object with code defaults (no file I/O)."""
-    default_base = os.path.abspath(
-        ENV_GAME_ROOT if ENV_GAME_ROOT else os.path.join(ROOT_DIR, "..")
-    )
+    default_base = os.path.abspath(ENV_GAME_ROOT) if ENV_GAME_ROOT else ""
     tl_subdir = DEFAULT_TL_SUBDIR
     return RuntimeConfig(
         env_game_root=ENV_GAME_ROOT or "",
         base_dir=default_base,
         tl_subdir=tl_subdir,
-        tl_dir=os.path.abspath(os.path.join(default_base, tl_subdir)),
-        work_game_dir=os.path.abspath(os.path.join(default_base, WORK_GAME_SUBDIR)),
+        tl_dir=(
+            os.path.abspath(os.path.join(default_base, tl_subdir)) if default_base else ""
+        ),
+        work_game_dir=(
+            os.path.abspath(os.path.join(default_base, WORK_GAME_SUBDIR))
+            if default_base
+            else ""
+        ),
         glossary_file=DEFAULT_GLOSSARY_FILE,
         models=list(DEFAULT_MODELS),
         max_chars=DEFAULT_MAX_CHARS,
@@ -1414,7 +1516,9 @@ def load_translator_settings():
         else:
             BASE_DIR = original_root
     else:
-        BASE_DIR = _canonical_abs_path(os.path.join(ROOT_DIR, ".."))
+        # No configured game_root: leave empty (do not invent tool parent as project).
+        BASE_DIR = ""
+        ENV_GAME_ROOT = ""
 
     load_context_storage_settings(config)
 
@@ -1435,12 +1539,17 @@ def load_translator_settings():
             candidate_subdir = normalize_tl_subdir(tl_subdir)
         else:
             candidate_subdir = normalize_tl_subdir(candidate_subdir)
-        candidate_tl_dir = _canonical_abs_path(os.path.join(BASE_DIR, candidate_subdir))
-        ensure_tl_dir_within_base(
-            BASE_DIR,
-            candidate_tl_dir,
-            tl_subdir=candidate_subdir,
-        )
+        if BASE_DIR:
+            candidate_tl_dir = _canonical_abs_path(
+                os.path.join(BASE_DIR, candidate_subdir)
+            )
+            ensure_tl_dir_within_base(
+                BASE_DIR,
+                candidate_tl_dir,
+                tl_subdir=candidate_subdir,
+            )
+        else:
+            candidate_tl_dir = ""
     except InvalidTlSubdirError as exc:
         raise SystemExit(
             "ERROR: Invalid tl_subdir configuration. "
@@ -1450,7 +1559,9 @@ def load_translator_settings():
 
     TL_SUBDIR = candidate_subdir
     TL_DIR = candidate_tl_dir
-    WORK_GAME_DIR = _canonical_abs_path(os.path.join(BASE_DIR, WORK_GAME_SUBDIR))
+    WORK_GAME_DIR = (
+        _canonical_abs_path(os.path.join(BASE_DIR, WORK_GAME_SUBDIR)) if BASE_DIR else ""
+    )
 
     prepare = config.get("prepare")
     if not isinstance(prepare, dict):
@@ -1468,17 +1579,22 @@ def load_translator_settings():
         # Omitted language must not retain a previous project's target language.
         PREP_LANGUAGE = DEFAULT_PREP_LANGUAGE
 
+    # SDK path is explicit only: prepare.renpy_sdk_dir or RENPY_SDK_DIR.
+    # Do not auto-scan nearby directories at load time; GUI「查找 SDK」is the
+    # sole interactive discovery entry point.
     renpy_sdk_dir = prepare.get("renpy_sdk_dir")
     if not (isinstance(renpy_sdk_dir, str) and renpy_sdk_dir.strip()):
         renpy_sdk_dir = os.environ.get("RENPY_SDK_DIR")
-    resolved_renpy_sdk_dir = _resolve_preferred_path_from_bases(
-        renpy_sdk_dir,
-        (BASE_DIR, ROOT_DIR, TOOL_DIR),
-    )
-    if _is_renpy_sdk_dir(resolved_renpy_sdk_dir):
-        PREP_RENPY_SDK_DIR = resolved_renpy_sdk_dir
+    if isinstance(renpy_sdk_dir, str) and renpy_sdk_dir.strip():
+        resolved_renpy_sdk_dir = _resolve_preferred_path_from_bases(
+            renpy_sdk_dir,
+            (BASE_DIR, ROOT_DIR, TOOL_DIR),
+        )
+        PREP_RENPY_SDK_DIR = (
+            resolved_renpy_sdk_dir if _is_renpy_sdk_dir(resolved_renpy_sdk_dir) else ""
+        )
     else:
-        PREP_RENPY_SDK_DIR = _discover_renpy_sdk_dir()
+        PREP_RENPY_SDK_DIR = ""
 
     source_game_dir = prepare.get("source_game_dir")
     if source_game_dir is not None:

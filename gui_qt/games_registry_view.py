@@ -10,15 +10,18 @@ from games_registry import (
     GAMES_MD_FILENAME,
     REGISTRY_FILENAME,
     TRANSLATION_STATUSES,
+    WORKSPACE_REQUIRED_MESSAGE,
     default_registry_path,
     default_workspace_root,
     discover_new_project_paths,
     format_doctor_mode_label,
     format_layout_status_label,
     get_registry_preferences,
+    load_configured_workspace_root,
     load_registry,
     resolve_doctor_mode,
     resolve_layout_status,
+    translator_config_path,
 )
 from translator_runtime import canonical_abs_path, resolve_effective_game_root
 
@@ -85,13 +88,30 @@ class RegistryRow:
         return "\n".join(part for part in parts if part.strip())
 
 
-def resolve_workspace_root(tool_root: Path | None = None) -> Path:
-    if tool_root is not None:
-        return tool_root.parent
-    return default_workspace_root()
+def resolve_workspace_root(
+    tool_root: Path | None = None,
+    *,
+    configured: Path | str | None = None,
+    config_path: Path | None = None,
+) -> Path | None:
+    """Return the explicit workspace root, or None when unset.
+
+    Never falls back to the parent of the tool package. Prefer *configured*
+    (e.g. from ProjectState), then translator_config.json next to the tool.
+    """
+    if configured is not None and str(configured).strip():
+        return Path(str(configured).strip()).expanduser().resolve()
+    cfg = config_path
+    if cfg is None and tool_root is not None:
+        cfg = translator_config_path(tool_root)
+    return load_configured_workspace_root(cfg)
 
 
 def resolve_registry_path(workspace_root: Path | None = None) -> Path:
+    if workspace_root is None:
+        workspace_root = default_workspace_root()
+    if workspace_root is None:
+        raise ValueError(WORKSPACE_REQUIRED_MESSAGE)
     return default_registry_path(workspace_root)
 
 
@@ -191,10 +211,12 @@ def load_registry_rows(
     workspace_root: Path | None = None,
     registry_path: Path | None = None,
 ) -> tuple[list[RegistryRow], str]:
-    workspace = workspace_root or default_workspace_root()
+    workspace = workspace_root if workspace_root is not None else default_workspace_root()
+    if workspace is None:
+        return [], "工作区未设置。请先选择工作区目录后再扫描或导入项目。"
     registry_file = registry_path or resolve_registry_path(workspace)
     if not registry_file.is_file():
-        games_md = workspace / GAMES_MD_FILENAME
+        games_md = Path(workspace) / GAMES_MD_FILENAME
         if games_md.is_file():
             return [], (
                 f"未找到 {registry_file.name}。"
@@ -211,7 +233,7 @@ def load_registry_rows(
         return [], f"{registry_file.name} 中没有项目记录。可点击「扫描新项目」或「从 GAMES.md 导入」。"
 
     rows = [
-        registry_row_from_project(workspace, project)
+        registry_row_from_project(Path(workspace), project)
         for project in projects
         if isinstance(project, dict) and project.get("path")
     ]
@@ -246,8 +268,13 @@ def load_registry_preferences(
     workspace_root: Path | None = None,
     registry_path: Path | None = None,
 ) -> dict[str, Any]:
-    workspace = workspace_root or default_workspace_root()
-    registry_file = registry_path or resolve_registry_path(workspace)
+    workspace = workspace_root if workspace_root is not None else default_workspace_root()
+    if workspace is None:
+        return {}
+    try:
+        registry_file = registry_path or resolve_registry_path(workspace)
+    except ValueError:
+        return {}
     if not registry_file.is_file():
         return {}
     return get_registry_preferences(load_registry(registry_file))

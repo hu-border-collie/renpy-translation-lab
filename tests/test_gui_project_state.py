@@ -102,7 +102,7 @@ class GuiProjectStateTests(unittest.TestCase):
             ):
                 self.assertEqual(state.get_api_key_status(), (2, "environment"))
 
-    def test_api_keys_path_uses_legacy_data_file_when_root_file_absent(self):
+    def test_api_keys_path_always_tool_root_even_if_legacy_data_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             root = workspace / "renpy-translation-lab"
@@ -115,9 +115,10 @@ class GuiProjectStateTests(unittest.TestCase):
             )
             state = self.make_state(root)
 
-            self.assertEqual(state._resolve_api_keys_path(), legacy_path)
+            self.assertEqual(state._resolve_api_keys_path(), root / "api_keys.json")
+            self.assertNotEqual(state._resolve_api_keys_path(), legacy_path)
 
-    def test_api_keys_path_prefers_root_file_when_present(self):
+    def test_api_keys_path_is_tool_root_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             root = workspace / "renpy-translation-lab"
@@ -137,14 +138,15 @@ class GuiProjectStateTests(unittest.TestCase):
 
             self.assertEqual(state._resolve_api_keys_path(), root_path)
 
-    def test_logs_dir_uses_legacy_root_when_root_api_keys_absent(self):
+    def test_logs_dir_always_under_tool_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             root = workspace / "renpy-translation-lab"
             root.mkdir()
             state = self.make_state(root)
 
-            self.assertEqual(state.get_logs_dir(), workspace / "logs" / "batch_jobs")
+            self.assertEqual(state.get_logs_dir(), root / "logs" / "batch_jobs")
+            self.assertEqual(state.get_cli_root_dir(), root)
 
     def test_logs_dir_prefers_tool_root_when_root_api_keys_exist(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -162,7 +164,7 @@ class GuiProjectStateTests(unittest.TestCase):
             workspace = Path(tmp)
             root = workspace / "renpy-translation-lab"
             root.mkdir()
-            jobs_dir = workspace / "logs" / "batch_jobs"
+            jobs_dir = root / "logs" / "batch_jobs"
             jobs_dir.mkdir(parents=True)
             manifest = jobs_dir / "job1" / "manifest.json"
             manifest.parent.mkdir()

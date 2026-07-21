@@ -556,6 +556,53 @@ class GamesRegistryTests(unittest.TestCase):
         )
         self.assertEqual(project["name"], "Renamed")
 
+    def test_default_workspace_root_is_unset_without_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "translator_config.json"
+            with mock.patch.object(registry, "translator_config_path", return_value=config_path):
+                self.assertIsNone(registry.default_workspace_root())
+                self.assertIsNone(registry.load_configured_workspace_root(config_path))
+                with self.assertRaises(ValueError):
+                    registry.require_workspace_root()
+                with self.assertRaises(ValueError):
+                    registry.default_registry_path()
+
+    def test_configured_workspace_root_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "translator_config.json"
+            workspace = Path(tmp) / "ws"
+            workspace.mkdir()
+            saved = registry.save_configured_workspace_root(workspace, config_path)
+            self.assertEqual(saved, workspace.resolve())
+            loaded = registry.load_configured_workspace_root(config_path)
+            self.assertIsNotNone(loaded)
+            assert loaded is not None
+            self.assertEqual(loaded.resolve(), workspace.resolve())
+            with mock.patch.object(registry, "translator_config_path", return_value=config_path):
+                required = registry.require_workspace_root()
+            self.assertEqual(required, workspace.resolve())
+            required_explicit = registry.require_workspace_root(workspace)
+            self.assertEqual(required_explicit, workspace.resolve())
+
+    def test_cli_resolve_paths_requires_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "missing_config.json"
+            with mock.patch.object(registry, "translator_config_path", return_value=config_path):
+                parser = registry.build_arg_parser()
+                args = parser.parse_args(["show"])
+                with self.assertRaises(SystemExit) as ctx:
+                    registry.resolve_paths(args)
+                self.assertEqual(ctx.exception.code, 2)
+
+            workspace = Path(tmp) / "ws"
+            workspace.mkdir()
+            parser = registry.build_arg_parser()
+            args = parser.parse_args(["--workspace", str(workspace), "show"])
+            resolved_ws, registry_path, md_path = registry.resolve_paths(args)
+            self.assertEqual(resolved_ws, workspace.resolve())
+            self.assertEqual(registry_path, workspace / registry.REGISTRY_FILENAME)
+            self.assertEqual(md_path, workspace / registry.GAMES_MD_FILENAME)
+
 
 if __name__ == "__main__":
     unittest.main()

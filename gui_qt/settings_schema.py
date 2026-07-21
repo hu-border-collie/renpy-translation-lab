@@ -620,7 +620,8 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "prepare_renpy_sdk_dir",
         ("prepare", "renpy_sdk_dir"),
         "Ren'Py SDK 目录",
-        "留空时自动发现或使用 RENPY_SDK_DIR 环境变量。",
+        "须显式指定：填写路径、环境变量 RENPY_SDK_DIR、点「浏览…」或「查找 SDK」。"
+        "留空时不会自动扫描其它目录；仅点击「查找 SDK」才会在项目 / 工作区 / 工具附近搜索。",
         "str",
         "",
         "准备流程",

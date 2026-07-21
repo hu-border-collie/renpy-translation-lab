@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -41,6 +42,7 @@ from games_registry import (
     normalize_translation_status,
 )
 
+from .empty_state import EmptyStateWidget
 from .game_ingest_dialog import GameIngestDialog
 from .games_registry_actions import (
     RegistryActionResult,
@@ -57,6 +59,7 @@ from .games_registry_doctor_compare import (
     format_registry_compare_hint,
 )
 from .games_registry_worker import RegistryIngestWorker, RegistryRefreshWorker
+from .path_utils import canonical_abs_path
 from .responsive_layout import FlowButtonBar
 from .widget_helpers import (
     NoWheelComboBox,
@@ -98,6 +101,7 @@ from .games_registry_view import (
 
 SwitchProjectHandler = Callable[[str], bool]
 DoctorReportProvider = Callable[[], dict | None]
+WorkspaceChangedHandler = Callable[[Path], None]
 
 
 def _combo_natural_width(combo: NoWheelComboBox) -> int:
@@ -165,10 +169,11 @@ class GamesRegistryPanel(QWidget):
         self,
         parent: QWidget | None,
         *,
-        workspace_root: Path,
+        workspace_root: Path | None = None,
         current_game_root: Path | None = None,
         get_doctor_report: DoctorReportProvider | None = None,
         on_switch_project: SwitchProjectHandler | None = None,
+        on_workspace_changed: WorkspaceChangedHandler | None = None,
         auto_discover_on_show: bool = True,
     ):
         super().__init__(parent)
@@ -179,7 +184,9 @@ class GamesRegistryPanel(QWidget):
             QSizePolicy.Policy.Expanding,
         )
 
-        self._workspace_root = workspace_root
+        self._workspace_root: Path | None = (
+            Path(workspace_root) if workspace_root is not None else None
+        )
         self._all_rows: list[RegistryRow] = []
         self._filtered_rows: list[RegistryRow] = []
         self._registry_summary = ""
@@ -192,6 +199,7 @@ class GamesRegistryPanel(QWidget):
         self._current_game_root = current_game_root
         self._get_doctor_report = get_doctor_report
         self._on_switch_project = on_switch_project
+        self._on_workspace_changed = on_workspace_changed
         self._auto_discover_on_show = auto_discover_on_show
         self._section_visible = False
         self._registry_disk_signature: tuple[str, int] | None = None
@@ -219,12 +227,49 @@ class GamesRegistryPanel(QWidget):
         title.setObjectName("diagnostics_section_label")
         title_row.addWidget(title)
         title_row.addStretch(1)
+        self._choose_workspace_btn = QPushButton("选择工作区…")
+        self._choose_workspace_btn.setObjectName("secondary_btn")
+        self._choose_workspace_btn.setToolTip(
+            "指定存放 Game_* 与 games_registry.json 的工作区根目录。"
+            "不会默认使用工具安装目录的上一级。"
+        )
+        self._choose_workspace_btn.clicked.connect(self._choose_workspace)
+        title_row.addWidget(self._choose_workspace_btn)
         self._switch_btn = QPushButton("切换到此项目")
         self._switch_btn.setObjectName("secondary_btn")
         self._switch_btn.clicked.connect(self._switch_to_selected)
         self._switch_btn.setEnabled(False)
         title_row.addWidget(self._switch_btn)
         layout.addLayout(title_row)
+
+        workspace_row = QHBoxLayout()
+        workspace_caption = QLabel("工作区")
+        workspace_caption.setObjectName("config_hint_label")
+        workspace_row.addWidget(workspace_caption)
+        self._workspace_path_edit = QLineEdit()
+        self._workspace_path_edit.setReadOnly(True)
+        self._workspace_path_edit.setObjectName("games_registry_workspace_path")
+        self._workspace_path_edit.setPlaceholderText("尚未指定工作区")
+        workspace_row.addWidget(self._workspace_path_edit, 1)
+        layout.addLayout(workspace_row)
+
+        self._workspace_empty_state = EmptyStateWidget(
+            "",
+            "尚未指定工作区",
+            "工作区默认未设置，也不会使用工具目录的上一级。"
+            "请先选择存放 Game_* 项目与 games_registry.json 的文件夹，"
+            "然后再扫描、导入或切换项目。",
+            action_text="选择工作区…",
+            parent=self,
+        )
+        self._workspace_empty_state.action_clicked.connect(self._choose_workspace)
+        layout.addWidget(self._workspace_empty_state, 1)
+
+        self._workspace_body = QWidget()
+        self._workspace_body.setObjectName("games_registry_workspace_body")
+        body_layout = QVBoxLayout(self._workspace_body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(12)
 
         self._toolbar = FlowButtonBar(spacing=8, row_spacing=8)
         self._toolbar.setObjectName("games_registry_toolbar")
@@ -298,6 +343,10 @@ class GamesRegistryPanel(QWidget):
         self._toolbar.add_widget(self._stop_refresh_btn, min_width=64)
 
         self._auto_discover_checkbox = QCheckBox("打开分区时自动扫描新项目")
+        self._auto_discover_checkbox.setToolTip(
+            "默认关闭。勾选后，进入本分区时会扫描工作区内未登记的 Game_* 并写入总表。"
+            "仅扫描已选工作区，不会访问工作区以外的路径。"
+        )
         self._auto_discover_checkbox.toggled.connect(self._on_auto_discover_toggled)
         self._maintenance_toolbar.add_widget(self._auto_discover_checkbox, min_width=None)
 
@@ -311,8 +360,8 @@ class GamesRegistryPanel(QWidget):
         ):
             section_label = QLabel(section_text)
             section_label.setObjectName("settings_inline_section_label")
-            layout.addWidget(section_label)
-            layout.addWidget(section_toolbar)
+            body_layout.addWidget(section_label)
+            body_layout.addWidget(section_toolbar)
 
         filter_row = QHBoxLayout()
         self._search_edit = QLineEdit()
@@ -350,20 +399,19 @@ class GamesRegistryPanel(QWidget):
             self._translation_filter_combo,
             self._sort_combo,
         )
-        layout.addLayout(filter_row)
+        body_layout.addLayout(filter_row)
 
         self._status_label = QLabel()
         self._status_label.setWordWrap(True)
         self._status_label.setObjectName("config_hint_label")
-        layout.addWidget(self._status_label)
-
+        body_layout.addWidget(self._status_label)
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setObjectName("games_registry_progress")
         self._progress_bar.setVisible(False)
         self._progress_bar.setTextVisible(True)
         self._progress_bar.setFormat("准备刷新…")
-        layout.addWidget(self._progress_bar)
+        body_layout.addWidget(self._progress_bar)
 
         self._table = QTableWidget(0, len(REGISTRY_TABLE_COLUMN_DEFS))
         self._table.setObjectName("games_registry_table")
@@ -381,7 +429,7 @@ class GamesRegistryPanel(QWidget):
         self._configure_table_header()
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.cellDoubleClicked.connect(self._on_row_activated)
-        layout.addWidget(self._table, 1)
+        body_layout.addWidget(self._table, 1)
         self._load_table_column_widths()
         self._apply_table_column_layout()
 
@@ -461,21 +509,95 @@ class GamesRegistryPanel(QWidget):
         self._save_fields_btn.setEnabled(False)
         edit_actions.addWidget(self._save_fields_btn)
         edit_layout.addRow("", edit_actions)
-        layout.addWidget(self._edit_group)
+        body_layout.addWidget(self._edit_group)
+        layout.addWidget(self._workspace_body, 1)
 
         prefs = load_registry_preferences(workspace_root=self._workspace_root)
         self._auto_discover_checkbox.setChecked(bool(prefs.get(REGISTRY_PREF_AUTO_DISCOVER, False)))
-        self._reload_table_from_disk()
+        self._apply_workspace_presence_ui()
+        if self._workspace_root is not None:
+            self._reload_table_from_disk()
 
     def selected_project_root(self) -> str:
         return self._selected_project_root
+
+    def workspace_root(self) -> Path | None:
+        return self._workspace_root
+
+    def set_workspace_root(self, workspace_root: Path | None) -> None:
+        """Update the active workspace and refresh registry UI."""
+        self._workspace_root = Path(workspace_root) if workspace_root is not None else None
+        self._registry_disk_signature = None
+        prefs = load_registry_preferences(workspace_root=self._workspace_root)
+        self._auto_discover_checkbox.blockSignals(True)
+        self._auto_discover_checkbox.setChecked(bool(prefs.get(REGISTRY_PREF_AUTO_DISCOVER, False)))
+        self._auto_discover_checkbox.blockSignals(False)
+        self._load_table_column_widths()
+        self._apply_workspace_presence_ui()
+        if self._workspace_root is not None:
+            self._reload_table_from_disk(force=True)
+        else:
+            self._all_rows = []
+            self._filtered_rows = []
+            self._registry_summary = ""
+            self._missing_message = "工作区未设置。"
+            self._table.setRowCount(0)
+            self._status_label.setText(self._missing_message)
+            self._edit_group.setVisible(False)
+            self._switch_btn.setEnabled(False)
 
     def set_current_game_root(self, game_root: Path | None) -> None:
         self._current_game_root = game_root
         self._on_selection_changed()
 
+    def _has_workspace(self) -> bool:
+        return self._workspace_root is not None
+
+    def _require_workspace(self) -> Path | None:
+        if self._workspace_root is None:
+            message_box_information(
+                self,
+                "工作区未设置",
+                "请先点击「选择工作区…」指定存放 Game_* 与 games_registry.json 的目录。",
+            )
+            return None
+        return self._workspace_root
+
+    def _apply_workspace_presence_ui(self) -> None:
+        has_workspace = self._has_workspace()
+        if has_workspace and self._workspace_root is not None:
+            self._workspace_path_edit.setText(canonical_abs_path(str(self._workspace_root)))
+            self._choose_workspace_btn.setText("更改工作区…")
+        else:
+            self._workspace_path_edit.clear()
+            self._choose_workspace_btn.setText("选择工作区…")
+        self._workspace_empty_state.setVisible(not has_workspace)
+        self._workspace_body.setVisible(has_workspace)
+        self._switch_btn.setEnabled(False)
+        if not has_workspace:
+            self._apply_interaction_gate()
+
+    def _choose_workspace(self) -> None:
+        if self._host_task_running or self._is_registry_task_running():
+            return
+        start_dir = str(self._workspace_root or Path.home())
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "选择工作区根目录（存放 Game_* 与 games_registry.json）",
+            start_dir,
+        )
+        if not directory:
+            return
+        chosen = Path(canonical_abs_path(directory))
+        self.set_workspace_root(chosen)
+        if self._on_workspace_changed is not None:
+            self._on_workspace_changed(chosen)
+
     def activate_section(self) -> None:
         """Refresh view when the settings nav selects the workspace section."""
+        if not self._has_workspace():
+            self._apply_workspace_presence_ui()
+            return
         self._reload_table_from_disk(force=False)
         if self._auto_discover_on_show:
             self._maybe_auto_discover_on_open()
@@ -538,6 +660,8 @@ class GamesRegistryPanel(QWidget):
 
     def _persist_table_column_widths(self) -> None:
         if self._applying_table_columns:
+            return
+        if self._workspace_root is None:
             return
         live: dict[str, int] = {}
         for index in interactive_column_indexes():
@@ -675,6 +799,8 @@ class GamesRegistryPanel(QWidget):
         super().hideEvent(event)
 
     def _registry_disk_signature_now(self) -> tuple[str, int]:
+        if self._workspace_root is None:
+            return ("", -1)
         registry_path = resolve_registry_path(self._workspace_root)
         path_text = str(registry_path)
         try:
@@ -696,6 +822,14 @@ class GamesRegistryPanel(QWidget):
         return REGISTRY_SORT_NAME_ASC
 
     def _reload_table_from_disk(self, *, force: bool = True) -> None:
+        if self._workspace_root is None:
+            self._all_rows = []
+            self._filtered_rows = []
+            self._missing_message = "工作区未设置。"
+            self._table.setRowCount(0)
+            self._status_label.setText(self._missing_message)
+            return
+
         signature = self._registry_disk_signature_now()
         if not force and self._registry_disk_signature == signature:
             # Unchanged registry file: keep rows, only re-apply selection highlight.
@@ -840,7 +974,7 @@ class GamesRegistryPanel(QWidget):
                 row,
                 self._current_game_root,
             )
-            if show_doctor:
+            if show_doctor and self._workspace_root is not None:
                 doctor_layout = str(doctor_report.get("layout_status") or "").strip()
                 doctor_mode = str(doctor_report.get("mode") or "").strip()
                 self._doctor_check_layout_label.setText(
@@ -924,9 +1058,15 @@ class GamesRegistryPanel(QWidget):
         """Combine local refresh-busy and host workbench-running gates."""
         # Prefer the explicit UI flag so buttons lock as soon as refresh is
         # requested, even before the QThread reports isRunning().
+        if not self._has_workspace():
+            self._choose_workspace_btn.setEnabled(not self._host_task_running)
+            return
+
         refresh_busy = bool(self._refresh_ui_busy) or self._is_registry_task_running()
         host_busy = self._host_task_running
         mutate_blocked = refresh_busy or host_busy
+
+        self._choose_workspace_btn.setEnabled(not mutate_blocked)
 
         for widget in (
             self._refresh_current_btn,
@@ -980,19 +1120,27 @@ class GamesRegistryPanel(QWidget):
     def _on_auto_discover_toggled(self, checked: bool) -> None:
         if self._is_registry_task_running():
             return
+        workspace = self._require_workspace()
+        if workspace is None:
+            return
         save_registry_dialog_preference(
-            self._workspace_root,
+            workspace,
             key=REGISTRY_PREF_AUTO_DISCOVER,
             value=checked,
         )
 
     def _maybe_auto_discover_on_open(self) -> None:
+        if not self._has_workspace():
+            return
         if not self._auto_discover_checkbox.isChecked() or self._is_registry_task_running():
             return
-        if count_undiscovered_projects(workspace_root=self._workspace_root) <= 0:
+        workspace = self._workspace_root
+        if workspace is None:
+            return
+        if count_undiscovered_projects(workspace_root=workspace) <= 0:
             return
         result = discover_registry_projects(
-            self._workspace_root,
+            workspace,
             refresh_new=True,
             mode=REFRESH_MODE_LITE,
         )
@@ -1001,7 +1149,10 @@ class GamesRegistryPanel(QWidget):
     def _import_from_games_md(self) -> None:
         if self._is_registry_task_running():
             return
-        registry_path = resolve_registry_path(self._workspace_root)
+        workspace = self._require_workspace()
+        if workspace is None:
+            return
+        registry_path = resolve_registry_path(workspace)
         merge = registry_path.is_file()
         if merge:
             reply = message_box_question(
@@ -1022,14 +1173,17 @@ class GamesRegistryPanel(QWidget):
                 return
             merge = reply == "yes"
 
-        result = import_registry_from_games_md(self._workspace_root, merge=merge)
+        result = import_registry_from_games_md(workspace, merge=merge)
         self._handle_action_result(result, title="导入失败")
 
     def _discover_new_projects(self) -> None:
         if self._is_registry_task_running():
             return
+        workspace = self._require_workspace()
+        if workspace is None:
+            return
         result = discover_registry_projects(
-            self._workspace_root,
+            workspace,
             refresh_new=True,
             mode=REFRESH_MODE_LITE,
         )
@@ -1038,17 +1192,20 @@ class GamesRegistryPanel(QWidget):
     def _ingest_game(self) -> None:
         if self._is_registry_task_running():
             return
+        workspace = self._require_workspace()
+        if workspace is None:
+            return
         dialog = GameIngestDialog(
             self,
-            workspace_root=self._workspace_root,
-            start_dir=self._workspace_root,
+            workspace_root=workspace,
+            start_dir=workspace,
         )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
         payload = dialog.result_payload()
         if payload is None:
             return
-        dest = (self._workspace_root / payload.folder_name).resolve()
+        dest = (workspace / payload.folder_name).resolve()
         reply = message_box_question(
             self,
             "确认导入",
@@ -1068,11 +1225,14 @@ class GamesRegistryPanel(QWidget):
     def _run_ingest(self, *, source: Path, game_name: str) -> None:
         if self._is_registry_task_running():
             return
+        workspace = self._require_workspace()
+        if workspace is None:
+            return
         self._set_refresh_busy(True)
         self._progress_bar.setFormat("准备导入…")
         self._status_label.setText(f"正在导入：{game_name}")
         worker = RegistryIngestWorker(
-            workspace_root=self._workspace_root,
+            workspace_root=workspace,
             source=source,
             game_name=game_name,
             mode=REFRESH_MODE_LITE,
@@ -1100,7 +1260,7 @@ class GamesRegistryPanel(QWidget):
         if result.project_id:
             self._preserved_project_id = result.project_id
         self._handle_action_result(result, title="导入失败")
-        if result.ok:
+        if result.ok and self._workspace_root is not None:
             prompt_render_games_md_after_refresh(
                 self,
                 self._workspace_root,
@@ -1110,17 +1270,23 @@ class GamesRegistryPanel(QWidget):
     def _sync_games_md(self) -> None:
         if self._is_registry_task_running():
             return
-        result = render_registry_games_md(self._workspace_root)
+        workspace = self._require_workspace()
+        if workspace is None:
+            return
+        result = render_registry_games_md(workspace)
         self._handle_action_result(result, title="同步失败")
 
     def _save_selected_project_fields(self) -> None:
         if self._is_registry_task_running():
             return
+        workspace = self._require_workspace()
+        if workspace is None:
+            return
         row = self._selected_row()
         if row is None or not row.project_id:
             return
         result = save_registry_project_fields(
-            self._workspace_root,
+            workspace,
             project_id=row.project_id,
             name=self._name_edit.text(),
             play_status=self._play_status_combo.currentText(),
@@ -1132,6 +1298,9 @@ class GamesRegistryPanel(QWidget):
 
     def _delete_selected_project(self) -> None:
         if self._is_registry_task_running():
+            return
+        workspace = self._require_workspace()
+        if workspace is None:
             return
         row = self._selected_row()
         if row is None or not row.project_id:
@@ -1148,7 +1317,7 @@ class GamesRegistryPanel(QWidget):
         )
         if reply != "yes":
             return
-        result = delete_registry_project(self._workspace_root, project_id=row.project_id)
+        result = delete_registry_project(workspace, project_id=row.project_id)
         self._preserved_project_id = ""
         self._handle_action_result(result, title="删除失败")
 
@@ -1214,9 +1383,12 @@ class GamesRegistryPanel(QWidget):
     ) -> None:
         if self._is_registry_task_running():
             return
+        workspace = self._require_workspace()
+        if workspace is None:
+            return
 
         self._refresh_worker = RegistryRefreshWorker(
-            workspace_root=self._workspace_root,
+            workspace_root=workspace,
             project_id=project_id,
             refresh_everything=refresh_everything,
             mode=mode,
@@ -1243,6 +1415,9 @@ class GamesRegistryPanel(QWidget):
             self._status_label.setText(message)
             return
 
+        if self._workspace_root is None:
+            self._status_label.setText(message)
+            return
         render_result = prompt_render_games_md_after_refresh(
             self,
             self._workspace_root,
@@ -1263,11 +1438,14 @@ class GamesRegistryPanel(QWidget):
     def _switch_to_selected(self) -> None:
         if self._is_registry_task_running() or self._host_task_running:
             return
+        workspace = self._require_workspace()
+        if workspace is None:
+            return
         row = self._selected_row()
         if row is None or not row.work_dir:
             return
         # Prefer effective work dir when present; set_game_root still normalizes.
-        target = row.work_dir or str(self._workspace_root / row.path)
+        target = row.work_dir or str(workspace / row.path)
         self._selected_project_root = target
         if self._on_switch_project is None:
             return

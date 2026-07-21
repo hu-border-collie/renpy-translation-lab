@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTextEdit,
     QFileDialog,
+    QInputDialog,
     QMessageBox,
     QGroupBox,
     QLineEdit,
@@ -204,7 +205,7 @@ from .font_worker import FontInstallResult, FontInstallWorker
 from .games_registry_actions import handle_post_apply_registry_update
 from .games_registry_panel import GamesRegistryPanel
 from .games_registry_doctor_compare import compare_registry_with_doctor_report
-from .games_registry_view import resolve_workspace_root
+
 from .manifest_resume_summary import (
     ManifestWorkflowDisplay,
     build_manifest_workflow_display,
@@ -2527,7 +2528,8 @@ class MainWindow(QMainWindow):
     def _build_settings_workspace_page(self) -> QWidget:
         page, layout = self._settings_page("settings_workspace")
         hint = QLabel(
-            "扫描、浏览和切换 Ren'Py 工作区内的游戏项目。"
+            "工作区默认未设置，不会自动使用工具目录的上一级。"
+            "先「选择工作区…」指定存放 Game_* 的根目录，再扫描、导入或切换项目。"
             "「切换到此项目」会写入当前 game_root 并留在本页；术语表 / 准备流程等到「项目」分区调整。"
         )
         hint.setWordWrap(True)
@@ -2536,10 +2538,11 @@ class MainWindow(QMainWindow):
 
         self._games_registry_panel = GamesRegistryPanel(
             None,
-            workspace_root=resolve_workspace_root(self.state.get_tool_root()),
+            workspace_root=self.state.get_workspace_root(),
             current_game_root=self.state.get_game_root(),
             get_doctor_report=self._current_registry_doctor_report,
             on_switch_project=self._on_registry_switch_project,
+            on_workspace_changed=self._on_workspace_changed,
         )
         self._games_registry_panel.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -3152,7 +3155,10 @@ class MainWindow(QMainWindow):
         row_layout = QVBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(4)
-        row_layout.addWidget(widget)
+        if field.key == "prepare_renpy_sdk_dir" and isinstance(widget, QLineEdit):
+            row_layout.addWidget(self._wrap_renpy_sdk_path_widget(widget))
+        else:
+            row_layout.addWidget(widget)
 
         desc = QLabel(field.description)
         desc.setWordWrap(True)
@@ -3165,6 +3171,112 @@ class MainWindow(QMainWindow):
         self._advanced_setting_error_labels[field.key] = error
         row_layout.addWidget(error)
         return row
+
+    def _wrap_renpy_sdk_path_widget(self, line_edit: QLineEdit) -> QWidget:
+        """Path field + browse/find actions for prepare.renpy_sdk_dir."""
+        host = QWidget()
+        host.setObjectName("prepare_renpy_sdk_path_row")
+        layout = QHBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(line_edit, 1)
+
+        browse_btn = QPushButton("浏览…")
+        browse_btn.setObjectName("secondary_btn")
+        browse_btn.setToolTip("手动选择包含 renpy.py 的 Ren'Py SDK 目录。")
+        browse_btn.clicked.connect(lambda: self._on_browse_renpy_sdk_dir(line_edit))
+        layout.addWidget(browse_btn)
+
+        find_btn = QPushButton("查找 SDK")
+        find_btn.setObjectName("secondary_btn")
+        find_btn.setToolTip(
+            "仅在点击后才会扫描：当前项目、已选工作区与工具附近的 renpy-*-sdk / renpy.py。"
+            "平时加载配置与 prepare 不会自动搜其它目录。找到后填入（多结果时可选）。"
+        )
+        find_btn.clicked.connect(lambda: self._on_find_renpy_sdk_dir(line_edit))
+        layout.addWidget(find_btn)
+        self._prepare_renpy_sdk_find_btn = find_btn
+        self._prepare_renpy_sdk_browse_btn = browse_btn
+        return host
+
+    def _on_browse_renpy_sdk_dir(self, line_edit: QLineEdit) -> None:
+        current = line_edit.text().strip()
+        start_dir = current or str(
+            self.state.get_workspace_root()
+            or self.state.get_game_root()
+            or self.state.get_tool_root()
+        )
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "选择 Ren'Py SDK 目录（应包含 renpy.py）",
+            start_dir,
+        )
+        if not directory:
+            return
+        from translator_runtime import is_renpy_sdk_dir
+
+        path_text = canonical_abs_path(directory)
+        if not is_renpy_sdk_dir(path_text):
+            reply = QMessageBox.question(
+                self,
+                "目录可能不是 Ren'Py SDK",
+                f"所选目录未发现 renpy.py：\n{path_text}\n\n仍要填入吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        line_edit.setText(path_text)
+        self.statusBar().showMessage(f"已填入 Ren'Py SDK：{path_text}", 5000)
+
+    def _on_find_renpy_sdk_dir(self, line_edit: QLineEdit) -> None:
+        from translator_runtime import discover_renpy_sdk_candidates
+
+        game_root = self.state.get_game_root()
+        workspace_root = self.state.get_workspace_root()
+        tool_root = self.state.get_tool_root()
+        candidates = discover_renpy_sdk_candidates(
+            game_root=str(game_root) if game_root is not None else None,
+            tool_root=str(tool_root),
+            workspace_root=str(workspace_root) if workspace_root is not None else None,
+            include_runtime_defaults=True,
+        )
+        if not candidates:
+            roots_hint = []
+            if game_root is not None:
+                roots_hint.append(f"项目：{game_root}")
+            if workspace_root is not None:
+                roots_hint.append(f"工作区：{workspace_root}")
+            roots_hint.append(f"工具：{tool_root}")
+            QMessageBox.information(
+                self,
+                "未找到 Ren'Py SDK",
+                "在附近目录未找到包含 renpy.py 的 Ren'Py SDK。\n\n"
+                "已搜索：\n- "
+                + "\n- ".join(roots_hint)
+                + "\n\n可安装 SDK 后重试，或点「浏览…」手动选择。",
+            )
+            return
+
+        if len(candidates) == 1:
+            chosen = candidates[0]
+        else:
+            labels = [canonical_abs_path(path) for path in candidates]
+            chosen_label, ok = QInputDialog.getItem(
+                self,
+                "选择 Ren'Py SDK",
+                f"找到 {len(labels)} 个候选（已按版本优先排序）：",
+                labels,
+                0,
+                False,
+            )
+            if not ok or not chosen_label:
+                return
+            chosen = chosen_label
+
+        line_edit.setText(canonical_abs_path(chosen))
+        self.statusBar().showMessage(f"已填入查找到的 Ren'Py SDK：{chosen}", 6000)
+        self._append_log(f"查找 Ren'Py SDK：已选择 {chosen}")
 
     def _create_advanced_setting_widget(self, field: SettingField) -> QWidget:
         if field.kind == "bool":
@@ -7188,7 +7300,16 @@ class MainWindow(QMainWindow):
         if self._task_running:
             return
         self._on_go_to_workspace_for_project_switch()
-        self.statusBar().showMessage("请在项目列表中选择项目并「切换到此项目」。", 5000)
+        if self.state.get_workspace_root() is None:
+            self.statusBar().showMessage(
+                "请先选择工作区目录，再从项目列表切换项目。",
+                6000,
+            )
+        else:
+            self.statusBar().showMessage(
+                "请在项目列表中选择项目并「切换到此项目」。",
+                5000,
+            )
 
     def _on_select_project(self):
         if self._task_running:
@@ -7316,14 +7437,33 @@ class MainWindow(QMainWindow):
         manifest_path = self._writeback_manifest_path
         if not manifest_path:
             return
+        workspace_root = self.state.get_workspace_root()
+        if workspace_root is None:
+            return
         result = handle_post_apply_registry_update(
             self,
-            workspace_root=resolve_workspace_root(self.state.get_tool_root()),
+            workspace_root=workspace_root,
             game_root=self.state.get_game_root(),
             manifest_path=manifest_path,
         )
         if result.message:
             self._append_log(result.message)
+
+    def _on_workspace_changed(self, workspace_root: Path) -> None:
+        """Persist explicit workspace selection from the project list panel."""
+        try:
+            self.state.set_workspace_root(workspace_root)
+        except ValueError as exc:
+            QMessageBox.warning(self, "无法更新工作区", str(exc))
+            self._append_log(f"更新 workspace_root 失败：{exc}")
+            return
+        panel = self.__dict__.get("_games_registry_panel")
+        if panel is not None and hasattr(panel, "set_workspace_root"):
+            # Panel already applied the path; ensure it matches persisted value.
+            if panel.workspace_root() != self.state.get_workspace_root():
+                panel.set_workspace_root(self.state.get_workspace_root())
+        self._append_log(f"工作区已设置为：{workspace_root}")
+        self.statusBar().showMessage(f"工作区：{workspace_root}", 5000)
 
     def _current_registry_doctor_report(self) -> dict | None:
         current_game_root = self.state.get_game_root()
@@ -8023,11 +8163,14 @@ class MainWindow(QMainWindow):
                 api_key_count=api_key_count,
                 api_key_source=api_key_source,
             )
-            compare = compare_registry_with_doctor_report(
-                resolve_workspace_root(self.state.get_tool_root()),
-                game_root=self.state.get_game_root(),
-                report=result.report,
-            )
+            workspace_root = self.state.get_workspace_root()
+            compare = None
+            if workspace_root is not None:
+                compare = compare_registry_with_doctor_report(
+                    workspace_root,
+                    game_root=self.state.get_game_root(),
+                    report=result.report,
+                )
             if compare is not None:
                 self._append_log(compare.log_line)
                 summary = DoctorSummary(

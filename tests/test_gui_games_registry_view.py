@@ -41,6 +41,11 @@ class GuiGamesRegistryViewTests(unittest.TestCase):
             self.assertIn("未找到", message)
             self.assertIn("扫描新项目", message)
 
+    def test_load_registry_rows_reports_unset_workspace(self):
+        rows, message = load_registry_rows(workspace_root=None)
+        self.assertEqual(rows, [])
+        self.assertIn("工作区未设置", message)
+
     def test_registry_row_uses_layout_status_or_auto_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

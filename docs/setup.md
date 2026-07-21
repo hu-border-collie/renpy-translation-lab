@@ -6,10 +6,12 @@
 
 ## 本地配置文件
 
-工具级配置放在仓库根目录：
+工具级配置放在**工具仓库根目录**（与脚本同级；不会回退到上一级 `data/`）：
 
 - `api_keys.example.json` -> `api_keys.json`
 - `translator_config.example.json` -> `translator_config.json`
+
+`game_root` / `workspace_root` 须显式配置；未配置时不会把工具父目录当成默认项目或工作区。Batch 日志在工具根下的 `logs/`。
 
 项目资产放在当前 `game_root`（通常就是游戏的 `work` 目录）：
 
@@ -21,7 +23,7 @@
 说明：
 
 - `api_keys.json` 保存 Gemini API Key；旧的 `batch_size/max_chars` 等字段仍兼容，但不再推荐写在这里。
-- `translator_config.json` 保存**工具级**设置：当前 `game_root`、模型、include 过滤、同步 / Batch 分块参数，以及 RAG/原文索引的**全局默认值**（当前项目尚未写过项目文件时使用）。
+- `translator_config.json` 保存**工具级**设置：可选 `workspace_root`（多项目工作区，须显式指定）、当前 `game_root`、模型、include 过滤、同步 / Batch 分块参数，以及 RAG/原文索引的**全局默认值**（当前项目尚未写过项目文件时使用）。
 - **按项目生效**的批量上下文开关见下一节 `project_context_settings.json`。
 - `glossary.json` 通常包含项目私有术语；不存在时脚本会退回内置默认术语规则。`translator_config.json` 的 `glossary_file` 应指向当前项目的文件。
 - `macro_setting.md` 往往包含剧情、角色口吻、世界观约束，可供 Batch 的 `batch.macro_setting_file` 使用。
@@ -83,7 +85,14 @@ Game_Example/
 
 **信任边界：** `translator_config.json` 是**可执行的本地配置**，不只是数据文件。`prepare.unpack_command` / `prepare.template_command` 会在准备阶段在本机运行。推荐使用 **argv 列表**；shell 字符串命令默认拒绝，只有显式设置 `prepare.allow_shell_commands: true` 后才允许（doctor / GUI 会标高风险）。不要加载来源不明的项目配置。
 
-可以通过 `translator_config.json` 或环境变量 `RENPY_SDK_DIR` 指定 SDK 位置；如果没有配置，脚本会尝试在 `game_root` 附近和工具工作区里自动查找 `renpy-*-sdk`：
+可以通过 `translator_config.json` 或环境变量 `RENPY_SDK_DIR` 指定 SDK 位置。**不会在加载配置或 prepare 时自动扫描磁盘**；只有用户主动操作才会搜索其它目录。
+
+GUI **设置 → 项目 → Ren'Py SDK 目录** 提供：
+
+- **查找 SDK**（主动）：在当前 `game_root`、已选工作区与工具附近扫描 `renpy-*-sdk` / `renpy.py`，找到后写入配置字段（多结果时选择）
+- **浏览…**（主动）：手动选择目录
+
+字段留空则 `prepare.renpy_sdk_dir` 为空，需要 SDK 的模板生成会提示配置。示例：
 
 ```json
 {
