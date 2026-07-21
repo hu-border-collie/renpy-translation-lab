@@ -2721,12 +2721,22 @@ def _slugify(text):
 
 
 def _project_slug_from_base_dir(base_dir):
-    base_name = os.path.basename(os.path.abspath(base_dir))
-    if base_name.lower() == "work":
-        parent = os.path.basename(os.path.dirname(os.path.abspath(base_dir)))
+    """Derive a store slug from a project path without inventing CWD roots.
+
+    Empty / unset base_dir yields ``unset`` so tool-local stores still work when
+    game_root is not configured (e.g. batch retry metadata under logs/).
+    """
+    raw = base_dir if base_dir is not None else BASE_DIR
+    if not (isinstance(raw, str) and str(raw).strip()):
+        return "unset"
+    base = _canonical_abs_path(str(raw).strip())
+    if not base:
+        return "unset"
+    base_name = os.path.basename(base)
+    if base_name.lower() in {"work", "original"}:
+        parent = os.path.basename(os.path.dirname(base))
         return _slugify(parent or base_name)
-    project_root = resolve_project_root(base_dir)
-    return _slugify(os.path.basename(os.path.normpath(project_root)))
+    return _slugify(base_name)
 
 
 def guess_project_slug():
@@ -2739,7 +2749,14 @@ def get_context_storage_location():
 
 def get_context_storage_root(base_dir=None):
     if CONTEXT_STORAGE_LOCATION == "game":
-        return _canonical_abs_path(os.path.join(resolve_project_root(base_dir), CONTEXT_STORAGE_GAME_DIR_NAME))
+        try:
+            project_root = resolve_project_root(base_dir)
+        except MissingGameRootError:
+            # Game-side storage needs a project; fall back to tool logs root.
+            return LOG_DIR
+        return _canonical_abs_path(
+            os.path.join(project_root, CONTEXT_STORAGE_GAME_DIR_NAME)
+        )
     return LOG_DIR
 
 
@@ -2747,7 +2764,7 @@ def get_default_context_store_dir(store_name, base_dir=None):
     root = get_context_storage_root(base_dir)
     if CONTEXT_STORAGE_LOCATION == "game":
         return os.path.join(root, store_name)
-    slug = _project_slug_from_base_dir(base_dir or BASE_DIR)
+    slug = _project_slug_from_base_dir(base_dir if base_dir is not None else BASE_DIR)
     return os.path.join(root, store_name, slug)
 
 
