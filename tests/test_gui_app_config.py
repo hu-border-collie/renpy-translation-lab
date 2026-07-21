@@ -343,6 +343,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._set_workflow_from_bootstrap_summary = lambda _summary: None
         self.window._append_log = lambda _text: None
         self.window._set_task_running = lambda _running: None
+        # Avoid per-project project_context_settings.json on a real path overriding
+        # the FakeState translator_config flags used by these unit tests.
+        self.window._game_root_str_for_flags = lambda: None
+        self.window._confirm_unsaved_config_before_workflow = lambda: True
         return self.window.runner
 
     def test_bootstrap_rag_uses_skip_prepare(self):

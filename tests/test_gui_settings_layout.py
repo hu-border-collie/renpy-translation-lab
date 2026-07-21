@@ -6,12 +6,13 @@ import unittest
 try:
     from PySide6.QtWidgets import QApplication, QFormLayout, QScrollArea
 
-    from gui_qt.app import MainWindow
+    from gui_qt.app import MainWindow, _SETTINGS_PAGE_SPECS
 except ImportError as exc:
     QApplication = None  # type: ignore[assignment,misc]
     QFormLayout = None  # type: ignore[assignment,misc]
     QScrollArea = None  # type: ignore[assignment,misc]
     MainWindow = None  # type: ignore[assignment,misc]
+    _SETTINGS_PAGE_SPECS = ()  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
@@ -35,6 +36,9 @@ class GuiSettingsLayoutTests(unittest.TestCase):
         self.window.resize(1600, 960)
         self.window.show()
         self.window._activate_shell_route("settings")
+        # Layout contracts inspect every settings body; materialize them all.
+        for key, _label, _builder in _SETTINGS_PAGE_SPECS:
+            self.window._ensure_settings_page(key)
         _process(self._app)
 
     def tearDown(self) -> None:
