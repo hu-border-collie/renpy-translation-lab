@@ -3,177 +3,155 @@
   "policy": "Each exception must name the vulnerability id, package, reason, and a review date. Remove entries when the pin is upgraded or the advisory is withdrawn. New findings without an exception fail the blocking audit gate. Prefer a dedicated dependency-upgrade PR over long-lived ignores.",
   "exceptions": [
     {
-      "id": "PYSEC-2026-2253",
-      "package": "pillow",
-      "fix_versions": ["12.3.0"],
-      "reason": "Direct pin pillow==12.2.0 in requirements-relation-analyzer.txt (optional analyzer profile only). Upgrade is a dedicated dependency PR with lock regeneration.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2254",
-      "package": "pillow",
-      "fix_versions": ["12.3.0"],
-      "reason": "Same pillow 12.2.0 pin as PYSEC-2026-2253.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2255",
-      "package": "pillow",
-      "fix_versions": ["12.3.0"],
-      "reason": "Same pillow 12.2.0 pin as PYSEC-2026-2253.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2256",
-      "package": "pillow",
-      "fix_versions": ["12.3.0"],
-      "reason": "Same pillow 12.2.0 pin as PYSEC-2026-2253.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2257",
-      "package": "pillow",
-      "fix_versions": ["12.3.0"],
-      "reason": "Same pillow 12.2.0 pin as PYSEC-2026-2253.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-3451",
-      "package": "pillow",
-      "fix_versions": ["12.3.0"],
-      "reason": "Same pillow 12.2.0 pin as PYSEC-2026-2253.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-3452",
-      "package": "pillow",
-      "fix_versions": ["12.3.0"],
-      "reason": "Same pillow 12.2.0 pin as PYSEC-2026-2253.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-3453",
-      "package": "pillow",
-      "fix_versions": ["12.3.0"],
-      "reason": "Same pillow 12.2.0 pin as PYSEC-2026-2253.",
-      "review_by": "2026-08-20"
-    },
-    {
       "id": "PYSEC-2026-237",
       "package": "aiohttp",
-      "fix_versions": ["3.14.1"],
+      "fix_versions": [
+        "3.14.1"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Upgrade with litellm profile in a dedicated dependency PR.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2104",
       "package": "aiohttp",
-      "fix_versions": ["3.14.0"],
+      "fix_versions": [
+        "3.14.0"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2105",
       "package": "aiohttp",
-      "fix_versions": ["3.14.0"],
+      "fix_versions": [
+        "3.14.0"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2106",
       "package": "aiohttp",
-      "fix_versions": ["3.14.0"],
+      "fix_versions": [
+        "3.14.0"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2107",
       "package": "aiohttp",
-      "fix_versions": ["3.14.1"],
+      "fix_versions": [
+        "3.14.1"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2108",
       "package": "aiohttp",
-      "fix_versions": ["3.14.1"],
+      "fix_versions": [
+        "3.14.1"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2109",
       "package": "aiohttp",
-      "fix_versions": ["3.14.1"],
+      "fix_versions": [
+        "3.14.1"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2110",
       "package": "aiohttp",
-      "fix_versions": ["3.14.1"],
+      "fix_versions": [
+        "3.14.1"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2111",
       "package": "aiohttp",
-      "fix_versions": ["3.14.1"],
+      "fix_versions": [
+        "3.14.1"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2112",
       "package": "aiohttp",
-      "fix_versions": ["3.14.1"],
+      "fix_versions": [
+        "3.14.1"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2113",
       "package": "aiohttp",
-      "fix_versions": ["3.14.1"],
+      "fix_versions": [
+        "3.14.1"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2132",
       "package": "click",
-      "fix_versions": ["8.3.3"],
+      "fix_versions": [
+        "8.3.3"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Upgrade with litellm profile in a dedicated dependency PR.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-388",
       "package": "litellm",
-      "fix_versions": ["1.84.0"],
+      "fix_versions": [
+        "1.84.0"
+      ],
       "reason": "Direct pin in requirements-litellm.txt optional profile. Upgrade is a dedicated dependency PR with platform lock regeneration.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2598",
       "package": "litellm",
-      "fix_versions": ["1.83.14"],
+      "fix_versions": [
+        "1.83.14"
+      ],
       "reason": "Same litellm pin track as PYSEC-2026-388.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2600",
       "package": "litellm",
-      "fix_versions": ["1.83.10"],
+      "fix_versions": [
+        "1.83.10"
+      ],
       "reason": "Same litellm pin track as PYSEC-2026-388.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2601",
       "package": "litellm",
-      "fix_versions": ["1.83.10"],
+      "fix_versions": [
+        "1.83.10"
+      ],
       "reason": "Same litellm pin track as PYSEC-2026-388.",
       "review_by": "2026-08-20"
     },
     {
       "id": "PYSEC-2026-2270",
       "package": "python-dotenv",
-      "fix_versions": ["1.2.2"],
+      "fix_versions": [
+        "1.2.2"
+      ],
       "reason": "Transitive via optional LiteLLM lock only. Upgrade with litellm profile in a dedicated dependency PR.",
       "review_by": "2026-08-20"
     }
