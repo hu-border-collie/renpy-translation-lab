@@ -572,17 +572,35 @@ class GamesRegistryTests(unittest.TestCase):
             config_path = Path(tmp) / "translator_config.json"
             workspace = Path(tmp) / "ws"
             workspace.mkdir()
+            # Preserve unrelated keys when updating workspace_root.
+            config_path.write_text(
+                json.dumps({"game_root": "C:/games/Example/work", "sync": {"model": "x"}}),
+                encoding="utf-8",
+            )
             saved = registry.save_configured_workspace_root(workspace, config_path)
             self.assertEqual(saved, workspace.resolve())
             loaded = registry.load_configured_workspace_root(config_path)
             self.assertIsNotNone(loaded)
             assert loaded is not None
             self.assertEqual(loaded.resolve(), workspace.resolve())
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["game_root"], "C:/games/Example/work")
+            self.assertEqual(data["sync"]["model"], "x")
             with mock.patch.object(registry, "translator_config_path", return_value=config_path):
                 required = registry.require_workspace_root()
             self.assertEqual(required, workspace.resolve())
             required_explicit = registry.require_workspace_root(workspace)
             self.assertEqual(required_explicit, workspace.resolve())
+
+    def test_save_configured_workspace_root_refuses_corrupt_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "translator_config.json"
+            config_path.write_text("{not-json", encoding="utf-8")
+            workspace = Path(tmp) / "ws"
+            workspace.mkdir()
+            with self.assertRaises(ValueError):
+                registry.save_configured_workspace_root(workspace, config_path)
+            self.assertEqual(config_path.read_text(encoding="utf-8"), "{not-json")
 
     def test_cli_resolve_paths_requires_workspace(self):
         with tempfile.TemporaryDirectory() as tmp:

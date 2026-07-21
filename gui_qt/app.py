@@ -3235,19 +3235,21 @@ class MainWindow(QMainWindow):
         game_root = self.state.get_game_root()
         workspace_root = self.state.get_workspace_root()
         tool_root = self.state.get_tool_root()
+        # Only explicit GUI roots (+ their intentional parents via search helper).
+        # Do not also walk runtime defaults / tool-parent implicit bases.
         candidates = discover_renpy_sdk_candidates(
             game_root=str(game_root) if game_root is not None else None,
             tool_root=str(tool_root),
             workspace_root=str(workspace_root) if workspace_root is not None else None,
-            include_runtime_defaults=True,
+            include_runtime_defaults=False,
         )
         if not candidates:
             roots_hint = []
             if game_root is not None:
-                roots_hint.append(f"项目：{game_root}")
+                roots_hint.append(f"项目：{game_root}（及其上两级）")
             if workspace_root is not None:
                 roots_hint.append(f"工作区：{workspace_root}")
-            roots_hint.append(f"工具：{tool_root}")
+            roots_hint.append(f"工具：{tool_root}（及其上一级）")
             QMessageBox.information(
                 self,
                 "未找到 Ren'Py SDK",

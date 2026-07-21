@@ -140,24 +140,34 @@ def load_configured_workspace_root(config_path: Path | None = None) -> Path | No
     raw = data.get("workspace_root")
     if not isinstance(raw, str) or not raw.strip():
         return None
-    return Path(raw.strip()).expanduser()
+    # Normalize at load so relative values do not depend on process CWD later.
+    return Path(raw.strip()).expanduser().resolve()
 
 
 def save_configured_workspace_root(
     workspace: Path | str,
     config_path: Path | None = None,
 ) -> Path:
-    """Persist workspace_root into translator_config.json; return resolved path."""
+    """Persist workspace_root into translator_config.json; return resolved path.
+
+    Refuses to clobber an unreadable existing config (does not rewrite as a
+    one-key object). Callers should treat parse/OS errors as hard failures.
+    """
     path = Path(config_path) if config_path is not None else translator_config_path()
     resolved = Path(workspace).expanduser().resolve()
     data: dict[str, Any] = {}
     if path.is_file():
         try:
             loaded = json.loads(path.read_text(encoding="utf-8-sig") or "{}")
-            if isinstance(loaded, dict):
-                data = loaded
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            data = {}
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Cannot update workspace_root: failed to read {path}: {exc}"
+            ) from exc
+        if not isinstance(loaded, dict):
+            raise ValueError(
+                f"Cannot update workspace_root: {path} root must be a JSON object."
+            )
+        data = loaded
     data["workspace_root"] = resolved.as_posix()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

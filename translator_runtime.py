@@ -545,6 +545,9 @@ def _resolve_path(base_dir, value):
         return ""
     if os.path.isabs(text):
         return _canonical_abs_path(text)
+    # Relative paths need an explicit base; never fall back to process CWD.
+    if not base_dir:
+        return ""
     return _canonical_abs_path(os.path.join(base_dir, text))
 
 
@@ -1586,13 +1589,22 @@ def load_translator_settings():
     if not (isinstance(renpy_sdk_dir, str) and renpy_sdk_dir.strip()):
         renpy_sdk_dir = os.environ.get("RENPY_SDK_DIR")
     if isinstance(renpy_sdk_dir, str) and renpy_sdk_dir.strip():
+        configured_sdk_raw = renpy_sdk_dir.strip()
         resolved_renpy_sdk_dir = _resolve_preferred_path_from_bases(
-            renpy_sdk_dir,
+            configured_sdk_raw,
             (BASE_DIR, ROOT_DIR, TOOL_DIR),
         )
-        PREP_RENPY_SDK_DIR = (
-            resolved_renpy_sdk_dir if _is_renpy_sdk_dir(resolved_renpy_sdk_dir) else ""
-        )
+        if _is_renpy_sdk_dir(resolved_renpy_sdk_dir):
+            PREP_RENPY_SDK_DIR = resolved_renpy_sdk_dir
+        else:
+            PREP_RENPY_SDK_DIR = ""
+            shown = resolved_renpy_sdk_dir or configured_sdk_raw
+            print(
+                "Warning: configured Ren'Py SDK path is not a valid SDK "
+                f"(missing renpy.py): {shown}. "
+                "Ignoring it (no nearby auto-discovery). "
+                "Fix prepare.renpy_sdk_dir / RENPY_SDK_DIR, or use GUI「查找 SDK」."
+            )
     else:
         PREP_RENPY_SDK_DIR = ""
 
@@ -1837,8 +1849,30 @@ def _path_contains_path(container, contained):
     return os.path.normcase(common) == os.path.normcase(container_norm)
 
 
+GAME_ROOT_REQUIRED_MESSAGE = (
+    "game_root is not set. Configure translator_config.json game_root "
+    "or environment variable GAME_ROOT / SA_GAME_ROOT before prepare, "
+    "bootstrap-work, or other project path operations."
+)
+
+
+class MissingGameRootError(ValueError):
+    """Raised when a project path is required but BASE_DIR / game_root is empty."""
+
+
+def require_base_dir(base_dir=None) -> str:
+    """Return a non-empty absolute game root, or raise MissingGameRootError.
+
+    Never substitutes the process CWD when game_root is unset.
+    """
+    raw = base_dir if base_dir is not None else BASE_DIR
+    if not (isinstance(raw, str) and str(raw).strip()):
+        raise MissingGameRootError(GAME_ROOT_REQUIRED_MESSAGE)
+    return _canonical_abs_path(str(raw).strip())
+
+
 def resolve_project_root(base_dir=None):
-    base = _canonical_abs_path(base_dir or BASE_DIR)
+    base = require_base_dir(base_dir)
     if os.path.basename(base).lower() in {"work", "original"}:
         return os.path.dirname(base)
     return base
@@ -1865,7 +1899,10 @@ def resolve_original_game_dir(base_dir=None):
     if SOURCE_GAME_DIR and os.path.isdir(SOURCE_GAME_DIR):
         return _canonical_abs_path(SOURCE_GAME_DIR)
 
-    root = resolve_project_root(base_dir)
+    try:
+        root = resolve_project_root(base_dir)
+    except MissingGameRootError:
+        return ""
     candidate = os.path.join(root, "original", "game")
     if os.path.isdir(candidate):
         return _canonical_abs_path(candidate)
@@ -1882,7 +1919,10 @@ def is_work_dir_empty(work_dir):
 
 
 def work_dir_bootstrap_allowed(base_dir=None):
-    work_dir = resolve_work_dir(base_dir)
+    try:
+        work_dir = resolve_work_dir(base_dir)
+    except MissingGameRootError as exc:
+        return False, "", str(exc)
     if is_work_dir_empty(work_dir):
         return True, work_dir, ""
     return False, work_dir, "work directory already exists and is not empty"
@@ -1960,7 +2000,18 @@ def persist_game_root(work_dir):
 
 
 def bootstrap_work_from_original(*, save_game_root=False, refresh_runtime_paths=False, base_dir=None):
-    base = _canonical_abs_path(base_dir or BASE_DIR)
+    try:
+        base = require_base_dir(base_dir)
+    except MissingGameRootError as exc:
+        return {
+            "status": "failed",
+            "project_root": "",
+            "work_dir": "",
+            "source_game_dir": "",
+            "files_copied": 0,
+            "message": str(exc),
+            "game_root_updated": False,
+        }
     project_root = resolve_project_root(base)
     work_dir = resolve_work_dir(base)
     allowed, _, skip_reason = work_dir_bootstrap_allowed(base)
@@ -2314,6 +2365,10 @@ def _resolve_prepare_launcher():
     if sdk_launcher:
         return sdk_launcher
 
+    # Only search the configured game root top-level — never process CWD.
+    if not BASE_DIR:
+        return ""
+
     py_files = sorted(glob.glob(os.path.join(BASE_DIR, "*.py")))
     if not py_files:
         return ""
@@ -2532,6 +2587,11 @@ def run_prepare_steps():
     if not PREP_ENABLED:
         print("[Prepare] Disabled by translator_config.")
         return
+
+    try:
+        require_base_dir()
+    except MissingGameRootError as exc:
+        raise SystemExit(f"[Prepare] {exc}") from exc
 
     allowed, _, _ = work_dir_bootstrap_allowed()
     if allowed and resolve_original_game_dir():
