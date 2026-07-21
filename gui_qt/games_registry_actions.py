@@ -27,6 +27,7 @@ from games_registry import (
     update_project_manual_fields,
     write_games_md,
 )
+from game_ingest import ingest_game
 
 from .games_registry_view import find_project_id_for_game_root, resolve_registry_path
 
@@ -39,6 +40,8 @@ class RegistryActionResult:
     message: str
     rendered_games_md: bool = False
     cancelled: bool = False
+    project_id: str = ""
+    project_path: str = ""
 
 
 def _registry_file(workspace_root: Path) -> Path:
@@ -147,6 +150,38 @@ def import_registry_from_games_md(
     if summary:
         message = f"{message} {summary}"
     return RegistryActionResult(True, message)
+
+
+def ingest_registry_project(
+    workspace_root: Path,
+    *,
+    source: Path | str,
+    game_name: str | None = None,
+    mode: str = REFRESH_MODE_LITE,
+    on_progress: RegistryProgressCallback | None = None,
+    should_cancel: CancelCheck | None = None,
+) -> RegistryActionResult:
+    """Copy a game dir/zip into Game_*/original/work/build and register it."""
+    try:
+        result = ingest_game(
+            source=Path(source),
+            workspace_root=workspace_root,
+            game_name=game_name,
+            refresh=True,
+            mode=mode if mode in {REFRESH_MODE_LITE, REFRESH_MODE_DEEP} else REFRESH_MODE_LITE,
+            on_progress=on_progress,
+            should_cancel=should_cancel,
+        )
+    except Exception as exc:
+        return RegistryActionResult(False, f"导入失败：{exc}")
+
+    return RegistryActionResult(
+        result.ok,
+        result.message,
+        cancelled=result.cancelled,
+        project_id=result.project_id,
+        project_path=result.project_path,
+    )
 
 
 def discover_registry_projects(
@@ -315,17 +350,18 @@ def prompt_render_games_md(
     *,
     reason: str = "已将写回结果记录到 games_registry.json。",
 ) -> RegistryActionResult:
-    from PySide6.QtWidgets import QMessageBox
+    from .widget_helpers import message_box_question
 
-    reply = QMessageBox.question(
+    reply = message_box_question(
         parent,
         "同步 GAMES.md",
         f"{reason}\n是否据此更新 GAMES.md？\n\n"
         "说明：games_registry.json 是真源；同步会用 JSON 覆盖 GAMES.md 的表格区。",
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        QMessageBox.StandardButton.Yes,
+        yes_text="同步",
+        no_text="跳过",
+        default="yes",
     )
-    if reply != QMessageBox.StandardButton.Yes:
+    if reply != "yes":
         return RegistryActionResult(True, "已跳过 GAMES.md 同步。")
     return render_registry_games_md(workspace_root)
 

@@ -83,10 +83,19 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             self.assertIn("Example", dialog._table.item(0, 0).text())
 
             dialog._table.selectRow(0)
+            # Path column is last (EUI flex); name stays column 0.
+            path_col = dialog._table.columnCount() - 1
+            self.assertEqual(dialog._table.item(0, path_col).text(), "Game_Example")
             with mock.patch.object(dialog, "accept") as accept_mock:
                 dialog._switch_to_selected()
                 accept_mock.assert_called_once()
-            self.assertTrue(dialog.selected_project_root().endswith("Game_Example"))
+            # Switch prefers effective work/ when present.
+            selected = dialog.selected_project_root().replace("\\", "/")
+            self.assertIn("Game_Example", selected)
+            self.assertTrue(
+                selected.rstrip("/").endswith("Game_Example/work")
+                or selected.rstrip("/").endswith("Game_Example")
+            )
 
     def test_refresh_current_project_updates_status_label(self):
         with tempfile.TemporaryDirectory() as tmp:

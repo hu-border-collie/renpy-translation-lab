@@ -116,7 +116,8 @@ class GuiSettingsLayoutTests(unittest.TestCase):
             with self.subTest(section=key):
                 self.assertEqual(body.objectName(), "settings_page_body")
                 self.assertEqual(body.property("settingsPage"), key)
-                self.assertEqual(body.maximumWidth(), 1080)
+                # Bodies expand with the viewport (no hard 1080px content cap).
+                self.assertGreaterEqual(body.maximumWidth(), 10000)
                 margins = body.layout().contentsMargins()
                 self.assertEqual(
                     (margins.left(), margins.top(), margins.right(), margins.bottom()),
@@ -137,9 +138,9 @@ class GuiSettingsLayoutTests(unittest.TestCase):
                     self.assertEqual(page.horizontalScrollBar().maximum(), 0)
                     body_key = f"settings_{key}"
                     body = self.window._settings_page_bodies[body_key]
-                    self.assertLessEqual(body.width(), 1080)
-                    expected_width = min(page.viewport().width(), 1080)
-                    self.assertGreaterEqual(body.width(), expected_width - 2)
+                    # Content body should track the viewport width (fullscreen-friendly).
+                    self.assertGreaterEqual(body.width(), page.viewport().width() - 2)
+                    self.assertLessEqual(body.width(), page.viewport().width() + 2)
 
     def test_settings_navigation_items_fit_at_supported_narrow_width(self) -> None:
         self.window.resize(960, 640)

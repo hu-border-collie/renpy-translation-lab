@@ -2483,8 +2483,10 @@ class MainWindow(QMainWindow):
         body = QWidget()
         body.setObjectName("settings_page_body")
         body.setProperty("settingsPage", object_name)
-        body.setMaximumWidth(1080)
+        # Fill the settings viewport (including fullscreen). A hard 1080px cap
+        # left large empty gutters on wide / maximized windows.
         body.setMinimumWidth(0)
+        body.setMaximumWidth(16777215)
         body.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.MinimumExpanding,
@@ -2493,10 +2495,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(20, 18, 20, 20)
         layout.setSpacing(14)
-        # Let the settings body consume the available viewport width. Supplying
-        # an alignment here keeps the widget at its size hint and compresses forms.
+        # Consume full viewport width; do not pin body to sizeHint via AlignHCenter.
         content_layout.addWidget(body, 1)
-        content_layout.addStretch(0)
         self._settings_page_bodies[object_name] = body
 
         scroll.setWidget(content)
@@ -2528,7 +2528,7 @@ class MainWindow(QMainWindow):
         page, layout = self._settings_page("settings_workspace")
         hint = QLabel(
             "扫描、浏览和切换 Ren'Py 工作区内的游戏项目。"
-            "项目列表操作即时生效；切换后会自动打开「项目」分区以调整术语表、准备流程等参数。"
+            "「切换到此项目」会写入当前 game_root 并留在本页；术语表 / 准备流程等到「项目」分区调整。"
         )
         hint.setWordWrap(True)
         hint.setObjectName("config_hint_label")
@@ -2540,6 +2540,10 @@ class MainWindow(QMainWindow):
             current_game_root=self.state.get_game_root(),
             get_doctor_report=self._current_registry_doctor_report,
             on_switch_project=self._on_registry_switch_project,
+        )
+        self._games_registry_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
         )
         layout.addWidget(self._games_registry_panel, 1)
         return page
@@ -2597,6 +2601,8 @@ class MainWindow(QMainWindow):
         switch_row.addWidget(self.settings_go_workspace_btn)
         current_form.addRow("", switch_row)
         layout.addWidget(current_box)
+        # Page may be lazy-built after a project switch; show the live game_root.
+        self._refresh_settings_project_root_display()
 
         for group_title in ("项目与资源", "准备流程"):
             group = QGroupBox(group_title)
@@ -7336,9 +7342,10 @@ class MainWindow(QMainWindow):
             return False
         panel = getattr(self, "_games_registry_panel", None)
         if panel is not None:
+            # Highlight against the effective work root, not the Game_* folder.
             panel.set_current_game_root(self.state.get_game_root())
+        # Stay on 项目列表; user can open 项目 when they need per-project knobs.
         self._show_settings_status("已切换项目", 5000)
-        self._focus_settings_section("project")
         return True
 
     def _focus_settings_section(self, key: str) -> None:
@@ -7902,8 +7909,10 @@ class MainWindow(QMainWindow):
         root = self.state.get_game_root()
         if root:
             label.setText(str(root))
+            label.setToolTip(str(root))
         else:
-            label.setText("（尚未选择项目，请前往「工作区」切换）")
+            label.setText("（尚未选择项目，请前往「项目列表」切换）")
+            label.setToolTip("")
 
     def _refresh_project_label(self):
         root = self.state.get_game_root()

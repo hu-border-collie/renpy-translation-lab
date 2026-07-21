@@ -53,7 +53,7 @@ class GuiGamesRegistryViewTests(unittest.TestCase):
                     "auto": {"doctor_layout": "ready"},
                 },
             )
-            self.assertEqual(row.layout_status, "ready")
+            self.assertEqual(row.layout_status, "就绪")
 
     def test_registry_row_resolves_nested_work_dir(self):
         with tempfile.TemporaryDirectory() as tmp:

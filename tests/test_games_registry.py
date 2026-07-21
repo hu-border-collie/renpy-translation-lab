@@ -101,7 +101,7 @@ class GamesRegistryTests(unittest.TestCase):
         }
         rendered = registry.render_games_md(payload)
         self.assertIn("generated from games_registry.json", rendered)
-        self.assertIn("| Alpha | `Game_Alpha` | 1.0 | ready | 待确认 | 待翻译 | 下一步：初译。 |", rendered)
+        self.assertIn("| Alpha | `Game_Alpha` | 1.0 | 就绪 | 待确认 | 待翻译 | 下一步：初译。 |", rendered)
 
     def test_suggest_translation_status_for_empty_work(self):
         project = {"translation_status_source": "doctor"}
@@ -137,6 +137,60 @@ class GamesRegistryTests(unittest.TestCase):
             version, source = registry.detect_game_version(project_root)
             self.assertEqual(version, "2.5.1")
             self.assertEqual(source, "detected")
+
+    def test_detect_game_version_from_cache_build_info(self):
+        """Ren'Py often stores build_info under game/cache/, not game/ root."""
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "Game_Example"
+            build_info = project_root / "original" / "game" / "cache" / "build_info.json"
+            build_info.parent.mkdir(parents=True)
+            build_info.write_text(
+                '{"name": "Example", "version": "1.6", "time": 1.0, "info": {}}',
+                encoding="utf-8",
+            )
+
+            version, source = registry.detect_game_version(project_root)
+            self.assertEqual(version, "1.6")
+            self.assertEqual(source, "detected")
+
+    def test_format_layout_status_label_maps_machine_codes(self):
+        self.assertEqual(registry.format_layout_status_label("ready"), "就绪")
+        self.assertEqual(registry.format_layout_status_label("attention"), "需关注")
+        self.assertEqual(registry.format_layout_status_label("switch_to_work"), "建议使用 work")
+        self.assertEqual(registry.format_layout_status_label("failed"), "不可用")
+        self.assertEqual(registry.format_layout_status_label("non_renpy"), "非 Ren'Py")
+        self.assertEqual(registry.format_layout_status_label(""), "待确认")
+        # Legacy free-form Chinese notes collapse to short labels.
+        self.assertEqual(
+            registry.format_layout_status_label(
+                "已建 `original/work/build`；散放解压目录已移入 `original/`"
+            ),
+            "需关注",
+        )
+        self.assertEqual(
+            registry.format_layout_status_label(
+                "已建 `original/work/build`；非 Ren'Py，TyranoScript / NW.js 结构"
+            ),
+            "非 Ren'Py",
+        )
+        self.assertEqual(registry.format_layout_status_label("Unity 包"), "非 Ren'Py")
+
+    def test_format_doctor_mode_label_maps_machine_codes(self):
+        self.assertEqual(
+            registry.format_doctor_mode_label("existing_tl_only"),
+            "已有 TL 模板",
+        )
+        self.assertEqual(registry.format_doctor_mode_label(""), "—")
+
+    def test_sync_layout_status_normalizes_non_renpy_freeform(self):
+        project = {
+            "layout_status": "已建 original/work/build；非 Ren'Py，TyranoScript",
+            "in_renpy_pipeline": False,
+            "engine": "tyrano",
+            "auto": {"doctor_layout": "", "in_renpy_pipeline": False, "engine": "tyrano"},
+        }
+        registry.sync_layout_status_from_auto(project)
+        self.assertEqual(project["layout_status"], "non_renpy")
 
     def test_collect_tl_counts_tracks_translated_lines(self):
         with tempfile.TemporaryDirectory() as tmp:

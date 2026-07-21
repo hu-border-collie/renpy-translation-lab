@@ -4,8 +4,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QBrush, QColor, QShowEvent
+from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtGui import QAction, QBrush, QColor, QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -16,10 +16,12 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QStyle,
     QStyleOptionComboBox,
     QTableWidget,
@@ -28,8 +30,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from games_registry import PLAY_STATUSES, REFRESH_MODE_DEEP, REFRESH_MODE_LITE, TRANSLATION_STATUSES
+from games_registry import (
+    PLAY_STATUSES,
+    REFRESH_MODE_DEEP,
+    REFRESH_MODE_LITE,
+    TRANSLATION_STATUSES,
+    format_doctor_mode_label,
+    format_layout_status_label,
+    normalize_play_status,
+    normalize_translation_status,
+)
 
+from .game_ingest_dialog import GameIngestDialog
 from .games_registry_actions import (
     RegistryActionResult,
     delete_registry_project,
@@ -44,14 +56,34 @@ from .games_registry_doctor_compare import (
     compare_registry_with_doctor_report,
     format_registry_compare_hint,
 )
-from .games_registry_worker import RegistryRefreshWorker
+from .games_registry_worker import RegistryIngestWorker, RegistryRefreshWorker
 from .responsive_layout import FlowButtonBar
-from .widget_helpers import NoWheelComboBox
+from .widget_helpers import (
+    NoWheelComboBox,
+    message_box_information,
+    message_box_question,
+    message_box_warning,
+)
+from .games_registry_table import (
+    REGISTRY_PREF_TABLE_COLUMN_WIDTHS,
+    REGISTRY_PREF_TABLE_COLUMN_WIDTHS_LEGACY,
+    REGISTRY_TABLE_COLUMN_DEFS,
+    REGISTRY_TABLE_PATH_COLUMN,
+    clamp_width,
+    clamp_width_for_fit,
+    column_at,
+    column_headers,
+    default_width_map,
+    interactive_column_indexes,
+    migrate_stored_widths,
+    min_width_for_column,
+    row_cell_values,
+    widths_for_persist,
+)
 from .games_registry_view import (
     REGISTRY_PREF_AUTO_DISCOVER,
     REGISTRY_SORT_NAME_ASC,
     REGISTRY_SORT_OPTIONS,
-    REGISTRY_TABLE_COLUMNS,
     RegistryRow,
     count_undiscovered_projects,
     filter_and_sort_registry_rows,
@@ -112,6 +144,20 @@ def _uniform_combo_width(*combos: NoWheelComboBox, minimum: int = 0, pad: int = 
         combo.setFixedWidth(width)
 
 
+def _set_status_combo_value(combo: NoWheelComboBox, value: str) -> None:
+    """Select *value* in combo; add item when registry has a free-form label.
+
+    The table shows the raw registry string (e.g. ``已完成（6.7 增量）``). The
+    detail combo used to only allow the closed status set and fell back to
+    「待确认」 for annotated values, so table and detail disagreed.
+    """
+    text = (value or "").strip() or "待确认"
+    existing = {combo.itemText(i) for i in range(combo.count())}
+    if text not in existing:
+        combo.addItem(text)
+    combo.setCurrentText(text)
+
+
 class GamesRegistryPanel(QWidget):
     """Browse workspace projects, maintain registry, and request game_root switches."""
 
@@ -128,6 +174,10 @@ class GamesRegistryPanel(QWidget):
         super().__init__(parent)
         self.setObjectName("games_registry_panel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
 
         self._workspace_root = workspace_root
         self._all_rows: list[RegistryRow] = []
@@ -136,6 +186,7 @@ class GamesRegistryPanel(QWidget):
         self._missing_message = ""
         self._selected_project_root = ""
         self._refresh_worker: RegistryRefreshWorker | None = None
+        self._ingest_worker: RegistryIngestWorker | None = None
         self._edit_loading = False
         self._preserved_project_id = ""
         self._current_game_root = current_game_root
@@ -149,6 +200,13 @@ class GamesRegistryPanel(QWidget):
         self._host_task_running = False
         # Explicit UI busy flag: set before the worker starts and cleared on completion.
         self._refresh_ui_busy = False
+        # Interactive column widths by id (path is last flex section, not stored).
+        self._table_column_widths: dict[str, int] = default_width_map()
+        self._applying_table_columns = False
+        self._column_width_save_timer = QTimer(self)
+        self._column_width_save_timer.setSingleShot(True)
+        self._column_width_save_timer.setInterval(250)
+        self._column_width_save_timer.timeout.connect(self._persist_table_column_widths)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -190,6 +248,15 @@ class GamesRegistryPanel(QWidget):
         self._discover_btn.setToolTip("扫描工作区中的 Game_* 目录，并把未登记的项目加入总表")
         self._discover_btn.clicked.connect(self._discover_new_projects)
         self._maintenance_toolbar.add_widget(self._discover_btn, min_width=88)
+
+        self._ingest_btn = QPushButton("导入游戏…")
+        self._ingest_btn.setObjectName("secondary_btn")
+        self._ingest_btn.setToolTip(
+            "从游戏目录或 zip 复制整理为 Game_*/original/work/build 并加入总表；"
+            "自动预填游戏名称，可改，并实时预览最终 Game_* 目录。不移动源文件，不自动准备 work。"
+        )
+        self._ingest_btn.clicked.connect(self._ingest_game)
+        self._maintenance_toolbar.add_widget(self._ingest_btn, min_width=88)
 
         self._sync_md_btn = QPushButton("同步 GAMES.md")
         self._sync_md_btn.setObjectName("secondary_btn")
@@ -298,57 +365,60 @@ class GamesRegistryPanel(QWidget):
         self._progress_bar.setFormat("准备刷新…")
         layout.addWidget(self._progress_bar)
 
-        self._table = QTableWidget(0, len(REGISTRY_TABLE_COLUMNS))
+        self._table = QTableWidget(0, len(REGISTRY_TABLE_COLUMN_DEFS))
         self._table.setObjectName("games_registry_table")
-        self._table.setHorizontalHeaderLabels(list(REGISTRY_TABLE_COLUMNS))
+        self._table.setHorizontalHeaderLabels(column_headers())
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._table.setAlternatingRowColors(True)
         self._table.setWordWrap(False)
+        # Long cells elide; full text stays on item tooltips (EUI truncation default).
+        self._table.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self._table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._table.verticalHeader().setVisible(False)
-        table_header = self._table.horizontalHeader()
-        table_header.setStretchLastSection(True)
-        table_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        table_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for column_index in range(2, len(REGISTRY_TABLE_COLUMNS)):
-            table_header.setSectionResizeMode(column_index, QHeaderView.ResizeMode.ResizeToContents)
+        self._configure_table_header()
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.cellDoubleClicked.connect(self._on_row_activated)
         layout.addWidget(self._table, 1)
+        self._load_table_column_widths()
+        self._apply_table_column_layout()
 
         self._edit_group = QGroupBox("项目详情")
         self._edit_group.setObjectName("games_registry_edit_group")
         self._edit_group.setVisible(False)
         edit_layout = QFormLayout(self._edit_group)
         edit_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        edit_layout.setHorizontalSpacing(12)
+        edit_layout.setVerticalSpacing(8)
 
         self._name_edit = QLineEdit()
         self._name_edit.setPlaceholderText("显示名称")
         edit_layout.addRow("项目名称", self._name_edit)
 
         self._layout_status_label = QLabel("—")
-        self._layout_status_label.setWordWrap(True)
+        self._layout_status_label.setWordWrap(False)
         self._layout_status_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         edit_layout.addRow("目录状态", self._layout_status_label)
 
         self._doctor_mode_label = QLabel("—")
-        self._doctor_mode_label.setWordWrap(True)
-        edit_layout.addRow("Doctor 模式", self._doctor_mode_label)
+        self._doctor_mode_label.setWordWrap(False)
+        edit_layout.addRow("模板模式", self._doctor_mode_label)
 
         self._last_refresh_label = QLabel("—")
         self._last_refresh_label.setWordWrap(True)
         edit_layout.addRow("最近刷新", self._last_refresh_label)
 
         self._doctor_check_layout_label = QLabel("—")
-        self._doctor_check_layout_label.setWordWrap(True)
-        edit_layout.addRow("环境检查 layout", self._doctor_check_layout_label)
+        self._doctor_check_layout_label.setWordWrap(False)
+        edit_layout.addRow("环境检查·目录", self._doctor_check_layout_label)
 
         self._doctor_check_mode_label = QLabel("—")
-        self._doctor_check_mode_label.setWordWrap(True)
-        edit_layout.addRow("环境检查 mode", self._doctor_check_mode_label)
+        self._doctor_check_mode_label.setWordWrap(False)
+        edit_layout.addRow("环境检查·模板", self._doctor_check_mode_label)
 
         self._registry_compare_label = QLabel("—")
         self._registry_compare_label.setWordWrap(True)
@@ -367,13 +437,15 @@ class GamesRegistryPanel(QWidget):
         _uniform_combo_width(
             self._play_status_combo,
             self._translation_status_combo,
+            minimum=96,
         )
         edit_layout.addRow("游玩状态", self._play_status_combo)
         edit_layout.addRow("翻译状态", self._translation_status_combo)
 
         self._notes_edit = QPlainTextEdit()
         self._notes_edit.setPlaceholderText("备注 / 下一步")
-        self._notes_edit.setFixedHeight(72)
+        self._notes_edit.setFixedHeight(88)
+        self._notes_edit.setMinimumHeight(72)
         edit_layout.addRow("备注", self._notes_edit)
 
         edit_actions = QHBoxLayout()
@@ -419,10 +491,163 @@ class GamesRegistryPanel(QWidget):
         if not self._section_visible:
             self._section_visible = True
             self.activate_section()
-        # Parent settings viewport width is final after show; wrap toolbar to it.
         self._reflow_toolbars(force=True)
-        # Re-lock combo pairs after the real style/font is applied (YaHei etc.).
         self._reflow_uniform_combos()
+        # Apply stored interactive widths once geometry is real; path flex fills rest.
+        self._apply_table_column_layout()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._reflow_toolbars()
+        # Interactive widths stay put; last-section Stretch absorbs leftover space.
+
+    # --- Table columns (EUI presets: interactive + last flex path) -------------
+
+    def _configure_table_header(self) -> None:
+        header = self._table.horizontalHeader()
+        # Path is always last → StretchLastSection is Qt-stable (no mid-Stretch fight).
+        header.setStretchLastSection(True)
+        header.setMinimumSectionSize(48)
+        header.setSectionsClickable(True)
+        header.setSectionsMovable(False)
+        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._on_table_header_menu)
+        header.sectionResized.connect(self._on_table_section_resized)
+        header.sectionDoubleClicked.connect(self._on_table_section_double_clicked)
+        path_index = REGISTRY_TABLE_PATH_COLUMN
+        for index in range(len(REGISTRY_TABLE_COLUMN_DEFS)):
+            if index == path_index:
+                header.setSectionResizeMode(index, QHeaderView.ResizeMode.Stretch)
+            else:
+                header.setSectionResizeMode(index, QHeaderView.ResizeMode.Interactive)
+
+    def _header_min_width(self, column_index: int) -> int:
+        """EUI min: header + longest enum sample fully readable."""
+        column = column_at(column_index)
+        if column is None:
+            return 56
+        metrics = self._table.fontMetrics()
+        return min_width_for_column(column, metrics.horizontalAdvance)
+
+    def _load_table_column_widths(self) -> None:
+        prefs = load_registry_preferences(workspace_root=self._workspace_root)
+        raw = prefs.get(REGISTRY_PREF_TABLE_COLUMN_WIDTHS)
+        if raw is None:
+            raw = prefs.get(REGISTRY_PREF_TABLE_COLUMN_WIDTHS_LEGACY)
+        self._table_column_widths = migrate_stored_widths(raw)
+
+    def _persist_table_column_widths(self) -> None:
+        if self._applying_table_columns:
+            return
+        live: dict[str, int] = {}
+        for index in interactive_column_indexes():
+            column = column_at(index)
+            if column is None:
+                continue
+            live[column.id] = int(self._table.columnWidth(index))
+        self._table_column_widths = widths_for_persist(live)
+        save_registry_dialog_preference(
+            self._workspace_root,
+            key=REGISTRY_PREF_TABLE_COLUMN_WIDTHS,
+            value=dict(self._table_column_widths),
+        )
+
+    def _apply_table_column_layout(self) -> None:
+        """Push stored interactive widths; path Stretch fills remaining space."""
+        table = getattr(self, "_table", None)
+        if table is None:
+            return
+        self._applying_table_columns = True
+        try:
+            for index in interactive_column_indexes():
+                column = column_at(index)
+                if column is None:
+                    continue
+                minimum = self._header_min_width(index)
+                preferred = int(
+                    self._table_column_widths.get(column.id, column.default_width)
+                )
+                width = clamp_width(column, preferred, min_width=minimum)
+                table.setColumnWidth(index, width)
+                self._table_column_widths[column.id] = width
+        finally:
+            self._applying_table_columns = False
+
+    def _on_table_section_resized(self, logical: int, _old: int, new: int) -> None:
+        """User drag: follow the mouse; only clamp to EUI min. Path is flex."""
+        if self._applying_table_columns:
+            return
+        column = column_at(logical)
+        if column is None or column.flex:
+            return
+        minimum = self._header_min_width(logical)
+        width = clamp_width(column, new, min_width=minimum)
+        if width != self._table.columnWidth(logical):
+            self._applying_table_columns = True
+            try:
+                self._table.setColumnWidth(logical, width)
+            finally:
+                self._applying_table_columns = False
+        self._table_column_widths[column.id] = width
+        self._column_width_save_timer.start()
+
+    def _on_table_section_double_clicked(self, logical: int) -> None:
+        """Double-click: size column to contents (min header/enum, max preset)."""
+        column = column_at(logical)
+        if column is None or column.flex:
+            return
+        minimum = self._header_min_width(logical)
+        self._applying_table_columns = True
+        try:
+            self._table.resizeColumnToContents(logical)
+            width = clamp_width_for_fit(
+                column,
+                self._table.columnWidth(logical),
+                min_width=minimum,
+            )
+            self._table.setColumnWidth(logical, width)
+        finally:
+            self._applying_table_columns = False
+        self._table_column_widths[column.id] = width
+        self._column_width_save_timer.start()
+
+    def _on_table_header_menu(self, pos) -> None:
+        menu = QMenu(self)
+        reset_action = QAction("重置列宽", self)
+        reset_action.setToolTip("恢复默认固定列宽；路径列继续自动占满剩余空间")
+        reset_action.triggered.connect(self._reset_table_column_layout)
+        menu.addAction(reset_action)
+        fit_action = QAction("按内容调整固定列", self)
+        fit_action.setToolTip("按当前单元格内容调整固定列（受列最大宽限制），路径列仍弹性")
+        fit_action.triggered.connect(self._fit_all_table_columns)
+        menu.addAction(fit_action)
+        header = self._table.horizontalHeader()
+        menu.exec(header.mapToGlobal(pos))
+
+    def _reset_table_column_layout(self) -> None:
+        self._table_column_widths = default_width_map()
+        self._apply_table_column_layout()
+        self._persist_table_column_widths()
+
+    def _fit_all_table_columns(self) -> None:
+        self._applying_table_columns = True
+        try:
+            for index in interactive_column_indexes():
+                column = column_at(index)
+                if column is None:
+                    continue
+                minimum = self._header_min_width(index)
+                self._table.resizeColumnToContents(index)
+                width = clamp_width_for_fit(
+                    column,
+                    self._table.columnWidth(index),
+                    min_width=minimum,
+                )
+                self._table.setColumnWidth(index, width)
+                self._table_column_widths[column.id] = width
+        finally:
+            self._applying_table_columns = False
+        self._persist_table_column_widths()
 
     def _reflow_uniform_combos(self) -> None:
         engine = getattr(self, "_engine_filter_combo", None)
@@ -440,14 +665,13 @@ class GamesRegistryPanel(QWidget):
         if play is not None and translation is not None:
             _uniform_combo_width(play, translation)
 
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        self._reflow_toolbars()
-
     def hideEvent(self, event) -> None:
         if self._is_refresh_running() and self._refresh_worker is not None:
             self._refresh_worker.request_stop()
             self._refresh_worker.wait(5000)
+        if self._is_ingest_running() and self._ingest_worker is not None:
+            self._ingest_worker.request_stop()
+            self._ingest_worker.wait(5000)
         super().hideEvent(event)
 
     def _registry_disk_signature_now(self) -> tuple[str, int]:
@@ -515,18 +739,17 @@ class GamesRegistryPanel(QWidget):
         )
 
         for row_index, row in enumerate(rows):
-            values = (
-                row.name,
-                row.path,
-                row.version,
-                row.layout_status,
-                row.play_status,
-                row.translation_status,
-            )
+            values = row_cell_values(row)
             for column_index, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if row.tooltip:
-                    item.setToolTip(row.tooltip)
+                # Full cell text in tooltip when elided; keep row scan summary too.
+                tips = [part for part in (value, row.tooltip) if part and part.strip()]
+                if tips:
+                    unique: list[str] = []
+                    for part in tips:
+                        if part not in unique:
+                            unique.append(part)
+                    item.setToolTip("\n".join(unique))
                 if not row.in_renpy_pipeline:
                     item.setForeground(QBrush(QColor("#64748b")))
                 self._table.setItem(row_index, column_index, item)
@@ -541,6 +764,7 @@ class GamesRegistryPanel(QWidget):
         if selected_row >= 0:
             self._table.selectRow(selected_row)
         self._on_selection_changed()
+        # Do not re-clamp column widths on every data refresh (preserves user drag).
 
     def _update_status_label(self, visible_count: int) -> None:
         if self._progress_bar.isVisible():
@@ -583,6 +807,12 @@ class GamesRegistryPanel(QWidget):
     def _is_refresh_running(self) -> bool:
         return self._refresh_worker is not None and self._refresh_worker.isRunning()
 
+    def _is_ingest_running(self) -> bool:
+        return self._ingest_worker is not None and self._ingest_worker.isRunning()
+
+    def _is_registry_task_running(self) -> bool:
+        return self._is_refresh_running() or self._is_ingest_running()
+
     def _populate_edit_panel(self, row: RegistryRow | None) -> None:
         self._edit_loading = True
         try:
@@ -613,8 +843,12 @@ class GamesRegistryPanel(QWidget):
             if show_doctor:
                 doctor_layout = str(doctor_report.get("layout_status") or "").strip()
                 doctor_mode = str(doctor_report.get("mode") or "").strip()
-                self._doctor_check_layout_label.setText(doctor_layout or "—")
-                self._doctor_check_mode_label.setText(doctor_mode or "—")
+                self._doctor_check_layout_label.setText(
+                    format_layout_status_label(doctor_layout) if doctor_layout else "—"
+                )
+                self._doctor_check_mode_label.setText(
+                    format_doctor_mode_label(doctor_mode) if doctor_mode else "—"
+                )
                 compare = compare_registry_with_doctor_report(
                     self._workspace_root,
                     game_root=self._current_game_root,
@@ -637,14 +871,15 @@ class GamesRegistryPanel(QWidget):
                 )
             )
 
-            play_status = row.play_status if row.play_status in PLAY_STATUSES else "待确认"
-            translation_status = (
-                row.translation_status
-                if row.translation_status in TRANSLATION_STATUSES
-                else "待确认"
+            # Match table text: keep free-form / annotated statuses (e.g. 已完成（6.7 增量）).
+            _set_status_combo_value(
+                self._play_status_combo,
+                normalize_play_status(row.play_status),
             )
-            self._play_status_combo.setCurrentText(play_status)
-            self._translation_status_combo.setCurrentText(translation_status)
+            _set_status_combo_value(
+                self._translation_status_combo,
+                normalize_translation_status(row.translation_status),
+            )
             self._notes_edit.setPlainText(row.notes)
         finally:
             self._edit_loading = False
@@ -654,7 +889,7 @@ class GamesRegistryPanel(QWidget):
         can_use_row = row is not None and bool(row.project_id)
         self._edit_group.setVisible(row is not None)
         self._populate_edit_panel(row)
-        refresh_busy = bool(self._refresh_ui_busy) or self._is_refresh_running()
+        refresh_busy = bool(self._refresh_ui_busy) or self._is_registry_task_running()
         if not refresh_busy and not self._host_task_running:
             self._switch_btn.setEnabled(row is not None and bool(row.work_dir))
             self._refresh_current_btn.setEnabled(can_use_row)
@@ -689,7 +924,7 @@ class GamesRegistryPanel(QWidget):
         """Combine local refresh-busy and host workbench-running gates."""
         # Prefer the explicit UI flag so buttons lock as soon as refresh is
         # requested, even before the QThread reports isRunning().
-        refresh_busy = bool(self._refresh_ui_busy) or self._is_refresh_running()
+        refresh_busy = bool(self._refresh_ui_busy) or self._is_registry_task_running()
         host_busy = self._host_task_running
         mutate_blocked = refresh_busy or host_busy
 
@@ -700,6 +935,7 @@ class GamesRegistryPanel(QWidget):
             self._switch_btn,
             self._import_md_btn,
             self._discover_btn,
+            self._ingest_btn,
             self._sync_md_btn,
             self._save_fields_btn,
             self._delete_project_btn,
@@ -742,7 +978,7 @@ class GamesRegistryPanel(QWidget):
         self._apply_interaction_gate()
 
     def _on_auto_discover_toggled(self, checked: bool) -> None:
-        if self._is_refresh_running():
+        if self._is_registry_task_running():
             return
         save_registry_dialog_preference(
             self._workspace_root,
@@ -751,7 +987,7 @@ class GamesRegistryPanel(QWidget):
         )
 
     def _maybe_auto_discover_on_open(self) -> None:
-        if not self._auto_discover_checkbox.isChecked() or self._is_refresh_running():
+        if not self._auto_discover_checkbox.isChecked() or self._is_registry_task_running():
             return
         if count_undiscovered_projects(workspace_root=self._workspace_root) <= 0:
             return
@@ -763,12 +999,12 @@ class GamesRegistryPanel(QWidget):
         self._handle_action_result(result, title="自动扫描失败")
 
     def _import_from_games_md(self) -> None:
-        if self._is_refresh_running():
+        if self._is_registry_task_running():
             return
         registry_path = resolve_registry_path(self._workspace_root)
         merge = registry_path.is_file()
         if merge:
-            reply = QMessageBox.question(
+            reply = message_box_question(
                 self,
                 "从 GAMES.md 导入",
                 "已存在 games_registry.json。\n\n"
@@ -777,20 +1013,20 @@ class GamesRegistryPanel(QWidget):
                 "• 选择「否」：用 GAMES.md 完全替换总表\n"
                 "• 选择「取消」：放弃\n\n"
                 "合并后如需让 Markdown 与 JSON 一致，请再点「同步 GAMES.md」。",
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.No
-                | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Yes,
+                yes_text="是",
+                no_text="否",
+                cancel_text="取消",
+                default="yes",
             )
-            if reply == QMessageBox.StandardButton.Cancel:
+            if reply == "cancel":
                 return
-            merge = reply == QMessageBox.StandardButton.Yes
+            merge = reply == "yes"
 
         result = import_registry_from_games_md(self._workspace_root, merge=merge)
         self._handle_action_result(result, title="导入失败")
 
     def _discover_new_projects(self) -> None:
-        if self._is_refresh_running():
+        if self._is_registry_task_running():
             return
         result = discover_registry_projects(
             self._workspace_root,
@@ -799,14 +1035,86 @@ class GamesRegistryPanel(QWidget):
         )
         self._handle_action_result(result, title="扫描失败")
 
+    def _ingest_game(self) -> None:
+        if self._is_registry_task_running():
+            return
+        dialog = GameIngestDialog(
+            self,
+            workspace_root=self._workspace_root,
+            start_dir=self._workspace_root,
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        payload = dialog.result_payload()
+        if payload is None:
+            return
+        dest = (self._workspace_root / payload.folder_name).resolve()
+        reply = message_box_question(
+            self,
+            "确认导入",
+            "将复制到：\n"
+            f"{dest}\n\n"
+            f"游戏名称：{payload.game_name}\n"
+            f"最终目录：{payload.folder_name}\n\n"
+            "源文件会保留，不会自动准备 work。确定继续？",
+            yes_text="确定",
+            no_text="取消",
+            default="yes",
+        )
+        if reply != "yes":
+            return
+        self._run_ingest(source=payload.source, game_name=payload.game_name)
+
+    def _run_ingest(self, *, source: Path, game_name: str) -> None:
+        if self._is_registry_task_running():
+            return
+        self._set_refresh_busy(True)
+        self._progress_bar.setFormat("准备导入…")
+        self._status_label.setText(f"正在导入：{game_name}")
+        worker = RegistryIngestWorker(
+            workspace_root=self._workspace_root,
+            source=source,
+            game_name=game_name,
+            mode=REFRESH_MODE_LITE,
+            parent=self,
+        )
+        self._ingest_worker = worker
+        worker.progress.connect(self._on_ingest_progress)
+        worker.completed.connect(self._on_ingest_finished)
+        worker.start()
+
+    def _on_ingest_progress(self, current: int, total: int, name: str) -> None:
+        self._progress_bar.setMaximum(max(total, 1))
+        self._progress_bar.setValue(current)
+        self._progress_bar.setFormat(f"{current}/{total} — {name}")
+        self._status_label.setText(f"正在导入：{name}（{current}/{total}）")
+
+    def _on_ingest_finished(self, result: object) -> None:
+        worker = self._ingest_worker
+        self._ingest_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self._set_refresh_busy(False)
+        if not isinstance(result, RegistryActionResult):
+            result = RegistryActionResult(False, "导入失败：未知结果。")
+        if result.project_id:
+            self._preserved_project_id = result.project_id
+        self._handle_action_result(result, title="导入失败")
+        if result.ok:
+            prompt_render_games_md_after_refresh(
+                self,
+                self._workspace_root,
+                result.message or "已将新项目登记到 games_registry.json。",
+            )
+
     def _sync_games_md(self) -> None:
-        if self._is_refresh_running():
+        if self._is_registry_task_running():
             return
         result = render_registry_games_md(self._workspace_root)
         self._handle_action_result(result, title="同步失败")
 
     def _save_selected_project_fields(self) -> None:
-        if self._is_refresh_running():
+        if self._is_registry_task_running():
             return
         row = self._selected_row()
         if row is None or not row.project_id:
@@ -823,20 +1131,22 @@ class GamesRegistryPanel(QWidget):
         self._handle_action_result(result, title="保存失败")
 
     def _delete_selected_project(self) -> None:
-        if self._is_refresh_running():
+        if self._is_registry_task_running():
             return
         row = self._selected_row()
         if row is None or not row.project_id:
             return
-        reply = QMessageBox.warning(
+        reply = message_box_question(
             self,
             "删除项目",
             f"确定从总表移除「{row.name}」？\n\n"
             "这不会删除磁盘上的 Game_* 目录，只是不再在 registry / GAMES.md 中显示。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            yes_text="删除",
+            no_text="取消",
+            default="no",
+            icon=QMessageBox.Icon.Warning,
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if reply != "yes":
             return
         result = delete_registry_project(self._workspace_root, project_id=row.project_id)
         self._preserved_project_id = ""
@@ -851,7 +1161,7 @@ class GamesRegistryPanel(QWidget):
         if result.message:
             self._status_label.setText(result.message)
         if not result.ok:
-            QMessageBox.warning(self, title, result.message)
+            message_box_warning(self, title, result.message)
 
     def _on_refresh_progress(self, current: int, total: int, name: str) -> None:
         self._progress_bar.setMaximum(max(total, 1))
@@ -860,16 +1170,22 @@ class GamesRegistryPanel(QWidget):
         self._status_label.setText(f"正在刷新：{name}（{current}/{total}）")
 
     def _on_stop_refresh(self) -> None:
-        if self._refresh_worker is None or not self._refresh_worker.isRunning():
+        stopped = False
+        if self._refresh_worker is not None and self._refresh_worker.isRunning():
+            self._refresh_worker.request_stop()
+            stopped = True
+        if self._ingest_worker is not None and self._ingest_worker.isRunning():
+            self._ingest_worker.request_stop()
+            stopped = True
+        if not stopped:
             return
-        self._refresh_worker.request_stop()
         self._stop_refresh_btn.setEnabled(False)
-        self._status_label.setText("正在停止…（等待当前项目完成）")
+        self._status_label.setText("正在停止…（等待当前任务完成）")
 
     def _refresh_current_project(self) -> None:
         row = self._selected_row()
         if row is None or not row.project_id:
-            QMessageBox.information(self, "请选择项目", "请先在表格里选中一个项目。")
+            message_box_information(self, "请选择项目", "请先在表格里选中一个项目。")
             return
         self._preserved_project_id = row.project_id
         self._run_refresh(project_id=row.project_id, mode=self._selected_refresh_mode())
@@ -877,14 +1193,15 @@ class GamesRegistryPanel(QWidget):
     def _refresh_all_projects(self) -> None:
         mode = self._selected_refresh_mode()
         if mode == REFRESH_MODE_DEEP:
-            reply = QMessageBox.question(
+            reply = message_box_question(
                 self,
                 "深度刷新全部",
                 f"将对全部 {len(self._all_rows)} 个项目运行完整 doctor，可能需要数分钟。\n确定继续？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                yes_text="确定",
+                no_text="取消",
+                default="no",
             )
-            if reply != QMessageBox.StandardButton.Yes:
+            if reply != "yes":
                 return
         self._run_refresh(refresh_everything=True, mode=mode)
 
@@ -895,7 +1212,7 @@ class GamesRegistryPanel(QWidget):
         refresh_everything: bool = False,
         mode: str = REFRESH_MODE_LITE,
     ) -> None:
-        if self._is_refresh_running():
+        if self._is_registry_task_running():
             return
 
         self._refresh_worker = RegistryRefreshWorker(
@@ -922,7 +1239,7 @@ class GamesRegistryPanel(QWidget):
             self._status_label.setText(message)
             return
         if not result.ok:
-            QMessageBox.warning(self, "刷新失败", message)
+            message_box_warning(self, "刷新失败", message)
             self._status_label.setText(message)
             return
 
@@ -936,7 +1253,7 @@ class GamesRegistryPanel(QWidget):
         self._status_label.setText(message)
 
     def _on_row_activated(self, row_index: int, _column: int) -> None:
-        if self._is_refresh_running() or self._host_task_running:
+        if self._is_registry_task_running() or self._host_task_running:
             return
         if row_index < 0 or row_index >= len(self._filtered_rows):
             return
@@ -944,14 +1261,18 @@ class GamesRegistryPanel(QWidget):
         self._switch_to_selected()
 
     def _switch_to_selected(self) -> None:
-        if self._is_refresh_running() or self._host_task_running:
+        if self._is_registry_task_running() or self._host_task_running:
             return
         row = self._selected_row()
         if row is None or not row.work_dir:
             return
-        target = str(self._workspace_root / row.path)
+        # Prefer effective work dir when present; set_game_root still normalizes.
+        target = row.work_dir or str(self._workspace_root / row.path)
         self._selected_project_root = target
         if self._on_switch_project is None:
             return
         if self._on_switch_project(target):
-            self.set_current_game_root(Path(target))
+            # Handler already refreshed current_game_root from state; keep a
+            # local fallback for dialog wrappers that only set selected path.
+            if self._current_game_root is None:
+                self.set_current_game_root(Path(target))
