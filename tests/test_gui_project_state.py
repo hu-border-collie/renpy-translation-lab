@@ -796,6 +796,34 @@ class GuiProjectStateTests(unittest.TestCase):
             state._load_workspace_root_from_config()
             self.assert_same_path(state.get_workspace_root(), workspace)
 
+    def test_load_workspace_root_expands_user_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            workspace = home / "RenPy_Workspace"
+            workspace.mkdir(parents=True)
+            state = self.make_state(root)
+            state.config_path.write_text(
+                json.dumps({"workspace_root": "~/RenPy_Workspace"}),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
+                # Path.expanduser uses home; also patch expanduser for reliability on Windows.
+                real_expand = Path.expanduser
+
+                def _expand(self):
+                    text = str(self)
+                    if text.startswith("~/") or text.startswith("~\\"):
+                        return Path(home) / text[2:]
+                    if text == "~":
+                        return Path(home)
+                    return real_expand(self)
+
+                with patch.object(Path, "expanduser", _expand):
+                    state._load_workspace_root_from_config()
+            self.assertIsNotNone(state.get_workspace_root())
+            self.assert_same_path(state.get_workspace_root(), workspace)
+
 
 if __name__ == "__main__":
     unittest.main()

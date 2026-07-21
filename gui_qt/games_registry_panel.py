@@ -579,6 +579,11 @@ class GamesRegistryPanel(QWidget):
 
     def _choose_workspace(self) -> None:
         if self._host_task_running or self._is_registry_task_running():
+            message_box_information(
+                self,
+                "暂时无法切换工作区",
+                "工作台任务或总表刷新进行中，请结束后再选择工作区。",
+            )
             return
         start_dir = str(self._workspace_root or Path.home())
         directory = QFileDialog.getExistingDirectory(
@@ -1065,7 +1070,11 @@ class GamesRegistryPanel(QWidget):
         # Prefer the explicit UI flag so buttons lock as soon as refresh is
         # requested, even before the QThread reports isRunning().
         if not self._has_workspace():
-            self._choose_workspace_btn.setEnabled(not self._host_task_running)
+            choose_enabled = not self._host_task_running
+            self._choose_workspace_btn.setEnabled(choose_enabled)
+            empty = getattr(self, "_workspace_empty_state", None)
+            if empty is not None and hasattr(empty, "set_action_enabled"):
+                empty.set_action_enabled(choose_enabled)
             return
 
         refresh_busy = bool(self._refresh_ui_busy) or self._is_registry_task_running()

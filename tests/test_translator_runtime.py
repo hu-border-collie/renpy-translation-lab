@@ -813,10 +813,22 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                         runtime._resolve_path('', '../original/game'),
                         '',
                     )
+                    self.assertEqual(runtime.guess_project_slug(), 'unset')
+                    self.assertEqual(
+                        runtime._project_slug_from_base_dir(''),
+                        'unset',
+                    )
                     # Must not have created a project layout via CWD fallback.
                     self.assertFalse((Path(tmp) / 'original').exists())
             finally:
                 os.chdir(old_cwd)
+
+    def test_game_context_store_falls_back_to_unset_slug_layout(self):
+        with mock.patch.object(runtime, 'BASE_DIR', ''), mock.patch.object(
+            runtime, 'CONTEXT_STORAGE_LOCATION', 'game'
+        ), mock.patch.object(runtime, 'LOG_DIR', '/tmp/tool-logs'):
+            path = runtime.get_default_context_store_dir('rag_store')
+            self.assertTrue(path.replace('\\', '/').endswith('rag_store/unset'))
 
     def test_invalid_configured_sdk_warns_and_stays_empty(self):
         with tempfile.TemporaryDirectory() as tmp:

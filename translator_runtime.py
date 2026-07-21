@@ -2752,7 +2752,11 @@ def get_context_storage_root(base_dir=None):
         try:
             project_root = resolve_project_root(base_dir)
         except MissingGameRootError:
-            # Game-side storage needs a project; fall back to tool logs root.
+            # Prefer tool logs over inventing a CWD project path.
+            print(
+                "Warning: context_storage.location is 'game' but game_root is unset; "
+                "using tool logs root with an 'unset' project slug."
+            )
             return LOG_DIR
         return _canonical_abs_path(
             os.path.join(project_root, CONTEXT_STORAGE_GAME_DIR_NAME)
@@ -2763,7 +2767,12 @@ def get_context_storage_root(base_dir=None):
 def get_default_context_store_dir(store_name, base_dir=None):
     root = get_context_storage_root(base_dir)
     if CONTEXT_STORAGE_LOCATION == "game":
-        return os.path.join(root, store_name)
+        try:
+            require_base_dir(base_dir)
+            return os.path.join(root, store_name)
+        except MissingGameRootError:
+            # Match tool-mode isolation: .../store_name/unset under LOG_DIR.
+            return os.path.join(LOG_DIR, store_name, "unset")
     slug = _project_slug_from_base_dir(base_dir if base_dir is not None else BASE_DIR)
     return os.path.join(root, store_name, slug)
 

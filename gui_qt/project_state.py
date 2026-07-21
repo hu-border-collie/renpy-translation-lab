@@ -424,7 +424,9 @@ class ProjectState:
             data = json.loads(self.config_path.read_text(encoding="utf-8-sig") or "{}")
             raw = data.get("workspace_root")
             if isinstance(raw, str) and raw.strip():
-                self._workspace_root = Path(canonical_abs_path(raw.strip()))
+                # Match CLI: expand ~ then canonicalize (absolute/stable path).
+                expanded = Path(raw.strip()).expanduser()
+                self._workspace_root = Path(canonical_abs_path(str(expanded)))
         except Exception:
             pass
 

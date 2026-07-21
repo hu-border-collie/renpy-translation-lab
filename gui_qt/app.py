@@ -3235,8 +3235,9 @@ class MainWindow(QMainWindow):
         game_root = self.state.get_game_root()
         workspace_root = self.state.get_workspace_root()
         tool_root = self.state.get_tool_root()
-        # Only explicit GUI roots (+ their intentional parents via search helper).
-        # Do not also walk runtime defaults / tool-parent implicit bases.
+        # Explicit GUI roots only (no runtime BASE_DIR/ROOT_DIR mix-in).
+        # tool_root / game_root still use intentional parent hops inside
+        # renpy_sdk_search_roots; include_runtime_defaults=False skips globals.
         candidates = discover_renpy_sdk_candidates(
             game_root=str(game_root) if game_root is not None else None,
             tool_root=str(tool_root),
