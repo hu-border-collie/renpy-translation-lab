@@ -176,24 +176,16 @@ class GuiSettingsLayoutTests(unittest.TestCase):
         self.assertGreaterEqual(form_count, 7)
 
     def test_model_selectors_use_consistent_editing_affordances(self) -> None:
-        # Gemini translation / embedding selectors accept free-typed model IDs
-        # and keep an explicit dropdown action so the list remains selectable.
+        # Gemini model page is select-only; custom catalog editing lives on Advanced.
         for combo in (
             self.window.sync_model_combo,
             self.window.batch_model_combo,
             self.window.sync_embedding_combo,
             self.window.batch_embedding_combo,
+            self.window.batch_thinking_combo,
         ):
             with self.subTest(combo=combo.objectName() or type(combo).__name__):
-                self.assertTrue(combo.isEditable())
-                line_edit = combo.lineEdit()
-                self.assertIsNotNone(line_edit)
-                actions = {
-                    action.objectName(): action for action in line_edit.actions()
-                }
-                self.assertIn("combo_popup_action", actions)
-                self.assertFalse(actions["combo_popup_action"].icon().isNull())
-        self.assertFalse(self.window.batch_thinking_combo.isEditable())
+                self.assertFalse(combo.isEditable())
 
 
 if __name__ == "__main__":

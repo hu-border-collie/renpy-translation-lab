@@ -14,6 +14,7 @@ from gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
     allowed_gemini_rotation_models,
+    extras_beyond_builtins,
     filter_gemini_rotation_models,
 )
 
@@ -76,6 +77,28 @@ CONTEXT_PRIMARY_SETTING_CATEGORY = "上下文主开关"
 
 
 ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
+    SettingField(
+        "catalog_gemini_models",
+        ("model_catalog", "gemini"),
+        "自定义 Gemini 翻译模型",
+        "扩展「设置 → 模型」下拉列表中的翻译模型。每行一个模型 ID（例如 gemini-experimental-foo）。"
+        "仅保存非内置 ID；内置模型始终可选。",
+        "list",
+        [],
+        "模型目录",
+        allow_empty=True,
+    ),
+    SettingField(
+        "catalog_gemini_embedding_models",
+        ("model_catalog", "gemini_embedding"),
+        "自定义 Gemini 向量模型",
+        "扩展「设置 → 模型」下拉列表中的 RAG 向量模型。每行一个模型 ID。"
+        "仅保存非内置 ID；内置 embedding 始终可选。",
+        "list",
+        [],
+        "模型目录",
+        allow_empty=True,
+    ),
     SettingField(
         "api_key_rotation_enabled",
         ("rotation", "api_key", "enabled"),
@@ -1021,7 +1044,13 @@ def normalize_for_write(
         return value.strip() if isinstance(value, str) else str(value).strip()
 
     if field.kind == "list":
-        return normalize_list_value(field, value)
+        normalized = normalize_list_value(field, value)
+        # model_catalog lists store only non-builtin extensions.
+        if field.key == "catalog_gemini_models":
+            return extras_beyond_builtins(normalized, kind="translation")
+        if field.key == "catalog_gemini_embedding_models":
+            return extras_beyond_builtins(normalized, kind="embedding")
+        return normalized
 
     if field.kind == "gemini_model_list":
         return filter_gemini_rotation_models(

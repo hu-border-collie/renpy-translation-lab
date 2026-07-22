@@ -2688,19 +2688,19 @@ class MainWindow(QMainWindow):
         sync_layout = self._settings_form(sync_box)
 
         self.sync_model_combo = NoWheelComboBox()
-        self._configure_editable_model_combo(self.sync_model_combo)
+        self.sync_model_combo.setEditable(False)
         self.sync_model_combo.addItems(list(BUILTIN_GEMINI_TRANSLATION_MODELS))
         sync_layout.addRow("翻译模型：", self.sync_model_combo)
 
         self.sync_embedding_combo = NoWheelComboBox()
-        self._configure_editable_model_combo(self.sync_embedding_combo)
+        self.sync_embedding_combo.setEditable(False)
         self.sync_embedding_combo.addItems(list(BUILTIN_GEMINI_EMBEDDING_MODELS))
         sync_layout.addRow("RAG 向量模型：", self.sync_embedding_combo)
 
         sync_hint = QLabel(
-            "此处只配置 Gemini 同步模型；LiteLLM 已移至左侧独立页面。"
-            "可从下拉列表选择，也可直接输入未列出的模型 ID（输入框右侧箭头可打开列表）；"
-            "自定义项保存后写入 translator_config.json 的 model_catalog。"
+            "此处只配置 Gemini 同步/批量所用模型，从下拉列表选择（不可手输）。"
+            "若要增加自定义模型 ID，请到「设置 → 高级 → 模型目录」。"
+            "LiteLLM 已移至左侧独立页面。"
         )
         sync_hint.setWordWrap(True)
         sync_hint.setObjectName("config_hint_label")
@@ -2711,12 +2711,12 @@ class MainWindow(QMainWindow):
         batch_layout = self._settings_form(batch_box)
 
         self.batch_model_combo = NoWheelComboBox()
-        self._configure_editable_model_combo(self.batch_model_combo)
+        self.batch_model_combo.setEditable(False)
         self.batch_model_combo.addItems(list(BUILTIN_GEMINI_TRANSLATION_MODELS))
         batch_layout.addRow("翻译模型：", self.batch_model_combo)
 
         self.batch_embedding_combo = NoWheelComboBox()
-        self._configure_editable_model_combo(self.batch_embedding_combo)
+        self.batch_embedding_combo.setEditable(False)
         self.batch_embedding_combo.addItems(list(BUILTIN_GEMINI_EMBEDDING_MODELS))
         batch_layout.addRow("RAG 向量模型：", self.batch_embedding_combo)
 
@@ -3326,22 +3326,56 @@ class MainWindow(QMainWindow):
         widget.setMinimumHeight(160)
         widget.setMaximumHeight(240)
         widget.setAlternatingRowColors(True)
-        try:
-            config = self.state.load_translator_config()
-        except Exception:
-            config = {}
-        models = allowed_gemini_rotation_models(config if isinstance(config, dict) else {})
-        for name in models:
-            item = QListWidgetItem(name)
-            item.setFlags(
-                item.flags()
-                | Qt.ItemFlag.ItemIsUserCheckable
-                | Qt.ItemFlag.ItemIsEnabled
-                | Qt.ItemFlag.ItemIsSelectable
-            )
-            item.setCheckState(Qt.CheckState.Unchecked)
-            widget.addItem(item)
+        self._refresh_gemini_model_checklist(widget)
         return widget
+
+    def _refresh_gemini_model_checklist(
+        self,
+        widget: QListWidget | None = None,
+        *,
+        selected: object | None = None,
+        config: dict | None = None,
+    ) -> None:
+        """Rebuild checklist rows from the current Gemini catalog."""
+        if widget is None:
+            widgets = getattr(self, "_advanced_setting_widgets", {})
+            candidate = widgets.get("model_rotation_models")
+            widget = candidate if isinstance(candidate, QListWidget) else None
+        if widget is None:
+            return
+        if selected is None:
+            selected = self._gemini_model_checklist_values(widget)
+        if config is None:
+            try:
+                loaded = self.state.load_translator_config()
+                config = loaded if isinstance(loaded, dict) else {}
+            except Exception:
+                config = {}
+        models = allowed_gemini_rotation_models(config)
+        previous_block = widget.blockSignals(True)
+        try:
+            widget.clear()
+            selected_set = {
+                str(item).strip()
+                for item in (selected if isinstance(selected, (list, tuple, set)) else [])
+                if str(item).strip()
+            }
+            for name in models:
+                item = QListWidgetItem(name)
+                item.setFlags(
+                    item.flags()
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsEnabled
+                    | Qt.ItemFlag.ItemIsSelectable
+                )
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if name in selected_set
+                    else Qt.CheckState.Unchecked
+                )
+                widget.addItem(item)
+        finally:
+            widget.blockSignals(previous_block)
 
     def _gemini_model_checklist_values(self, widget: QListWidget) -> list[str]:
         selected: list[str] = []
@@ -7712,7 +7746,15 @@ class MainWindow(QMainWindow):
             elif field.kind == "float":
                 widget.setValue(float(value))
             elif field.kind == "gemini_model_list" and isinstance(widget, QListWidget):
-                self._set_gemini_model_checklist_values(widget, value)
+                try:
+                    config = self.state.load_translator_config()
+                except Exception:
+                    config = {}
+                self._refresh_gemini_model_checklist(
+                    widget,
+                    selected=value,
+                    config=config if isinstance(config, dict) else {},
+                )
             elif hasattr(widget, "setPlainText"):
                 widget.setPlainText(self._format_advanced_setting_text(field, value))
             else:
@@ -10850,19 +10892,6 @@ class MainWindow(QMainWindow):
             batch_embedding_model = self.batch_embedding_combo.currentText().strip()
             sync_rag_config["embedding_model"] = sync_embedding_model
             batch_rag_config["embedding_model"] = batch_embedding_model
-            write_model_catalog_extras(
-                config,
-                translation_models=merge_model_lists(
-                    self._combo_item_texts(self.sync_model_combo),
-                    self._combo_item_texts(self.batch_model_combo),
-                    [sync_model, batch_model],
-                ),
-                embedding_models=merge_model_lists(
-                    self._combo_item_texts(self.sync_embedding_combo),
-                    self._combo_item_texts(self.batch_embedding_combo),
-                    [sync_embedding_model, batch_embedding_model],
-                ),
-            )
             thinking_val = self.batch_thinking_combo.currentData()
             thinking_level = thinking_val if isinstance(thinking_val, str) else ""
             if self._should_save_batch_thinking_level(
@@ -10889,6 +10918,16 @@ class MainWindow(QMainWindow):
                     return False
                 self._clear_advanced_setting_errors()
                 apply_advanced_settings(config, complete_advanced_values)
+                # Persist only non-builtin catalog extensions; drop empty keys.
+                write_model_catalog_extras(
+                    config,
+                    translation_models=list(
+                        complete_advanced_values.get("catalog_gemini_models") or []
+                    ),
+                    embedding_models=list(
+                        complete_advanced_values.get("catalog_gemini_embedding_models") or []
+                    ),
+                )
 
             # Validate every field before either settings file is written. This
             # avoids persisting project flags when the UI reports "未保存".
@@ -10924,6 +10963,11 @@ class MainWindow(QMainWindow):
                 "设置已成功保存（全局项 → translator_config.json；"
                 "RAG/原文索引 → 当前项目 project_context_settings.json）。"
             )
+            # Refresh select-only model dropdowns / rotation checklist from catalog.
+            try:
+                self._load_config_to_ui(refresh_task_gates=False)
+            except Exception as refresh_exc:
+                self._append_log(f"保存后刷新模型列表失败：{refresh_exc}")
             try:
                 ToastNotification.show_toast(self, "设置已成功保存")
             except Exception as exc:

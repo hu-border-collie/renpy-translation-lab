@@ -155,7 +155,7 @@ python gemini_translate_batch.py doctor
 }
 ```
 
-- GUI「设置 → 模型」下拉框也可直接输入未列出的模型 ID；保存后会写入上述 `model_catalog`。
+- GUI「设置 → 模型」仅从下拉列表选择；自定义模型 ID 在「设置 → 高级 → 模型目录」编辑并保存到 `model_catalog`。
 - `gemini-3.5-flash-lite` 适合高频翻译与简单处理；需要更强推理时可改用 `gemini-3.6-flash` / `gemini-3.5-flash`。
 - RAG 当前默认搭配 `gemini-embedding-001`（也可选 `gemini-embedding-2`）。
 

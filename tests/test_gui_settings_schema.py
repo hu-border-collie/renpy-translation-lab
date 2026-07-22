@@ -167,6 +167,25 @@ class GuiSettingsSchemaTests(unittest.TestCase):
             ["gemini-3.1-flash-lite"],
         )
 
+    def test_catalog_gemini_lists_strip_builtins_on_write(self):
+        config = {"game_root": "C:/Game/work"}
+        values = recommended_advanced_settings()
+        values["game_root"] = "C:/Game/work"
+        values["catalog_gemini_models"] = [
+            "gemini-3.1-flash-lite",
+            "gemini-custom-extra",
+        ]
+        values["catalog_gemini_embedding_models"] = [
+            "gemini-embedding-001",
+            "gemini-embedding-custom",
+        ]
+        saved = apply_advanced_settings(config, values)
+        self.assertEqual(saved["model_catalog"]["gemini"], ["gemini-custom-extra"])
+        self.assertEqual(
+            saved["model_catalog"]["gemini_embedding"],
+            ["gemini-embedding-custom"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
