@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
-    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -227,11 +226,11 @@ class GamesRegistryPanel(QWidget):
         title.setObjectName("diagnostics_section_label")
         title_row.addWidget(title)
         title_row.addStretch(1)
-        self._choose_workspace_btn = QPushButton("选择工作区…")
+        self._choose_workspace_btn = QPushButton("创建 / 接入工作区…")
         self._choose_workspace_btn.setObjectName("secondary_btn")
         self._choose_workspace_btn.setToolTip(
-            "指定存放 Game_* 与 games_registry.json 的工作区根目录。"
-            "不会默认使用工具安装目录的上一级。"
+            "创建或接入工作区：预览后初始化/接入 games_registry.json。"
+            "不会默认使用工具安装目录的上一级，也不会自动准备项目。"
         )
         self._choose_workspace_btn.clicked.connect(self._choose_workspace)
         title_row.addWidget(self._choose_workspace_btn)
@@ -257,9 +256,9 @@ class GamesRegistryPanel(QWidget):
             "",
             "尚未指定工作区",
             "工作区默认未设置，也不会使用工具目录的上一级。"
-            "请先选择存放 Game_* 项目与 games_registry.json 的文件夹，"
+            "请使用「创建 / 接入工作区…」选择目录并预览初始化总表，"
             "然后再扫描、导入或切换项目。",
-            action_text="选择工作区…",
+            action_text="创建 / 接入工作区…",
             parent=self,
         )
         self._workspace_empty_state.action_clicked.connect(self._choose_workspace)
@@ -558,7 +557,7 @@ class GamesRegistryPanel(QWidget):
             message_box_information(
                 self,
                 "工作区未设置",
-                "请先点击「选择工作区…」指定存放 Game_* 与 games_registry.json 的目录。",
+                "请先点击「创建 / 接入工作区…」指定存放 Game_* 与 games_registry.json 的目录。",
             )
             return None
         return self._workspace_root
@@ -570,7 +569,7 @@ class GamesRegistryPanel(QWidget):
             self._choose_workspace_btn.setText("更改工作区…")
         else:
             self._workspace_path_edit.clear()
-            self._choose_workspace_btn.setText("选择工作区…")
+            self._choose_workspace_btn.setText("创建 / 接入工作区…")
         self._workspace_empty_state.setVisible(not has_workspace)
         self._workspace_body.setVisible(has_workspace)
         self._switch_btn.setEnabled(False)
@@ -582,23 +581,30 @@ class GamesRegistryPanel(QWidget):
             message_box_information(
                 self,
                 "暂时无法切换工作区",
-                "工作台任务或总表刷新进行中，请结束后再选择工作区。",
+                "工作台任务或总表刷新进行中，请结束后再创建或接入工作区。",
             )
             return
-        start_dir = str(self._workspace_root or Path.home())
-        directory = QFileDialog.getExistingDirectory(
+        from .workspace_setup_dialog import WorkspaceSetupDialog
+
+        start = self._workspace_root or Path.home()
+        dialog = WorkspaceSetupDialog(
             self,
-            "选择工作区根目录（存放 Game_* 与 games_registry.json）",
-            start_dir,
+            start_dir=start,
+            initial_path=self._workspace_root,
         )
-        if not directory:
+        if dialog.exec() != dialog.DialogCode.Accepted:
             return
-        chosen = Path(canonical_abs_path(directory))
+        payload = dialog.result_payload()
+        if payload is None:
+            return
+        chosen = Path(canonical_abs_path(str(payload.workspace)))
         if self._on_workspace_changed is not None:
-            # Host persists first and re-syncs this panel (including failure revert).
+            # Host persists config and re-syncs this panel (including failure revert).
             self._on_workspace_changed(chosen)
             return
         self.set_workspace_root(chosen)
+        if payload.message:
+            message_box_information(self, "工作区已接入", payload.message)
 
     def activate_section(self) -> None:
         """Refresh view when the settings nav selects the workspace section."""

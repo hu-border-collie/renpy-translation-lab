@@ -11,7 +11,7 @@
 - `api_keys.example.json` -> `api_keys.json`
 - `translator_config.example.json` -> `translator_config.json`
 
-`game_root` / `workspace_root` 须显式配置；未配置时不会把工具父目录当成默认项目或工作区。Batch 日志在工具根下的 `logs/`。
+`game_root` / `workspace_root` 须显式配置；未配置时不会把工具父目录当成默认项目或工作区。GUI 用「创建 / 接入工作区…」预览并写入总表后，才会保存 `workspace_root`；CLI 可用 `python games_registry.py setup --workspace <path>`。Batch 日志在工具根下的 `logs/`。
 
 项目资产放在当前 `game_root`（通常就是游戏的 `work` 目录）：
 

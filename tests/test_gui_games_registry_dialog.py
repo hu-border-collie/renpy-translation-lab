@@ -91,6 +91,19 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "ws"
             workspace.mkdir()
+            # Setup dialog already wrote registry; host only persists config.
+            (workspace / registry.REGISTRY_FILENAME).write_text(
+                json.dumps({"projects": []}),
+                encoding="utf-8",
+            )
+
+            from gui_qt.workspace_setup_dialog import WorkspaceSetupDialogResult
+
+            fake_result = WorkspaceSetupDialogResult(
+                workspace=workspace,
+                message="ok",
+                project_count=0,
+            )
 
             # Mirror MainWindow._on_workspace_changed success path.
             def on_ok(path: Path, panel_ref: list) -> None:
@@ -104,9 +117,22 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
                 auto_discover_on_show=False,
             )
             panel_box.append(panel)
+
+            class _AcceptDialog:
+                DialogCode = type("DC", (), {"Accepted": 1, "Rejected": 0})()
+
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def exec(self):
+                    return self.DialogCode.Accepted
+
+                def result_payload(self):
+                    return fake_result
+
             with mock.patch(
-                "gui_qt.games_registry_panel.QFileDialog.getExistingDirectory",
-                return_value=str(workspace),
+                "gui_qt.workspace_setup_dialog.WorkspaceSetupDialog",
+                _AcceptDialog,
             ):
                 panel._choose_workspace()
             self.assertIsNotNone(panel.workspace_root())
@@ -131,8 +157,8 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             )
             panel2_box.append(panel2)
             with mock.patch(
-                "gui_qt.games_registry_panel.QFileDialog.getExistingDirectory",
-                return_value=str(workspace),
+                "gui_qt.workspace_setup_dialog.WorkspaceSetupDialog",
+                _AcceptDialog,
             ):
                 panel2._choose_workspace()
             self.assertIsNone(panel2.workspace_root())

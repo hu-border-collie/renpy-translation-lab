@@ -9,10 +9,12 @@ from unittest import mock
 
 import games_registry as registry
 from gui_qt.games_registry_actions import (
+    apply_workspace_setup_action,
     delete_registry_project,
     discover_registry_projects,
     import_registry_from_games_md,
     ingest_registry_project,
+    plan_workspace_setup_action,
     record_apply_batch_for_game_root,
     refresh_registry_projects,
     render_registry_games_md,
@@ -245,6 +247,30 @@ class GuiGamesRegistryActionsTests(unittest.TestCase):
             )
             data = registry.load_registry(workspace / registry.REGISTRY_FILENAME)
             self.assertEqual(data["projects"][0]["name"], "GUI Ingest")
+
+    def test_plan_and_apply_workspace_setup_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "ws"
+            workspace.mkdir()
+            plan = plan_workspace_setup_action(workspace)
+            self.assertTrue(plan.ok)
+            self.assertEqual(plan.scene, registry.WorkspaceScene.EMPTY)
+
+            result = apply_workspace_setup_action(plan, persist_workspace_root=False)
+            self.assertTrue(result.ok, result.message)
+            self.assertTrue((workspace / registry.REGISTRY_FILENAME).is_file())
+            self.assertEqual(result.project_count, 0)
+            self.assertTrue(result.workspace_root)
+            self.assertTrue(result.created_registry)
+
+    def test_apply_workspace_setup_action_refuses_corrupt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / registry.REGISTRY_FILENAME).write_text("{bad", encoding="utf-8")
+            plan = plan_workspace_setup_action(workspace)
+            self.assertFalse(plan.ok)
+            result = apply_workspace_setup_action(plan, persist_workspace_root=False)
+            self.assertFalse(result.ok)
 
 
 if __name__ == "__main__":
