@@ -84,13 +84,16 @@ class ContextLibraryPage(QFrame):
         self.source_index_status_label = self.source_index_status_row.status_label
         self.status_layout.root.addWidget(self.source_index_status_row)
 
-        # Phase 1 (#256): readonly status only; generation/publish land in later issues.
-        self.project_analysis_readonly_label = QLabel("只读")
+        # Phase 2 (#254): status from core module; publish/generate remain CLI-first.
+        self.project_analysis_readonly_label = QLabel("CLI")
         self.project_analysis_readonly_label.setObjectName(
             "context_project_analysis_readonly_label"
         )
         self.project_analysis_readonly_label.setToolTip(
-            "项目分析当前仅提供状态查看；生成与发布在后续阶段实现。"
+            "项目分析：状态在此只读展示。"
+            "导入关键词摘要、构建结构草稿、发布/撤销请用诊断命令参考中的 CLI"
+            "（project-analysis-ingest-keywords / build-structure / publish）。"
+            "仅 published 且未过期的 brief 可在配置开启后注入翻译 prompt。"
         )
         self.project_analysis_status_row = TaskStatusActionRow(
             "项目分析",

@@ -182,6 +182,13 @@ STORY_MEMORY_INCLUDE_SCENE_SUMMARY = True
 _STORY_GRAPH = None
 _STORY_GRAPH_PATH = ''
 
+PROJECT_ANALYSIS_ENABLED = False
+PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = False
+PROJECT_ANALYSIS_STORE_DIR = ''
+PROJECT_ANALYSIS_MAX_BRIEF_CHARS = 4000
+_PROJECT_BRIEF_CACHE = None
+_PROJECT_BRIEF_CACHE_KEY = None
+
 
 def load_json_file(path):
     if not path or not os.path.isfile(path):
@@ -312,6 +319,9 @@ def load_batch_settings():
     global STORY_MEMORY_ENABLED, STORY_MEMORY_GRAPH_FILE, STORY_MEMORY_MAX_CONTEXT_CHARS
     global STORY_MEMORY_TOP_K_RELATIONS, STORY_MEMORY_TOP_K_TERMS
     global STORY_MEMORY_INCLUDE_SCENE_SUMMARY, _STORY_GRAPH, _STORY_GRAPH_PATH
+    global PROJECT_ANALYSIS_ENABLED, PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF
+    global PROJECT_ANALYSIS_STORE_DIR, PROJECT_ANALYSIS_MAX_BRIEF_CHARS
+    global _PROJECT_BRIEF_CACHE, _PROJECT_BRIEF_CACHE_KEY
     global BATCH_NON_CHINESE_RULES, SYNC_BACKEND, SYNC_MODEL
 
     config = load_json_file(legacy.CONFIG_FILE)
@@ -521,6 +531,62 @@ def load_batch_settings():
         STORY_MEMORY_GRAPH_FILE = ''
     _STORY_GRAPH = None
     _STORY_GRAPH_PATH = ''
+
+    project_analysis_config = batch.get('project_analysis')
+    if not isinstance(project_analysis_config, dict):
+        project_analysis_config = {}
+    PROJECT_ANALYSIS_ENABLED = coerce_bool(
+        project_analysis_config.get('enabled'),
+        PROJECT_ANALYSIS_ENABLED,
+    )
+    PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = coerce_bool(
+        project_analysis_config.get('inject_published_brief'),
+        PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF,
+    )
+    PROJECT_ANALYSIS_MAX_BRIEF_CHARS = coerce_positive_int(
+        project_analysis_config.get('max_brief_chars'),
+        PROJECT_ANALYSIS_MAX_BRIEF_CHARS,
+    )
+    pa_store = project_analysis_config.get('store_dir')
+    if pa_store:
+        PROJECT_ANALYSIS_STORE_DIR = legacy._resolve_path(legacy.BASE_DIR, pa_store)
+    else:
+        PROJECT_ANALYSIS_STORE_DIR = ''
+    _PROJECT_BRIEF_CACHE = None
+    _PROJECT_BRIEF_CACHE_KEY = None
+
+
+def load_injectable_project_brief_for_prompts():
+    """Return (text, diagnostics) for published brief when injection is enabled."""
+    global _PROJECT_BRIEF_CACHE, _PROJECT_BRIEF_CACHE_KEY
+    if not PROJECT_ANALYSIS_ENABLED or not PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
+        return '', ''
+    from project_analysis import load_injectable_project_brief
+
+    store_dir = PROJECT_ANALYSIS_STORE_DIR or None
+    cache_key = (
+        bool(PROJECT_ANALYSIS_ENABLED),
+        bool(PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF),
+        store_dir or '',
+        int(PROJECT_ANALYSIS_MAX_BRIEF_CHARS),
+        str(legacy.BASE_DIR or ''),
+    )
+    if _PROJECT_BRIEF_CACHE is not None and _PROJECT_BRIEF_CACHE_KEY == cache_key:
+        return _PROJECT_BRIEF_CACHE
+    payload = load_injectable_project_brief(
+        store_dir=store_dir,
+        base_dir=legacy.BASE_DIR or None,
+        max_chars=PROJECT_ANALYSIS_MAX_BRIEF_CHARS,
+        enabled=True,
+    )
+    result = (
+        str(payload.get('text') or '') if payload.get('injectable') else '',
+        str(payload.get('diagnostics') or '') if payload.get('injectable') else '',
+    )
+    _PROJECT_BRIEF_CACHE = result
+    _PROJECT_BRIEF_CACHE_KEY = cache_key
+    return result
+
 
 def load_progress():
     if not os.path.exists(PROGRESS_LOG):
@@ -2404,6 +2470,7 @@ def build_user_prompt(
     story_hits=None,
     source_hits=None,
 ):
+    brief_text, brief_diag = load_injectable_project_brief_for_prompts()
     return translation_core.build_translation_user_prompt(
         translation_core.ContextWindow(context_past, context_future),
         target_items,
@@ -2412,6 +2479,8 @@ def build_user_prompt(
             history_hits=history_hits,
             story_hits=story_hits,
             source_hits=source_hits,
+            project_brief_text=brief_text,
+            project_brief_diagnostics=brief_diag,
         ),
         history_char_limit=RAG_HISTORY_CHAR_LIMIT,
         story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
@@ -2958,6 +3027,7 @@ def build_revision_system_instruction():
 
 
 def build_revision_user_prompt(chunk):
+    brief_text, brief_diag = load_injectable_project_brief_for_prompts()
     return translation_core.build_revision_user_prompt(
         translation_core.ContextWindow(
             chunk.get('context_past') or [],
@@ -2974,6 +3044,8 @@ def build_revision_user_prompt(chunk):
             history_hits=chunk.get('history_hits') or [],
             story_hits=chunk.get('story_hits'),
             rag_stats=chunk.get('rag_stats') or {},
+            project_brief_text=brief_text,
+            project_brief_diagnostics=brief_diag,
         ),
         history_char_limit=RAG_HISTORY_CHAR_LIMIT,
         story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
@@ -9452,6 +9524,73 @@ def build_arg_parser():
         help='Print machine-readable JSON status instead of the human-readable report.',
     )
 
+    pa_ingest = subparsers.add_parser(
+        'project-analysis-ingest-keywords',
+        help='Import keyword_chunk_summaries.jsonl into Project Analysis chunk drafts.',
+    )
+    pa_ingest.add_argument(
+        '--summary-jsonl',
+        required=True,
+        help='Path to keyword_chunk_summaries.jsonl from keyword export.',
+    )
+    pa_ingest.add_argument('--store-dir', default='', help='Override analysis store directory.')
+
+    pa_build = subparsers.add_parser(
+        'project-analysis-build-structure',
+        help=(
+            'Parse Ren\'Py labels/jumps into draft label/route summaries and project brief '
+            '(no LLM). Uses existing chunk drafts when present.'
+        ),
+    )
+    pa_build.add_argument('--store-dir', default='', help='Override analysis store directory.')
+    pa_build.add_argument(
+        '--script-root',
+        action='append',
+        default=None,
+        help='Script root to scan for .rpy files. Repeatable. Defaults under game_root.',
+    )
+    pa_build.add_argument(
+        '--entry-label',
+        action='append',
+        default=None,
+        help='Optional route entry label. Repeatable.',
+    )
+
+    pa_inspect = subparsers.add_parser(
+        'project-analysis-inspect',
+        help='Inspect draft/published analysis artifacts (JSON).',
+    )
+    pa_inspect.add_argument('--store-dir', default='', help='Override analysis store directory.')
+    pa_inspect.add_argument(
+        '--kind',
+        default='status',
+        choices=['status', 'labels', 'routes', 'chunks', 'brief'],
+        help='What to print (default: status).',
+    )
+
+    pa_diff = subparsers.add_parser(
+        'project-analysis-diff',
+        help='Compare draft vs published project brief.',
+    )
+    pa_diff.add_argument('--store-dir', default='', help='Override analysis store directory.')
+
+    pa_publish = subparsers.add_parser(
+        'project-analysis-publish',
+        help='Publish draft project brief for optional prompt injection.',
+    )
+    pa_publish.add_argument('--store-dir', default='', help='Override analysis store directory.')
+    pa_publish.add_argument(
+        '--force',
+        action='store_true',
+        help='Replace an existing published brief from the current draft.',
+    )
+
+    pa_unpublish = subparsers.add_parser(
+        'project-analysis-unpublish',
+        help='Unpublish project brief so it is no longer injectable.',
+    )
+    pa_unpublish.add_argument('--store-dir', default='', help='Override analysis store directory.')
+
     submit_parser = subparsers.add_parser('submit', help='Create and submit a batch job.')
     submit_parser.add_argument(
         'target',
@@ -9854,39 +9993,136 @@ def main(argv=None):
         run_generate_template()
         return
 
-    if command == 'project-analysis-status':
-        # Readonly inspect: load settings for default store path, skip batch logging.
+    if command in {
+        'project-analysis-status',
+        'project-analysis-ingest-keywords',
+        'project-analysis-build-structure',
+        'project-analysis-inspect',
+        'project-analysis-diff',
+        'project-analysis-publish',
+        'project-analysis-unpublish',
+    }:
         import contextlib
         import io
 
-        from project_analysis import collect_project_analysis_status, print_status
+        from project_analysis import (
+            ProjectAnalysisError,
+            collect_project_analysis_status,
+            format_brief_diff,
+            print_status,
+            publish_project_brief,
+            resolve_project_analysis_store,
+            unpublish_project_brief,
+        )
+        from project_analysis_generate import (
+            build_structure_drafts,
+            ingest_keyword_summaries,
+        )
 
         store_dir = getattr(args, 'store_dir', None) or None
         as_json = bool(getattr(args, 'json', False))
         source_fp = getattr(args, 'source_fingerprint', '') or ''
 
-        def _load_settings_and_status():
+        def _load_settings_quiet():
             if not store_dir:
-                # Readonly command: never rewrite translator_config.json when the
-                # configured game_root is normalized to an effective work root.
                 legacy.load_translator_settings(persist_corrected_game_root=False)
                 load_batch_settings()
-            return collect_project_analysis_status(
-                store_dir=store_dir,
-                expected_source_fingerprint=source_fp,
-            )
 
-        if as_json:
-            # Keep machine-readable stdout clean: settings load and path resolution
-            # may emit warnings via print (e.g. game_root unset under game storage).
-            with contextlib.redirect_stdout(io.StringIO()):
-                status = _load_settings_and_status()
-            print(json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True))
-        else:
-            status = _load_settings_and_status()
-            print_banner()
-            print_status(status)
-        return
+        def _run_pa():
+            _load_settings_quiet()
+            if command == 'project-analysis-status':
+                return collect_project_analysis_status(
+                    store_dir=store_dir,
+                    expected_source_fingerprint=source_fp,
+                )
+            if command == 'project-analysis-ingest-keywords':
+                return ingest_keyword_summaries(
+                    args.summary_jsonl,
+                    store_dir=store_dir,
+                    base_dir=legacy.BASE_DIR or None,
+                )
+            if command == 'project-analysis-build-structure':
+                return build_structure_drafts(
+                    store_dir=store_dir,
+                    base_dir=legacy.BASE_DIR or None,
+                    script_roots=args.script_root or None,
+                    entry_labels=args.entry_label or None,
+                )
+            if command == 'project-analysis-inspect':
+                store = resolve_project_analysis_store(
+                    store_dir, base_dir=legacy.BASE_DIR or None
+                )
+                kind = getattr(args, 'kind', 'status') or 'status'
+                if kind == 'status':
+                    return store.collect_status()
+                if kind == 'chunks':
+                    return {'chunks': store.load_summaries('chunk')}
+                if kind == 'labels':
+                    return {'labels': store.load_summaries('label')}
+                if kind == 'routes':
+                    return {'routes': store.load_routes()}
+                if kind == 'brief':
+                    return {
+                        'draft': store.load_brief_text(published=False),
+                        'published': store.load_brief_text(published=True),
+                    }
+                return store.collect_status()
+            if command == 'project-analysis-diff':
+                return format_brief_diff(store_dir, base_dir=legacy.BASE_DIR or None)
+            if command == 'project-analysis-publish':
+                return publish_project_brief(
+                    store_dir,
+                    base_dir=legacy.BASE_DIR or None,
+                    force=bool(getattr(args, 'force', False)),
+                )
+            if command == 'project-analysis-unpublish':
+                return unpublish_project_brief(
+                    store_dir, base_dir=legacy.BASE_DIR or None
+                )
+            raise SystemExit(f'Unknown project-analysis command: {command}')
+
+        try:
+            if command == 'project-analysis-status' and not as_json:
+                result = _run_pa()
+                print_banner()
+                print_status(result)
+                return
+            # JSON / machine actions: keep stdout clean when possible.
+            quiet = command != 'project-analysis-status' or as_json
+            if quiet:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    result = _run_pa()
+            else:
+                result = _run_pa()
+            if command == 'project-analysis-status' and as_json:
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            elif command != 'project-analysis-status':
+                if command in {
+                    'project-analysis-inspect',
+                    'project-analysis-diff',
+                    'project-analysis-ingest-keywords',
+                    'project-analysis-build-structure',
+                    'project-analysis-publish',
+                    'project-analysis-unpublish',
+                }:
+                    # Drop full graph from build output for readability unless tiny.
+                    if (
+                        command == 'project-analysis-build-structure'
+                        and isinstance(result, dict)
+                        and 'graph' in result
+                    ):
+                        result = dict(result)
+                        result['graph'] = {
+                            'label_count': len((result['graph'] or {}).get('labels') or {}),
+                            'route_count': len((result['graph'] or {}).get('routes') or []),
+                            'unresolved_edges': len(
+                                (result['graph'] or {}).get('unresolved_edges') or []
+                            ),
+                        }
+                    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return
+        except ProjectAnalysisError as exc:
+            raise SystemExit(f'Project analysis error: {exc}') from exc
 
     initialize_batch_logging()
     legacy.load_config()

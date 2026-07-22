@@ -102,6 +102,48 @@ logs/story_memory/story_graph.json
 - 无关 route 保持有效
 - prompt / schema / provider / model 变化按 dependency digest 判定（调用方把受影响 artifact id 传入失效规划器）
 
+### 阶段 2：结构草稿与发布门禁（#254，无 LLM 首版）
+
+典型流程：
+
+```bash
+# 1) 导入关键词 chunk 摘要为 analysis chunk drafts
+python gemini_translate_batch.py project-analysis-ingest-keywords --summary-jsonl path/to/keyword_chunk_summaries.jsonl
+
+# 2) 静态解析 label/jump/call/menu，写出 label/route drafts 与 project_brief.draft.md
+python gemini_translate_batch.py project-analysis-build-structure
+
+# 3) 审查
+python gemini_translate_batch.py project-analysis-inspect --kind routes
+python gemini_translate_batch.py project-analysis-diff
+
+# 4) 人工确认后发布（写 project_brief.published.md）
+python gemini_translate_batch.py project-analysis-publish
+# 撤销
+python gemini_translate_batch.py project-analysis-unpublish
+```
+
+配置（默认关闭；`translator_config.example.json` → `batch.project_analysis`）：
+
+```json
+{
+  "batch": {
+    "project_analysis": {
+      "enabled": false,
+      "inject_published_brief": false,
+      "store_dir": "",
+      "max_brief_chars": 4000
+    }
+  }
+}
+```
+
+- 仅当 `enabled` 且 `inject_published_brief` 为 true，并且 brief 为 **published 且 fingerprint 有效** 时，才会向翻译/订正 prompt 注入 `PROJECT BRIEF` 分区。
+- **draft 永不注入**；stale / 缺 published 文件会跳过注入。
+- 动态 `jump expression` / `call expression` 标记为 unresolved，不虚构单一路线。
+- 本阶段**不**调用 LLM 生成正文（规则聚合 + 关键词摘要）；LLM map-reduce 为后续增量。
+- **不**写 `glossary.json`、正式 `story_graph.json` 或 `.rpy`。
+
 ### 只读 CLI / GUI
 
 ```bash
@@ -111,8 +153,8 @@ python gemini_translate_batch.py project-analysis-status --store-dir <path> --so
 ```
 
 - `doctor` 报告中的 `Project analysis:` 行汇总 overall / 计数 / brief 状态。
-- GUI「上下文库」展示只读「项目分析」状态行；状态判断在 `project_analysis` 模块内完成，GUI 不重复实现失效逻辑。
-- 本阶段**不**提供生成、发布或写回按钮。
+- GUI「上下文库」展示「项目分析」状态行；状态判断在 `project_analysis` 模块内完成，GUI 不重复实现失效逻辑。
+- 诊断「命令参考」可复制 ingest / build-structure / publish / unpublish 命令。
 
 设计对照与取舍见 [plans/wenyi_reference_and_batch_roadmap.md](plans/wenyi_reference_and_batch_roadmap.md)。
 

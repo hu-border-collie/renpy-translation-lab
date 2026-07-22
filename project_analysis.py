@@ -1122,14 +1122,12 @@ class ProjectAnalysisStore:
         }
 
 
-def collect_project_analysis_status(
+def resolve_project_analysis_store(
     store_dir: str | os.PathLike[str] | None = None,
     *,
     base_dir: str | None = None,
-    expected_source_fingerprint: str = "",
-    project_identity: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    # Path defaults live in translator_runtime (same pattern as rag / source_index).
+) -> ProjectAnalysisStore:
+    """Resolve default or explicit analysis store directory."""
     from translator_runtime import get_default_project_analysis_store_dir
 
     resolved = (
@@ -1137,11 +1135,278 @@ def collect_project_analysis_status(
         if store_dir
         else get_default_project_analysis_store_dir(base_dir)
     )
-    store = ProjectAnalysisStore(resolved)
+    return ProjectAnalysisStore(resolved)
+
+
+def collect_project_analysis_status(
+    store_dir: str | os.PathLike[str] | None = None,
+    *,
+    base_dir: str | None = None,
+    expected_source_fingerprint: str = "",
+    project_identity: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
     return store.collect_status(
         expected_source_fingerprint=expected_source_fingerprint,
         project_identity=project_identity,
     )
+
+
+def load_injectable_project_brief(
+    store_dir: str | os.PathLike[str] | None = None,
+    *,
+    base_dir: str | None = None,
+    expected_source_fingerprint: str = "",
+    max_chars: int = 4000,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    """Load published brief text only when it is safe to inject into prompts.
+
+    Returns a dict with:
+    - ``text``: brief body or empty string
+    - ``injectable``: bool
+    - ``reason``: why injection was skipped (empty when ok)
+    - ``status``: collect_status snapshot (subset)
+    """
+    if not enabled:
+        return {
+            "text": "",
+            "injectable": False,
+            "reason": "injection_disabled",
+            "status": {},
+            "diagnostics": "",
+        }
+    store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
+    status = store.collect_status(
+        expected_source_fingerprint=expected_source_fingerprint,
+    )
+    brief_status = status.get("brief_status") or STATUS_MISSING
+    if brief_status != STATUS_PUBLISHED:
+        return {
+            "text": "",
+            "injectable": False,
+            "reason": f"brief_not_published:{brief_status}",
+            "status": status,
+            "diagnostics": "",
+        }
+    if not status.get("brief_published_present"):
+        return {
+            "text": "",
+            "injectable": False,
+            "reason": "published_file_missing",
+            "status": status,
+            "diagnostics": "",
+        }
+    # Re-check brief entry freshness with expected fingerprint when provided.
+    brief_entry = (status.get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {}
+    synthetic = {
+        "id": brief_entry.get("id") or "project_brief",
+        "kind": KIND_PROJECT_BRIEF,
+        "status": STATUS_PUBLISHED,
+        "source_files": [],
+        "evidence_item_ids": [],
+        "upstream_artifact_ids": [],
+        "source_checksum": "",
+        "lineage": brief_entry.get("lineage") or empty_lineage(),
+    }
+    effective = evaluate_record_status(
+        synthetic,
+        expected_source_fingerprint=expected_source_fingerprint,
+    )
+    if effective != STATUS_PUBLISHED:
+        return {
+            "text": "",
+            "injectable": False,
+            "reason": f"brief_not_fresh:{effective}",
+            "status": status,
+            "diagnostics": "",
+        }
+    text = store.load_brief_text(published=True).strip()
+    if not text:
+        return {
+            "text": "",
+            "injectable": False,
+            "reason": "published_brief_empty",
+            "status": status,
+            "diagnostics": "",
+        }
+    if max_chars > 0 and len(text) > max_chars:
+        text = text[: max(0, max_chars - 1)].rstrip() + "…"
+    lineage = normalize_lineage(brief_entry.get("lineage"))
+    fp = lineage.get("source_fingerprint") or ""
+    diagnostics = (
+        f"schema={SCHEMA_VERSION} status=published "
+        f"fingerprint={fp[:12] + ('…' if len(fp) > 12 else '')}"
+    )
+    return {
+        "text": text,
+        "injectable": True,
+        "reason": "",
+        "status": status,
+        "diagnostics": diagnostics,
+    }
+
+
+def publish_project_brief(
+    store_dir: str | os.PathLike[str] | None = None,
+    *,
+    base_dir: str | None = None,
+    force: bool = False,
+    project_identity: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Promote draft brief to published after gate checks.
+
+    Does not invent empty published content. Failure leaves any prior published
+    brief untouched.
+    """
+    store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
+    draft = store.load_brief_text(published=False).strip()
+    if not draft:
+        raise ProjectAnalysisError(
+            "cannot publish: project_brief.draft.md is missing or empty"
+        )
+
+    manifest = store.load_manifest() or empty_manifest(
+        project_identity=project_identity or {},
+        store_dir=store.store_dir,
+    )
+    brief_entry = dict((manifest.get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {})
+    current = normalize_status(
+        brief_entry.get("status") or STATUS_DRAFT, allow_missing=True
+    )
+    if current == STATUS_PUBLISHED and not force:
+        if store.load_brief_text(published=True).strip() == draft:
+            return {
+                "status": STATUS_PUBLISHED,
+                "store_dir": store.store_dir,
+                "changed": False,
+                "message": "brief already published (identical draft)",
+            }
+        raise ProjectAnalysisError(
+            "cannot publish: brief already published; pass force=True to replace"
+        )
+    if current not in {
+        STATUS_DRAFT,
+        STATUS_REVIEW_REQUIRED,
+        STATUS_PUBLISHED,
+        STATUS_STALE,
+        STATUS_MISSING,
+    }:
+        raise ProjectAnalysisError(f"cannot publish from status {current!r}")
+
+    lineage = normalize_lineage(brief_entry.get("lineage"))
+    if not lineage.get("source_fingerprint") and not force:
+        # Allow publish when draft body exists but require fingerprint for injection
+        # safety: still set a content-based fingerprint so inject checks work.
+        lineage = empty_lineage(
+            source_fingerprint=sha256_text(draft),
+            upstream_dependency_digest=lineage.get("upstream_dependency_digest") or "",
+            prompt_schema_version=lineage.get("prompt_schema_version") or "",
+            provider=lineage.get("provider") or "",
+            model=lineage.get("model") or "",
+            thinking_level=lineage.get("thinking_level") or "",
+            generated_at=lineage.get("generated_at") or "",
+            reviewed_at=lineage.get("reviewed_at") or "",
+            published_at="",
+        )
+    lineage = dict(lineage)
+    lineage["published_at"] = utc_now_iso()
+    if not lineage.get("source_fingerprint"):
+        lineage["source_fingerprint"] = sha256_text(draft)
+
+    # Write published body first; only then flip manifest status.
+    store.save_brief_text(draft + ("\n" if not draft.endswith("\n") else ""), published=True)
+    brief_entry.update(
+        {
+            "status": STATUS_PUBLISHED,
+            "draft_present": True,
+            "published_present": True,
+            "lineage": lineage,
+            "id": brief_entry.get("id") or "project_brief",
+        }
+    )
+    manifest.setdefault("artifacts", {})[KIND_PROJECT_BRIEF] = brief_entry
+    if project_identity:
+        manifest["project_identity"] = dict(project_identity)
+    store.save_manifest(manifest)
+    # Refresh aggregate from disk so counts stay honest.
+    store.rebuild_manifest(
+        project_identity=manifest.get("project_identity") or project_identity,
+        expected_source_fingerprint=lineage.get("source_fingerprint") or "",
+    )
+    # Ensure brief stays published after rebuild (rebuild may infer from files).
+    refreshed = store.load_manifest() or manifest
+    entry = dict((refreshed.get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {})
+    entry["status"] = STATUS_PUBLISHED
+    entry["published_present"] = True
+    entry["draft_present"] = True
+    entry["lineage"] = lineage
+    entry["id"] = entry.get("id") or "project_brief"
+    refreshed.setdefault("artifacts", {})[KIND_PROJECT_BRIEF] = entry
+    store.save_manifest(refreshed)
+    return {
+        "status": STATUS_PUBLISHED,
+        "store_dir": store.store_dir,
+        "changed": True,
+        "message": "brief published",
+        "source_fingerprint": lineage.get("source_fingerprint") or "",
+    }
+
+
+def unpublish_project_brief(
+    store_dir: str | os.PathLike[str] | None = None,
+    *,
+    base_dir: str | None = None,
+    remove_published_file: bool = True,
+) -> dict[str, Any]:
+    """Revert published brief so it is no longer injectable."""
+    store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
+    published_path = store.artifact_path(PROJECT_BRIEF_PUBLISHED_FILENAME)
+    had_published = os.path.isfile(published_path)
+    if remove_published_file and had_published:
+        os.unlink(published_path)
+
+    manifest = store.load_manifest() or empty_manifest(store_dir=store.store_dir)
+    brief_entry = dict((manifest.get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {})
+    draft_present = os.path.isfile(store.artifact_path(PROJECT_BRIEF_DRAFT_FILENAME))
+    brief_entry.update(
+        {
+            "status": STATUS_DRAFT if draft_present else STATUS_MISSING,
+            "draft_present": draft_present,
+            "published_present": False,
+            "id": brief_entry.get("id") or "project_brief",
+            "lineage": normalize_lineage(brief_entry.get("lineage")),
+        }
+    )
+    manifest.setdefault("artifacts", {})[KIND_PROJECT_BRIEF] = brief_entry
+    store.save_manifest(manifest)
+    return {
+        "status": brief_entry["status"],
+        "store_dir": store.store_dir,
+        "changed": had_published or True,
+        "message": "brief unpublished",
+    }
+
+
+def format_brief_diff(
+    store_dir: str | os.PathLike[str] | None = None,
+    *,
+    base_dir: str | None = None,
+) -> dict[str, Any]:
+    """Compare draft vs published brief texts and report presence."""
+    store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
+    draft = store.load_brief_text(published=False)
+    published = store.load_brief_text(published=True)
+    return {
+        "store_dir": store.store_dir,
+        "draft_present": bool(draft.strip()),
+        "published_present": bool(published.strip()),
+        "identical": draft == published,
+        "draft_chars": len(draft),
+        "published_chars": len(published),
+        "draft_preview": draft[:500],
+        "published_preview": published[:500],
+    }
 
 
 def format_status_lines(status: Mapping[str, Any]) -> list[str]:
