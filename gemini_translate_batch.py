@@ -9867,7 +9867,9 @@ def main(argv=None):
 
         def _load_settings_and_status():
             if not store_dir:
-                legacy.load_translator_settings()
+                # Readonly command: never rewrite translator_config.json when the
+                # configured game_root is normalized to an effective work root.
+                legacy.load_translator_settings(persist_corrected_game_root=False)
                 load_batch_settings()
             return collect_project_analysis_status(
                 store_dir=store_dir,

@@ -369,26 +369,59 @@ class PathAndCliContractTests(unittest.TestCase):
         previous_location = runtime.CONTEXT_STORAGE_LOCATION
         try:
             runtime.CONTEXT_STORAGE_LOCATION = "tool"
-            path_a = runtime.get_default_project_analysis_store_dir(
-                r"C:\Games\ProjectA\work"
-            )
-            path_b = runtime.get_default_project_analysis_store_dir(
-                r"C:\Games\ProjectB\work"
-            )
+            # Platform-native fixtures: .../ProjectA/work → slug ProjectA.
+            root = Path(tempfile.gettempdir()) / "rtl-pa-slug-fixture"
+            base_a = str(root / "ProjectA" / "work")
+            base_b = str(root / "ProjectB" / "work")
+            slug_a = runtime._project_slug_from_base_dir(base_a)
+            slug_b = runtime._project_slug_from_base_dir(base_b)
+            self.assertEqual(slug_a, "ProjectA")
+            self.assertEqual(slug_b, "ProjectB")
+
+            path_a = runtime.get_default_project_analysis_store_dir(base_a)
+            path_b = runtime.get_default_project_analysis_store_dir(base_b)
             self.assertNotEqual(path_a, path_b)
-            self.assertIn("project_analysis", path_a.replace("\\", "/"))
-            self.assertTrue(path_a.endswith("ProjectA") or "ProjectA" in path_a)
-            self.assertTrue(path_b.endswith("ProjectB") or "ProjectB" in path_b)
-            status_a = pa.collect_project_analysis_status(
-                base_dir=r"C:\Games\ProjectA\work"
-            )
-            status_b = pa.collect_project_analysis_status(
-                base_dir=r"C:\Games\ProjectB\work"
-            )
+            self.assertEqual(os.path.basename(path_a), slug_a)
+            self.assertEqual(os.path.basename(path_b), slug_b)
+            self.assertEqual(os.path.basename(os.path.dirname(path_a)), "project_analysis")
+            status_a = pa.collect_project_analysis_status(base_dir=base_a)
+            status_b = pa.collect_project_analysis_status(base_dir=base_b)
             self.assertEqual(status_a["store_dir"], path_a)
             self.assertEqual(status_b["store_dir"], path_b)
         finally:
             runtime.CONTEXT_STORAGE_LOCATION = previous_location
+
+    def test_project_analysis_status_does_not_persist_game_root(self):
+        """Readonly status must not rewrite translator_config.json."""
+        import gemini_translate_batch as batch_mod
+        import translator_runtime as runtime
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "Game_Example"
+            work = project / "work"
+            original_game = project / "original" / "game"
+            work.mkdir(parents=True)
+            original_game.mkdir(parents=True)
+            config_path = root / "translator_config.json"
+            # Point at project root; loader would normally normalize to work/ and persist.
+            config_path.write_text(
+                json.dumps({"game_root": str(project)}),
+                encoding="utf-8",
+            )
+            before = config_path.read_text(encoding="utf-8")
+
+            with mock.patch.object(runtime, "TRANSLATOR_CONFIG", str(config_path)):
+                with mock.patch("builtins.print"):
+                    batch_mod.main(["project-analysis-status"])
+
+            after = config_path.read_text(encoding="utf-8")
+            self.assertEqual(after, before)
+            saved = json.loads(after)
+            self.assertEqual(
+                runtime.canonical_abs_path(saved["game_root"]),
+                runtime.canonical_abs_path(str(project)),
+            )
 
     def test_json_status_stdout_is_pure_json_when_path_warns(self):
         """P2: --json must not mix path-resolution warnings into stdout."""
