@@ -314,15 +314,8 @@ class DoctorIntegrationTests(unittest.TestCase):
         import gemini_translate_batch as batch_mod
 
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(
-                pa,
-                "get_default_project_analysis_store_dir",
-                return_value=tmp,
-            ):
-                # collect_doctor_context_status imports collect_project_analysis_status
-                # which resolves default store; patch at call site via store_dir path.
-                status = pa.collect_project_analysis_status(store_dir=tmp)
-                self.assertEqual(status["overall_status"], pa.STATUS_MISSING)
+            status = pa.collect_project_analysis_status(store_dir=tmp)
+            self.assertEqual(status["overall_status"], pa.STATUS_MISSING)
 
             context = batch_mod.collect_doctor_context_status()
             self.assertIn("project_analysis", context)

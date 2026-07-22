@@ -517,13 +517,6 @@ def apply_invalidation_to_records(
     return out
 
 
-def get_default_project_analysis_store_dir(base_dir: str | None = None) -> str:
-    """Resolve default store path via context_storage settings."""
-    from translator_runtime import get_default_context_store_dir
-
-    return get_default_context_store_dir(STORE_NAME, base_dir)
-
-
 def resolve_under_store(store_dir: str | os.PathLike[str], relative: str) -> str:
     """Resolve *relative* under *store_dir*; reject escapes."""
     root = os.path.realpath(os.path.abspath(os.fspath(store_dir)))
@@ -904,7 +897,7 @@ class ProjectAnalysisStore:
                     labels = self.load_summaries(KIND_LABEL)
                     routes = self.load_routes()
                     statuses = []
-                    for kind, records in (
+                    for _kind, records in (
                         (KIND_CHUNK, chunks),
                         (KIND_SCENE, scenes),
                         (KIND_LABEL, labels),
@@ -1058,6 +1051,9 @@ def collect_project_analysis_status(
     expected_source_fingerprint: str = "",
     project_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # Path defaults live in translator_runtime (same pattern as rag / source_index).
+    from translator_runtime import get_default_project_analysis_store_dir
+
     resolved = (
         os.path.abspath(os.fspath(store_dir))
         if store_dir

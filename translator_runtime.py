@@ -2930,8 +2930,8 @@ def get_default_source_index_store_dir():
     return get_default_context_store_dir("source_index_store")
 
 
-def get_default_project_analysis_store_dir():
-    return get_default_context_store_dir("project_analysis")
+def get_default_project_analysis_store_dir(base_dir=None):
+    return get_default_context_store_dir("project_analysis", base_dir)
 
 
 def get_default_story_memory_graph_path():

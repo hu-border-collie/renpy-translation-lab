@@ -34,7 +34,7 @@
 | 翻译对象 | 长篇小说电子书 | Ren'Py `game/tl/<lang>/` |
 | 主路径 | **同步在线** LLM 调用（进程内长跑） | **Batch 异步**（`build → submit → download → check → apply`） |
 | 「batch」含义 | 切段大小（字符预算） | 远端 Batch 作业 + package/manifest |
-| 全书理解 | `pipeline.book_understanding`：预扫 → 章梗概 + 全书概览，直接注入翻译 prompt | 规划中：**Project Analysis**（#253/#256–#254），draft → 人工 publish 后才注入 |
+| 全书理解 | `pipeline.book_understanding`：预扫 → 章梗概 + 全书概览，直接注入翻译 prompt | **#256 已交付**产物/状态合同与只读检查；**#254** 路线感知生成与人工 publish 后才注入（仍待做） |
 | 质量手段 | 多阶段 LLM（分析/梗概/译/润/审）+ 段数对齐 | glossary / macro / RAG / Story Memory + **规则闸门** + 订正/关键词 |
 | 最终审校 | 独立 `review` 命令；可 `--force` / 可选 `autofix_severe`；默认关闭 | 规划中：#255 report-only campaign → 现有 revision preview/apply |
 | 用量 | `state/.../usage.json`：provider-neutral，按 tier/stage 归因，跨续跑增量合并 | 规划中：#252 项目级账本；现有估算 + 分散在 results 的 raw usage |
