@@ -28,6 +28,7 @@ SettingKind = Literal[
     "list",
     "json",
     "gemini_model_list",
+    "gemini_catalog_list",
 ]
 SettingValue = Any
 
@@ -80,10 +81,9 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
         "catalog_gemini_models",
         ("model_catalog", "gemini"),
-        "自定义 Gemini 翻译模型",
-        "扩展「设置 → 模型」下拉列表中的翻译模型。每行一个模型 ID（例如 gemini-experimental-foo）。"
-        "仅保存非内置 ID；内置模型始终可选。",
-        "list",
+        "翻译模型扩展",
+        "追加到「设置 → 模型」下拉列表的自定义翻译模型 ID。内置模型始终可选，无需在此重复添加。",
+        "gemini_catalog_list",
         [],
         "模型目录",
         allow_empty=True,
@@ -91,10 +91,9 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
         "catalog_gemini_embedding_models",
         ("model_catalog", "gemini_embedding"),
-        "自定义 Gemini 向量模型",
-        "扩展「设置 → 模型」下拉列表中的 RAG 向量模型。每行一个模型 ID。"
-        "仅保存非内置 ID；内置 embedding 始终可选。",
-        "list",
+        "向量模型扩展",
+        "追加到「设置 → 模型」下拉列表的自定义 RAG 向量模型 ID。内置 embedding 始终可选。",
+        "gemini_catalog_list",
         [],
         "模型目录",
         allow_empty=True,
@@ -979,7 +978,7 @@ def validate_value(
             return f"{field.label}不能为空。"
         return ""
 
-    if field.kind in {"bool", "list", "json", "gemini_model_list"}:
+    if field.kind in {"bool", "list", "json", "gemini_model_list", "gemini_catalog_list"}:
         return ""
 
     number = float(normalized)
@@ -1044,13 +1043,13 @@ def normalize_for_write(
         return value.strip() if isinstance(value, str) else str(value).strip()
 
     if field.kind == "list":
+        return normalize_list_value(field, value)
+
+    if field.kind == "gemini_catalog_list":
         normalized = normalize_list_value(field, value)
-        # model_catalog lists store only non-builtin extensions.
-        if field.key == "catalog_gemini_models":
-            return extras_beyond_builtins(normalized, kind="translation")
         if field.key == "catalog_gemini_embedding_models":
             return extras_beyond_builtins(normalized, kind="embedding")
-        return normalized
+        return extras_beyond_builtins(normalized, kind="translation")
 
     if field.kind == "gemini_model_list":
         return filter_gemini_rotation_models(

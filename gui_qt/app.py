@@ -3129,6 +3129,9 @@ class MainWindow(QMainWindow):
         ):
             if group_title in skipped_categories:
                 continue
+            if group_title == "模型目录":
+                layout.addWidget(self._build_model_catalog_group(fields))
+                continue
             group = QGroupBox(group_title)
             form = self._settings_form(group)
             for field in fields:
@@ -3144,6 +3147,41 @@ class MainWindow(QMainWindow):
             layout.addWidget(group)
         layout.addStretch(1)
         return page
+
+    def _build_model_catalog_group(self, fields: tuple[SettingField, ...]) -> QWidget:
+        """Compact add/remove editors for custom Gemini catalog models."""
+        group = QGroupBox("模型目录")
+        outer = QVBoxLayout(group)
+        outer.setContentsMargins(14, 18, 14, 14)
+        outer.setSpacing(12)
+
+        intro = QLabel(
+            "扩展「设置 → 模型」下拉可选的自定义模型。内置模型始终可用，无需在此添加。"
+        )
+        intro.setWordWrap(True)
+        intro.setObjectName("config_hint_label")
+        outer.addWidget(intro)
+
+        for field in fields:
+            if field.key in CONTEXT_PRIMARY_SETTING_KEYS:
+                continue
+            widget = self._create_advanced_setting_widget(field)
+            self._advanced_setting_widgets[field.key] = widget
+            section = QWidget()
+            section_layout = QVBoxLayout(section)
+            section_layout.setContentsMargins(0, 0, 0, 0)
+            section_layout.setSpacing(4)
+            title = QLabel(field.label)
+            title.setObjectName("settings_description_label")
+            section_layout.addWidget(title)
+            section_layout.addWidget(widget)
+            error = QLabel()
+            error.setWordWrap(True)
+            error.setObjectName("settings_error_label")
+            self._advanced_setting_error_labels[field.key] = error
+            section_layout.addWidget(error)
+            outer.addWidget(section)
+        return group
 
     def _advanced_setting_row(self, field: SettingField, widget: QWidget) -> QWidget:
         row = QWidget()
@@ -3306,6 +3344,13 @@ class MainWindow(QMainWindow):
             widget.setRange(minimum, maximum)
         elif field.kind == "gemini_model_list":
             widget = self._create_gemini_model_checklist()
+        elif field.kind == "gemini_catalog_list":
+            kind = (
+                "embedding"
+                if field.key == "catalog_gemini_embedding_models"
+                else "translation"
+            )
+            widget = self._create_gemini_catalog_list_editor(kind=kind)
         elif field.kind in {"text", "list", "json"}:
             widget = QTextEdit()
             widget.setAcceptRichText(False)
@@ -3318,6 +3363,118 @@ class MainWindow(QMainWindow):
                 widget.setPlaceholderText("留空使用默认路径" if "路径" in field.label else "可留空")
         widget.setToolTip(field.description)
         return widget
+
+    def _create_gemini_catalog_list_editor(self, *, kind: str) -> QWidget:
+        """Compact custom-model editor: short list + single-line add/remove."""
+        host = QWidget()
+        host.setObjectName(f"gemini_catalog_editor_{kind}")
+        host.setProperty("catalog_kind", kind)
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        model_list = QListWidget()
+        model_list.setObjectName(f"gemini_catalog_list_{kind}")
+        model_list.setAlternatingRowColors(True)
+        model_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        model_list.setMaximumHeight(110)
+        model_list.setMinimumHeight(72)
+        layout.addWidget(model_list)
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        entry = QLineEdit()
+        entry.setObjectName(f"gemini_catalog_entry_{kind}")
+        entry.setClearButtonEnabled(True)
+        entry.setPlaceholderText(
+            "例如 gemini-embedding-custom"
+            if kind == "embedding"
+            else "例如 gemini-experimental-foo"
+        )
+        row_layout.addWidget(entry, 1)
+
+        add_btn = QPushButton("添加")
+        add_btn.setObjectName("secondary_btn")
+        add_btn.setToolTip("将上方输入的模型 ID 加入列表（仅非内置 ID）。")
+        row_layout.addWidget(add_btn)
+
+        remove_btn = QPushButton("删除所选")
+        remove_btn.setObjectName("secondary_btn")
+        remove_btn.setToolTip("删除列表中选中的自定义模型。")
+        row_layout.addWidget(remove_btn)
+        layout.addWidget(row)
+
+        def _add_model() -> None:
+            name = entry.text().strip()
+            if not name:
+                return
+            from gemini_model_catalog import extras_beyond_builtins
+
+            extras = extras_beyond_builtins([name], kind=kind)
+            if not extras:
+                self.statusBar().showMessage(
+                    "内置模型无需添加，已在「设置 → 模型」中可选。",
+                    4000,
+                )
+                entry.clear()
+                return
+            cleaned = extras[0]
+            existing = {
+                model_list.item(i).text().strip()
+                for i in range(model_list.count())
+                if model_list.item(i) is not None
+            }
+            if cleaned in existing:
+                self.statusBar().showMessage(f"已在列表中：{cleaned}", 3000)
+                entry.clear()
+                return
+            model_list.addItem(cleaned)
+            entry.clear()
+            model_list.setCurrentRow(model_list.count() - 1)
+
+        def _remove_selected() -> None:
+            for item in model_list.selectedItems():
+                row_index = model_list.row(item)
+                model_list.takeItem(row_index)
+
+        add_btn.clicked.connect(_add_model)
+        entry.returnPressed.connect(_add_model)
+        remove_btn.clicked.connect(_remove_selected)
+        host._catalog_list = model_list  # type: ignore[attr-defined]
+        host._catalog_entry = entry  # type: ignore[attr-defined]
+        return host
+
+    def _gemini_catalog_list_values(self, widget: QWidget) -> list[str]:
+        model_list = getattr(widget, "_catalog_list", None)
+        if not isinstance(model_list, QListWidget):
+            return []
+        values: list[str] = []
+        for index in range(model_list.count()):
+            item = model_list.item(index)
+            if item is None:
+                continue
+            text = item.text().strip()
+            if text and text not in values:
+                values.append(text)
+        return values
+
+    def _set_gemini_catalog_list_values(self, widget: QWidget, values: object) -> None:
+        model_list = getattr(widget, "_catalog_list", None)
+        if not isinstance(model_list, QListWidget):
+            return
+        kind = str(widget.property("catalog_kind") or "translation")
+        from gemini_model_catalog import extras_beyond_builtins
+
+        cleaned = extras_beyond_builtins(values, kind=kind)
+        previous = model_list.blockSignals(True)
+        try:
+            model_list.clear()
+            for name in cleaned:
+                model_list.addItem(name)
+        finally:
+            model_list.blockSignals(previous)
 
     def _create_gemini_model_checklist(self) -> QListWidget:
         """Multi-select checklist limited to known Gemini translation models."""
@@ -7722,6 +7879,8 @@ class MainWindow(QMainWindow):
                 values[field.key] = widget.value()
             elif field.kind == "gemini_model_list" and isinstance(widget, QListWidget):
                 values[field.key] = self._gemini_model_checklist_values(widget)
+            elif field.kind == "gemini_catalog_list":
+                values[field.key] = self._gemini_catalog_list_values(widget)
             elif hasattr(widget, "toPlainText"):
                 values[field.key] = widget.toPlainText().strip()
             else:
@@ -7755,6 +7914,8 @@ class MainWindow(QMainWindow):
                     selected=value,
                     config=config if isinstance(config, dict) else {},
                 )
+            elif field.kind == "gemini_catalog_list":
+                self._set_gemini_catalog_list_values(widget, value)
             elif hasattr(widget, "setPlainText"):
                 widget.setPlainText(self._format_advanced_setting_text(field, value))
             else:
@@ -7765,7 +7926,7 @@ class MainWindow(QMainWindow):
             self._on_model_rotation_enabled_toggled(enabled_widget.isChecked())
 
     def _format_advanced_setting_text(self, field: SettingField, value: object) -> str:
-        if field.kind in {"list", "gemini_model_list"}:
+        if field.kind in {"list", "gemini_model_list", "gemini_catalog_list"}:
             if isinstance(value, (list, tuple, set)):
                 return "\n".join(str(item) for item in value)
             return str(value or "")

@@ -185,6 +185,10 @@ class GuiSettingsSchemaTests(unittest.TestCase):
             saved["model_catalog"]["gemini_embedding"],
             ["gemini-embedding-custom"],
         )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["catalog_gemini_models"].kind,
+            "gemini_catalog_list",
+        )
 
 
 if __name__ == "__main__":
