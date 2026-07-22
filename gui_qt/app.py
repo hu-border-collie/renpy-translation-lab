@@ -2609,7 +2609,8 @@ class MainWindow(QMainWindow):
         page, layout = self._settings_page("settings_workspace")
         # Prefer filling the settings viewport so the project table can grow;
         # the table itself scrolls instead of crushing into a short strip.
-        body = self._settings_page_bodies.get("settings_workspace")
+        bodies = getattr(self, "_settings_page_bodies", None)
+        body = bodies.get("settings_workspace") if isinstance(bodies, dict) else None
         if body is not None:
             body.setSizePolicy(
                 QSizePolicy.Policy.Expanding,

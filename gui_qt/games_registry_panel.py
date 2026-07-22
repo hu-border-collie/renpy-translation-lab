@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 
 # Prefer giving the overview table real height inside the settings viewport.
 _REGISTRY_TABLE_MIN_HEIGHT = 280
-_REGISTRY_DETAIL_DEFAULT_HEIGHT = 220
+_REGISTRY_DETAIL_DEFAULT_HEIGHT = 260
 
 from games_registry import (
     PLAY_STATUSES,
@@ -542,7 +542,11 @@ class GamesRegistryPanel(QWidget):
         self._notes_edit.setMaximumHeight(120)
         edit_layout.addRow("备注", self._notes_edit)
 
-        edit_actions = QHBoxLayout()
+        edit_actions_host = QWidget()
+        edit_actions_host.setObjectName("games_registry_edit_actions_host")
+        edit_actions = QHBoxLayout(edit_actions_host)
+        edit_actions.setContentsMargins(0, 4, 0, 0)
+        edit_actions.setSpacing(10)
         self._delete_project_btn = QPushButton("删除项目")
         self._delete_project_btn.setObjectName("kill_btn")
         self._delete_project_btn.clicked.connect(self._delete_selected_project)
@@ -555,11 +559,12 @@ class GamesRegistryPanel(QWidget):
         self._collapse_detail_btn.clicked.connect(self._collapse_detail_panel)
         edit_actions.addWidget(self._collapse_detail_btn)
         self._save_fields_btn = QPushButton("保存修改")
-        self._save_fields_btn.setObjectName("secondary_btn")
+        self._save_fields_btn.setObjectName("primary_btn")
+        self._save_fields_btn.setToolTip("保存当前选中项目的名称、游玩/翻译状态及备注。")
         self._save_fields_btn.clicked.connect(self._save_selected_project_fields)
         self._save_fields_btn.setEnabled(False)
         edit_actions.addWidget(self._save_fields_btn)
-        edit_layout.addRow("", edit_actions)
+        edit_layout.addRow("", edit_actions_host)
 
         self._detail_host = QWidget()
         self._detail_host.setObjectName("games_registry_detail_host")
