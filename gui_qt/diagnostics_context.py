@@ -210,6 +210,14 @@ def build_cli_commands(
             label="项目检查",
             command=format_cli_command(python_exe, batch_script_path, ["doctor"]),
         ),
+        DiagnosticsCommand(
+            label="项目分析状态",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["project-analysis-status"],
+            ),
+        ),
     ]
 
     mode = manifest.get("mode")

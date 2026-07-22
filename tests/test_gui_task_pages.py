@@ -554,8 +554,10 @@ class GuiTaskPageTests(unittest.TestCase):
         page = self.window.context_library_page
         self.assertEqual(page.rag_status_row.title_label.text(), "记忆库")
         self.assertEqual(page.source_index_status_row.title_label.text(), "原文索引")
+        self.assertEqual(page.project_analysis_status_row.title_label.text(), "项目分析")
         self.assertIn("项目", self.window.context_rag_status_label.text())
         self.assertIn("项目", self.window.context_source_index_status_label.text())
+        self.assertIn("项目", self.window.context_project_analysis_status_label.text())
         self.assertIs(
             page.bootstrap_rag_btn.parentWidget(),
             page.rag_status_row,
@@ -564,6 +566,7 @@ class GuiTaskPageTests(unittest.TestCase):
             page.bootstrap_source_index_btn.parentWidget(),
             page.source_index_status_row,
         )
+        self.assertEqual(page.project_analysis_readonly_label.text(), "只读")
 
     def test_context_page_uses_callbacks_and_owns_empty_state(self) -> None:
         page = self.window.context_library_page
@@ -580,6 +583,7 @@ class GuiTaskPageTests(unittest.TestCase):
             rag_enabled=False,
             source_index_enabled=False,
             game_root="",
+            project_analysis_label="未生成",
         )
         self.assertIs(page.page_stack.currentWidget(), page.empty_state)
         page.empty_state.action_clicked.emit()
@@ -589,9 +593,30 @@ class GuiTaskPageTests(unittest.TestCase):
             rag_enabled=True,
             source_index_enabled=False,
             game_root="C:/Games/Example/work",
+            project_analysis_status={
+                "overall_status": "missing",
+                "store_exists": False,
+            },
         )
         page.bootstrap_rag_btn.click()
         self.assertEqual(prebuilds, ["rag"])
+
+        page.set_context_status(
+            rag_enabled=False,
+            source_index_enabled=False,
+            game_root="C:/Games/Example/work",
+            project_analysis_status={
+                "overall_status": "published",
+                "store_exists": True,
+                "chunk_count": 1,
+                "label_count": 0,
+                "route_count": 0,
+                "brief_status": "published",
+                "injectable": True,
+            },
+        )
+        self.assertIs(page.page_stack.currentWidget(), page.status_page)
+        self.assertIn("已发布", page.project_analysis_status_label.text())
 
     def test_global_prep_buttons_visible_on_all_task_pages(self) -> None:
         for mode in (

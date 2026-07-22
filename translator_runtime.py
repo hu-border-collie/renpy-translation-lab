@@ -2930,6 +2930,10 @@ def get_default_source_index_store_dir():
     return get_default_context_store_dir("source_index_store")
 
 
+def get_default_project_analysis_store_dir():
+    return get_default_context_store_dir("project_analysis")
+
+
 def get_default_story_memory_graph_path():
     if CONTEXT_STORAGE_LOCATION == "game":
         return os.path.join(get_context_storage_root(), "story_memory", "story_graph.json")

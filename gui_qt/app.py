@@ -1647,6 +1647,7 @@ class MainWindow(QMainWindow):
                 self.context_library_panel = page
                 self.context_rag_status_label = page.rag_status_label
                 self.context_source_index_status_label = page.source_index_status_label
+                self.context_project_analysis_status_label = page.project_analysis_status_label
                 self.context_bootstrap_rag_btn = page.bootstrap_rag_btn
                 self.context_bootstrap_source_index_btn = page.bootstrap_source_index_btn
                 self.context_open_settings_btn = page.open_settings_btn
@@ -2270,10 +2271,24 @@ class MainWindow(QMainWindow):
             game_root = self.state.get_game_root() if hasattr(self, "state") else None
             if running is None:
                 running = self._task_page_running_chrome()
+            analysis_status = None
+            analysis_label = "未检测"
+            try:
+                from project_analysis import (
+                    collect_project_analysis_status,
+                    format_status_label,
+                )
+
+                analysis_status = collect_project_analysis_status()
+                analysis_label = format_status_label(analysis_status)
+            except Exception as exc:
+                analysis_label = f"读取失败 · {exc}"
             page.set_context_status(
                 rag_enabled=rag_on,
                 source_index_enabled=idx_on,
                 game_root=str(game_root or ""),
+                project_analysis_status=analysis_status,
+                project_analysis_label=analysis_label,
             )
             page.set_task_running(running)
             return
