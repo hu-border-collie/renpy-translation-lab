@@ -1589,11 +1589,15 @@ def _reset_project_settings_to_defaults():
     _SYNC_STORY_GRAPH_PATH = ""
 
 
-def load_translator_settings():
+def load_translator_settings(*, persist_corrected_game_root: bool = True):
     """Loads per-game settings (game root, tl subdir) from translator_config.json or env.
 
     Always starts from code defaults for project/path/prepare fields so omitted
     keys cannot retain values from a previous load (issue #216).
+
+    When *persist_corrected_game_root* is False (readonly commands such as
+    ``project-analysis-status``), a corrected effective root is applied in
+    memory only and ``translator_config.json`` is not rewritten.
     """
     global BASE_DIR, TL_DIR, TL_SUBDIR, ENV_GAME_ROOT, WORK_GAME_DIR, SOURCE_GAME_DIR, GLOSSARY_FILE
     global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_REFRESH_EXISTING_TEMPLATE, PREP_LANGUAGE
@@ -1617,7 +1621,13 @@ def load_translator_settings():
         resolved_root = resolve_effective_game_root(original_root)
         if os.path.normcase(resolved_root) != os.path.normcase(original_root):
             ENV_GAME_ROOT = resolved_root
-            if isinstance(game_root, str) and game_root.strip() and os.path.exists(TRANSLATOR_CONFIG):
+            should_persist = (
+                persist_corrected_game_root
+                and isinstance(game_root, str)
+                and game_root.strip()
+                and os.path.exists(TRANSLATOR_CONFIG)
+            )
+            if should_persist:
                 try:
                     persist_game_root(resolved_root)
                 except Exception as exc:
@@ -2928,6 +2938,10 @@ def get_default_batch_rag_store_dir():
 
 def get_default_source_index_store_dir():
     return get_default_context_store_dir("source_index_store")
+
+
+def get_default_project_analysis_store_dir(base_dir=None):
+    return get_default_context_store_dir("project_analysis", base_dir)
 
 
 def get_default_story_memory_graph_path():

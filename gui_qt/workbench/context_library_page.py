@@ -1,8 +1,11 @@
 """Persistent context-library page used by the workbench stack (#176 P1)."""
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 from PySide6.QtWidgets import (
     QFrame,
+    QLabel,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -17,7 +20,7 @@ from .task_controls import TaskPageLayout, TaskStatusActionRow
 
 
 class ContextLibraryPage(QFrame):
-    """Page-local presentation for RAG and source-index preparation."""
+    """Page-local presentation for RAG, source-index, and project-analysis status."""
 
     supported_modes = (
         WorkMode.BOOTSTRAP_RAG,
@@ -31,6 +34,7 @@ class ContextLibraryPage(QFrame):
         self._running = False
         self._rag_enabled = False
         self._source_index_enabled = False
+        self._project_analysis_present = False
         self._active_mode = WorkMode.BOOTSTRAP_RAG
 
         outer = QVBoxLayout(self)
@@ -80,6 +84,22 @@ class ContextLibraryPage(QFrame):
         self.source_index_status_label = self.source_index_status_row.status_label
         self.status_layout.root.addWidget(self.source_index_status_row)
 
+        # Phase 1 (#256): readonly status only; generation/publish land in later issues.
+        self.project_analysis_readonly_label = QLabel("只读")
+        self.project_analysis_readonly_label.setObjectName(
+            "context_project_analysis_readonly_label"
+        )
+        self.project_analysis_readonly_label.setToolTip(
+            "项目分析当前仅提供状态查看；生成与发布在后续阶段实现。"
+        )
+        self.project_analysis_status_row = TaskStatusActionRow(
+            "项目分析",
+            self.project_analysis_readonly_label,
+            parent=self.status_page,
+        )
+        self.project_analysis_status_label = self.project_analysis_status_row.status_label
+        self.status_layout.root.addWidget(self.project_analysis_status_row)
+
         self.context_actions = self.status_layout.add_section(
             "上下文任务",
             role="context_library",
@@ -122,6 +142,8 @@ class ContextLibraryPage(QFrame):
         rag_enabled: bool,
         source_index_enabled: bool,
         game_root: str,
+        project_analysis_status: Mapping[str, Any] | None = None,
+        project_analysis_label: str = "",
     ) -> None:
         self._rag_enabled = rag_enabled
         self._source_index_enabled = source_index_enabled
@@ -134,8 +156,31 @@ class ContextLibraryPage(QFrame):
             f"{'已启用' if source_index_enabled else '未启用'} · 项目 {root_hint}"
             + ("" if source_index_enabled else " · 请先在设置 · 上下文开启并保存")
         )
+        if project_analysis_label:
+            analysis_text = project_analysis_label
+        elif project_analysis_status is not None:
+            from project_analysis import format_status_label
+
+            analysis_text = format_status_label(project_analysis_status)
+        else:
+            analysis_text = "未检测"
+        self.project_analysis_status_row.set_status(f"{analysis_text} · 项目 {root_hint}")
+        overall = ""
+        if project_analysis_status is not None:
+            overall = str(project_analysis_status.get("overall_status") or "")
+            self._project_analysis_present = bool(
+                project_analysis_status.get("store_exists")
+            ) or overall not in {"", "missing"}
+        else:
+            self._project_analysis_present = bool(project_analysis_label) and project_analysis_label not in {
+                "未检测",
+                "未生成",
+            }
+        show_status = (
+            rag_enabled or source_index_enabled or self._project_analysis_present
+        )
         self.page_stack.setCurrentWidget(
-            self.status_page if rag_enabled or source_index_enabled else self.empty_state
+            self.status_page if show_status else self.empty_state
         )
         self._refresh_action_states()
 
@@ -148,6 +193,8 @@ class ContextLibraryPage(QFrame):
             rag_enabled=False,
             source_index_enabled=False,
             game_root="",
+            project_analysis_status=None,
+            project_analysis_label="未检测",
         )
 
     def _refresh_action_states(self) -> None:

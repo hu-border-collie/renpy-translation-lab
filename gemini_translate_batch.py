@@ -8613,9 +8613,22 @@ def collect_doctor_context_status():
             )
             source_index_status['error'] = combined_error
 
+    try:
+        from project_analysis import collect_project_analysis_status
+
+        project_analysis_status = collect_project_analysis_status()
+    except Exception as exc:
+        project_analysis_status = {
+            'store_dir': '',
+            'store_exists': False,
+            'overall_status': 'failed',
+            'error': str(exc),
+        }
+
     return {
         'rag': rag_status,
         'source_index': source_index_status,
+        'project_analysis': project_analysis_status,
     }
 
 def _read_translator_config_object():
@@ -9053,6 +9066,7 @@ def print_doctor_report(report):
     context_status = report.get('context_status') or {}
     rag_context = context_status.get('rag') or {}
     source_index_context = context_status.get('source_index') or {}
+    project_analysis_context = context_status.get('project_analysis') or {}
     print('Doctor report:')
     print(f"- Base dir: {report['base_dir']}")
     print(f"- TL dir: {report['tl_dir']} (exists: {report['tl_exists']})")
@@ -9134,6 +9148,19 @@ def print_doctor_report(report):
         f"schema_version={source_index_context.get('schema_version') or ''}, "
         f"updated_at={source_index_context.get('updated_at') or ''}, "
         f"error={source_index_context.get('error') or ''}"
+    )
+    print(
+        '- Project analysis: '
+        f"overall={project_analysis_context.get('overall_status') or 'missing'}, "
+        f"store_dir={project_analysis_context.get('store_dir') or ''}, "
+        f"store_exists={project_analysis_context.get('store_exists', False)}, "
+        f"injectable={project_analysis_context.get('injectable', False)}, "
+        f"chunks={project_analysis_context.get('chunk_count', 0)}, "
+        f"labels={project_analysis_context.get('label_count', 0)}, "
+        f"routes={project_analysis_context.get('route_count', 0)}, "
+        f"brief={project_analysis_context.get('brief_status') or 'missing'}, "
+        f"updated_at={project_analysis_context.get('updated_at') or ''}, "
+        f"error={project_analysis_context.get('error') or ''}"
     )
     project_assets = report.get('project_assets') or {}
     print(
@@ -9397,6 +9424,32 @@ def build_arg_parser():
         '--no-prune',
         action='store_true',
         help='Do not prune stale segments from the index store after indexing.',
+    )
+
+    project_analysis_status_parser = subparsers.add_parser(
+        'project-analysis-status',
+        help=(
+            'Inspect Project Analysis store status (missing/draft/published/stale) '
+            'without generating or injecting analysis context.'
+        ),
+    )
+    project_analysis_status_parser.add_argument(
+        '--store-dir',
+        default='',
+        help='Override project analysis store directory. Defaults to context_storage path.',
+    )
+    project_analysis_status_parser.add_argument(
+        '--source-fingerprint',
+        default='',
+        help=(
+            'Optional expected source fingerprint. When set, published artifacts with a '
+            'mismatched lineage fingerprint are reported as stale.'
+        ),
+    )
+    project_analysis_status_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='Print machine-readable JSON status instead of the human-readable report.',
     )
 
     submit_parser = subparsers.add_parser('submit', help='Create and submit a batch job.')
@@ -9799,6 +9852,40 @@ def main(argv=None):
         load_batch_settings()
         print_banner()
         run_generate_template()
+        return
+
+    if command == 'project-analysis-status':
+        # Readonly inspect: load settings for default store path, skip batch logging.
+        import contextlib
+        import io
+
+        from project_analysis import collect_project_analysis_status, print_status
+
+        store_dir = getattr(args, 'store_dir', None) or None
+        as_json = bool(getattr(args, 'json', False))
+        source_fp = getattr(args, 'source_fingerprint', '') or ''
+
+        def _load_settings_and_status():
+            if not store_dir:
+                # Readonly command: never rewrite translator_config.json when the
+                # configured game_root is normalized to an effective work root.
+                legacy.load_translator_settings(persist_corrected_game_root=False)
+                load_batch_settings()
+            return collect_project_analysis_status(
+                store_dir=store_dir,
+                expected_source_fingerprint=source_fp,
+            )
+
+        if as_json:
+            # Keep machine-readable stdout clean: settings load and path resolution
+            # may emit warnings via print (e.g. game_root unset under game storage).
+            with contextlib.redirect_stdout(io.StringIO()):
+                status = _load_settings_and_status()
+            print(json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            status = _load_settings_and_status()
+            print_banner()
+            print_status(status)
         return
 
     initialize_batch_logging()

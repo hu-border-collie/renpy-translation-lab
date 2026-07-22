@@ -2,13 +2,14 @@
 
 文档地图：[docs/README.md](README.md)
 
-本文档说明 Batch / sync 可选上下文层：RAG history store、Batch source-only index 和 Structured Story Memory。
+本文档说明 Batch / sync 可选上下文层：RAG history store、Batch source-only index、Structured Story Memory，以及 **Project Analysis（项目分析）** 的产物合同。
 
 ## 如何选择上下文层
 
 - RAG history store：使用“已有原文 + 已有译文”保持术语、称呼和风格一致。
 - Batch source-only index：只使用全文原文，为新项目或译文很少的项目提供远距离剧情上下文。
 - Structured Story Memory：人工维护的结构化角色、关系、术语和场景图谱。
+- Project Analysis：从带 evidence 的 chunk / label / route 摘要聚合为可审核的项目理解（路线感知 brief）；**只有已发布且 fingerprint 未陈旧的产物**才允许注入后续翻译/审校（生成与发布见后续阶段）。
 
 这些上下文层会进入不同 prompt 分区，避免把“以前的译法参考”和“相关剧情原文”混在一起。
 
@@ -24,6 +25,7 @@
 ```text
 logs/rag_store/<project_slug>/
 logs/source_index_store/<project_slug>/
+logs/project_analysis/<project_slug>/
 logs/story_memory/story_graph.json
 ```
 
@@ -43,10 +45,76 @@ logs/story_memory/story_graph.json
 ```text
 <GameProject>/translation_context/rag_store/
 <GameProject>/translation_context/source_index_store/
+<GameProject>/translation_context/project_analysis/
 <GameProject>/translation_context/story_memory/story_graph.json
 ```
 
 `batch.rag.store_dir`、`batch.source_index.store_dir`、`sync.rag.store_dir` 和 `story_memory.graph_file` 仍然可以显式指定；一旦填了具体路径，就优先使用该路径，不再跟随 `context_storage.location`。
+
+## Project Analysis（项目分析）
+
+> 阶段 1（#256）只交付**产物合同、状态与只读检查**，不调用模型，也不把分析正文注入翻译 prompt。路线感知生成（#254）与最终审校 campaign（#255）将复用同一套 schema / fingerprint / 发布状态。
+
+### 产物目录
+
+默认与其它上下文库一样，跟随 `context_storage`：
+
+```text
+.../project_analysis/
+  manifest.json
+  chunk_summaries.jsonl
+  scene_summaries.jsonl
+  label_summaries.jsonl
+  route_summaries.json
+  project_brief.draft.md
+  project_brief.published.md
+```
+
+核心模块：`project_analysis.py`（schema、原子写入、lineage fingerprint、失效规划、状态汇总）。
+
+### 状态
+
+| 状态 | 含义 |
+|------|------|
+| `missing` | 尚无产物 |
+| `draft` | 已生成，未发布 |
+| `review_required` | 需要人工审核 |
+| `published` | 已发布 |
+| `stale` | 上游源/依赖 fingerprint 已变，或显式失效 |
+| `failed` | 读取/校验失败 |
+
+**只有 `published` 且 fingerprint 仍匹配时**，下游才可将该产物视为可注入的正式上下文。stale published **不得**静默继续注入。
+
+### 证据与 lineage
+
+每条可发布摘要至少包含稳定 `id` / `kind`、源文件、适用时的 label/scene/route 标识、`evidence_item_ids`、行跨度 / `source_checksum`、上游产物 id，以及 lineage：
+
+- `schema_version`
+- `source_fingerprint`
+- `prompt_schema_version`
+- `provider` / `model` / `thinking_level`（生成阶段可为空）
+- `upstream_dependency_digest`
+- `generated_at` / `reviewed_at` / `published_at`
+
+### 局部失效
+
+- 单个源 item 变化 → 失效引用它的 chunk / scene / label、依赖它们的 route，以及 global brief
+- 无关 route 保持有效
+- prompt / schema / provider / model 变化按 dependency digest 判定（调用方把受影响 artifact id 传入失效规划器）
+
+### 只读 CLI / GUI
+
+```bash
+python gemini_translate_batch.py project-analysis-status
+python gemini_translate_batch.py project-analysis-status --json
+python gemini_translate_batch.py project-analysis-status --store-dir <path> --source-fingerprint <digest>
+```
+
+- `doctor` 报告中的 `Project analysis:` 行汇总 overall / 计数 / brief 状态。
+- GUI「上下文库」展示只读「项目分析」状态行；状态判断在 `project_analysis` 模块内完成，GUI 不重复实现失效逻辑。
+- 本阶段**不**提供生成、发布或写回按钮。
+
+设计对照与取舍见 [plans/wenyi_reference_and_batch_roadmap.md](plans/wenyi_reference_and_batch_roadmap.md)。
 
 ## Batch RAG 预建
 

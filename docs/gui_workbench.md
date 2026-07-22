@@ -332,7 +332,9 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 若项目已有一部分译文，或希望在 build 时检索相关剧情原文，可在设置页启用批量上下文并预建本地库。
 
-设置页「上下文」里的「上下文库保存到游戏目录」会把默认 RAG / 原文索引 / 剧情图谱路径切到当前 `work` 同级的 `translation_context/`；关闭时仍使用工具项目内的 `logs/`。高级分区可显式覆盖 store 路径；Batch manifest、检查失败报告、补译包等运行记录仍保存在工具日志目录。
+设置页「上下文」里的「上下文库保存到游戏目录」会把默认 RAG / 原文索引 / 项目分析 / 剧情图谱路径切到当前 `work` 同级的 `translation_context/`；关闭时仍使用工具项目内的 `logs/`。高级分区可显式覆盖 store 路径；Batch manifest、检查失败报告、补译包等运行记录仍保存在工具日志目录。
+
+上下文库页中的 **项目分析** 行为只读状态（`project-analysis-status`）；阶段 1 不提供生成或发布按钮。详见 [上下文系统 · Project Analysis](context_systems.md#project-analysis项目分析)。
 
 预建流程：
 
@@ -348,9 +350,10 @@ build-keywords -> submit -> status -> download -> export-keywords
 ```text
 bootstrap-rag --skip-prepare
 bootstrap-source-index
+project-analysis-status
 ```
 
-预建结果以普通语言摘要显示；失败细节可在「诊断与运行日志」的原始输出查看。任务运行中状态卡上的预建按钮会禁用，避免叠跑。
+预建结果以普通语言摘要显示；失败细节可在「诊断与运行日志」的原始输出查看。任务运行中状态卡上的预建按钮会禁用，避免叠跑。项目分析在阶段 1 仅支持状态查看。
 
 若开启了 build 时自动补建，后续 `build` 仍可能自动补建；图形预建入口适合在首次翻译前手动确认 store 状态。
 
