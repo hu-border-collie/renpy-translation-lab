@@ -2380,10 +2380,9 @@ class MainWindow(QMainWindow):
             )
         self._settings_lazy_resolving = True
         try:
-            if page_key in _SETTINGS_CONFIG_PAGE_KEYS:
-                self._ensure_settings_pages_for_config()
-            else:
-                self._ensure_settings_page(page_key)
+            # Only materialize the page that owns this attribute. Full config
+            # fan-out remains save/reload's job via _ensure_settings_pages_for_config.
+            self._ensure_settings_page(page_key)
         finally:
             self._settings_lazy_resolving = False
         try:
@@ -2402,16 +2401,19 @@ class MainWindow(QMainWindow):
         )
 
     def _ensure_settings_page(self, key: str, *, populate: bool = True) -> None:
-        """Build one settings section and swap it into the settings stack."""
+        """Build one settings section and swap it into the settings stack.
+
+        Visiting a config section only materializes that section. Building every
+        config page at once made tab switches hitch after Advanced grew heavier.
+        Full config materialization still happens on save/reload via
+        ``_ensure_settings_pages_for_config``.
+        """
         if not self._settings_lazy_ready():
             return
         built = getattr(self, "_settings_pages_built", None)
         if built is None:
             return
         if key in built:
-            return
-        if populate and key in _SETTINGS_CONFIG_PAGE_KEYS:
-            self._ensure_settings_pages_for_config()
             return
         builders = getattr(self, "_settings_page_builders", {})
         builder_name = builders.get(key)
@@ -2442,9 +2444,23 @@ class MainWindow(QMainWindow):
                 set_gate = getattr(panel, "set_host_task_running", None)
                 if callable(set_gate):
                     set_gate(True)
+        # Push saved config into widgets that already exist (including this page).
+        if (
+            populate
+            and key in _SETTINGS_CONFIG_PAGE_KEYS
+            and not getattr(self, "_loading_config_to_ui", False)
+        ):
+            self._load_config_to_ui(refresh_task_gates=False)
+            if "api_status_label" in self.__dict__:
+                self._refresh_api_status()
 
     def _ensure_settings_pages_for_config(self) -> None:
-        """Ensure every section that participates in config load/save/dirty."""
+        """Ensure every section that participates in config load/save/dirty.
+
+        Used by save/reload/restore — not by ordinary settings-tab navigation.
+        When some config pages are already open, preserve their current UI values
+        across the full materialization so save does not clobber in-progress edits.
+        """
         if not self._settings_lazy_ready():
             return
         built = getattr(self, "_settings_pages_built", set())
@@ -2453,11 +2469,20 @@ class MainWindow(QMainWindow):
             for key, _label, _builder in _SETTINGS_PAGE_SPECS
             if key in _SETTINGS_CONFIG_PAGE_KEYS and key not in built
         ]
+        if not pending:
+            return
+        preserve: dict[str, object] | None = None
+        if built.intersection(_SETTINGS_CONFIG_PAGE_KEYS) and not getattr(
+            self, "_loading_config_to_ui", False
+        ):
+            preserve = self._current_config_ui_snapshot()
         for key in pending:
             self._ensure_settings_page(key, populate=False)
-        if pending and not getattr(self, "_loading_config_to_ui", False):
+        if not getattr(self, "_loading_config_to_ui", False):
             self._load_config_to_ui(refresh_task_gates=False)
-            if hasattr(self, "api_status_label"):
+            if preserve is not None:
+                self._restore_config_ui_snapshot(preserve)
+            if "api_status_label" in self.__dict__:
                 self._refresh_api_status()
 
     def _wire_settings_models_signals(self) -> None:
@@ -5854,18 +5879,20 @@ class MainWindow(QMainWindow):
         return normalize_work_mode(self._work_mode)
 
     def _selected_sync_backend(self) -> str:
-        combo = getattr(self, "sync_backend_combo", None)
+        # Use __dict__/settings_widget — plain getattr() would lazy-build every
+        # config page via __getattr__ when the LiteLLM section is unvisited.
+        combo = self._settings_widget("sync_backend_combo")
         if combo is None:
             return "gemini"
         value = combo.currentData()
         return value if value in {"gemini", "litellm"} else "gemini"
 
     def _litellm_model_text(self) -> str:
-        combo = getattr(self, "litellm_model_combo", None)
+        combo = self._settings_widget("litellm_model_combo")
         model = combo.currentText().strip() if combo is not None else ""
         if not model or "/" in model:
             return model
-        provider_combo = getattr(self, "litellm_provider_combo", None)
+        provider_combo = self._settings_widget("litellm_provider_combo")
         provider = (
             str(provider_combo.currentData() or "").strip().lower()
             if provider_combo is not None
@@ -5877,7 +5904,7 @@ class MainWindow(QMainWindow):
         model_provider = provider_from_model(self._litellm_model_text())
         if model_provider:
             return model_provider
-        combo = getattr(self, "litellm_provider_combo", None)
+        combo = self._settings_widget("litellm_provider_combo")
         if combo is not None:
             provider = str(combo.currentData() or "").strip().lower()
             if provider:
@@ -5891,7 +5918,7 @@ class MainWindow(QMainWindow):
         *,
         preserve_current: bool = False,
     ) -> None:
-        combo = getattr(self, "litellm_model_combo", None)
+        combo = self._settings_widget("litellm_model_combo")
         if combo is None:
             return
         current = combo.currentText().strip()
@@ -5908,8 +5935,8 @@ class MainWindow(QMainWindow):
         self._on_litellm_model_changed(combo.currentText())
 
     def _refresh_litellm_credential_status(self) -> None:
-        provider_label = getattr(self, "litellm_provider_label", None)
-        status_label = getattr(self, "litellm_credential_status_label", None)
+        provider_label = self._settings_widget("litellm_provider_label")
+        status_label = self._settings_widget("litellm_credential_status_label")
         if provider_label is None or status_label is None:
             return
         status = provider_credential_status(self._litellm_model_text(), os.environ)
@@ -5930,7 +5957,7 @@ class MainWindow(QMainWindow):
 
     def _on_litellm_model_changed(self, _text: str) -> None:
         provider = provider_from_model(self._litellm_model_text())
-        provider_combo = getattr(self, "litellm_provider_combo", None)
+        provider_combo = self._settings_widget("litellm_provider_combo")
         if provider and provider_combo is not None and not getattr(self, "_updating_litellm_provider", False):
             index = provider_combo.findData(provider)
             if index >= 0 and index != provider_combo.currentIndex():
@@ -5942,7 +5969,7 @@ class MainWindow(QMainWindow):
     def _on_litellm_provider_changed(self, _index: int) -> None:
         if self._updating_litellm_provider:
             return
-        provider_combo = getattr(self, "litellm_provider_combo", None)
+        provider_combo = self._settings_widget("litellm_provider_combo")
         provider = (
             str(provider_combo.currentData() or "").strip().lower()
             if provider_combo is not None
@@ -5959,7 +5986,7 @@ class MainWindow(QMainWindow):
         self._refresh_litellm_credential_status()
 
     def _refresh_litellm_version_label(self) -> None:
-        label = getattr(self, "litellm_version_label", None)
+        label = self._settings_widget("litellm_version_label")
         if label is None:
             return
         installed = installed_litellm_version()
@@ -5998,7 +6025,7 @@ class MainWindow(QMainWindow):
     def _on_check_litellm_version(self) -> None:
         if getattr(self, "_litellm_version_worker", None) is not None:
             return
-        button = getattr(self, "litellm_check_version_btn", None)
+        button = self._settings_widget("litellm_check_version_btn")
         if button is not None:
             button.setEnabled(False)
             button.setText("正在检查…")
@@ -6019,7 +6046,7 @@ class MainWindow(QMainWindow):
         self._litellm_version_worker = None
         if worker is not None:
             worker.deleteLater()
-        button = getattr(self, "litellm_check_version_btn", None)
+        button = self._settings_widget("litellm_check_version_btn")
         if button is not None:
             button.setText("检查更新")
         self._litellm_latest_version = latest
@@ -6027,7 +6054,7 @@ class MainWindow(QMainWindow):
         self._litellm_latest_requires_python = requires_python
         self._refresh_litellm_version_label()
         if error:
-            label = getattr(self, "litellm_version_label", None)
+            label = self._settings_widget("litellm_version_label")
             if label is not None:
                 current = f"本机 {installed}" if installed else "尚未安装"
                 label.setText(f"{current}；检查更新失败，请稍后重试。")
@@ -6039,7 +6066,7 @@ class MainWindow(QMainWindow):
         provider = self._current_litellm_provider()
         if not provider:
             return
-        button = getattr(self, "litellm_refresh_models_btn", None)
+        button = self._settings_widget("litellm_refresh_models_btn")
         if button is not None:
             button.setEnabled(False)
             button.setText("正在加载…")
@@ -6065,7 +6092,7 @@ class MainWindow(QMainWindow):
         self._litellm_catalog_worker = None
         if worker is not None:
             worker.deleteLater()
-        button = getattr(self, "litellm_refresh_models_btn", None)
+        button = self._settings_widget("litellm_refresh_models_btn")
         if button is not None:
             button.setText("联网更新列表")
         self._on_sync_backend_changed(-1)
@@ -6075,7 +6102,7 @@ class MainWindow(QMainWindow):
         values = tuple(str(model) for model in models)
         self._litellm_catalog_models[provider] = values
         self._litellm_catalog_source = source
-        source_label = getattr(self, "litellm_catalog_status_label", None)
+        source_label = self._settings_widget("litellm_catalog_status_label")
         if source_label is not None:
             source_label.setText(catalog_source_label(str(source or "")))
         if self._current_litellm_provider() == provider:
@@ -6149,11 +6176,11 @@ class MainWindow(QMainWindow):
 
     def _on_sync_backend_changed(self, _index: int) -> None:
         backend = self._selected_sync_backend()
-        hint = getattr(self, "sync_backend_hint", None)
+        hint = self._settings_widget("sync_backend_hint")
         if hint is None:
             return
-        install_btn = getattr(self, "install_litellm_btn", None)
-        install_progress = getattr(self, "litellm_install_progress", None)
+        install_btn = self._settings_widget("install_litellm_btn")
+        install_progress = self._settings_widget("litellm_install_progress")
         installing = self._litellm_install_running()
         installed_version = installed_litellm_version()
         installed = bool(installed_version) and importlib.util.find_spec("litellm") is not None
@@ -6216,10 +6243,11 @@ class MainWindow(QMainWindow):
                 install_progress.setRange(0, 0)
                 install_progress.setFormat("正在后台更新 LiteLLM…" if installed else "正在后台安装 LiteLLM…")
 
-        model_combo = getattr(self, "litellm_model_combo", None)
+        model_combo = self._settings_widget("litellm_model_combo")
         if model_combo is not None:
             model_combo.setEnabled(backend == "litellm" and not installing)
-        gemini_sync_model_combo = getattr(self, "sync_model_combo", None)
+        # Never getattr(sync_model_combo): that would force-build the models page.
+        gemini_sync_model_combo = self._settings_widget("sync_model_combo")
         if gemini_sync_model_combo is not None:
             gemini_sync_model_combo.setEnabled(backend == "gemini")
             gemini_sync_model_combo.setToolTip(
@@ -6235,10 +6263,10 @@ class MainWindow(QMainWindow):
             "litellm_delete_key_btn",
             "litellm_test_connection_btn",
         ):
-            widget = getattr(self, name, None)
+            widget = self._settings_widget(name)
             if widget is not None:
                 widget.setEnabled(backend == "litellm" and not installing)
-        version_button = getattr(self, "litellm_check_version_btn", None)
+        version_button = self._settings_widget("litellm_check_version_btn")
         if version_button is not None:
             checking = getattr(self, "_litellm_version_worker", None) is not None
             version_button.setEnabled(not installing and not checking)
@@ -8059,24 +8087,111 @@ class MainWindow(QMainWindow):
             return
 
     def _current_config_ui_snapshot(self) -> dict[str, object]:
-        thinking_val = self.batch_thinking_combo.currentData()
+        """Snapshot only already-built settings widgets (no lazy page build)."""
+
+        def _checked(name: str, default: bool = False) -> bool:
+            widget = self._settings_widget(name)
+            return bool(widget.isChecked()) if widget is not None else default
+
+        def _combo_text(name: str, default: str = "") -> str:
+            widget = self._settings_widget(name)
+            if widget is None:
+                return default
+            return self._config_string(widget.currentText())
+
+        thinking_combo = self._settings_widget("batch_thinking_combo")
+        thinking_val = thinking_combo.currentData() if thinking_combo is not None else ""
         thinking_level = thinking_val if isinstance(thinking_val, str) else ""
+        storage_cb = self._settings_widget("context_storage_game_cb")
+        storage_location = (
+            "game"
+            if storage_cb is not None and storage_cb.isChecked()
+            else "tool"
+        )
         snapshot: dict[str, object] = {
-            "rag_enabled": self.rag_enabled_cb.isChecked(),
-            "source_index_enabled": self.source_index_enabled_cb.isChecked(),
-            "bootstrap_on_build": self.bootstrap_on_build_cb.isChecked(),
-            "context_storage_location": "game" if self.context_storage_game_cb.isChecked() else "tool",
+            "rag_enabled": _checked("rag_enabled_cb"),
+            "source_index_enabled": _checked("source_index_enabled_cb"),
+            "bootstrap_on_build": _checked("bootstrap_on_build_cb"),
+            "context_storage_location": storage_location,
             "sync_backend": self._selected_sync_backend(),
-            "sync_model": self.sync_model_combo.currentText().strip(),
+            "sync_model": _combo_text("sync_model_combo"),
             "litellm_model": self._litellm_model_text(),
-            "batch_model": self.batch_model_combo.currentText().strip(),
-            "sync_embedding_model": self.sync_embedding_combo.currentText().strip(),
-            "batch_embedding_model": self.batch_embedding_combo.currentText().strip(),
+            "batch_model": _combo_text("batch_model_combo"),
+            "sync_embedding_model": _combo_text("sync_embedding_combo"),
+            "batch_embedding_model": _combo_text("batch_embedding_combo"),
             "batch_thinking_level": thinking_level,
             "theme": self._current_theme_preference_from_ui(),
         }
         snapshot.update(self._advanced_settings_values_from_ui())
         return snapshot
+
+    def _restore_config_ui_snapshot(self, snapshot: dict[str, object]) -> None:
+        """Re-apply a prior UI snapshot onto already-built settings widgets."""
+        if not snapshot:
+            return
+        previous_loading = getattr(self, "_loading_config_to_ui", False)
+        self._loading_config_to_ui = True
+        try:
+            rag_cb = self._settings_widget("rag_enabled_cb")
+            if rag_cb is not None and "rag_enabled" in snapshot:
+                rag_cb.setChecked(bool(snapshot["rag_enabled"]))
+            source_cb = self._settings_widget("source_index_enabled_cb")
+            if source_cb is not None and "source_index_enabled" in snapshot:
+                source_cb.setChecked(bool(snapshot["source_index_enabled"]))
+            bootstrap_cb = self._settings_widget("bootstrap_on_build_cb")
+            if bootstrap_cb is not None and "bootstrap_on_build" in snapshot:
+                bootstrap_cb.setChecked(bool(snapshot["bootstrap_on_build"]))
+            storage_cb = self._settings_widget("context_storage_game_cb")
+            if storage_cb is not None and "context_storage_location" in snapshot:
+                storage_cb.setChecked(snapshot["context_storage_location"] == "game")
+
+            backend_combo = self._settings_widget("sync_backend_combo")
+            if backend_combo is not None and "sync_backend" in snapshot:
+                backend = str(snapshot.get("sync_backend") or "gemini")
+                idx = backend_combo.findData(backend)
+                if idx >= 0:
+                    backend_combo.setCurrentIndex(idx)
+
+            if "sync_model" in snapshot:
+                sync_model = self._settings_widget("sync_model_combo")
+                if sync_model is not None:
+                    self._set_combo_value(sync_model, snapshot["sync_model"])
+            if "batch_model" in snapshot:
+                batch_model = self._settings_widget("batch_model_combo")
+                if batch_model is not None:
+                    self._set_combo_value(batch_model, snapshot["batch_model"])
+            if "sync_embedding_model" in snapshot:
+                sync_emb = self._settings_widget("sync_embedding_combo")
+                if sync_emb is not None:
+                    self._set_combo_value(sync_emb, snapshot["sync_embedding_model"])
+            if "batch_embedding_model" in snapshot:
+                batch_emb = self._settings_widget("batch_embedding_combo")
+                if batch_emb is not None:
+                    self._set_combo_value(batch_emb, snapshot["batch_embedding_model"])
+            if "batch_thinking_level" in snapshot:
+                self._set_batch_thinking_value(str(snapshot.get("batch_thinking_level") or ""))
+            if "litellm_model" in snapshot:
+                litellm_combo = self._settings_widget("litellm_model_combo")
+                if litellm_combo is not None:
+                    self._set_combo_value(litellm_combo, snapshot["litellm_model"])
+            if "theme" in snapshot:
+                self._set_theme_combo_value(str(snapshot.get("theme") or "system"))
+
+            advanced_keys = {
+                field.key
+                for field in ADVANCED_SETTING_FIELDS
+                if field.key not in _SETTINGS_WORKSPACE_MANAGED_KEYS
+            }
+            advanced_values = {
+                key: snapshot[key] for key in advanced_keys if key in snapshot
+            }
+            if advanced_values and self.__dict__.get("_advanced_setting_widgets"):
+                # Merge onto defaults so partial snapshots still apply cleanly.
+                merged = recommended_advanced_settings()
+                merged.update(advanced_values)
+                self._load_advanced_settings_to_ui(merged)
+        finally:
+            self._loading_config_to_ui = previous_loading
 
     def _config_tab_has_unsaved_changes(self) -> bool:
         if getattr(self, "_loading_config_to_ui", False):
@@ -10970,14 +11085,17 @@ class MainWindow(QMainWindow):
 
     def _on_batch_model_changed(self, text: str):
         is_thinking_supported = self._supports_batch_thinking(text)
-        self.batch_thinking_combo.setEnabled(is_thinking_supported)
+        thinking_combo = self._settings_widget("batch_thinking_combo")
+        if thinking_combo is None:
+            return
+        thinking_combo.setEnabled(is_thinking_supported)
         if not is_thinking_supported:
             self._set_batch_thinking_value("")
             return
 
         default_value = self._batch_thinking_value_for_model_change(
             text,
-            self.batch_thinking_combo.currentData(),
+            thinking_combo.currentData(),
             self._batch_thinking_config_has_key,
             self._batch_thinking_user_changed,
         )
