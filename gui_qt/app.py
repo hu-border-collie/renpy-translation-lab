@@ -232,9 +232,18 @@ from .litellm_settings import (
     read_sync_backend_models,
     write_sync_backend_models,
 )
+from gemini_model_catalog import (
+    BUILTIN_GEMINI_EMBEDDING_MODELS,
+    BUILTIN_GEMINI_TRANSLATION_MODELS,
+    merge_model_lists,
+    resolve_gemini_embedding_models,
+    resolve_gemini_translation_models,
+    write_model_catalog_extras,
+)
 from litellm_provider_config import (
     DEFAULT_MODELS,
     SUPPORTED_PROVIDERS,
+    catalog_source_label,
     installed_litellm_version,
     version_key,
     ProviderCredentialStoreError,
@@ -2678,25 +2687,21 @@ class MainWindow(QMainWindow):
         sync_layout = self._settings_form(sync_box)
 
         self.sync_model_combo = NoWheelComboBox()
-        self.sync_model_combo.addItems([
-            "gemini-3.5-flash",
-            "gemini-3.1-pro-preview",
-            "gemini-3.1-flash-lite",
-            "gemini-3-flash-preview",
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-        ])
+        self.sync_model_combo.setEditable(True)
+        self.sync_model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.sync_model_combo.addItems(list(BUILTIN_GEMINI_TRANSLATION_MODELS))
         sync_layout.addRow("翻译模型：", self.sync_model_combo)
 
         self.sync_embedding_combo = NoWheelComboBox()
-        self.sync_embedding_combo.addItems([
-            "gemini-embedding-2",
-            "gemini-embedding-001",
-        ])
+        self.sync_embedding_combo.setEditable(True)
+        self.sync_embedding_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.sync_embedding_combo.addItems(list(BUILTIN_GEMINI_EMBEDDING_MODELS))
         sync_layout.addRow("RAG 向量模型：", self.sync_embedding_combo)
 
-        sync_hint = QLabel("此处只配置 Gemini 同步模型；LiteLLM 已移至左侧独立页面。")
+        sync_hint = QLabel(
+            "此处只配置 Gemini 同步模型；LiteLLM 已移至左侧独立页面。"
+            "可直接输入未列出的模型 ID；自定义项会写入 translator_config.json 的 model_catalog。"
+        )
         sync_hint.setWordWrap(True)
         sync_hint.setObjectName("config_hint_label")
         sync_layout.addRow(sync_hint)
@@ -2706,22 +2711,15 @@ class MainWindow(QMainWindow):
         batch_layout = self._settings_form(batch_box)
 
         self.batch_model_combo = NoWheelComboBox()
-        self.batch_model_combo.addItems([
-            "gemini-3.5-flash",
-            "gemini-3.1-pro-preview",
-            "gemini-3.1-flash-lite",
-            "gemini-3-flash-preview",
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-        ])
+        self.batch_model_combo.setEditable(True)
+        self.batch_model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.batch_model_combo.addItems(list(BUILTIN_GEMINI_TRANSLATION_MODELS))
         batch_layout.addRow("翻译模型：", self.batch_model_combo)
 
         self.batch_embedding_combo = NoWheelComboBox()
-        self.batch_embedding_combo.addItems([
-            "gemini-embedding-2",
-            "gemini-embedding-001",
-        ])
+        self.batch_embedding_combo.setEditable(True)
+        self.batch_embedding_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.batch_embedding_combo.addItems(list(BUILTIN_GEMINI_EMBEDDING_MODELS))
         batch_layout.addRow("RAG 向量模型：", self.batch_embedding_combo)
 
         self.batch_thinking_combo = NoWheelComboBox()
@@ -5780,7 +5778,13 @@ class MainWindow(QMainWindow):
         if button is not None:
             button.setEnabled(False)
             button.setText("正在加载…")
-        worker = LiteLLMModelCatalogWorker(provider, self)
+        api_key = ""
+        if provider != "ollama":
+            try:
+                api_key = load_provider_api_key(provider)
+            except ProviderCredentialStoreError:
+                api_key = ""
+        worker = LiteLLMModelCatalogWorker(provider, api_key=api_key, parent=self)
         worker.completed.connect(
             lambda models, source, error, selected=provider: self._on_litellm_models_loaded(
                 selected, models, error, source
@@ -5808,11 +5812,7 @@ class MainWindow(QMainWindow):
         self._litellm_catalog_source = source
         source_label = getattr(self, "litellm_catalog_status_label", None)
         if source_label is not None:
-            source_label.setText(
-                "目录来源：LiteLLM 官方在线目录。"
-                if source == "online"
-                else "目录来源：本机 LiteLLM 随包目录（联网失败，可能过时）。"
-            )
+            source_label.setText(catalog_source_label(str(source or "")))
         if self._current_litellm_provider() == provider:
             self._set_litellm_models(provider, values, preserve_current=True)
         message = f"已加载 {len(values)} 个 {provider} 模型。"
@@ -10414,6 +10414,42 @@ class MainWindow(QMainWindow):
             or "thinking_level" in batch_config
         )
 
+    def _combo_item_texts(self, combo: NoWheelComboBox | None) -> list[str]:
+        if combo is None:
+            return []
+        items: list[str] = []
+        for index in range(combo.count()):
+            text = self._config_string(combo.itemText(index))
+            if text and text not in items:
+                items.append(text)
+        current = self._config_string(combo.currentText())
+        if current and current not in items:
+            items.append(current)
+        return items
+
+    def _repopulate_model_combo(
+        self,
+        combo: NoWheelComboBox | None,
+        models: list[str],
+        selected: str,
+    ) -> None:
+        if combo is None:
+            return
+        selected = self._config_string(selected)
+        previous_block = combo.blockSignals(True)
+        try:
+            combo.clear()
+            if models:
+                combo.addItems(models)
+            if selected:
+                self._set_combo_value(combo, selected)
+            elif combo.count() > 0:
+                combo.setCurrentIndex(0)
+            else:
+                combo.setCurrentIndex(-1)
+        finally:
+            combo.blockSignals(previous_block)
+
     def _set_combo_value(self, combo: NoWheelComboBox, value: Any):
         value = self._config_string(value)
         if not value:
@@ -10425,6 +10461,8 @@ class MainWindow(QMainWindow):
         else:
             combo.addItem(value)
             combo.setCurrentIndex(combo.count() - 1)
+        if combo.isEditable() and combo.lineEdit() is not None:
+            combo.lineEdit().setText(value)
 
     def _set_theme_combo_value(self, value: str) -> None:
         # Use __dict__ lookup so _load_config_to_ui / project switch never force
@@ -10568,35 +10606,43 @@ class MainWindow(QMainWindow):
                 sync_backend,
                 str(BASIC_RECOMMENDED_VALUES["sync_model"]),
             )
+            batch_val = self._config_string(batch_config.get("model", "")) or str(
+                BASIC_RECOMMENDED_VALUES["batch_model"]
+            )
+            sync_emb_val = self._config_string(sync_rag_config.get("embedding_model", "")) or str(
+                BASIC_RECOMMENDED_VALUES["sync_embedding_model"]
+            )
+            batch_emb_val = self._config_string(batch_rag_config.get("embedding_model", "")) or str(
+                BASIC_RECOMMENDED_VALUES["batch_embedding_model"]
+            )
+            translation_models = resolve_gemini_translation_models(
+                config,
+                extra_selected=[backend_models.gemini_model, batch_val],
+            )
+            embedding_models = resolve_gemini_embedding_models(
+                config,
+                extra_selected=[sync_emb_val, batch_emb_val],
+            )
             sync_model = self._settings_widget("sync_model_combo")
-            if sync_model is not None:
-                self._set_combo_value(sync_model, backend_models.gemini_model)
+            self._repopulate_model_combo(
+                sync_model,
+                translation_models,
+                backend_models.gemini_model,
+            )
             litellm_combo = self._settings_widget("litellm_model_combo")
             if litellm_combo is not None:
                 self._set_combo_value(litellm_combo, backend_models.litellm_model)
             if backend_combo is not None:
                 self._on_sync_backend_changed(backend_idx)
 
-            batch_val = self._config_string(batch_config.get("model", "")) or str(
-                BASIC_RECOMMENDED_VALUES["batch_model"]
-            )
             batch_model = self._settings_widget("batch_model_combo")
-            if batch_model is not None:
-                self._set_combo_value(batch_model, batch_val)
+            self._repopulate_model_combo(batch_model, translation_models, batch_val)
 
-            sync_emb_val = self._config_string(sync_rag_config.get("embedding_model", "")) or str(
-                BASIC_RECOMMENDED_VALUES["sync_embedding_model"]
-            )
             sync_emb = self._settings_widget("sync_embedding_combo")
-            if sync_emb is not None:
-                self._set_combo_value(sync_emb, sync_emb_val)
+            self._repopulate_model_combo(sync_emb, embedding_models, sync_emb_val)
 
-            batch_emb_val = self._config_string(batch_rag_config.get("embedding_model", "")) or str(
-                BASIC_RECOMMENDED_VALUES["batch_embedding_model"]
-            )
             batch_emb = self._settings_widget("batch_embedding_combo")
-            if batch_emb is not None:
-                self._set_combo_value(batch_emb, batch_emb_val)
+            self._repopulate_model_combo(batch_emb, embedding_models, batch_emb_val)
 
             if batch_model is not None:
                 self._on_batch_model_changed(batch_val)
@@ -10702,8 +10748,23 @@ class MainWindow(QMainWindow):
                     sync_config.pop("models", None)
             batch_model = self.batch_model_combo.currentText().strip()
             batch_config["model"] = batch_model
-            sync_rag_config["embedding_model"] = self.sync_embedding_combo.currentText().strip()
-            batch_rag_config["embedding_model"] = self.batch_embedding_combo.currentText().strip()
+            sync_embedding_model = self.sync_embedding_combo.currentText().strip()
+            batch_embedding_model = self.batch_embedding_combo.currentText().strip()
+            sync_rag_config["embedding_model"] = sync_embedding_model
+            batch_rag_config["embedding_model"] = batch_embedding_model
+            write_model_catalog_extras(
+                config,
+                translation_models=merge_model_lists(
+                    self._combo_item_texts(self.sync_model_combo),
+                    self._combo_item_texts(self.batch_model_combo),
+                    [sync_model, batch_model],
+                ),
+                embedding_models=merge_model_lists(
+                    self._combo_item_texts(self.sync_embedding_combo),
+                    self._combo_item_texts(self.batch_embedding_combo),
+                    [sync_embedding_model, batch_embedding_model],
+                ),
+            )
             thinking_val = self.batch_thinking_combo.currentData()
             thinking_level = thinking_val if isinstance(thinking_val, str) else ""
             if self._should_save_batch_thinking_level(

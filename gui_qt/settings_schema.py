@@ -10,6 +10,11 @@ from dataclasses import dataclass
 import json
 from typing import Any, Iterable, Literal
 
+from gemini_model_catalog import (
+    DEFAULT_GEMINI_EMBEDDING_MODEL,
+    DEFAULT_GEMINI_TRANSLATION_MODEL,
+)
+
 
 SettingKind = Literal["bool", "int", "float", "str", "text", "list", "json"]
 SettingValue = Any
@@ -40,10 +45,10 @@ BASIC_RECOMMENDED_VALUES: dict[str, SettingValue] = {
     "rag_enabled": True,
     "source_index_enabled": False,
     "bootstrap_on_build": True,
-    "sync_model": "gemini-3.1-flash-lite",
-    "batch_model": "gemini-3.1-flash-lite",
-    "sync_embedding_model": "gemini-embedding-001",
-    "batch_embedding_model": "gemini-embedding-001",
+    "sync_model": DEFAULT_GEMINI_TRANSLATION_MODEL,
+    "batch_model": DEFAULT_GEMINI_TRANSLATION_MODEL,
+    "sync_embedding_model": DEFAULT_GEMINI_EMBEDDING_MODEL,
+    "batch_embedding_model": DEFAULT_GEMINI_EMBEDDING_MODEL,
     "batch_thinking_level": "minimal",
 }
 

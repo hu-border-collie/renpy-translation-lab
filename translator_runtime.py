@@ -33,6 +33,12 @@ def locked_runtime_state():
         yield
 
 from atomic_io import atomic_write_json, atomic_write_lines, file_sha256
+from gemini_model_catalog import (
+    DEFAULT_GEMINI_EMBEDDING_MODEL,
+    catalog_extra_models,
+    default_model_rotation_list,
+    merge_model_lists,
+)
 from rag_memory import JsonRagStore, hash_text, truncate_text
 from rpa_safety import (
     DEFAULT_RPA_LIMITS,
@@ -65,17 +71,13 @@ DEFAULT_TL_SUBDIR = "game/tl/schinese"
 DEFAULT_PREP_LANGUAGE = "schinese"
 DEFAULT_CONTEXT_STORAGE_LOCATION = "tool"
 DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME = "translation_context"
-DEFAULT_MODELS = [
-    "gemini-3.1-flash-lite",
-    "gemini-3-flash-preview",
-    "gemini-3-pro-preview",
-    "gemini-2.5-pro",
-]
+# First entry is the rotation/fallback default (cost-efficient lite).
+DEFAULT_MODELS = default_model_rotation_list()
 DEFAULT_MAX_CHARS = 12000
 DEFAULT_MAX_ITEMS = 40
 DEFAULT_SYNC_MAX_OUTPUT_TOKENS = 24576
 DEFAULT_SYNC_BACKEND = "gemini"
-DEFAULT_SYNC_RAG_EMBEDDING_MODEL = "gemini-embedding-001"
+DEFAULT_SYNC_RAG_EMBEDDING_MODEL = DEFAULT_GEMINI_EMBEDDING_MODEL
 DEFAULT_SYNC_RAG_QUERY_TASK_TYPE = "RETRIEVAL_QUERY"
 DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE = "RETRIEVAL_DOCUMENT"
 DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY = 768
@@ -969,12 +971,24 @@ def load_sync_translation_settings(config):
 
     custom_models = sync.get("models")
     single_model = sync.get("model")
-    if not custom_models and single_model:
-        custom_models = [single_model]
-    elif isinstance(custom_models, str):
+    if isinstance(custom_models, str):
         custom_models = [custom_models]
     if custom_models:
+        # Explicit rotation list in config wins completely.
         replace_model_list(custom_models, "sync")
+    elif backend_name == "litellm":
+        # LiteLLM keeps a tight model list (provider-specific IDs).
+        if isinstance(single_model, str) and single_model.strip():
+            replace_model_list([single_model], "sync")
+    else:
+        # Gemini: selected model first, then builtins + user model_catalog extras.
+        catalog_models = merge_model_lists(
+            [single_model] if isinstance(single_model, str) and single_model.strip() else [],
+            DEFAULT_MODELS,
+            catalog_extra_models(config, kind="translation"),
+        )
+        if catalog_models and catalog_models != list(MODELS):
+            replace_model_list(catalog_models, "catalog")
 
     previous_items = MAX_ITEMS
     previous_chars = MAX_CHARS

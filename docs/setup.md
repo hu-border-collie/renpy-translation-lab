@@ -23,7 +23,7 @@
 说明：
 
 - `api_keys.json` 保存 Gemini API Key；旧的 `batch_size/max_chars` 等字段仍兼容，但不再推荐写在这里。
-- `translator_config.json` 保存**工具级**设置：可选 `workspace_root`（多项目工作区，须显式指定）、当前 `game_root`、模型、include 过滤、同步 / Batch 分块参数，以及 RAG/原文索引的**全局默认值**（当前项目尚未写过项目文件时使用）。
+- `translator_config.json` 保存**工具级**设置：可选 `workspace_root`（多项目工作区，须显式指定）、当前 `game_root`、模型、include 过滤、同步 / Batch 分块参数，以及 RAG/原文索引的**全局默认值**（当前项目尚未写过项目文件时使用）。可选 `model_catalog.gemini` / `model_catalog.gemini_embedding` 用于扩展内置模型列表（见下文「当前模型建议」）。
 - **按项目生效**的批量上下文开关见下一节 `project_context_settings.json`。
 - `glossary.json` 通常包含项目私有术语；不存在时脚本会退回内置默认术语规则。`translator_config.json` 的 `glossary_file` 应指向当前项目的文件。
 - `macro_setting.md` 往往包含剧情、角色口吻、世界观约束，可供 Batch 的 `batch.macro_setting_file` 使用。
@@ -144,6 +144,17 @@ python gemini_translate_batch.py doctor
 
 当前模型建议：
 
-- 正式 Batch 默认优先使用 `gemini-3.1-flash-lite`。
-- 该模型支持 Batch API、结构化输出和 Thinking，定位更适合高频、低延迟、低成本翻译任务。
-- RAG 当前默认搭配 `gemini-embedding-001`。
+- 正式 Batch / 同步默认仍优先使用 `gemini-3.1-flash-lite`（高吞吐、低成本）。
+- **内置模型列表的单一源**是仓库根目录的 `gemini_model_catalog.py`（GUI 与 CLI 共用）。发版更新模型时优先改该文件。
+- **配置可扩展**：在 `translator_config.json` 增加 `model_catalog`，无需改代码即可把新模型 ID 加进下拉框与 CLI 轮换列表：
+
+```json
+"model_catalog": {
+  "gemini": ["gemini-experimental-foo"],
+  "gemini_embedding": ["gemini-embedding-experimental"]
+}
+```
+
+- GUI「设置 → 模型」下拉框也可直接输入未列出的模型 ID；保存后会写入上述 `model_catalog`。
+- `gemini-3.5-flash-lite` 适合高频翻译与简单处理；需要更强推理时可改用 `gemini-3.6-flash` / `gemini-3.5-flash`。
+- RAG 当前默认搭配 `gemini-embedding-001`（也可选 `gemini-embedding-2`）。
