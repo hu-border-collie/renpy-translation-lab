@@ -407,13 +407,18 @@ class WorkspaceSetupDialog(QDialog):
             str(default_sdk_target(workspace_result.workspace))
         )
         self._sdk_skip.setChecked(True)
-        self._sdk_status.setText("")
+        self._set_sdk_status("")
         self._sdk_progress.setVisible(False)
         self._sdk_progress.setValue(0)
         self._ok_button.setText("完成")
         self._ok_button.setEnabled(True)
         self._stack.setCurrentIndex(1)
         # Do not scan until the user clicks「查找」(explicit only).
+
+    def _set_sdk_status(self, text: str, *, error: bool = False) -> None:
+        """Update SDK status text; clear red error style unless *error* is set."""
+        self._sdk_status.setStyleSheet("color: #b91c1c;" if error else "")
+        self._sdk_status.setText(text)
 
     def _find_sdk(self) -> None:
         workspace = (
@@ -432,13 +437,13 @@ class WorkspaceSetupDialog(QDialog):
             self._found_path_edit.setText(_display_path(self._found_sdk))
             self._sdk_found.setEnabled(True)
             self._sdk_found.setChecked(True)
-            self._sdk_status.setText(f"找到 {len(candidates)} 个候选，已选最新。")
+            self._set_sdk_status(f"找到 {len(candidates)} 个候选，已选最新。")
             self._sdk_status_message = ""
         else:
             self._found_sdk = None
             self._found_path_edit.clear()
             self._sdk_found.setEnabled(False)
-            self._sdk_status.setText("未在工作区附近找到 Ren'Py SDK。")
+            self._set_sdk_status("未在工作区附近找到 Ren'Py SDK。")
 
     def _browse_sdk(self) -> None:
         start = (
@@ -457,10 +462,12 @@ class WorkspaceSetupDialog(QDialog):
         self._browse_path_edit.setText(_display_path(path))
         if is_renpy_sdk_dir(str(path)):
             self._sdk_browse.setChecked(True)
-            self._sdk_status.setText("已选择有效 SDK 目录。")
+            self._set_sdk_status("已选择有效 SDK 目录。")
         else:
-            self._sdk_status.setText("所选目录不是有效 SDK（缺少 renpy.py）。")
-            self._sdk_status.setStyleSheet("color: #b91c1c;")
+            self._set_sdk_status(
+                "所选目录不是有效 SDK（缺少 renpy.py）。",
+                error=True,
+            )
 
     def _browse_download_target(self) -> None:
         start = self._download_target_edit.text().strip() or str(Path.home())

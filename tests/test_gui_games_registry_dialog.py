@@ -101,8 +101,9 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
 
             fake_result = WorkspaceSetupDialogResult(
                 workspace=workspace,
-                message="ok",
+                message="工作区已接入：测试",
                 project_count=0,
+                sdk_message="已跳过 SDK 配置。",
             )
 
             # Mirror MainWindow._on_workspace_changed success path.
@@ -146,9 +147,10 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             self.assertTrue(panel._workspace_empty_state.isHidden())
             self.assertFalse(panel._workspace_body.isHidden())
             info.assert_called()
-            # Summary should include workspace + SDK status from dialog result.
+            # Summary must include workspace outcome and SDK status from dialog result.
             summary_text = "\n".join(str(c) for c in info.call_args[0])
-            self.assertIn("ok", summary_text)
+            self.assertIn("工作区已接入：测试", summary_text)
+            self.assertIn("已跳过 SDK 配置。", summary_text)
 
             # Failure path: host reverts to previous (None).
             def on_fail(path: Path, panel_ref: list) -> None:
