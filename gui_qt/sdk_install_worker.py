@@ -18,12 +18,16 @@ class SdkInstallWorker(QThread):
         self,
         target_dir: Path | str,
         *,
+        workspace_root: Path | str | None = None,
+        game_root: Path | str | None = None,
         persist_config: bool = True,
         config_path: Path | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._target_dir = Path(target_dir)
+        self._workspace_root = workspace_root
+        self._game_root = game_root
         self._persist_config = bool(persist_config)
         self._config_path = config_path
         self._cancel = False
@@ -38,6 +42,8 @@ class SdkInstallWorker(QThread):
         try:
             result = install_recommended_sdk(
                 self._target_dir,
+                workspace_root=self._workspace_root,
+                game_root=self._game_root,
                 persist_config=self._persist_config,
                 config_path=self._config_path,
                 should_cancel=lambda: self._cancel or self.isInterruptionRequested(),

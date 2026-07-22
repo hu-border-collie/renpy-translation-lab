@@ -3367,7 +3367,13 @@ class MainWindow(QMainWindow):
 
         from .sdk_install_worker import SdkInstallWorker
 
-        worker = SdkInstallWorker(Path(target_text), persist_config=True, parent=self)
+        worker = SdkInstallWorker(
+            Path(target_text),
+            workspace_root=workspace,
+            game_root=self.state.get_game_root(),
+            persist_config=True,
+            parent=self,
+        )
         self._sdk_install_worker = worker
         self._sdk_install_line_edit = line_edit
         download_btn = getattr(self, "_prepare_renpy_sdk_download_btn", None)
@@ -3438,30 +3444,32 @@ class MainWindow(QMainWindow):
 
         game_root = self.state.get_game_root()
         workspace_root = self.state.get_workspace_root()
-        tool_root = self.state.get_tool_root()
-        # Explicit GUI roots only (no runtime BASE_DIR/ROOT_DIR mix-in).
-        # tool_root / game_root still use intentional parent hops inside
-        # renpy_sdk_search_roots; include_runtime_defaults=False skips globals.
+        # Explicit user-selected roots only — no tool parent / CWD inference (#245/#246).
+        search_roots: list[str] = []
+        if workspace_root is not None:
+            search_roots.append(str(workspace_root))
+        if game_root is not None:
+            search_roots.append(str(game_root))
         candidates = discover_renpy_sdk_candidates(
-            game_root=str(game_root) if game_root is not None else None,
-            tool_root=str(tool_root),
-            workspace_root=str(workspace_root) if workspace_root is not None else None,
+            search_roots=search_roots or None,
             include_runtime_defaults=False,
-        )
+        ) if search_roots else []
         if not candidates:
             roots_hint = []
-            if game_root is not None:
-                roots_hint.append(f"项目：{game_root}（及其上两级）")
             if workspace_root is not None:
                 roots_hint.append(f"工作区：{workspace_root}")
-            roots_hint.append(f"工具：{tool_root}（及其上一级）")
+            if game_root is not None:
+                roots_hint.append(f"当前项目：{game_root}")
+            if not roots_hint:
+                roots_hint.append("（尚未设置工作区或项目；请先接入工作区或指定项目）")
             QMessageBox.information(
                 self,
                 "未找到 Ren'Py SDK",
-                "在附近目录未找到包含 renpy.py 的 Ren'Py SDK。\n\n"
+                "在已选工作区 / 当前项目下未找到包含 renpy.py 的 Ren'Py SDK。\n\n"
                 "已搜索：\n- "
                 + "\n- ".join(roots_hint)
-                + "\n\n可安装 SDK 后重试，或点「浏览…」手动选择，"
+                + "\n\n不会扫描工具安装目录的上一级。"
+                "\n可安装 SDK 后重试，或点「浏览…」手动选择，"
                 "或使用「下载推荐 SDK…」。",
             )
             return

@@ -482,10 +482,27 @@ class WorkspaceSetupDialog(QDialog):
             return
         self._finish_sdk()
 
+    def _stop_sdk_worker(self, *, wait_ms: int = 5000) -> None:
+        """Cancel and wait for the SDK worker before destroying this dialog."""
+        worker = self._sdk_worker
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.request_cancel()
+            worker.requestInterruption()
+            worker.wait(wait_ms)
+        self._sdk_worker = None
+
     def _on_reject(self) -> None:
         if self._sdk_worker is not None and self._sdk_worker.isRunning():
-            self._sdk_worker.request_cancel()
+            self._ok_button.setEnabled(False)
             self._sdk_status.setText("正在取消 SDK 下载…")
+            self._stop_sdk_worker()
+            self._sdk_status_message = "SDK 安装已取消。"
+            self._sdk_status.setText(self._sdk_status_message)
+            self._sdk_progress.setVisible(False)
+            self._ok_button.setEnabled(True)
+            # Stay on the SDK page so the user can skip or retry.
             return
         # If workspace already applied, still accept with skip SDK so host can persist root.
         if self._workspace_result is not None and self._stack.currentIndex() == 1:
@@ -499,6 +516,10 @@ class WorkspaceSetupDialog(QDialog):
             self.accept()
             return
         self.reject()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._stop_sdk_worker(wait_ms=5000)
+        super().closeEvent(event)
 
     def _sdk_summary_for_skip(self) -> str:
         if self._sdk_status_message:
@@ -602,7 +623,17 @@ class WorkspaceSetupDialog(QDialog):
         self._sdk_progress.setValue(0)
         self._sdk_status.setText("正在下载并安装推荐 SDK…")
 
-        worker = SdkInstallWorker(target, persist_config=True, parent=self)
+        workspace = (
+            self._workspace_result.workspace
+            if self._workspace_result is not None
+            else None
+        )
+        worker = SdkInstallWorker(
+            target,
+            workspace_root=workspace,
+            persist_config=True,
+            parent=self,
+        )
         self._sdk_worker = worker
         worker.progress.connect(self._on_sdk_progress)
         worker.completed.connect(self._on_sdk_completed)

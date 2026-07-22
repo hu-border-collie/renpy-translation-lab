@@ -234,6 +234,49 @@ class RenpySdkInstallTests(unittest.TestCase):
             with self.assertRaises(sdk.SdkInstallError):
                 sdk.validate_sdk_install_target(target)
 
+    def test_rejects_workspace_root_and_game_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "ws"
+            game = workspace / "MyGame" / "work"
+            game.mkdir(parents=True)
+            workspace.mkdir(exist_ok=True)
+            with self.assertRaises(sdk.SdkInstallError) as ctx:
+                sdk.validate_sdk_install_target(workspace, workspace_root=workspace)
+            self.assertIn("工作区根", str(ctx.exception))
+            with self.assertRaises(sdk.SdkInstallError) as ctx2:
+                sdk.validate_sdk_install_target(game / "sdk", workspace_root=workspace, game_root=game)
+            self.assertIn("游戏项目", str(ctx2.exception))
+            # Child under workspace is allowed by path rules.
+            ok = sdk.validate_sdk_install_target(
+                workspace / sdk.RECOMMENDED_FOLDER_NAME,
+                workspace_root=workspace,
+                game_root=game,
+            )
+            self.assertEqual(ok.name, sdk.RECOMMENDED_FOLDER_NAME)
+
+    def test_config_write_failure_removes_placed_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "sdk.zip"
+            digest = _make_sdk_zip(archive)
+            target = root / "ws" / "renpy-8.5.3-sdk"
+            target.parent.mkdir()
+            with mock.patch.object(
+                sdk,
+                "save_renpy_sdk_dir",
+                side_effect=sdk.SdkInstallError("config denied"),
+            ):
+                result = sdk.install_from_archive(
+                    archive,
+                    target,
+                    expected_sha256=digest,
+                    workspace_root=target.parent,
+                    persist_config=True,
+                )
+            self.assertFalse(result.ok)
+            self.assertIn("config denied", result.message)
+            self.assertFalse(target.exists())
+
     def test_save_renpy_sdk_dir_is_atomic_and_preserves_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "translator_config.json"

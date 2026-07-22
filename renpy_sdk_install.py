@@ -143,10 +143,16 @@ def save_renpy_sdk_dir(
         raise SdkInstallError(
             f"无法更新 prepare.renpy_sdk_dir：prepare 必须是 JSON object（{path}）。"
         )
+    # Prefer POSIX form for cross-platform config consistency (same as workspace_root).
     prepare["renpy_sdk_dir"] = resolved.as_posix()
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Atomic replace — translator_config.json is executable local config.
-    atomic_write_json(path, data, ensure_ascii=False, indent=2)
+    try:
+        # Atomic replace — translator_config.json is executable local config.
+        atomic_write_json(path, data, ensure_ascii=False, indent=2)
+    except OSError as exc:
+        raise SdkInstallError(
+            f"无法更新 prepare.renpy_sdk_dir：写入配置失败 {path}: {exc}"
+        ) from exc
     return resolved
 
 
@@ -344,21 +350,48 @@ def _normalize_path(path: Path | str) -> Path:
         return candidate.absolute()
 
 
-def validate_sdk_install_target(target_dir: Path | str) -> Path:
-    """Reject installs into the tool repo or any ``Game_*`` project tree.
+def _is_same_or_under(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def validate_sdk_install_target(
+    target_dir: Path | str,
+    *,
+    workspace_root: Path | str | None = None,
+    game_root: Path | str | None = None,
+) -> Path:
+    """Reject installs into tool repo, workspace root, or game project trees.
 
     Shared by CLI / GUI so path defaults alone cannot be bypassed.
+    Allowed: a subdirectory under workspace (e.g. ``workspace/renpy-*-sdk``)
+    or another explicit non-project path.
     """
     target = _normalize_path(target_dir)
     tool_root = _normalize_path(tool_package_root())
-    try:
-        target.relative_to(tool_root)
-    except ValueError:
-        pass
-    else:
+    if _is_same_or_under(target, tool_root):
         raise SdkInstallError(
             f"拒绝安装到工具仓库内：{target}\n请改到工作区或其它显式目录。"
         )
+
+    if workspace_root is not None and str(workspace_root).strip():
+        workspace = _normalize_path(workspace_root)
+        if target == workspace:
+            raise SdkInstallError(
+                f"拒绝安装到工作区根目录本身：{target}\n"
+                f"请使用子目录，例如 {workspace / RECOMMENDED_FOLDER_NAME}。"
+            )
+
+    if game_root is not None and str(game_root).strip():
+        game = _normalize_path(game_root)
+        if target == game or _is_same_or_under(target, game):
+            raise SdkInstallError(
+                f"拒绝安装到游戏项目目录内：{target}\n"
+                "SDK 不要放进 game_root / work / original。"
+            )
 
     for part in target.parts:
         if part.startswith("Game_"):
@@ -370,7 +403,7 @@ def validate_sdk_install_target(target_dir: Path | str) -> Path:
 
 
 def _place_sdk_root(sdk_root: Path, target: Path) -> None:
-    """Atomically place *sdk_root* at *target* on the same volume when possible."""
+    """Place *sdk_root* at *target* (same-volume rename preferred, copy fallback)."""
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         if target.is_dir() and not any(target.iterdir()):
@@ -381,8 +414,7 @@ def _place_sdk_root(sdk_root: Path, target: Path) -> None:
     if sdk_root.resolve() == target.resolve():
         return
 
-    # Prefer os.replace / rename (same volume). Avoid shutil.move cross-device
-    # copy that can leave a partial destination.
+    # Prefer os.replace / rename (same volume).
     try:
         os.replace(str(sdk_root), str(target))
         return
@@ -391,10 +423,32 @@ def _place_sdk_root(sdk_root: Path, target: Path) -> None:
     try:
         os.rename(str(sdk_root), str(target))
         return
+    except OSError:
+        pass
+
+    # Cross-volume fallback: copy into a sibling temp on the *target* volume,
+    # validate, then rename into place so readers never see a partial tree as
+    # the final path for longer than the final replace.
+    place_tmp = target.parent / f".renpy-sdk-place-{os.getpid()}"
+    if place_tmp.exists():
+        shutil.rmtree(place_tmp, ignore_errors=True)
+    try:
+        shutil.copytree(sdk_root, place_tmp)
+        if not is_renpy_sdk_dir(str(place_tmp)):
+            raise SdkInstallError(f"跨卷复制后校验失败，未找到 renpy.py：{place_tmp}")
+        os.replace(str(place_tmp), str(target))
+        place_tmp = None  # type: ignore[assignment]
     except OSError as exc:
         raise SdkInstallError(
-            f"无法将 SDK 原子落位到目标（请确保目标与解压目录在同一卷）：{target}\n{exc}"
+            f"无法将 SDK 落位到目标：{target}\n{exc}"
         ) from exc
+    finally:
+        if place_tmp is not None:
+            shutil.rmtree(place_tmp, ignore_errors=True)
+        # Source tree lives under staging; caller cleans staging_base.
+        # Best-effort remove empty leftover after successful cross-volume copy.
+        if is_renpy_sdk_dir(str(target)):
+            shutil.rmtree(sdk_root, ignore_errors=True)
 
 
 def _install_validated_archive(
@@ -408,10 +462,11 @@ def _install_validated_archive(
     progress: ProgressCallback | None,
     success_message: str,
 ) -> SdkInstallResult:
-    """Shared extract + same-volume place path used by download and local archive."""
+    """Shared extract + place path used by download and local archive."""
     verify_sha256(archive_path, expected_sha256, label="SDK 归档")
     target.parent.mkdir(parents=True, exist_ok=True)
     staging_base: Path | None = None
+    placed = False
     try:
         # Sibling staging under target.parent so rename stays on the same volume.
         staging_base = Path(
@@ -429,13 +484,22 @@ def _install_validated_archive(
         if not is_renpy_sdk_dir(str(sdk_root)):
             raise SdkInstallError(f"解压后校验失败，未找到 renpy.py：{sdk_root}")
         _place_sdk_root(sdk_root, target)
+        placed = True
         if not is_renpy_sdk_dir(str(target)):
             raise SdkInstallError(f"安装后校验失败，未找到 renpy.py：{target}")
 
         persisted = False
         if persist_config:
-            save_renpy_sdk_dir(target, config_path)
-            persisted = True
+            try:
+                save_renpy_sdk_dir(target, config_path)
+                persisted = True
+            except SdkInstallError:
+                # Config write failed after disk place — remove target so retry
+                # is not blocked by conflict, and signal incomplete install.
+                if placed and target.exists():
+                    shutil.rmtree(target, ignore_errors=True)
+                    placed = False
+                raise
         return SdkInstallResult(
             ok=True,
             message=success_message,
@@ -443,6 +507,10 @@ def _install_validated_archive(
             reused_existing=False,
             persisted_config=persisted,
         )
+    except Exception:
+        if placed and target.exists() and not is_renpy_sdk_dir(str(target)):
+            shutil.rmtree(target, ignore_errors=True)
+        raise
     finally:
         if staging_base is not None:
             shutil.rmtree(staging_base, ignore_errors=True)
@@ -470,6 +538,8 @@ def _reuse_or_conflict(target: Path) -> SdkInstallResult | None:
 def install_recommended_sdk(
     target_dir: Path | str,
     *,
+    workspace_root: Path | str | None = None,
+    game_root: Path | str | None = None,
     persist_config: bool = True,
     config_path: Path | None = None,
     timeout: float = DEFAULT_TIMEOUT_SEC,
@@ -483,7 +553,11 @@ def install_recommended_sdk(
     tests should use :func:`install_from_archive` with a local zip.
     """
     try:
-        target = validate_sdk_install_target(target_dir)
+        target = validate_sdk_install_target(
+            target_dir,
+            workspace_root=workspace_root,
+            game_root=game_root,
+        )
     except SdkInstallError as exc:
         return SdkInstallResult(ok=False, message=str(exc))
 
@@ -554,6 +628,8 @@ def install_from_archive(
     target_dir: Path | str,
     *,
     expected_sha256: str,
+    workspace_root: Path | str | None = None,
+    game_root: Path | str | None = None,
     persist_config: bool = False,
     config_path: Path | None = None,
     should_cancel: CancelCheck | None = None,
@@ -561,7 +637,11 @@ def install_from_archive(
 ) -> SdkInstallResult:
     """Install from a local archive (tests / offline). Still verifies SHA-256."""
     try:
-        target = validate_sdk_install_target(target_dir)
+        target = validate_sdk_install_target(
+            target_dir,
+            workspace_root=workspace_root,
+            game_root=game_root,
+        )
     except SdkInstallError as exc:
         return SdkInstallResult(ok=False, message=str(exc))
 
@@ -676,6 +756,7 @@ def main(argv: list[str] | None = None) -> int:
 
         result = install_recommended_sdk(
             target,
+            workspace_root=args.workspace,
             persist_config=bool(args.persist_config),
             timeout=float(args.timeout),
             progress=_progress,
