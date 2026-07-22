@@ -601,10 +601,18 @@ class GamesRegistryPanel(QWidget):
         if self._on_workspace_changed is not None:
             # Host persists config and re-syncs this panel (including failure revert).
             self._on_workspace_changed(chosen)
+        else:
+            self.set_workspace_root(chosen)
+        # Host may have reverted on persist failure — skip success summary then.
+        if self.workspace_root() is None:
             return
-        self.set_workspace_root(chosen)
-        if payload.message:
-            message_box_information(self, "工作区已接入", payload.message)
+        summary_parts = [payload.message or ""]
+        sdk_message = getattr(payload, "sdk_message", "") or ""
+        if sdk_message:
+            summary_parts.append(sdk_message)
+        summary = "\n".join(part for part in summary_parts if part.strip())
+        if summary:
+            message_box_information(self, "工作区已接入", summary)
 
     def activate_section(self) -> None:
         """Refresh view when the settings nav selects the workspace section."""

@@ -3286,7 +3286,7 @@ class MainWindow(QMainWindow):
         download_btn.setObjectName("secondary_btn")
         download_btn.setToolTip(
             "仅在确认后从官方 renpy.org 下载本工具维护的推荐稳定版 SDK。"
-            "不会因打开本页或运行 prepare 自动联网。"
+            "不会因打开本页或运行 prepare 自动联网。下载中可再次点击取消。"
         )
         download_btn.clicked.connect(lambda: self._on_download_recommended_sdk(line_edit))
         layout.addWidget(download_btn)
@@ -3334,8 +3334,12 @@ class MainWindow(QMainWindow):
             recommended_sdk,
         )
 
-        if getattr(self, "_sdk_install_worker", None) is not None:
-            self.statusBar().showMessage("SDK 下载已在进行中…", 4000)
+        worker = getattr(self, "_sdk_install_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.request_cancel()
+            worker.requestInterruption()
+            self.statusBar().showMessage("正在取消 SDK 下载…", 4000)
+            self._append_log("用户取消推荐 SDK 下载")
             return
 
         spec = recommended_sdk()
@@ -3368,8 +3372,9 @@ class MainWindow(QMainWindow):
         self._sdk_install_line_edit = line_edit
         download_btn = getattr(self, "_prepare_renpy_sdk_download_btn", None)
         if download_btn is not None:
-            download_btn.setEnabled(False)
-        self.statusBar().showMessage("正在下载推荐 Ren'Py SDK…", 0)
+            download_btn.setText("取消下载")
+            download_btn.setEnabled(True)
+        self.statusBar().showMessage("正在下载推荐 Ren'Py SDK…（可再次点击按钮取消）", 0)
         self._append_log(
             f"开始下载推荐 SDK {spec.version} → {target_text}（官方来源，已确认）"
         )
@@ -3380,7 +3385,7 @@ class MainWindow(QMainWindow):
     def _on_sdk_install_progress(self, phase: str, current: int, total: int) -> None:
         if phase == "download" and total > 0:
             pct = min(100, int(100 * current / total))
-            self.statusBar().showMessage(f"SDK 下载中… {pct}%", 0)
+            self.statusBar().showMessage(f"SDK 下载中… {pct}%（可点「取消下载」）", 0)
         elif phase == "extract":
             self.statusBar().showMessage(f"SDK 解压中… {current}/{total}", 0)
 
@@ -3390,11 +3395,15 @@ class MainWindow(QMainWindow):
         self._sdk_install_worker = None
         download_btn = getattr(self, "_prepare_renpy_sdk_download_btn", None)
         if download_btn is not None:
+            download_btn.setText("下载推荐 SDK…")
             download_btn.setEnabled(True)
         if not isinstance(result, SdkInstallResult):
             self.statusBar().showMessage("SDK 安装返回未知结果。", 6000)
             return
         self._append_log(result.message)
+        if result.cancelled:
+            self.statusBar().showMessage(result.message, 6000)
+            return
         if result.ok and result.sdk_dir is not None:
             line_edit = getattr(self, "_sdk_install_line_edit", None)
             if line_edit is not None:
@@ -3403,6 +3412,26 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "SDK 未配置", result.message)
             self.statusBar().showMessage(result.message, 8000)
+
+    def _cancel_sdk_install_worker(self, *, wait_ms: int = 5000) -> None:
+        """Request cancel and wait for the SDK worker (window close / shutdown)."""
+        worker = getattr(self, "_sdk_install_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.request_cancel()
+            worker.requestInterruption()
+            if not worker.wait(wait_ms):
+                self._append_log("SDK 下载线程在关闭时未能及时退出。")
+        self._sdk_install_worker = None
+        download_btn = getattr(self, "_prepare_renpy_sdk_download_btn", None)
+        if download_btn is not None:
+            download_btn.setText("下载推荐 SDK…")
+            download_btn.setEnabled(True)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._cancel_sdk_install_worker(wait_ms=5000)
+        super().closeEvent(event)
 
     def _on_find_renpy_sdk_dir(self, line_edit: QLineEdit) -> None:
         from translator_runtime import discover_renpy_sdk_candidates

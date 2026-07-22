@@ -93,6 +93,8 @@ class WorkspaceSetupDialog(QDialog):
         self._workspace_result: WorkspaceSetupDialogResult | None = None
         self._sdk_worker: SdkInstallWorker | None = None
         self._found_sdk: Path | None = None
+        # Last SDK attempt message (failure / cancel) for completion summary.
+        self._sdk_status_message: str = ""
 
         root = QVBoxLayout(self)
         root.setSpacing(12)
@@ -411,10 +413,9 @@ class WorkspaceSetupDialog(QDialog):
         self._ok_button.setText("完成")
         self._ok_button.setEnabled(True)
         self._stack.setCurrentIndex(1)
-        # Best-effort scan (user can also click 查找).
-        self._find_sdk(silent=True)
+        # Do not scan until the user clicks「查找」(explicit only).
 
-    def _find_sdk(self, *, silent: bool = False) -> None:
+    def _find_sdk(self) -> None:
         workspace = (
             self._workspace_result.workspace
             if self._workspace_result is not None
@@ -430,15 +431,14 @@ class WorkspaceSetupDialog(QDialog):
             self._found_sdk = Path(candidates[0])
             self._found_path_edit.setText(_display_path(self._found_sdk))
             self._sdk_found.setEnabled(True)
-            if not silent:
-                self._sdk_found.setChecked(True)
-                self._sdk_status.setText(f"找到 {len(candidates)} 个候选，已选最新。")
+            self._sdk_found.setChecked(True)
+            self._sdk_status.setText(f"找到 {len(candidates)} 个候选，已选最新。")
+            self._sdk_status_message = ""
         else:
             self._found_sdk = None
             self._found_path_edit.clear()
             self._sdk_found.setEnabled(False)
-            if not silent:
-                self._sdk_status.setText("未在工作区附近找到 Ren'Py SDK。")
+            self._sdk_status.setText("未在工作区附近找到 Ren'Py SDK。")
 
     def _browse_sdk(self) -> None:
         start = (
@@ -494,11 +494,16 @@ class WorkspaceSetupDialog(QDialog):
                 message=self._workspace_result.message,
                 project_count=self._workspace_result.project_count,
                 created_registry=self._workspace_result.created_registry,
-                sdk_message="已跳过 SDK 配置。",
+                sdk_message=self._sdk_summary_for_skip(),
             )
             self.accept()
             return
         self.reject()
+
+    def _sdk_summary_for_skip(self) -> str:
+        if self._sdk_status_message:
+            return f"SDK 未配置：{self._sdk_status_message}"
+        return "已跳过 SDK 配置。"
 
     def _apply_workspace(self) -> None:
         if self._selected is None:
@@ -539,7 +544,7 @@ class WorkspaceSetupDialog(QDialog):
 
         base = self._workspace_result
         sdk_dir: Path | None = None
-        sdk_message = "已跳过 SDK 配置。"
+        sdk_message = self._sdk_summary_for_skip()
 
         if self._sdk_found.isChecked() and self._found_sdk is not None:
             if not is_renpy_sdk_dir(str(self._found_sdk)):
@@ -622,13 +627,15 @@ class WorkspaceSetupDialog(QDialog):
             self._sdk_status.setText("SDK 安装返回了未知结果。")
             return
         if result.cancelled:
+            self._sdk_status_message = result.message
             self._sdk_status.setText(result.message)
             self._sdk_progress.setVisible(False)
             return
         if not result.ok:
-            # Keep workspace success; report SDK failure in final payload if user finishes with skip.
+            # Keep workspace success; preserve failure for completion summary.
+            self._sdk_status_message = result.message
             self._sdk_status.setText(
-                f"{result.message}\n工作区已保留；可改选「暂时跳过」完成，或重试下载。"
+                f"{result.message}\n工作区已保留；可改选「暂时跳过」完成（摘要会保留失败原因），或重试下载。"
             )
             self._sdk_progress.setVisible(False)
             return
@@ -636,6 +643,7 @@ class WorkspaceSetupDialog(QDialog):
         base = self._workspace_result
         if base is None:
             return
+        self._sdk_status_message = ""
         self._result = WorkspaceSetupDialogResult(
             workspace=base.workspace,
             message=base.message,

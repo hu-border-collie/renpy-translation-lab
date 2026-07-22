@@ -212,6 +212,48 @@ class RenpySdkInstallTests(unittest.TestCase):
             self.assertEqual(target.name, sdk.RECOMMENDED_FOLDER_NAME)
             self.assertEqual(target.parent.resolve(), ws.resolve())
 
+    def test_rejects_install_into_tool_repo(self):
+        tool = sdk.tool_package_root()
+        inside = tool / "renpy-8.5.3-sdk"
+        with self.assertRaises(sdk.SdkInstallError) as ctx:
+            sdk.validate_sdk_install_target(inside)
+        self.assertIn("工具仓库", str(ctx.exception))
+        result = sdk.install_from_archive(
+            tool / "missing.zip",
+            inside,
+            expected_sha256="0" * 64,
+            persist_config=False,
+        )
+        self.assertFalse(result.ok)
+        self.assertIn("工具仓库", result.message)
+
+    def test_rejects_install_into_game_star(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "Game_Example" / "renpy-sdk"
+            target.parent.mkdir()
+            with self.assertRaises(sdk.SdkInstallError):
+                sdk.validate_sdk_install_target(target)
+
+    def test_save_renpy_sdk_dir_is_atomic_and_preserves_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "translator_config.json"
+            config.write_text(
+                json.dumps({"game_root": "C:/g", "prepare": {"language": "schinese"}}),
+                encoding="utf-8",
+            )
+            sdk_dir = Path(tmp) / "renpy-8.5.3-sdk"
+            sdk_dir.mkdir()
+            (sdk_dir / "renpy.py").write_text("#\n", encoding="utf-8")
+            saved = sdk.save_renpy_sdk_dir(sdk_dir, config)
+            self.assertEqual(saved.resolve(), sdk_dir.resolve())
+            data = json.loads(config.read_text(encoding="utf-8"))
+            self.assertEqual(data["game_root"], "C:/g")
+            self.assertEqual(data["prepare"]["language"], "schinese")
+            self.assertEqual(
+                Path(data["prepare"]["renpy_sdk_dir"]).resolve(),
+                sdk_dir.resolve(),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

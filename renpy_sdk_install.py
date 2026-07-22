@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.request import Request, urlopen
 
+from atomic_io import atomic_write_json
 from translator_runtime import is_renpy_sdk_dir
 
 # Single recommended stable build maintained by this tool (official renpy.org).
@@ -144,10 +145,8 @@ def save_renpy_sdk_dir(
         )
     prepare["renpy_sdk_dir"] = resolved.as_posix()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    # Atomic replace — translator_config.json is executable local config.
+    atomic_write_json(path, data, ensure_ascii=False, indent=2)
     return resolved
 
 
@@ -337,6 +336,137 @@ def _target_conflict_message(target: Path) -> str:
     )
 
 
+def _normalize_path(path: Path | str) -> Path:
+    candidate = Path(path).expanduser()
+    try:
+        return candidate.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return candidate.absolute()
+
+
+def validate_sdk_install_target(target_dir: Path | str) -> Path:
+    """Reject installs into the tool repo or any ``Game_*`` project tree.
+
+    Shared by CLI / GUI so path defaults alone cannot be bypassed.
+    """
+    target = _normalize_path(target_dir)
+    tool_root = _normalize_path(tool_package_root())
+    try:
+        target.relative_to(tool_root)
+    except ValueError:
+        pass
+    else:
+        raise SdkInstallError(
+            f"拒绝安装到工具仓库内：{target}\n请改到工作区或其它显式目录。"
+        )
+
+    for part in target.parts:
+        if part.startswith("Game_"):
+            raise SdkInstallError(
+                f"拒绝安装到 Game_* 项目目录内：{target}\n"
+                "SDK 应放在工作区根下（如 renpy-*-sdk），不要放进游戏项目。"
+            )
+    return target
+
+
+def _place_sdk_root(sdk_root: Path, target: Path) -> None:
+    """Atomically place *sdk_root* at *target* on the same volume when possible."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        if target.is_dir() and not any(target.iterdir()):
+            target.rmdir()
+        else:
+            raise SdkInstallError(_target_conflict_message(target))
+
+    if sdk_root.resolve() == target.resolve():
+        return
+
+    # Prefer os.replace / rename (same volume). Avoid shutil.move cross-device
+    # copy that can leave a partial destination.
+    try:
+        os.replace(str(sdk_root), str(target))
+        return
+    except OSError:
+        pass
+    try:
+        os.rename(str(sdk_root), str(target))
+        return
+    except OSError as exc:
+        raise SdkInstallError(
+            f"无法将 SDK 原子落位到目标（请确保目标与解压目录在同一卷）：{target}\n{exc}"
+        ) from exc
+
+
+def _install_validated_archive(
+    archive_path: Path,
+    target: Path,
+    *,
+    expected_sha256: str,
+    persist_config: bool,
+    config_path: Path | None,
+    should_cancel: CancelCheck | None,
+    progress: ProgressCallback | None,
+    success_message: str,
+) -> SdkInstallResult:
+    """Shared extract + same-volume place path used by download and local archive."""
+    verify_sha256(archive_path, expected_sha256, label="SDK 归档")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging_base: Path | None = None
+    try:
+        # Sibling staging under target.parent so rename stays on the same volume.
+        staging_base = Path(
+            tempfile.mkdtemp(prefix=".renpy-sdk-staging.", dir=str(target.parent))
+        )
+        unpack = staging_base / "unpack"
+        unpack.mkdir(parents=True, exist_ok=True)
+        sdk_root = extract_sdk_zip(
+            archive_path,
+            unpack,
+            should_cancel=should_cancel,
+            progress=progress,
+        )
+        _check_cancel(should_cancel)
+        if not is_renpy_sdk_dir(str(sdk_root)):
+            raise SdkInstallError(f"解压后校验失败，未找到 renpy.py：{sdk_root}")
+        _place_sdk_root(sdk_root, target)
+        if not is_renpy_sdk_dir(str(target)):
+            raise SdkInstallError(f"安装后校验失败，未找到 renpy.py：{target}")
+
+        persisted = False
+        if persist_config:
+            save_renpy_sdk_dir(target, config_path)
+            persisted = True
+        return SdkInstallResult(
+            ok=True,
+            message=success_message,
+            sdk_dir=target,
+            reused_existing=False,
+            persisted_config=persisted,
+        )
+    finally:
+        if staging_base is not None:
+            shutil.rmtree(staging_base, ignore_errors=True)
+
+
+def _reuse_or_conflict(target: Path) -> SdkInstallResult | None:
+    """Return a result if install should short-circuit (reuse / conflict)."""
+    if is_renpy_sdk_dir(str(target)):
+        return None  # caller handles reuse + persist
+    if target.exists():
+        try:
+            if target.is_file() or any(target.iterdir()):
+                return SdkInstallResult(
+                    ok=False,
+                    message=_target_conflict_message(target),
+                )
+        except OSError as exc:
+            return SdkInstallResult(
+                ok=False,
+                message=f"无法检查目标目录：{target}: {exc}",
+            )
+    return None
+
+
 def install_recommended_sdk(
     target_dir: Path | str,
     *,
@@ -352,11 +482,10 @@ def install_recommended_sdk(
     If *target_dir* already is a valid SDK, reuse it (no overwrite). Offline
     tests should use :func:`install_from_archive` with a local zip.
     """
-    target = Path(target_dir).expanduser()
     try:
-        target = target.resolve(strict=False)
-    except (OSError, RuntimeError):
-        target = target.absolute()
+        target = validate_sdk_install_target(target_dir)
+    except SdkInstallError as exc:
+        return SdkInstallResult(ok=False, message=str(exc))
 
     if is_renpy_sdk_dir(str(target)):
         persisted = False
@@ -380,28 +509,16 @@ def install_recommended_sdk(
             persisted_config=persisted,
         )
 
-    if target.exists():
-        # Non-empty or any existing path that is not a valid SDK → conflict.
-        try:
-            if target.is_file() or any(target.iterdir()):
-                return SdkInstallResult(
-                    ok=False,
-                    message=_target_conflict_message(target),
-                )
-        except OSError as exc:
-            return SdkInstallResult(
-                ok=False,
-                message=f"无法检查目标目录：{target}: {exc}",
-            )
+    early = _reuse_or_conflict(target)
+    if early is not None:
+        return early
 
     spec = recommended_sdk()
-    work_root: Path | None = None
+    download_root: Path | None = None
     try:
-        work_root = Path(tempfile.mkdtemp(prefix="renpy-sdk-install-"))
-        archive_path = work_root / spec.archive_name
-        staging = work_root / "staging"
-        staging.mkdir(parents=True, exist_ok=True)
-
+        # Archive may live in system temp; extract staging is sibling of target.
+        download_root = Path(tempfile.mkdtemp(prefix="renpy-sdk-dl-"))
+        archive_path = download_root / spec.archive_name
         download_to_file(
             spec.url,
             archive_path,
@@ -411,37 +528,15 @@ def install_recommended_sdk(
             progress=progress,
             opener=opener,
         )
-
-        sdk_root = extract_sdk_zip(
+        return _install_validated_archive(
             archive_path,
-            staging,
+            target,
+            expected_sha256=spec.sha256,
+            persist_config=persist_config,
+            config_path=config_path,
             should_cancel=should_cancel,
             progress=progress,
-        )
-        _check_cancel(should_cancel)
-
-        # Place at target: move the sdk_root contents/folder into place.
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists() and target.is_dir() and not any(target.iterdir()):
-            target.rmdir()
-        # Move the discovered SDK root to the final target path.
-        if sdk_root.resolve() != target:
-            shutil.move(str(sdk_root), str(target))
-
-        if not is_renpy_sdk_dir(str(target)):
-            raise SdkInstallError(f"安装后校验失败，未找到 renpy.py：{target}")
-
-        persisted = False
-        if persist_config:
-            save_renpy_sdk_dir(target, config_path)
-            persisted = True
-
-        return SdkInstallResult(
-            ok=True,
-            message=f"已安装 Ren'Py SDK {spec.version} → {target}",
-            sdk_dir=target,
-            reused_existing=False,
-            persisted_config=persisted,
+            success_message=f"已安装 Ren'Py SDK {spec.version} → {target}",
         )
     except SdkCancelled as exc:
         return SdkInstallResult(ok=False, message=str(exc), cancelled=True)
@@ -450,8 +545,8 @@ def install_recommended_sdk(
     except (OSError, ValueError) as exc:
         return SdkInstallResult(ok=False, message=f"SDK 安装失败：{exc}")
     finally:
-        if work_root is not None:
-            shutil.rmtree(work_root, ignore_errors=True)
+        if download_root is not None:
+            shutil.rmtree(download_root, ignore_errors=True)
 
 
 def install_from_archive(
@@ -465,11 +560,10 @@ def install_from_archive(
     progress: ProgressCallback | None = None,
 ) -> SdkInstallResult:
     """Install from a local archive (tests / offline). Still verifies SHA-256."""
-    target = Path(target_dir).expanduser()
     try:
-        target = target.resolve(strict=False)
-    except (OSError, RuntimeError):
-        target = target.absolute()
+        target = validate_sdk_install_target(target_dir)
+    except SdkInstallError as exc:
+        return SdkInstallResult(ok=False, message=str(exc))
 
     if is_renpy_sdk_dir(str(target)):
         return SdkInstallResult(
@@ -478,40 +572,21 @@ def install_from_archive(
             sdk_dir=target,
             reused_existing=True,
         )
-    if target.exists():
-        try:
-            if target.is_file() or any(target.iterdir()):
-                return SdkInstallResult(ok=False, message=_target_conflict_message(target))
-        except OSError as exc:
-            return SdkInstallResult(ok=False, message=str(exc))
+    early = _reuse_or_conflict(target)
+    if early is not None:
+        return early
 
     archive_path = Path(archive)
-    work_root: Path | None = None
     try:
-        verify_sha256(archive_path, expected_sha256, label="SDK 归档")
-        work_root = Path(tempfile.mkdtemp(prefix="renpy-sdk-extract-"))
-        staging = work_root / "staging"
-        sdk_root = extract_sdk_zip(
+        return _install_validated_archive(
             archive_path,
-            staging,
+            target,
+            expected_sha256=expected_sha256,
+            persist_config=persist_config,
+            config_path=config_path,
             should_cancel=should_cancel,
             progress=progress,
-        )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists() and target.is_dir() and not any(target.iterdir()):
-            target.rmdir()
-        shutil.move(str(sdk_root), str(target))
-        if not is_renpy_sdk_dir(str(target)):
-            raise SdkInstallError(f"安装后校验失败：{target}")
-        persisted = False
-        if persist_config:
-            save_renpy_sdk_dir(target, config_path)
-            persisted = True
-        return SdkInstallResult(
-            ok=True,
-            message=f"已从本地归档安装 SDK → {target}",
-            sdk_dir=target,
-            persisted_config=persisted,
+            success_message=f"已从本地归档安装 SDK → {target}",
         )
     except SdkCancelled as exc:
         return SdkInstallResult(ok=False, message=str(exc), cancelled=True)
@@ -519,9 +594,6 @@ def install_from_archive(
         return SdkInstallResult(ok=False, message=str(exc))
     except (OSError, ValueError) as exc:
         return SdkInstallResult(ok=False, message=f"SDK 安装失败：{exc}")
-    finally:
-        if work_root is not None:
-            shutil.rmtree(work_root, ignore_errors=True)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

@@ -54,6 +54,8 @@ class GuiWorkspaceSetupDialogTests(unittest.TestCase):
             dialog._apply_workspace()
             self.assertEqual(dialog._stack.currentIndex(), 1)
             self.assertTrue((workspace / registry.REGISTRY_FILENAME).is_file())
+            # Must not auto-scan until user clicks 查找.
+            self.assertFalse(dialog._sdk_found.isEnabled())
             dialog._sdk_skip.setChecked(True)
             dialog._finish_sdk()
             self.assertEqual(dialog.result(), int(QDialog.DialogCode.Accepted))
@@ -68,6 +70,21 @@ class GuiWorkspaceSetupDialogTests(unittest.TestCase):
                 (workspace / registry.REGISTRY_FILENAME).read_text(encoding="utf-8")
             )
             self.assertEqual(data["projects"], [])
+
+    def test_skip_after_sdk_failure_preserves_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "ws"
+            workspace.mkdir()
+            dialog = WorkspaceSetupDialog(None, initial_path=workspace)
+            dialog._apply_workspace()
+            dialog._sdk_status_message = "SHA-256 校验失败：示例"
+            dialog._sdk_skip.setChecked(True)
+            dialog._finish_sdk()
+            payload = dialog.result_payload()
+            self.assertIsNotNone(payload)
+            assert payload is not None
+            self.assertIn("SHA-256", payload.sdk_message)
+            self.assertIn("未配置", payload.sdk_message)
 
     def test_browse_sets_path(self):
         with tempfile.TemporaryDirectory() as tmp:
