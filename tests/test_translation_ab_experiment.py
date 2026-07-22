@@ -30,6 +30,24 @@ def _full_chunk_translations() -> str:
 
 
 class TranslationAbExperimentTests(unittest.TestCase):
+    def setUp(self):
+        # Isolate batch globals that other suites may leave dirty.
+        self._rag_enabled = batch_mod.RAG_ENABLED
+        self._source_index_enabled = batch_mod.SOURCE_INDEX_ENABLED
+        self._story_memory_enabled = batch_mod.STORY_MEMORY_ENABLED
+        self._base_dir = __import__('translator_runtime', fromlist=['BASE_DIR']).BASE_DIR
+        batch_mod.RAG_ENABLED = False
+        batch_mod.SOURCE_INDEX_ENABLED = False
+        batch_mod.STORY_MEMORY_ENABLED = False
+
+    def tearDown(self):
+        batch_mod.RAG_ENABLED = self._rag_enabled
+        batch_mod.SOURCE_INDEX_ENABLED = self._source_index_enabled
+        batch_mod.STORY_MEMORY_ENABLED = self._story_memory_enabled
+        import translator_runtime as runtime
+
+        runtime.BASE_DIR = self._base_dir
+
     def test_deep_merge_dict_merges_nested_batch_settings(self):
         merged = ab_mod.deep_merge_dict(
             {'batch': {'story_memory': {'enabled': False, 'max_context_chars': 800}}},
@@ -69,10 +87,10 @@ class TranslationAbExperimentTests(unittest.TestCase):
         self.assertIn('Unexpected result ids: line-3', error)
 
     def test_variant_batch_settings_restores_baseline_globals(self):
-        baseline_rag = batch_mod.RAG_ENABLED
+        batch_mod.RAG_ENABLED = False
         with ab_mod.variant_batch_settings({'batch': {'rag': {'enabled': True}}}):
             self.assertTrue(batch_mod.RAG_ENABLED)
-        self.assertEqual(batch_mod.RAG_ENABLED, baseline_rag)
+        self.assertFalse(batch_mod.RAG_ENABLED)
 
     def test_dry_run_skips_retrieval_calls(self):
         chunk = {

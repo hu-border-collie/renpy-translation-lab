@@ -51,14 +51,46 @@ class RotationSettingsTests(unittest.TestCase):
         self.assertFalse(runtime.rotate_model())
         self.assertEqual(runtime.CURRENT_MODEL_INDEX, 0)
 
-    def test_rotate_model_uses_explicit_pool_when_enabled(self):
-        runtime.MODELS = ["gemini-selected"]
+    def test_rotate_model_follows_runtime_models_without_rewriting(self):
+        # MODELS is initialized by load_sync (selected first + pool). Runtime
+        # rotation must walk that sequence and never drop the primary model.
+        runtime.MODELS = ["gemini-selected", "gemini-a", "gemini-b"]
         runtime.CURRENT_MODEL_INDEX = 0
         runtime.MODEL_ROTATION_ENABLED = True
-        runtime.MODEL_ROTATION_MODELS = ["gemini-a", "gemini-b", "gemini-c"]
+        runtime.MODEL_ROTATION_MODELS = ["gemini-a", "gemini-b"]  # must not overwrite MODELS
         self.assertTrue(runtime.rotate_model())
-        self.assertEqual(runtime.get_current_model(), "gemini-b")
-        self.assertEqual(runtime.MODELS, ["gemini-a", "gemini-b", "gemini-c"])
+        self.assertEqual(runtime.get_current_model(), "gemini-a")
+        self.assertEqual(
+            runtime.MODELS,
+            ["gemini-selected", "gemini-a", "gemini-b"],
+        )
+        self.assertEqual(runtime.CURRENT_MODEL_INDEX, 1)
+
+    def test_rotate_model_does_not_skip_primary_after_load(self):
+        runtime.load_sync_translation_settings(
+            {
+                "sync": {
+                    "backend": "gemini",
+                    "model": "gemini-3.1-flash-lite",
+                },
+                "rotation": {
+                    "model": {
+                        "enabled": True,
+                        "models": [
+                            "gemini-3.5-flash-lite",
+                            "gemini-3.6-flash",
+                        ],
+                    }
+                },
+            }
+        )
+        self.assertEqual(runtime.MODELS[0], "gemini-3.1-flash-lite")
+        self.assertEqual(runtime.CURRENT_MODEL_INDEX, 0)
+        self.assertTrue(runtime.rotate_model())
+        # First rotate advances from primary to next pool entry — primary stays in list.
+        self.assertEqual(runtime.CURRENT_MODEL_INDEX, 1)
+        self.assertEqual(runtime.MODELS[0], "gemini-3.1-flash-lite")
+        self.assertNotEqual(runtime.get_current_model(), "gemini-3.1-flash-lite")
 
     def test_load_sync_pins_single_model_when_rotation_disabled(self):
         runtime.load_sync_translation_settings(

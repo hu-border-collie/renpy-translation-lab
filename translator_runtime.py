@@ -2799,9 +2799,7 @@ def get_current_model():
     return MODELS[CURRENT_MODEL_INDEX]
 
 def effective_model_rotation_pool() -> list[str]:
-    """Models eligible for automatic hopping when model rotation is enabled."""
-    if MODEL_ROTATION_MODELS:
-        return list(MODEL_ROTATION_MODELS)
+    """Runtime model sequence used for hopping (initialized by load_sync_translation_settings)."""
     return list(MODELS)
 
 def api_key_rotation_attempts() -> int:
@@ -2815,30 +2813,41 @@ def api_key_rotation_attempts() -> int:
 
 
 def rotate_api_key():
-    """Advance to the next API key when rotation is enabled and multiple keys exist."""
+    """Advance to the next API key when rotation is enabled and multiple keys exist.
+
+    Returns True only when the active key index actually changes.
+    """
     global CURRENT_KEY_INDEX
     if not API_KEY_ROTATION_ENABLED:
         return False
-    if len(API_KEYS) > 1:
-        CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
-        print(f"  ➜ Rotating to API Key #{CURRENT_KEY_INDEX + 1}")
-        return True
-    return False
+    if len(API_KEYS) <= 1:
+        return False
+    previous = CURRENT_KEY_INDEX
+    CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
+    if CURRENT_KEY_INDEX == previous:
+        return False
+    print(f"  ➜ Rotating to API Key #{CURRENT_KEY_INDEX + 1}")
+    return True
 
 def rotate_model():
-    """Advance to the next model when model rotation is enabled and the pool has 2+ entries."""
-    global CURRENT_MODEL_INDEX, MODELS
+    """Advance along the MODELS sequence built by load_sync_translation_settings.
+
+    Does not re-apply MODEL_ROTATION_MODELS at runtime (that would drop the
+    selected primary model or skip the first entry). Returns True only when the
+    active model actually changes.
+    """
+    global CURRENT_MODEL_INDEX
     if not MODEL_ROTATION_ENABLED:
         return False
-    pool = effective_model_rotation_pool()
-    if len(pool) <= 1:
+    if len(MODELS) <= 1:
         return False
-    # Keep MODELS aligned with the active rotation pool so get_current_model() tracks it.
-    if MODELS != pool:
-        MODELS = list(pool)
-        CURRENT_MODEL_INDEX = min(CURRENT_MODEL_INDEX, len(MODELS) - 1)
+    previous_index = CURRENT_MODEL_INDEX
+    previous_model = MODELS[CURRENT_MODEL_INDEX] if MODELS else ""
     CURRENT_MODEL_INDEX = (CURRENT_MODEL_INDEX + 1) % len(MODELS)
-    print(f"  ➜ Rotating to Model: {MODELS[CURRENT_MODEL_INDEX]}")
+    next_model = MODELS[CURRENT_MODEL_INDEX]
+    if CURRENT_MODEL_INDEX == previous_index or next_model == previous_model:
+        return False
+    print(f"  ➜ Rotating to Model: {next_model}")
     return True
 
 def configure_genai():

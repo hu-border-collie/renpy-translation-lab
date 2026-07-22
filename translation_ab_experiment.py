@@ -182,6 +182,9 @@ def variant_batch_settings(overrides: dict):
     base_legacy = baseline['load_json_file'](legacy.CONFIG_FILE)
     merged_translator = deep_merge_dict(base_translator, overrides)
     original_load = baseline['load_json_file']
+    # Isolate from whatever project BASE_DIR a prior test left behind so
+    # project_context_settings.json cannot clobber experiment overrides.
+    previous_base_dir = legacy.BASE_DIR
 
     def patched_load(path):
         if path == legacy.TRANSLATOR_CONFIG:
@@ -196,10 +199,12 @@ def variant_batch_settings(overrides: dict):
     batch_mod._RAG_STORE = None
     batch_mod._SOURCE_INDEX_STORE = None
     try:
+        legacy.BASE_DIR = ''
         batch_mod.load_batch_settings()
         yield summarize_variant_settings()
     finally:
         _restore_batch_globals(baseline)
+        legacy.BASE_DIR = previous_base_dir
 
 
 def enrich_chunk_for_current_settings(chunk: dict, *, dry_run: bool = False) -> dict:
