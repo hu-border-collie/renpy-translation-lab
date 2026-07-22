@@ -101,8 +101,9 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
 
             fake_result = WorkspaceSetupDialogResult(
                 workspace=workspace,
-                message="ok",
+                message="工作区已接入：测试",
                 project_count=0,
+                sdk_message="已跳过 SDK 配置。",
             )
 
             # Mirror MainWindow._on_workspace_changed success path.
@@ -134,7 +135,10 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
                 "gui_qt.workspace_setup_dialog.WorkspaceSetupDialog",
                 _AcceptDialog,
             ):
-                panel._choose_workspace()
+                with mock.patch(
+                    "gui_qt.games_registry_panel.message_box_information"
+                ) as info:
+                    panel._choose_workspace()
             self.assertIsNotNone(panel.workspace_root())
             self.assertEqual(
                 Path(panel.workspace_root()).resolve(),
@@ -142,6 +146,11 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             )
             self.assertTrue(panel._workspace_empty_state.isHidden())
             self.assertFalse(panel._workspace_body.isHidden())
+            info.assert_called()
+            # Summary must include workspace outcome and SDK status from dialog result.
+            summary_text = "\n".join(str(c) for c in info.call_args[0])
+            self.assertIn("工作区已接入：测试", summary_text)
+            self.assertIn("已跳过 SDK 配置。", summary_text)
 
             # Failure path: host reverts to previous (None).
             def on_fail(path: Path, panel_ref: list) -> None:
@@ -160,10 +169,14 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
                 "gui_qt.workspace_setup_dialog.WorkspaceSetupDialog",
                 _AcceptDialog,
             ):
-                panel2._choose_workspace()
+                with mock.patch(
+                    "gui_qt.games_registry_panel.message_box_information"
+                ) as info2:
+                    panel2._choose_workspace()
             self.assertIsNone(panel2.workspace_root())
             self.assertFalse(panel2._workspace_empty_state.isHidden())
             self.assertTrue(panel2._workspace_body.isHidden())
+            info2.assert_not_called()
 
     def test_dialog_loads_rows_and_accepts_switch(self):
         with tempfile.TemporaryDirectory() as tmp:

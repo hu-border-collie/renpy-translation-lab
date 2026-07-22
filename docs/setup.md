@@ -89,8 +89,19 @@ Game_Example/
 
 GUI **设置 → 项目 → Ren'Py SDK 目录** 提供：
 
-- **查找 SDK**（主动）：在当前 `game_root`、已选工作区与工具附近扫描 `renpy-*-sdk` / `renpy.py`，找到后写入配置字段（多结果时选择）
+- **查找 SDK**（主动）：仅在**已选工作区**与**当前项目**目录下扫描 `renpy-*-sdk` / `renpy.py`（不扫描工具安装目录的上一级）；找到后写入配置字段（多结果时选择）
 - **浏览…**（主动）：手动选择目录
+- **下载推荐 SDK…**（主动确认）：仅从官方 `renpy.org` 下载本工具维护的固定推荐版 **8.5.3**；展示版本、URL、预计大小与 SHA-256；下载到临时文件校验后再安全解压。默认目标为 `<workspace>/renpy-8.5.3-sdk/`（可改）。失败不会破坏已初始化工作区
+
+CLI：
+
+```powershell
+python renpy_sdk_install.py show
+python renpy_sdk_install.py install --workspace path\to\RenPy_Workspace
+# 默认目标：<workspace>/renpy-8.5.3-sdk/
+# 省略 --workspace 时，默认目标为 <当前工作目录>/renpy-8.5.3-sdk/
+# 可选：--target path\to\renpy-8.5.3-sdk --no-persist-config
+```
 
 字段留空则 `prepare.renpy_sdk_dir` 为空，需要 SDK 的模板生成会提示配置。示例：
 
@@ -103,7 +114,7 @@ GUI **设置 → 项目 → Ren'Py SDK 目录** 提供：
     "generate_template": true,
     "refresh_existing_template": true,
     "language": "schinese",
-    "renpy_sdk_dir": "C:/RenPy/renpy-8.5.2-sdk",
+    "renpy_sdk_dir": "C:/RenPy/renpy-8.5.3-sdk",
     "template_command": [
       "{python_exe}",
       "{launcher_py}",
