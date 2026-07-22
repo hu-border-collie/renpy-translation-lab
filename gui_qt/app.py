@@ -2688,20 +2688,19 @@ class MainWindow(QMainWindow):
         sync_layout = self._settings_form(sync_box)
 
         self.sync_model_combo = NoWheelComboBox()
-        self.sync_model_combo.setEditable(True)
-        self.sync_model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._configure_editable_model_combo(self.sync_model_combo)
         self.sync_model_combo.addItems(list(BUILTIN_GEMINI_TRANSLATION_MODELS))
         sync_layout.addRow("翻译模型：", self.sync_model_combo)
 
         self.sync_embedding_combo = NoWheelComboBox()
-        self.sync_embedding_combo.setEditable(True)
-        self.sync_embedding_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._configure_editable_model_combo(self.sync_embedding_combo)
         self.sync_embedding_combo.addItems(list(BUILTIN_GEMINI_EMBEDDING_MODELS))
         sync_layout.addRow("RAG 向量模型：", self.sync_embedding_combo)
 
         sync_hint = QLabel(
             "此处只配置 Gemini 同步模型；LiteLLM 已移至左侧独立页面。"
-            "可直接输入未列出的模型 ID；自定义项会写入 translator_config.json 的 model_catalog。"
+            "可从下拉列表选择，也可直接输入未列出的模型 ID（输入框右侧箭头可打开列表）；"
+            "自定义项保存后写入 translator_config.json 的 model_catalog。"
         )
         sync_hint.setWordWrap(True)
         sync_hint.setObjectName("config_hint_label")
@@ -2712,14 +2711,12 @@ class MainWindow(QMainWindow):
         batch_layout = self._settings_form(batch_box)
 
         self.batch_model_combo = NoWheelComboBox()
-        self.batch_model_combo.setEditable(True)
-        self.batch_model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._configure_editable_model_combo(self.batch_model_combo)
         self.batch_model_combo.addItems(list(BUILTIN_GEMINI_TRANSLATION_MODELS))
         batch_layout.addRow("翻译模型：", self.batch_model_combo)
 
         self.batch_embedding_combo = NoWheelComboBox()
-        self.batch_embedding_combo.setEditable(True)
-        self.batch_embedding_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._configure_editable_model_combo(self.batch_embedding_combo)
         self.batch_embedding_combo.addItems(list(BUILTIN_GEMINI_EMBEDDING_MODELS))
         batch_layout.addRow("RAG 向量模型：", self.batch_embedding_combo)
 
@@ -2935,8 +2932,7 @@ class MainWindow(QMainWindow):
         backend_layout.addRow("Provider：", self.litellm_provider_combo)
 
         self.litellm_model_combo = NoWheelComboBox()
-        self.litellm_model_combo.setEditable(True)
-        add_editable_combo_popup_action(self.litellm_model_combo)
+        self._configure_editable_model_combo(self.litellm_model_combo)
         self.litellm_model_combo.addItems(DEFAULT_MODELS["openai"])
         self.litellm_model_combo.currentTextChanged.connect(self._on_litellm_model_changed)
         model_row = QWidget()
@@ -3279,6 +3275,16 @@ class MainWindow(QMainWindow):
         line_edit.setText(canonical_abs_path(chosen))
         self.statusBar().showMessage(f"已填入查找到的 Ren'Py SDK：{chosen}", 6000)
         self._append_log(f"查找 Ren'Py SDK：已选择 {chosen}")
+
+    def _configure_editable_model_combo(self, combo: NoWheelComboBox) -> None:
+        """Editable model field that still has a clear dropdown for picking list items.
+
+        On Windows/stylesheets, ``setEditable(True)`` can hide the native combo
+        arrow; mirror LiteLLM and install an explicit popup action.
+        """
+        combo.setEditable(True)
+        combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        add_editable_combo_popup_action(combo)
 
     def _create_advanced_setting_widget(self, field: SettingField) -> QWidget:
         if field.kind == "bool":

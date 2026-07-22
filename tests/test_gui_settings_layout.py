@@ -177,15 +177,22 @@ class GuiSettingsLayoutTests(unittest.TestCase):
 
     def test_model_selectors_use_consistent_editing_affordances(self) -> None:
         # Gemini translation / embedding selectors accept free-typed model IDs
-        # so users can extend catalogs without code changes.
+        # and keep an explicit dropdown action so the list remains selectable.
         for combo in (
             self.window.sync_model_combo,
             self.window.batch_model_combo,
             self.window.sync_embedding_combo,
             self.window.batch_embedding_combo,
         ):
-            with self.subTest(combo=type(combo).__name__):
+            with self.subTest(combo=combo.objectName() or type(combo).__name__):
                 self.assertTrue(combo.isEditable())
+                line_edit = combo.lineEdit()
+                self.assertIsNotNone(line_edit)
+                actions = {
+                    action.objectName(): action for action in line_edit.actions()
+                }
+                self.assertIn("combo_popup_action", actions)
+                self.assertFalse(actions["combo_popup_action"].icon().isNull())
         self.assertFalse(self.window.batch_thinking_combo.isEditable())
 
 
