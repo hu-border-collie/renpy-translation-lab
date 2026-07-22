@@ -2444,14 +2444,15 @@ class MainWindow(QMainWindow):
                 set_gate = getattr(panel, "set_host_task_running", None)
                 if callable(set_gate):
                     set_gate(True)
-        # Push saved config into widgets that already exist (including this page).
+        # Only fill the page we just built — never re-run a full config pass on
+        # every tab visit (that re-read disk + re-applied theme and felt laggy).
         if (
             populate
             and key in _SETTINGS_CONFIG_PAGE_KEYS
             and not getattr(self, "_loading_config_to_ui", False)
         ):
-            self._load_config_to_ui(refresh_task_gates=False)
-            if "api_status_label" in self.__dict__:
+            self._load_config_to_ui(refresh_task_gates=False, pages={key})
+            if key == "api_keys" and "api_status_label" in self.__dict__:
                 self._refresh_api_status()
 
     def _ensure_settings_pages_for_config(self) -> None:
@@ -10905,15 +10906,18 @@ class MainWindow(QMainWindow):
         finally:
             self._updating_batch_thinking_combo = False
 
-    def _load_theme_to_ui(self, config: dict[str, Any]) -> None:
+    def _load_theme_to_ui(self, config: dict[str, Any], *, apply: bool = True) -> None:
         theme = read_gui_theme_from_config(config)
+        previous = getattr(self, "_theme_preference", None)
         self._theme_preference = theme
         self._loading_theme_to_ui = True
         try:
             self._set_theme_combo_value(theme)
         finally:
             self._loading_theme_to_ui = False
-        self._apply_theme()
+        # Re-applying QSS on every settings tab open is a major hitch.
+        if apply and previous != theme:
+            self._apply_theme()
 
     def _apply_theme(self) -> None:
         qt_app = getattr(self, "_qt_app", None)
@@ -10931,8 +10935,11 @@ class MainWindow(QMainWindow):
             self._append_log(f"加载主题样式失败：{exc}")
 
     def _set_theme_preference(self, preference: str, *, persist: bool) -> None:
-        self._theme_preference = normalize_theme_preference(preference)
-        self._apply_theme()
+        normalized = normalize_theme_preference(preference)
+        changed = getattr(self, "_theme_preference", None) != normalized
+        self._theme_preference = normalized
+        if changed:
+            self._apply_theme()
         if not persist:
             return
         try:
@@ -10964,120 +10971,175 @@ class MainWindow(QMainWindow):
         """
         return self.__dict__.get(name)
 
-    def _load_config_to_ui(self, *, refresh_task_gates: bool = True) -> None:
+    def _load_config_to_ui(
+        self,
+        *,
+        refresh_task_gates: bool = True,
+        pages: set[str] | None = None,
+    ) -> None:
         """Push translator_config into settings widgets that already exist.
+
+        When ``pages`` is set, only widgets belonging to those settings sections
+        are updated (fast path for first opening a single tab).
 
         When ``refresh_task_gates`` is False (cold start), skip probe/resume
         readiness walks; ``_deferred_startup_refresh`` applies them after show.
         Missing lazy settings widgets are skipped — call
         ``_ensure_settings_pages_for_config()`` first for a full UI sync.
         """
+        want = pages  # None => all built pages
         self._loading_config_to_ui = True
         try:
             config = self.state.load_translator_config()
-            self._load_theme_to_ui(config)
+            # Theme QSS is global; only touch appearance widgets / re-apply when needed.
+            if want is None or "appearance" in want:
+                self._load_theme_to_ui(config, apply=(want is None or "appearance" in want))
+            elif want is not None:
+                # Keep preference in sync without re-applying stylesheets.
+                self._theme_preference = read_gui_theme_from_config(config)
+
             # Nothing else to fill until config-bearing pages exist.
             # Use __dict__ so we do not trigger lazy materialization here.
             if (
                 self._settings_widget("rag_enabled_cb") is None
                 and self._settings_widget("batch_model_combo") is None
+                and self._settings_widget("sync_backend_combo") is None
+                and not self.__dict__.get("_advanced_setting_widgets")
+                and self._settings_widget("theme_combo") is None
             ):
                 return
+
             sync_config = self._config_section(config, "sync")
             batch_config = self._config_section(config, "batch")
             sync_rag_config = self._config_section(sync_config, "rag")
             batch_rag_config = self._config_section(batch_config, "rag")
-            context_flags = read_batch_context_flags(
-                config,
-                game_root=self._game_root_str_for_flags(),
-            )
-            rag_cb = self._settings_widget("rag_enabled_cb")
-            if rag_cb is not None:
-                rag_cb.setChecked(context_flags["rag_enabled"])
-            source_cb = self._settings_widget("source_index_enabled_cb")
-            if source_cb is not None:
-                source_cb.setChecked(context_flags["source_index_enabled"])
-            bootstrap_cb = self._settings_widget("bootstrap_on_build_cb")
-            if bootstrap_cb is not None:
-                bootstrap_cb.setChecked(context_flags["bootstrap_on_build"])
-            storage_config = self._config_section(config, "context_storage")
-            storage_location = normalize_context_storage_location(
-                storage_config.get("location", config.get("context_storage_location", ""))
-            )
-            storage_cb = self._settings_widget("context_storage_game_cb")
-            if storage_cb is not None:
-                storage_cb.setChecked(storage_location == "game")
-            self._batch_thinking_config_has_key = "thinking_level" in batch_config
 
-            sync_backend = self._config_string(sync_config.get("backend", "gemini")).lower()
-            if sync_backend not in {"gemini", "litellm"}:
-                sync_backend = "gemini"
-            backend_combo = self._settings_widget("sync_backend_combo")
-            backend_idx = backend_combo.findData(sync_backend) if backend_combo is not None else -1
-            if backend_combo is not None:
-                backend_combo.setCurrentIndex(backend_idx)
+            if want is None or "context" in want:
+                context_flags = read_batch_context_flags(
+                    config,
+                    game_root=self._game_root_str_for_flags(),
+                )
+                rag_cb = self._settings_widget("rag_enabled_cb")
+                if rag_cb is not None:
+                    rag_cb.setChecked(context_flags["rag_enabled"])
+                source_cb = self._settings_widget("source_index_enabled_cb")
+                if source_cb is not None:
+                    source_cb.setChecked(context_flags["source_index_enabled"])
+                bootstrap_cb = self._settings_widget("bootstrap_on_build_cb")
+                if bootstrap_cb is not None:
+                    bootstrap_cb.setChecked(context_flags["bootstrap_on_build"])
+                storage_config = self._config_section(config, "context_storage")
+                storage_location = normalize_context_storage_location(
+                    storage_config.get(
+                        "location", config.get("context_storage_location", "")
+                    )
+                )
+                storage_cb = self._settings_widget("context_storage_game_cb")
+                if storage_cb is not None:
+                    storage_cb.setChecked(storage_location == "game")
 
-            backend_models = read_sync_backend_models(
-                sync_config,
-                sync_backend,
-                str(BASIC_RECOMMENDED_VALUES["sync_model"]),
-            )
-            batch_val = self._config_string(batch_config.get("model", "")) or str(
-                BASIC_RECOMMENDED_VALUES["batch_model"]
-            )
-            sync_emb_val = self._config_string(sync_rag_config.get("embedding_model", "")) or str(
-                BASIC_RECOMMENDED_VALUES["sync_embedding_model"]
-            )
-            batch_emb_val = self._config_string(batch_rag_config.get("embedding_model", "")) or str(
-                BASIC_RECOMMENDED_VALUES["batch_embedding_model"]
-            )
-            translation_models = resolve_gemini_translation_models(
-                config,
-                extra_selected=[backend_models.gemini_model, batch_val],
-            )
-            embedding_models = resolve_gemini_embedding_models(
-                config,
-                extra_selected=[sync_emb_val, batch_emb_val],
-            )
-            sync_model = self._settings_widget("sync_model_combo")
-            self._repopulate_model_combo(
-                sync_model,
-                translation_models,
-                backend_models.gemini_model,
-            )
-            litellm_combo = self._settings_widget("litellm_model_combo")
-            if litellm_combo is not None:
-                self._set_combo_value(litellm_combo, backend_models.litellm_model)
-            if backend_combo is not None:
-                self._on_sync_backend_changed(backend_idx)
+            need_models = want is None or "models" in want
+            need_litellm = want is None or "litellm" in want
+            if need_models or need_litellm:
+                self._batch_thinking_config_has_key = "thinking_level" in batch_config
+                sync_backend = self._config_string(
+                    sync_config.get("backend", "gemini")
+                ).lower()
+                if sync_backend not in {"gemini", "litellm"}:
+                    sync_backend = "gemini"
+                backend_combo = self._settings_widget("sync_backend_combo")
+                backend_idx = (
+                    backend_combo.findData(sync_backend)
+                    if backend_combo is not None
+                    else -1
+                )
+                if need_litellm and backend_combo is not None:
+                    backend_combo.setCurrentIndex(backend_idx)
 
-            batch_model = self._settings_widget("batch_model_combo")
-            self._repopulate_model_combo(batch_model, translation_models, batch_val)
+                backend_models = read_sync_backend_models(
+                    sync_config,
+                    sync_backend,
+                    str(BASIC_RECOMMENDED_VALUES["sync_model"]),
+                )
+                batch_val = self._config_string(batch_config.get("model", "")) or str(
+                    BASIC_RECOMMENDED_VALUES["batch_model"]
+                )
+                sync_emb_val = self._config_string(
+                    sync_rag_config.get("embedding_model", "")
+                ) or str(BASIC_RECOMMENDED_VALUES["sync_embedding_model"])
+                batch_emb_val = self._config_string(
+                    batch_rag_config.get("embedding_model", "")
+                ) or str(BASIC_RECOMMENDED_VALUES["batch_embedding_model"])
 
-            sync_emb = self._settings_widget("sync_embedding_combo")
-            self._repopulate_model_combo(sync_emb, embedding_models, sync_emb_val)
+                if need_models:
+                    translation_models = resolve_gemini_translation_models(
+                        config,
+                        extra_selected=[backend_models.gemini_model, batch_val],
+                    )
+                    embedding_models = resolve_gemini_embedding_models(
+                        config,
+                        extra_selected=[sync_emb_val, batch_emb_val],
+                    )
+                    sync_model = self._settings_widget("sync_model_combo")
+                    self._repopulate_model_combo(
+                        sync_model,
+                        translation_models,
+                        backend_models.gemini_model,
+                    )
+                    batch_model = self._settings_widget("batch_model_combo")
+                    self._repopulate_model_combo(
+                        batch_model, translation_models, batch_val
+                    )
+                    sync_emb = self._settings_widget("sync_embedding_combo")
+                    self._repopulate_model_combo(
+                        sync_emb, embedding_models, sync_emb_val
+                    )
+                    batch_emb = self._settings_widget("batch_embedding_combo")
+                    self._repopulate_model_combo(
+                        batch_emb, embedding_models, batch_emb_val
+                    )
+                    if batch_model is not None:
+                        self._on_batch_model_changed(batch_val)
+                        thinking_val = self._batch_thinking_value_for_load(
+                            batch_config, batch_val
+                        )
+                        self._set_batch_thinking_value(thinking_val)
 
-            batch_emb = self._settings_widget("batch_embedding_combo")
-            self._repopulate_model_combo(batch_emb, embedding_models, batch_emb_val)
+                if need_litellm:
+                    litellm_combo = self._settings_widget("litellm_model_combo")
+                    if litellm_combo is not None:
+                        self._set_combo_value(
+                            litellm_combo, backend_models.litellm_model
+                        )
+                    if backend_combo is not None:
+                        self._on_sync_backend_changed(backend_idx)
 
-            if batch_model is not None:
-                self._on_batch_model_changed(batch_val)
-                thinking_val = self._batch_thinking_value_for_load(batch_config, batch_val)
-                self._set_batch_thinking_value(thinking_val)
-            advanced_values = read_advanced_settings(config)
-            get_game_root = getattr(self.state, "get_game_root", None)
-            current_game_root = get_game_root() if callable(get_game_root) else None
-            if current_game_root and not self._config_string(advanced_values.get("game_root")):
-                advanced_values["game_root"] = str(current_game_root)
-            if self.__dict__.get("_advanced_setting_widgets"):
-                self._load_advanced_settings_to_ui(advanced_values)
-                self._clear_advanced_setting_errors()
+            if want is None or "advanced" in want:
+                advanced_values = read_advanced_settings(config)
+                get_game_root = getattr(self.state, "get_game_root", None)
+                current_game_root = get_game_root() if callable(get_game_root) else None
+                if current_game_root and not self._config_string(
+                    advanced_values.get("game_root")
+                ):
+                    advanced_values["game_root"] = str(current_game_root)
+                if self.__dict__.get("_advanced_setting_widgets"):
+                    self._load_advanced_settings_to_ui(advanced_values)
+                    self._clear_advanced_setting_errors()
+
+            if want is None or "project" in want:
+                # Project page is mostly read-only labels; refresh if present.
+                root_label = self._settings_widget("settings_project_root_value")
+                if root_label is not None:
+                    game_root = self.state.get_game_root()
+                    root_label.setText(str(game_root) if game_root else "（未选择）")
         finally:
             self._batch_thinking_user_changed = False
             self._loading_config_to_ui = False
         if (
             self._settings_widget("rag_enabled_cb") is not None
             or self._settings_widget("batch_model_combo") is not None
+            or self._settings_widget("sync_backend_combo") is not None
+            or self.__dict__.get("_advanced_setting_widgets")
         ):
             self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
         if refresh_task_gates and "translate_btn" in self.__dict__:
