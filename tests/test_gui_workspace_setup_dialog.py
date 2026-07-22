@@ -108,7 +108,6 @@ class GuiWorkspaceSetupDialogTests(unittest.TestCase):
             sdk_dir = Path(tmp) / "renpy-fake-sdk"
             sdk_dir.mkdir()
             (sdk_dir / "renpy.py").write_text("# renpy\n", encoding="utf-8")
-            config = Path(tmp) / "translator_config.json"
 
             dialog = WorkspaceSetupDialog(None, initial_path=workspace)
             dialog._apply_workspace()
@@ -124,6 +123,32 @@ class GuiWorkspaceSetupDialogTests(unittest.TestCase):
             self.assertIsNotNone(payload)
             assert payload is not None
             self.assertEqual(payload.sdk_dir.resolve(), sdk_dir.resolve())
+
+    def test_download_option_reuses_existing_sdk_without_worker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "ws"
+            workspace.mkdir()
+            sdk_dir = workspace / "renpy-8.5.3-sdk"
+            sdk_dir.mkdir()
+            (sdk_dir / "renpy.py").write_text("# renpy\n", encoding="utf-8")
+
+            dialog = WorkspaceSetupDialog(None, initial_path=workspace)
+            dialog._apply_workspace()
+            dialog._download_target_edit.setText(str(sdk_dir))
+            dialog._sdk_download.setChecked(True)
+            with mock.patch(
+                "gui_qt.workspace_setup_dialog.save_renpy_sdk_dir",
+                side_effect=lambda path, config_path=None: Path(path),
+            ) as save_mock:
+                with mock.patch.object(dialog, "_start_download") as start_dl:
+                    dialog._finish_sdk()
+            start_dl.assert_not_called()
+            save_mock.assert_called()
+            payload = dialog.result_payload()
+            self.assertIsNotNone(payload)
+            assert payload is not None
+            self.assertEqual(payload.sdk_dir.resolve(), sdk_dir.resolve())
+            self.assertIn("跳过下载", payload.sdk_message)
 
 
 if __name__ == "__main__":

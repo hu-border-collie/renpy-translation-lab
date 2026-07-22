@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from games_registry import WorkspaceScene, plan_workspace_setup
 from renpy_sdk_install import (
     default_sdk_target,
+    existing_valid_sdk,
     format_size_mib,
     recommended_sdk,
     save_renpy_sdk_dir,
@@ -652,6 +653,28 @@ class WorkspaceSetupDialog(QDialog):
                 self._set_sdk_status("请指定下载目标目录。", error=True)
                 return
             target = Path(target_text)
+            # Already a valid SDK at target or via find/browse paths: reuse, no network.
+            existing = (
+                existing_valid_sdk(target)
+                or existing_valid_sdk(self._found_sdk)
+                or existing_valid_sdk(self._browse_path_edit.text().strip())
+            )
+            if existing is not None:
+                try:
+                    save_renpy_sdk_dir(existing)
+                except Exception as exc:
+                    self._set_sdk_status(f"写入 SDK 配置失败：{exc}", error=True)
+                    return
+                self._result = WorkspaceSetupDialogResult(
+                    workspace=base.workspace,
+                    message=base.message,
+                    project_count=base.project_count,
+                    created_registry=base.created_registry,
+                    sdk_dir=existing,
+                    sdk_message=f"已有有效 SDK，跳过下载并复用：{existing}",
+                )
+                self.accept()
+                return
             spec = recommended_sdk()
             self._set_sdk_status(
                 f"确认下载：{spec.version}（约 {format_size_mib(spec.size_bytes)}）→ {target}"
@@ -672,6 +695,13 @@ class WorkspaceSetupDialog(QDialog):
     def _start_download(self, target: Path) -> None:
         if self._sdk_worker_active():
             self._set_sdk_status("已有 SDK 任务在运行，请稍候。", error=True)
+            return
+        existing = existing_valid_sdk(target)
+        if existing is not None:
+            self._set_sdk_status(
+                f"目标已是有效 SDK，不会重复下载：{existing}",
+                error=True,
+            )
             return
         self._ok_button.setEnabled(False)
         self._sdk_progress.setVisible(True)

@@ -33,6 +33,21 @@ class RenpySdkInstallTests(unittest.TestCase):
         self.assertEqual(len(spec.sha256), 64)
         self.assertIn("sdk.zip", spec.archive_name)
 
+    def test_existing_valid_sdk_detects_and_rejects_non_sdk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            empty = root / "empty"
+            empty.mkdir()
+            self.assertIsNone(sdk.existing_valid_sdk(empty))
+            self.assertIsNone(sdk.existing_valid_sdk(None))
+            sdk_dir = root / "renpy-8.5.3-sdk"
+            sdk_dir.mkdir()
+            (sdk_dir / "renpy.py").write_text("# renpy\n", encoding="utf-8")
+            found = sdk.existing_valid_sdk(sdk_dir)
+            self.assertIsNotNone(found)
+            assert found is not None
+            self.assertEqual(found.resolve(), sdk_dir.resolve())
+
     def test_download_rejects_non_allowlisted_url(self):
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "x.zip"

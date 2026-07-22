@@ -106,6 +106,20 @@ def default_sdk_target(workspace: Path | str | None = None) -> Path:
     return base / RECOMMENDED_FOLDER_NAME
 
 
+def existing_valid_sdk(path: Path | str | None) -> Path | None:
+    """Return resolved path when *path* is already a valid Ren'Py SDK root."""
+    if path is None or not str(path).strip():
+        return None
+    candidate = Path(path).expanduser()
+    try:
+        candidate = candidate.resolve(strict=False)
+    except (OSError, RuntimeError):
+        candidate = candidate.absolute()
+    if is_renpy_sdk_dir(str(candidate)):
+        return candidate
+    return None
+
+
 def tool_package_root() -> Path:
     return Path(__file__).resolve().parent
 

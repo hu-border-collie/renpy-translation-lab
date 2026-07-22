@@ -3342,10 +3342,31 @@ class MainWindow(QMainWindow):
             self._append_log("用户取消推荐 SDK 下载")
             return
 
+        from renpy_sdk_install import existing_valid_sdk
+
         spec = recommended_sdk()
         workspace = self.state.get_workspace_root()
         default_target = default_sdk_target(workspace)
-        target_text = line_edit.text().strip() or str(default_target)
+        current_text = line_edit.text().strip()
+        target_text = current_text or str(default_target)
+
+        # Already-configured or existing-on-disk SDK: never re-download.
+        existing = existing_valid_sdk(current_text) or existing_valid_sdk(target_text)
+        if existing is not None:
+            line_edit.setText(canonical_abs_path(str(existing)))
+            QMessageBox.information(
+                self,
+                "已有有效 SDK",
+                (
+                    f"已检测到有效 Ren'Py SDK，不会重复下载：\n{existing}\n\n"
+                    "请继续使用「浏览…」或「查找 SDK」切换路径；"
+                    "仅在需要全新安装到其它空目录时再下载。"
+                ),
+            )
+            self.statusBar().showMessage(f"已有有效 SDK，跳过下载：{existing}", 6000)
+            self._append_log(f"跳过推荐 SDK 下载（已有有效目录）：{existing}")
+            return
+
         reply = QMessageBox.question(
             self,
             "下载推荐 Ren'Py SDK",
@@ -3357,6 +3378,7 @@ class MainWindow(QMainWindow):
                 f"SHA-256：{spec.sha256}\n"
                 f"目标目录：{target_text}\n\n"
                 "下载到临时文件并校验后再解压；失败不会破坏已选工作区。\n"
+                "目标目录若已是有效 SDK 将直接复用、不会联网。\n"
                 "是否继续？"
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
