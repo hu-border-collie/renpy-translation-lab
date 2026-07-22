@@ -40,6 +40,22 @@ from .sdk_install_worker import SdkInstallWorker
 
 @dataclass(frozen=True)
 class WorkspaceSetupDialogResult:
+    """Outcome of the workspace create/attach dialog (workspace + optional SDK).
+
+    Workspace fields always describe a successful registry attach/init.
+
+    SDK contract for callers (``games_registry_panel`` summary, host config):
+
+    - **Not configured / skipped:** ``sdk_dir is None`` and ``sdk_message`` is
+      empty or a skip notice such as ``已跳过 SDK 配置。``
+    - **Attempted but failed/cancelled:** ``sdk_dir is None`` and
+      ``sdk_message`` starts with ``SDK 未配置：`` (preserves the failure
+      reason after the user finishes with「跳过」).
+    - **Configured successfully:** ``sdk_dir`` is an absolute path that was
+      written to ``prepare.renpy_sdk_dir`` (find / browse / download), and
+      ``sdk_message`` describes that success.
+    """
+
     workspace: Path
     message: str
     project_count: int
@@ -489,24 +505,41 @@ class WorkspaceSetupDialog(QDialog):
             return
         self._finish_sdk()
 
-    def _stop_sdk_worker(self, *, wait_ms: int = 5000) -> None:
-        """Cancel and wait for the SDK worker before destroying this dialog."""
+    def _sdk_worker_active(self) -> bool:
+        return self._sdk_worker is not None and self._sdk_worker.isRunning()
+
+    def _stop_sdk_worker(self, *, wait_ms: int = 5000) -> bool:
+        """Cancel and wait for the SDK worker.
+
+        Returns True only when no worker is attached or it has fully stopped.
+        On timeout the reference is **kept** so callers continue to block SDK
+        actions and must not destroy the dialog while the thread runs.
+        """
         worker = self._sdk_worker
         if worker is None:
-            return
+            return True
         if worker.isRunning():
             worker.request_cancel()
             worker.requestInterruption()
             worker.wait(wait_ms)
+        if worker.isRunning():
+            return False
         self._sdk_worker = None
+        return True
 
     def _on_reject(self) -> None:
-        if self._sdk_worker is not None and self._sdk_worker.isRunning():
+        if self._sdk_worker_active():
             self._ok_button.setEnabled(False)
-            self._sdk_status.setText("正在取消 SDK 下载…")
-            self._stop_sdk_worker()
+            self._set_sdk_status("正在取消 SDK 下载…")
+            if not self._stop_sdk_worker():
+                self._set_sdk_status(
+                    "SDK 任务仍在结束，请稍候再关闭或重试。",
+                    error=True,
+                )
+                # Keep OK disabled until completed signal clears the worker.
+                return
             self._sdk_status_message = "SDK 安装已取消。"
-            self._sdk_status.setText(self._sdk_status_message)
+            self._set_sdk_status(self._sdk_status_message)
             self._sdk_progress.setVisible(False)
             self._ok_button.setEnabled(True)
             # Stay on the SDK page so the user can skip or retry.
@@ -525,7 +558,13 @@ class WorkspaceSetupDialog(QDialog):
         self.reject()
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        self._stop_sdk_worker(wait_ms=5000)
+        if not self._stop_sdk_worker(wait_ms=5000):
+            event.ignore()
+            self._set_sdk_status(
+                "SDK 任务仍在结束，请稍候再关闭。",
+                error=True,
+            )
+            return
         super().closeEvent(event)
 
     def _sdk_summary_for_skip(self) -> str:
@@ -567,7 +606,8 @@ class WorkspaceSetupDialog(QDialog):
     def _finish_sdk(self) -> None:
         if self._workspace_result is None:
             return
-        if self._sdk_worker is not None and self._sdk_worker.isRunning():
+        if self._sdk_worker_active():
+            self._set_sdk_status("SDK 任务进行中，请等待完成或取消后再操作。")
             return
 
         base = self._workspace_result
@@ -576,12 +616,15 @@ class WorkspaceSetupDialog(QDialog):
 
         if self._sdk_found.isChecked() and self._found_sdk is not None:
             if not is_renpy_sdk_dir(str(self._found_sdk)):
-                self._sdk_status.setText("查找到的路径已失效，请重新查找或改选其它选项。")
+                self._set_sdk_status(
+                    "查找到的路径已失效，请重新查找或改选其它选项。",
+                    error=True,
+                )
                 return
             try:
                 save_renpy_sdk_dir(self._found_sdk)
             except Exception as exc:
-                self._sdk_status.setText(f"写入 SDK 配置失败：{exc}")
+                self._set_sdk_status(f"写入 SDK 配置失败：{exc}", error=True)
                 return
             sdk_dir = self._found_sdk
             sdk_message = f"已配置查找到的 SDK：{self._found_sdk}"
@@ -589,13 +632,16 @@ class WorkspaceSetupDialog(QDialog):
         elif self._sdk_browse.isChecked():
             text = self._browse_path_edit.text().strip()
             if not text or not is_renpy_sdk_dir(text):
-                self._sdk_status.setText("请浏览选择包含 renpy.py 的有效 SDK 目录。")
+                self._set_sdk_status(
+                    "请浏览选择包含 renpy.py 的有效 SDK 目录。",
+                    error=True,
+                )
                 return
             path = Path(text)
             try:
                 save_renpy_sdk_dir(path)
             except Exception as exc:
-                self._sdk_status.setText(f"写入 SDK 配置失败：{exc}")
+                self._set_sdk_status(f"写入 SDK 配置失败：{exc}", error=True)
                 return
             sdk_dir = path
             sdk_message = f"已配置指定 SDK：{path}"
@@ -603,11 +649,11 @@ class WorkspaceSetupDialog(QDialog):
         elif self._sdk_download.isChecked():
             target_text = self._download_target_edit.text().strip()
             if not target_text:
-                self._sdk_status.setText("请指定下载目标目录。")
+                self._set_sdk_status("请指定下载目标目录。", error=True)
                 return
             target = Path(target_text)
             spec = recommended_sdk()
-            self._sdk_status.setText(
+            self._set_sdk_status(
                 f"确认下载：{spec.version}（约 {format_size_mib(spec.size_bytes)}）→ {target}"
             )
             self._start_download(target)
@@ -624,11 +670,14 @@ class WorkspaceSetupDialog(QDialog):
         self.accept()
 
     def _start_download(self, target: Path) -> None:
+        if self._sdk_worker_active():
+            self._set_sdk_status("已有 SDK 任务在运行，请稍候。", error=True)
+            return
         self._ok_button.setEnabled(False)
         self._sdk_progress.setVisible(True)
         self._sdk_progress.setRange(0, 100)
         self._sdk_progress.setValue(0)
-        self._sdk_status.setText("正在下载并安装推荐 SDK…")
+        self._set_sdk_status("正在下载并安装推荐 SDK…")
 
         workspace = (
             self._workspace_result.workspace
@@ -657,23 +706,25 @@ class WorkspaceSetupDialog(QDialog):
             self._sdk_status.setText(f"解压中… {current}/{total}")
 
     def _on_sdk_completed(self, result: object) -> None:
-        self._ok_button.setEnabled(True)
+        # Thread has finished — safe to drop the reference now.
         self._sdk_worker = None
+        self._ok_button.setEnabled(True)
         from renpy_sdk_install import SdkInstallResult
 
         if not isinstance(result, SdkInstallResult):
-            self._sdk_status.setText("SDK 安装返回了未知结果。")
+            self._set_sdk_status("SDK 安装返回了未知结果。", error=True)
             return
         if result.cancelled:
             self._sdk_status_message = result.message
-            self._sdk_status.setText(result.message)
+            self._set_sdk_status(result.message)
             self._sdk_progress.setVisible(False)
             return
         if not result.ok:
             # Keep workspace success; preserve failure for completion summary.
             self._sdk_status_message = result.message
-            self._sdk_status.setText(
-                f"{result.message}\n工作区已保留；可改选「暂时跳过」完成（摘要会保留失败原因），或重试下载。"
+            self._set_sdk_status(
+                f"{result.message}\n工作区已保留；可改选「暂时跳过」完成（摘要会保留失败原因），或重试下载。",
+                error=True,
             )
             self._sdk_progress.setVisible(False)
             return
