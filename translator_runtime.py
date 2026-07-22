@@ -991,7 +991,20 @@ def load_rotation_settings(config):
         model_cfg.get("enabled"),
         DEFAULT_MODEL_ROTATION_ENABLED,
     )
-    MODEL_ROTATION_MODELS = normalize_model_names(model_cfg.get("models"))
+    from gemini_model_catalog import filter_gemini_rotation_models
+
+    raw_pool = normalize_model_names(model_cfg.get("models"))
+    MODEL_ROTATION_MODELS = filter_gemini_rotation_models(
+        raw_pool,
+        translator_config=config if isinstance(config, dict) else None,
+        reject_unknown=False,
+    )
+    dropped = [name for name in raw_pool if name not in set(MODEL_ROTATION_MODELS)]
+    if dropped:
+        print(
+            "Warning: ignored unknown model rotation entries (not in Gemini catalog): "
+            + ", ".join(dropped)
+        )
 
     if API_KEY_ROTATION_ENABLED != previous_key:
         state = "enabled" if API_KEY_ROTATION_ENABLED else "disabled"

@@ -279,6 +279,7 @@ from .settings_schema import (
     context_primary_setting_fields,
     BASIC_RECOMMENDED_VALUES,
     SettingField,
+    allowed_gemini_rotation_models,
     apply_advanced_settings,
     grouped_advanced_fields,
     read_advanced_settings,
@@ -3282,6 +3283,8 @@ class MainWindow(QMainWindow):
     def _create_advanced_setting_widget(self, field: SettingField) -> QWidget:
         if field.kind == "bool":
             widget = QCheckBox()
+            if field.key == "model_rotation_enabled":
+                widget.toggled.connect(self._on_model_rotation_enabled_toggled)
         elif field.kind == "int":
             widget = QSpinBox()
             widget.setAccelerated(True)
@@ -3295,6 +3298,8 @@ class MainWindow(QMainWindow):
             minimum = float(field.minimum if field.minimum is not None else -999999.0)
             maximum = float(field.maximum if field.maximum is not None else 999999.0)
             widget.setRange(minimum, maximum)
+        elif field.kind == "gemini_model_list":
+            widget = self._create_gemini_model_checklist()
         elif field.kind in {"text", "list", "json"}:
             widget = QTextEdit()
             widget.setAcceptRichText(False)
@@ -3307,6 +3312,69 @@ class MainWindow(QMainWindow):
                 widget.setPlaceholderText("留空使用默认路径" if "路径" in field.label else "可留空")
         widget.setToolTip(field.description)
         return widget
+
+    def _create_gemini_model_checklist(self) -> QListWidget:
+        """Multi-select checklist limited to known Gemini translation models."""
+        widget = QListWidget()
+        widget.setObjectName("model_rotation_models_list")
+        widget.setMinimumHeight(160)
+        widget.setMaximumHeight(240)
+        widget.setAlternatingRowColors(True)
+        try:
+            config = self.state.load_translator_config()
+        except Exception:
+            config = {}
+        models = allowed_gemini_rotation_models(config if isinstance(config, dict) else {})
+        for name in models:
+            item = QListWidgetItem(name)
+            item.setFlags(
+                item.flags()
+                | Qt.ItemFlag.ItemIsUserCheckable
+                | Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsSelectable
+            )
+            item.setCheckState(Qt.CheckState.Unchecked)
+            widget.addItem(item)
+        return widget
+
+    def _gemini_model_checklist_values(self, widget: QListWidget) -> list[str]:
+        selected: list[str] = []
+        for index in range(widget.count()):
+            item = widget.item(index)
+            if item is None:
+                continue
+            if item.checkState() == Qt.CheckState.Checked:
+                text = item.text().strip()
+                if text:
+                    selected.append(text)
+        return selected
+
+    def _set_gemini_model_checklist_values(
+        self,
+        widget: QListWidget,
+        values: object,
+    ) -> None:
+        selected = {
+            str(item).strip()
+            for item in (values if isinstance(values, (list, tuple, set)) else [])
+            if str(item).strip()
+        }
+        # Preserve order from the checklist; only toggle known rows.
+        for index in range(widget.count()):
+            item = widget.item(index)
+            if item is None:
+                continue
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if item.text().strip() in selected
+                else Qt.CheckState.Unchecked
+            )
+
+    def _on_model_rotation_enabled_toggled(self, checked: bool) -> None:
+        widgets = getattr(self, "_advanced_setting_widgets", {})
+        checklist = widgets.get("model_rotation_models")
+        if checklist is not None:
+            checklist.setEnabled(bool(checked))
 
     def _advanced_setting_placeholder(self, field: SettingField) -> str:
         if field.kind == "list":
@@ -7612,6 +7680,8 @@ class MainWindow(QMainWindow):
                 values[field.key] = widget.isChecked()
             elif field.kind in {"int", "float"}:
                 values[field.key] = widget.value()
+            elif field.kind == "gemini_model_list" and isinstance(widget, QListWidget):
+                values[field.key] = self._gemini_model_checklist_values(widget)
             elif hasattr(widget, "toPlainText"):
                 values[field.key] = widget.toPlainText().strip()
             else:
@@ -7635,13 +7705,19 @@ class MainWindow(QMainWindow):
                 widget.setValue(int(value))
             elif field.kind == "float":
                 widget.setValue(float(value))
+            elif field.kind == "gemini_model_list" and isinstance(widget, QListWidget):
+                self._set_gemini_model_checklist_values(widget, value)
             elif hasattr(widget, "setPlainText"):
                 widget.setPlainText(self._format_advanced_setting_text(field, value))
             else:
                 widget.setText(str(value))
+        # Keep rotation pool checklist enabled only when model rotation is on.
+        enabled_widget = widgets.get("model_rotation_enabled")
+        if isinstance(enabled_widget, QCheckBox):
+            self._on_model_rotation_enabled_toggled(enabled_widget.isChecked())
 
     def _format_advanced_setting_text(self, field: SettingField, value: object) -> str:
-        if field.kind == "list":
+        if field.kind in {"list", "gemini_model_list"}:
             if isinstance(value, (list, tuple, set)):
                 return "\n".join(str(item) for item in value)
             return str(value or "")

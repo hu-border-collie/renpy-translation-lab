@@ -3,6 +3,7 @@ import unittest
 from gui_qt.settings_schema import (
     ADVANCED_SETTING_FIELD_BY_KEY,
     apply_advanced_settings,
+    filter_gemini_rotation_models,
     read_advanced_settings,
     recommended_advanced_settings,
     validate_advanced_settings,
@@ -146,6 +147,24 @@ class GuiSettingsSchemaTests(unittest.TestCase):
         self.assertEqual(
             ADVANCED_SETTING_FIELD_BY_KEY["sync_story_memory_graph_file"].path,
             ("sync", "story_memory", "graph_file"),
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["model_rotation_models"].kind,
+            "gemini_model_list",
+        )
+
+    def test_gemini_model_list_rejects_unknown_ids(self):
+        with self.assertRaises(ValueError):
+            filter_gemini_rotation_models(
+                ["gemini-3.1-flash-lite", "totally-fake-model"],
+                reject_unknown=True,
+            )
+        self.assertEqual(
+            filter_gemini_rotation_models(
+                ["gemini-3.1-flash-lite", "totally-fake-model"],
+                reject_unknown=False,
+            ),
+            ["gemini-3.1-flash-lite"],
         )
 
 

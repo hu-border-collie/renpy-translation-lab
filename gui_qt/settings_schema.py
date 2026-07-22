@@ -13,10 +13,21 @@ from typing import Any, Iterable, Literal
 from gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
+    allowed_gemini_rotation_models,
+    filter_gemini_rotation_models,
 )
 
 
-SettingKind = Literal["bool", "int", "float", "str", "text", "list", "json"]
+SettingKind = Literal[
+    "bool",
+    "int",
+    "float",
+    "str",
+    "text",
+    "list",
+    "json",
+    "gemini_model_list",
+]
 SettingValue = Any
 
 
@@ -87,8 +98,9 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "model_rotation_models",
         ("rotation", "model", "models"),
         "模型轮换范围",
-        "启用模型轮换时的候选列表；每行一个模型 ID。留空则使用当前模型列表/内置目录。",
-        "list",
+        "启用模型轮换时从下列已知 Gemini 模型中勾选候选；至少选 2 个才有轮换意义。"
+        "未勾选任何项时，回退为「当前模型 + 内置目录」。",
+        "gemini_model_list",
         [],
         "请求轮换",
         allow_empty=True,
@@ -896,26 +908,21 @@ def recommended_advanced_settings() -> dict[str, SettingValue]:
     return {field.key: field.recommended_value for field in ADVANCED_SETTING_FIELDS}
 
 
-def validate_advanced_settings(values: dict[str, Any]) -> dict[str, str]:
-    errors: dict[str, str] = {}
-    for field in ADVANCED_SETTING_FIELDS:
-        error = validate_value(field, values.get(field.key))
-        if error:
-            errors[field.key] = error
-    return errors
-
-
 def apply_advanced_settings(
     config: dict[str, Any],
     values: dict[str, Any],
 ) -> dict[str, Any]:
-    errors = validate_advanced_settings(values)
+    errors = validate_advanced_settings(values, translator_config=config)
     if errors:
         first = next(iter(errors.values()))
         raise ValueError(first)
 
     for field in ADVANCED_SETTING_FIELDS:
-        set_nested_value(config, field.path, normalize_for_write(field, values[field.key]))
+        set_nested_value(
+            config,
+            field.path,
+            normalize_for_write(field, values[field.key], translator_config=config),
+        )
     return config
 
 
@@ -924,14 +931,23 @@ def read_setting(config: dict[str, Any], field: SettingField) -> SettingValue:
     if raw is None:
         return field.default
     try:
-        return normalize_for_write(field, raw)
+        return normalize_for_write(field, raw, translator_config=config)
     except ValueError:
         return field.default
 
 
-def validate_value(field: SettingField, value: Any) -> str:
+def validate_value(
+    field: SettingField,
+    value: Any,
+    *,
+    translator_config: dict[str, Any] | None = None,
+) -> str:
     try:
-        normalized = normalize_for_write(field, value)
+        normalized = normalize_for_write(
+            field,
+            value,
+            translator_config=translator_config,
+        )
     except ValueError as exc:
         return str(exc)
 
@@ -940,7 +956,7 @@ def validate_value(field: SettingField, value: Any) -> str:
             return f"{field.label}不能为空。"
         return ""
 
-    if field.kind in {"bool", "list", "json"}:
+    if field.kind in {"bool", "list", "json", "gemini_model_list"}:
         return ""
 
     number = float(normalized)
@@ -953,7 +969,29 @@ def validate_value(field: SettingField, value: Any) -> str:
     return ""
 
 
-def normalize_for_write(field: SettingField, value: Any) -> SettingValue:
+def validate_advanced_settings(
+    values: dict[str, Any],
+    *,
+    translator_config: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    errors: dict[str, str] = {}
+    for field in ADVANCED_SETTING_FIELDS:
+        error = validate_value(
+            field,
+            values.get(field.key),
+            translator_config=translator_config,
+        )
+        if error:
+            errors[field.key] = error
+    return errors
+
+
+def normalize_for_write(
+    field: SettingField,
+    value: Any,
+    *,
+    translator_config: dict[str, Any] | None = None,
+) -> SettingValue:
     if field.kind == "bool":
         if isinstance(value, bool):
             return value
@@ -984,6 +1022,13 @@ def normalize_for_write(field: SettingField, value: Any) -> SettingValue:
 
     if field.kind == "list":
         return normalize_list_value(field, value)
+
+    if field.kind == "gemini_model_list":
+        return filter_gemini_rotation_models(
+            value,
+            translator_config=translator_config,
+            reject_unknown=True,
+        )
 
     if field.kind == "json":
         return normalize_json_value(field, value)

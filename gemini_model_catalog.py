@@ -158,6 +158,31 @@ def extras_beyond_builtins(
     return result
 
 
+def allowed_gemini_rotation_models(
+    translator_config: Mapping[str, Any] | None = None,
+) -> list[str]:
+    """Models users may select for automatic model rotation."""
+    return resolve_gemini_translation_models(translator_config)
+
+
+def filter_gemini_rotation_models(
+    values: Any,
+    *,
+    translator_config: Mapping[str, Any] | None = None,
+    reject_unknown: bool = False,
+) -> list[str]:
+    """Keep only catalog-known models; optionally raise on unknown IDs."""
+    allowed = set(allowed_gemini_rotation_models(translator_config))
+    selected = normalize_model_names(values)
+    unknown = [name for name in selected if name not in allowed]
+    if reject_unknown and unknown:
+        raise ValueError(
+            "模型轮换范围只能选择已知 Gemini 模型，未知："
+            + "、".join(unknown)
+        )
+    return [name for name in selected if name in allowed]
+
+
 def write_model_catalog_extras(
     translator_config: dict[str, Any],
     *,

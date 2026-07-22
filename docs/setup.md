@@ -177,7 +177,7 @@ python gemini_translate_batch.py doctor
 |----|------|------|
 | `rotation.api_key.enabled` | **true** | 配额/限流时在多把 Gemini API Key 间切换；只有一把 Key 时无效果 |
 | `rotation.model.enabled` | **false** | 同步路径在 429/模型不可用时是否自动换模型；默认关闭，避免无意跳模型 |
-| `rotation.model.models` | `[]` | 启用模型轮换时的候选范围；留空则用当前模型列表 / 内置目录 |
+| `rotation.model.models` | `[]` | 启用模型轮换时的候选范围；**只能是** `gemini_model_catalog` / `model_catalog` 中的已知 Gemini 模型。GUI 用勾选列表配置；手改 JSON 时未知 ID 会被忽略。留空则回退「当前模型 + 内置目录」 |
 
 说明：
 
