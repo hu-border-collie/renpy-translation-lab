@@ -190,6 +190,27 @@ class GuiSettingsSchemaTests(unittest.TestCase):
             "gemini_catalog_list",
         )
 
+    def test_rotation_accepts_catalog_entry_added_in_same_save(self):
+        """New catalog extras must be valid rotation picks in one apply pass."""
+        config = {"game_root": "C:/Game/work"}
+        values = recommended_advanced_settings()
+        values["game_root"] = "C:/Game/work"
+        values["catalog_gemini_models"] = ["gemini-brand-new-extra"]
+        values["model_rotation_enabled"] = True
+        values["model_rotation_models"] = [
+            "gemini-3.1-flash-lite",
+            "gemini-brand-new-extra",
+        ]
+        # Must not reject brand-new-extra as unknown against the old empty catalog.
+        errors = validate_advanced_settings(values, translator_config=config)
+        self.assertNotIn("model_rotation_models", errors)
+        saved = apply_advanced_settings(config, values)
+        self.assertEqual(saved["model_catalog"]["gemini"], ["gemini-brand-new-extra"])
+        self.assertEqual(
+            saved["rotation"]["model"]["models"],
+            ["gemini-3.1-flash-lite", "gemini-brand-new-extra"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

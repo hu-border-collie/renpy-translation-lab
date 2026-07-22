@@ -11252,7 +11252,10 @@ class MainWindow(QMainWindow):
                 current_game_root = self.state.get_game_root()
                 if current_game_root is not None:
                     complete_advanced_values["game_root"] = str(current_game_root)
-                errors = validate_advanced_settings(complete_advanced_values)
+                errors = validate_advanced_settings(
+                    complete_advanced_values,
+                    translator_config=config,
+                )
                 if errors:
                     self._show_advanced_setting_errors(errors)
                     self._show_settings_status("高级设置有无效字段，未保存。", 6000)

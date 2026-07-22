@@ -930,11 +930,51 @@ def recommended_advanced_settings() -> dict[str, SettingValue]:
     return {field.key: field.recommended_value for field in ADVANCED_SETTING_FIELDS}
 
 
+def config_with_pending_catalog_updates(
+    config: dict[str, Any] | None,
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a config view where pending model_catalog edits from values are applied.
+
+    Used so ``model_rotation_models`` validation can accept catalog entries that
+    are being added in the same save, without writing the real config yet.
+    """
+    base: dict[str, Any] = dict(config) if isinstance(config, dict) else {}
+    existing_catalog = base.get("model_catalog")
+    catalog: dict[str, Any] = (
+        dict(existing_catalog) if isinstance(existing_catalog, dict) else {}
+    )
+    for field in ADVANCED_SETTING_FIELDS:
+        if field.kind != "gemini_catalog_list" or field.key not in values:
+            continue
+        try:
+            normalized = normalize_for_write(
+                field,
+                values[field.key],
+                translator_config=base,
+            )
+        except ValueError:
+            # Leave validation of this field to the normal pass.
+            continue
+        set_nested_value(catalog, field.path[1:], normalized)
+    if catalog:
+        base["model_catalog"] = catalog
+    elif "model_catalog" in base and not catalog:
+        # Explicit empty catalogs from values should clear section keys.
+        for field in ADVANCED_SETTING_FIELDS:
+            if field.kind == "gemini_catalog_list" and field.key in values:
+                base.pop("model_catalog", None)
+                break
+    return base
+
+
 def apply_advanced_settings(
     config: dict[str, Any],
     values: dict[str, Any],
 ) -> dict[str, Any]:
-    errors = validate_advanced_settings(values, translator_config=config)
+    # Validate rotation against the catalog *as it will look after this save*.
+    provisional = config_with_pending_catalog_updates(config, values)
+    errors = validate_advanced_settings(values, translator_config=provisional)
     if errors:
         first = next(iter(errors.values()))
         raise ValueError(first)
@@ -943,7 +983,11 @@ def apply_advanced_settings(
         set_nested_value(
             config,
             field.path,
-            normalize_for_write(field, values[field.key], translator_config=config),
+            normalize_for_write(
+                field,
+                values[field.key],
+                translator_config=provisional,
+            ),
         )
     return config
 
@@ -996,12 +1040,14 @@ def validate_advanced_settings(
     *,
     translator_config: dict[str, Any] | None = None,
 ) -> dict[str, str]:
+    # Include pending catalog_* values so rotation can select brand-new extras.
+    provisional = config_with_pending_catalog_updates(translator_config, values)
     errors: dict[str, str] = {}
     for field in ADVANCED_SETTING_FIELDS:
         error = validate_value(
             field,
             values.get(field.key),
-            translator_config=translator_config,
+            translator_config=provisional,
         )
         if error:
             errors[field.key] = error
