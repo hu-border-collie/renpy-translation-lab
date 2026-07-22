@@ -23,7 +23,7 @@
 说明：
 
 - `api_keys.json` 保存 Gemini API Key；旧的 `batch_size/max_chars` 等字段仍兼容，但不再推荐写在这里。
-- `translator_config.json` 保存**工具级**设置：可选 `workspace_root`（多项目工作区，须显式指定）、当前 `game_root`、模型、include 过滤、同步 / Batch 分块参数，以及 RAG/原文索引的**全局默认值**（当前项目尚未写过项目文件时使用）。可选 `model_catalog.gemini` / `model_catalog.gemini_embedding` 用于扩展内置模型列表（见下文「当前模型建议」）。
+- `translator_config.json` 保存**工具级**设置：可选 `workspace_root`（多项目工作区，须显式指定）、当前 `game_root`、模型、include 过滤、同步 / Batch 分块参数，以及 RAG/原文索引的**全局默认值**（当前项目尚未写过项目文件时使用）。可选 `model_catalog.gemini` / `model_catalog.gemini_embedding` 用于扩展内置模型列表；可选 `rotation` 控制 API Key / 模型轮换（见下文）。
 - **按项目生效**的批量上下文开关见下一节 `project_context_settings.json`。
 - `glossary.json` 通常包含项目私有术语；不存在时脚本会退回内置默认术语规则。`translator_config.json` 的 `glossary_file` 应指向当前项目的文件。
 - `macro_setting.md` 往往包含剧情、角色口吻、世界观约束，可供 Batch 的 `batch.macro_setting_file` 使用。
@@ -158,3 +158,29 @@ python gemini_translate_batch.py doctor
 - GUI「设置 → 模型」下拉框也可直接输入未列出的模型 ID；保存后会写入上述 `model_catalog`。
 - `gemini-3.5-flash-lite` 适合高频翻译与简单处理；需要更强推理时可改用 `gemini-3.6-flash` / `gemini-3.5-flash`。
 - RAG 当前默认搭配 `gemini-embedding-001`（也可选 `gemini-embedding-2`）。
+
+### 请求轮换（API Key / 模型）
+
+配置段：`translator_config.json` → `rotation`（GUI「设置 → 高级」也可改）。
+
+```json
+"rotation": {
+  "api_key": { "enabled": true },
+  "model": {
+    "enabled": false,
+    "models": ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]
+  }
+}
+```
+
+| 项 | 默认 | 说明 |
+|----|------|------|
+| `rotation.api_key.enabled` | **true** | 配额/限流时在多把 Gemini API Key 间切换；只有一把 Key 时无效果 |
+| `rotation.model.enabled` | **false** | 同步路径在 429/模型不可用时是否自动换模型；默认关闭，避免无意跳模型 |
+| `rotation.model.models` | `[]` | 启用模型轮换时的候选范围；留空则用当前模型列表 / 内置目录 |
+
+说明：
+
+- **API Key 轮换**作用于 Batch 提交与同步 Gemini 调用（以及需要 key 的修复重试）。
+- **模型轮换**主要作用于同步翻译的重试逻辑；Batch 作业仍使用 manifest 中固定的 `batch.model`。
+- 未开启模型轮换时，同步路径固定使用 `sync.model`（或 `sync.models` 的首项），不会因 catalog 列表自动换模型。

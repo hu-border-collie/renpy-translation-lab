@@ -66,6 +66,34 @@ CONTEXT_PRIMARY_SETTING_CATEGORY = "上下文主开关"
 
 ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
+        "api_key_rotation_enabled",
+        ("rotation", "api_key", "enabled"),
+        "启用 API Key 轮换",
+        "配额/限流时在 api_keys.json 的多把 Key 之间自动切换；仅一把 Key 时无效果。默认开启。",
+        "bool",
+        True,
+        "请求轮换",
+    ),
+    SettingField(
+        "model_rotation_enabled",
+        ("rotation", "model", "enabled"),
+        "启用模型轮换",
+        "同步翻译遇限流或模型不可用时自动切换到下一模型；默认关闭，避免意外换模型。",
+        "bool",
+        False,
+        "请求轮换",
+    ),
+    SettingField(
+        "model_rotation_models",
+        ("rotation", "model", "models"),
+        "模型轮换范围",
+        "启用模型轮换时的候选列表；每行一个模型 ID。留空则使用当前模型列表/内置目录。",
+        "list",
+        [],
+        "请求轮换",
+        allow_empty=True,
+    ),
+    SettingField(
         "sync_chunk_size",
         ("sync", "chunk_size"),
         "同步 chunk 条数",

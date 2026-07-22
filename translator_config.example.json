@@ -13,6 +13,15 @@
     "gemini": [],
     "gemini_embedding": []
   },
+  "rotation": {
+    "api_key": {
+      "enabled": true
+    },
+    "model": {
+      "enabled": false,
+      "models": []
+    }
+  },
   "prepare": {
     "enabled": true,
     "source_game_dir": "../original/game",

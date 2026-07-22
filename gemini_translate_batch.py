@@ -1296,7 +1296,12 @@ def embed_texts(contents, task_type):
     if not contents:
         return []
     api_key_count = len(getattr(legacy, 'API_KEYS', []) or [])
-    attempts = max(3, api_key_count * 2)
+    key_attempts = (
+        legacy.api_key_rotation_attempts()
+        if hasattr(legacy, 'api_key_rotation_attempts')
+        else max(1, api_key_count)
+    )
+    attempts = max(3, key_attempts * 2)
     last_error = None
     for attempt in range(1, attempts + 1):
         client = create_batch_client()
@@ -4217,7 +4222,11 @@ def submit_manifest(
         batch_submit_recovery.begin_submit_attempt(manifest, package_dir=package_dir)
         save_manifest(manifest)
 
-    attempts = max(1, len(getattr(legacy, 'API_KEYS', [])))
+    attempts = (
+        legacy.api_key_rotation_attempts()
+        if hasattr(legacy, 'api_key_rotation_attempts')
+        else max(1, len(getattr(legacy, 'API_KEYS', []) or []))
+    )
     last_error = None
 
     for attempt in range(1, attempts + 1):
@@ -7622,7 +7631,12 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
         ))
         return _sync_result_to_dict(result)
 
-    attempts = 1 if api_key_index is not None else max(1, len(getattr(legacy, 'API_KEYS', [])))
+    if api_key_index is not None:
+        attempts = 1
+    elif hasattr(legacy, 'api_key_rotation_attempts'):
+        attempts = legacy.api_key_rotation_attempts()
+    else:
+        attempts = max(1, len(getattr(legacy, 'API_KEYS', []) or []))
     last_error = None
 
     for attempt in range(1, attempts + 1):

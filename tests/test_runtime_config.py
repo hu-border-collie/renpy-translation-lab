@@ -238,9 +238,13 @@ class DefaultsFirstReloadTests(unittest.TestCase):
                     self.assertEqual(cfg_b.sync_backend, runtime.DEFAULT_SYNC_BACKEND)
                     self.assertEqual(runtime.API_KEYS, ["key-b"])
                     self.assertEqual(runtime.PREP_LANGUAGE, runtime.DEFAULT_PREP_LANGUAGE)
-                    # Models fall back to defaults when project B omits sync.models
-                    # after a full defaults-first load_runtime_config.
-                    self.assertEqual(runtime.MODELS, list(runtime.DEFAULT_MODELS))
+                    # With model rotation off (default), the active list pins to
+                    # the recommended Gemini model when project B omits sync.model(s).
+                    self.assertEqual(
+                        runtime.MODELS,
+                        [runtime.DEFAULT_GEMINI_TRANSLATION_MODEL],
+                    )
+                    self.assertFalse(runtime.MODEL_ROTATION_ENABLED)
         finally:
             _restore_sensitive_runtime(snapshot)
 
