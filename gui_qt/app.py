@@ -2607,10 +2607,25 @@ class MainWindow(QMainWindow):
 
     def _build_settings_workspace_page(self) -> QWidget:
         page, layout = self._settings_page("settings_workspace")
+        # Prefer filling the settings viewport so the project table can grow;
+        # the table itself scrolls instead of crushing into a short strip.
+        body = self._settings_page_bodies.get("settings_workspace")
+        if body is not None:
+            body.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Expanding,
+            )
+        content = page.widget() if hasattr(page, "widget") else None
+        if content is not None:
+            content.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Expanding,
+            )
         hint = QLabel(
             "工作区默认未设置，不会自动使用工具目录的上一级。"
             "先「创建 / 接入工作区…」预览并初始化/接入总表，再扫描、导入或切换项目。"
             "「切换到此项目」会写入当前 game_root 并留在本页；术语表 / 准备流程等到「项目」分区调整。"
+            "总览表与详情可拖拽分隔；扫描新项目、导入与 GAMES.md 等操作在「维护」中展开。"
         )
         hint.setWordWrap(True)
         hint.setObjectName("config_hint_label")

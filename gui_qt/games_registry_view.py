@@ -199,17 +199,20 @@ def load_registry_rows(
         if games_md.is_file():
             return [], (
                 f"未找到 {registry_file.name}。"
-                f"可点击「从 GAMES.md 导入」，或「扫描新项目」从 Game_* 目录创建总表。"
+                f"可在「维护」中「从 GAMES.md 导入」，或「扫描新项目」从 Game_* 目录创建总表。"
             )
         return [], (
             f"未找到 {registry_file.name}。"
-            f"可点击「扫描新项目」发现 Game_* 目录，或先准备 {GAMES_MD_FILENAME} 后导入。"
+            f"可在「维护」中「扫描新项目」发现 Game_* 目录，或先准备 {GAMES_MD_FILENAME} 后导入。"
         )
 
     registry = load_registry(registry_file)
     projects = registry.get("projects")
     if not isinstance(projects, list) or not projects:
-        return [], f"{registry_file.name} 中没有项目记录。可点击「扫描新项目」或「从 GAMES.md 导入」。"
+        return [], (
+            f"{registry_file.name} 中没有项目记录。"
+            f"可在「维护」中「扫描新项目」或「从 GAMES.md 导入」。"
+        )
 
     rows = [
         registry_row_from_project(Path(workspace), project)
