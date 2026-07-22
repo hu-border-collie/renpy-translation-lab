@@ -10,19 +10,26 @@
 
 | 你想… | 读 |
 |---|---|
-| 先跑通 CLI 翻译 | 根目录 `README.md` → [安装与本地配置](setup.md) → [Batch 工作流与安全检查](batch_workflows.md) |
-| 使用图形界面 | [GUI 工作台](gui_workbench.md) → 按需回看 [setup.md](setup.md) |
+| 第一次通过 GUI 完成翻译 | [GUI 快速开始](quickstart_gui.md) → [GUI 工作台](gui_workbench.md) |
+| 让 Agent / 脚本通过 CLI 翻译 | [Agent / CLI 快速开始](quickstart_agent.md) → [Batch 工作流与安全检查](batch_workflows.md) |
+| 手动使用完整 CLI 工作流 | 根目录 `README.md` → [安装与本地配置](setup.md) → [Batch 工作流与安全检查](batch_workflows.md) |
 | 多游戏工作区总表 | [工作区项目总表](games_registry.md) |
 | 理解环境检查建议 | [环境检查智能建议机制](doctor_recommendations.md) · [状态矩阵](doctor_states_matrix.md) |
 | 启用 RAG / 原文索引 / 剧情记忆 | [上下文系统](context_systems.md) · [setup.md](setup.md) 中的项目级开关 |
 | 角色关系 / 语义分析 | [关系与语义分析](relation_analysis.md) · [`relation_analyzer/README.md`](../relation_analyzer/README.md) |
 | 项目边界与安全 | [项目说明](project_notes.md) |
 | 查看版本变化 | [变更日志](../CHANGELOG.md) · [v1.0.0 发行说明](releases/v1.0.0.md) |
-| 参与开发 / AI 协作 | 根目录 [CONTRIBUTING.md](../CONTRIBUTING.md)（含 **CLI / GUI 同步**） |
+| 参与开发 / AI 协作 | 根目录 [AGENTS.md](../AGENTS.md) → [CONTRIBUTING.md](../CONTRIBUTING.md)（含 **CLI / GUI 同步**） |
 | 理解 PR 门禁与定时集成 | [CI 与定时集成检查](ci.md)（含 lint / type / audit） |
 | 理解依赖所有权与哈希锁 | [依赖输入与哈希锁](dependencies.md) |
 
 ## 文档分组
+
+### 现行：快速开始
+
+- [GUI 快速开始](quickstart_gui.md)：源码安装、选择项目、配置密钥、环境检查和第一次安全写回。
+- [Agent / CLI 快速开始](quickstart_agent.md)：面向操作工具的 Agent，说明环境准备、显式 manifest 流程和 `check -> apply` 门禁。
+- [Agent 开发约定](../AGENTS.md)：面向修改本仓库的 Agent；完整开发规则仍以 [CONTRIBUTING.md](../CONTRIBUTING.md) 为准。
 
 ### 现行：配置与 GUI
 
