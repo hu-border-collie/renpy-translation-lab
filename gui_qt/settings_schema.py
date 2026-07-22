@@ -10,8 +10,26 @@ from dataclasses import dataclass
 import json
 from typing import Any, Iterable, Literal
 
+from gemini_model_catalog import (
+    DEFAULT_GEMINI_EMBEDDING_MODEL,
+    DEFAULT_GEMINI_TRANSLATION_MODEL,
+    allowed_gemini_rotation_models,
+    extras_beyond_builtins,
+    filter_gemini_rotation_models,
+)
 
-SettingKind = Literal["bool", "int", "float", "str", "text", "list", "json"]
+
+SettingKind = Literal[
+    "bool",
+    "int",
+    "float",
+    "str",
+    "text",
+    "list",
+    "json",
+    "gemini_model_list",
+    "gemini_catalog_list",
+]
 SettingValue = Any
 
 
@@ -40,10 +58,10 @@ BASIC_RECOMMENDED_VALUES: dict[str, SettingValue] = {
     "rag_enabled": True,
     "source_index_enabled": False,
     "bootstrap_on_build": True,
-    "sync_model": "gemini-3.1-flash-lite",
-    "batch_model": "gemini-3.1-flash-lite",
-    "sync_embedding_model": "gemini-embedding-001",
-    "batch_embedding_model": "gemini-embedding-001",
+    "sync_model": DEFAULT_GEMINI_TRANSLATION_MODEL,
+    "batch_model": DEFAULT_GEMINI_TRANSLATION_MODEL,
+    "sync_embedding_model": DEFAULT_GEMINI_EMBEDDING_MODEL,
+    "batch_embedding_model": DEFAULT_GEMINI_EMBEDDING_MODEL,
     "batch_thinking_level": "minimal",
 }
 
@@ -60,6 +78,55 @@ CONTEXT_PRIMARY_SETTING_CATEGORY = "上下文主开关"
 
 
 ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
+    SettingField(
+        "catalog_gemini_models",
+        ("model_catalog", "gemini"),
+        "翻译模型扩展",
+        "追加到「设置 → 模型」下拉列表的自定义翻译模型 ID。内置模型始终可选，无需在此重复添加。",
+        "gemini_catalog_list",
+        [],
+        "模型目录",
+        allow_empty=True,
+    ),
+    SettingField(
+        "catalog_gemini_embedding_models",
+        ("model_catalog", "gemini_embedding"),
+        "向量模型扩展",
+        "追加到「设置 → 模型」下拉列表的自定义 RAG 向量模型 ID。内置 embedding 始终可选。",
+        "gemini_catalog_list",
+        [],
+        "模型目录",
+        allow_empty=True,
+    ),
+    SettingField(
+        "api_key_rotation_enabled",
+        ("rotation", "api_key", "enabled"),
+        "启用 API Key 轮换",
+        "配额/限流时在 api_keys.json 的多把 Key 之间自动切换；仅一把 Key 时无效果。默认开启。",
+        "bool",
+        True,
+        "请求轮换",
+    ),
+    SettingField(
+        "model_rotation_enabled",
+        ("rotation", "model", "enabled"),
+        "启用模型轮换",
+        "同步翻译遇限流或模型不可用时自动切换到下一模型；默认关闭，避免意外换模型。",
+        "bool",
+        False,
+        "请求轮换",
+    ),
+    SettingField(
+        "model_rotation_models",
+        ("rotation", "model", "models"),
+        "模型轮换范围",
+        "启用模型轮换时从下列已知 Gemini 模型中勾选候选；至少选 2 个才有轮换意义。"
+        "未勾选任何项时，回退为「当前模型 + 内置目录」。",
+        "gemini_model_list",
+        [],
+        "请求轮换",
+        allow_empty=True,
+    ),
     SettingField(
         "sync_chunk_size",
         ("sync", "chunk_size"),
@@ -863,26 +930,65 @@ def recommended_advanced_settings() -> dict[str, SettingValue]:
     return {field.key: field.recommended_value for field in ADVANCED_SETTING_FIELDS}
 
 
-def validate_advanced_settings(values: dict[str, Any]) -> dict[str, str]:
-    errors: dict[str, str] = {}
+def config_with_pending_catalog_updates(
+    config: dict[str, Any] | None,
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a config view where pending model_catalog edits from values are applied.
+
+    Used so ``model_rotation_models`` validation can accept catalog entries that
+    are being added in the same save, without writing the real config yet.
+    """
+    base: dict[str, Any] = dict(config) if isinstance(config, dict) else {}
+    existing_catalog = base.get("model_catalog")
+    catalog: dict[str, Any] = (
+        dict(existing_catalog) if isinstance(existing_catalog, dict) else {}
+    )
     for field in ADVANCED_SETTING_FIELDS:
-        error = validate_value(field, values.get(field.key))
-        if error:
-            errors[field.key] = error
-    return errors
+        if field.kind != "gemini_catalog_list" or field.key not in values:
+            continue
+        try:
+            normalized = normalize_for_write(
+                field,
+                values[field.key],
+                translator_config=base,
+            )
+        except ValueError:
+            # Leave validation of this field to the normal pass.
+            continue
+        set_nested_value(catalog, field.path[1:], normalized)
+    if catalog:
+        base["model_catalog"] = catalog
+    elif "model_catalog" in base and not catalog:
+        # Explicit empty catalogs from values should clear section keys.
+        for field in ADVANCED_SETTING_FIELDS:
+            if field.kind == "gemini_catalog_list" and field.key in values:
+                base.pop("model_catalog", None)
+                break
+    return base
 
 
 def apply_advanced_settings(
     config: dict[str, Any],
     values: dict[str, Any],
 ) -> dict[str, Any]:
-    errors = validate_advanced_settings(values)
+    # Validate rotation against the catalog *as it will look after this save*.
+    provisional = config_with_pending_catalog_updates(config, values)
+    errors = validate_advanced_settings(values, translator_config=provisional)
     if errors:
         first = next(iter(errors.values()))
         raise ValueError(first)
 
     for field in ADVANCED_SETTING_FIELDS:
-        set_nested_value(config, field.path, normalize_for_write(field, values[field.key]))
+        set_nested_value(
+            config,
+            field.path,
+            normalize_for_write(
+                field,
+                values[field.key],
+                translator_config=provisional,
+            ),
+        )
     return config
 
 
@@ -891,14 +997,23 @@ def read_setting(config: dict[str, Any], field: SettingField) -> SettingValue:
     if raw is None:
         return field.default
     try:
-        return normalize_for_write(field, raw)
+        return normalize_for_write(field, raw, translator_config=config)
     except ValueError:
         return field.default
 
 
-def validate_value(field: SettingField, value: Any) -> str:
+def validate_value(
+    field: SettingField,
+    value: Any,
+    *,
+    translator_config: dict[str, Any] | None = None,
+) -> str:
     try:
-        normalized = normalize_for_write(field, value)
+        normalized = normalize_for_write(
+            field,
+            value,
+            translator_config=translator_config,
+        )
     except ValueError as exc:
         return str(exc)
 
@@ -907,7 +1022,7 @@ def validate_value(field: SettingField, value: Any) -> str:
             return f"{field.label}不能为空。"
         return ""
 
-    if field.kind in {"bool", "list", "json"}:
+    if field.kind in {"bool", "list", "json", "gemini_model_list", "gemini_catalog_list"}:
         return ""
 
     number = float(normalized)
@@ -920,7 +1035,31 @@ def validate_value(field: SettingField, value: Any) -> str:
     return ""
 
 
-def normalize_for_write(field: SettingField, value: Any) -> SettingValue:
+def validate_advanced_settings(
+    values: dict[str, Any],
+    *,
+    translator_config: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    # Include pending catalog_* values so rotation can select brand-new extras.
+    provisional = config_with_pending_catalog_updates(translator_config, values)
+    errors: dict[str, str] = {}
+    for field in ADVANCED_SETTING_FIELDS:
+        error = validate_value(
+            field,
+            values.get(field.key),
+            translator_config=provisional,
+        )
+        if error:
+            errors[field.key] = error
+    return errors
+
+
+def normalize_for_write(
+    field: SettingField,
+    value: Any,
+    *,
+    translator_config: dict[str, Any] | None = None,
+) -> SettingValue:
     if field.kind == "bool":
         if isinstance(value, bool):
             return value
@@ -951,6 +1090,19 @@ def normalize_for_write(field: SettingField, value: Any) -> SettingValue:
 
     if field.kind == "list":
         return normalize_list_value(field, value)
+
+    if field.kind == "gemini_catalog_list":
+        normalized = normalize_list_value(field, value)
+        if field.key == "catalog_gemini_embedding_models":
+            return extras_beyond_builtins(normalized, kind="embedding")
+        return extras_beyond_builtins(normalized, kind="translation")
+
+    if field.kind == "gemini_model_list":
+        return filter_gemini_rotation_models(
+            value,
+            translator_config=translator_config,
+            reject_unknown=True,
+        )
 
     if field.kind == "json":
         return normalize_json_value(field, value)

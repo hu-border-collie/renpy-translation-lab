@@ -3,6 +3,7 @@ import unittest
 from gui_qt.settings_schema import (
     ADVANCED_SETTING_FIELD_BY_KEY,
     apply_advanced_settings,
+    filter_gemini_rotation_models,
     read_advanced_settings,
     recommended_advanced_settings,
     validate_advanced_settings,
@@ -146,6 +147,68 @@ class GuiSettingsSchemaTests(unittest.TestCase):
         self.assertEqual(
             ADVANCED_SETTING_FIELD_BY_KEY["sync_story_memory_graph_file"].path,
             ("sync", "story_memory", "graph_file"),
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["model_rotation_models"].kind,
+            "gemini_model_list",
+        )
+
+    def test_gemini_model_list_rejects_unknown_ids(self):
+        with self.assertRaises(ValueError):
+            filter_gemini_rotation_models(
+                ["gemini-3.1-flash-lite", "totally-fake-model"],
+                reject_unknown=True,
+            )
+        self.assertEqual(
+            filter_gemini_rotation_models(
+                ["gemini-3.1-flash-lite", "totally-fake-model"],
+                reject_unknown=False,
+            ),
+            ["gemini-3.1-flash-lite"],
+        )
+
+    def test_catalog_gemini_lists_strip_builtins_on_write(self):
+        config = {"game_root": "C:/Game/work"}
+        values = recommended_advanced_settings()
+        values["game_root"] = "C:/Game/work"
+        values["catalog_gemini_models"] = [
+            "gemini-3.1-flash-lite",
+            "gemini-custom-extra",
+        ]
+        values["catalog_gemini_embedding_models"] = [
+            "gemini-embedding-001",
+            "gemini-embedding-custom",
+        ]
+        saved = apply_advanced_settings(config, values)
+        self.assertEqual(saved["model_catalog"]["gemini"], ["gemini-custom-extra"])
+        self.assertEqual(
+            saved["model_catalog"]["gemini_embedding"],
+            ["gemini-embedding-custom"],
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["catalog_gemini_models"].kind,
+            "gemini_catalog_list",
+        )
+
+    def test_rotation_accepts_catalog_entry_added_in_same_save(self):
+        """New catalog extras must be valid rotation picks in one apply pass."""
+        config = {"game_root": "C:/Game/work"}
+        values = recommended_advanced_settings()
+        values["game_root"] = "C:/Game/work"
+        values["catalog_gemini_models"] = ["gemini-brand-new-extra"]
+        values["model_rotation_enabled"] = True
+        values["model_rotation_models"] = [
+            "gemini-3.1-flash-lite",
+            "gemini-brand-new-extra",
+        ]
+        # Must not reject brand-new-extra as unknown against the old empty catalog.
+        errors = validate_advanced_settings(values, translator_config=config)
+        self.assertNotIn("model_rotation_models", errors)
+        saved = apply_advanced_settings(config, values)
+        self.assertEqual(saved["model_catalog"]["gemini"], ["gemini-brand-new-extra"])
+        self.assertEqual(
+            saved["rotation"]["model"]["models"],
+            ["gemini-3.1-flash-lite", "gemini-brand-new-extra"],
         )
 
 

@@ -174,6 +174,34 @@ def _restore_batch_globals(snapshot: dict) -> None:
     batch_mod.load_json_file = load_json_file
 
 
+def _reapply_explicit_context_overrides(overrides: dict) -> None:
+    """Re-apply variant context flags after load_batch_settings.
+
+    load_batch_settings() always folds project_context_settings.json into
+    batch.rag / batch.source_index, which would otherwise clobber explicit
+    experiment overrides. Keep BASE_DIR intact so macro paths and store dirs
+    still resolve against the active project.
+    """
+    if not isinstance(overrides, dict):
+        return
+    batch = overrides.get('batch')
+    if not isinstance(batch, dict):
+        return
+    batch_mod = _batch()
+    rag = batch.get('rag')
+    if isinstance(rag, dict):
+        if 'enabled' in rag:
+            batch_mod.RAG_ENABLED = bool(rag['enabled'])
+        if 'bootstrap_on_build' in rag:
+            batch_mod.RAG_BOOTSTRAP_ON_BUILD = bool(rag['bootstrap_on_build'])
+    source_index = batch.get('source_index')
+    if isinstance(source_index, dict) and 'enabled' in source_index:
+        batch_mod.SOURCE_INDEX_ENABLED = bool(source_index['enabled'])
+    story_memory = batch.get('story_memory')
+    if isinstance(story_memory, dict) and 'enabled' in story_memory:
+        batch_mod.STORY_MEMORY_ENABLED = bool(story_memory['enabled'])
+
+
 @contextmanager
 def variant_batch_settings(overrides: dict):
     batch_mod = _batch()
@@ -196,7 +224,10 @@ def variant_batch_settings(overrides: dict):
     batch_mod._RAG_STORE = None
     batch_mod._SOURCE_INDEX_STORE = None
     try:
+        # Preserve legacy.BASE_DIR so project-scoped paths (macro_setting_file,
+        # RAG/source-index store dirs) resolve against the active game root.
         batch_mod.load_batch_settings()
+        _reapply_explicit_context_overrides(overrides)
         yield summarize_variant_settings()
     finally:
         _restore_batch_globals(baseline)

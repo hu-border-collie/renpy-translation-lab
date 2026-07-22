@@ -155,6 +155,8 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             self.window.sync_backend_combo.setCurrentIndex(litellm_index)
 
     def test_models_page_is_gemini_only(self):
+        # Materialize the lazy models settings page before inspecting widgets.
+        _ = self.window.sync_model_combo
         row = self.window._settings_nav_rows["models"]
         page = self.window.settings_stack.widget(row)
         titles = {group.title() for group in page.findChildren(QGroupBox)}

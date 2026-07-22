@@ -232,9 +232,18 @@ from .litellm_settings import (
     read_sync_backend_models,
     write_sync_backend_models,
 )
+from gemini_model_catalog import (
+    BUILTIN_GEMINI_EMBEDDING_MODELS,
+    BUILTIN_GEMINI_TRANSLATION_MODELS,
+    merge_model_lists,
+    resolve_gemini_embedding_models,
+    resolve_gemini_translation_models,
+    write_model_catalog_extras,
+)
 from litellm_provider_config import (
     DEFAULT_MODELS,
     SUPPORTED_PROVIDERS,
+    catalog_source_label,
     installed_litellm_version,
     version_key,
     ProviderCredentialStoreError,
@@ -270,6 +279,7 @@ from .settings_schema import (
     context_primary_setting_fields,
     BASIC_RECOMMENDED_VALUES,
     SettingField,
+    allowed_gemini_rotation_models,
     apply_advanced_settings,
     grouped_advanced_fields,
     read_advanced_settings,
@@ -373,6 +383,33 @@ _SETTINGS_CONFIG_PAGE_KEYS = frozenset(
         "advanced",
     }
 )
+# Flat dirty-snapshot keys owned by each config section (not advanced fields).
+_CONFIG_SNAPSHOT_KEYS_BY_PAGE: dict[str, frozenset[str]] = {
+    "context": frozenset(
+        {
+            "rag_enabled",
+            "source_index_enabled",
+            "bootstrap_on_build",
+            "context_storage_location",
+        }
+    ),
+    "models": frozenset(
+        {
+            "sync_model",
+            "batch_model",
+            "sync_embedding_model",
+            "batch_embedding_model",
+            "batch_thinking_level",
+        }
+    ),
+    "litellm": frozenset(
+        {
+            "sync_backend",
+            "litellm_model",
+        }
+    ),
+    "appearance": frozenset({"theme"}),
+}
 # Attribute → settings section for lazy materialization (tests + direct access).
 _SETTINGS_LAZY_ATTR_TO_PAGE: dict[str, str] = {
     "_games_registry_panel": "workspace",
@@ -2370,10 +2407,9 @@ class MainWindow(QMainWindow):
             )
         self._settings_lazy_resolving = True
         try:
-            if page_key in _SETTINGS_CONFIG_PAGE_KEYS:
-                self._ensure_settings_pages_for_config()
-            else:
-                self._ensure_settings_page(page_key)
+            # Only materialize the page that owns this attribute. Full config
+            # fan-out remains save/reload's job via _ensure_settings_pages_for_config.
+            self._ensure_settings_page(page_key)
         finally:
             self._settings_lazy_resolving = False
         try:
@@ -2392,16 +2428,19 @@ class MainWindow(QMainWindow):
         )
 
     def _ensure_settings_page(self, key: str, *, populate: bool = True) -> None:
-        """Build one settings section and swap it into the settings stack."""
+        """Build one settings section and swap it into the settings stack.
+
+        Visiting a config section only materializes that section. Building every
+        config page at once made tab switches hitch after Advanced grew heavier.
+        Full config materialization still happens on save/reload via
+        ``_ensure_settings_pages_for_config``.
+        """
         if not self._settings_lazy_ready():
             return
         built = getattr(self, "_settings_pages_built", None)
         if built is None:
             return
         if key in built:
-            return
-        if populate and key in _SETTINGS_CONFIG_PAGE_KEYS:
-            self._ensure_settings_pages_for_config()
             return
         builders = getattr(self, "_settings_page_builders", {})
         builder_name = builders.get(key)
@@ -2432,9 +2471,24 @@ class MainWindow(QMainWindow):
                 set_gate = getattr(panel, "set_host_task_running", None)
                 if callable(set_gate):
                     set_gate(True)
+        # Only fill the page we just built — never re-run a full config pass on
+        # every tab visit (that re-read disk + re-applied theme and felt laggy).
+        if (
+            populate
+            and key in _SETTINGS_CONFIG_PAGE_KEYS
+            and not getattr(self, "_loading_config_to_ui", False)
+        ):
+            self._load_config_to_ui(refresh_task_gates=False, pages={key})
+            if key == "api_keys" and "api_status_label" in self.__dict__:
+                self._refresh_api_status()
 
     def _ensure_settings_pages_for_config(self) -> None:
-        """Ensure every section that participates in config load/save/dirty."""
+        """Ensure every section that participates in config load/save/dirty.
+
+        Used by save/reload/restore — not by ordinary settings-tab navigation.
+        When some config pages are already open, preserve their current UI values
+        across the full materialization so save does not clobber in-progress edits.
+        """
         if not self._settings_lazy_ready():
             return
         built = getattr(self, "_settings_pages_built", set())
@@ -2443,11 +2497,20 @@ class MainWindow(QMainWindow):
             for key, _label, _builder in _SETTINGS_PAGE_SPECS
             if key in _SETTINGS_CONFIG_PAGE_KEYS and key not in built
         ]
+        if not pending:
+            return
+        preserve: dict[str, object] | None = None
+        if built.intersection(_SETTINGS_CONFIG_PAGE_KEYS) and not getattr(
+            self, "_loading_config_to_ui", False
+        ):
+            preserve = self._current_config_ui_snapshot()
         for key in pending:
             self._ensure_settings_page(key, populate=False)
-        if pending and not getattr(self, "_loading_config_to_ui", False):
+        if not getattr(self, "_loading_config_to_ui", False):
             self._load_config_to_ui(refresh_task_gates=False)
-            if hasattr(self, "api_status_label"):
+            if preserve is not None:
+                self._restore_config_ui_snapshot(preserve)
+            if "api_status_label" in self.__dict__:
                 self._refresh_api_status()
 
     def _wire_settings_models_signals(self) -> None:
@@ -2678,25 +2741,20 @@ class MainWindow(QMainWindow):
         sync_layout = self._settings_form(sync_box)
 
         self.sync_model_combo = NoWheelComboBox()
-        self.sync_model_combo.addItems([
-            "gemini-3.5-flash",
-            "gemini-3.1-pro-preview",
-            "gemini-3.1-flash-lite",
-            "gemini-3-flash-preview",
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-        ])
+        self.sync_model_combo.setEditable(False)
+        self.sync_model_combo.addItems(list(BUILTIN_GEMINI_TRANSLATION_MODELS))
         sync_layout.addRow("翻译模型：", self.sync_model_combo)
 
         self.sync_embedding_combo = NoWheelComboBox()
-        self.sync_embedding_combo.addItems([
-            "gemini-embedding-2",
-            "gemini-embedding-001",
-        ])
+        self.sync_embedding_combo.setEditable(False)
+        self.sync_embedding_combo.addItems(list(BUILTIN_GEMINI_EMBEDDING_MODELS))
         sync_layout.addRow("RAG 向量模型：", self.sync_embedding_combo)
 
-        sync_hint = QLabel("此处只配置 Gemini 同步模型；LiteLLM 已移至左侧独立页面。")
+        sync_hint = QLabel(
+            "此处只配置 Gemini 同步/批量所用模型，从下拉列表选择（不可手输）。"
+            "若要增加自定义模型 ID，请到「设置 → 高级 → 模型目录」。"
+            "LiteLLM 已移至左侧独立页面。"
+        )
         sync_hint.setWordWrap(True)
         sync_hint.setObjectName("config_hint_label")
         sync_layout.addRow(sync_hint)
@@ -2706,22 +2764,13 @@ class MainWindow(QMainWindow):
         batch_layout = self._settings_form(batch_box)
 
         self.batch_model_combo = NoWheelComboBox()
-        self.batch_model_combo.addItems([
-            "gemini-3.5-flash",
-            "gemini-3.1-pro-preview",
-            "gemini-3.1-flash-lite",
-            "gemini-3-flash-preview",
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-        ])
+        self.batch_model_combo.setEditable(False)
+        self.batch_model_combo.addItems(list(BUILTIN_GEMINI_TRANSLATION_MODELS))
         batch_layout.addRow("翻译模型：", self.batch_model_combo)
 
         self.batch_embedding_combo = NoWheelComboBox()
-        self.batch_embedding_combo.addItems([
-            "gemini-embedding-2",
-            "gemini-embedding-001",
-        ])
+        self.batch_embedding_combo.setEditable(False)
+        self.batch_embedding_combo.addItems(list(BUILTIN_GEMINI_EMBEDDING_MODELS))
         batch_layout.addRow("RAG 向量模型：", self.batch_embedding_combo)
 
         self.batch_thinking_combo = NoWheelComboBox()
@@ -2936,8 +2985,7 @@ class MainWindow(QMainWindow):
         backend_layout.addRow("Provider：", self.litellm_provider_combo)
 
         self.litellm_model_combo = NoWheelComboBox()
-        self.litellm_model_combo.setEditable(True)
-        add_editable_combo_popup_action(self.litellm_model_combo)
+        self._configure_editable_model_combo(self.litellm_model_combo)
         self.litellm_model_combo.addItems(DEFAULT_MODELS["openai"])
         self.litellm_model_combo.currentTextChanged.connect(self._on_litellm_model_changed)
         model_row = QWidget()
@@ -3134,6 +3182,9 @@ class MainWindow(QMainWindow):
         ):
             if group_title in skipped_categories:
                 continue
+            if group_title == "模型目录":
+                layout.addWidget(self._build_model_catalog_group(fields))
+                continue
             group = QGroupBox(group_title)
             form = self._settings_form(group)
             for field in fields:
@@ -3149,6 +3200,41 @@ class MainWindow(QMainWindow):
             layout.addWidget(group)
         layout.addStretch(1)
         return page
+
+    def _build_model_catalog_group(self, fields: tuple[SettingField, ...]) -> QWidget:
+        """Compact add/remove editors for custom Gemini catalog models."""
+        group = QGroupBox("模型目录")
+        outer = QVBoxLayout(group)
+        outer.setContentsMargins(14, 18, 14, 14)
+        outer.setSpacing(12)
+
+        intro = QLabel(
+            "扩展「设置 → 模型」下拉可选的自定义模型。内置模型始终可用，无需在此添加。"
+        )
+        intro.setWordWrap(True)
+        intro.setObjectName("config_hint_label")
+        outer.addWidget(intro)
+
+        for field in fields:
+            if field.key in CONTEXT_PRIMARY_SETTING_KEYS:
+                continue
+            widget = self._create_advanced_setting_widget(field)
+            self._advanced_setting_widgets[field.key] = widget
+            section = QWidget()
+            section_layout = QVBoxLayout(section)
+            section_layout.setContentsMargins(0, 0, 0, 0)
+            section_layout.setSpacing(4)
+            title = QLabel(field.label)
+            title.setObjectName("settings_description_label")
+            section_layout.addWidget(title)
+            section_layout.addWidget(widget)
+            error = QLabel()
+            error.setWordWrap(True)
+            error.setObjectName("settings_error_label")
+            self._advanced_setting_error_labels[field.key] = error
+            section_layout.addWidget(error)
+            outer.addWidget(section)
+        return group
 
     def _advanced_setting_row(self, field: SettingField, widget: QWidget) -> QWidget:
         row = QWidget()
@@ -3281,9 +3367,21 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"已填入查找到的 Ren'Py SDK：{chosen}", 6000)
         self._append_log(f"查找 Ren'Py SDK：已选择 {chosen}")
 
+    def _configure_editable_model_combo(self, combo: NoWheelComboBox) -> None:
+        """Editable model field that still has a clear dropdown for picking list items.
+
+        On Windows/stylesheets, ``setEditable(True)`` can hide the native combo
+        arrow; mirror LiteLLM and install an explicit popup action.
+        """
+        combo.setEditable(True)
+        combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        add_editable_combo_popup_action(combo)
+
     def _create_advanced_setting_widget(self, field: SettingField) -> QWidget:
         if field.kind == "bool":
             widget = QCheckBox()
+            if field.key == "model_rotation_enabled":
+                widget.toggled.connect(self._on_model_rotation_enabled_toggled)
         elif field.kind == "int":
             widget = QSpinBox()
             widget.setAccelerated(True)
@@ -3297,6 +3395,15 @@ class MainWindow(QMainWindow):
             minimum = float(field.minimum if field.minimum is not None else -999999.0)
             maximum = float(field.maximum if field.maximum is not None else 999999.0)
             widget.setRange(minimum, maximum)
+        elif field.kind == "gemini_model_list":
+            widget = self._create_gemini_model_checklist()
+        elif field.kind == "gemini_catalog_list":
+            kind = (
+                "embedding"
+                if field.key == "catalog_gemini_embedding_models"
+                else "translation"
+            )
+            widget = self._create_gemini_catalog_list_editor(kind=kind)
         elif field.kind in {"text", "list", "json"}:
             widget = QTextEdit()
             widget.setAcceptRichText(False)
@@ -3309,6 +3416,215 @@ class MainWindow(QMainWindow):
                 widget.setPlaceholderText("留空使用默认路径" if "路径" in field.label else "可留空")
         widget.setToolTip(field.description)
         return widget
+
+    def _create_gemini_catalog_list_editor(self, *, kind: str) -> QWidget:
+        """Compact custom-model editor: short list + single-line add/remove."""
+        host = QWidget()
+        host.setObjectName(f"gemini_catalog_editor_{kind}")
+        host.setProperty("catalog_kind", kind)
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        model_list = QListWidget()
+        model_list.setObjectName(f"gemini_catalog_list_{kind}")
+        model_list.setAlternatingRowColors(True)
+        model_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        model_list.setMaximumHeight(110)
+        model_list.setMinimumHeight(72)
+        layout.addWidget(model_list)
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        entry = QLineEdit()
+        entry.setObjectName(f"gemini_catalog_entry_{kind}")
+        entry.setClearButtonEnabled(True)
+        entry.setPlaceholderText(
+            "例如 gemini-embedding-custom"
+            if kind == "embedding"
+            else "例如 gemini-experimental-foo"
+        )
+        row_layout.addWidget(entry, 1)
+
+        add_btn = QPushButton("添加")
+        add_btn.setObjectName("secondary_btn")
+        add_btn.setToolTip("将上方输入的模型 ID 加入列表（仅非内置 ID）。")
+        row_layout.addWidget(add_btn)
+
+        remove_btn = QPushButton("删除所选")
+        remove_btn.setObjectName("secondary_btn")
+        remove_btn.setToolTip("删除列表中选中的自定义模型。")
+        row_layout.addWidget(remove_btn)
+        layout.addWidget(row)
+
+        def _add_model() -> None:
+            name = entry.text().strip()
+            if not name:
+                return
+            from gemini_model_catalog import extras_beyond_builtins
+
+            extras = extras_beyond_builtins([name], kind=kind)
+            if not extras:
+                self.statusBar().showMessage(
+                    "内置模型无需添加，已在「设置 → 模型」中可选。",
+                    4000,
+                )
+                entry.clear()
+                return
+            cleaned = extras[0]
+            existing = {
+                model_list.item(i).text().strip()
+                for i in range(model_list.count())
+                if model_list.item(i) is not None
+            }
+            if cleaned in existing:
+                self.statusBar().showMessage(f"已在列表中：{cleaned}", 3000)
+                entry.clear()
+                return
+            model_list.addItem(cleaned)
+            entry.clear()
+            model_list.setCurrentRow(model_list.count() - 1)
+
+        def _remove_selected() -> None:
+            for item in model_list.selectedItems():
+                row_index = model_list.row(item)
+                model_list.takeItem(row_index)
+
+        add_btn.clicked.connect(_add_model)
+        entry.returnPressed.connect(_add_model)
+        remove_btn.clicked.connect(_remove_selected)
+        host._catalog_list = model_list  # type: ignore[attr-defined]
+        host._catalog_entry = entry  # type: ignore[attr-defined]
+        return host
+
+    def _gemini_catalog_list_values(self, widget: QWidget) -> list[str]:
+        model_list = getattr(widget, "_catalog_list", None)
+        if not isinstance(model_list, QListWidget):
+            return []
+        values: list[str] = []
+        for index in range(model_list.count()):
+            item = model_list.item(index)
+            if item is None:
+                continue
+            text = item.text().strip()
+            if text and text not in values:
+                values.append(text)
+        return values
+
+    def _set_gemini_catalog_list_values(self, widget: QWidget, values: object) -> None:
+        model_list = getattr(widget, "_catalog_list", None)
+        if not isinstance(model_list, QListWidget):
+            return
+        kind = str(widget.property("catalog_kind") or "translation")
+        from gemini_model_catalog import extras_beyond_builtins
+
+        cleaned = extras_beyond_builtins(values, kind=kind)
+        previous = model_list.blockSignals(True)
+        try:
+            model_list.clear()
+            for name in cleaned:
+                model_list.addItem(name)
+        finally:
+            model_list.blockSignals(previous)
+
+    def _create_gemini_model_checklist(self) -> QListWidget:
+        """Multi-select checklist limited to known Gemini translation models."""
+        widget = QListWidget()
+        widget.setObjectName("model_rotation_models_list")
+        widget.setMinimumHeight(160)
+        widget.setMaximumHeight(240)
+        widget.setAlternatingRowColors(True)
+        self._refresh_gemini_model_checklist(widget)
+        return widget
+
+    def _refresh_gemini_model_checklist(
+        self,
+        widget: QListWidget | None = None,
+        *,
+        selected: object | None = None,
+        config: dict | None = None,
+    ) -> None:
+        """Rebuild checklist rows from the current Gemini catalog."""
+        if widget is None:
+            widgets = getattr(self, "_advanced_setting_widgets", {})
+            candidate = widgets.get("model_rotation_models")
+            widget = candidate if isinstance(candidate, QListWidget) else None
+        if widget is None:
+            return
+        if selected is None:
+            selected = self._gemini_model_checklist_values(widget)
+        if config is None:
+            try:
+                loaded = self.state.load_translator_config()
+                config = loaded if isinstance(loaded, dict) else {}
+            except Exception:
+                config = {}
+        models = allowed_gemini_rotation_models(config)
+        previous_block = widget.blockSignals(True)
+        try:
+            widget.clear()
+            selected_set = {
+                str(item).strip()
+                for item in (selected if isinstance(selected, (list, tuple, set)) else [])
+                if str(item).strip()
+            }
+            for name in models:
+                item = QListWidgetItem(name)
+                item.setFlags(
+                    item.flags()
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsEnabled
+                    | Qt.ItemFlag.ItemIsSelectable
+                )
+                item.setCheckState(
+                    Qt.CheckState.Checked
+                    if name in selected_set
+                    else Qt.CheckState.Unchecked
+                )
+                widget.addItem(item)
+        finally:
+            widget.blockSignals(previous_block)
+
+    def _gemini_model_checklist_values(self, widget: QListWidget) -> list[str]:
+        selected: list[str] = []
+        for index in range(widget.count()):
+            item = widget.item(index)
+            if item is None:
+                continue
+            if item.checkState() == Qt.CheckState.Checked:
+                text = item.text().strip()
+                if text:
+                    selected.append(text)
+        return selected
+
+    def _set_gemini_model_checklist_values(
+        self,
+        widget: QListWidget,
+        values: object,
+    ) -> None:
+        selected = {
+            str(item).strip()
+            for item in (values if isinstance(values, (list, tuple, set)) else [])
+            if str(item).strip()
+        }
+        # Preserve order from the checklist; only toggle known rows.
+        for index in range(widget.count()):
+            item = widget.item(index)
+            if item is None:
+                continue
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if item.text().strip() in selected
+                else Qt.CheckState.Unchecked
+            )
+
+    def _on_model_rotation_enabled_toggled(self, checked: bool) -> None:
+        widgets = getattr(self, "_advanced_setting_widgets", {})
+        checklist = widgets.get("model_rotation_models")
+        if checklist is not None:
+            checklist.setEnabled(bool(checked))
 
     def _advanced_setting_placeholder(self, field: SettingField) -> str:
         if field.kind == "list":
@@ -5591,18 +5907,20 @@ class MainWindow(QMainWindow):
         return normalize_work_mode(self._work_mode)
 
     def _selected_sync_backend(self) -> str:
-        combo = getattr(self, "sync_backend_combo", None)
+        # Use __dict__/settings_widget — plain getattr() would lazy-build every
+        # config page via __getattr__ when the LiteLLM section is unvisited.
+        combo = self._settings_widget("sync_backend_combo")
         if combo is None:
             return "gemini"
         value = combo.currentData()
         return value if value in {"gemini", "litellm"} else "gemini"
 
     def _litellm_model_text(self) -> str:
-        combo = getattr(self, "litellm_model_combo", None)
+        combo = self._settings_widget("litellm_model_combo")
         model = combo.currentText().strip() if combo is not None else ""
         if not model or "/" in model:
             return model
-        provider_combo = getattr(self, "litellm_provider_combo", None)
+        provider_combo = self._settings_widget("litellm_provider_combo")
         provider = (
             str(provider_combo.currentData() or "").strip().lower()
             if provider_combo is not None
@@ -5614,7 +5932,7 @@ class MainWindow(QMainWindow):
         model_provider = provider_from_model(self._litellm_model_text())
         if model_provider:
             return model_provider
-        combo = getattr(self, "litellm_provider_combo", None)
+        combo = self._settings_widget("litellm_provider_combo")
         if combo is not None:
             provider = str(combo.currentData() or "").strip().lower()
             if provider:
@@ -5628,7 +5946,7 @@ class MainWindow(QMainWindow):
         *,
         preserve_current: bool = False,
     ) -> None:
-        combo = getattr(self, "litellm_model_combo", None)
+        combo = self._settings_widget("litellm_model_combo")
         if combo is None:
             return
         current = combo.currentText().strip()
@@ -5645,8 +5963,8 @@ class MainWindow(QMainWindow):
         self._on_litellm_model_changed(combo.currentText())
 
     def _refresh_litellm_credential_status(self) -> None:
-        provider_label = getattr(self, "litellm_provider_label", None)
-        status_label = getattr(self, "litellm_credential_status_label", None)
+        provider_label = self._settings_widget("litellm_provider_label")
+        status_label = self._settings_widget("litellm_credential_status_label")
         if provider_label is None or status_label is None:
             return
         status = provider_credential_status(self._litellm_model_text(), os.environ)
@@ -5667,7 +5985,7 @@ class MainWindow(QMainWindow):
 
     def _on_litellm_model_changed(self, _text: str) -> None:
         provider = provider_from_model(self._litellm_model_text())
-        provider_combo = getattr(self, "litellm_provider_combo", None)
+        provider_combo = self._settings_widget("litellm_provider_combo")
         if provider and provider_combo is not None and not getattr(self, "_updating_litellm_provider", False):
             index = provider_combo.findData(provider)
             if index >= 0 and index != provider_combo.currentIndex():
@@ -5679,7 +5997,7 @@ class MainWindow(QMainWindow):
     def _on_litellm_provider_changed(self, _index: int) -> None:
         if self._updating_litellm_provider:
             return
-        provider_combo = getattr(self, "litellm_provider_combo", None)
+        provider_combo = self._settings_widget("litellm_provider_combo")
         provider = (
             str(provider_combo.currentData() or "").strip().lower()
             if provider_combo is not None
@@ -5696,7 +6014,7 @@ class MainWindow(QMainWindow):
         self._refresh_litellm_credential_status()
 
     def _refresh_litellm_version_label(self) -> None:
-        label = getattr(self, "litellm_version_label", None)
+        label = self._settings_widget("litellm_version_label")
         if label is None:
             return
         installed = installed_litellm_version()
@@ -5735,7 +6053,7 @@ class MainWindow(QMainWindow):
     def _on_check_litellm_version(self) -> None:
         if getattr(self, "_litellm_version_worker", None) is not None:
             return
-        button = getattr(self, "litellm_check_version_btn", None)
+        button = self._settings_widget("litellm_check_version_btn")
         if button is not None:
             button.setEnabled(False)
             button.setText("正在检查…")
@@ -5756,7 +6074,7 @@ class MainWindow(QMainWindow):
         self._litellm_version_worker = None
         if worker is not None:
             worker.deleteLater()
-        button = getattr(self, "litellm_check_version_btn", None)
+        button = self._settings_widget("litellm_check_version_btn")
         if button is not None:
             button.setText("检查更新")
         self._litellm_latest_version = latest
@@ -5764,7 +6082,7 @@ class MainWindow(QMainWindow):
         self._litellm_latest_requires_python = requires_python
         self._refresh_litellm_version_label()
         if error:
-            label = getattr(self, "litellm_version_label", None)
+            label = self._settings_widget("litellm_version_label")
             if label is not None:
                 current = f"本机 {installed}" if installed else "尚未安装"
                 label.setText(f"{current}；检查更新失败，请稍后重试。")
@@ -5776,11 +6094,17 @@ class MainWindow(QMainWindow):
         provider = self._current_litellm_provider()
         if not provider:
             return
-        button = getattr(self, "litellm_refresh_models_btn", None)
+        button = self._settings_widget("litellm_refresh_models_btn")
         if button is not None:
             button.setEnabled(False)
             button.setText("正在加载…")
-        worker = LiteLLMModelCatalogWorker(provider, self)
+        api_key = ""
+        if provider != "ollama":
+            try:
+                api_key = load_provider_api_key(provider)
+            except ProviderCredentialStoreError:
+                api_key = ""
+        worker = LiteLLMModelCatalogWorker(provider, api_key=api_key, parent=self)
         worker.completed.connect(
             lambda models, source, error, selected=provider: self._on_litellm_models_loaded(
                 selected, models, error, source
@@ -5796,7 +6120,7 @@ class MainWindow(QMainWindow):
         self._litellm_catalog_worker = None
         if worker is not None:
             worker.deleteLater()
-        button = getattr(self, "litellm_refresh_models_btn", None)
+        button = self._settings_widget("litellm_refresh_models_btn")
         if button is not None:
             button.setText("联网更新列表")
         self._on_sync_backend_changed(-1)
@@ -5806,13 +6130,9 @@ class MainWindow(QMainWindow):
         values = tuple(str(model) for model in models)
         self._litellm_catalog_models[provider] = values
         self._litellm_catalog_source = source
-        source_label = getattr(self, "litellm_catalog_status_label", None)
+        source_label = self._settings_widget("litellm_catalog_status_label")
         if source_label is not None:
-            source_label.setText(
-                "目录来源：LiteLLM 官方在线目录。"
-                if source == "online"
-                else "目录来源：本机 LiteLLM 随包目录（联网失败，可能过时）。"
-            )
+            source_label.setText(catalog_source_label(str(source or "")))
         if self._current_litellm_provider() == provider:
             self._set_litellm_models(provider, values, preserve_current=True)
         message = f"已加载 {len(values)} 个 {provider} 模型。"
@@ -5884,11 +6204,11 @@ class MainWindow(QMainWindow):
 
     def _on_sync_backend_changed(self, _index: int) -> None:
         backend = self._selected_sync_backend()
-        hint = getattr(self, "sync_backend_hint", None)
+        hint = self._settings_widget("sync_backend_hint")
         if hint is None:
             return
-        install_btn = getattr(self, "install_litellm_btn", None)
-        install_progress = getattr(self, "litellm_install_progress", None)
+        install_btn = self._settings_widget("install_litellm_btn")
+        install_progress = self._settings_widget("litellm_install_progress")
         installing = self._litellm_install_running()
         installed_version = installed_litellm_version()
         installed = bool(installed_version) and importlib.util.find_spec("litellm") is not None
@@ -5951,10 +6271,11 @@ class MainWindow(QMainWindow):
                 install_progress.setRange(0, 0)
                 install_progress.setFormat("正在后台更新 LiteLLM…" if installed else "正在后台安装 LiteLLM…")
 
-        model_combo = getattr(self, "litellm_model_combo", None)
+        model_combo = self._settings_widget("litellm_model_combo")
         if model_combo is not None:
             model_combo.setEnabled(backend == "litellm" and not installing)
-        gemini_sync_model_combo = getattr(self, "sync_model_combo", None)
+        # Never getattr(sync_model_combo): that would force-build the models page.
+        gemini_sync_model_combo = self._settings_widget("sync_model_combo")
         if gemini_sync_model_combo is not None:
             gemini_sync_model_combo.setEnabled(backend == "gemini")
             gemini_sync_model_combo.setToolTip(
@@ -5970,10 +6291,10 @@ class MainWindow(QMainWindow):
             "litellm_delete_key_btn",
             "litellm_test_connection_btn",
         ):
-            widget = getattr(self, name, None)
+            widget = self._settings_widget(name)
             if widget is not None:
                 widget.setEnabled(backend == "litellm" and not installing)
-        version_button = getattr(self, "litellm_check_version_btn", None)
+        version_button = self._settings_widget("litellm_check_version_btn")
         if version_button is not None:
             checking = getattr(self, "_litellm_version_worker", None) is not None
             version_button.setEnabled(not installing and not checking)
@@ -7612,6 +7933,10 @@ class MainWindow(QMainWindow):
                 values[field.key] = widget.isChecked()
             elif field.kind in {"int", "float"}:
                 values[field.key] = widget.value()
+            elif field.kind == "gemini_model_list" and isinstance(widget, QListWidget):
+                values[field.key] = self._gemini_model_checklist_values(widget)
+            elif field.kind == "gemini_catalog_list":
+                values[field.key] = self._gemini_catalog_list_values(widget)
             elif hasattr(widget, "toPlainText"):
                 values[field.key] = widget.toPlainText().strip()
             else:
@@ -7635,13 +7960,29 @@ class MainWindow(QMainWindow):
                 widget.setValue(int(value))
             elif field.kind == "float":
                 widget.setValue(float(value))
+            elif field.kind == "gemini_model_list" and isinstance(widget, QListWidget):
+                try:
+                    config = self.state.load_translator_config()
+                except Exception:
+                    config = {}
+                self._refresh_gemini_model_checklist(
+                    widget,
+                    selected=value,
+                    config=config if isinstance(config, dict) else {},
+                )
+            elif field.kind == "gemini_catalog_list":
+                self._set_gemini_catalog_list_values(widget, value)
             elif hasattr(widget, "setPlainText"):
                 widget.setPlainText(self._format_advanced_setting_text(field, value))
             else:
                 widget.setText(str(value))
+        # Keep rotation pool checklist enabled only when model rotation is on.
+        enabled_widget = widgets.get("model_rotation_enabled")
+        if isinstance(enabled_widget, QCheckBox):
+            self._on_model_rotation_enabled_toggled(enabled_widget.isChecked())
 
     def _format_advanced_setting_text(self, field: SettingField, value: object) -> str:
-        if field.kind == "list":
+        if field.kind in {"list", "gemini_model_list", "gemini_catalog_list"}:
             if isinstance(value, (list, tuple, set)):
                 return "\n".join(str(item) for item in value)
             return str(value or "")
@@ -7773,25 +8114,153 @@ class MainWindow(QMainWindow):
         except Exception:
             return
 
+    def _config_snapshot_keys_for_pages(self, pages: set[str]) -> set[str]:
+        """Dirty-snapshot keys owned by the given settings sections."""
+        keys: set[str] = set()
+        for page in pages:
+            keys.update(_CONFIG_SNAPSHOT_KEYS_BY_PAGE.get(page, ()))
+        if "advanced" in pages:
+            keys.update(
+                field.key
+                for field in ADVANCED_SETTING_FIELDS
+                if field.key not in _SETTINGS_WORKSPACE_MANAGED_KEYS
+            )
+        return keys
+
+    def _update_config_ui_saved_snapshot(
+        self, *, pages: set[str] | None = None
+    ) -> None:
+        """Refresh the unsaved-changes baseline after loading config into widgets.
+
+        Full loads (``pages is None``) replace the baseline entirely. Partial
+        loads only update keys for the reloaded sections so edits on other open
+        pages stay dirty and are not folded into the "saved" baseline.
+        """
+        current = self._current_config_ui_snapshot()
+        if pages is None:
+            self._config_ui_saved_snapshot = current
+            return
+        baseline = getattr(self, "_config_ui_saved_snapshot", None) or {}
+        if not baseline:
+            # First materialization: accept the full current shape (defaults for
+            # unbuilt widgets) so later comparisons are well-defined.
+            self._config_ui_saved_snapshot = current
+            return
+        page_keys = self._config_snapshot_keys_for_pages(pages)
+        if not page_keys:
+            return
+        merged = dict(baseline)
+        for key in page_keys:
+            if key in current:
+                merged[key] = current[key]
+        self._config_ui_saved_snapshot = merged
+
     def _current_config_ui_snapshot(self) -> dict[str, object]:
-        thinking_val = self.batch_thinking_combo.currentData()
+        """Snapshot only already-built settings widgets (no lazy page build)."""
+
+        def _checked(name: str, default: bool = False) -> bool:
+            widget = self._settings_widget(name)
+            return bool(widget.isChecked()) if widget is not None else default
+
+        def _combo_text(name: str, default: str = "") -> str:
+            widget = self._settings_widget(name)
+            if widget is None:
+                return default
+            return self._config_string(widget.currentText())
+
+        thinking_combo = self._settings_widget("batch_thinking_combo")
+        thinking_val = thinking_combo.currentData() if thinking_combo is not None else ""
         thinking_level = thinking_val if isinstance(thinking_val, str) else ""
+        storage_cb = self._settings_widget("context_storage_game_cb")
+        storage_location = (
+            "game"
+            if storage_cb is not None and storage_cb.isChecked()
+            else "tool"
+        )
         snapshot: dict[str, object] = {
-            "rag_enabled": self.rag_enabled_cb.isChecked(),
-            "source_index_enabled": self.source_index_enabled_cb.isChecked(),
-            "bootstrap_on_build": self.bootstrap_on_build_cb.isChecked(),
-            "context_storage_location": "game" if self.context_storage_game_cb.isChecked() else "tool",
+            "rag_enabled": _checked("rag_enabled_cb"),
+            "source_index_enabled": _checked("source_index_enabled_cb"),
+            "bootstrap_on_build": _checked("bootstrap_on_build_cb"),
+            "context_storage_location": storage_location,
             "sync_backend": self._selected_sync_backend(),
-            "sync_model": self.sync_model_combo.currentText().strip(),
+            "sync_model": _combo_text("sync_model_combo"),
             "litellm_model": self._litellm_model_text(),
-            "batch_model": self.batch_model_combo.currentText().strip(),
-            "sync_embedding_model": self.sync_embedding_combo.currentText().strip(),
-            "batch_embedding_model": self.batch_embedding_combo.currentText().strip(),
+            "batch_model": _combo_text("batch_model_combo"),
+            "sync_embedding_model": _combo_text("sync_embedding_combo"),
+            "batch_embedding_model": _combo_text("batch_embedding_combo"),
             "batch_thinking_level": thinking_level,
             "theme": self._current_theme_preference_from_ui(),
         }
         snapshot.update(self._advanced_settings_values_from_ui())
         return snapshot
+
+    def _restore_config_ui_snapshot(self, snapshot: dict[str, object]) -> None:
+        """Re-apply a prior UI snapshot onto already-built settings widgets."""
+        if not snapshot:
+            return
+        previous_loading = getattr(self, "_loading_config_to_ui", False)
+        self._loading_config_to_ui = True
+        try:
+            rag_cb = self._settings_widget("rag_enabled_cb")
+            if rag_cb is not None and "rag_enabled" in snapshot:
+                rag_cb.setChecked(bool(snapshot["rag_enabled"]))
+            source_cb = self._settings_widget("source_index_enabled_cb")
+            if source_cb is not None and "source_index_enabled" in snapshot:
+                source_cb.setChecked(bool(snapshot["source_index_enabled"]))
+            bootstrap_cb = self._settings_widget("bootstrap_on_build_cb")
+            if bootstrap_cb is not None and "bootstrap_on_build" in snapshot:
+                bootstrap_cb.setChecked(bool(snapshot["bootstrap_on_build"]))
+            storage_cb = self._settings_widget("context_storage_game_cb")
+            if storage_cb is not None and "context_storage_location" in snapshot:
+                storage_cb.setChecked(snapshot["context_storage_location"] == "game")
+
+            backend_combo = self._settings_widget("sync_backend_combo")
+            if backend_combo is not None and "sync_backend" in snapshot:
+                backend = str(snapshot.get("sync_backend") or "gemini")
+                idx = backend_combo.findData(backend)
+                if idx >= 0:
+                    backend_combo.setCurrentIndex(idx)
+
+            if "sync_model" in snapshot:
+                sync_model = self._settings_widget("sync_model_combo")
+                if sync_model is not None:
+                    self._set_combo_value(sync_model, snapshot["sync_model"])
+            if "batch_model" in snapshot:
+                batch_model = self._settings_widget("batch_model_combo")
+                if batch_model is not None:
+                    self._set_combo_value(batch_model, snapshot["batch_model"])
+            if "sync_embedding_model" in snapshot:
+                sync_emb = self._settings_widget("sync_embedding_combo")
+                if sync_emb is not None:
+                    self._set_combo_value(sync_emb, snapshot["sync_embedding_model"])
+            if "batch_embedding_model" in snapshot:
+                batch_emb = self._settings_widget("batch_embedding_combo")
+                if batch_emb is not None:
+                    self._set_combo_value(batch_emb, snapshot["batch_embedding_model"])
+            if "batch_thinking_level" in snapshot:
+                self._set_batch_thinking_value(str(snapshot.get("batch_thinking_level") or ""))
+            if "litellm_model" in snapshot:
+                litellm_combo = self._settings_widget("litellm_model_combo")
+                if litellm_combo is not None:
+                    self._set_combo_value(litellm_combo, snapshot["litellm_model"])
+            if "theme" in snapshot:
+                self._set_theme_combo_value(str(snapshot.get("theme") or "system"))
+
+            advanced_keys = {
+                field.key
+                for field in ADVANCED_SETTING_FIELDS
+                if field.key not in _SETTINGS_WORKSPACE_MANAGED_KEYS
+            }
+            advanced_values = {
+                key: snapshot[key] for key in advanced_keys if key in snapshot
+            }
+            if advanced_values and self.__dict__.get("_advanced_setting_widgets"):
+                # Merge onto defaults so partial snapshots still apply cleanly.
+                merged = recommended_advanced_settings()
+                merged.update(advanced_values)
+                self._load_advanced_settings_to_ui(merged)
+        finally:
+            self._loading_config_to_ui = previous_loading
 
     def _config_tab_has_unsaved_changes(self) -> bool:
         if getattr(self, "_loading_config_to_ui", False):
@@ -10414,6 +10883,52 @@ class MainWindow(QMainWindow):
             or "thinking_level" in batch_config
         )
 
+    def _combo_item_texts(self, combo: NoWheelComboBox | None) -> list[str]:
+        if combo is None:
+            return []
+        items: list[str] = []
+        count = getattr(combo, "count", None)
+        item_text = getattr(combo, "itemText", None)
+        if callable(count) and callable(item_text):
+            for index in range(int(count())):
+                text = self._config_string(item_text(index))
+                if text and text not in items:
+                    items.append(text)
+        current = self._config_string(combo.currentText())
+        if current and current not in items:
+            items.append(current)
+        return items
+
+    def _repopulate_model_combo(
+        self,
+        combo: NoWheelComboBox | None,
+        models: list[str],
+        selected: str,
+    ) -> None:
+        if combo is None:
+            return
+        selected = self._config_string(selected)
+        block_signals = getattr(combo, "blockSignals", None)
+        previous_block = block_signals(True) if callable(block_signals) else False
+        try:
+            clear = getattr(combo, "clear", None)
+            if callable(clear):
+                clear()
+            add_items = getattr(combo, "addItems", None)
+            if models and callable(add_items):
+                add_items(models)
+            if selected:
+                self._set_combo_value(combo, selected)
+            else:
+                count = getattr(combo, "count", None)
+                if callable(count) and int(count()) > 0:
+                    combo.setCurrentIndex(0)
+                else:
+                    combo.setCurrentIndex(-1)
+        finally:
+            if callable(block_signals):
+                block_signals(previous_block)
+
     def _set_combo_value(self, combo: NoWheelComboBox, value: Any):
         value = self._config_string(value)
         if not value:
@@ -10424,7 +10939,15 @@ class MainWindow(QMainWindow):
             combo.setCurrentIndex(idx)
         else:
             combo.addItem(value)
-            combo.setCurrentIndex(combo.count() - 1)
+            count = getattr(combo, "count", None)
+            if callable(count):
+                combo.setCurrentIndex(int(count()) - 1)
+        is_editable = getattr(combo, "isEditable", None)
+        line_edit = getattr(combo, "lineEdit", None)
+        if callable(is_editable) and is_editable() and callable(line_edit):
+            editor = line_edit()
+            if editor is not None and hasattr(editor, "setText"):
+                editor.setText(value)
 
     def _set_theme_combo_value(self, value: str) -> None:
         # Use __dict__ lookup so _load_config_to_ui / project switch never force
@@ -10451,15 +10974,18 @@ class MainWindow(QMainWindow):
         finally:
             self._updating_batch_thinking_combo = False
 
-    def _load_theme_to_ui(self, config: dict[str, Any]) -> None:
+    def _load_theme_to_ui(self, config: dict[str, Any], *, apply: bool = True) -> None:
         theme = read_gui_theme_from_config(config)
+        previous = getattr(self, "_theme_preference", None)
         self._theme_preference = theme
         self._loading_theme_to_ui = True
         try:
             self._set_theme_combo_value(theme)
         finally:
             self._loading_theme_to_ui = False
-        self._apply_theme()
+        # Re-applying QSS on every settings tab open is a major hitch.
+        if apply and previous != theme:
+            self._apply_theme()
 
     def _apply_theme(self) -> None:
         qt_app = getattr(self, "_qt_app", None)
@@ -10477,8 +11003,11 @@ class MainWindow(QMainWindow):
             self._append_log(f"加载主题样式失败：{exc}")
 
     def _set_theme_preference(self, preference: str, *, persist: bool) -> None:
-        self._theme_preference = normalize_theme_preference(preference)
-        self._apply_theme()
+        normalized = normalize_theme_preference(preference)
+        changed = getattr(self, "_theme_preference", None) != normalized
+        self._theme_preference = normalized
+        if changed:
+            self._apply_theme()
         if not persist:
             return
         try:
@@ -10510,127 +11039,195 @@ class MainWindow(QMainWindow):
         """
         return self.__dict__.get(name)
 
-    def _load_config_to_ui(self, *, refresh_task_gates: bool = True) -> None:
+    def _load_config_to_ui(
+        self,
+        *,
+        refresh_task_gates: bool = True,
+        pages: set[str] | None = None,
+    ) -> None:
         """Push translator_config into settings widgets that already exist.
+
+        When ``pages`` is set, only widgets belonging to those settings sections
+        are updated (fast path for first opening a single tab).
 
         When ``refresh_task_gates`` is False (cold start), skip probe/resume
         readiness walks; ``_deferred_startup_refresh`` applies them after show.
         Missing lazy settings widgets are skipped — call
         ``_ensure_settings_pages_for_config()`` first for a full UI sync.
         """
+        want = pages  # None => all built pages
         self._loading_config_to_ui = True
         try:
             config = self.state.load_translator_config()
-            self._load_theme_to_ui(config)
+            # Theme QSS is global; only touch appearance widgets / re-apply when needed.
+            if want is None or "appearance" in want:
+                self._load_theme_to_ui(config, apply=(want is None or "appearance" in want))
+            elif want is not None:
+                # Keep preference in sync without re-applying stylesheets.
+                self._theme_preference = read_gui_theme_from_config(config)
+
             # Nothing else to fill until config-bearing pages exist.
             # Use __dict__ so we do not trigger lazy materialization here.
             if (
                 self._settings_widget("rag_enabled_cb") is None
                 and self._settings_widget("batch_model_combo") is None
+                and self._settings_widget("sync_backend_combo") is None
+                and not self.__dict__.get("_advanced_setting_widgets")
+                and self._settings_widget("theme_combo") is None
             ):
                 return
+
             sync_config = self._config_section(config, "sync")
             batch_config = self._config_section(config, "batch")
             sync_rag_config = self._config_section(sync_config, "rag")
             batch_rag_config = self._config_section(batch_config, "rag")
-            context_flags = read_batch_context_flags(
-                config,
-                game_root=self._game_root_str_for_flags(),
-            )
-            rag_cb = self._settings_widget("rag_enabled_cb")
-            if rag_cb is not None:
-                rag_cb.setChecked(context_flags["rag_enabled"])
-            source_cb = self._settings_widget("source_index_enabled_cb")
-            if source_cb is not None:
-                source_cb.setChecked(context_flags["source_index_enabled"])
-            bootstrap_cb = self._settings_widget("bootstrap_on_build_cb")
-            if bootstrap_cb is not None:
-                bootstrap_cb.setChecked(context_flags["bootstrap_on_build"])
-            storage_config = self._config_section(config, "context_storage")
-            storage_location = normalize_context_storage_location(
-                storage_config.get("location", config.get("context_storage_location", ""))
-            )
-            storage_cb = self._settings_widget("context_storage_game_cb")
-            if storage_cb is not None:
-                storage_cb.setChecked(storage_location == "game")
-            self._batch_thinking_config_has_key = "thinking_level" in batch_config
 
-            sync_backend = self._config_string(sync_config.get("backend", "gemini")).lower()
-            if sync_backend not in {"gemini", "litellm"}:
-                sync_backend = "gemini"
-            backend_combo = self._settings_widget("sync_backend_combo")
-            backend_idx = backend_combo.findData(sync_backend) if backend_combo is not None else -1
-            if backend_combo is not None:
-                backend_combo.setCurrentIndex(backend_idx)
+            if want is None or "context" in want:
+                context_flags = read_batch_context_flags(
+                    config,
+                    game_root=self._game_root_str_for_flags(),
+                )
+                rag_cb = self._settings_widget("rag_enabled_cb")
+                if rag_cb is not None:
+                    rag_cb.setChecked(context_flags["rag_enabled"])
+                source_cb = self._settings_widget("source_index_enabled_cb")
+                if source_cb is not None:
+                    source_cb.setChecked(context_flags["source_index_enabled"])
+                bootstrap_cb = self._settings_widget("bootstrap_on_build_cb")
+                if bootstrap_cb is not None:
+                    bootstrap_cb.setChecked(context_flags["bootstrap_on_build"])
+                storage_config = self._config_section(config, "context_storage")
+                storage_location = normalize_context_storage_location(
+                    storage_config.get(
+                        "location", config.get("context_storage_location", "")
+                    )
+                )
+                storage_cb = self._settings_widget("context_storage_game_cb")
+                if storage_cb is not None:
+                    storage_cb.setChecked(storage_location == "game")
 
-            backend_models = read_sync_backend_models(
-                sync_config,
-                sync_backend,
-                str(BASIC_RECOMMENDED_VALUES["sync_model"]),
-            )
-            sync_model = self._settings_widget("sync_model_combo")
-            if sync_model is not None:
-                self._set_combo_value(sync_model, backend_models.gemini_model)
-            litellm_combo = self._settings_widget("litellm_model_combo")
-            if litellm_combo is not None:
-                self._set_combo_value(litellm_combo, backend_models.litellm_model)
-            if backend_combo is not None:
-                self._on_sync_backend_changed(backend_idx)
+            need_models = want is None or "models" in want
+            need_litellm = want is None or "litellm" in want
+            if need_models or need_litellm:
+                self._batch_thinking_config_has_key = "thinking_level" in batch_config
+                sync_backend = self._config_string(
+                    sync_config.get("backend", "gemini")
+                ).lower()
+                if sync_backend not in {"gemini", "litellm"}:
+                    sync_backend = "gemini"
+                backend_combo = self._settings_widget("sync_backend_combo")
+                backend_idx = (
+                    backend_combo.findData(sync_backend)
+                    if backend_combo is not None
+                    else -1
+                )
+                if need_litellm and backend_combo is not None:
+                    backend_combo.setCurrentIndex(backend_idx)
 
-            batch_val = self._config_string(batch_config.get("model", "")) or str(
-                BASIC_RECOMMENDED_VALUES["batch_model"]
-            )
-            batch_model = self._settings_widget("batch_model_combo")
-            if batch_model is not None:
-                self._set_combo_value(batch_model, batch_val)
+                backend_models = read_sync_backend_models(
+                    sync_config,
+                    sync_backend,
+                    str(BASIC_RECOMMENDED_VALUES["sync_model"]),
+                )
+                batch_val = self._config_string(batch_config.get("model", "")) or str(
+                    BASIC_RECOMMENDED_VALUES["batch_model"]
+                )
+                sync_emb_val = self._config_string(
+                    sync_rag_config.get("embedding_model", "")
+                ) or str(BASIC_RECOMMENDED_VALUES["sync_embedding_model"])
+                batch_emb_val = self._config_string(
+                    batch_rag_config.get("embedding_model", "")
+                ) or str(BASIC_RECOMMENDED_VALUES["batch_embedding_model"])
 
-            sync_emb_val = self._config_string(sync_rag_config.get("embedding_model", "")) or str(
-                BASIC_RECOMMENDED_VALUES["sync_embedding_model"]
-            )
-            sync_emb = self._settings_widget("sync_embedding_combo")
-            if sync_emb is not None:
-                self._set_combo_value(sync_emb, sync_emb_val)
+                if need_models:
+                    translation_models = resolve_gemini_translation_models(
+                        config,
+                        extra_selected=[backend_models.gemini_model, batch_val],
+                    )
+                    embedding_models = resolve_gemini_embedding_models(
+                        config,
+                        extra_selected=[sync_emb_val, batch_emb_val],
+                    )
+                    sync_model = self._settings_widget("sync_model_combo")
+                    self._repopulate_model_combo(
+                        sync_model,
+                        translation_models,
+                        backend_models.gemini_model,
+                    )
+                    batch_model = self._settings_widget("batch_model_combo")
+                    self._repopulate_model_combo(
+                        batch_model, translation_models, batch_val
+                    )
+                    sync_emb = self._settings_widget("sync_embedding_combo")
+                    self._repopulate_model_combo(
+                        sync_emb, embedding_models, sync_emb_val
+                    )
+                    batch_emb = self._settings_widget("batch_embedding_combo")
+                    self._repopulate_model_combo(
+                        batch_emb, embedding_models, batch_emb_val
+                    )
+                    if batch_model is not None:
+                        self._on_batch_model_changed(batch_val)
+                        thinking_val = self._batch_thinking_value_for_load(
+                            batch_config, batch_val
+                        )
+                        self._set_batch_thinking_value(thinking_val)
 
-            batch_emb_val = self._config_string(batch_rag_config.get("embedding_model", "")) or str(
-                BASIC_RECOMMENDED_VALUES["batch_embedding_model"]
-            )
-            batch_emb = self._settings_widget("batch_embedding_combo")
-            if batch_emb is not None:
-                self._set_combo_value(batch_emb, batch_emb_val)
+                if need_litellm:
+                    litellm_combo = self._settings_widget("litellm_model_combo")
+                    if litellm_combo is not None:
+                        self._set_combo_value(
+                            litellm_combo, backend_models.litellm_model
+                        )
+                    if backend_combo is not None:
+                        self._on_sync_backend_changed(backend_idx)
 
-            if batch_model is not None:
-                self._on_batch_model_changed(batch_val)
-                thinking_val = self._batch_thinking_value_for_load(batch_config, batch_val)
-                self._set_batch_thinking_value(thinking_val)
-            advanced_values = read_advanced_settings(config)
-            get_game_root = getattr(self.state, "get_game_root", None)
-            current_game_root = get_game_root() if callable(get_game_root) else None
-            if current_game_root and not self._config_string(advanced_values.get("game_root")):
-                advanced_values["game_root"] = str(current_game_root)
-            if self.__dict__.get("_advanced_setting_widgets"):
-                self._load_advanced_settings_to_ui(advanced_values)
-                self._clear_advanced_setting_errors()
+            if want is None or "advanced" in want:
+                advanced_values = read_advanced_settings(config)
+                get_game_root = getattr(self.state, "get_game_root", None)
+                current_game_root = get_game_root() if callable(get_game_root) else None
+                if current_game_root and not self._config_string(
+                    advanced_values.get("game_root")
+                ):
+                    advanced_values["game_root"] = str(current_game_root)
+                if self.__dict__.get("_advanced_setting_widgets"):
+                    self._load_advanced_settings_to_ui(advanced_values)
+                    self._clear_advanced_setting_errors()
+
+            if want is None or "project" in want:
+                # Project page is mostly read-only labels; refresh if present.
+                root_label = self._settings_widget("settings_project_root_value")
+                if root_label is not None:
+                    game_root = self.state.get_game_root()
+                    root_label.setText(str(game_root) if game_root else "（未选择）")
         finally:
             self._batch_thinking_user_changed = False
             self._loading_config_to_ui = False
         if (
             self._settings_widget("rag_enabled_cb") is not None
             or self._settings_widget("batch_model_combo") is not None
+            or self._settings_widget("sync_backend_combo") is not None
+            or self.__dict__.get("_advanced_setting_widgets")
         ):
-            self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
+            # Partial tab loads must not rewrite the whole baseline — that would
+            # treat dirty widgets on other open pages as "already saved".
+            self._update_config_ui_saved_snapshot(pages=want)
         if refresh_task_gates and "translate_btn" in self.__dict__:
             self._set_task_running(bool(getattr(self, "_task_running", False)))
 
     def _on_batch_model_changed(self, text: str):
         is_thinking_supported = self._supports_batch_thinking(text)
-        self.batch_thinking_combo.setEnabled(is_thinking_supported)
+        thinking_combo = self._settings_widget("batch_thinking_combo")
+        if thinking_combo is None:
+            return
+        thinking_combo.setEnabled(is_thinking_supported)
         if not is_thinking_supported:
             self._set_batch_thinking_value("")
             return
 
         default_value = self._batch_thinking_value_for_model_change(
             text,
-            self.batch_thinking_combo.currentData(),
+            thinking_combo.currentData(),
             self._batch_thinking_config_has_key,
             self._batch_thinking_user_changed,
         )
@@ -10702,8 +11299,10 @@ class MainWindow(QMainWindow):
                     sync_config.pop("models", None)
             batch_model = self.batch_model_combo.currentText().strip()
             batch_config["model"] = batch_model
-            sync_rag_config["embedding_model"] = self.sync_embedding_combo.currentText().strip()
-            batch_rag_config["embedding_model"] = self.batch_embedding_combo.currentText().strip()
+            sync_embedding_model = self.sync_embedding_combo.currentText().strip()
+            batch_embedding_model = self.batch_embedding_combo.currentText().strip()
+            sync_rag_config["embedding_model"] = sync_embedding_model
+            batch_rag_config["embedding_model"] = batch_embedding_model
             thinking_val = self.batch_thinking_combo.currentData()
             thinking_level = thinking_val if isinstance(thinking_val, str) else ""
             if self._should_save_batch_thinking_level(
@@ -10723,13 +11322,26 @@ class MainWindow(QMainWindow):
                 current_game_root = self.state.get_game_root()
                 if current_game_root is not None:
                     complete_advanced_values["game_root"] = str(current_game_root)
-                errors = validate_advanced_settings(complete_advanced_values)
+                errors = validate_advanced_settings(
+                    complete_advanced_values,
+                    translator_config=config,
+                )
                 if errors:
                     self._show_advanced_setting_errors(errors)
                     self._show_settings_status("高级设置有无效字段，未保存。", 6000)
                     return False
                 self._clear_advanced_setting_errors()
                 apply_advanced_settings(config, complete_advanced_values)
+                # Persist only non-builtin catalog extensions; drop empty keys.
+                write_model_catalog_extras(
+                    config,
+                    translation_models=list(
+                        complete_advanced_values.get("catalog_gemini_models") or []
+                    ),
+                    embedding_models=list(
+                        complete_advanced_values.get("catalog_gemini_embedding_models") or []
+                    ),
+                )
 
             # Validate every field before either settings file is written. This
             # avoids persisting project flags when the UI reports "未保存".
@@ -10765,6 +11377,11 @@ class MainWindow(QMainWindow):
                 "设置已成功保存（全局项 → translator_config.json；"
                 "RAG/原文索引 → 当前项目 project_context_settings.json）。"
             )
+            # Refresh select-only model dropdowns / rotation checklist from catalog.
+            try:
+                self._load_config_to_ui(refresh_task_gates=False)
+            except Exception as refresh_exc:
+                self._append_log(f"保存后刷新模型列表失败：{refresh_exc}")
             try:
                 ToastNotification.show_toast(self, "设置已成功保存")
             except Exception as exc:

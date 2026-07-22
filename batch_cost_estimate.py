@@ -10,10 +10,24 @@ DEFAULT_PRICING = {
     'version': 1,
     'currency': 'USD',
     'chars_per_input_token': 4.0,
+    # Batch API rates (≈50% of standard paid tier). See:
+    # https://ai.google.dev/gemini-api/docs/pricing
     'models': {
+        'gemini-3.6-flash': {
+            'input_per_million': 0.75,
+            'output_per_million': 3.75,
+        },
+        'gemini-3.5-flash': {
+            'input_per_million': 0.75,
+            'output_per_million': 4.50,
+        },
+        'gemini-3.5-flash-lite': {
+            'input_per_million': 0.15,
+            'output_per_million': 1.25,
+        },
         'gemini-3.1-flash-lite': {
-            'input_per_million': 0.10,
-            'output_per_million': 0.40,
+            'input_per_million': 0.125,
+            'output_per_million': 0.75,
         },
         'gemini-3-flash-preview': {
             'input_per_million': 0.50,

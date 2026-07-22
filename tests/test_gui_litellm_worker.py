@@ -66,14 +66,12 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         self.assertNotIn("provider echoed", completed[0][1])
 
 
-    def test_model_catalog_prefers_official_online_data(self):
-        payload = {
-            "gpt-current": {"litellm_provider": "openai", "mode": "chat"},
-        }
+    def test_model_catalog_prefers_provider_native_catalog(self):
+        payload = {"data": [{"id": "gpt-current"}, {"id": "text-embedding-3-small"}]}
         response = mock.MagicMock()
         response.__enter__.return_value = io.BytesIO(json.dumps(payload).encode("utf-8"))
         completed = []
-        worker = LiteLLMModelCatalogWorker("openai")
+        worker = LiteLLMModelCatalogWorker("openai", api_key="sk-test")
         worker.completed.connect(
             lambda models, source, error: completed.append((models, source, error))
         )
@@ -81,7 +79,148 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         with mock.patch("gui_qt.litellm_worker.urlopen", return_value=response):
             worker.run()
 
-        self.assertEqual(completed, [(('openai/gpt-current',), "online", None)])
+        self.assertEqual(completed, [(("openai/gpt-current",), "openai", None)])
+
+    def test_openrouter_catalog_uses_official_models_endpoint(self):
+        payload = {
+            "data": [
+                {
+                    "id": "openai/gpt-5",
+                    "architecture": {"output_modalities": ["text"]},
+                },
+                {
+                    "id": "anthropic/claude-sonnet",
+                    "architecture": {"output_modalities": ["text"]},
+                },
+            ]
+        }
+        response = mock.MagicMock()
+        response.__enter__.return_value = io.BytesIO(json.dumps(payload).encode("utf-8"))
+        completed = []
+        worker = LiteLLMModelCatalogWorker("openrouter", api_key="or-secret")
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+
+        with mock.patch("gui_qt.litellm_worker.urlopen", return_value=response) as urlopen:
+            worker.run()
+
+        request = urlopen.call_args.args[0]
+        self.assertIn("openrouter.ai/api/v1/models", request.full_url)
+        self.assertEqual(request.get_header("Authorization"), "Bearer or-secret")
+        self.assertEqual(completed[0][1], "openrouter")
+        self.assertIsNone(completed[0][2])
+        self.assertEqual(
+            completed[0][0],
+            (
+                "openrouter/anthropic/claude-sonnet",
+                "openrouter/openai/gpt-5",
+            ),
+        )
+
+    def test_openai_catalog_requires_key_then_uses_official_endpoint(self):
+        completed = []
+        worker = LiteLLMModelCatalogWorker("openai", api_key="")
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+        litellm_payload = {
+            "gpt-from-litellm": {"litellm_provider": "openai", "mode": "chat"},
+        }
+        litellm_response = mock.MagicMock()
+        litellm_response.__enter__.return_value = io.BytesIO(
+            json.dumps(litellm_payload).encode("utf-8")
+        )
+
+        with mock.patch("gui_qt.litellm_worker.urlopen", return_value=litellm_response):
+            worker.run()
+
+        self.assertEqual(completed[0][1], "online")
+        self.assertIn("请先保存 OpenAI API Key", completed[0][2])
+        self.assertEqual(completed[0][0], ("openai/gpt-from-litellm",))
+
+        completed.clear()
+        official_payload = {"data": [{"id": "gpt-5"}, {"id": "text-embedding-3-large"}]}
+        official_response = mock.MagicMock()
+        official_response.__enter__.return_value = io.BytesIO(
+            json.dumps(official_payload).encode("utf-8")
+        )
+        worker = LiteLLMModelCatalogWorker("openai", api_key="sk-test")
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+        with mock.patch(
+            "gui_qt.litellm_worker.urlopen", return_value=official_response
+        ) as urlopen:
+            worker.run()
+        request = urlopen.call_args.args[0]
+        self.assertIn("api.openai.com/v1/models", request.full_url)
+        self.assertEqual(request.get_header("Authorization"), "Bearer sk-test")
+        self.assertEqual(completed[0], (("openai/gpt-5",), "openai", None))
+
+    def test_anthropic_catalog_sends_version_header(self):
+        payload = {"data": [{"id": "claude-sonnet-4-5-20250929"}]}
+        response = mock.MagicMock()
+        response.__enter__.return_value = io.BytesIO(json.dumps(payload).encode("utf-8"))
+        completed = []
+        worker = LiteLLMModelCatalogWorker("anthropic", api_key="ant-key")
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+        with mock.patch("gui_qt.litellm_worker.urlopen", return_value=response) as urlopen:
+            worker.run()
+        request = urlopen.call_args.args[0]
+        self.assertIn("api.anthropic.com/v1/models", request.full_url)
+        self.assertEqual(request.get_header("X-api-key"), "ant-key")
+        self.assertEqual(request.get_header("Anthropic-version"), "2023-06-01")
+        self.assertEqual(
+            completed[0],
+            (("anthropic/claude-sonnet-4-5-20250929",), "anthropic", None),
+        )
+
+    def test_ollama_catalog_reads_local_tags(self):
+        payload = {"models": [{"name": "llama3:latest"}]}
+        response = mock.MagicMock()
+        response.__enter__.return_value = io.BytesIO(json.dumps(payload).encode("utf-8"))
+        completed = []
+        worker = LiteLLMModelCatalogWorker("ollama")
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+        with mock.patch("gui_qt.litellm_worker.urlopen", return_value=response) as urlopen:
+            worker.run()
+        self.assertIn("127.0.0.1:11434/api/tags", urlopen.call_args.args[0].full_url)
+        self.assertEqual(completed[0], (("ollama/llama3:latest",), "ollama", None))
+
+    def test_openrouter_falls_back_to_litellm_subset_then_local(self):
+        litellm_payload = {
+            "openrouter/openai/gpt-subset": {
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            }
+        }
+        litellm_response = mock.MagicMock()
+        litellm_response.__enter__.return_value = io.BytesIO(
+            json.dumps(litellm_payload).encode("utf-8")
+        )
+        completed = []
+        worker = LiteLLMModelCatalogWorker("openrouter")
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+
+        def fake_urlopen(request, timeout=0):
+            url = getattr(request, "full_url", str(request))
+            if "openrouter.ai" in url:
+                raise OSError("openrouter down")
+            return litellm_response
+
+        with mock.patch("gui_qt.litellm_worker.urlopen", side_effect=fake_urlopen):
+            worker.run()
+
+        self.assertEqual(completed[0][0], ("openrouter/openai/gpt-subset",))
+        self.assertEqual(completed[0][1], "online")
+        self.assertIn("OpenRouter 官方列表失败", completed[0][2])
 
     def test_model_catalog_marks_local_fallback_as_possibly_stale(self):
         completed = []

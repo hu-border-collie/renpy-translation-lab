@@ -33,6 +33,14 @@ def locked_runtime_state():
         yield
 
 from atomic_io import atomic_write_json, atomic_write_lines, file_sha256
+from gemini_model_catalog import (
+    DEFAULT_GEMINI_EMBEDDING_MODEL,
+    DEFAULT_GEMINI_TRANSLATION_MODEL,
+    catalog_extra_models,
+    default_model_rotation_list,
+    merge_model_lists,
+    normalize_model_names,
+)
 from rag_memory import JsonRagStore, hash_text, truncate_text
 from rpa_safety import (
     DEFAULT_RPA_LIMITS,
@@ -65,17 +73,16 @@ DEFAULT_TL_SUBDIR = "game/tl/schinese"
 DEFAULT_PREP_LANGUAGE = "schinese"
 DEFAULT_CONTEXT_STORAGE_LOCATION = "tool"
 DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME = "translation_context"
-DEFAULT_MODELS = [
-    "gemini-3.1-flash-lite",
-    "gemini-3-flash-preview",
-    "gemini-3-pro-preview",
-    "gemini-2.5-pro",
-]
+# First entry is the rotation/fallback default (cost-efficient lite).
+DEFAULT_MODELS = default_model_rotation_list()
 DEFAULT_MAX_CHARS = 12000
 DEFAULT_MAX_ITEMS = 40
 DEFAULT_SYNC_MAX_OUTPUT_TOKENS = 24576
 DEFAULT_SYNC_BACKEND = "gemini"
-DEFAULT_SYNC_RAG_EMBEDDING_MODEL = "gemini-embedding-001"
+DEFAULT_SYNC_RAG_EMBEDDING_MODEL = DEFAULT_GEMINI_EMBEDDING_MODEL
+# Rotation policy defaults: multi-key failover stays on; model hopping is off.
+DEFAULT_API_KEY_ROTATION_ENABLED = True
+DEFAULT_MODEL_ROTATION_ENABLED = False
 DEFAULT_SYNC_RAG_QUERY_TASK_TYPE = "RETRIEVAL_QUERY"
 DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE = "RETRIEVAL_DOCUMENT"
 DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY = 768
@@ -139,6 +146,10 @@ MODELS = list(DEFAULT_MODELS)
 CURRENT_KEY_INDEX = 0
 CURRENT_MODEL_INDEX = 0
 API_KEYS = []
+API_KEY_ROTATION_ENABLED = DEFAULT_API_KEY_ROTATION_ENABLED
+MODEL_ROTATION_ENABLED = DEFAULT_MODEL_ROTATION_ENABLED
+# When model rotation is enabled and this list is non-empty, rotate only within it.
+MODEL_ROTATION_MODELS: list[str] = []
 
 PRESERVE_TERMS = [
     "???", "????", "?????", "[name]", "{sc=4}???{/sc}",
@@ -879,7 +890,7 @@ def load_sync_rag_settings(config):
     SYNC_RAG_ENABLED = _coerce_bool(rag.get("enabled"), False)
     SYNC_RAG_EMBEDDING_MODEL = _coerce_non_empty_string(
         rag.get("embedding_model"),
-        "gemini-embedding-001",
+        DEFAULT_SYNC_RAG_EMBEDDING_MODEL,
     )
     SYNC_RAG_QUERY_TASK_TYPE = _normalize_task_type(
         rag.get("query_task_type"),
@@ -953,6 +964,59 @@ def load_sync_story_memory_settings(config):
     _SYNC_STORY_GRAPH_PATH = ""
 
 
+def load_rotation_settings(config):
+    """Load API-key / model rotation policy from translator_config.rotation."""
+    global API_KEY_ROTATION_ENABLED, MODEL_ROTATION_ENABLED, MODEL_ROTATION_MODELS
+
+    section = config.get("rotation") if isinstance(config, dict) else None
+    if not isinstance(section, dict):
+        section = {}
+
+    api_key_cfg = section.get("api_key")
+    if not isinstance(api_key_cfg, dict):
+        api_key_cfg = {}
+    model_cfg = section.get("model")
+    if not isinstance(model_cfg, dict):
+        model_cfg = {}
+
+    previous_key = API_KEY_ROTATION_ENABLED
+    previous_model = MODEL_ROTATION_ENABLED
+    previous_pool = list(MODEL_ROTATION_MODELS)
+
+    API_KEY_ROTATION_ENABLED = _coerce_bool(
+        api_key_cfg.get("enabled"),
+        DEFAULT_API_KEY_ROTATION_ENABLED,
+    )
+    MODEL_ROTATION_ENABLED = _coerce_bool(
+        model_cfg.get("enabled"),
+        DEFAULT_MODEL_ROTATION_ENABLED,
+    )
+    from gemini_model_catalog import filter_gemini_rotation_models
+
+    raw_pool = normalize_model_names(model_cfg.get("models"))
+    MODEL_ROTATION_MODELS = filter_gemini_rotation_models(
+        raw_pool,
+        translator_config=config if isinstance(config, dict) else None,
+        reject_unknown=False,
+    )
+    dropped = [name for name in raw_pool if name not in set(MODEL_ROTATION_MODELS)]
+    if dropped:
+        print(
+            "Warning: ignored unknown model rotation entries (not in Gemini catalog): "
+            + ", ".join(dropped)
+        )
+
+    if API_KEY_ROTATION_ENABLED != previous_key:
+        state = "enabled" if API_KEY_ROTATION_ENABLED else "disabled"
+        print(f"API key rotation: {state}")
+    if MODEL_ROTATION_ENABLED != previous_model or MODEL_ROTATION_MODELS != previous_pool:
+        if MODEL_ROTATION_ENABLED:
+            pool = ", ".join(MODEL_ROTATION_MODELS) if MODEL_ROTATION_MODELS else "(active model list)"
+            print(f"Model rotation: enabled; pool={pool}")
+        else:
+            print("Model rotation: disabled")
+
+
 def load_sync_translation_settings(config):
     global MAX_ITEMS, MAX_CHARS, SYNC_MAX_OUTPUT_TOKENS, SYNC_BACKEND
 
@@ -967,14 +1031,42 @@ def load_sync_translation_settings(config):
         )
     SYNC_BACKEND = backend_name
 
+    load_rotation_settings(config)
+
     custom_models = sync.get("models")
     single_model = sync.get("model")
-    if not custom_models and single_model:
-        custom_models = [single_model]
-    elif isinstance(custom_models, str):
+    if isinstance(custom_models, str):
         custom_models = [custom_models]
     if custom_models:
+        # Explicit sync.models list still defines the active model list.
         replace_model_list(custom_models, "sync")
+    elif backend_name == "litellm":
+        # LiteLLM keeps a tight model list (provider-specific IDs).
+        if isinstance(single_model, str) and single_model.strip():
+            replace_model_list([single_model], "sync")
+    else:
+        selected = (
+            single_model.strip()
+            if isinstance(single_model, str) and single_model.strip()
+            else DEFAULT_GEMINI_TRANSLATION_MODEL
+        )
+        if MODEL_ROTATION_ENABLED:
+            # Enabled: selected model first, then explicit pool or catalog builtins.
+            pool_extras = (
+                MODEL_ROTATION_MODELS
+                if MODEL_ROTATION_MODELS
+                else merge_model_lists(
+                    DEFAULT_MODELS,
+                    catalog_extra_models(config, kind="translation"),
+                )
+            )
+            replace_model_list(
+                merge_model_lists([selected], pool_extras),
+                "model-rotation",
+            )
+        else:
+            # Default: pin to the configured model; no automatic hopping.
+            replace_model_list([selected], "sync")
 
     previous_items = MAX_ITEMS
     previous_chars = MAX_CHARS
@@ -1081,6 +1173,9 @@ class RuntimeConfig:
     models: list = field(default_factory=lambda: list(DEFAULT_MODELS))
     current_key_index: int = 0
     current_model_index: int = 0
+    api_key_rotation_enabled: bool = DEFAULT_API_KEY_ROTATION_ENABLED
+    model_rotation_enabled: bool = DEFAULT_MODEL_ROTATION_ENABLED
+    model_rotation_models: list = field(default_factory=list)
 
     max_chars: int = DEFAULT_MAX_CHARS
     max_items: int = DEFAULT_MAX_ITEMS
@@ -1116,6 +1211,7 @@ class RuntimeConfig:
             self,
             api_keys=list(self.api_keys),
             models=list(self.models),
+            model_rotation_models=list(self.model_rotation_models),
             include_files=set(self.include_files),
             include_prefixes=set(self.include_prefixes),
             prep_unpack_command=(
@@ -1198,6 +1294,9 @@ def snapshot_runtime_config() -> RuntimeConfig:
         models=list(MODELS),
         current_key_index=CURRENT_KEY_INDEX,
         current_model_index=CURRENT_MODEL_INDEX,
+        api_key_rotation_enabled=API_KEY_ROTATION_ENABLED,
+        model_rotation_enabled=MODEL_ROTATION_ENABLED,
+        model_rotation_models=list(MODEL_ROTATION_MODELS),
         max_chars=MAX_CHARS,
         max_items=MAX_ITEMS,
         sync_max_output_tokens=SYNC_MAX_OUTPUT_TOKENS,
@@ -1234,6 +1333,7 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
     global PREP_UNPACK_COMMAND, PREP_TEMPLATE_COMMAND, PREP_ALLOW_SHELL_COMMANDS
     global CONTEXT_STORAGE_LOCATION, CONTEXT_STORAGE_GAME_DIR_NAME
     global API_KEYS, MODELS, CURRENT_KEY_INDEX, CURRENT_MODEL_INDEX
+    global API_KEY_ROTATION_ENABLED, MODEL_ROTATION_ENABLED, MODEL_ROTATION_MODELS
     global MAX_CHARS, MAX_ITEMS, SYNC_MAX_OUTPUT_TOKENS, SYNC_BACKEND
     global INCLUDE_FILES, INCLUDE_PREFIXES
     global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
@@ -1278,6 +1378,9 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
         MODELS = list(applied.models) if applied.models else list(DEFAULT_MODELS)
         CURRENT_KEY_INDEX = int(applied.current_key_index or 0)
         CURRENT_MODEL_INDEX = int(applied.current_model_index or 0)
+        API_KEY_ROTATION_ENABLED = bool(applied.api_key_rotation_enabled)
+        MODEL_ROTATION_ENABLED = bool(applied.model_rotation_enabled)
+        MODEL_ROTATION_MODELS = list(applied.model_rotation_models or [])
 
         MAX_CHARS = int(applied.max_chars)
         MAX_ITEMS = int(applied.max_items)
@@ -1435,6 +1538,7 @@ def _reset_project_settings_to_defaults():
     global SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS, SYNC_STORY_MEMORY_TOP_K_RELATIONS
     global SYNC_STORY_MEMORY_TOP_K_TERMS, SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY
     global _SYNC_STORY_GRAPH, _SYNC_STORY_GRAPH_PATH
+    global API_KEY_ROTATION_ENABLED, MODEL_ROTATION_ENABLED, MODEL_ROTATION_MODELS
 
     # Paths/language/prepare always recompute from defaults + current config.
     TL_SUBDIR = DEFAULT_TL_SUBDIR
@@ -1453,6 +1557,11 @@ def _reset_project_settings_to_defaults():
     PREP_ALLOW_SHELL_COMMANDS = False
     CONTEXT_STORAGE_LOCATION = DEFAULT_CONTEXT_STORAGE_LOCATION
     CONTEXT_STORAGE_GAME_DIR_NAME = DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME
+
+    # Rotation policy always recompute from translator_config.rotation defaults.
+    API_KEY_ROTATION_ENABLED = DEFAULT_API_KEY_ROTATION_ENABLED
+    MODEL_ROTATION_ENABLED = DEFAULT_MODEL_ROTATION_ENABLED
+    MODEL_ROTATION_MODELS = []
 
     # RAG / story memory always recompute from translator_config.sync defaults.
     SYNC_BACKEND = DEFAULT_SYNC_BACKEND
@@ -2689,21 +2798,57 @@ def get_current_api_key():
 def get_current_model():
     return MODELS[CURRENT_MODEL_INDEX]
 
+def effective_model_rotation_pool() -> list[str]:
+    """Runtime model sequence used for hopping (initialized by load_sync_translation_settings)."""
+    return list(MODELS)
+
+def api_key_rotation_attempts() -> int:
+    """How many distinct key tries are allowed for the current rotation policy."""
+    key_count = len(API_KEYS)
+    if key_count <= 0:
+        return 1
+    if not API_KEY_ROTATION_ENABLED or key_count == 1:
+        return 1
+    return key_count
+
+
 def rotate_api_key():
+    """Advance to the next API key when rotation is enabled and multiple keys exist.
+
+    Returns True only when the active key index actually changes.
+    """
     global CURRENT_KEY_INDEX
-    if len(API_KEYS) > 1:
-        CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
-        print(f"  ➜ Rotating to API Key #{CURRENT_KEY_INDEX + 1}")
-        return True
-    return False
+    if not API_KEY_ROTATION_ENABLED:
+        return False
+    if len(API_KEYS) <= 1:
+        return False
+    previous = CURRENT_KEY_INDEX
+    CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(API_KEYS)
+    if CURRENT_KEY_INDEX == previous:
+        return False
+    print(f"  ➜ Rotating to API Key #{CURRENT_KEY_INDEX + 1}")
+    return True
 
 def rotate_model():
+    """Advance along the MODELS sequence built by load_sync_translation_settings.
+
+    Does not re-apply MODEL_ROTATION_MODELS at runtime (that would drop the
+    selected primary model or skip the first entry). Returns True only when the
+    active model actually changes.
+    """
     global CURRENT_MODEL_INDEX
-    if len(MODELS) > 1:
-        CURRENT_MODEL_INDEX = (CURRENT_MODEL_INDEX + 1) % len(MODELS)
-        print(f"  ➜ Rotating to Model: {MODELS[CURRENT_MODEL_INDEX]}")
-        return True
-    return False
+    if not MODEL_ROTATION_ENABLED:
+        return False
+    if len(MODELS) <= 1:
+        return False
+    previous_index = CURRENT_MODEL_INDEX
+    previous_model = MODELS[CURRENT_MODEL_INDEX] if MODELS else ""
+    CURRENT_MODEL_INDEX = (CURRENT_MODEL_INDEX + 1) % len(MODELS)
+    next_model = MODELS[CURRENT_MODEL_INDEX]
+    if CURRENT_MODEL_INDEX == previous_index or next_model == previous_model:
+        return False
+    print(f"  ➜ Rotating to Model: {next_model}")
+    return True
 
 def configure_genai():
     """Ensures the google-genai library is available."""

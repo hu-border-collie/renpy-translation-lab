@@ -77,16 +77,54 @@ class GuiStartupPerfTests(unittest.TestCase):
         self.assertIn("_games_registry_panel", self.window.__dict__)
         self.assertNotIn("batch_model_combo", self.window.__dict__)
 
-    def test_first_config_section_builds_all_config_pages(self) -> None:
+    def test_first_config_section_builds_only_that_page(self) -> None:
+        """Tab switches must not materialize every config section at once."""
         self.window = MainWindow()
         self.window._focus_settings_section("models")
-        self.assertTrue(
-            _SETTINGS_CONFIG_PAGE_KEYS.issubset(self.window._settings_pages_built)
-        )
+        self.assertEqual(self.window._settings_pages_built, {"models"})
         self.assertIn("batch_model_combo", self.window.__dict__)
+        self.assertNotIn("advanced", self.window._settings_pages_built)
         self.assertNotIn("workspace", self.window._settings_pages_built)
         self.assertNotIn("extensions", self.window._settings_pages_built)
         self.assertNotIn("shortcuts", self.window._settings_pages_built)
+
+        self.window._focus_settings_section("advanced")
+        self.assertEqual(
+            self.window._settings_pages_built,
+            {"models", "advanced"},
+        )
+        self.assertFalse(
+            _SETTINGS_CONFIG_PAGE_KEYS.issubset(self.window._settings_pages_built)
+        )
+
+    def test_partial_page_load_preserves_dirty_baseline(self) -> None:
+        """Opening another settings tab must not mark prior edits as saved."""
+        self.window = MainWindow()
+        self.window._focus_settings_section("models")
+        combo = self.window.batch_model_combo
+        original = combo.currentText()
+        dirty_value = f"{original}-dirty-marker" if original else "dirty-marker"
+        combo.setEditText(dirty_value) if combo.isEditable() else combo.setCurrentText(dirty_value)
+        # Force a non-default value even if setCurrentText no-ops on empty lists.
+        if combo.currentText() == original:
+            combo.addItem(dirty_value)
+            combo.setCurrentText(dirty_value)
+        self.assertTrue(self.window._config_tab_has_unsaved_changes())
+        saved_before = dict(self.window._config_ui_saved_snapshot)
+
+        self.window._focus_settings_section("context")
+        self.assertTrue(
+            self.window._config_tab_has_unsaved_changes(),
+            "partial load of context must not fold dirty models into baseline",
+        )
+        self.assertEqual(
+            self.window._config_ui_saved_snapshot.get("batch_model"),
+            saved_before.get("batch_model"),
+        )
+        self.assertNotEqual(
+            self.window._current_config_ui_snapshot().get("batch_model"),
+            self.window._config_ui_saved_snapshot.get("batch_model"),
+        )
 
     def test_doctor_details_toggle_has_stable_fixed_width(self) -> None:
         self.window = MainWindow()
