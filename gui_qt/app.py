@@ -383,6 +383,33 @@ _SETTINGS_CONFIG_PAGE_KEYS = frozenset(
         "advanced",
     }
 )
+# Flat dirty-snapshot keys owned by each config section (not advanced fields).
+_CONFIG_SNAPSHOT_KEYS_BY_PAGE: dict[str, frozenset[str]] = {
+    "context": frozenset(
+        {
+            "rag_enabled",
+            "source_index_enabled",
+            "bootstrap_on_build",
+            "context_storage_location",
+        }
+    ),
+    "models": frozenset(
+        {
+            "sync_model",
+            "batch_model",
+            "sync_embedding_model",
+            "batch_embedding_model",
+            "batch_thinking_level",
+        }
+    ),
+    "litellm": frozenset(
+        {
+            "sync_backend",
+            "litellm_model",
+        }
+    ),
+    "appearance": frozenset({"theme"}),
+}
 # Attribute → settings section for lazy materialization (tests + direct access).
 _SETTINGS_LAZY_ATTR_TO_PAGE: dict[str, str] = {
     "_games_registry_panel": "workspace",
@@ -8087,6 +8114,47 @@ class MainWindow(QMainWindow):
         except Exception:
             return
 
+    def _config_snapshot_keys_for_pages(self, pages: set[str]) -> set[str]:
+        """Dirty-snapshot keys owned by the given settings sections."""
+        keys: set[str] = set()
+        for page in pages:
+            keys.update(_CONFIG_SNAPSHOT_KEYS_BY_PAGE.get(page, ()))
+        if "advanced" in pages:
+            keys.update(
+                field.key
+                for field in ADVANCED_SETTING_FIELDS
+                if field.key not in _SETTINGS_WORKSPACE_MANAGED_KEYS
+            )
+        return keys
+
+    def _update_config_ui_saved_snapshot(
+        self, *, pages: set[str] | None = None
+    ) -> None:
+        """Refresh the unsaved-changes baseline after loading config into widgets.
+
+        Full loads (``pages is None``) replace the baseline entirely. Partial
+        loads only update keys for the reloaded sections so edits on other open
+        pages stay dirty and are not folded into the "saved" baseline.
+        """
+        current = self._current_config_ui_snapshot()
+        if pages is None:
+            self._config_ui_saved_snapshot = current
+            return
+        baseline = getattr(self, "_config_ui_saved_snapshot", None) or {}
+        if not baseline:
+            # First materialization: accept the full current shape (defaults for
+            # unbuilt widgets) so later comparisons are well-defined.
+            self._config_ui_saved_snapshot = current
+            return
+        page_keys = self._config_snapshot_keys_for_pages(pages)
+        if not page_keys:
+            return
+        merged = dict(baseline)
+        for key in page_keys:
+            if key in current:
+                merged[key] = current[key]
+        self._config_ui_saved_snapshot = merged
+
     def _current_config_ui_snapshot(self) -> dict[str, object]:
         """Snapshot only already-built settings widgets (no lazy page build)."""
 
@@ -11141,7 +11209,9 @@ class MainWindow(QMainWindow):
             or self._settings_widget("sync_backend_combo") is not None
             or self.__dict__.get("_advanced_setting_widgets")
         ):
-            self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
+            # Partial tab loads must not rewrite the whole baseline — that would
+            # treat dirty widgets on other open pages as "already saved".
+            self._update_config_ui_saved_snapshot(pages=want)
         if refresh_task_gates and "translate_btn" in self.__dict__:
             self._set_task_running(bool(getattr(self, "_task_running", False)))
 

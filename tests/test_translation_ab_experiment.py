@@ -92,6 +92,32 @@ class TranslationAbExperimentTests(unittest.TestCase):
             self.assertTrue(batch_mod.RAG_ENABLED)
         self.assertFalse(batch_mod.RAG_ENABLED)
 
+    def test_variant_overrides_win_over_project_context_without_clearing_base_dir(self):
+        """compare-variants must keep BASE_DIR for project paths, but still honor RAG overrides."""
+        import translator_runtime as runtime
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            (project_root / 'project_context_settings.json').write_text(
+                json.dumps(
+                    {
+                        'batch_rag_enabled': False,
+                        'batch_source_index_enabled': False,
+                        'batch_rag_bootstrap_on_build': False,
+                    }
+                ),
+                encoding='utf-8',
+            )
+            previous_base = runtime.BASE_DIR
+            runtime.BASE_DIR = str(project_root)
+            try:
+                with ab_mod.variant_batch_settings({'batch': {'rag': {'enabled': True}}}):
+                    self.assertEqual(runtime.BASE_DIR, str(project_root))
+                    self.assertTrue(batch_mod.RAG_ENABLED)
+                self.assertEqual(runtime.BASE_DIR, str(project_root))
+            finally:
+                runtime.BASE_DIR = previous_base
+
     def test_dry_run_skips_retrieval_calls(self):
         chunk = {
             'items': [{'id': 'line-1', 'text': 'Hello'}],
