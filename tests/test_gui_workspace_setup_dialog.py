@@ -46,19 +46,24 @@ class GuiWorkspaceSetupDialogTests(unittest.TestCase):
             self.assertFalse(dialog._ok_button.isEnabled())
             self.assertIn("损坏", dialog._error_label.text() + dialog._scene_label.text())
 
-    def test_accept_applies_and_returns_result(self):
+    def test_accept_applies_workspace_then_skip_sdk(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "ws"
             workspace.mkdir()
             dialog = WorkspaceSetupDialog(None, initial_path=workspace)
-            dialog._on_accept()
+            dialog._apply_workspace()
+            self.assertEqual(dialog._stack.currentIndex(), 1)
+            self.assertTrue((workspace / registry.REGISTRY_FILENAME).is_file())
+            dialog._sdk_skip.setChecked(True)
+            dialog._finish_sdk()
             self.assertEqual(dialog.result(), int(QDialog.DialogCode.Accepted))
             payload = dialog.result_payload()
             self.assertIsNotNone(payload)
             assert payload is not None
             self.assertEqual(payload.workspace.resolve(), workspace.resolve())
             self.assertTrue(payload.created_registry)
-            self.assertTrue((workspace / registry.REGISTRY_FILENAME).is_file())
+            self.assertIsNone(payload.sdk_dir)
+            self.assertIn("跳过", payload.sdk_message)
             data = json.loads(
                 (workspace / registry.REGISTRY_FILENAME).read_text(encoding="utf-8")
             )
@@ -78,6 +83,30 @@ class GuiWorkspaceSetupDialogTests(unittest.TestCase):
             assert dialog._selected is not None
             self.assertEqual(dialog._selected.resolve(), workspace.resolve())
             self.assertTrue(dialog._ok_button.isEnabled())
+
+    def test_sdk_page_can_persist_browsed_sdk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "ws"
+            workspace.mkdir()
+            sdk_dir = Path(tmp) / "renpy-fake-sdk"
+            sdk_dir.mkdir()
+            (sdk_dir / "renpy.py").write_text("# renpy\n", encoding="utf-8")
+            config = Path(tmp) / "translator_config.json"
+
+            dialog = WorkspaceSetupDialog(None, initial_path=workspace)
+            dialog._apply_workspace()
+            dialog._browse_path_edit.setText(str(sdk_dir))
+            dialog._sdk_browse.setChecked(True)
+            with mock.patch(
+                "gui_qt.workspace_setup_dialog.save_renpy_sdk_dir",
+                side_effect=lambda path, config_path=None: Path(path),
+            ) as save_mock:
+                dialog._finish_sdk()
+            save_mock.assert_called()
+            payload = dialog.result_payload()
+            self.assertIsNotNone(payload)
+            assert payload is not None
+            self.assertEqual(payload.sdk_dir.resolve(), sdk_dir.resolve())
 
 
 if __name__ == "__main__":

@@ -3281,8 +3281,19 @@ class MainWindow(QMainWindow):
         )
         find_btn.clicked.connect(lambda: self._on_find_renpy_sdk_dir(line_edit))
         layout.addWidget(find_btn)
+
+        download_btn = QPushButton("下载推荐 SDK…")
+        download_btn.setObjectName("secondary_btn")
+        download_btn.setToolTip(
+            "仅在确认后从官方 renpy.org 下载本工具维护的推荐稳定版 SDK。"
+            "不会因打开本页或运行 prepare 自动联网。"
+        )
+        download_btn.clicked.connect(lambda: self._on_download_recommended_sdk(line_edit))
+        layout.addWidget(download_btn)
+
         self._prepare_renpy_sdk_find_btn = find_btn
         self._prepare_renpy_sdk_browse_btn = browse_btn
+        self._prepare_renpy_sdk_download_btn = download_btn
         return host
 
     def _on_browse_renpy_sdk_dir(self, line_edit: QLineEdit) -> None:
@@ -3315,6 +3326,84 @@ class MainWindow(QMainWindow):
         line_edit.setText(path_text)
         self.statusBar().showMessage(f"已填入 Ren'Py SDK：{path_text}", 5000)
 
+    def _on_download_recommended_sdk(self, line_edit: QLineEdit) -> None:
+        """Explicit opt-in download of the tool-maintained official SDK build."""
+        from renpy_sdk_install import (
+            default_sdk_target,
+            format_size_mib,
+            recommended_sdk,
+        )
+
+        if getattr(self, "_sdk_install_worker", None) is not None:
+            self.statusBar().showMessage("SDK 下载已在进行中…", 4000)
+            return
+
+        spec = recommended_sdk()
+        workspace = self.state.get_workspace_root()
+        default_target = default_sdk_target(workspace)
+        target_text = line_edit.text().strip() or str(default_target)
+        reply = QMessageBox.question(
+            self,
+            "下载推荐 Ren'Py SDK",
+            (
+                f"将从 {spec.source_label} 下载固定推荐版本（不会使用其它 URL）：\n\n"
+                f"版本：{spec.version}\n"
+                f"来源：{spec.url}\n"
+                f"预计大小：约 {format_size_mib(spec.size_bytes)}\n"
+                f"SHA-256：{spec.sha256}\n"
+                f"目标目录：{target_text}\n\n"
+                "下载到临时文件并校验后再解压；失败不会破坏已选工作区。\n"
+                "是否继续？"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        from .sdk_install_worker import SdkInstallWorker
+
+        worker = SdkInstallWorker(Path(target_text), persist_config=True, parent=self)
+        self._sdk_install_worker = worker
+        self._sdk_install_line_edit = line_edit
+        download_btn = getattr(self, "_prepare_renpy_sdk_download_btn", None)
+        if download_btn is not None:
+            download_btn.setEnabled(False)
+        self.statusBar().showMessage("正在下载推荐 Ren'Py SDK…", 0)
+        self._append_log(
+            f"开始下载推荐 SDK {spec.version} → {target_text}（官方来源，已确认）"
+        )
+        worker.progress.connect(self._on_sdk_install_progress)
+        worker.completed.connect(self._on_sdk_install_completed)
+        worker.start()
+
+    def _on_sdk_install_progress(self, phase: str, current: int, total: int) -> None:
+        if phase == "download" and total > 0:
+            pct = min(100, int(100 * current / total))
+            self.statusBar().showMessage(f"SDK 下载中… {pct}%", 0)
+        elif phase == "extract":
+            self.statusBar().showMessage(f"SDK 解压中… {current}/{total}", 0)
+
+    def _on_sdk_install_completed(self, result: object) -> None:
+        from renpy_sdk_install import SdkInstallResult
+
+        self._sdk_install_worker = None
+        download_btn = getattr(self, "_prepare_renpy_sdk_download_btn", None)
+        if download_btn is not None:
+            download_btn.setEnabled(True)
+        if not isinstance(result, SdkInstallResult):
+            self.statusBar().showMessage("SDK 安装返回未知结果。", 6000)
+            return
+        self._append_log(result.message)
+        if result.ok and result.sdk_dir is not None:
+            line_edit = getattr(self, "_sdk_install_line_edit", None)
+            if line_edit is not None:
+                line_edit.setText(canonical_abs_path(str(result.sdk_dir)))
+            self.statusBar().showMessage(result.message, 8000)
+        else:
+            QMessageBox.warning(self, "SDK 未配置", result.message)
+            self.statusBar().showMessage(result.message, 8000)
+
     def _on_find_renpy_sdk_dir(self, line_edit: QLineEdit) -> None:
         from translator_runtime import discover_renpy_sdk_candidates
 
@@ -3343,7 +3432,8 @@ class MainWindow(QMainWindow):
                 "在附近目录未找到包含 renpy.py 的 Ren'Py SDK。\n\n"
                 "已搜索：\n- "
                 + "\n- ".join(roots_hint)
-                + "\n\n可安装 SDK 后重试，或点「浏览…」手动选择。",
+                + "\n\n可安装 SDK 后重试，或点「浏览…」手动选择，"
+                "或使用「下载推荐 SDK…」。",
             )
             return
 

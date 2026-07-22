@@ -91,6 +91,15 @@ GUI **设置 → 项目 → Ren'Py SDK 目录** 提供：
 
 - **查找 SDK**（主动）：在当前 `game_root`、已选工作区与工具附近扫描 `renpy-*-sdk` / `renpy.py`，找到后写入配置字段（多结果时选择）
 - **浏览…**（主动）：手动选择目录
+- **下载推荐 SDK…**（主动确认）：仅从官方 `renpy.org` 下载本工具维护的**一个**推荐稳定版；展示版本、URL、预计大小与 SHA-256；下载到临时文件校验后再安全解压。默认目标为 `<workspace>/renpy-<version>-sdk/`（可改）。失败不会破坏已初始化工作区
+
+CLI：
+
+```powershell
+python renpy_sdk_install.py show
+python renpy_sdk_install.py install --workspace path\to\RenPy_Workspace
+# 可选：--target path\to\renpy-x.y.z-sdk --no-persist-config
+```
 
 字段留空则 `prepare.renpy_sdk_dir` 为空，需要 SDK 的模板生成会提示配置。示例：
 
