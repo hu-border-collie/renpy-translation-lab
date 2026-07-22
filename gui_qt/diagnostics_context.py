@@ -239,6 +239,14 @@ def build_cli_commands(
             ),
         ),
         DiagnosticsCommand(
+            label="项目分析·LLM 生成摘要",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["project-analysis-generate"],
+            ),
+        ),
+        DiagnosticsCommand(
             label="项目分析·发布 brief",
             command=format_cli_command(
                 python_exe,

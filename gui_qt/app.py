@@ -1641,6 +1641,7 @@ class MainWindow(QMainWindow):
                         prebuild=self._on_context_bootstrap_clicked,
                         open_settings=self._on_open_context_settings,
                         stop=self._on_kill,
+                        action=self._on_context_library_action,
                     )
                 )
                 self.context_library_page = page
@@ -2261,6 +2262,53 @@ class MainWindow(QMainWindow):
         if self._current_work_mode() != target:
             self._set_work_mode(target, refresh_manifest_writeback=False)
         self._start_bootstrap_task(kind)
+
+    def _on_context_library_action(self, name: str) -> None:
+        """Run project-analysis CLI actions from the context library page."""
+        if bool(getattr(self, "_task_running", False)):
+            return
+        runner = getattr(self, "runner", None)
+        is_running = getattr(runner, "is_running", None) if runner is not None else None
+        if callable(is_running) and bool(is_running()):
+            return
+        if not self._confirm_unsaved_config_before_workflow():
+            return
+        if not self.state.get_game_root():
+            QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
+            return
+
+        command_map = {
+            "project_analysis_build_structure": (
+                "project_analysis_build_structure",
+                ["project-analysis-build-structure"],
+                "gemini_translate_batch.py project-analysis-build-structure",
+            ),
+            "project_analysis_generate": (
+                "project_analysis_generate",
+                ["project-analysis-generate"],
+                "gemini_translate_batch.py project-analysis-generate",
+            ),
+            "project_analysis_publish": (
+                "project_analysis_publish",
+                ["project-analysis-publish"],
+                "gemini_translate_batch.py project-analysis-publish",
+            ),
+            "project_analysis_unpublish": (
+                "project_analysis_unpublish",
+                ["project-analysis-unpublish"],
+                "gemini_translate_batch.py project-analysis-unpublish",
+            ),
+        }
+        entry = command_map.get(name)
+        if entry is None:
+            return
+        command, args, log_heading = entry
+        self._clear_log_view()
+        self._show_workbench_log_drawer()
+        self._active_command = command
+        self._append_log(f"=== 正在运行：{log_heading} ===\n")
+        self._set_task_running(True)
+        self.runner.run(self.state.get_batch_script_path(), args)
 
     def _refresh_context_library_panel(self, *, running: bool | None = None) -> None:
         page = getattr(self, "context_library_page", None)

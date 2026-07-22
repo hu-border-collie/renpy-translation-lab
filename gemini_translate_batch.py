@@ -186,6 +186,12 @@ PROJECT_ANALYSIS_ENABLED = False
 PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = False
 PROJECT_ANALYSIS_STORE_DIR = ''
 PROJECT_ANALYSIS_MAX_BRIEF_CHARS = 4000
+PROJECT_ANALYSIS_MODEL = ''
+PROJECT_ANALYSIS_THINKING_LEVEL = ''
+PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS = 800
+PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS = 1200
+PROJECT_ANALYSIS_MAX_INPUT_CHARS = 12000
+PROJECT_ANALYSIS_MAX_OUTPUT_TOKENS = 2048
 _PROJECT_BRIEF_CACHE = None
 _PROJECT_BRIEF_CACHE_KEY = None
 
@@ -321,6 +327,9 @@ def load_batch_settings():
     global STORY_MEMORY_INCLUDE_SCENE_SUMMARY, _STORY_GRAPH, _STORY_GRAPH_PATH
     global PROJECT_ANALYSIS_ENABLED, PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF
     global PROJECT_ANALYSIS_STORE_DIR, PROJECT_ANALYSIS_MAX_BRIEF_CHARS
+    global PROJECT_ANALYSIS_MODEL, PROJECT_ANALYSIS_THINKING_LEVEL
+    global PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS, PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS
+    global PROJECT_ANALYSIS_MAX_INPUT_CHARS, PROJECT_ANALYSIS_MAX_OUTPUT_TOKENS
     global _PROJECT_BRIEF_CACHE, _PROJECT_BRIEF_CACHE_KEY
     global BATCH_NON_CHINESE_RULES, SYNC_BACKEND, SYNC_MODEL
 
@@ -546,6 +555,31 @@ def load_batch_settings():
     PROJECT_ANALYSIS_MAX_BRIEF_CHARS = coerce_positive_int(
         project_analysis_config.get('max_brief_chars'),
         PROJECT_ANALYSIS_MAX_BRIEF_CHARS,
+    )
+    PROJECT_ANALYSIS_MODEL = coerce_non_empty_string(
+        project_analysis_config.get('model'),
+        PROJECT_ANALYSIS_MODEL,
+    )
+    if 'thinking_level' in project_analysis_config:
+        PROJECT_ANALYSIS_THINKING_LEVEL = coerce_thinking_level(
+            project_analysis_config.get('thinking_level'),
+            PROJECT_ANALYSIS_THINKING_LEVEL,
+        )
+    PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS = coerce_positive_int(
+        project_analysis_config.get('max_label_summary_chars'),
+        PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS,
+    )
+    PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS = coerce_positive_int(
+        project_analysis_config.get('max_route_summary_chars'),
+        PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS,
+    )
+    PROJECT_ANALYSIS_MAX_INPUT_CHARS = coerce_positive_int(
+        project_analysis_config.get('max_input_chars_per_request'),
+        PROJECT_ANALYSIS_MAX_INPUT_CHARS,
+    )
+    PROJECT_ANALYSIS_MAX_OUTPUT_TOKENS = coerce_positive_int(
+        project_analysis_config.get('max_output_tokens'),
+        PROJECT_ANALYSIS_MAX_OUTPUT_TOKENS,
     )
     pa_store = project_analysis_config.get('store_dir')
     if pa_store:
@@ -9616,6 +9650,26 @@ def build_arg_parser():
         help='Optional route entry label. Repeatable.',
     )
 
+    pa_generate = subparsers.add_parser(
+        'project-analysis-generate',
+        help=(
+            'LLM map-reduce: refine label → route → project brief drafts. '
+            'Requires structure drafts from project-analysis-build-structure. '
+            'Never writes glossary/story_graph/.rpy; publish remains manual.'
+        ),
+    )
+    pa_generate.add_argument('--store-dir', default='', help='Override analysis store directory.')
+    pa_generate.add_argument(
+        '--model',
+        default='',
+        help='Override batch.project_analysis.model (else falls back to batch/sync model).',
+    )
+    pa_generate.add_argument(
+        '--force',
+        action='store_true',
+        help='Re-generate even when drafts already have matching LLM lineage.',
+    )
+
     pa_inspect = subparsers.add_parser(
         'project-analysis-inspect',
         help='Inspect draft/published analysis artifacts (JSON).',
@@ -10062,6 +10116,7 @@ def main(argv=None):
         'project-analysis-status',
         'project-analysis-ingest-keywords',
         'project-analysis-build-structure',
+        'project-analysis-generate',
         'project-analysis-inspect',
         'project-analysis-diff',
         'project-analysis-publish',
@@ -10083,13 +10138,15 @@ def main(argv=None):
             build_structure_drafts,
             ingest_keyword_summaries,
         )
+        from project_analysis_llm import run_mapreduce_drafts
+        from sync_model_backend import SyncGenerationRequest
 
         store_dir = getattr(args, 'store_dir', None) or None
         as_json = bool(getattr(args, 'json', False))
         source_fp = getattr(args, 'source_fingerprint', '') or ''
 
         def _load_settings_quiet():
-            if not store_dir:
+            if not store_dir or command == 'project-analysis-generate':
                 legacy.load_translator_settings(persist_corrected_game_root=False)
                 load_batch_settings()
 
@@ -10112,6 +10169,50 @@ def main(argv=None):
                     base_dir=legacy.BASE_DIR or None,
                     script_roots=args.script_root or None,
                     entry_labels=args.entry_label or None,
+                )
+            if command == 'project-analysis-generate':
+                model = (
+                    getattr(args, 'model', '') or PROJECT_ANALYSIS_MODEL or BATCH_MODEL or SYNC_MODEL
+                )
+
+                def _generate(request: SyncGenerationRequest):
+                    # Reuse production sync path (Gemini / LiteLLM).
+                    payload = {
+                        'contents': request.contents,
+                        'generation_config': dict(request.config or {}),
+                    }
+                    system = (request.config or {}).get('system_instruction')
+                    if system:
+                        payload['system_instruction'] = system
+                    raw = run_sync_request(payload, model)
+                    from sync_model_backend import SyncGenerationResult, SYNC_EXECUTION_MODE
+
+                    return SyncGenerationResult(
+                        provider=str(raw.get('provider') or SYNC_BACKEND or 'gemini'),
+                        model=str(raw.get('model') or model),
+                        execution_mode=str(raw.get('execution_mode') or SYNC_EXECUTION_MODE),
+                        response_payload=raw.get('response_payload') or raw,
+                        response_text=str(raw.get('response_text') or ''),
+                        finish_reason=str(raw.get('finish_reason') or ''),
+                        usage_metadata=dict(raw.get('usage_metadata') or {}),
+                    )
+
+                return run_mapreduce_drafts(
+                    store_dir=store_dir,
+                    base_dir=legacy.BASE_DIR or None,
+                    generate=_generate,
+                    config={
+                        'model': model,
+                        'thinking_level': PROJECT_ANALYSIS_THINKING_LEVEL,
+                        'max_label_summary_chars': PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS,
+                        'max_route_summary_chars': PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS,
+                        'max_brief_chars': PROJECT_ANALYSIS_MAX_BRIEF_CHARS,
+                        'max_input_chars_per_request': PROJECT_ANALYSIS_MAX_INPUT_CHARS,
+                        'max_output_tokens': PROJECT_ANALYSIS_MAX_OUTPUT_TOKENS,
+                    },
+                    force=bool(getattr(args, 'force', False)),
+                    provider=SYNC_BACKEND or 'gemini',
+                    model=model,
                 )
             if command == 'project-analysis-inspect':
                 store = resolve_project_analysis_store(
@@ -10169,6 +10270,7 @@ def main(argv=None):
                     'project-analysis-diff',
                     'project-analysis-ingest-keywords',
                     'project-analysis-build-structure',
+                    'project-analysis-generate',
                     'project-analysis-publish',
                     'project-analysis-unpublish',
                 }:

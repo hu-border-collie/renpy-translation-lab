@@ -117,6 +117,8 @@ python gemini_translate_batch.py project-analysis-build-structure
 python gemini_translate_batch.py project-analysis-inspect --kind routes
 python gemini_translate_batch.py project-analysis-diff
 
+# 3b) （可选）LLM map-reduce 精炼 label → route → brief 草稿
+python gemini_translate_batch.py project-analysis-generate
 # 4) 人工确认后发布（写 project_brief.published.md）
 python gemini_translate_batch.py project-analysis-publish
 # 撤销
@@ -132,7 +134,13 @@ python gemini_translate_batch.py project-analysis-unpublish
       "enabled": false,
       "inject_published_brief": false,
       "store_dir": "",
-      "max_brief_chars": 4000
+      "model": "",
+      "thinking_level": "",
+      "max_brief_chars": 4000,
+      "max_label_summary_chars": 800,
+      "max_route_summary_chars": 1200,
+      "max_input_chars_per_request": 12000,
+      "max_output_tokens": 2048
     }
   }
 }
@@ -142,7 +150,8 @@ python gemini_translate_batch.py project-analysis-unpublish
 - **draft 永不注入**；stale / 缺 published 文件会跳过注入。
 - 动态 `jump expression` / `call expression` 标记为 unresolved，不虚构单一路线。
 - 普通 `call label` **不是**路线分支：调用返回后继续调用者后续语句，枚举路线时不把 call 目标当成与 jump 互斥的分叉；call 仅作附属依赖/元数据。
-- 本阶段**不**调用 LLM 生成正文（规则聚合 + 关键词摘要）；LLM map-reduce 为后续增量。
+- **结构草稿**可无 LLM；**精炼摘要**使用 `project-analysis-generate`（可 mock 的 Sync 路径），结果仍为 draft，须人工 publish。
+- GUI「上下文库」提供：构建结构 / LLM 生成 / 发布 brief / 撤销发布（均走 CLI，不重复门禁逻辑）。
 - **不**写 `glossary.json`、正式 `story_graph.json` 或 `.rpy`。
 
 ### 只读 CLI / GUI

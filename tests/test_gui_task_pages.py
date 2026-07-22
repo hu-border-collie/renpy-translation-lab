@@ -566,7 +566,9 @@ class GuiTaskPageTests(unittest.TestCase):
             page.bootstrap_source_index_btn.parentWidget(),
             page.source_index_status_row,
         )
-        self.assertEqual(page.project_analysis_readonly_label.text(), "CLI")
+        self.assertEqual(page.project_analysis_generate_btn.text(), "LLM 生成")
+        self.assertEqual(page.project_analysis_publish_btn.text(), "发布 brief")
+        self.assertEqual(page.project_analysis_unpublish_btn.text(), "撤销发布")
 
     def test_context_page_uses_callbacks_and_owns_empty_state(self) -> None:
         page = self.window.context_library_page

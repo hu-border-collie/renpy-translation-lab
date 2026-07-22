@@ -106,7 +106,13 @@
       "enabled": false,
       "inject_published_brief": false,
       "store_dir": "",
-      "max_brief_chars": 4000
+      "model": "",
+      "thinking_level": "",
+      "max_brief_chars": 4000,
+      "max_label_summary_chars": 800,
+      "max_route_summary_chars": 1200,
+      "max_input_chars_per_request": 12000,
+      "max_output_tokens": 2048
     },
     "submit_max_cost": 0,
     "non_chinese_validation": {

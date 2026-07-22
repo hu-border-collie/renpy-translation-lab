@@ -72,6 +72,8 @@ CONTEXT_PRIMARY_SETTING_KEYS: frozenset[str] = frozenset(
         "sync_rag_enabled",
         "sync_story_memory_enabled",
         "batch_story_memory_enabled",
+        "batch_project_analysis_enabled",
+        "batch_project_analysis_inject_published_brief",
     }
 )
 CONTEXT_PRIMARY_SETTING_CATEGORY = "上下文主开关"
@@ -266,6 +268,44 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "bool",
         False,
         CONTEXT_PRIMARY_SETTING_CATEGORY,
+    ),
+    SettingField(
+        "batch_project_analysis_enabled",
+        ("batch", "project_analysis", "enabled"),
+        "启用项目分析上下文",
+        "允许在翻译/订正 prompt 中使用已发布的项目 brief（仍须开启下方注入开关）。",
+        "bool",
+        False,
+        CONTEXT_PRIMARY_SETTING_CATEGORY,
+    ),
+    SettingField(
+        "batch_project_analysis_inject_published_brief",
+        ("batch", "project_analysis", "inject_published_brief"),
+        "注入已发布项目 brief",
+        "仅当 brief 已发布且结构 fingerprint 未过期时注入；草稿永不注入。",
+        "bool",
+        False,
+        CONTEXT_PRIMARY_SETTING_CATEGORY,
+    ),
+    SettingField(
+        "batch_project_analysis_model",
+        ("batch", "project_analysis", "model"),
+        "项目分析生成模型",
+        "project-analysis-generate 使用的模型；留空则回退到 Batch/同步模型。",
+        "str",
+        "",
+        "项目分析",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_project_analysis_max_brief_chars",
+        ("batch", "project_analysis", "max_brief_chars"),
+        "项目 brief 最大字符",
+        "LLM 生成与注入 brief 的长度上限。",
+        "int",
+        4000,
+        "项目分析",
+        minimum=200,
     ),
     SettingField(
         "sync_rag_output_dimensionality",
