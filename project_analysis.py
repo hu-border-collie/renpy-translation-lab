@@ -266,11 +266,28 @@ def digest_upstream_artifacts(artifact_ids: Sequence[str]) -> str:
 
 
 def normalize_summary_record(raw: Any, *, default_kind: str | None = None) -> dict[str, Any]:
-    """Validate and normalize one summary / brief artifact record."""
+    """Validate and normalize one summary / brief artifact record.
+
+    When *default_kind* is set (loader/writer bound to a specific artifact file),
+    an explicit record ``kind`` must match that file kind.
+    """
     if not isinstance(raw, Mapping):
         raise ProjectAnalysisSchemaError("summary record must be an object")
 
-    kind = normalize_kind(raw.get("kind") or default_kind)
+    raw_kind = raw.get("kind")
+    if default_kind is not None:
+        expected_kind = normalize_kind(default_kind)
+        if raw_kind is not None and str(raw_kind).strip() != "":
+            actual_kind = normalize_kind(raw_kind)
+            if actual_kind != expected_kind:
+                raise ProjectAnalysisSchemaError(
+                    f"summary kind {actual_kind!r} does not match expected file kind "
+                    f"{expected_kind!r}"
+                )
+        kind = expected_kind
+    else:
+        kind = normalize_kind(raw_kind)
+
     artifact_id = _as_optional_str(raw.get("id") or raw.get("artifact_id"))
     if not artifact_id:
         raise ProjectAnalysisSchemaError("summary record requires a stable id")
@@ -876,6 +893,86 @@ class ProjectAnalysisStore:
         manifest["updated_at"] = utc_now_iso()
         return self.save_manifest(manifest)
 
+    def _disk_brief_presence(self) -> tuple[bool, bool]:
+        draft_present = os.path.isfile(self.artifact_path(PROJECT_BRIEF_DRAFT_FILENAME))
+        published_present = os.path.isfile(
+            self.artifact_path(PROJECT_BRIEF_PUBLISHED_FILENAME)
+        )
+        return draft_present, published_present
+
+    @staticmethod
+    def _evaluate_aggregate_entry(
+        entry: Mapping[str, Any],
+        *,
+        kind: str,
+        expected_source_fingerprint: str = "",
+    ) -> str:
+        """Apply publish/freshness contract to a manifest aggregate entry."""
+        status = normalize_status(entry.get("status") or STATUS_MISSING, allow_missing=True)
+        if status == STATUS_MISSING:
+            return STATUS_MISSING
+        if status not in RECORD_STATUSES:
+            return status
+        synthetic = {
+            "id": _as_optional_str(entry.get("id") or f"{kind}-aggregate"),
+            "kind": kind,
+            "status": status,
+            "source_files": [],
+            "evidence_item_ids": [],
+            "upstream_artifact_ids": [],
+            "source_checksum": "",
+            "lineage": entry.get("lineage") or empty_lineage(),
+        }
+        return evaluate_record_status(
+            synthetic,
+            expected_source_fingerprint=expected_source_fingerprint,
+        )
+
+    def _evaluate_brief_status(
+        self,
+        entry: Mapping[str, Any],
+        *,
+        draft_present: bool,
+        published_present: bool,
+        expected_source_fingerprint: str = "",
+    ) -> str:
+        """Brief status requires on-disk published file for injectability."""
+        claimed = normalize_status(entry.get("status") or STATUS_MISSING, allow_missing=True)
+        if not draft_present and not published_present:
+            # Manifest may claim publish, but missing files are not injectable.
+            if claimed in {STATUS_PUBLISHED, STATUS_DRAFT, STATUS_REVIEW_REQUIRED}:
+                return STATUS_STALE
+            return STATUS_MISSING if claimed == STATUS_MISSING else claimed
+
+        if claimed == STATUS_PUBLISHED and not published_present:
+            # Never treat a missing published file as published.
+            status = STATUS_STALE
+        elif claimed == STATUS_MISSING:
+            if published_present:
+                status = STATUS_PUBLISHED
+            elif draft_present:
+                status = STATUS_DRAFT
+            else:
+                status = STATUS_MISSING
+        else:
+            status = claimed
+
+        if status not in RECORD_STATUSES:
+            return status
+        return evaluate_record_status(
+            {
+                "id": _as_optional_str(entry.get("id") or "project_brief"),
+                "kind": KIND_PROJECT_BRIEF,
+                "status": status,
+                "source_files": [],
+                "evidence_item_ids": [],
+                "upstream_artifact_ids": [],
+                "source_checksum": "",
+                "lineage": entry.get("lineage") or empty_lineage(),
+            },
+            expected_source_fingerprint=expected_source_fingerprint,
+        )
+
     def collect_status(
         self,
         *,
@@ -885,160 +982,141 @@ class ProjectAnalysisStore:
         """Readonly status snapshot for CLI / GUI / doctor (no side effects)."""
         error = ""
         manifest: dict[str, Any] | None = None
+        overall = STATUS_MISSING
         try:
+            draft_present, published_present = self._disk_brief_presence()
             if not self.exists():
+                manifest = empty_manifest(
+                    project_identity=project_identity or {},
+                    store_dir=self.store_dir,
+                )
                 overall = STATUS_MISSING
             else:
                 manifest = self.load_manifest()
                 if manifest is None:
-                    # Artifacts without manifest still report via rebuild-in-memory.
+                    # Artifacts without manifest: derive aggregates from files.
                     chunks = self.load_summaries(KIND_CHUNK)
                     scenes = self.load_summaries(KIND_SCENE)
                     labels = self.load_summaries(KIND_LABEL)
                     routes = self.load_routes()
-                    statuses = []
-                    for _kind, records in (
+                    manifest = empty_manifest(
+                        project_identity=project_identity or {},
+                        store_dir=self.store_dir,
+                    )
+                    for kind, records in (
                         (KIND_CHUNK, chunks),
                         (KIND_SCENE, scenes),
                         (KIND_LABEL, labels),
                         (KIND_ROUTE, routes),
                     ):
-                        statuses.extend(
+                        statuses = [
                             evaluate_record_status(
-                                r, expected_source_fingerprint=expected_source_fingerprint
+                                r,
+                                expected_source_fingerprint=expected_source_fingerprint,
                             )
                             for r in records
+                        ]
+                        lineage = (
+                            normalize_lineage(records[0].get("lineage"))
+                            if records
+                            else empty_lineage()
                         )
-                    draft_present = os.path.isfile(
-                        self.artifact_path(PROJECT_BRIEF_DRAFT_FILENAME)
+                        manifest["artifacts"][kind] = {
+                            "status": _aggregate_status(statuses),
+                            "count": len(records),
+                            "lineage": lineage,
+                        }
+                    brief_entry = {
+                        "status": (
+                            STATUS_PUBLISHED
+                            if published_present
+                            else STATUS_DRAFT
+                            if draft_present
+                            else STATUS_MISSING
+                        ),
+                        "lineage": empty_lineage(),
+                        "id": "project_brief",
+                    }
+                    manifest["artifacts"][KIND_PROJECT_BRIEF] = brief_entry
+
+                # Freshness + brief disk contract (always re-check on read).
+                overall_statuses: list[str] = []
+                for kind in (KIND_CHUNK, KIND_SCENE, KIND_LABEL, KIND_ROUTE):
+                    entry = dict(manifest["artifacts"].get(kind) or {})
+                    status = self._evaluate_aggregate_entry(
+                        entry,
+                        kind=kind,
+                        expected_source_fingerprint=expected_source_fingerprint,
                     )
-                    published_present = os.path.isfile(
-                        self.artifact_path(PROJECT_BRIEF_PUBLISHED_FILENAME)
-                    )
-                    if published_present:
-                        statuses.append(STATUS_PUBLISHED)
-                    elif draft_present:
-                        statuses.append(STATUS_DRAFT)
-                    overall = _aggregate_status(statuses)
-                    manifest = empty_manifest(
-                        project_identity=project_identity or {},
-                        store_dir=self.store_dir,
-                    )
-                    manifest["artifacts"][KIND_CHUNK]["count"] = len(chunks)
-                    manifest["artifacts"][KIND_CHUNK]["status"] = _aggregate_status(
-                        [
-                            evaluate_record_status(
-                                r, expected_source_fingerprint=expected_source_fingerprint
-                            )
-                            for r in chunks
-                        ]
-                    )
-                    manifest["artifacts"][KIND_SCENE]["count"] = len(scenes)
-                    manifest["artifacts"][KIND_SCENE]["status"] = _aggregate_status(
-                        [
-                            evaluate_record_status(
-                                r, expected_source_fingerprint=expected_source_fingerprint
-                            )
-                            for r in scenes
-                        ]
-                    )
-                    manifest["artifacts"][KIND_LABEL]["count"] = len(labels)
-                    manifest["artifacts"][KIND_LABEL]["status"] = _aggregate_status(
-                        [
-                            evaluate_record_status(
-                                r, expected_source_fingerprint=expected_source_fingerprint
-                            )
-                            for r in labels
-                        ]
-                    )
-                    manifest["artifacts"][KIND_ROUTE]["count"] = len(routes)
-                    manifest["artifacts"][KIND_ROUTE]["status"] = _aggregate_status(
-                        [
-                            evaluate_record_status(
-                                r, expected_source_fingerprint=expected_source_fingerprint
-                            )
-                            for r in routes
-                        ]
-                    )
-                    brief_status = (
-                        STATUS_PUBLISHED
-                        if published_present
-                        else STATUS_DRAFT
-                        if draft_present
-                        else STATUS_MISSING
-                    )
-                    manifest["artifacts"][KIND_PROJECT_BRIEF]["status"] = brief_status
-                    manifest["artifacts"][KIND_PROJECT_BRIEF]["draft_present"] = draft_present
-                    manifest["artifacts"][KIND_PROJECT_BRIEF][
-                        "published_present"
-                    ] = published_present
-                else:
-                    # Re-evaluate published → stale when expected fingerprint provided.
-                    overall_statuses = []
-                    for kind in (KIND_CHUNK, KIND_SCENE, KIND_LABEL, KIND_ROUTE):
-                        entry = manifest["artifacts"][kind]
-                        status = entry.get("status") or STATUS_MISSING
-                        if status == STATUS_PUBLISHED and expected_source_fingerprint:
-                            lineage = normalize_lineage(entry.get("lineage"))
-                            if (
-                                lineage["source_fingerprint"]
-                                and lineage["source_fingerprint"] != expected_source_fingerprint
-                            ):
-                                status = STATUS_STALE
-                                entry = dict(entry)
-                                entry["status"] = STATUS_STALE
-                                manifest["artifacts"][kind] = entry
-                        overall_statuses.append(status)
-                    brief = manifest["artifacts"][KIND_PROJECT_BRIEF]
-                    brief_status = brief.get("status") or STATUS_MISSING
-                    if brief_status == STATUS_PUBLISHED and expected_source_fingerprint:
-                        lineage = normalize_lineage(brief.get("lineage"))
-                        if (
-                            lineage["source_fingerprint"]
-                            and lineage["source_fingerprint"] != expected_source_fingerprint
-                        ):
-                            brief_status = STATUS_STALE
-                            brief = dict(brief)
-                            brief["status"] = STATUS_STALE
-                            manifest["artifacts"][KIND_PROJECT_BRIEF] = brief
-                    overall_statuses.append(brief_status)
-                    overall = _aggregate_status(
-                        [s for s in overall_statuses if s != STATUS_MISSING]
-                    )
-                    if overall == STATUS_MISSING and any(
-                        s != STATUS_MISSING for s in overall_statuses
-                    ):
-                        overall = _aggregate_status(overall_statuses)
+                    entry["status"] = status
+                    if "count" not in entry:
+                        entry["count"] = 0
+                    if "lineage" not in entry:
+                        entry["lineage"] = empty_lineage()
+                    manifest["artifacts"][kind] = entry
+                    overall_statuses.append(status)
+
+                brief = dict(manifest["artifacts"].get(KIND_PROJECT_BRIEF) or {})
+                brief_status = self._evaluate_brief_status(
+                    brief,
+                    draft_present=draft_present,
+                    published_present=published_present,
+                    expected_source_fingerprint=expected_source_fingerprint,
+                )
+                brief["status"] = brief_status
+                brief["draft_present"] = draft_present
+                brief["published_present"] = published_present
+                if "lineage" not in brief:
+                    brief["lineage"] = empty_lineage()
+                if "id" not in brief:
+                    brief["id"] = "project_brief"
+                manifest["artifacts"][KIND_PROJECT_BRIEF] = brief
+                overall_statuses.append(brief_status)
+
+                non_missing = [s for s in overall_statuses if s != STATUS_MISSING]
+                overall = (
+                    _aggregate_status(non_missing)
+                    if non_missing
+                    else _aggregate_status(overall_statuses)
+                )
         except ProjectAnalysisError as exc:
             error = str(exc)
             overall = STATUS_FAILED
+            draft_present, published_present = False, False
             manifest = empty_manifest(
                 project_identity=project_identity or {}, store_dir=self.store_dir
             )
         except OSError as exc:
             error = str(exc)
             overall = STATUS_FAILED
+            draft_present, published_present = False, False
             manifest = empty_manifest(
                 project_identity=project_identity or {}, store_dir=self.store_dir
             )
 
         artifacts = (manifest or empty_manifest(store_dir=self.store_dir)).get("artifacts") or {}
         brief = artifacts.get(KIND_PROJECT_BRIEF) or {}
+        # overall==published only when every non-missing layer (incl. brief) is published
+        # and fingerprint-fresh; brief publish without on-disk file is forced to stale.
+        injectable = overall == STATUS_PUBLISHED
         return {
             "store_dir": self.store_dir,
             "store_exists": self.exists(),
             "schema_version": SCHEMA_VERSION,
             "overall_status": overall,
-            "injectable": overall == STATUS_PUBLISHED,
-            "project_identity": (manifest or {}).get("project_identity") or dict(project_identity or {}),
+            "injectable": injectable,
+            "project_identity": (manifest or {}).get("project_identity")
+            or dict(project_identity or {}),
             "artifacts": artifacts,
             "chunk_count": int((artifacts.get(KIND_CHUNK) or {}).get("count") or 0),
             "scene_count": int((artifacts.get(KIND_SCENE) or {}).get("count") or 0),
             "label_count": int((artifacts.get(KIND_LABEL) or {}).get("count") or 0),
             "route_count": int((artifacts.get(KIND_ROUTE) or {}).get("count") or 0),
             "brief_status": brief.get("status") or STATUS_MISSING,
-            "brief_draft_present": bool(brief.get("draft_present")),
-            "brief_published_present": bool(brief.get("published_present")),
+            "brief_draft_present": bool(brief.get("draft_present", draft_present)),
+            "brief_published_present": bool(
+                brief.get("published_present", published_present)
+            ),
             "updated_at": (manifest or {}).get("updated_at") or "",
             "error": error,
         }

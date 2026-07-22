@@ -9856,32 +9856,32 @@ def main(argv=None):
 
     if command == 'project-analysis-status':
         # Readonly inspect: load settings for default store path, skip batch logging.
+        import contextlib
+        import io
+
         from project_analysis import collect_project_analysis_status, print_status
 
         store_dir = getattr(args, 'store_dir', None) or None
         as_json = bool(getattr(args, 'json', False))
-        if store_dir:
-            # Explicit store needs no config chatter.
-            pass
-        elif as_json:
-            # Keep machine-readable stdout clean while resolving context_storage defaults.
-            import contextlib
-            import io
+        source_fp = getattr(args, 'source_fingerprint', '') or ''
 
-            with contextlib.redirect_stdout(io.StringIO()):
+        def _load_settings_and_status():
+            if not store_dir:
                 legacy.load_translator_settings()
                 load_batch_settings()
-        else:
-            legacy.load_translator_settings()
-            load_batch_settings()
+            return collect_project_analysis_status(
+                store_dir=store_dir,
+                expected_source_fingerprint=source_fp,
+            )
 
-        status = collect_project_analysis_status(
-            store_dir=store_dir,
-            expected_source_fingerprint=getattr(args, 'source_fingerprint', '') or '',
-        )
         if as_json:
+            # Keep machine-readable stdout clean: settings load and path resolution
+            # may emit warnings via print (e.g. game_root unset under game storage).
+            with contextlib.redirect_stdout(io.StringIO()):
+                status = _load_settings_and_status()
             print(json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True))
         else:
+            status = _load_settings_and_status()
             print_banner()
             print_status(status)
         return

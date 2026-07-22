@@ -2279,7 +2279,9 @@ class MainWindow(QMainWindow):
                     format_status_label,
                 )
 
-                analysis_status = collect_project_analysis_status()
+                analysis_status = collect_project_analysis_status(
+                    base_dir=str(game_root) if game_root else None,
+                )
                 analysis_label = format_status_label(analysis_status)
             except Exception as exc:
                 analysis_label = f"读取失败 · {exc}"

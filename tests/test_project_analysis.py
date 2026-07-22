@@ -253,6 +253,180 @@ class StoreIoTests(unittest.TestCase):
             pa.is_injectable_record(record, expected_source_fingerprint="other")
         )
 
+    def test_missing_fingerprint_on_published_is_stale(self):
+        """P1: expected fingerprint + empty lineage must not stay injectable."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = pa.ProjectAnalysisStore(tmp)
+            store.save_summaries(
+                pa.KIND_CHUNK,
+                [
+                    {
+                        **_chunk("chunk-1", ["item-1"]),
+                        "lineage": pa.empty_lineage(),  # published but no fingerprint
+                    }
+                ],
+            )
+            manifest = store.rebuild_manifest()
+            # Aggregate lineage is empty; claim published.
+            manifest["artifacts"][pa.KIND_CHUNK]["status"] = pa.STATUS_PUBLISHED
+            manifest["artifacts"][pa.KIND_CHUNK]["lineage"] = pa.empty_lineage()
+            store.save_manifest(manifest)
+
+            status = store.collect_status(expected_source_fingerprint="src-fp-1")
+            self.assertEqual(status["overall_status"], pa.STATUS_STALE)
+            self.assertFalse(status["injectable"])
+            self.assertEqual(
+                status["artifacts"][pa.KIND_CHUNK]["status"], pa.STATUS_STALE
+            )
+
+    def test_manifest_published_brief_without_file_not_injectable(self):
+        """P1: manifest alone cannot claim published brief without the md file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = pa.ProjectAnalysisStore(tmp)
+            store.save_summaries(
+                pa.KIND_CHUNK, [_chunk("chunk-1", ["item-1"])]
+            )
+            manifest = store.rebuild_manifest(expected_source_fingerprint="src-fp-1")
+            # Ensure chunk layer is published+fresh.
+            manifest["artifacts"][pa.KIND_CHUNK]["status"] = pa.STATUS_PUBLISHED
+            manifest["artifacts"][pa.KIND_CHUNK]["lineage"] = _lineage()
+            # Claim brief published without writing project_brief.published.md
+            manifest["artifacts"][pa.KIND_PROJECT_BRIEF] = {
+                "status": pa.STATUS_PUBLISHED,
+                "draft_present": False,
+                "published_present": True,
+                "lineage": _lineage(),
+                "id": "project_brief",
+            }
+            store.save_manifest(manifest)
+            self.assertFalse(
+                os.path.isfile(store.artifact_path(pa.PROJECT_BRIEF_PUBLISHED_FILENAME))
+            )
+
+            status = store.collect_status(expected_source_fingerprint="src-fp-1")
+            self.assertEqual(status["brief_status"], pa.STATUS_STALE)
+            self.assertFalse(status["brief_published_present"])
+            self.assertNotEqual(status["overall_status"], pa.STATUS_PUBLISHED)
+            self.assertFalse(status["injectable"])
+
+    def test_kind_must_match_target_file(self):
+        """P2: chunk_summaries.jsonl must not accept kind=route rows."""
+        with self.assertRaises(pa.ProjectAnalysisSchemaError):
+            pa.normalize_summary_record(
+                {
+                    "id": "r1",
+                    "kind": pa.KIND_ROUTE,
+                    "status": pa.STATUS_DRAFT,
+                    "lineage": pa.empty_lineage(),
+                },
+                default_kind=pa.KIND_CHUNK,
+            )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = pa.ProjectAnalysisStore(tmp)
+            with self.assertRaises(pa.ProjectAnalysisSchemaError):
+                store.save_summaries(
+                    pa.KIND_CHUNK,
+                    [
+                        {
+                            "id": "bad",
+                            "kind": pa.KIND_ROUTE,
+                            "status": pa.STATUS_DRAFT,
+                            "source_files": [],
+                            "evidence_item_ids": [],
+                            "upstream_artifact_ids": [],
+                            "lineage": pa.empty_lineage(),
+                        }
+                    ],
+                )
+            # Loader rejects mismatched rows already on disk.
+            path = store.artifact_path(pa.CHUNK_SUMMARIES_FILENAME)
+            os.makedirs(tmp, exist_ok=True)
+            Path(path).write_text(
+                json.dumps(
+                    {
+                        "id": "bad",
+                        "kind": "route",
+                        "status": "draft",
+                        "source_files": [],
+                        "evidence_item_ids": [],
+                        "upstream_artifact_ids": [],
+                        "lineage": pa.empty_lineage(),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(pa.ProjectAnalysisSchemaError):
+                store.load_summaries(pa.KIND_CHUNK)
+
+
+class PathAndCliContractTests(unittest.TestCase):
+    def test_base_dir_selects_distinct_tool_store_slugs(self):
+        """P2: project switch must resolve different analysis store dirs."""
+        import translator_runtime as runtime
+
+        previous_location = runtime.CONTEXT_STORAGE_LOCATION
+        try:
+            runtime.CONTEXT_STORAGE_LOCATION = "tool"
+            path_a = runtime.get_default_project_analysis_store_dir(
+                r"C:\Games\ProjectA\work"
+            )
+            path_b = runtime.get_default_project_analysis_store_dir(
+                r"C:\Games\ProjectB\work"
+            )
+            self.assertNotEqual(path_a, path_b)
+            self.assertIn("project_analysis", path_a.replace("\\", "/"))
+            self.assertTrue(path_a.endswith("ProjectA") or "ProjectA" in path_a)
+            self.assertTrue(path_b.endswith("ProjectB") or "ProjectB" in path_b)
+            status_a = pa.collect_project_analysis_status(
+                base_dir=r"C:\Games\ProjectA\work"
+            )
+            status_b = pa.collect_project_analysis_status(
+                base_dir=r"C:\Games\ProjectB\work"
+            )
+            self.assertEqual(status_a["store_dir"], path_a)
+            self.assertEqual(status_b["store_dir"], path_b)
+        finally:
+            runtime.CONTEXT_STORAGE_LOCATION = previous_location
+
+    def test_json_status_stdout_is_pure_json_when_path_warns(self):
+        """P2: --json must not mix path-resolution warnings into stdout."""
+        import io
+        from contextlib import redirect_stdout
+
+        import gemini_translate_batch as batch_mod
+
+        def noisy_collect(*_args, **_kwargs):
+            print(
+                "Warning: context_storage.location is 'game' but game_root is unset; "
+                "using tool logs root with an 'unset' project slug."
+            )
+            return {
+                "overall_status": pa.STATUS_MISSING,
+                "store_dir": "C:/tmp/project_analysis/unset",
+                "store_exists": False,
+                "schema_version": pa.SCHEMA_VERSION,
+                "injectable": False,
+                "chunk_count": 0,
+                "label_count": 0,
+                "route_count": 0,
+                "brief_status": pa.STATUS_MISSING,
+                "error": "",
+            }
+
+        buf = io.StringIO()
+        with mock.patch(
+            "project_analysis.collect_project_analysis_status",
+            side_effect=noisy_collect,
+        ), redirect_stdout(buf):
+            batch_mod.main(["project-analysis-status", "--json", "--store-dir", "C:/tmp"])
+        raw = buf.getvalue()
+        self.assertNotIn("Warning:", raw, msg=f"stdout mixed warning: {raw!r}")
+        payload = json.loads(raw)
+        self.assertEqual(payload["overall_status"], pa.STATUS_MISSING)
+        self.assertIn("store_dir", payload)
+
 
 class CliStatusTests(unittest.TestCase):
     def test_project_analysis_status_command(self):
