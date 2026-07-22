@@ -110,7 +110,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 设置页采用左侧分区导航，右侧显示当前分区内容；底部固定提供 **重新加载**、**恢复推荐值**、**保存设置**。
 
-- **工作区 / 项目列表**：先**选择工作区**（`workspace_root`，默认未设置，不会用工具上一级），再浏览 `games_registry.json` 中的项目，扫描/刷新总表、同步 `GAMES.md`、编辑详情并**切换当前 `game_root`**。未指定工作区时本区为空状态。「切换到此项目」成功后**留在项目列表**；术语表 / 准备流程等到「项目」分区调整。此分区的操作即时写入 registry / `workspace_root`，不使用底部「保存设置」。
+- **工作区 / 项目列表**：先 **创建 / 接入工作区…**（预览后初始化或接入 `games_registry.json`，成功后再写 `workspace_root`；默认未设置，不会用工具上一级），再浏览总表、扫描/刷新、同步 `GAMES.md`、编辑详情并**切换当前 `game_root`**。未指定工作区时本区为空状态。「切换到此项目」成功后**留在项目列表**；术语表 / 准备流程等到「项目」分区调整。此分区的操作即时写入 registry / `workspace_root`，不使用底部「保存设置」。
 - **密钥**：读取 / 保存 `api_keys.json`；环境变量 Key 只读提示。
 - **LiteLLM**：选择 Provider 和模型、从已安装的 LiteLLM 目录刷新模型列表、在操作系统凭据管理器中单独保存供应商密钥，并可后台测试连接。
 - **项目**：术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。Ren'Py SDK 须显式配置： **查找 SDK**（用户点击后才扫描附近）或 **浏览…**；留空不会自动搜其它目录。结果写入 `prepare.renpy_sdk_dir`，保存设置后生效。当前 `game_root` 只读展示；需换项目请用「项目与环境」或「项目列表」。

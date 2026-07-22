@@ -5,6 +5,7 @@ The registry file (``games_registry.json``) lives at the RenPy workspace root.
 
 Commands::
 
+    python games_registry.py setup --workspace path/to/workspace
     python games_registry.py import-md
     python games_registry.py discover
     python games_registry.py ingest --source path/to/game_or.zip
@@ -22,7 +23,9 @@ import re
 import sys
 import warnings
 from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -937,6 +940,641 @@ def save_registry(path: Path, registry: dict[str, Any]) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Workspace create / attach (plan → apply). No Qt. Does not auto-run prepare.
+# ---------------------------------------------------------------------------
+
+_WRITE_PROBE_NAME = ".renpy_tl_lab_write_test"
+
+
+class WorkspaceScene(str, Enum):
+    """High-level classification of a candidate workspace path."""
+
+    MISSING_PATH = "missing_path"
+    NOT_DIRECTORY = "not_directory"
+    NOT_WRITABLE = "not_writable"
+    EMPTY = "empty"
+    REGISTRY_OK = "registry_ok"
+    REGISTRY_CORRUPT = "registry_corrupt"
+    GAMES_MD_ONLY = "games_md_only"
+    GAME_DIRS_ONLY = "game_dirs_only"
+    MIXED = "mixed"
+
+
+@dataclass(frozen=True)
+class WorkspaceSetupPlan:
+    """Read-only preview of workspace create / attach actions."""
+
+    workspace: Path
+    scene: WorkspaceScene
+    ok: bool
+    error_message: str = ""
+    path_exists: bool = False
+    is_dir: bool = False
+    is_writable: bool = False
+    registry_path: Path = field(default_factory=Path)
+    registry_exists: bool = False
+    registry_valid: bool = False
+    registry_project_count: int = 0
+    games_md_path: Path = field(default_factory=Path)
+    games_md_exists: bool = False
+    games_md_row_count: int = 0
+    games_md_parse_ok: bool = True
+    game_dir_paths: tuple[str, ...] = ()
+    undiscovered_paths: tuple[str, ...] = ()
+    will_create_directory: bool = False
+    will_create_empty_registry: bool = False
+    will_attach_registry: bool = False
+    suggest_import_md: bool = False
+    suggest_discover: bool = False
+    suggest_render_md: bool = False
+    notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class WorkspaceSetupOptions:
+    """User choices for :func:`apply_workspace_setup`."""
+
+    import_md: bool = False
+    import_md_merge: bool = True
+    discover: bool = False
+    refresh_new: bool = True
+    refresh_mode: str = REFRESH_MODE_LITE
+    render_md: bool = False
+    persist_workspace_root: bool = True
+    config_path: Path | None = None
+    create_directory: bool = False
+
+
+@dataclass(frozen=True)
+class WorkspaceSetupResult:
+    """Outcome of applying a workspace setup plan."""
+
+    ok: bool
+    message: str
+    workspace: Path | None = None
+    created_registry: bool = False
+    imported_md: bool = False
+    discovered_count: int = 0
+    rendered_md: bool = False
+    persisted_workspace_root: bool = False
+    project_count: int = 0
+    scene: str = ""
+
+
+def normalize_workspace_path(path: Path | str) -> Path:
+    """Expand user and resolve when possible (works for not-yet-created paths)."""
+    candidate = Path(path).expanduser()
+    try:
+        return candidate.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return candidate.absolute()
+
+
+def try_read_registry(path: Path) -> tuple[str, dict[str, Any] | None, str]:
+    """Inspect a registry file without synthesizing an empty document.
+
+    Returns ``(status, data, error_message)`` where status is one of
+    ``missing`` | ``ok`` | ``corrupt``. Never writes to disk.
+    """
+    if not path.is_file():
+        return "missing", None, ""
+    try:
+        raw = path.read_text(encoding="utf-8-sig")
+        data = json.loads(raw if raw.strip() else "{}")
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        return "corrupt", None, f"无法解析 {path.name}：{exc}"
+    if not isinstance(data, dict):
+        return "corrupt", None, f"Registry root must be an object: {path}"
+    data.setdefault("schema_version", SCHEMA_VERSION)
+    if "projects" not in data:
+        data["projects"] = []
+    if not isinstance(data.get("projects"), list):
+        return "corrupt", None, f"{path.name} 的 projects 必须是数组。"
+    return "ok", data, ""
+
+
+def dir_is_writable(path: Path) -> bool:
+    """Return True when ``path`` is a directory that accepts new files."""
+    if not path.is_dir():
+        return False
+    probe = path / _WRITE_PROBE_NAME
+    try:
+        # Unique suffix reduces collision if two processes probe together.
+        probe = path / f"{_WRITE_PROBE_NAME}.{os.getpid()}"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
+def _project_count(registry: dict[str, Any] | None) -> int:
+    if not registry:
+        return 0
+    projects = registry.get("projects")
+    if not isinstance(projects, list):
+        return 0
+    return len(projects)
+
+
+def _shell_registry_for_discover(
+    workspace: Path,
+    registry_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Minimal in-memory registry for discover path comparison (not written)."""
+    if registry_data is not None:
+        return registry_data
+    return empty_registry(workspace)
+
+
+def plan_workspace_setup(path: Path | str) -> WorkspaceSetupPlan:
+    """Read-only classify a path and suggest create / attach actions.
+
+    Does not write registry, GAMES.md, or ``translator_config.json``.
+    A write probe file may be created and deleted to test writability.
+    """
+    workspace = normalize_workspace_path(path)
+    registry_path = workspace / REGISTRY_FILENAME
+    md_path = workspace / GAMES_MD_FILENAME
+    notes: list[str] = []
+
+    path_exists = workspace.exists()
+    is_dir = workspace.is_dir() if path_exists else False
+    is_writable = False
+    will_create_directory = not path_exists
+
+    if not path_exists:
+        notes.append("目录尚不存在；确认后可创建。")
+        return WorkspaceSetupPlan(
+            workspace=workspace,
+            scene=WorkspaceScene.MISSING_PATH,
+            ok=True,
+            path_exists=False,
+            is_dir=False,
+            is_writable=False,
+            registry_path=registry_path,
+            games_md_path=md_path,
+            will_create_directory=True,
+            will_create_empty_registry=True,
+            suggest_import_md=False,
+            suggest_discover=False,
+            notes=tuple(notes),
+        )
+
+    if not is_dir:
+        return WorkspaceSetupPlan(
+            workspace=workspace,
+            scene=WorkspaceScene.NOT_DIRECTORY,
+            ok=False,
+            error_message=f"目标不是目录：{workspace}",
+            path_exists=True,
+            is_dir=False,
+            registry_path=registry_path,
+            games_md_path=md_path,
+            notes=("目标路径存在但不是目录。",),
+        )
+
+    is_writable = dir_is_writable(workspace)
+    if not is_writable:
+        return WorkspaceSetupPlan(
+            workspace=workspace,
+            scene=WorkspaceScene.NOT_WRITABLE,
+            ok=False,
+            error_message=f"目录不可写：{workspace}",
+            path_exists=True,
+            is_dir=True,
+            is_writable=False,
+            registry_path=registry_path,
+            games_md_path=md_path,
+            notes=("无法在该目录创建文件，未写入 workspace_root。",),
+        )
+
+    reg_status, reg_data, reg_error = try_read_registry(registry_path)
+    if reg_status == "corrupt":
+        return WorkspaceSetupPlan(
+            workspace=workspace,
+            scene=WorkspaceScene.REGISTRY_CORRUPT,
+            ok=False,
+            error_message=reg_error or f"{REGISTRY_FILENAME} 损坏，拒绝覆盖。",
+            path_exists=True,
+            is_dir=True,
+            is_writable=True,
+            registry_path=registry_path,
+            registry_exists=True,
+            registry_valid=False,
+            games_md_path=md_path,
+            games_md_exists=md_path.is_file(),
+            notes=(
+                f"检测到损坏的 {REGISTRY_FILENAME}，不会重写为空表。",
+                "请手动修复或移走该文件后再接入。",
+            ),
+        )
+
+    registry_exists = reg_status == "ok"
+    registry_valid = registry_exists
+    registry_project_count = _project_count(reg_data)
+
+    games_md_exists = md_path.is_file()
+    games_md_row_count = 0
+    games_md_parse_ok = True
+    if games_md_exists:
+        try:
+            content = md_path.read_text(encoding="utf-8-sig")
+            games_md_row_count = len(parse_games_md_table(content))
+        except (OSError, UnicodeError) as exc:
+            games_md_parse_ok = False
+            notes.append(f"读取 GAMES.md 失败：{exc}")
+
+    game_dir_paths = tuple(iter_workspace_project_paths(workspace))
+    shell = _shell_registry_for_discover(workspace, reg_data)
+    undiscovered = tuple(discover_new_project_paths(workspace, shell))
+
+    has_registry = registry_exists
+    has_md = games_md_exists
+    has_games = bool(game_dir_paths)
+    kind_count = sum((has_registry, has_md, has_games))
+
+    if kind_count == 0:
+        scene = WorkspaceScene.EMPTY
+    elif kind_count >= 2:
+        scene = WorkspaceScene.MIXED
+    elif has_registry:
+        scene = WorkspaceScene.REGISTRY_OK
+    elif has_md:
+        scene = WorkspaceScene.GAMES_MD_ONLY
+    else:
+        scene = WorkspaceScene.GAME_DIRS_ONLY
+
+    if scene == WorkspaceScene.GAMES_MD_ONLY and not games_md_parse_ok:
+        return WorkspaceSetupPlan(
+            workspace=workspace,
+            scene=scene,
+            ok=False,
+            error_message="GAMES.md 无法读取，且没有可用的 games_registry.json。",
+            path_exists=True,
+            is_dir=True,
+            is_writable=True,
+            registry_path=registry_path,
+            registry_exists=False,
+            games_md_path=md_path,
+            games_md_exists=True,
+            games_md_parse_ok=False,
+            game_dir_paths=game_dir_paths,
+            notes=tuple(notes) or ("GAMES.md 存在但无法解析。",),
+        )
+
+    # Default option suggestions (GUI/CLI may override).
+    suggest_import_md = False
+    if has_md and games_md_parse_ok:
+        if scene == WorkspaceScene.GAMES_MD_ONLY:
+            suggest_import_md = True
+        elif scene == WorkspaceScene.MIXED and (not has_registry or registry_project_count == 0):
+            suggest_import_md = True
+
+    suggest_discover = bool(undiscovered)
+    suggest_render_md = False
+
+    will_create_empty_registry = not has_registry and not suggest_import_md
+    # If only MD and we suggest import, empty registry is not needed.
+    if not has_registry and suggest_import_md:
+        will_create_empty_registry = False
+    if not has_registry and not has_md:
+        will_create_empty_registry = True
+
+    will_attach_registry = has_registry
+
+    if scene == WorkspaceScene.EMPTY:
+        notes.append("空目录：将创建最小 games_registry.json。")
+    elif scene == WorkspaceScene.REGISTRY_OK:
+        notes.append(
+            f"已有合法总表（{registry_project_count} 个项目）；接入时不覆盖现有记录。"
+        )
+    elif scene == WorkspaceScene.GAMES_MD_ONLY:
+        notes.append(f"仅有 GAMES.md（约 {games_md_row_count} 行）；建议导入初始化总表。")
+    elif scene == WorkspaceScene.GAME_DIRS_ONLY:
+        notes.append(
+            f"发现 {len(game_dir_paths)} 个 Game_* 目录；建议扫描登记。"
+        )
+    elif scene == WorkspaceScene.MIXED:
+        notes.append("检测到总表 / GAMES.md / Game_* 混合内容；可预览后合并或扫描。")
+
+    if undiscovered:
+        notes.append(f"尚未登记的 Game_*：{len(undiscovered)} 个。")
+    if has_md and not suggest_import_md and has_registry:
+        notes.append("已有总表时导入 GAMES.md 将按路径合并，不会整表替换。")
+
+    return WorkspaceSetupPlan(
+        workspace=workspace,
+        scene=scene,
+        ok=True,
+        path_exists=True,
+        is_dir=True,
+        is_writable=True,
+        registry_path=registry_path,
+        registry_exists=has_registry,
+        registry_valid=registry_valid,
+        registry_project_count=registry_project_count,
+        games_md_path=md_path,
+        games_md_exists=has_md,
+        games_md_row_count=games_md_row_count,
+        games_md_parse_ok=games_md_parse_ok,
+        game_dir_paths=game_dir_paths,
+        undiscovered_paths=undiscovered,
+        will_create_directory=False,
+        will_create_empty_registry=will_create_empty_registry,
+        will_attach_registry=will_attach_registry,
+        suggest_import_md=suggest_import_md,
+        suggest_discover=suggest_discover,
+        suggest_render_md=suggest_render_md,
+        notes=tuple(notes),
+    )
+
+
+def options_from_plan(
+    plan: WorkspaceSetupPlan,
+    *,
+    import_md: bool | None = None,
+    discover: bool | None = None,
+    render_md: bool | None = None,
+    create_directory: bool = False,
+    persist_workspace_root: bool = True,
+    config_path: Path | None = None,
+    refresh_new: bool = True,
+) -> WorkspaceSetupOptions:
+    """Build apply options, filling defaults from plan suggestions.
+
+    ``create_directory`` is never implied: callers must opt in explicitly even
+    when the plan reports ``will_create_directory``.
+    """
+    return WorkspaceSetupOptions(
+        import_md=plan.suggest_import_md if import_md is None else import_md,
+        import_md_merge=True,
+        discover=plan.suggest_discover if discover is None else discover,
+        refresh_new=refresh_new,
+        refresh_mode=REFRESH_MODE_LITE,
+        render_md=bool(render_md) if render_md is not None else plan.suggest_render_md,
+        persist_workspace_root=persist_workspace_root,
+        config_path=config_path,
+        create_directory=bool(create_directory),
+    )
+
+
+def apply_workspace_setup(
+    plan: WorkspaceSetupPlan,
+    options: WorkspaceSetupOptions | None = None,
+) -> WorkspaceSetupResult:
+    """Apply a confirmed workspace setup plan.
+
+    Never rewrites a corrupt registry. Persists ``workspace_root`` only when
+    ``options.persist_workspace_root`` is true and required writes succeed.
+    """
+    opts = options if options is not None else options_from_plan(plan)
+
+    if not plan.ok:
+        return WorkspaceSetupResult(
+            ok=False,
+            message=plan.error_message or "工作区计划不可用，已取消。",
+            scene=plan.scene.value,
+        )
+
+    # Re-inspect to avoid acting on a stale plan (TOCTOU).
+    fresh = plan_workspace_setup(plan.workspace)
+    if fresh.scene == WorkspaceScene.REGISTRY_CORRUPT or (
+        not fresh.ok and fresh.scene != WorkspaceScene.MISSING_PATH
+    ):
+        return WorkspaceSetupResult(
+            ok=False,
+            message=fresh.error_message or "工作区状态已变化，拒绝写入。",
+            workspace=fresh.workspace,
+            scene=fresh.scene.value,
+        )
+    if fresh.scene == WorkspaceScene.MISSING_PATH and not opts.create_directory:
+        return WorkspaceSetupResult(
+            ok=False,
+            message=f"目录不存在，且未指定创建：{fresh.workspace}",
+            workspace=fresh.workspace,
+            scene=fresh.scene.value,
+        )
+
+    workspace = fresh.workspace
+    registry_path = fresh.registry_path
+    md_path = fresh.games_md_path
+
+    if opts.create_directory and not workspace.exists():
+        try:
+            workspace.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return WorkspaceSetupResult(
+                ok=False,
+                message=f"无法创建目录：{exc}",
+                workspace=workspace,
+                scene=fresh.scene.value,
+            )
+
+    if not workspace.is_dir():
+        return WorkspaceSetupResult(
+            ok=False,
+            message=f"目标不是目录：{workspace}",
+            workspace=workspace,
+            scene=WorkspaceScene.NOT_DIRECTORY.value,
+        )
+
+    if not dir_is_writable(workspace):
+        return WorkspaceSetupResult(
+            ok=False,
+            message=f"目录不可写：{workspace}",
+            workspace=workspace,
+            scene=WorkspaceScene.NOT_WRITABLE.value,
+        )
+
+    # Refuse to touch corrupt registry after mkdir/writable checks.
+    reg_status, reg_data, reg_error = try_read_registry(registry_path)
+    if reg_status == "corrupt":
+        return WorkspaceSetupResult(
+            ok=False,
+            message=reg_error or f"{REGISTRY_FILENAME} 损坏，拒绝写入。",
+            workspace=workspace,
+            scene=WorkspaceScene.REGISTRY_CORRUPT.value,
+        )
+
+    created_registry = False
+    imported_md = False
+    discovered_count = 0
+    rendered_md = False
+    data: dict[str, Any]
+
+    try:
+        if reg_status == "missing":
+            if opts.import_md and md_path.is_file():
+                data = import_from_games_md(
+                    md_path=md_path,
+                    registry_path=registry_path,
+                    workspace_root=workspace,
+                    merge=False,
+                )
+                created_registry = True
+                imported_md = True
+            else:
+                data = empty_registry(workspace)
+                data["workspace_root"] = workspace.as_posix()
+                data["update_summary"] = "工作区初始化：空总表"
+                save_registry(registry_path, data)
+                created_registry = True
+        else:
+            assert reg_data is not None
+            data = reg_data
+            data["workspace_root"] = workspace.as_posix()
+            if opts.import_md and md_path.is_file():
+                # Existing registry: always merge; never wipe projects.
+                data = import_from_games_md(
+                    md_path=md_path,
+                    registry_path=registry_path,
+                    workspace_root=workspace,
+                    merge=True,
+                )
+                imported_md = True
+            else:
+                # Attach only: refresh workspace_root stamp without touching projects.
+                save_registry(registry_path, data)
+
+        if opts.discover:
+            status_after, data_after, err_after = try_read_registry(registry_path)
+            if status_after != "ok" or data_after is None:
+                return WorkspaceSetupResult(
+                    ok=False,
+                    message=err_after or "扫描前无法读取总表。",
+                    workspace=workspace,
+                    created_registry=created_registry,
+                    imported_md=imported_md,
+                    scene=fresh.scene.value,
+                )
+            data = data_after
+            data["workspace_root"] = workspace.as_posix()
+            mode = (
+                opts.refresh_mode
+                if opts.refresh_mode in REFRESH_MODES
+                else REFRESH_MODE_LITE
+            )
+            discovered_count, _paths = merge_discovered_projects(
+                data,
+                workspace_root=workspace,
+                refresh_new=opts.refresh_new,
+                mode=mode,
+            )
+            save_registry(registry_path, data)
+
+        if opts.render_md:
+            status_md, data_md, err_md = try_read_registry(registry_path)
+            if status_md != "ok" or data_md is None:
+                return WorkspaceSetupResult(
+                    ok=False,
+                    message=err_md or "生成 GAMES.md 前无法读取总表。",
+                    workspace=workspace,
+                    created_registry=created_registry,
+                    imported_md=imported_md,
+                    discovered_count=discovered_count,
+                    scene=fresh.scene.value,
+                )
+            data_md["workspace_root"] = workspace.as_posix()
+            data_md["update_summary"] = (
+                data_md.get("update_summary") or "由工作区接入向导生成"
+            )
+            write_games_md(data_md, md_path)
+            rendered_md = True
+            data = data_md
+
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return WorkspaceSetupResult(
+            ok=False,
+            message=f"写入工作区失败：{exc}",
+            workspace=workspace,
+            created_registry=created_registry,
+            imported_md=imported_md,
+            discovered_count=discovered_count,
+            rendered_md=rendered_md,
+            scene=fresh.scene.value,
+        )
+
+    final_status, final_data, final_err = try_read_registry(registry_path)
+    if final_status != "ok" or final_data is None:
+        return WorkspaceSetupResult(
+            ok=False,
+            message=final_err or "写入后无法验证总表。",
+            workspace=workspace,
+            created_registry=created_registry,
+            imported_md=imported_md,
+            discovered_count=discovered_count,
+            rendered_md=rendered_md,
+            scene=fresh.scene.value,
+        )
+
+    project_count = _project_count(final_data)
+    persisted = False
+    if opts.persist_workspace_root:
+        try:
+            save_configured_workspace_root(workspace, opts.config_path)
+            persisted = True
+        except ValueError as exc:
+            # Registry already written; report partial success clearly.
+            parts = [
+                f"工作区总表已就绪（{project_count} 个项目）",
+                f"但未能写入 workspace_root：{exc}",
+            ]
+            return WorkspaceSetupResult(
+                ok=False,
+                message="；".join(parts),
+                workspace=workspace,
+                created_registry=created_registry,
+                imported_md=imported_md,
+                discovered_count=discovered_count,
+                rendered_md=rendered_md,
+                persisted_workspace_root=False,
+                project_count=project_count,
+                scene=fresh.scene.value,
+            )
+
+    summary_bits = [f"工作区已接入：{workspace}"]
+    if created_registry and not imported_md:
+        summary_bits.append("已创建空总表")
+    if imported_md:
+        summary_bits.append("已导入 GAMES.md")
+    if discovered_count:
+        summary_bits.append(f"新登记 {discovered_count} 个项目")
+    if rendered_md:
+        summary_bits.append("已生成 GAMES.md")
+    summary_bits.append(f"共 {project_count} 个项目")
+    if persisted:
+        summary_bits.append("已写入 workspace_root")
+
+    return WorkspaceSetupResult(
+        ok=True,
+        message="；".join(summary_bits) + "。",
+        workspace=workspace,
+        created_registry=created_registry,
+        imported_md=imported_md,
+        discovered_count=discovered_count,
+        rendered_md=rendered_md,
+        persisted_workspace_root=persisted,
+        project_count=project_count,
+        scene=fresh.scene.value,
+    )
+
+
+def plan_to_public_dict(plan: WorkspaceSetupPlan) -> dict[str, Any]:
+    """JSON-serializable view of a setup plan (paths as strings)."""
+    payload = asdict(plan)
+    payload["workspace"] = str(plan.workspace)
+    payload["registry_path"] = str(plan.registry_path)
+    payload["games_md_path"] = str(plan.games_md_path)
+    payload["scene"] = plan.scene.value
+    return payload
+
+
 def find_project(registry: dict[str, Any], project_id: str) -> dict[str, Any] | None:
     for project in registry.get("projects", []):
         if project.get("id") == project_id:
@@ -1365,6 +2003,53 @@ def build_arg_parser() -> argparse.ArgumentParser:
     show_parser = subparsers.add_parser("show", help="Print registry or one project as JSON")
     show_parser.add_argument("--project", dest="project_id", default=None)
 
+    setup_parser = subparsers.add_parser(
+        "setup",
+        help=(
+            "Create or attach a workspace (preview with --dry-run); "
+            "initializes games_registry.json without running project prepare"
+        ),
+    )
+    setup_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the plan only; do not write registry, GAMES.md, or config",
+    )
+    setup_parser.add_argument(
+        "--import-md",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Import GAMES.md into the registry (default: plan suggestion)",
+    )
+    setup_parser.add_argument(
+        "--discover",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Scan and register new Game_* folders (default: plan suggestion)",
+    )
+    setup_parser.add_argument(
+        "--render-md",
+        action="store_true",
+        help="Regenerate GAMES.md from the registry after setup",
+    )
+    setup_parser.add_argument(
+        "--create-directory",
+        action="store_true",
+        help="Create the workspace directory when it does not exist",
+    )
+    setup_parser.add_argument(
+        "--persist-config",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write workspace_root into translator_config.json (default: yes)",
+    )
+    setup_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Print plan or result as JSON",
+    )
+
     return parser
 
 
@@ -1379,9 +2064,92 @@ def resolve_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     return workspace, registry_path, md_path
 
 
+def _print_setup_plan(plan: WorkspaceSetupPlan, *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(plan_to_public_dict(plan), ensure_ascii=False, indent=2))
+        return
+    print(f"workspace: {plan.workspace}")
+    print(f"scene: {plan.scene.value}")
+    print(f"ok: {plan.ok}")
+    if plan.error_message:
+        print(f"error: {plan.error_message}")
+    print(f"registry: exists={plan.registry_exists} valid={plan.registry_valid} "
+          f"projects={plan.registry_project_count}")
+    print(f"GAMES.md: exists={plan.games_md_exists} rows={plan.games_md_row_count}")
+    print(f"Game_*: {len(plan.game_dir_paths)} "
+          f"(undiscovered={len(plan.undiscovered_paths)})")
+    if plan.undiscovered_paths:
+        for rel in plan.undiscovered_paths[:20]:
+            print(f"  + {rel}")
+        if len(plan.undiscovered_paths) > 20:
+            print(f"  … 共 {len(plan.undiscovered_paths)} 个")
+    print(
+        "suggest: "
+        f"import_md={plan.suggest_import_md} "
+        f"discover={plan.suggest_discover} "
+        f"render_md={plan.suggest_render_md} "
+        f"create_dir={plan.will_create_directory} "
+        f"create_empty_registry={plan.will_create_empty_registry}"
+    )
+    for note in plan.notes:
+        print(f"- {note}")
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    """Create or attach a workspace; require explicit --workspace."""
+    if args.workspace is None or not str(args.workspace).strip():
+        print(
+            "setup 需要显式 --workspace <path>（不会使用隐式推断）。",
+            file=sys.stderr,
+        )
+        return 2
+
+    plan = plan_workspace_setup(args.workspace)
+    if getattr(args, "dry_run", False):
+        _print_setup_plan(plan, as_json=bool(getattr(args, "as_json", False)))
+        return 0 if plan.ok else 1
+
+    if not plan.ok:
+        _print_setup_plan(plan, as_json=bool(getattr(args, "as_json", False)))
+        return 1
+
+    options = options_from_plan(
+        plan,
+        import_md=getattr(args, "import_md", None),
+        discover=getattr(args, "discover", None),
+        render_md=True if getattr(args, "render_md", False) else None,
+        create_directory=bool(getattr(args, "create_directory", False)),
+        persist_workspace_root=bool(getattr(args, "persist_config", True)),
+    )
+
+    result = apply_workspace_setup(plan, options)
+    if getattr(args, "as_json", False):
+        payload = {
+            "ok": result.ok,
+            "message": result.message,
+            "workspace": str(result.workspace) if result.workspace else None,
+            "created_registry": result.created_registry,
+            "imported_md": result.imported_md,
+            "discovered_count": result.discovered_count,
+            "rendered_md": result.rendered_md,
+            "persisted_workspace_root": result.persisted_workspace_root,
+            "project_count": result.project_count,
+            "scene": result.scene,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        stream = sys.stdout if result.ok else sys.stderr
+        print(result.message, file=stream)
+    return 0 if result.ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "setup":
+        return cmd_setup(args)
+
     workspace, registry_path, md_path = resolve_paths(args)
 
     if args.command == "import-md":

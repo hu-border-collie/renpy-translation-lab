@@ -12,12 +12,18 @@ from games_registry import (
     REFRESH_MODE_DEEP,
     REFRESH_MODE_LITE,
     CancelCheck,
+    WorkspaceSetupOptions,
+    WorkspaceSetupPlan,
+    WorkspaceSetupResult,
+    apply_workspace_setup,
     default_games_md_path,
     discover_new_project_paths,
     empty_registry,
     import_from_games_md,
     load_registry,
     merge_discovered_projects,
+    options_from_plan,
+    plan_workspace_setup,
     record_batch,
     refresh_all,
     refresh_project,
@@ -42,10 +48,56 @@ class RegistryActionResult:
     cancelled: bool = False
     project_id: str = ""
     project_path: str = ""
+    workspace_root: str = ""
+    project_count: int = 0
 
 
 def _registry_file(workspace_root: Path) -> Path:
     return resolve_registry_path(workspace_root)
+
+
+def plan_workspace_setup_action(path: Path | str) -> WorkspaceSetupPlan:
+    """Read-only workspace create/attach plan (shared core, no Qt)."""
+    return plan_workspace_setup(path)
+
+
+def apply_workspace_setup_action(
+    plan: WorkspaceSetupPlan,
+    *,
+    import_md: bool | None = None,
+    discover: bool | None = None,
+    render_md: bool = False,
+    create_directory: bool = False,
+    persist_workspace_root: bool = False,
+    refresh_new: bool = True,
+) -> RegistryActionResult:
+    """Apply workspace setup; GUI defaults to not writing translator_config.
+
+    Host (``ProjectState.set_workspace_root``) should persist ``workspace_root``
+    after a successful apply.
+    """
+    options = options_from_plan(
+        plan,
+        import_md=import_md,
+        discover=discover,
+        render_md=True if render_md else None,
+        create_directory=create_directory,
+        persist_workspace_root=persist_workspace_root,
+        refresh_new=refresh_new,
+    )
+    try:
+        result: WorkspaceSetupResult = apply_workspace_setup(plan, options)
+    except (OSError, ValueError) as exc:
+        return RegistryActionResult(False, f"接入工作区失败：{exc}")
+
+    workspace = str(result.workspace) if result.workspace is not None else ""
+    return RegistryActionResult(
+        result.ok,
+        result.message,
+        workspace_root=workspace,
+        project_count=result.project_count,
+        project_path=workspace,
+    )
 
 
 def _mode_label(mode: str) -> str:

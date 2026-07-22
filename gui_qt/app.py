@@ -2592,7 +2592,7 @@ class MainWindow(QMainWindow):
         page, layout = self._settings_page("settings_workspace")
         hint = QLabel(
             "工作区默认未设置，不会自动使用工具目录的上一级。"
-            "先「选择工作区…」指定存放 Game_* 的根目录，再扫描、导入或切换项目。"
+            "先「创建 / 接入工作区…」预览并初始化/接入总表，再扫描、导入或切换项目。"
             "「切换到此项目」会写入当前 game_root 并留在本页；术语表 / 准备流程等到「项目」分区调整。"
         )
         hint.setWordWrap(True)
@@ -7626,7 +7626,7 @@ class MainWindow(QMainWindow):
         self._on_go_to_workspace_for_project_switch()
         if self.state.get_workspace_root() is None:
             self.statusBar().showMessage(
-                "请先选择工作区目录，再从项目列表切换项目。",
+                "请先创建 / 接入工作区，再从项目列表切换项目。",
                 6000,
             )
         else:

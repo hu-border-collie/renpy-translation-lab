@@ -623,6 +623,317 @@ class GamesRegistryTests(unittest.TestCase):
             self.assertEqual(registry_path.resolve(), (expected_ws / registry.REGISTRY_FILENAME))
             self.assertEqual(md_path.resolve(), (expected_ws / registry.GAMES_MD_FILENAME))
 
+    def test_try_read_registry_missing_ok_corrupt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / registry.REGISTRY_FILENAME
+            status, data, err = registry.try_read_registry(path)
+            self.assertEqual(status, "missing")
+            self.assertIsNone(data)
+            self.assertEqual(err, "")
+
+            registry.save_registry(path, registry.empty_registry(Path(tmp)))
+            status, data, err = registry.try_read_registry(path)
+            self.assertEqual(status, "ok")
+            self.assertIsNotNone(data)
+            self.assertEqual(err, "")
+
+            path.write_text("{not-json", encoding="utf-8")
+            status, data, err = registry.try_read_registry(path)
+            self.assertEqual(status, "corrupt")
+            self.assertIsNone(data)
+            self.assertIn("无法解析", err)
+
+            path.write_text("[]\n", encoding="utf-8")
+            status, data, err = registry.try_read_registry(path)
+            self.assertEqual(status, "corrupt")
+            self.assertIsNone(data)
+
+    def test_plan_and_apply_empty_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "ws"
+            workspace.mkdir()
+            config_path = Path(tmp) / "translator_config.json"
+            plan = registry.plan_workspace_setup(workspace)
+            self.assertTrue(plan.ok)
+            self.assertEqual(plan.scene, registry.WorkspaceScene.EMPTY)
+            self.assertTrue(plan.will_create_empty_registry)
+
+            result = registry.apply_workspace_setup(
+                plan,
+                registry.WorkspaceSetupOptions(
+                    persist_workspace_root=True,
+                    config_path=config_path,
+                ),
+            )
+            self.assertTrue(result.ok, result.message)
+            self.assertTrue(result.created_registry)
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            self.assertTrue(registry_path.is_file())
+            loaded = json.loads(registry_path.read_text(encoding="utf-8"))
+            self.assertEqual(loaded["projects"], [])
+            self.assertEqual(
+                registry.load_configured_workspace_root(config_path),
+                workspace.resolve(),
+            )
+
+    def test_plan_attach_existing_registry_preserves_projects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            original = {
+                "schema_version": 1,
+                "workspace_root": workspace.as_posix(),
+                "projects": [
+                    {
+                        "id": "game_keep",
+                        "name": "Keep",
+                        "path": "Game_Keep",
+                        "notes": "人工备注",
+                        "play_status": "进行中",
+                    }
+                ],
+            }
+            registry_path.write_text(
+                json.dumps(original, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            plan = registry.plan_workspace_setup(workspace)
+            self.assertTrue(plan.ok)
+            self.assertEqual(plan.scene, registry.WorkspaceScene.REGISTRY_OK)
+            self.assertTrue(plan.will_attach_registry)
+            self.assertFalse(plan.suggest_import_md)
+
+            result = registry.apply_workspace_setup(
+                plan,
+                registry.WorkspaceSetupOptions(persist_workspace_root=False),
+            )
+            self.assertTrue(result.ok, result.message)
+            self.assertFalse(result.created_registry)
+            loaded = json.loads(registry_path.read_text(encoding="utf-8"))
+            self.assertEqual(loaded["projects"][0]["notes"], "人工备注")
+            self.assertEqual(loaded["projects"][0]["play_status"], "进行中")
+            self.assertEqual(result.project_count, 1)
+
+    def test_apply_import_md_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "GAMES.md").write_text(SAMPLE_MD, encoding="utf-8")
+            plan = registry.plan_workspace_setup(workspace)
+            self.assertEqual(plan.scene, registry.WorkspaceScene.GAMES_MD_ONLY)
+            self.assertTrue(plan.suggest_import_md)
+
+            result = registry.apply_workspace_setup(
+                plan,
+                registry.options_from_plan(plan, persist_workspace_root=False),
+            )
+            self.assertTrue(result.ok, result.message)
+            self.assertTrue(result.imported_md)
+            self.assertEqual(result.project_count, 3)
+
+    def test_apply_discover_game_dirs_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "Game_Alpha").mkdir()
+            (workspace / "Game_Beta").mkdir()
+            plan = registry.plan_workspace_setup(workspace)
+            self.assertEqual(plan.scene, registry.WorkspaceScene.GAME_DIRS_ONLY)
+            self.assertTrue(plan.suggest_discover)
+            self.assertEqual(set(plan.undiscovered_paths), {"Game_Alpha", "Game_Beta"})
+
+            with mock.patch.object(
+                registry,
+                "refresh_project",
+                side_effect=lambda data, project_id, **kwargs: registry.find_project(
+                    data, project_id
+                ),
+            ):
+                result = registry.apply_workspace_setup(
+                    plan,
+                    registry.options_from_plan(plan, persist_workspace_root=False),
+                )
+            self.assertTrue(result.ok, result.message)
+            self.assertEqual(result.discovered_count, 2)
+            self.assertEqual(result.project_count, 2)
+
+            # Idempotent re-run
+            plan2 = registry.plan_workspace_setup(workspace)
+            with mock.patch.object(
+                registry,
+                "refresh_project",
+                side_effect=lambda data, project_id, **kwargs: registry.find_project(
+                    data, project_id
+                ),
+            ):
+                result2 = registry.apply_workspace_setup(
+                    plan2,
+                    registry.WorkspaceSetupOptions(
+                        discover=True,
+                        persist_workspace_root=False,
+                    ),
+                )
+            self.assertTrue(result2.ok, result2.message)
+            self.assertEqual(result2.discovered_count, 0)
+            self.assertEqual(result2.project_count, 2)
+
+    def test_apply_mixed_does_not_duplicate_or_clobber_manual(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "Game_Keep").mkdir()
+            (workspace / "Game_New").mkdir()
+            (workspace / "GAMES.md").write_text(SAMPLE_MD, encoding="utf-8")
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            registry.save_registry(
+                registry_path,
+                {
+                    "projects": [
+                        {
+                            "id": "game_keep",
+                            "name": "Keep",
+                            "path": "Game_Keep",
+                            "notes": "勿覆盖",
+                            "play_status": "已玩完",
+                            "auto": {"marker": 1},
+                        }
+                    ]
+                },
+            )
+            plan = registry.plan_workspace_setup(workspace)
+            self.assertEqual(plan.scene, registry.WorkspaceScene.MIXED)
+            self.assertIn("Game_New", plan.undiscovered_paths)
+
+            with mock.patch.object(
+                registry,
+                "refresh_project",
+                side_effect=lambda data, project_id, **kwargs: registry.find_project(
+                    data, project_id
+                ),
+            ):
+                result = registry.apply_workspace_setup(
+                    plan,
+                    registry.WorkspaceSetupOptions(
+                        import_md=True,
+                        discover=True,
+                        persist_workspace_root=False,
+                    ),
+                )
+            self.assertTrue(result.ok, result.message)
+            loaded = json.loads(registry_path.read_text(encoding="utf-8"))
+            by_path = {p["path"]: p for p in loaded["projects"]}
+            self.assertEqual(by_path["Game_Keep"]["notes"], "勿覆盖")
+            self.assertEqual(by_path["Game_Keep"]["play_status"], "已玩完")
+            self.assertEqual(by_path["Game_Keep"]["auto"]["marker"], 1)
+            self.assertIn("Game_New", by_path)
+            # SAMPLE_MD paths also merged
+            self.assertIn("Game_GloryHounds", by_path)
+
+    def test_corrupt_registry_refuses_apply_and_preserves_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            registry_path = workspace / registry.REGISTRY_FILENAME
+            corrupt = "{not-valid-json"
+            registry_path.write_text(corrupt, encoding="utf-8")
+            config_path = Path(tmp) / "translator_config.json"
+            plan = registry.plan_workspace_setup(workspace)
+            self.assertFalse(plan.ok)
+            self.assertEqual(plan.scene, registry.WorkspaceScene.REGISTRY_CORRUPT)
+
+            result = registry.apply_workspace_setup(
+                plan,
+                registry.WorkspaceSetupOptions(
+                    persist_workspace_root=True,
+                    config_path=config_path,
+                ),
+            )
+            self.assertFalse(result.ok)
+            self.assertEqual(registry_path.read_text(encoding="utf-8"), corrupt)
+            self.assertFalse(config_path.exists())
+
+    def test_not_directory_plan_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            file_path = Path(tmp) / "not_a_dir.txt"
+            file_path.write_text("x", encoding="utf-8")
+            plan = registry.plan_workspace_setup(file_path)
+            self.assertFalse(plan.ok)
+            self.assertEqual(plan.scene, registry.WorkspaceScene.NOT_DIRECTORY)
+            result = registry.apply_workspace_setup(plan)
+            self.assertFalse(result.ok)
+
+    def test_missing_path_requires_create_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "new_ws"
+            plan = registry.plan_workspace_setup(workspace)
+            self.assertTrue(plan.ok)
+            self.assertEqual(plan.scene, registry.WorkspaceScene.MISSING_PATH)
+
+            refused = registry.apply_workspace_setup(
+                plan,
+                registry.WorkspaceSetupOptions(
+                    create_directory=False,
+                    persist_workspace_root=False,
+                ),
+            )
+            self.assertFalse(refused.ok)
+            self.assertFalse(workspace.exists())
+
+            ok = registry.apply_workspace_setup(
+                plan,
+                registry.WorkspaceSetupOptions(
+                    create_directory=True,
+                    persist_workspace_root=False,
+                ),
+            )
+            self.assertTrue(ok.ok, ok.message)
+            self.assertTrue(workspace.is_dir())
+            self.assertTrue((workspace / registry.REGISTRY_FILENAME).is_file())
+
+    def test_discover_stays_inside_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "ws"
+            outside = Path(tmp) / "outside"
+            workspace.mkdir()
+            outside.mkdir()
+            (workspace / "Game_Inside").mkdir()
+            (outside / "Game_Outside").mkdir()
+            plan = registry.plan_workspace_setup(workspace)
+            self.assertEqual(plan.game_dir_paths, ("Game_Inside",))
+            self.assertNotIn("Game_Outside", plan.game_dir_paths)
+            self.assertNotIn("outside/Game_Outside", plan.game_dir_paths)
+
+    def test_dry_run_cli_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "ws"
+            workspace.mkdir()
+            config_path = Path(tmp) / "translator_config.json"
+            with mock.patch.object(registry, "translator_config_path", return_value=config_path):
+                code = registry.main(
+                    ["--workspace", str(workspace), "setup", "--dry-run"]
+                )
+            self.assertEqual(code, 0)
+            self.assertFalse((workspace / registry.REGISTRY_FILENAME).exists())
+            self.assertFalse(config_path.exists())
+
+    def test_cli_setup_requires_workspace(self):
+        code = registry.main(["setup", "--dry-run"])
+        self.assertEqual(code, 2)
+
+    def test_cli_setup_empty_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "ws"
+            workspace.mkdir()
+            config_path = Path(tmp) / "translator_config.json"
+            with mock.patch.object(registry, "translator_config_path", return_value=config_path):
+                code = registry.main(
+                    [
+                        "--workspace",
+                        str(workspace),
+                        "setup",
+                        "--no-persist-config",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertTrue((workspace / registry.REGISTRY_FILENAME).is_file())
+            self.assertFalse(config_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
