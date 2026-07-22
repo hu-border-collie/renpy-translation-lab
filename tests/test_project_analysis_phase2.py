@@ -50,6 +50,59 @@ class RouteParseTests(unittest.TestCase):
             msg=f"expected unresolved route in {graph.routes!r}",
         )
 
+    def test_safe_relpath_cross_drive_does_not_raise(self):
+        # Simulate Windows cross-drive: function must not raise ValueError.
+        path = str(SCRIPT)
+        other_base = "D:\\not\\this\\drive" if os.name == "nt" else "/mnt/other"
+        rel = routes.safe_relpath(path, other_base)
+        self.assertTrue(rel)
+        self.assertNotIn("..", rel.split("/"))
+
+    def test_call_is_not_exclusive_branch(self):
+        text = (
+            "label start:\n"
+            "    call helper\n"
+            "    jump ending\n"
+            "\n"
+            "label helper:\n"
+            "    \"side\"\n"
+            "    return\n"
+            "\n"
+            "label ending:\n"
+            "    \"done\"\n"
+            "    return\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "call_flow.rpy"
+            script.write_text(text, encoding="utf-8")
+            graph = routes.build_route_graph(
+                [str(script)], base_dir=tmp, entry_labels=["start"]
+            )
+            paths = ["->".join(r.get("label_ids") or []) for r in graph.routes]
+            # Must not invent mutually exclusive start→helper vs start→ending only.
+            self.assertTrue(
+                any(p == "start->ending" or p.startswith("start->ending") for p in paths)
+                or any("ending" in p and "start" in p for p in paths),
+                msg=paths,
+            )
+            # helper should not be a sole exclusive sibling route without ending
+            exclusive_helper = [
+                p for p in paths if p == "start->helper" or p.endswith("->helper")
+            ]
+            self.assertEqual(exclusive_helper, [], msg=paths)
+
+    def test_script_content_changes_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "s.rpy"
+            script.write_text("label a:\n    jump b\n\nlabel b:\n    return\n", encoding="utf-8")
+            fp1 = routes.digest_script_paths([str(script)], base_dir=tmp)
+            script.write_text(
+                "label a:\n    jump b\n\nlabel b:\n    \"changed\"\n    return\n",
+                encoding="utf-8",
+            )
+            fp2 = routes.digest_script_paths([str(script)], base_dir=tmp)
+            self.assertNotEqual(fp1, fp2)
+
 
 class GenerateAndPublishTests(unittest.TestCase):
     def test_ingest_build_publish_inject_cycle(self):
@@ -69,8 +122,17 @@ class GenerateAndPublishTests(unittest.TestCase):
             self.assertGreaterEqual(built["labels"], 4)
             self.assertGreaterEqual(built["routes"], 1)
             self.assertGreaterEqual(built["unresolved_edges"], 1)
+            structure_fp = built["source_fingerprint"]
+            self.assertTrue(structure_fp)
 
             store = pa.ProjectAnalysisStore(store_dir)
+            labels = store.load_summaries(pa.KIND_LABEL)
+            label_text = "\n".join(str(r.get("summary") or "") for r in labels)
+            # Keyword spans must land on path_a / path_b / hub (not only unassigned).
+            self.assertIn("Path A", label_text)
+            self.assertIn("Path B", label_text)
+            self.assertIn("hub", label_text.lower())
+
             draft = store.load_brief_text(published=False)
             self.assertIn("Project Analysis Brief", draft)
             self.assertFalse(store.load_brief_text(published=True).strip())
@@ -87,25 +149,66 @@ class GenerateAndPublishTests(unittest.TestCase):
             self.assertEqual(pub["status"], pa.STATUS_PUBLISHED)
 
             allowed = pa.load_injectable_project_brief(
-                store_dir=store_dir, enabled=True
+                store_dir=store_dir,
+                enabled=True,
+                expected_source_fingerprint=structure_fp,
             )
             self.assertTrue(allowed["injectable"])
             self.assertIn("Project Analysis Brief", allowed["text"])
 
-            # Stale when expected fingerprint mismatches.
-            stale = pa.load_injectable_project_brief(
-                store_dir=store_dir,
-                enabled=True,
-                expected_source_fingerprint="not-the-real-fp",
-            )
-            self.assertFalse(stale["injectable"])
+            # Script edit changes fingerprint → injection blocked (use temp copy).
+            with tempfile.TemporaryDirectory() as tmp2:
+                script_copy = Path(tmp2) / "script.rpy"
+                script_copy.write_text(
+                    (FIXTURE_DIR / "script.rpy").read_text(encoding="utf-8")
+                    + "\n# edited\n",
+                    encoding="utf-8",
+                )
+                new_fp = routes.digest_script_paths(
+                    [str(script_copy)], base_dir=tmp2
+                )
+                self.assertNotEqual(new_fp, structure_fp)
+                stale = pa.load_injectable_project_brief(
+                    store_dir=store_dir,
+                    enabled=True,
+                    expected_source_fingerprint=new_fp,
+                )
+                self.assertFalse(stale["injectable"])
 
             unpub = pa.unpublish_project_brief(store_dir=store_dir)
             self.assertIn(unpub["status"], {pa.STATUS_DRAFT, pa.STATUS_MISSING})
             after = pa.load_injectable_project_brief(
-                store_dir=store_dir, enabled=True
+                store_dir=store_dir,
+                enabled=True,
+                expected_source_fingerprint=structure_fp,
             )
             self.assertFalse(after["injectable"])
+
+    def test_publish_rejects_stale_without_force_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = pa.ProjectAnalysisStore(tmp)
+            store.save_brief_text("# draft body\n", published=False)
+            manifest = pa.empty_manifest(store_dir=tmp)
+            manifest["artifacts"][pa.KIND_PROJECT_BRIEF] = {
+                "status": pa.STATUS_STALE,
+                "draft_present": True,
+                "published_present": False,
+                "lineage": pa.empty_lineage(source_fingerprint="old-fp"),
+                "id": "project_brief",
+            }
+            store.save_manifest(manifest)
+            with self.assertRaises(pa.ProjectAnalysisError):
+                pa.publish_project_brief(store_dir=tmp)
+            # force without current fingerprint still fails
+            with self.assertRaises(pa.ProjectAnalysisError):
+                pa.publish_project_brief(store_dir=tmp, force=True)
+            # force + current fingerprint allowed
+            out = pa.publish_project_brief(
+                store_dir=tmp,
+                force=True,
+                current_source_fingerprint="new-fp",
+            )
+            self.assertEqual(out["status"], pa.STATUS_PUBLISHED)
 
     def test_publish_empty_draft_fails_without_clobbering(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -114,6 +217,24 @@ class GenerateAndPublishTests(unittest.TestCase):
             with self.assertRaises(pa.ProjectAnalysisError):
                 pa.publish_project_brief(store_dir=tmp)
             self.assertIn("keep me", store.load_brief_text(published=True))
+
+    def test_publish_rejects_missing_lineage_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = pa.ProjectAnalysisStore(tmp)
+            store.save_brief_text("# draft only\n", published=False)
+            manifest = pa.empty_manifest(store_dir=tmp)
+            manifest["artifacts"][pa.KIND_PROJECT_BRIEF] = {
+                "status": pa.STATUS_DRAFT,
+                "draft_present": True,
+                "published_present": False,
+                "lineage": pa.empty_lineage(),
+                "id": "project_brief",
+            }
+            store.save_manifest(manifest)
+            with self.assertRaisesRegex(
+                pa.ProjectAnalysisError, "source_fingerprint"
+            ):
+                pa.publish_project_brief(store_dir=tmp)
 
     def test_local_invalidation_does_not_touch_other_route(self):
         chunks = [

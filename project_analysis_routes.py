@@ -6,6 +6,7 @@ Dynamic jumps are marked unresolved; no single linear route is invented.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass, field
@@ -83,6 +84,46 @@ def _line_number_at(text: str, index: int) -> int:
 
 def _normalize_rel(path: str) -> str:
     return str(path or "").replace("\\", "/").lstrip("./")
+
+
+def safe_relpath(path: str, base_dir: str | None = None) -> str:
+    """Relative path under *base_dir*, or basename when cross-drive / outside base.
+
+    ``os.path.relpath`` raises ValueError on Windows when path and base are on
+    different drives; that must not break route builds or CI temp dirs.
+    """
+    path_abs = os.path.abspath(path)
+    if not base_dir:
+        return _normalize_rel(os.path.basename(path_abs))
+    base_abs = os.path.abspath(base_dir)
+    try:
+        common = os.path.commonpath([path_abs, base_abs])
+    except ValueError:
+        return _normalize_rel(os.path.basename(path_abs))
+    if os.path.normcase(common) != os.path.normcase(base_abs):
+        return _normalize_rel(os.path.basename(path_abs))
+    try:
+        return _normalize_rel(os.path.relpath(path_abs, base_abs))
+    except ValueError:
+        return _normalize_rel(os.path.basename(path_abs))
+
+
+def digest_script_paths(
+    script_paths: Sequence[str],
+    *,
+    base_dir: str | None = None,
+) -> str:
+    """Stable fingerprint of script relative paths + file content checksums."""
+    rows: list[dict[str, str]] = []
+    for path in sorted({os.path.abspath(p) for p in script_paths if p}):
+        if not os.path.isfile(path):
+            continue
+        rel = safe_relpath(path, base_dir)
+        with open(path, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()
+        rows.append({"path": rel, "sha256": digest})
+    rows.sort(key=lambda row: row["path"])
+    return stable_json_sha256(rows)
 
 
 def parse_rpy_labels_and_edges(text: str, *, file_rel_path: str = "") -> tuple[list[LabelNode], list[RouteEdge]]:
@@ -198,7 +239,7 @@ def build_route_graph(
         path = os.path.abspath(path)
         if not os.path.isfile(path):
             continue
-        rel = _normalize_rel(os.path.relpath(path, base) if base else os.path.basename(path))
+        rel = safe_relpath(path, base or None)
         with open(path, "r", encoding="utf-8-sig", errors="replace") as handle:
             text = handle.read()
         labels, edges = parse_rpy_labels_and_edges(text, file_rel_path=rel)
@@ -275,6 +316,14 @@ def _enumerate_routes(
     max_depth: int,
     max_routes: int,
 ) -> list[list[str]]:
+    """Enumerate jump/menu branches only.
+
+    ``call`` is *not* treated as an exclusive branch. A call returns to the
+    caller; modeling it like jump would invent false mutually-exclusive routes
+    (e.g. ``start → helper`` vs ``start → ending`` when the real flow is
+    ``start → call helper → ending``). Call targets are recorded on edges for
+    dependency/metadata but do not fork the walk.
+    """
     results: list[list[str]] = []
 
     def walk(current: str, path: list[str], depth: int) -> None:
@@ -287,25 +336,22 @@ def _enumerate_routes(
         if node is None:
             results.append(list(path))
             return
-        # Resolved jump/call targets first; unresolved still ends a branch marker.
-        targets = []
-        has_unresolved = False
+        jump_targets: list[str] = []
         for edge in node.outgoing:
             if edge.unresolved:
-                has_unresolved = True
+                continue
+            # Calls are side dependencies, not route forks.
+            if edge.kind == "call":
                 continue
             if edge.target_label and edge.target_label not in path:
-                targets.append(edge.target_label)
+                jump_targets.append(edge.target_label)
             elif edge.target_label:
                 # cycle — close route
                 results.append(list(path))
-        if not targets:
+        if not jump_targets:
             results.append(list(path))
-            if has_unresolved:
-                # Record same path; unresolved flag computed later.
-                pass
             return
-        for target in targets:
+        for target in jump_targets:
             walk(target, path + [target], depth + 1)
 
     if entry not in labels:

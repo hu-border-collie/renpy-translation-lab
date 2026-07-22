@@ -556,26 +556,57 @@ def load_batch_settings():
     _PROJECT_BRIEF_CACHE_KEY = None
 
 
+def compute_current_project_analysis_fingerprint(base_dir=None):
+    """Recompute structure fingerprint from current scripts under *base_dir*."""
+    from project_analysis_routes import digest_script_paths, discover_script_files
+
+    base = base_dir if base_dir is not None else (legacy.BASE_DIR or None)
+    if not base:
+        return ''
+    roots = []
+    for rel in ('game', os.path.join('work', 'game'), os.path.join('original', 'game')):
+        candidate = os.path.join(base, rel)
+        if os.path.isdir(candidate):
+            roots.append(candidate)
+    if not roots:
+        roots.append(base)
+    paths = discover_script_files(roots)
+    if not paths:
+        return ''
+    return digest_script_paths(paths, base_dir=base)
+
+
 def load_injectable_project_brief_for_prompts():
-    """Return (text, diagnostics) for published brief when injection is enabled."""
+    """Return (text, diagnostics) for published brief when injection is enabled.
+
+    Always passes the *current* structure fingerprint so post-publish script
+    edits mark the brief stale and block silent injection.
+    """
     global _PROJECT_BRIEF_CACHE, _PROJECT_BRIEF_CACHE_KEY
     if not PROJECT_ANALYSIS_ENABLED or not PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
         return '', ''
     from project_analysis import load_injectable_project_brief
 
     store_dir = PROJECT_ANALYSIS_STORE_DIR or None
+    base_dir = legacy.BASE_DIR or None
+    current_fp = compute_current_project_analysis_fingerprint(base_dir)
+    if not current_fp:
+        # Cannot verify freshness against live scripts — do not inject.
+        return '', ''
     cache_key = (
         bool(PROJECT_ANALYSIS_ENABLED),
         bool(PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF),
         store_dir or '',
         int(PROJECT_ANALYSIS_MAX_BRIEF_CHARS),
-        str(legacy.BASE_DIR or ''),
+        str(base_dir or ''),
+        current_fp,
     )
     if _PROJECT_BRIEF_CACHE is not None and _PROJECT_BRIEF_CACHE_KEY == cache_key:
         return _PROJECT_BRIEF_CACHE
     payload = load_injectable_project_brief(
         store_dir=store_dir,
-        base_dir=legacy.BASE_DIR or None,
+        base_dir=base_dir,
+        expected_source_fingerprint=current_fp,
         max_chars=PROJECT_ANALYSIS_MAX_BRIEF_CHARS,
         enabled=True,
     )
@@ -9582,7 +9613,12 @@ def build_arg_parser():
     pa_publish.add_argument(
         '--force',
         action='store_true',
-        help='Replace an existing published brief from the current draft.',
+        help='Replace published brief or force-publish stale with --source-fingerprint.',
+    )
+    pa_publish.add_argument(
+        '--source-fingerprint',
+        default='',
+        help='Current structure fingerprint (required with --force for stale/missing lineage).',
     )
 
     pa_unpublish = subparsers.add_parser(
@@ -10074,6 +10110,8 @@ def main(argv=None):
                     store_dir,
                     base_dir=legacy.BASE_DIR or None,
                     force=bool(getattr(args, 'force', False)),
+                    current_source_fingerprint=getattr(args, 'source_fingerprint', '')
+                    or '',
                 )
             if command == 'project-analysis-unpublish':
                 return unpublish_project_brief(

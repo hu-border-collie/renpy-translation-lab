@@ -1252,12 +1252,18 @@ def publish_project_brief(
     *,
     base_dir: str | None = None,
     force: bool = False,
+    current_source_fingerprint: str = "",
     project_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Promote draft brief to published after gate checks.
 
     Does not invent empty published content. Failure leaves any prior published
     brief untouched.
+
+    Stale briefs and missing lineage source fingerprints cannot be published
+    unless ``force=True`` **and** ``current_source_fingerprint`` is provided
+    (structure rebuild fingerprint). Brief body hashes never substitute for
+    source fingerprints.
     """
     store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
     draft = store.load_brief_text(published=False).strip()
@@ -1285,6 +1291,13 @@ def publish_project_brief(
         raise ProjectAnalysisError(
             "cannot publish: brief already published; pass force=True to replace"
         )
+    if current == STATUS_STALE and not force:
+        raise ProjectAnalysisError(
+            "cannot publish: brief is stale; rebuild structure then publish, "
+            "or pass force=True with current_source_fingerprint"
+        )
+    if current == STATUS_FAILED:
+        raise ProjectAnalysisError(f"cannot publish from status {current!r}")
     if current not in {
         STATUS_DRAFT,
         STATUS_REVIEW_REQUIRED,
@@ -1294,25 +1307,32 @@ def publish_project_brief(
     }:
         raise ProjectAnalysisError(f"cannot publish from status {current!r}")
 
-    lineage = normalize_lineage(brief_entry.get("lineage"))
-    if not lineage.get("source_fingerprint") and not force:
-        # Allow publish when draft body exists but require fingerprint for injection
-        # safety: still set a content-based fingerprint so inject checks work.
-        lineage = empty_lineage(
-            source_fingerprint=sha256_text(draft),
-            upstream_dependency_digest=lineage.get("upstream_dependency_digest") or "",
-            prompt_schema_version=lineage.get("prompt_schema_version") or "",
-            provider=lineage.get("provider") or "",
-            model=lineage.get("model") or "",
-            thinking_level=lineage.get("thinking_level") or "",
-            generated_at=lineage.get("generated_at") or "",
-            reviewed_at=lineage.get("reviewed_at") or "",
-            published_at="",
+    lineage = dict(normalize_lineage(brief_entry.get("lineage")))
+    current_fp = str(current_source_fingerprint or "").strip()
+    if current == STATUS_STALE:
+        if not current_fp:
+            raise ProjectAnalysisError(
+                "cannot force-publish stale brief without current_source_fingerprint"
+            )
+        lineage["source_fingerprint"] = current_fp
+    elif not lineage.get("source_fingerprint"):
+        if force and current_fp:
+            lineage["source_fingerprint"] = current_fp
+        else:
+            raise ProjectAnalysisError(
+                "cannot publish: missing lineage source_fingerprint; "
+                "run project-analysis-build-structure first "
+                "(brief text hash is not a valid source fingerprint)"
+            )
+    elif current_fp and lineage.get("source_fingerprint") != current_fp and not force:
+        raise ProjectAnalysisError(
+            "cannot publish: lineage source_fingerprint does not match "
+            "current_source_fingerprint; rebuild or pass force=True"
         )
-    lineage = dict(lineage)
+    elif force and current_fp:
+        lineage["source_fingerprint"] = current_fp
+
     lineage["published_at"] = utc_now_iso()
-    if not lineage.get("source_fingerprint"):
-        lineage["source_fingerprint"] = sha256_text(draft)
 
     # Write published body first; only then flip manifest status.
     store.save_brief_text(draft + ("\n" if not draft.endswith("\n") else ""), published=True)

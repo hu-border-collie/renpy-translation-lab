@@ -28,6 +28,7 @@ from project_analysis import (
 )
 from project_analysis_routes import (
     build_route_graph,
+    digest_script_paths,
     discover_script_files,
     graph_to_label_records,
     graph_to_route_records,
@@ -120,36 +121,85 @@ def keyword_rows_to_chunk_records(
     return [normalize_summary_record(r, default_kind=KIND_CHUNK) for r in records]
 
 
+def _normalize_file_rel(path: str) -> str:
+    return str(path or "").replace("\\", "/").lstrip("./")
+
+
 def _guess_label_for_chunk(chunk: Mapping[str, Any], label_names: Sequence[str]) -> str:
-    """Heuristic: match label name appearing in file path or summary prefix."""
+    """Fallback heuristic when line spans are unavailable."""
     meta = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
     file_rel = str(meta.get("file_rel_path") or (chunk.get("source_files") or [""])[0])
     summary = str(chunk.get("summary") or "")
-    # Prefer longer label names to avoid partial matches.
     for name in sorted(label_names, key=len, reverse=True):
-        if name and (name in file_rel or f"`{name}`" in summary or f" {name} " in f" {summary} "):
+        if name and (
+            name in file_rel
+            or f"`{name}`" in summary
+            or f" {name} " in f" {summary} "
+        ):
             return name
     return ""
 
 
+def _label_match_for_chunk(
+    chunk: Mapping[str, Any],
+    labels: Mapping[str, Any],
+) -> str:
+    """Prefer file_rel_path + line_span overlap with label bodies; else name guess."""
+    meta = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+    file_rel = _normalize_file_rel(
+        str(meta.get("file_rel_path") or (chunk.get("source_files") or [""])[0])
+    )
+    span = chunk.get("line_span")
+    if file_rel and isinstance(span, (list, tuple)) and len(span) == 2:
+        try:
+            c_start, c_end = int(span[0]), int(span[1])
+        except (TypeError, ValueError):
+            c_start = c_end = -1
+        if c_start >= 0:
+            candidates: list[tuple[int, str]] = []
+            for name, node in labels.items():
+                node_file = _normalize_file_rel(getattr(node, "file_rel_path", "") or "")
+                if node_file != file_rel:
+                    continue
+                l_start = int(getattr(node, "line_start", 0) or 0)
+                l_end = int(getattr(node, "line_end", 0) or l_start)
+                # Overlap between chunk lines and label body span.
+                if c_start <= l_end and c_end >= l_start:
+                    # Prefer the tightest (smallest) containing/overlapping label.
+                    candidates.append((max(0, l_end - l_start), name))
+            if candidates:
+                candidates.sort(key=lambda item: (item[0], item[1]))
+                return candidates[0][1]
+    return _guess_label_for_chunk(chunk, list(labels.keys()))
+
+
 def assign_chunks_to_labels(
     chunks: Sequence[Mapping[str, Any]],
-    label_names: Sequence[str],
+    labels: Mapping[str, Any] | Sequence[str],
 ) -> dict[str, list[dict[str, Any]]]:
+    """Map chunks onto labels using line spans when possible.
+
+    *labels* may be a ``{name: LabelNode}`` map (preferred) or a sequence of names.
+    """
+    if isinstance(labels, Mapping):
+        label_map = labels
+        label_names = list(label_map.keys())
+    else:
+        label_names = list(labels)
+        label_map = {name: type("N", (), {"file_rel_path": "", "line_start": 0, "line_end": 0})() for name in label_names}
+
     by_label: dict[str, list[dict[str, Any]]] = {name: [] for name in label_names}
     unassigned: list[dict[str, Any]] = []
     for chunk in chunks:
-        name = _guess_label_for_chunk(chunk, label_names)
+        name = _label_match_for_chunk(chunk, label_map)
         if name and name in by_label:
             by_label[name].append(dict(chunk))
         else:
             unassigned.append(dict(chunk))
-    # Attach unassigned to a synthetic bucket via first label if only one exists.
     if unassigned and len(label_names) == 1:
         by_label[label_names[0]].extend(unassigned)
         unassigned = []
-    if unassigned and "_unassigned" not in by_label:
-        # Keep them available for brief only; not as a fake story label.
+    if unassigned:
         by_label["_unassigned"] = unassigned
     return by_label
 
@@ -270,21 +320,17 @@ def build_structure_drafts(
             f"no .rpy scripts found under: {', '.join(roots)}"
         )
 
+    graph_base = base_dir or (roots[0] if roots else None)
     graph = build_route_graph(
         script_paths,
-        base_dir=base_dir or (roots[0] if roots else None),
+        base_dir=graph_base,
         entry_labels=entry_labels,
     )
     chunks = store.load_summaries(KIND_CHUNK)
-    source_fp = ""
-    if chunks:
-        source_fp = str(
-            (chunks[0].get("lineage") or {}).get("source_fingerprint") or ""
-        )
-    if not source_fp:
-        source_fp = sha256_text("|".join(graph.source_files))
+    # Fingerprint must include script *contents*, not just names / chunk hashes.
+    source_fp = digest_script_paths(script_paths, base_dir=graph_base)
 
-    chunk_by_label = assign_chunks_to_labels(chunks, list(graph.labels.keys()))
+    chunk_by_label = assign_chunks_to_labels(chunks, graph.labels)
     # Drop synthetic bucket from label record generation.
     label_chunk_map = {
         k: v for k, v in chunk_by_label.items() if k != "_unassigned" and k in graph.labels
