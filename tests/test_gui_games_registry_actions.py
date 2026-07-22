@@ -261,6 +261,7 @@ class GuiGamesRegistryActionsTests(unittest.TestCase):
             self.assertTrue((workspace / registry.REGISTRY_FILENAME).is_file())
             self.assertEqual(result.project_count, 0)
             self.assertTrue(result.workspace_root)
+            self.assertTrue(result.created_registry)
 
     def test_apply_workspace_setup_action_refuses_corrupt(self):
         with tempfile.TemporaryDirectory() as tmp:

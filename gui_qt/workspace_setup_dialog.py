@@ -37,7 +37,8 @@ class WorkspaceSetupDialogResult:
 def _display_path(path: Path) -> str:
     try:
         path = path.expanduser().resolve()
-    except OSError:
+    except (OSError, RuntimeError):
+        # RuntimeError: symlink loops on some platforms (match normalize_workspace_path).
         path = path.expanduser()
     return str(path)
 
@@ -167,7 +168,7 @@ class WorkspaceSetupDialog(QDialog):
             start = Path.home()
         try:
             start = start.resolve()
-        except OSError:
+        except (OSError, RuntimeError):
             pass
         picked = QFileDialog.getExistingDirectory(
             self,
@@ -277,6 +278,6 @@ class WorkspaceSetupDialog(QDialog):
             workspace=workspace,
             message=action.message,
             project_count=action.project_count,
-            created_registry="空总表" in action.message or "已创建" in action.message,
+            created_registry=action.created_registry,
         )
         self.accept()

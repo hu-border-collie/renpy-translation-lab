@@ -57,6 +57,7 @@ class GuiWorkspaceSetupDialogTests(unittest.TestCase):
             self.assertIsNotNone(payload)
             assert payload is not None
             self.assertEqual(payload.workspace.resolve(), workspace.resolve())
+            self.assertTrue(payload.created_registry)
             self.assertTrue((workspace / registry.REGISTRY_FILENAME).is_file())
             data = json.loads(
                 (workspace / registry.REGISTRY_FILENAME).read_text(encoding="utf-8")

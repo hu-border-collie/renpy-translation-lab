@@ -50,6 +50,7 @@ class RegistryActionResult:
     project_path: str = ""
     workspace_root: str = ""
     project_count: int = 0
+    created_registry: bool = False
 
 
 def _registry_file(workspace_root: Path) -> Path:
@@ -97,6 +98,7 @@ def apply_workspace_setup_action(
         workspace_root=workspace,
         project_count=result.project_count,
         project_path=workspace,
+        created_registry=result.created_registry,
     )
 
 
