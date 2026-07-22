@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QSplitter,
     QStyle,
     QStyleOptionComboBox,
     QTableWidget,
@@ -29,6 +30,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+# Prefer giving the overview table real height inside the settings viewport.
+_REGISTRY_TABLE_MIN_HEIGHT = 280
+_REGISTRY_DETAIL_DEFAULT_HEIGHT = 260
 
 from games_registry import (
     PLAY_STATUSES,
@@ -270,43 +275,17 @@ class GamesRegistryPanel(QWidget):
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(12)
 
+        # Layout C: primary refresh + collapsible 维护 in the same left action cluster.
+        # Expanded block is left-aligned with a light indent so it reads as nested under
+        # the strip (avoids both “floating right” and “toggle right / content left”).
         self._toolbar = FlowButtonBar(spacing=8, row_spacing=8)
         self._toolbar.setObjectName("games_registry_toolbar")
-        self._maintenance_toolbar = FlowButtonBar(spacing=8, row_spacing=8)
-        self._maintenance_toolbar.setObjectName("games_registry_maintenance_toolbar")
-        self._registry_toolbar = FlowButtonBar(spacing=8, row_spacing=8)
-        self._registry_toolbar.setObjectName("games_registry_file_toolbar")
-        self._toolbars = (self._toolbar, self._maintenance_toolbar, self._registry_toolbar)
-
-        self._import_md_btn = QPushButton("从 GAMES.md 导入")
-        self._import_md_btn.setObjectName("secondary_btn")
-        self._import_md_btn.setToolTip(
-            "把 GAMES.md 表格合并进 games_registry.json（按路径匹配）。"
-            "JSON 仍是日常真源；导入后建议再点「同步 GAMES.md」。"
-        )
-        self._import_md_btn.clicked.connect(self._import_from_games_md)
-        self._registry_toolbar.add_widget(self._import_md_btn, min_width=100)
-
-        self._discover_btn = QPushButton("扫描新项目")
-        self._discover_btn.setObjectName("secondary_btn")
-        self._discover_btn.setToolTip("扫描工作区中的 Game_* 目录，并把未登记的项目加入总表")
-        self._discover_btn.clicked.connect(self._discover_new_projects)
-        self._maintenance_toolbar.add_widget(self._discover_btn, min_width=88)
-
-        self._ingest_btn = QPushButton("导入游戏…")
-        self._ingest_btn.setObjectName("secondary_btn")
-        self._ingest_btn.setToolTip(
-            "从游戏目录或 zip 复制整理为 Game_*/original/work/build 并加入总表；"
-            "自动预填游戏名称，可改，并实时预览最终 Game_* 目录。不移动源文件，不自动准备 work。"
-        )
-        self._ingest_btn.clicked.connect(self._ingest_game)
-        self._maintenance_toolbar.add_widget(self._ingest_btn, min_width=88)
-
-        self._sync_md_btn = QPushButton("同步 GAMES.md")
-        self._sync_md_btn.setObjectName("secondary_btn")
-        self._sync_md_btn.setToolTip("用 games_registry.json 重新生成 GAMES.md 表格（覆盖表格区）")
-        self._sync_md_btn.clicked.connect(self._sync_games_md)
-        self._registry_toolbar.add_widget(self._sync_md_btn, min_width=100)
+        self._secondary_toolbar = FlowButtonBar(spacing=8, row_spacing=8, align="left")
+        self._secondary_toolbar.setObjectName("games_registry_secondary_toolbar")
+        # Back-compat aliases (tests / older call sites may still look for these).
+        self._maintenance_toolbar = self._secondary_toolbar
+        self._registry_toolbar = self._secondary_toolbar
+        self._toolbars = (self._toolbar, self._secondary_toolbar)
 
         self._refresh_current_btn = QPushButton("刷新当前")
         self._refresh_current_btn.setObjectName("secondary_btn")
@@ -330,7 +309,9 @@ class GamesRegistryPanel(QWidget):
         self._refresh_mode_combo.setObjectName("games_registry_refresh_mode_combo")
         self._refresh_mode_combo.addItem("快速", REFRESH_MODE_LITE)
         self._refresh_mode_combo.addItem("深度", REFRESH_MODE_DEEP)
-        self._refresh_mode_combo.setToolTip("快速：只扫磁盘与翻译文件；深度：额外运行 doctor（较慢）")
+        self._refresh_mode_combo.setToolTip(
+            "快速：只扫磁盘与翻译文件；深度：额外运行 doctor（较慢）"
+        )
         self._refresh_mode_combo.setMinimumWidth(72)
         mode_row.addWidget(self._refresh_mode_combo)
         self._toolbar.add_widget(mode_host, min_width=None)
@@ -341,26 +322,84 @@ class GamesRegistryPanel(QWidget):
         self._stop_refresh_btn.clicked.connect(self._on_stop_refresh)
         self._toolbar.add_widget(self._stop_refresh_btn, min_width=64)
 
+        self._more_btn = QPushButton("维护 ▾")
+        self._more_btn.setObjectName("secondary_btn")
+        self._more_btn.setCheckable(True)
+        self._more_btn.setChecked(False)
+        self._more_btn.setToolTip(
+            "展开/收起维护操作：扫描新项目、导入游戏、GAMES.md 导入/同步、自动扫描偏好。"
+        )
+        self._more_btn.toggled.connect(self._on_more_actions_toggled)
+        self._toolbar.add_widget(self._more_btn, min_width=72)
+
+        self._discover_section_label = QLabel("项目发现")
+        self._discover_section_label.setObjectName("settings_inline_section_label")
+        self._registry_section_label = QLabel("总表维护")
+        self._registry_section_label.setObjectName("settings_inline_section_label")
+
+        self._discover_btn = QPushButton("扫描新项目")
+        self._discover_btn.setObjectName("secondary_btn")
+        self._discover_btn.setToolTip(
+            "扫描工作区中的 Game_* 目录，并把未登记的项目加入总表"
+        )
+        self._discover_btn.clicked.connect(self._discover_new_projects)
+
+        self._ingest_btn = QPushButton("导入游戏…")
+        self._ingest_btn.setObjectName("secondary_btn")
+        self._ingest_btn.setToolTip(
+            "从游戏目录或 zip 复制整理为 Game_*/original/work/build 并加入总表；"
+            "自动预填游戏名称，可改，并实时预览最终 Game_* 目录。不移动源文件，不自动准备 work。"
+        )
+        self._ingest_btn.clicked.connect(self._ingest_game)
+
+        self._import_md_btn = QPushButton("从 GAMES.md 导入")
+        self._import_md_btn.setObjectName("secondary_btn")
+        self._import_md_btn.setToolTip(
+            "把 GAMES.md 表格合并进 games_registry.json（按路径匹配）。"
+            "JSON 仍是日常真源；导入后建议再点「同步 GAMES.md」。"
+        )
+        self._import_md_btn.clicked.connect(self._import_from_games_md)
+
+        self._sync_md_btn = QPushButton("同步 GAMES.md")
+        self._sync_md_btn.setObjectName("secondary_btn")
+        self._sync_md_btn.setToolTip(
+            "用 games_registry.json 重新生成 GAMES.md 表格（覆盖表格区）"
+        )
+        self._sync_md_btn.clicked.connect(self._sync_games_md)
+
+        # Order: 项目发现 · 两钮 · 总表维护 · 两钮 — 宽屏同一行，窄屏左对齐换行。
+        self._secondary_toolbar.add_widget(self._discover_section_label, min_width=None)
+        self._secondary_toolbar.add_widget(self._discover_btn, min_width=88)
+        self._secondary_toolbar.add_widget(self._ingest_btn, min_width=88)
+        self._secondary_toolbar.add_widget(self._registry_section_label, min_width=None)
+        self._secondary_toolbar.add_widget(self._import_md_btn, min_width=100)
+        self._secondary_toolbar.add_widget(self._sync_md_btn, min_width=100)
+
         self._auto_discover_checkbox = QCheckBox("打开分区时自动扫描新项目")
         self._auto_discover_checkbox.setToolTip(
             "默认关闭。勾选后，进入本分区时会扫描工作区内未登记的 Game_* 并写入总表。"
             "仅扫描已选工作区，不会访问工作区以外的路径。"
         )
         self._auto_discover_checkbox.toggled.connect(self._on_auto_discover_toggled)
-        self._maintenance_toolbar.add_widget(self._auto_discover_checkbox, min_width=None)
 
         for toolbar in self._toolbars:
             toolbar.finish_setup()
 
-        for section_text, section_toolbar in (
-            ("项目刷新", self._toolbar),
-            ("项目发现", self._maintenance_toolbar),
-            ("总表维护", self._registry_toolbar),
-        ):
-            section_label = QLabel(section_text)
-            section_label.setObjectName("settings_inline_section_label")
-            body_layout.addWidget(section_label)
-            body_layout.addWidget(section_toolbar)
+        refresh_section_label = QLabel("项目刷新")
+        refresh_section_label.setObjectName("settings_inline_section_label")
+        body_layout.addWidget(refresh_section_label)
+        body_layout.addWidget(self._toolbar)
+
+        self._more_host = QWidget()
+        self._more_host.setObjectName("games_registry_more_host")
+        self._more_host.setVisible(False)
+        more_layout = QVBoxLayout(self._more_host)
+        # Indent so the block reads as nested under the primary action strip.
+        more_layout.setContentsMargins(12, 0, 0, 0)
+        more_layout.setSpacing(8)
+        more_layout.addWidget(self._secondary_toolbar)
+        more_layout.addWidget(self._auto_discover_checkbox)
+        body_layout.addWidget(self._more_host)
 
         filter_row = QHBoxLayout()
         self._search_edit = QLineEdit()
@@ -376,7 +415,9 @@ class GamesRegistryPanel(QWidget):
         filter_row.addWidget(self._engine_filter_combo)
 
         self._translation_filter_combo = NoWheelComboBox()
-        self._translation_filter_combo.setObjectName("games_registry_translation_filter_combo")
+        self._translation_filter_combo.setObjectName(
+            "games_registry_translation_filter_combo"
+        )
         for label in registry_translation_filter_options():
             self._translation_filter_combo.addItem(label, label)
         self._translation_filter_combo.currentIndexChanged.connect(self._apply_filters)
@@ -425,16 +466,19 @@ class GamesRegistryPanel(QWidget):
         self._table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._table.verticalHeader().setVisible(False)
+        self._table.setMinimumHeight(_REGISTRY_TABLE_MIN_HEIGHT)
+        self._table.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         self._configure_table_header()
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.cellDoubleClicked.connect(self._on_row_activated)
-        body_layout.addWidget(self._table, 1)
         self._load_table_column_widths()
         self._apply_table_column_layout()
 
         self._edit_group = QGroupBox("项目详情")
         self._edit_group.setObjectName("games_registry_edit_group")
-        self._edit_group.setVisible(False)
         edit_layout = QFormLayout(self._edit_group)
         edit_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         edit_layout.setHorizontalSpacing(12)
@@ -478,7 +522,9 @@ class GamesRegistryPanel(QWidget):
         self._play_status_combo.setObjectName("games_registry_play_status_combo")
         self._play_status_combo.addItems(sorted(PLAY_STATUSES))
         self._translation_status_combo = NoWheelComboBox()
-        self._translation_status_combo.setObjectName("games_registry_translation_status_combo")
+        self._translation_status_combo.setObjectName(
+            "games_registry_translation_status_combo"
+        )
         self._translation_status_combo.addItems(sorted(TRANSLATION_STATUSES))
         # Compact equal width for both status fields (not full form row).
         _uniform_combo_width(
@@ -491,24 +537,60 @@ class GamesRegistryPanel(QWidget):
 
         self._notes_edit = QPlainTextEdit()
         self._notes_edit.setPlaceholderText("备注 / 下一步")
-        self._notes_edit.setFixedHeight(88)
-        self._notes_edit.setMinimumHeight(72)
+        self._notes_edit.setFixedHeight(72)
+        self._notes_edit.setMinimumHeight(56)
+        self._notes_edit.setMaximumHeight(120)
         edit_layout.addRow("备注", self._notes_edit)
 
-        edit_actions = QHBoxLayout()
+        edit_actions_host = QWidget()
+        edit_actions_host.setObjectName("games_registry_edit_actions_host")
+        edit_actions = QHBoxLayout(edit_actions_host)
+        edit_actions.setContentsMargins(0, 4, 0, 0)
+        edit_actions.setSpacing(10)
         self._delete_project_btn = QPushButton("删除项目")
         self._delete_project_btn.setObjectName("kill_btn")
         self._delete_project_btn.clicked.connect(self._delete_selected_project)
         self._delete_project_btn.setEnabled(False)
         edit_actions.addWidget(self._delete_project_btn)
         edit_actions.addStretch(1)
+        self._collapse_detail_btn = QPushButton("收起详情")
+        self._collapse_detail_btn.setObjectName("secondary_btn")
+        self._collapse_detail_btn.setToolTip("收起详情面板，把高度还给项目总览表。")
+        self._collapse_detail_btn.clicked.connect(self._collapse_detail_panel)
+        edit_actions.addWidget(self._collapse_detail_btn)
         self._save_fields_btn = QPushButton("保存修改")
-        self._save_fields_btn.setObjectName("secondary_btn")
+        self._save_fields_btn.setObjectName("primary_btn")
+        self._save_fields_btn.setToolTip("保存当前选中项目的名称、游玩/翻译状态及备注。")
         self._save_fields_btn.clicked.connect(self._save_selected_project_fields)
         self._save_fields_btn.setEnabled(False)
         edit_actions.addWidget(self._save_fields_btn)
-        edit_layout.addRow("", edit_actions)
-        body_layout.addWidget(self._edit_group)
+        edit_layout.addRow("", edit_actions_host)
+
+        self._detail_host = QWidget()
+        self._detail_host.setObjectName("games_registry_detail_host")
+        self._detail_host.setVisible(False)
+        self._detail_host.setMinimumHeight(0)
+        self._detail_host.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        detail_host_layout = QVBoxLayout(self._detail_host)
+        detail_host_layout.setContentsMargins(0, 0, 0, 0)
+        detail_host_layout.setSpacing(0)
+        detail_host_layout.addWidget(self._edit_group)
+
+        self._content_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._content_splitter.setObjectName("games_registry_content_splitter")
+        self._content_splitter.setChildrenCollapsible(True)
+        self._content_splitter.setHandleWidth(6)
+        self._content_splitter.addWidget(self._table)
+        self._content_splitter.addWidget(self._detail_host)
+        self._content_splitter.setStretchFactor(0, 4)
+        self._content_splitter.setStretchFactor(1, 1)
+        self._content_splitter.setSizes(
+            [max(_REGISTRY_TABLE_MIN_HEIGHT, 400), _REGISTRY_DETAIL_DEFAULT_HEIGHT]
+        )
+        body_layout.addWidget(self._content_splitter, 1)
         layout.addWidget(self._workspace_body, 1)
 
         prefs = load_registry_preferences(workspace_root=self._workspace_root)
@@ -542,7 +624,7 @@ class GamesRegistryPanel(QWidget):
             self._missing_message = "工作区未设置。"
             self._table.setRowCount(0)
             self._status_label.setText(self._missing_message)
-            self._edit_group.setVisible(False)
+            self._set_detail_visible(False)
             self._switch_btn.setEnabled(False)
 
     def set_current_game_root(self, game_root: Path | None) -> None:
@@ -946,7 +1028,7 @@ class GamesRegistryPanel(QWidget):
         if undiscovered > 0:
             status_message = (
                 f"{status_message} 发现 {undiscovered} 个未登记的 Game_* 目录，"
-                "可点击「扫描新项目」。"
+                "可在「维护」中点击「扫描新项目」。"
             )
         self._status_label.setText(status_message)
 
@@ -1043,10 +1125,50 @@ class GamesRegistryPanel(QWidget):
         finally:
             self._edit_loading = False
 
+    def _on_more_actions_toggled(self, checked: bool) -> None:
+        host = getattr(self, "_more_host", None)
+        button = getattr(self, "_more_btn", None)
+        if host is not None:
+            host.setVisible(bool(checked))
+        if button is not None:
+            button.setText("维护 ▴" if checked else "维护 ▾")
+        self._reflow_toolbars(force=True)
+
+    def _collapse_detail_panel(self) -> None:
+        """Hide detail without losing table scroll position; clear selection."""
+        self._table.clearSelection()
+        self._set_detail_visible(False)
+
+    def _set_detail_visible(self, visible: bool) -> None:
+        """Show/hide the detail pane and restore a usable splitter split."""
+        host = getattr(self, "_detail_host", None)
+        splitter = getattr(self, "_content_splitter", None)
+        edit_group = getattr(self, "_edit_group", None)
+        if host is None:
+            if edit_group is not None:
+                edit_group.setVisible(visible)
+            return
+
+        was_visible = host.isVisible()
+        host.setVisible(visible)
+        if edit_group is not None:
+            edit_group.setVisible(visible)
+        if splitter is None or not visible:
+            return
+        if was_visible:
+            return
+        sizes = splitter.sizes()
+        total = sum(sizes) if sizes else 0
+        if total <= 0:
+            total = max(splitter.height(), _REGISTRY_TABLE_MIN_HEIGHT + _REGISTRY_DETAIL_DEFAULT_HEIGHT)
+        detail = max(_REGISTRY_DETAIL_DEFAULT_HEIGHT, int(total * 0.32))
+        table = max(_REGISTRY_TABLE_MIN_HEIGHT, total - detail)
+        splitter.setSizes([table, detail])
+
     def _on_selection_changed(self) -> None:
         row = self._selected_row()
         can_use_row = row is not None and bool(row.project_id)
-        self._edit_group.setVisible(row is not None)
+        self._set_detail_visible(row is not None)
         self._populate_edit_panel(row)
         refresh_busy = bool(self._refresh_ui_busy) or self._is_registry_task_running()
         if not refresh_busy and not self._host_task_running:

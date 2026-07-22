@@ -84,24 +84,43 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
         self.assertEqual(
             title_row.itemAt(0).widget().objectName(), "diagnostics_section_label"
         )
+        # Primary strip: refresh + 维护 disclosure in one left-aligned cluster.
         self.assertEqual(
             [
                 widget.text() if hasattr(widget, "text") else widget.objectName()
                 for widget in panel._toolbar._items
             ],
-            ["刷新当前", "刷新全部", "games_registry_mode_host", "停止"],
+            [
+                "刷新当前",
+                "刷新全部",
+                "games_registry_mode_host",
+                "停止",
+                "维护 ▾",
+            ],
         )
+        # Expanded maintenance: section labels + four actions, nested left flow.
         self.assertEqual(
             [
                 widget.text() if hasattr(widget, "text") else widget.objectName()
-                for widget in panel._maintenance_toolbar._items
+                for widget in panel._secondary_toolbar._items
             ],
-            ["扫描新项目", "导入游戏…", "打开分区时自动扫描新项目"],
+            [
+                "项目发现",
+                "扫描新项目",
+                "导入游戏…",
+                "总表维护",
+                "从 GAMES.md 导入",
+                "同步 GAMES.md",
+            ],
         )
-        self.assertEqual(
-            [widget.text() for widget in panel._registry_toolbar._items],
-            ["从 GAMES.md 导入", "同步 GAMES.md"],
-        )
+        self.assertEqual(panel._secondary_toolbar._align, "left")
+        self.assertEqual(panel._more_host.layout().contentsMargins().left(), 12)
+        self.assertTrue(panel._more_host.isHidden())
+        panel._more_btn.setChecked(True)
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertFalse(panel._more_host.isHidden())
+        self.assertEqual(panel._more_btn.text(), "维护 ▴")
 
         self.window.resize(960, 700)
         self.window.show()
@@ -111,12 +130,22 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
         panel._table.clearSelection()
         for _ in range(4):
             self._app.processEvents()
+        self.assertTrue(panel._detail_host.isHidden())
         self.assertTrue(panel._edit_group.isHidden())
+        self.assertGreaterEqual(panel._table.minimumHeight(), 280)
+        self.assertEqual(
+            panel._content_splitter.objectName(), "games_registry_content_splitter"
+        )
         if panel._table.rowCount() > 0:
             panel._table.selectRow(0)
             for _ in range(4):
                 self._app.processEvents()
+            self.assertFalse(panel._detail_host.isHidden())
             self.assertFalse(panel._edit_group.isHidden())
+            panel._collapse_detail_btn.click()
+            for _ in range(4):
+                self._app.processEvents()
+            self.assertTrue(panel._detail_host.isHidden())
 
     def test_table_column_path_is_last_stretch_and_drag_clamps_eui_min(self) -> None:
         from PySide6.QtCore import Qt
