@@ -176,15 +176,17 @@ class GuiSettingsLayoutTests(unittest.TestCase):
         self.assertGreaterEqual(form_count, 7)
 
     def test_model_selectors_use_consistent_editing_affordances(self) -> None:
-        self.assertFalse(self.window.sync_model_combo.isEditable())
-        self.assertFalse(self.window.batch_model_combo.isEditable())
+        # Gemini translation / embedding selectors accept free-typed model IDs
+        # so users can extend catalogs without code changes.
         for combo in (
+            self.window.sync_model_combo,
+            self.window.batch_model_combo,
             self.window.sync_embedding_combo,
             self.window.batch_embedding_combo,
-            self.window.batch_thinking_combo,
         ):
-            with self.subTest(combo=combo.objectName()):
-                self.assertFalse(combo.isEditable())
+            with self.subTest(combo=type(combo).__name__):
+                self.assertTrue(combo.isEditable())
+        self.assertFalse(self.window.batch_thinking_combo.isEditable())
 
 
 if __name__ == "__main__":

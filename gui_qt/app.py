@@ -10418,10 +10418,13 @@ class MainWindow(QMainWindow):
         if combo is None:
             return []
         items: list[str] = []
-        for index in range(combo.count()):
-            text = self._config_string(combo.itemText(index))
-            if text and text not in items:
-                items.append(text)
+        count = getattr(combo, "count", None)
+        item_text = getattr(combo, "itemText", None)
+        if callable(count) and callable(item_text):
+            for index in range(int(count())):
+                text = self._config_string(item_text(index))
+                if text and text not in items:
+                    items.append(text)
         current = self._config_string(combo.currentText())
         if current and current not in items:
             items.append(current)
@@ -10436,19 +10439,26 @@ class MainWindow(QMainWindow):
         if combo is None:
             return
         selected = self._config_string(selected)
-        previous_block = combo.blockSignals(True)
+        block_signals = getattr(combo, "blockSignals", None)
+        previous_block = block_signals(True) if callable(block_signals) else False
         try:
-            combo.clear()
-            if models:
-                combo.addItems(models)
+            clear = getattr(combo, "clear", None)
+            if callable(clear):
+                clear()
+            add_items = getattr(combo, "addItems", None)
+            if models and callable(add_items):
+                add_items(models)
             if selected:
                 self._set_combo_value(combo, selected)
-            elif combo.count() > 0:
-                combo.setCurrentIndex(0)
             else:
-                combo.setCurrentIndex(-1)
+                count = getattr(combo, "count", None)
+                if callable(count) and int(count()) > 0:
+                    combo.setCurrentIndex(0)
+                else:
+                    combo.setCurrentIndex(-1)
         finally:
-            combo.blockSignals(previous_block)
+            if callable(block_signals):
+                block_signals(previous_block)
 
     def _set_combo_value(self, combo: NoWheelComboBox, value: Any):
         value = self._config_string(value)
@@ -10460,9 +10470,15 @@ class MainWindow(QMainWindow):
             combo.setCurrentIndex(idx)
         else:
             combo.addItem(value)
-            combo.setCurrentIndex(combo.count() - 1)
-        if combo.isEditable() and combo.lineEdit() is not None:
-            combo.lineEdit().setText(value)
+            count = getattr(combo, "count", None)
+            if callable(count):
+                combo.setCurrentIndex(int(count()) - 1)
+        is_editable = getattr(combo, "isEditable", None)
+        line_edit = getattr(combo, "lineEdit", None)
+        if callable(is_editable) and is_editable() and callable(line_edit):
+            editor = line_edit()
+            if editor is not None and hasattr(editor, "setText"):
+                editor.setText(value)
 
     def _set_theme_combo_value(self, value: str) -> None:
         # Use __dict__ lookup so _load_config_to_ui / project switch never force

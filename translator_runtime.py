@@ -881,7 +881,7 @@ def load_sync_rag_settings(config):
     SYNC_RAG_ENABLED = _coerce_bool(rag.get("enabled"), False)
     SYNC_RAG_EMBEDDING_MODEL = _coerce_non_empty_string(
         rag.get("embedding_model"),
-        "gemini-embedding-001",
+        DEFAULT_SYNC_RAG_EMBEDDING_MODEL,
     )
     SYNC_RAG_QUERY_TASK_TYPE = _normalize_task_type(
         rag.get("query_task_type"),
