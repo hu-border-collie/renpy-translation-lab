@@ -102,6 +102,12 @@
       "top_k_terms": 12,
       "include_scene_summary": true
     },
+    "project_analysis": {
+      "enabled": false,
+      "inject_published_brief": false,
+      "store_dir": "",
+      "max_brief_chars": 4000
+    },
     "submit_max_cost": 0,
     "non_chinese_validation": {
       "extra_static_name_credit_rel_paths": [],

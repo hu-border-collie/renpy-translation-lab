@@ -218,6 +218,42 @@ def build_cli_commands(
                 ["project-analysis-status"],
             ),
         ),
+        DiagnosticsCommand(
+            label="项目分析·导入关键词摘要",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                [
+                    "project-analysis-ingest-keywords",
+                    "--summary-jsonl",
+                    "path/to/keyword_chunk_summaries.jsonl",
+                ],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="项目分析·构建结构草稿",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["project-analysis-build-structure"],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="项目分析·发布 brief",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["project-analysis-publish"],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="项目分析·撤销发布",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["project-analysis-unpublish"],
+            ),
+        ),
     ]
 
     mode = manifest.get("mode")

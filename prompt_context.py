@@ -61,6 +61,15 @@ def format_source_hits_block(hits, empty_label="(none)"):
     return "\n".join(lines) if lines else empty_label
 
 
+def format_project_brief_block(brief_text, *, diagnostics="", empty_label="(none)"):
+    text = str(brief_text or "").strip()
+    if not text:
+        return empty_label
+    if diagnostics:
+        return f"{text}\n\n[{diagnostics}]"
+    return text
+
+
 def build_reference_blocks(
     *,
     include_translation_memory=True,
@@ -68,6 +77,8 @@ def build_reference_blocks(
     history_hits=None,
     story_hits=None,
     source_hits=None,
+    project_brief_text="",
+    project_brief_diagnostics="",
     history_char_limit=220,
     story_char_limit=1200,
     include_source_text=True,
@@ -81,6 +92,12 @@ def build_reference_blocks(
             f"{format_glossary_hits_block(glossary_hits or [], empty_label)}\n\n"
             "RETRIEVED MEMORY:\n"
             f"{format_history_hits_block(history_hits or [], empty_label, history_char_limit, include_source_text)}\n\n"
+        )
+    brief = str(project_brief_text or "").strip()
+    if brief:
+        blocks.append(
+            "PROJECT BRIEF:\n"
+            f"{format_project_brief_block(brief, diagnostics=project_brief_diagnostics, empty_label=empty_label)}\n\n"
         )
     if source_hits:
         blocks.append(
