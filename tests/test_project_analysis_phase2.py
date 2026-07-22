@@ -103,6 +103,41 @@ class RouteParseTests(unittest.TestCase):
             fp2 = routes.digest_script_paths([str(script)], base_dir=tmp)
             self.assertNotEqual(fp1, fp2)
 
+    def test_call_expression_not_parsed_as_named_call(self):
+        text = "label a:\n    call expression some_flag\n    call helper\n"
+        labels, edges = routes.parse_rpy_labels_and_edges(text, file_rel_path="x.rpy")
+        kinds = {(e.kind, e.target_label, e.unresolved) for e in edges}
+        self.assertIn(("unresolved", "", True), kinds)
+        self.assertIn(("call", "helper", False), kinds)
+        self.assertNotIn(("call", "expression", False), kinds)
+
+    def test_persisted_script_roots_used_for_fingerprint(self):
+        import gemini_translate_batch as batch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            custom = Path(tmp) / "custom_scripts"
+            custom.mkdir()
+            (custom / "only.rpy").write_text(
+                "label start:\n    jump end\n\nlabel end:\n    return\n",
+                encoding="utf-8",
+            )
+            store_dir = os.path.join(tmp, "pa")
+            # Default game layout under tmp is empty; structure uses custom root.
+            built = gen.build_structure_drafts(
+                store_dir=store_dir,
+                base_dir=tmp,
+                script_roots=[str(custom)],
+                entry_labels=["start"],
+            )
+            self.assertEqual(built["source_fingerprint"], routes.digest_script_paths(
+                [str(custom / "only.rpy")], base_dir=tmp
+            ))
+            # Runtime fingerprint must reuse stored roots, not only default layout.
+            fp = batch_mod.compute_current_project_analysis_fingerprint(
+                tmp, store_dir=store_dir
+            )
+            self.assertEqual(fp, built["source_fingerprint"])
+
 
 class GenerateAndPublishTests(unittest.TestCase):
     def test_ingest_build_publish_inject_cycle(self):

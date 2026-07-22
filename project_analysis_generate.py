@@ -350,9 +350,17 @@ def build_structure_drafts(
         unresolved_count=len(graph.unresolved_edges),
     )
     store.save_brief_text(brief_text, published=False)
+    # Persist absolute script roots so runtime fingerprint reuse matches build-time roots
+    # (custom --script-root must not fall back to default game/ layout only).
+    abs_roots = [os.path.abspath(r) for r in roots]
+    identity = {
+        "base_dir": os.path.abspath(base_dir) if base_dir else "",
+        "script_roots": abs_roots,
+        "graph_base": os.path.abspath(graph_base) if graph_base else "",
+    }
     # Update brief lineage in manifest.
     manifest = store.rebuild_manifest(
-        project_identity={"base_dir": base_dir or ""},
+        project_identity=identity,
         expected_source_fingerprint=source_fp,
     )
     brief_entry = dict((manifest.get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {})
@@ -370,8 +378,14 @@ def build_structure_drafts(
                 upstream_dependency_digest=digest_upstream_artifacts(upstream),
                 generated_at=utc_now_iso(),
             ),
+            "metadata": {
+                "script_roots": abs_roots,
+                "graph_base": identity["graph_base"],
+            },
         }
     )
+    # rebuild_manifest may overwrite project_identity; restore full identity.
+    manifest["project_identity"] = identity
     manifest.setdefault("artifacts", {})[KIND_PROJECT_BRIEF] = brief_entry
     store.save_manifest(manifest)
 
@@ -384,5 +398,6 @@ def build_structure_drafts(
         "chunks": len(chunks),
         "source_fingerprint": source_fp,
         "brief_draft_chars": len(brief_text),
+        "script_roots": abs_roots,
         "graph": graph.to_dict(),
     }

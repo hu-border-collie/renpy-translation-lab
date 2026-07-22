@@ -92,7 +92,7 @@ class ContextLibraryPage(QFrame):
         self.project_analysis_readonly_label.setToolTip(
             "项目分析：状态在此只读展示。"
             "导入关键词摘要、构建结构草稿、发布/撤销请用诊断命令参考中的 CLI"
-            "（project-analysis-ingest-keywords / build-structure / publish）。"
+            "（project-analysis-ingest-keywords / build-structure / publish / unpublish）。"
             "仅 published 且未过期的 brief 可在配置开启后注入翻译 prompt。"
         )
         self.project_analysis_status_row = TaskStatusActionRow(

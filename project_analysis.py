@@ -1403,8 +1403,8 @@ def unpublish_project_brief(
     return {
         "status": brief_entry["status"],
         "store_dir": store.store_dir,
-        "changed": had_published or True,
-        "message": "brief unpublished",
+        "changed": bool(had_published),
+        "message": "brief unpublished" if had_published else "brief was not published",
     }
 
 

@@ -26,7 +26,11 @@ from project_analysis import (
 _LABEL_RE = re.compile(r"^\s*label\s+([A-Za-z_][\w.]*)\s*:", re.MULTILINE)
 _JUMP_RE = re.compile(r"^\s*jump\s+([A-Za-z_][\w.]*)\s*$", re.MULTILINE)
 _JUMP_EXPR_RE = re.compile(r"^\s*jump\s+expression\b", re.MULTILINE | re.IGNORECASE)
-_CALL_RE = re.compile(r"^\s*call\s+([A-Za-z_][\w.]*)\b", re.MULTILINE)
+# Negative lookahead: "call expression ..." is unresolved, not target name "expression".
+_CALL_RE = re.compile(
+    r"^\s*call\s+(?!expression\b)([A-Za-z_][\w.]*)\b",
+    re.MULTILINE | re.IGNORECASE,
+)
 _CALL_EXPR_RE = re.compile(r"^\s*call\s+expression\b", re.MULTILINE | re.IGNORECASE)
 _MENU_RE = re.compile(r"^\s*menu\s*(?:[A-Za-z_][\w.]*)?\s*:", re.MULTILINE)
 

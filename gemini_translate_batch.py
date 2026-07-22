@@ -556,24 +556,51 @@ def load_batch_settings():
     _PROJECT_BRIEF_CACHE_KEY = None
 
 
-def compute_current_project_analysis_fingerprint(base_dir=None):
-    """Recompute structure fingerprint from current scripts under *base_dir*."""
+def compute_current_project_analysis_fingerprint(base_dir=None, store_dir=None):
+    """Recompute structure fingerprint from scripts under build-time roots when known.
+
+    Prefers ``project_identity.script_roots`` persisted by
+    ``build_structure_drafts`` so custom ``--script-root`` builds stay injectable.
+    Falls back to default game/work/original discovery under *base_dir*.
+    """
+    from project_analysis import resolve_project_analysis_store
     from project_analysis_routes import digest_script_paths, discover_script_files
 
     base = base_dir if base_dir is not None else (legacy.BASE_DIR or None)
-    if not base:
-        return ''
     roots = []
-    for rel in ('game', os.path.join('work', 'game'), os.path.join('original', 'game')):
-        candidate = os.path.join(base, rel)
-        if os.path.isdir(candidate):
-            roots.append(candidate)
+    graph_base = base or ''
+    resolved_store = store_dir if store_dir is not None else (PROJECT_ANALYSIS_STORE_DIR or None)
+    try:
+        store = resolve_project_analysis_store(resolved_store, base_dir=base)
+        manifest = store.load_manifest() or {}
+        identity = manifest.get('project_identity') if isinstance(manifest, dict) else {}
+        if isinstance(identity, dict):
+            stored_roots = identity.get('script_roots') or []
+            if isinstance(stored_roots, list):
+                roots = [str(r) for r in stored_roots if str(r or '').strip()]
+            stored_base = str(identity.get('graph_base') or identity.get('base_dir') or '').strip()
+            if stored_base:
+                graph_base = stored_base
+            elif base:
+                graph_base = base
+    except Exception:
+        roots = []
+
     if not roots:
-        roots.append(base)
+        if not base:
+            return ''
+        for rel in ('game', os.path.join('work', 'game'), os.path.join('original', 'game')):
+            candidate = os.path.join(base, rel)
+            if os.path.isdir(candidate):
+                roots.append(candidate)
+        if not roots:
+            roots.append(base)
+        graph_base = base
+
     paths = discover_script_files(roots)
     if not paths:
         return ''
-    return digest_script_paths(paths, base_dir=base)
+    return digest_script_paths(paths, base_dir=graph_base or base)
 
 
 def load_injectable_project_brief_for_prompts():
@@ -589,7 +616,9 @@ def load_injectable_project_brief_for_prompts():
 
     store_dir = PROJECT_ANALYSIS_STORE_DIR or None
     base_dir = legacy.BASE_DIR or None
-    current_fp = compute_current_project_analysis_fingerprint(base_dir)
+    current_fp = compute_current_project_analysis_fingerprint(
+        base_dir, store_dir=store_dir
+    )
     if not current_fp:
         # Cannot verify freshness against live scripts — do not inject.
         return '', ''

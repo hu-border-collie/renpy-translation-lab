@@ -141,6 +141,7 @@ python gemini_translate_batch.py project-analysis-unpublish
 - 仅当 `enabled` 且 `inject_published_brief` 为 true，并且 brief 为 **published 且 fingerprint 有效** 时，才会向翻译/订正 prompt 注入 `PROJECT BRIEF` 分区。
 - **draft 永不注入**；stale / 缺 published 文件会跳过注入。
 - 动态 `jump expression` / `call expression` 标记为 unresolved，不虚构单一路线。
+- 普通 `call label` **不是**路线分支：调用返回后继续调用者后续语句，枚举路线时不把 call 目标当成与 jump 互斥的分叉；call 仅作附属依赖/元数据。
 - 本阶段**不**调用 LLM 生成正文（规则聚合 + 关键词摘要）；LLM map-reduce 为后续增量。
 - **不**写 `glossary.json`、正式 `story_graph.json` 或 `.rpy`。
 
