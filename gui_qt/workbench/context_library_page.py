@@ -110,12 +110,25 @@ class ContextLibraryPage(QFrame):
             role="context_library",
             secondary=True,
         )
+        self.project_analysis_review_btn = QPushButton("审查对照")
+        self.project_analysis_review_btn.setObjectName(
+            "context_project_analysis_review_btn"
+        )
+        self.project_analysis_review_btn.setToolTip(
+            "对照 draft / published brief，并查看 label evidence 与 route 路径。"
+        )
+        self.project_analysis_review_btn.clicked.connect(
+            lambda: self._trigger_action("project_analysis_review")
+        )
+        self.context_actions.add_action(self.project_analysis_review_btn, min_width=100)
+
         self.project_analysis_publish_btn = QPushButton("发布 brief")
         self.project_analysis_publish_btn.setObjectName(
             "context_project_analysis_publish_btn"
         )
         self.project_analysis_publish_btn.setToolTip(
             "将 project_brief.draft.md 发布为 published（可注入）。"
+            "会校验当前脚本 fingerprint；不匹配时拒绝发布。"
         )
         self.project_analysis_publish_btn.clicked.connect(
             lambda: self._trigger_action("project_analysis_publish")
@@ -243,6 +256,7 @@ class ContextLibraryPage(QFrame):
         )
         can_pa = not self._running
         self.project_analysis_generate_btn.setEnabled(can_pa)
+        self.project_analysis_review_btn.setEnabled(can_pa)
         self.project_analysis_publish_btn.setEnabled(can_pa)
         self.project_analysis_unpublish_btn.setEnabled(can_pa)
         self.project_analysis_build_btn.setEnabled(can_pa)

@@ -2277,6 +2277,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
             return
 
+        if name == "project_analysis_review":
+            self._show_project_analysis_review_dialog()
+            return
+
         command_map = {
             "project_analysis_build_structure": (
                 "project_analysis_build_structure",
@@ -2303,12 +2307,154 @@ class MainWindow(QMainWindow):
         if entry is None:
             return
         command, args, log_heading = entry
+        if name == "project_analysis_publish":
+            ok, live_fp, detail = self._project_analysis_publish_gate()
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "无法发布项目 brief",
+                    detail or "请先重新构建结构或生成摘要后再发布。",
+                )
+                return
+            if live_fp:
+                args = list(args) + ["--source-fingerprint", live_fp]
+                log_heading = f"{log_heading} --source-fingerprint <live>"
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._active_command = command
         self._append_log(f"=== 正在运行：{log_heading} ===\n")
         self._set_task_running(True)
         self.runner.run(self.state.get_batch_script_path(), args)
+
+    def _project_analysis_live_fingerprint(self) -> str:
+        """Compute live structure fingerprint for the current game root / store."""
+        try:
+            import gemini_translate_batch as batch_mod
+
+            game_root = self.state.get_game_root() if hasattr(self, "state") else None
+            return str(
+                batch_mod.compute_current_project_analysis_fingerprint(
+                    str(game_root) if game_root else None
+                )
+                or ""
+            )
+        except Exception:
+            return ""
+
+    def _project_analysis_publish_gate(self) -> tuple[bool, str, str]:
+        """Block publishing drafts whose lineage is behind live scripts."""
+        try:
+            from project_analysis import (
+                KIND_PROJECT_BRIEF,
+                normalize_lineage,
+                resolve_project_analysis_store,
+            )
+
+            game_root = self.state.get_game_root() if hasattr(self, "state") else None
+            base = str(game_root) if game_root else None
+            live_fp = self._project_analysis_live_fingerprint()
+            store = resolve_project_analysis_store(base_dir=base)
+            draft = store.load_brief_text(published=False).strip()
+            if not draft:
+                return False, live_fp, "没有可发布的 draft brief。请先构建结构或 LLM 生成。"
+            manifest = store.load_manifest() or {}
+            brief = (manifest.get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {}
+            lineage = normalize_lineage(brief.get("lineage"))
+            draft_fp = str(lineage.get("source_fingerprint") or "")
+            if not live_fp:
+                return (
+                    False,
+                    "",
+                    "无法计算当前脚本 fingerprint（未找到 .rpy 或路径不可用）。",
+                )
+            if not draft_fp:
+                return (
+                    False,
+                    live_fp,
+                    "draft 缺少 source_fingerprint。请先运行「构建结构」。",
+                )
+            if draft_fp != live_fp:
+                return (
+                    False,
+                    live_fp,
+                    "脚本已相对 draft 变更（fingerprint 不匹配）。\n"
+                    "请先「构建结构」并（如需要）「LLM 生成」，再发布。",
+                )
+            return True, live_fp, ""
+        except Exception as exc:
+            return False, "", f"发布前检查失败：{exc}"
+
+    def _show_project_analysis_review_dialog(self) -> None:
+        """Readonly draft vs published brief + evidence summary for human review."""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QTextEdit, QVBoxLayout
+
+        try:
+            from project_analysis import (
+                KIND_LABEL,
+                KIND_ROUTE,
+                format_brief_diff,
+                resolve_project_analysis_store,
+            )
+
+            game_root = self.state.get_game_root() if hasattr(self, "state") else None
+            base = str(game_root) if game_root else None
+            store = resolve_project_analysis_store(base_dir=base)
+            diff = format_brief_diff(store.store_dir)
+            labels = store.load_summaries(KIND_LABEL)
+            routes = store.load_routes()
+            live_fp = self._project_analysis_live_fingerprint()
+            lines = [
+                f"Store: {store.store_dir}",
+                f"Live structure fingerprint: {live_fp or '(unavailable)'}",
+                f"Draft present: {diff.get('draft_present')} ({diff.get('draft_chars')} chars)",
+                f"Published present: {diff.get('published_present')} ({diff.get('published_chars')} chars)",
+                f"Draft == published: {diff.get('identical')}",
+                "",
+                "=== Draft brief (preview) ===",
+                str(diff.get("draft_preview") or "(empty)"),
+                "",
+                "=== Published brief (preview) ===",
+                str(diff.get("published_preview") or "(empty)"),
+                "",
+                f"=== Labels ({len(labels)}) evidence ===",
+            ]
+            for rec in labels[:40]:
+                eids = ", ".join(rec.get("evidence_item_ids") or []) or "(none)"
+                lines.append(
+                    f"- {rec.get('id')}: status={rec.get('status')} evidence=[{eids}]"
+                )
+            if len(labels) > 40:
+                lines.append(f"... and {len(labels) - 40} more labels")
+            lines.append("")
+            lines.append(f"=== Routes ({len(routes)}) ===")
+            for rec in routes[:40]:
+                meta = rec.get("metadata") if isinstance(rec.get("metadata"), dict) else {}
+                path = " -> ".join(meta.get("label_ids") or [])
+                lines.append(
+                    f"- {rec.get('id')}: unresolved={meta.get('unresolved')} path={path}"
+                )
+            if len(routes) > 40:
+                lines.append(f"... and {len(routes) - 40} more routes")
+            text = "\n".join(lines)
+        except Exception as exc:
+            text = f"无法加载项目分析审查内容：{exc}"
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("项目分析 · draft / published 对照")
+        dialog.resize(720, 560)
+        layout = QVBoxLayout(dialog)
+        view = QTextEdit()
+        view.setReadOnly(True)
+        view.setPlainText(text)
+        layout.addWidget(view)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        close_btn = buttons.button(QDialogButtonBox.StandardButton.Close)
+        if close_btn is not None:
+            close_btn.clicked.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def _refresh_context_library_panel(self, *, running: bool | None = None) -> None:
         page = getattr(self, "context_library_page", None)
@@ -2327,8 +2473,10 @@ class MainWindow(QMainWindow):
                     format_status_label,
                 )
 
+                live_fp = self._project_analysis_live_fingerprint()
                 analysis_status = collect_project_analysis_status(
                     base_dir=str(game_root) if game_root else None,
+                    expected_source_fingerprint=live_fp,
                 )
                 analysis_label = format_status_label(analysis_status)
             except Exception as exc:

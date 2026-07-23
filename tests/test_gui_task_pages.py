@@ -567,6 +567,7 @@ class GuiTaskPageTests(unittest.TestCase):
             page.source_index_status_row,
         )
         self.assertEqual(page.project_analysis_generate_btn.text(), "LLM 生成")
+        self.assertEqual(page.project_analysis_review_btn.text(), "审查对照")
         self.assertEqual(page.project_analysis_publish_btn.text(), "发布 brief")
         self.assertEqual(page.project_analysis_unpublish_btn.text(), "撤销发布")
 

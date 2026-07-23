@@ -21,9 +21,11 @@ from project_analysis import (
     digest_source_items,
     digest_upstream_artifacts,
     empty_lineage,
+    normalize_lineage,
     normalize_summary_record,
     resolve_project_analysis_store,
     sha256_text,
+    stable_json_sha256,
     utc_now_iso,
 )
 from project_analysis_routes import (
@@ -289,6 +291,92 @@ def ingest_keyword_summaries(
     }
 
 
+def structure_record_signature(record: Mapping[str, Any]) -> str:
+    """Signature of structural fields only (not LLM summary text)."""
+    meta = record.get("metadata") if isinstance(record.get("metadata"), Mapping) else {}
+    return stable_json_sha256(
+        {
+            "id": record.get("id"),
+            "kind": record.get("kind"),
+            "source_files": record.get("source_files") or [],
+            "line_span": record.get("line_span"),
+            "evidence_item_ids": record.get("evidence_item_ids") or [],
+            "upstream_artifact_ids": record.get("upstream_artifact_ids") or [],
+            "label_id": record.get("label_id") or "",
+            "route_id": record.get("route_id") or "",
+            "metadata": {
+                "label_ids": meta.get("label_ids") or [],
+                "entry_label": meta.get("entry_label") or "",
+                "unresolved": bool(meta.get("unresolved")),
+                "outgoing_targets": meta.get("outgoing_targets") or [],
+                "shared_labels": meta.get("shared_labels") or [],
+            },
+        }
+    )
+
+
+def merge_structure_records(
+    new_records: Sequence[Mapping[str, Any]],
+    existing_records: Sequence[Mapping[str, Any]],
+    *,
+    default_kind: str,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Preserve LLM summaries for records whose structure signature is unchanged.
+
+    When source fingerprint changes but structure is identical, keep text as draft
+    and clear model lineage so generate will refresh only those needing LLM.
+    When structure changes, use the new skeleton (rule draft).
+    """
+    existing_by_id = {
+        str(r.get("id") or ""): normalize_summary_record(r, default_kind=default_kind)
+        for r in existing_records
+        if str(r.get("id") or "").strip()
+    }
+    preserved = 0
+    rebuilt = 0
+    cleared_lineage = 0
+    out: list[dict[str, Any]] = []
+    for raw in new_records:
+        new = normalize_summary_record(raw, default_kind=default_kind)
+        old = existing_by_id.get(new["id"])
+        if old is None:
+            out.append(new)
+            rebuilt += 1
+            continue
+        new_sig = structure_record_signature(new)
+        old_sig = structure_record_signature(old)
+        old_lineage = normalize_lineage(old.get("lineage"))
+        new_fp = str((new.get("lineage") or {}).get("source_fingerprint") or "")
+        old_fp = str(old_lineage.get("source_fingerprint") or "")
+        if new_sig == old_sig and new_fp and new_fp == old_fp:
+            merged = dict(new)
+            merged["summary"] = old.get("summary") or new.get("summary")
+            # Keep full lineage (incl. LLM model/schema) when structure+fp match.
+            if old_lineage.get("model") or old_lineage.get("prompt_schema_version"):
+                merged["lineage"] = old_lineage
+                merged["status"] = old.get("status") or STATUS_DRAFT
+                preserved += 1
+            else:
+                rebuilt += 1
+            out.append(normalize_summary_record(merged, default_kind=default_kind))
+            continue
+        if new_sig == old_sig and new_fp and new_fp != old_fp:
+            # Scripts changed; keep wording as draft but drop model so LLM re-runs.
+            merged = dict(new)
+            merged["summary"] = old.get("summary") or new.get("summary")
+            merged["status"] = STATUS_DRAFT
+            cleared_lineage += 1
+            out.append(normalize_summary_record(merged, default_kind=default_kind))
+            continue
+        out.append(new)
+        rebuilt += 1
+    return out, {
+        "preserved": preserved,
+        "rebuilt": rebuilt,
+        "cleared_lineage": cleared_lineage,
+    }
+
+
 def build_structure_drafts(
     *,
     store_dir: str | os.PathLike[str] | None = None,
@@ -335,20 +423,41 @@ def build_structure_drafts(
     label_chunk_map = {
         k: v for k, v in chunk_by_label.items() if k != "_unassigned" and k in graph.labels
     }
-    labels = graph_to_label_records(
+    existing_labels = store.load_summaries(KIND_LABEL)
+    existing_routes = store.load_routes()
+    labels_new = graph_to_label_records(
         graph, chunk_by_label=label_chunk_map, source_fingerprint=source_fp
     )
-    routes = graph_to_route_records(
+    labels, label_merge_stats = merge_structure_records(
+        labels_new, existing_labels, default_kind=KIND_LABEL
+    )
+    routes_new = graph_to_route_records(
         graph, label_records=labels, source_fingerprint=source_fp
+    )
+    routes, route_merge_stats = merge_structure_records(
+        routes_new, existing_routes, default_kind=KIND_ROUTE
     )
     store.save_summaries(KIND_LABEL, labels)
     store.save_routes(routes)
 
-    brief_text = build_project_brief_text(
-        routes=routes,
-        labels=labels,
-        unresolved_count=len(graph.unresolved_edges),
+    # Only rewrite rule brief when no LLM brief lineage is present, or structure
+    # identity changed enough that routes were rebuilt.
+    previous_brief = store.load_brief_text(published=False)
+    previous_manifest = store.load_manifest() or {}
+    previous_brief_lineage = normalize_lineage(
+        ((previous_manifest.get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {}).get(
+            "lineage"
+        )
     )
+    routes_touched = route_merge_stats["rebuilt"] + route_merge_stats["cleared_lineage"]
+    if previous_brief_lineage.get("model") and routes_touched == 0:
+        brief_text = previous_brief
+    else:
+        brief_text = build_project_brief_text(
+            routes=routes,
+            labels=labels,
+            unresolved_count=len(graph.unresolved_edges),
+        )
     store.save_brief_text(brief_text, published=False)
     # Persist absolute script roots so runtime fingerprint reuse matches build-time roots
     # (custom --script-root must not fall back to default game/ layout only).
@@ -399,5 +508,7 @@ def build_structure_drafts(
         "source_fingerprint": source_fp,
         "brief_draft_chars": len(brief_text),
         "script_roots": abs_roots,
+        "label_merge": label_merge_stats,
+        "route_merge": route_merge_stats,
         "graph": graph.to_dict(),
     }

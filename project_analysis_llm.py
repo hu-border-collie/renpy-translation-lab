@@ -312,37 +312,84 @@ def refine_project_brief(
     return _clip(text, cfg["max_brief_chars"])
 
 
+def generation_signature(
+    *,
+    source_fingerprint: str = "",
+    provider: str = "",
+    model: str = "",
+    thinking_level: str = "",
+    upstream_dependency_digest: str = "",
+    prompt_schema_version: str = PROMPT_SCHEMA_VERSION,
+) -> dict[str, str]:
+    """Full generation signature used for cache/skip decisions."""
+    return {
+        "prompt_schema_version": str(prompt_schema_version or ""),
+        "source_fingerprint": str(source_fingerprint or ""),
+        "provider": str(provider or ""),
+        "model": str(model or ""),
+        "thinking_level": str(thinking_level or ""),
+        "upstream_dependency_digest": str(upstream_dependency_digest or ""),
+    }
+
+
+def lineage_matches_generation_signature(
+    lineage: Mapping[str, Any],
+    expected: Mapping[str, str],
+) -> bool:
+    """Return True when stored lineage matches the full generation signature."""
+    current = normalize_lineage(lineage)
+    for key, value in expected.items():
+        if not value:
+            # Empty expected field is not a wildcard for model/provider/thinking:
+            # only source_fingerprint may be empty when caller cannot compute it.
+            if key == "source_fingerprint":
+                continue
+            if not str(current.get(key) or ""):
+                continue
+            return False
+        if str(current.get(key) or "") != value:
+            return False
+    # Model must be non-empty for a cached LLM result.
+    if not str(current.get("model") or ""):
+        return False
+    if str(current.get("prompt_schema_version") or "") != str(
+        expected.get("prompt_schema_version") or PROMPT_SCHEMA_VERSION
+    ):
+        return False
+    return True
+
+
 def _needs_llm_refresh(
     record: Mapping[str, Any],
     *,
-    expected_source_fingerprint: str,
+    expected_signature: Mapping[str, str],
     force: bool,
 ) -> bool:
     if force:
         return True
     status = str(record.get("status") or STATUS_DRAFT)
-    if status in {STATUS_STALE, STATUS_FAILED, STATUS_DRAFT}:
-        # Refresh drafts and stale; skip only if published and still fresh.
-        if status == STATUS_DRAFT:
-            lineage = normalize_lineage(record.get("lineage"))
-            # Skip re-LLM if already refined with same schema+fingerprint.
-            if (
-                lineage.get("prompt_schema_version") == PROMPT_SCHEMA_VERSION
-                and lineage.get("source_fingerprint")
-                and (
-                    not expected_source_fingerprint
-                    or lineage.get("source_fingerprint") == expected_source_fingerprint
-                )
-                and lineage.get("model")
-            ):
-                return False
-            return True
+    lineage = normalize_lineage(record.get("lineage"))
+    # Recompute expected upstream from the record when not provided by caller.
+    expected = dict(expected_signature)
+    if not expected.get("upstream_dependency_digest"):
+        expected["upstream_dependency_digest"] = digest_upstream_artifacts(
+            record.get("upstream_artifact_ids") or []
+        )
+    if status in {STATUS_STALE, STATUS_FAILED}:
         return True
+    if status == STATUS_DRAFT:
+        return not lineage_matches_generation_signature(lineage, expected)
     if status == STATUS_PUBLISHED:
         effective = evaluate_record_status(
-            record, expected_source_fingerprint=expected_source_fingerprint
+            record,
+            expected_source_fingerprint=expected.get("source_fingerprint") or "",
+            expected_upstream_digest=expected.get("upstream_dependency_digest") or "",
+            expected_prompt_schema_version=expected.get("prompt_schema_version") or "",
+            expected_provider=expected.get("provider") or "",
+            expected_model=expected.get("model") or "",
+            expected_thinking_level=expected.get("thinking_level") or "",
         )
-        return effective == STATUS_STALE
+        return effective != STATUS_PUBLISHED
     return True
 
 
@@ -404,13 +451,19 @@ def run_mapreduce_drafts(
     prov = provider or getattr(backend, "provider", "") or ""
     model_name = cfg["model"]
 
+    base_sig = generation_signature(
+        source_fingerprint=source_fp,
+        provider=prov,
+        model=model_name,
+        thinking_level=cfg["thinking_level"],
+        prompt_schema_version=PROMPT_SCHEMA_VERSION,
+    )
+
     labels_out: list[dict[str, Any]] = []
     labels_refined = 0
     labels_skipped = 0
     for rec in labels:
-        if not _needs_llm_refresh(
-            rec, expected_source_fingerprint=source_fp, force=force
-        ):
+        if not _needs_llm_refresh(rec, expected_signature=base_sig, force=force):
             labels_out.append(normalize_summary_record(rec, default_kind=KIND_LABEL))
             labels_skipped += 1
             continue
@@ -435,9 +488,7 @@ def run_mapreduce_drafts(
     routes_refined = 0
     routes_skipped = 0
     for rec in routes:
-        if not _needs_llm_refresh(
-            rec, expected_source_fingerprint=source_fp, force=force
-        ):
+        if not _needs_llm_refresh(rec, expected_signature=base_sig, force=force):
             routes_out.append(normalize_summary_record(rec, default_kind=KIND_ROUTE))
             routes_skipped += 1
             continue
