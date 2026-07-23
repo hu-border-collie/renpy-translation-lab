@@ -151,7 +151,7 @@ python gemini_translate_batch.py project-analysis-unpublish
 - 动态 `jump expression` / `call expression` 标记为 unresolved，不虚构单一路线。
 - 普通 `call label` **不是**路线分支：调用返回后继续调用者后续语句，枚举路线时不把 call 目标当成与 jump 互斥的分叉；call 仅作附属依赖/元数据。
 - **结构草稿**可无 LLM；**精炼摘要**使用 `project-analysis-generate`（可 mock 的 Sync 路径），结果仍为 draft，须人工 publish。
-- GUI「上下文库」把首次静态构建作为「开始分析」主操作，并按 missing / draft / published / stale 生命周期切换为生成、更新或重新构建；审查、启用到翻译、停止用于翻译仍调用同一套 CLI 和核心门禁。
+- GUI「上下文库」把首次静态构建作为「开始分析」主操作，并按 missing / draft / published / stale / failed 生命周期切换为生成、更新或重新构建；是否已有结构由核心状态中的显式产物信号判断，不依赖 label/route 数量。审查、启用到翻译、停止用于翻译仍调用同一套 CLI 和核心门禁。
 - **不**写 `glossary.json`、正式 `story_graph.json` 或 `.rpy`。
 
 ### 只读 CLI / GUI

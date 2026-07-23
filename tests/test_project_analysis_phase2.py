@@ -140,6 +140,30 @@ class RouteParseTests(unittest.TestCase):
 
 
 class GenerateAndPublishTests(unittest.TestCase):
+    def test_zero_record_structure_is_reported_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scripts = Path(tmp) / "scripts"
+            scripts.mkdir()
+            (scripts / "script.rpy").write_text(
+                "init python:\n    value = 1\n",
+                encoding="utf-8",
+            )
+            store_dir = os.path.join(tmp, "project_analysis")
+            built = gen.build_structure_drafts(
+                store_dir=store_dir,
+                base_dir=tmp,
+                script_roots=[str(scripts)],
+            )
+            self.assertEqual(built["labels"], 0)
+            self.assertEqual(built["routes"], 0)
+
+            status = pa.collect_project_analysis_status(
+                store_dir=store_dir,
+                expected_source_fingerprint=built["source_fingerprint"],
+            )
+            self.assertTrue(status["structure_present"])
+            self.assertTrue(status["brief_draft_present"])
+
     def test_ingest_build_publish_inject_cycle(self):
         with tempfile.TemporaryDirectory() as tmp:
             store_dir = os.path.join(tmp, "project_analysis")

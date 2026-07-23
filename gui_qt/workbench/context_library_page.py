@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..empty_state import EmptyStateWidget
-from ..user_copy import PROJECT_ANALYSIS_COPY
+from ..user_copy import CONTEXT_LIBRARY_COPY, PROJECT_ANALYSIS_COPY
 from ..work_modes import WorkMode
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
@@ -53,8 +53,8 @@ class ContextLibraryPage(QFrame):
 
         self.empty_state = EmptyStateWidget(
             "",
-            PROJECT_ANALYSIS_COPY["empty_title"],
-            PROJECT_ANALYSIS_COPY["empty_body"],
+            CONTEXT_LIBRARY_COPY["empty_title"],
+            CONTEXT_LIBRARY_COPY["empty_body"],
             action_text="打开设置 · 上下文",
         )
         self.empty_state.setObjectName("context_library_empty_state")
@@ -267,12 +267,16 @@ class ContextLibraryPage(QFrame):
 
     def set_task_running(self, running: bool, operation: str = "") -> None:
         self._running = running
-        if running and operation == "project_analysis_build_structure":
+        if not running:
+            self.stop_btn.setText("停止")
+        elif operation == "project_analysis_build_structure":
             self.stop_btn.setText("停止构建")
-        elif running and operation == "project_analysis_generate":
+        elif operation == "project_analysis_generate":
             self.stop_btn.setText("停止生成")
+        elif operation in {"bootstrap_rag", "bootstrap_source_index"}:
+            self.stop_btn.setText("停止预建")
         else:
-            self.stop_btn.setText("停止任务" if running else "停止")
+            self.stop_btn.setText("停止任务")
         self._refresh_action_states()
 
     def reset_project(self) -> None:
@@ -291,30 +295,44 @@ class ContextLibraryPage(QFrame):
         )
         status = self._project_analysis_status
         overall = str(status.get("overall_status") or "missing")
-        has_structure = bool(status.get("label_count") or status.get("route_count"))
         has_draft = bool(status.get("brief_draft_present")) or overall in {
             "draft",
             "review_required",
         }
         has_published = bool(status.get("brief_published_present"))
+        if "structure_present" in status:
+            has_structure = bool(status.get("structure_present"))
+        else:
+            # Compatibility for older/mocked status payloads.
+            has_structure = bool(
+                has_draft
+                or has_published
+                or status.get("label_count")
+                or status.get("route_count")
+            )
+
         can_manage = (
             not self._running
             and self._has_project
             and self._project_analysis_enabled
         )
 
-        if overall in {"missing", "failed"} or not has_structure:
+        if overall == "missing":
             self._project_analysis_primary_action = (
                 "project_analysis_build_structure"
             )
             primary_text = PROJECT_ANALYSIS_COPY["start"]
             primary_tip = "静态解析 label / jump 并建立项目结构；这是首次分析的必需步骤。"
-        elif overall == "stale":
+        elif overall in {"failed", "stale"} or not has_structure:
             self._project_analysis_primary_action = (
                 "project_analysis_build_structure"
             )
             primary_text = PROJECT_ANALYSIS_COPY["rebuild"]
-            primary_tip = "脚本已变化，请先重新构建结构，再更新项目摘要。"
+            primary_tip = (
+                "上次构建失败，请重新构建并查看运行日志。"
+                if overall == "failed"
+                else "项目结构不可用或已过期，请先重新构建，再更新项目摘要。"
+            )
         else:
             self._project_analysis_primary_action = "project_analysis_generate"
             primary_text = (

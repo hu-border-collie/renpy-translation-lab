@@ -651,8 +651,9 @@ class GuiTaskPageTests(unittest.TestCase):
             project_analysis_status={
                 "overall_status": "draft",
                 "store_exists": True,
-                "label_count": 3,
-                "route_count": 1,
+                "structure_present": True,
+                "label_count": 0,
+                "route_count": 0,
                 "brief_draft_present": True,
             },
         )
@@ -693,6 +694,18 @@ class GuiTaskPageTests(unittest.TestCase):
             },
         )
         self.assertEqual(page.project_analysis_generate_btn.text(), "重新构建")
+        page.set_context_status(
+            rag_enabled=False,
+            source_index_enabled=False,
+            game_root="C:/Games/Example/work",
+            project_analysis_enabled=True,
+            project_analysis_status={
+                "overall_status": "failed",
+                "store_exists": True,
+                "structure_present": False,
+            },
+        )
+        self.assertEqual(page.project_analysis_generate_btn.text(), "重新构建")
 
 
     def test_global_prep_buttons_visible_on_all_task_pages(self) -> None:
@@ -730,6 +743,13 @@ class GuiTaskPageTests(unittest.TestCase):
             self.assertEqual(
                 self.window.context_library_page.stop_btn.objectName(),
                 "context_library_stop_btn",
+            )
+            self.window.context_library_page.set_task_running(
+                True, "bootstrap_rag"
+            )
+            self.assertEqual(
+                self.window.context_library_page.stop_btn.text(),
+                "停止预建",
             )
             # Overlapping start must no-op while a task is already running.
             self.assertFalse(self.window._start_bootstrap_task("source_index"))
