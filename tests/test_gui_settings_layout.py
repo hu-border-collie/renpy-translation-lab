@@ -60,6 +60,47 @@ class GuiSettingsLayoutTests(unittest.TestCase):
         }
         self.assertEqual(set(self.window._settings_page_bodies), expected)
 
+    def test_workspace_action_bar_uses_immediate_save_context(self) -> None:
+        workspace_row = self.window._settings_nav_rows["workspace"]
+        project_row = self.window._settings_nav_rows["project"]
+
+        self.window.settings_nav.setCurrentRow(workspace_row)
+        _process(self._app, 5)
+        self.assertEqual(
+            self.window.settings_action_context_label.text(),
+            "项目列表操作即时保存，不受设置保存按钮影响。",
+        )
+        self.assertFalse(self.window.settings_action_context_label.isHidden())
+        for button in (
+            self.window.reload_config_btn,
+            self.window.restore_defaults_btn,
+            self.window.save_config_btn,
+        ):
+            self.assertTrue(button.isHidden())
+        self.assertFalse(self.window._save_config_shortcut.isEnabled())
+
+        self.window._config_tab_has_unsaved_changes = lambda: True
+        self.window._sync_settings_action_bar_enabled(
+            task_running=False,
+            nav_row=workspace_row,
+        )
+        self.assertEqual(
+            self.window.settings_action_context_label.text(),
+            "其他设置有未保存的更改；切换项目前需保存或放弃。",
+        )
+        self.assertFalse(self.window.save_config_btn.isHidden())
+        self.assertTrue(self.window._save_config_shortcut.isEnabled())
+
+        self.window.settings_nav.setCurrentRow(project_row)
+        _process(self._app, 5)
+        self.assertTrue(self.window.settings_action_context_label.isHidden())
+        for button in (
+            self.window.reload_config_btn,
+            self.window.restore_defaults_btn,
+            self.window.save_config_btn,
+        ):
+            self.assertFalse(button.isHidden())
+
     def test_shortcuts_section_lists_core_bindings(self) -> None:
         from PySide6.QtWidgets import QLabel
 

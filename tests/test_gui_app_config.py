@@ -826,9 +826,17 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeBtn:
             def __init__(self):
                 self.enabled = None
+                self.visible = None
+                self.text = None
 
             def setEnabled(self, value):
                 self.enabled = value
+
+            def setVisible(self, value):
+                self.visible = value
+
+            def setText(self, value):
+                self.text = value
 
         class FakeStack:
             def setCurrentIndex(self, _index):
@@ -838,22 +846,63 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         save_btn = FakeBtn()
         restore_btn = FakeBtn()
         reload_btn = FakeBtn()
+        context_label = FakeBtn()
         self.window.settings_nav = nav
+        save_shortcut = FakeBtn()
         self.window.settings_stack = FakeStack()
         self.window._settings_nav_rows = {"workspace": 0, "project": 1}
         self.window.save_config_btn = save_btn
         self.window.restore_defaults_btn = restore_btn
         self.window.reload_config_btn = reload_btn
+        self.window.settings_action_context_label = context_label
         self.window._task_running = False
+        self.window._save_config_shortcut = save_shortcut
 
+        dirty = [False]
+        self.window._config_tab_has_unsaved_changes = lambda: dirty[0]
         self.window._on_settings_nav_row_changed(0)
         self.assertFalse(save_btn.enabled)
         self.assertFalse(restore_btn.enabled)
         self.assertTrue(reload_btn.enabled)
+        self.assertTrue(context_label.visible)
+        self.assertFalse(save_btn.visible)
+        self.assertFalse(restore_btn.visible)
+        self.assertFalse(reload_btn.visible)
+
+        self.assertEqual(
+            context_label.text,
+            "项目列表操作即时保存，不受设置保存按钮影响。",
+        )
+        self.assertFalse(save_shortcut.enabled)
+
+        dirty[0] = True
+        self.window._sync_settings_action_bar_enabled(
+            task_running=False,
+            nav_row=0,
+        )
+        self.assertEqual(
+            context_label.text,
+            "其他设置有未保存的更改；切换项目前需保存或放弃。",
+        )
+        self.assertTrue(save_btn.visible)
+        self.assertTrue(save_btn.enabled)
+        self.assertTrue(save_shortcut.enabled)
 
         self.window._on_settings_nav_row_changed(1)
         self.assertTrue(save_btn.enabled)
         self.assertTrue(restore_btn.enabled)
+        self.assertFalse(context_label.visible)
+        self.assertTrue(save_btn.visible)
+        self.assertTrue(restore_btn.visible)
+        self.assertTrue(reload_btn.visible)
+
+        self.window._sync_settings_action_bar_enabled(
+            task_running=True,
+            nav_row=1,
+        )
+        self.assertFalse(save_btn.enabled)
+        self.assertFalse(restore_btn.enabled)
+        self.assertFalse(reload_btn.enabled)
 
     def test_settings_workspace_nav_skips_registry_activate_before_config_tab_open(self):
         activated = []

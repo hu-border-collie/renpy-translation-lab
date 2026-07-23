@@ -440,6 +440,11 @@ QLabel#settings_description_label {
     font-size: 12px;
 }
 
+QLabel#settings_action_context_label {
+    color: ${fg_muted};
+    font-size: 12px;
+}
+
 QLabel#settings_inline_section_label {
     color: ${fg_secondary};
     font-size: 11px;
