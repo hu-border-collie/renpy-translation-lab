@@ -262,10 +262,55 @@ def build_cli_commands(
                 ["project-analysis-unpublish"],
             ),
         ),
+        DiagnosticsCommand(
+            label="最终审校·构建 campaign",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["final-review-build"],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="最终审校·状态",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["final-review-status", manifest_path],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="最终审校·导出 findings",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["final-review-export", manifest_path],
+            ),
+        ),
     ]
 
     mode = manifest.get("mode")
     mode_text = mode.strip() if isinstance(mode, str) else ""
+    if mode_text == "final_review":
+        commands.extend(
+            [
+                DiagnosticsCommand(
+                    label="最终审校状态（当前包）",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        ["final-review-status", manifest_path],
+                    ),
+                ),
+                DiagnosticsCommand(
+                    label="导出最终审校报告",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        ["final-review-export", manifest_path],
+                    ),
+                ),
+            ]
+        )
     if mode_text == "revision":
         commands.extend(
             build_cloud_job_commands(

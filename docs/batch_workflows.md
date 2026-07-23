@@ -62,6 +62,54 @@ python gemini_translate_batch.py sync-revisions --apply
 
 `sync-revisions` 复用订正 prompt、schema、RAG / Story Memory 注入、预览报告和写回前源快照校验；默认只预览，传 `--apply` 才调用 `apply-revisions` 写回。
 
+## 最终审校 campaign（report-only）
+
+最终审校是**独立 campaign**，用于在翻译范围完成后批量发现问题。默认 **report-only**：不调用 autofix，也不直接写 `.rpy`。用户选中的 findings 将来会转成现有订正候选，再走 `preview-revisions → apply-revisions`。
+
+```bash
+# 构建 campaign：完成度闸门 + 冻结上下文/译文 snapshot digest + review units
+python gemini_translate_batch.py final-review-build
+python gemini_translate_batch.py final-review-status logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py final-review-export logs/batch_jobs/<package>/manifest.json
+```
+
+### 启动闸门
+
+- 范围内必须有可审校的已译条目（原文 + 当前译文）。
+- 默认 `batch.final_review.require_zero_pending=true`：范围内若仍有未完成翻译，`final-review-build` **拒绝启动**并打印可操作原因（pending 条数、示例文件）。
+- 可用 CLI `--allow-pending` 显式覆盖（不推荐；结果可能不完整）。
+- 可用现有 include 过滤缩小审校范围。
+
+### 快照与 digest
+
+构建时冻结并哈希：
+
+- 当前译文集合（identity + source + current_translation）
+- glossary / macro setting（启用内容）
+- 可选 Story Memory / Source Index（仅当启用）
+- 可选已启用且可注入的 published Project Analysis fingerprint（无 PA 时允许仅靠其它上下文运行）
+
+每个 review unit 保存 `input_digest`（条目 + snapshot + model + prompt schema）。后续续跑将跳过 digest 未变的已完成 unit；上游变化会使 unit `stale`（执行与 resume 在后续 PR）。
+
+### 产物布局
+
+```text
+logs/batch_jobs/<ts>_<project>_final_review/
+  manifest.json          # mode=final_review, report_only=true
+  snapshot.json          # 冻结上下文摘要与 snapshot_digest
+  review_units.jsonl     # unit 状态 / input_digest / items
+  findings.jsonl         # 审校发现（执行后填充；build 时为空）
+  report.md              # 人类可读报告
+```
+
+### 非目标（当前）
+
+- 不自动修改 `.rpy`，无模型直接声称 `fixed` / `applied`。
+- 不把回译抽检当作写回安全闸门。
+- 模型执行、续跑 submit/download、转 revision candidates 与 GUI 完整页在后续 PR 交付；本阶段交付合同、闸门与可重现 digest。
+
+相关配置见 `translator_config.example.json` 的 `batch.final_review`。
+
 ## 关键词提取流程
 
 关键词提取模式只生成候选报告，不写回 `.rpy` / `glossary.json` / `story_graph.json`：

@@ -53,7 +53,7 @@ logs/story_memory/story_graph.json
 
 ## Project Analysis（项目分析）
 
-> 阶段 1（#256）只交付**产物合同、状态与只读检查**，不调用模型，也不把分析正文注入翻译 prompt。路线感知生成（#254）与最终审校 campaign（#255）将复用同一套 schema / fingerprint / 发布状态。
+> 阶段 1（#256）只交付**产物合同、状态与只读检查**，不调用模型，也不把分析正文注入翻译 prompt。路线感知生成（#254）已落地；最终审校 campaign（#255）在冻结 snapshot 时可**可选**纳入已发布 Project Analysis fingerprint（无 PA 时仍可仅靠其它上下文层运行）。详见 [Batch 工作流 · 最终审校](batch_workflows.md#最终审校-campaignreport-only)。
 
 ### 产物目录
 

@@ -116,6 +116,7 @@ BATCH_NON_CHINESE_RULES = batch_non_chinese_rules.normalize_non_chinese_rules(No
 MANIFEST_MODE_TRANSLATION = 'translation'
 MANIFEST_MODE_KEYWORD_EXTRACTION = 'keyword_extraction'
 MANIFEST_MODE_REVISION = 'revision'
+MANIFEST_MODE_FINAL_REVIEW = 'final_review'
 CHECK_CONTRACT_VERSION = 2
 CHECK_SAFETY_SAFE = 'safe'
 CHECK_SAFETY_WARN = 'warn'
@@ -194,6 +195,13 @@ PROJECT_ANALYSIS_MAX_INPUT_CHARS = 12000
 PROJECT_ANALYSIS_MAX_OUTPUT_TOKENS = 2048
 _PROJECT_BRIEF_CACHE = None
 _PROJECT_BRIEF_CACHE_KEY = None
+
+FINAL_REVIEW_ENABLED = True
+FINAL_REVIEW_REQUIRE_ZERO_PENDING = True
+FINAL_REVIEW_CHUNK_SIZE = 16
+FINAL_REVIEW_PROMPT_SCHEMA_VERSION = 'final-review-v1'
+FINAL_REVIEW_MODEL = ''
+FINAL_REVIEW_DISPLAY_NAME_PREFIX = 'renpy-final-review'
 
 
 def load_json_file(path):
@@ -331,6 +339,9 @@ def load_batch_settings():
     global PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS, PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS
     global PROJECT_ANALYSIS_MAX_INPUT_CHARS, PROJECT_ANALYSIS_MAX_OUTPUT_TOKENS
     global _PROJECT_BRIEF_CACHE, _PROJECT_BRIEF_CACHE_KEY
+    global FINAL_REVIEW_ENABLED, FINAL_REVIEW_REQUIRE_ZERO_PENDING, FINAL_REVIEW_CHUNK_SIZE
+    global FINAL_REVIEW_PROMPT_SCHEMA_VERSION, FINAL_REVIEW_MODEL
+    global FINAL_REVIEW_DISPLAY_NAME_PREFIX
     global BATCH_NON_CHINESE_RULES, SYNC_BACKEND, SYNC_MODEL
 
     config = load_json_file(legacy.CONFIG_FILE)
@@ -588,6 +599,34 @@ def load_batch_settings():
         PROJECT_ANALYSIS_STORE_DIR = ''
     _PROJECT_BRIEF_CACHE = None
     _PROJECT_BRIEF_CACHE_KEY = None
+
+    final_review_config = batch.get('final_review')
+    if not isinstance(final_review_config, dict):
+        final_review_config = {}
+    FINAL_REVIEW_ENABLED = coerce_bool(
+        final_review_config.get('enabled'),
+        FINAL_REVIEW_ENABLED,
+    )
+    FINAL_REVIEW_REQUIRE_ZERO_PENDING = coerce_bool(
+        final_review_config.get('require_zero_pending'),
+        FINAL_REVIEW_REQUIRE_ZERO_PENDING,
+    )
+    FINAL_REVIEW_CHUNK_SIZE = coerce_positive_int(
+        final_review_config.get('chunk_size'),
+        FINAL_REVIEW_CHUNK_SIZE,
+    )
+    FINAL_REVIEW_PROMPT_SCHEMA_VERSION = coerce_non_empty_string(
+        final_review_config.get('prompt_schema_version'),
+        FINAL_REVIEW_PROMPT_SCHEMA_VERSION,
+    )
+    FINAL_REVIEW_MODEL = coerce_non_empty_string(
+        final_review_config.get('model'),
+        FINAL_REVIEW_MODEL,
+    )
+    FINAL_REVIEW_DISPLAY_NAME_PREFIX = coerce_non_empty_string(
+        final_review_config.get('display_name_prefix'),
+        FINAL_REVIEW_DISPLAY_NAME_PREFIX,
+    )
 
 
 def compute_current_project_analysis_fingerprint(base_dir=None, store_dir=None):
@@ -3295,6 +3334,253 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
         for warning_text in build_warnings:
             print(f'- {warning_text}')
     return manifest_path
+
+
+def _flatten_revision_items(file_jobs):
+    items = []
+    for job in file_jobs or []:
+        for item in job.get('items') or []:
+            current = dict(item)
+            current.setdefault('file_rel_path', job.get('file_rel_path', ''))
+            current.setdefault('file_path', job.get('file_path', ''))
+            items.append(current)
+    return items
+
+
+def _pending_file_rows_for_final_review(file_jobs):
+    rows = []
+    for job in file_jobs or []:
+        count = int(job.get('task_count') or 0)
+        if count <= 0:
+            continue
+        rows.append(
+            {
+                'file_rel_path': job.get('file_rel_path') or '',
+                'pending_task_count': count,
+            }
+        )
+    return rows
+
+
+def _collect_final_review_context_snapshot(translation_items):
+    """Build the frozen context snapshot for a final-review campaign."""
+    import final_review as fr
+
+    include_filters = []
+    raw_include = getattr(legacy, 'INCLUDE_FILTERS', None) or getattr(
+        legacy, 'FILE_INCLUDE_FILTERS', None
+    )
+    if isinstance(raw_include, (list, tuple)):
+        include_filters = [str(x) for x in raw_include if str(x).strip()]
+
+    pa_status = ''
+    pa_fp = ''
+    pa_version = None
+    if PROJECT_ANALYSIS_ENABLED and PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
+        try:
+            from project_analysis import collect_project_analysis_status
+
+            pa_fp = compute_current_project_analysis_fingerprint(
+                legacy.BASE_DIR, store_dir=PROJECT_ANALYSIS_STORE_DIR or None
+            )
+            status_payload = collect_project_analysis_status(
+                store_dir=PROJECT_ANALYSIS_STORE_DIR or None,
+                base_dir=legacy.BASE_DIR or None,
+                expected_source_fingerprint=pa_fp or '',
+            )
+            pa_status = str(status_payload.get('brief_status') or '')
+            pa_version = status_payload.get('schema_version')
+            # Only pin fingerprint into the review digest when brief is injectable.
+            brief = load_injectable_project_brief_for_prompts()
+            if not brief[0]:
+                pa_fp = ''
+        except Exception:
+            pa_status = 'error'
+            pa_fp = ''
+
+    macro_path = ''
+    for candidate in (
+        getattr(legacy, 'MACRO_SETTING_FILE', ''),
+        getattr(legacy, 'MACRO_SETTING_PATH', ''),
+    ):
+        if candidate and os.path.isfile(str(candidate)):
+            macro_path = str(candidate)
+            break
+
+    source_index_path = ''
+    if SOURCE_INDEX_ENABLED:
+        source_index_path = SOURCE_INDEX_STORE_DIR or get_default_source_index_store_dir()
+
+    return fr.build_context_snapshot(
+        translation_items=translation_items,
+        glossary_path=getattr(legacy, 'GLOSSARY_FILE', '') or '',
+        glossary_enabled=True,
+        macro_setting_text=BATCH_MACRO_SETTING or '',
+        macro_setting_path=macro_path or None,
+        story_memory_enabled=bool(STORY_MEMORY_ENABLED),
+        story_memory_graph_path=STORY_MEMORY_GRAPH_FILE or None,
+        source_index_enabled=bool(SOURCE_INDEX_ENABLED),
+        source_index_store_path=source_index_path or None,
+        project_analysis_enabled=bool(PROJECT_ANALYSIS_ENABLED),
+        project_analysis_inject=bool(PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF),
+        project_analysis_status=pa_status,
+        project_analysis_fingerprint=pa_fp,
+        project_analysis_version=pa_version,
+        project_analysis_store_path=PROJECT_ANALYSIS_STORE_DIR or None,
+        include_filters=include_filters,
+        base_dir=legacy.BASE_DIR or '',
+        tl_dir=legacy.TL_DIR or '',
+    )
+
+
+def create_final_review_package(
+    display_name_override='',
+    skip_prepare=False,
+    chunk_size=None,
+    allow_pending=False,
+    require_zero_pending=None,
+):
+    """Build a report-only final-review campaign package (no LLM, no .rpy writes)."""
+    import final_review as fr
+
+    if not FINAL_REVIEW_ENABLED:
+        raise SystemExit(
+            'Final review is disabled in config (batch.final_review.enabled=false).'
+        )
+
+    if not skip_prepare:
+        legacy.run_prepare_steps()
+    if not os.path.isdir(legacy.TL_DIR):
+        raise SystemExit(f'TL dir does not exist: {legacy.TL_DIR}')
+
+    pending_jobs = collect_pending_file_jobs(include_complete_files=False)
+    pending_progress = summarize_translation_progress(pending_jobs)
+    pending_count = int(pending_progress.get('pending_task_count') or 0)
+
+    file_jobs = collect_revision_file_jobs()
+    translation_items = _flatten_revision_items(file_jobs)
+
+    enforce_zero = (
+        FINAL_REVIEW_REQUIRE_ZERO_PENDING
+        if require_zero_pending is None
+        else bool(require_zero_pending)
+    )
+    readiness = fr.evaluate_readiness(
+        pending_task_count=pending_count,
+        pending_files=_pending_file_rows_for_final_review(pending_jobs),
+        review_item_count=len(translation_items),
+        require_zero_pending=enforce_zero,
+        allow_pending=bool(allow_pending),
+    )
+    try:
+        fr.require_readiness(readiness)
+    except fr.FinalReviewReadinessError as exc:
+        print('Final review readiness check failed:')
+        for reason in exc.reasons:
+            print(f'- {reason}')
+        raise SystemExit(1) from exc
+
+    chunk_size = max(1, int(chunk_size or FINAL_REVIEW_CHUNK_SIZE or fr.DEFAULT_CHUNK_SIZE))
+    model = FINAL_REVIEW_MODEL or BATCH_MODEL or ''
+    prompt_schema = FINAL_REVIEW_PROMPT_SCHEMA_VERSION or fr.PROMPT_SCHEMA_VERSION
+
+    snapshot = _collect_final_review_context_snapshot(translation_items)
+    units = fr.build_review_units(
+        translation_items,
+        chunk_size=chunk_size,
+        snapshot_digest=snapshot['snapshot_digest'],
+        model=model,
+        prompt_schema_version=prompt_schema,
+    )
+    if not units:
+        print('No final-review units built (no translated items in scope).')
+        return None
+
+    package_name = fr.suggest_package_name(guess_project_slug())
+    package_dir = create_batch_package_dir(package_name)
+
+    display_name = display_name_override.strip() if display_name_override else ''
+    if not display_name:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        display_name = f'{FINAL_REVIEW_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
+
+    manifest = fr.build_campaign_manifest(
+        package_dir=package_dir,
+        display_name=display_name,
+        snapshot=snapshot,
+        units=units,
+        readiness=readiness,
+        base_dir=legacy.BASE_DIR or '',
+        tl_dir=legacy.TL_DIR or '',
+        model=model,
+        prompt_schema_version=prompt_schema,
+        chunk_size=chunk_size,
+        batch_model=BATCH_MODEL,
+        settings={
+            'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
+            'temperature': BATCH_TEMPERATURE,
+            'thinking_level': BATCH_THINKING_LEVEL,
+        },
+        extra={
+            **_manifest_target_language_fields(),
+            'build_warnings': get_batch_risk_warnings(),
+        },
+    )
+    paths = fr.write_campaign_package(
+        package_dir,
+        manifest=manifest,
+        snapshot=snapshot,
+        units=units,
+        findings=[],
+        write_report=True,
+    )
+    remember_latest_manifest(paths['manifest'])
+
+    print(f'Created final-review campaign: {package_dir}')
+    print(f"Units: {manifest['summary']['unit_count']}")
+    print(f"Items: {manifest['summary']['item_count']}")
+    print(f"Snapshot digest: {snapshot['snapshot_digest'][:16]}…")
+    print('Mode: final_review (report-only; no autofix)')
+    print('Next: final-review-status <package>  (LLM run lands in a follow-up PR)')
+    if readiness.reasons:
+        print('Notes:')
+        for reason in readiness.reasons:
+            print(f'- {reason}')
+    return paths['manifest']
+
+
+def run_final_review_status(target=None, as_json=False):
+    import final_review as fr
+
+    package_target = manifest_path_for_target(target)
+    try:
+        status = fr.collect_campaign_status(package_target)
+    except fr.FinalReviewError as exc:
+        raise SystemExit(f'Final review status error: {exc}') from exc
+    if as_json:
+        print(json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(fr.format_status_text(status))
+    return status
+
+
+def run_final_review_export(target=None, output_jsonl='', output_markdown=''):
+    import final_review as fr
+
+    package_target = manifest_path_for_target(target)
+    try:
+        result = fr.export_findings(
+            package_target,
+            output_jsonl=output_jsonl,
+            output_markdown=output_markdown,
+        )
+    except fr.FinalReviewError as exc:
+        raise SystemExit(f'Final review export error: {exc}') from exc
+    print(f"Findings JSONL: {result['jsonl_path']}")
+    print(f"Report Markdown: {result['markdown_path']}")
+    print(f"Finding count: {result['finding_count']}")
+    print(f"Campaign status: {result['status'].get('status')}")
+    return result
 
 
 def should_include_keyword_source(text):
@@ -9592,6 +9878,76 @@ def build_arg_parser():
         help='Do not prune stale segments from the index store after indexing.',
     )
 
+    final_review_build_parser = subparsers.add_parser(
+        'final-review-build',
+        help=(
+            'Build a report-only final-review campaign package: readiness gate, '
+            'frozen context/translation snapshot digests, and review units. '
+            'Does not call the model or write .rpy files.'
+        ),
+    )
+    final_review_build_parser.add_argument(
+        '--display-name',
+        default='',
+        help='Override campaign display name.',
+    )
+    final_review_build_parser.add_argument(
+        '--skip-prepare',
+        action='store_true',
+        help='Skip auto prepare steps before collecting review sources.',
+    )
+    final_review_build_parser.add_argument(
+        '--chunk-size',
+        type=int,
+        default=0,
+        help='Items per review unit. Defaults to batch.final_review.chunk_size.',
+    )
+    final_review_build_parser.add_argument(
+        '--allow-pending',
+        action='store_true',
+        help=(
+            'Allow building even when pending translations remain in scope '
+            '(not recommended; results may be incomplete).'
+        ),
+    )
+
+    final_review_status_parser = subparsers.add_parser(
+        'final-review-status',
+        help='Show final-review campaign progress and unit status counts.',
+    )
+    final_review_status_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Campaign package dir or manifest path. Defaults to latest package.',
+    )
+    final_review_status_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='Print machine-readable JSON status.',
+    )
+
+    final_review_export_parser = subparsers.add_parser(
+        'final-review-export',
+        help='Export final-review findings JSONL and Markdown report (report-only).',
+    )
+    final_review_export_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Campaign package dir or manifest path. Defaults to latest package.',
+    )
+    final_review_export_parser.add_argument(
+        '--jsonl',
+        default='',
+        help='Output findings JSONL path (default: package findings.jsonl).',
+    )
+    final_review_export_parser.add_argument(
+        '--markdown',
+        default='',
+        help='Output report Markdown path (default: package report.md).',
+    )
+
     project_analysis_status_parser = subparsers.add_parser(
         'project-analysis-status',
         help=(
@@ -10111,6 +10467,40 @@ def main(argv=None):
         print_banner()
         run_generate_template()
         return
+
+    if command in {
+        'final-review-build',
+        'final-review-status',
+        'final-review-export',
+    }:
+        legacy.load_translator_settings(persist_corrected_game_root=False)
+        legacy.load_glossary()
+        load_batch_settings()
+        if command == 'final-review-build':
+            print_banner()
+            create_final_review_package(
+                display_name_override=getattr(args, 'display_name', '') or '',
+                skip_prepare=bool(getattr(args, 'skip_prepare', False)),
+                chunk_size=getattr(args, 'chunk_size', 0) or None,
+                allow_pending=bool(getattr(args, 'allow_pending', False)),
+            )
+            return
+        if command == 'final-review-status':
+            if not getattr(args, 'json', False):
+                print_banner()
+            run_final_review_status(
+                getattr(args, 'target', '') or None,
+                as_json=bool(getattr(args, 'json', False)),
+            )
+            return
+        if command == 'final-review-export':
+            print_banner()
+            run_final_review_export(
+                getattr(args, 'target', '') or None,
+                output_jsonl=getattr(args, 'jsonl', '') or '',
+                output_markdown=getattr(args, 'markdown', '') or '',
+            )
+            return
 
     if command in {
         'project-analysis-status',
