@@ -11708,7 +11708,7 @@ class MainWindow(QMainWindow):
                     )
                     self._load_advanced_settings_to_ui(
                         advanced_values,
-                        keys=PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS if context_only else None,
+                        keys=CONTEXT_PRIMARY_SETTING_KEYS if context_only else None,
                     )
                     self._clear_advanced_setting_errors()
 

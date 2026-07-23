@@ -128,7 +128,7 @@ class GuiContextPrimaryUiTests(unittest.TestCase):
         }
         self.assertIn("项目剧情分析", titles)
 
-    def test_context_lazy_load_includes_project_analysis_model_fields(self) -> None:
+    def test_context_lazy_load_restores_all_owned_fields(self) -> None:
         config = {
             "batch": {
                 "project_analysis": {
@@ -136,8 +136,13 @@ class GuiContextPrimaryUiTests(unittest.TestCase):
                     "inject_published_brief": True,
                     "model": "analysis-model",
                     "thinking_level": "high",
-                }
-            }
+                },
+                "story_memory": {"enabled": True},
+            },
+            "sync": {
+                "rag": {"enabled": True},
+                "story_memory": {"enabled": True},
+            },
         }
         with mock.patch.object(
             self.window.state,
@@ -153,7 +158,11 @@ class GuiContextPrimaryUiTests(unittest.TestCase):
             widgets["batch_project_analysis_thinking_level"].text(), "high"
         )
 
+        self.assertTrue(widgets["sync_rag_enabled"].isChecked())
+        self.assertTrue(widgets["sync_story_memory_enabled"].isChecked())
+        self.assertTrue(widgets["batch_story_memory_enabled"].isChecked())
     def test_restore_recommended_sets_primary_switches(self) -> None:
+
         widgets = self.window._advanced_setting_widgets
         for key in CONTEXT_PRIMARY_SETTING_KEYS:
             w = widgets[key]
