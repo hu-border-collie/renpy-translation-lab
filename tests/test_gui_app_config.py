@@ -812,7 +812,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(invalid_widget.focused)
         self.assertEqual(status_bar.messages[-1][0], "高级设置有无效字段，未保存。")
 
-    def test_settings_workspace_nav_disables_save_buttons(self):
+    def test_settings_workspace_action_bar_clean_dirty_and_save_clear(self):
         class FakeNav:
             def __init__(self):
                 self.row = None
@@ -826,9 +826,30 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeBtn:
             def __init__(self):
                 self.enabled = None
+                self.visible = None
+                self.text = None
+                self.props: dict[str, object] = {}
 
             def setEnabled(self, value):
                 self.enabled = value
+
+            def setVisible(self, value):
+                self.visible = value
+
+            def setText(self, value):
+                self.text = value
+
+            def setProperty(self, name, value):
+                self.props[name] = value
+
+            def property(self, name):
+                return self.props.get(name)
+
+            def style(self):
+                return None
+
+            def update(self):
+                return None
 
         class FakeStack:
             def setCurrentIndex(self, _index):
@@ -838,22 +859,160 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         save_btn = FakeBtn()
         restore_btn = FakeBtn()
         reload_btn = FakeBtn()
+        context_label = FakeBtn()
         self.window.settings_nav = nav
+        save_shortcut = FakeBtn()
         self.window.settings_stack = FakeStack()
         self.window._settings_nav_rows = {"workspace": 0, "project": 1}
         self.window.save_config_btn = save_btn
         self.window.restore_defaults_btn = restore_btn
         self.window.reload_config_btn = reload_btn
+        self.window.settings_action_context_label = context_label
         self.window._task_running = False
+        self.window._save_config_shortcut = save_shortcut
 
+        dirty = [False]
+        self.window._config_tab_has_unsaved_changes = lambda: dirty[0]
         self.window._on_settings_nav_row_changed(0)
         self.assertFalse(save_btn.enabled)
         self.assertFalse(restore_btn.enabled)
         self.assertTrue(reload_btn.enabled)
+        self.assertTrue(context_label.visible)
+        self.assertFalse(save_btn.visible)
+        self.assertFalse(restore_btn.visible)
+        self.assertFalse(reload_btn.visible)
+        self.assertEqual(context_label.props.get("tone"), "muted")
+
+        self.assertEqual(
+            context_label.text,
+            "项目列表操作即时保存，不受设置保存按钮影响。",
+        )
+        self.assertFalse(save_shortcut.enabled)
+
+        dirty[0] = True
+        self.window._sync_settings_action_bar_enabled(
+            task_running=False,
+            nav_row=0,
+        )
+        self.assertEqual(
+            context_label.text,
+            "其他设置有未保存的更改；可保存、重新加载放弃，或切换项目时再处理。",
+        )
+        self.assertEqual(context_label.props.get("tone"), "warning")
+        self.assertTrue(save_btn.visible)
+        self.assertTrue(save_btn.enabled)
+        self.assertTrue(reload_btn.visible)
+        self.assertTrue(reload_btn.enabled)
+        self.assertFalse(restore_btn.visible)
+        self.assertTrue(save_shortcut.enabled)
+
+        # Simulate successful save/reload clearing the dirty snapshot while
+        # still on the project list (matches _on_save_config / _on_reload_config).
+        dirty[0] = False
+        self.window._sync_settings_action_bar_enabled(
+            task_running=False,
+            nav_row=0,
+        )
+        self.assertEqual(
+            context_label.text,
+            "项目列表操作即时保存，不受设置保存按钮影响。",
+        )
+        self.assertEqual(context_label.props.get("tone"), "muted")
+        self.assertFalse(save_btn.visible)
+        self.assertFalse(reload_btn.visible)
+        self.assertFalse(restore_btn.visible)
+        self.assertFalse(save_shortcut.enabled)
 
         self.window._on_settings_nav_row_changed(1)
         self.assertTrue(save_btn.enabled)
         self.assertTrue(restore_btn.enabled)
+        self.assertFalse(context_label.visible)
+        self.assertTrue(save_btn.visible)
+        self.assertTrue(restore_btn.visible)
+        self.assertTrue(reload_btn.visible)
+
+        self.window._sync_settings_action_bar_enabled(
+            task_running=True,
+            nav_row=1,
+        )
+        self.assertFalse(save_btn.enabled)
+        self.assertFalse(restore_btn.enabled)
+        self.assertFalse(reload_btn.enabled)
+
+    def test_reload_config_resyncs_workspace_action_bar_after_discard(self):
+        class FakeBtn:
+            def __init__(self):
+                self.enabled = None
+                self.visible = None
+                self.text = None
+                self.props: dict[str, object] = {}
+
+            def setEnabled(self, value):
+                self.enabled = value
+
+            def setVisible(self, value):
+                self.visible = value
+
+            def setText(self, value):
+                self.text = value
+
+            def setProperty(self, name, value):
+                self.props[name] = value
+
+            def property(self, name):
+                return self.props.get(name)
+
+            def style(self):
+                return None
+
+            def update(self):
+                return None
+
+        class FakeNav:
+            def currentRow(self):
+                return 0
+
+        save_btn = FakeBtn()
+        restore_btn = FakeBtn()
+        reload_btn = FakeBtn()
+        context_label = FakeBtn()
+        save_shortcut = FakeBtn()
+        self.window.settings_nav = FakeNav()
+        self.window._settings_nav_rows = {"workspace": 0, "project": 1}
+        self.window.save_config_btn = save_btn
+        self.window.restore_defaults_btn = restore_btn
+        self.window.reload_config_btn = reload_btn
+        self.window.settings_action_context_label = context_label
+        self.window._save_config_shortcut = save_shortcut
+        self.window._task_running = False
+
+        dirty = [True]
+        self.window._config_tab_has_unsaved_changes = lambda: dirty[0]
+        self.window._sync_settings_action_bar_enabled(
+            task_running=False,
+            nav_row=0,
+        )
+        self.assertTrue(save_btn.visible)
+        self.assertTrue(reload_btn.visible)
+
+        def _fake_load():
+            dirty[0] = False
+
+        self.window._ensure_settings_pages_for_config = lambda: None
+        self.window._load_config_to_ui = _fake_load
+        self.window._refresh_api_status = lambda: None
+        self.window._show_settings_status = lambda _msg: None
+
+        self.window._on_reload_config()
+
+        self.assertFalse(save_btn.visible)
+        self.assertFalse(reload_btn.visible)
+        self.assertFalse(restore_btn.visible)
+        self.assertEqual(
+            context_label.text,
+            "项目列表操作即时保存，不受设置保存按钮影响。",
+        )
+        self.assertEqual(context_label.props.get("tone"), "muted")
 
     def test_settings_workspace_nav_skips_registry_activate_before_config_tab_open(self):
         activated = []
