@@ -393,6 +393,135 @@ def digest_text_blob(text: str | None, *, label: str = "") -> dict[str, Any]:
     }
 
 
+# Authoritative Source Index store files (rag_memory.SourceIndexStore).
+# Locks / *.tmp.* / unrelated files must never contribute to the digest.
+SOURCE_INDEX_AUTHORITATIVE_FILES = (
+    "source_metadata.json",
+    "source_segments.jsonl",
+)
+
+
+def digest_source_index_store(
+    store_path: str | os.PathLike[str] | None,
+) -> dict[str, Any]:
+    """Deterministic digest over Source Index store content.
+
+    The store is a *directory* whose authoritative files are
+    ``source_metadata.json`` and ``source_segments.jsonl``. Temporary write
+    artifacts (``*.tmp.*``), lock files, and other siblings are ignored so a
+    concurrent bootstrap cannot thrash digests.
+    """
+    text = str(store_path or "").strip()
+    if not text:
+        return {
+            "path": "",
+            "exists": False,
+            "sha256": "",
+            "size": 0,
+            "files": {},
+        }
+    abs_path = os.path.abspath(text)
+    # Allow passing a single file for tests; treat as that basename only.
+    if os.path.isfile(abs_path):
+        meta = digest_path_content(abs_path)
+        return {
+            "path": abs_path,
+            "exists": bool(meta.get("exists")),
+            "sha256": meta.get("sha256") or "",
+            "size": int(meta.get("size") or 0),
+            "files": {os.path.basename(abs_path): meta},
+        }
+    if not os.path.isdir(abs_path):
+        return {
+            "path": abs_path,
+            "exists": False,
+            "sha256": "",
+            "size": 0,
+            "files": {},
+        }
+
+    file_rows: list[dict[str, Any]] = []
+    files_meta: dict[str, Any] = {}
+    total_size = 0
+    for name in SOURCE_INDEX_AUTHORITATIVE_FILES:
+        file_path = os.path.join(abs_path, name)
+        meta = digest_path_content(file_path)
+        files_meta[name] = {
+            "exists": bool(meta.get("exists")),
+            "sha256": meta.get("sha256") or "",
+            "size": int(meta.get("size") or 0),
+        }
+        total_size += int(meta.get("size") or 0)
+        file_rows.append(
+            {
+                "name": name,
+                "exists": bool(meta.get("exists")),
+                "sha256": meta.get("sha256") or "",
+                "size": int(meta.get("size") or 0),
+            }
+        )
+    combined = stable_json_sha256(file_rows)
+    any_exists = any(row["exists"] for row in file_rows)
+    return {
+        "path": abs_path,
+        "exists": any_exists,
+        "sha256": combined if any_exists else "",
+        "size": total_size,
+        "files": files_meta,
+    }
+
+
+def _project_analysis_digest_fields(
+    *,
+    enabled: bool,
+    inject: bool,
+    status: str,
+    fingerprint: str,
+    version: str | int | None,
+    store_path: str,
+    brief_text: str,
+    lineage: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build PA layer + digest-slice fields.
+
+    When injectable, bind the *actual injected brief text* (already max_chars
+    truncated by the loader) and artifact lineage — not merely schema_version
+    or a structure fingerprint. Same fingerprint with a force-republished brief
+    body must change the digest.
+    """
+    brief_meta = digest_text_blob(brief_text, label="project_analysis_brief")
+    lineage_obj = dict(lineage or {}) if isinstance(lineage, Mapping) else {}
+    # Keep only stable lineage keys that identify the artifact generation.
+    lineage_slice = {
+        "source_fingerprint": _as_optional_str(lineage_obj.get("source_fingerprint")),
+        "upstream_dependency_digest": _as_optional_str(
+            lineage_obj.get("upstream_dependency_digest")
+        ),
+        "prompt_schema_version": _as_optional_str(lineage_obj.get("prompt_schema_version")),
+        "generated_at": _as_optional_str(lineage_obj.get("generated_at")),
+        "provider": _as_optional_str(lineage_obj.get("provider")),
+        "model": _as_optional_str(lineage_obj.get("model")),
+    }
+    lineage_digest = stable_json_sha256(lineage_slice) if any(lineage_slice.values()) else ""
+
+    # Include when inject is on and we have either brief text or a fingerprint.
+    included = bool(enabled and inject and (brief_meta["present"] or fingerprint))
+    meta = {
+        "enabled": bool(enabled),
+        "inject": bool(inject),
+        "status": _as_optional_str(status),
+        "fingerprint": _as_optional_str(fingerprint),
+        "version": version,
+        "store_path": str(store_path or ""),
+        "brief_text_sha256": brief_meta["sha256"] if included else "",
+        "brief_char_count": brief_meta["char_count"] if included else 0,
+        "lineage_digest": lineage_digest if included else "",
+        "lineage": lineage_slice if included else {},
+        "included_in_digest": included,
+    }
+    return meta
+
+
 def build_context_snapshot(
     *,
     translation_items: Sequence[Mapping[str, Any]],
@@ -410,6 +539,8 @@ def build_context_snapshot(
     project_analysis_fingerprint: str = "",
     project_analysis_version: str | int | None = None,
     project_analysis_store_path: str | os.PathLike[str] | None = None,
+    project_analysis_brief_text: str = "",
+    project_analysis_lineage: Mapping[str, Any] | None = None,
     include_filters: Sequence[str] | None = None,
     base_dir: str = "",
     tl_dir: str = "",
@@ -417,9 +548,17 @@ def build_context_snapshot(
 ) -> dict[str, Any]:
     """Freeze enabled context dependencies into a reproducible snapshot document.
 
-    Only layers that are enabled (or always-on translation/glossary/macro) contribute
-    content digests. Disabled optional layers record ``enabled: false`` so flipping
-    a switch changes the snapshot digest.
+    Digests are split on purpose:
+
+    - ``context_digest`` — shared enabled context only (glossary/macro/story/
+      source index/PA brief…). Used by each unit's ``input_digest`` so a
+      translation edit in file A does not stale units in file B.
+    - ``snapshot_digest`` — context + full-scope ``translations_digest`` for
+      campaign-level audit / completeness. Not bound into unit digests.
+
+    Only layers that are enabled (or always-on translation/glossary/macro)
+    contribute content digests. Disabled optional layers record
+    ``enabled: false`` so flipping a switch changes the digests.
     """
     items = list(translation_items or [])
     translation_digest = digest_translation_items(items)
@@ -448,43 +587,28 @@ def build_context_snapshot(
     if source_index_enabled:
         source_meta = {
             "enabled": True,
-            **digest_path_content(source_index_store_path),
+            **digest_source_index_store(source_index_store_path),
         }
     else:
-        source_meta = {"enabled": False, "path": "", "exists": False, "sha256": "", "size": 0}
-
-    pa_fp = _as_optional_str(project_analysis_fingerprint)
-    pa_status = _as_optional_str(project_analysis_status)
-    if project_analysis_enabled and project_analysis_inject and pa_fp:
-        pa_meta = {
-            "enabled": True,
-            "inject": True,
-            "status": pa_status or "unknown",
-            "fingerprint": pa_fp,
-            "version": project_analysis_version,
-            "store_path": str(project_analysis_store_path or ""),
-            "included_in_digest": True,
-        }
-    elif project_analysis_enabled:
-        pa_meta = {
-            "enabled": True,
-            "inject": bool(project_analysis_inject),
-            "status": pa_status or "not_injected",
-            "fingerprint": pa_fp,
-            "version": project_analysis_version,
-            "store_path": str(project_analysis_store_path or ""),
-            "included_in_digest": False,
-        }
-    else:
-        pa_meta = {
+        source_meta = {
             "enabled": False,
-            "inject": False,
-            "status": "",
-            "fingerprint": "",
-            "version": None,
-            "store_path": "",
-            "included_in_digest": False,
+            "path": "",
+            "exists": False,
+            "sha256": "",
+            "size": 0,
+            "files": {},
         }
+
+    pa_meta = _project_analysis_digest_fields(
+        enabled=bool(project_analysis_enabled),
+        inject=bool(project_analysis_inject),
+        status=project_analysis_status,
+        fingerprint=project_analysis_fingerprint,
+        version=project_analysis_version,
+        store_path=str(project_analysis_store_path or ""),
+        brief_text=project_analysis_brief_text,
+        lineage=project_analysis_lineage,
+    )
 
     scope = {
         "base_dir": str(base_dir or ""),
@@ -513,13 +637,11 @@ def build_context_snapshot(
         "project_analysis": pa_meta,
     }
 
-    # Digest payload intentionally omits absolute paths that differ across machines
-    # when only content hashes matter — paths are kept for human status, hashes drive identity.
-    digest_payload = {
+    # Shared context only (no per-item translations). Absolute paths omitted.
+    context_payload = {
         "schema_version": SCHEMA_VERSION,
         "scope": {
             "include_filters": scope["include_filters"],
-            "item_count": scope["item_count"],
             "base_dir_name": os.path.basename(os.path.normpath(scope["base_dir"]))
             if scope["base_dir"]
             else "",
@@ -527,7 +649,6 @@ def build_context_snapshot(
             if scope["tl_dir"]
             else "",
         },
-        "translations_digest": translation_digest,
         "glossary_sha256": glossary_meta.get("sha256") or "",
         "macro_text_sha256": macro_text_meta.get("sha256") or "",
         "macro_path_sha256": macro_path_meta.get("sha256") or "",
@@ -544,17 +665,36 @@ def build_context_snapshot(
             "fingerprint": pa_meta.get("fingerprint") if pa_meta.get("included_in_digest") else "",
             "version": pa_meta.get("version") if pa_meta.get("included_in_digest") else None,
             "status": pa_meta.get("status") if pa_meta.get("included_in_digest") else "",
+            "brief_text_sha256": pa_meta.get("brief_text_sha256")
+            if pa_meta.get("included_in_digest")
+            else "",
+            "lineage_digest": pa_meta.get("lineage_digest")
+            if pa_meta.get("included_in_digest")
+            else "",
         },
         "extra": dict(extra or {}),
+    }
+    context_digest = stable_json_sha256(context_payload)
+
+    # Full campaign audit digest: shared context + translation inventory.
+    digest_payload = {
+        **context_payload,
+        "scope": {
+            **context_payload["scope"],
+            "item_count": scope["item_count"],
+        },
+        "translations_digest": translation_digest,
     }
     snapshot_digest = stable_json_sha256(digest_payload)
 
     return {
         "schema_version": SCHEMA_VERSION,
         "created_at": utc_now_iso(),
+        "context_digest": context_digest,
         "snapshot_digest": snapshot_digest,
         "scope": scope,
         "layers": layers,
+        "context_payload": context_payload,
         "digest_payload": digest_payload,
     }
 
@@ -603,19 +743,25 @@ def compute_unit_input_digest(
     *,
     item_ids: Sequence[str],
     items_digest: str,
-    snapshot_digest: str,
+    context_digest: str,
     model: str = "",
     prompt_schema_version: str = PROMPT_SCHEMA_VERSION,
     chunk_index: int = 0,
     file_rel_path: str = "",
 ) -> str:
+    """Digest for one review unit.
+
+    Binds shared *context_digest* (glossary/macro/PA/…) and this unit's
+    ``items_digest`` only — never the campaign-wide translations inventory —
+    so edits outside the unit do not force a re-run.
+    """
     payload = {
         "schema_version": SCHEMA_VERSION,
         "file_rel_path": _normalize_rel_path(file_rel_path),
         "chunk_index": int(chunk_index),
         "item_ids": list(item_ids),
         "items_digest": items_digest,
-        "snapshot_digest": snapshot_digest,
+        "context_digest": _as_optional_str(context_digest),
         "model": _as_optional_str(model),
         "prompt_schema_version": _as_optional_str(prompt_schema_version)
         or PROMPT_SCHEMA_VERSION,
@@ -627,11 +773,20 @@ def build_review_units(
     items: Sequence[Mapping[str, Any]],
     *,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
-    snapshot_digest: str,
+    context_digest: str = "",
+    snapshot_digest: str = "",
     model: str = "",
     prompt_schema_version: str = PROMPT_SCHEMA_VERSION,
 ) -> list[dict[str, Any]]:
-    """Chunk normalized items into review units with stable input digests."""
+    """Chunk normalized items into review units with stable input digests.
+
+    ``context_digest`` is required for resume correctness (shared context).
+    ``snapshot_digest`` is recorded for audit only and is not part of the unit
+    input digest. For backward-compatible callers that only pass
+    ``snapshot_digest``, it is used as a fallback context digest with a note
+    that incremental granularity may be coarser.
+    """
+    shared_context = _as_optional_str(context_digest) or _as_optional_str(snapshot_digest)
     size = max(1, int(chunk_size or DEFAULT_CHUNK_SIZE))
     normalized = [normalize_review_item(item) for item in items or []]
     # Group by file to keep local context coherent (matches revision batching).
@@ -654,7 +809,7 @@ def build_review_units(
             input_digest = compute_unit_input_digest(
                 item_ids=item_ids,
                 items_digest=items_digest,
-                snapshot_digest=snapshot_digest,
+                context_digest=shared_context,
                 model=model,
                 prompt_schema_version=prompt_schema_version,
                 chunk_index=chunk_index,
@@ -671,7 +826,8 @@ def build_review_units(
                     "items": chunk_items,
                     "items_digest": items_digest,
                     "input_digest": input_digest,
-                    "snapshot_digest": snapshot_digest,
+                    "context_digest": shared_context,
+                    "snapshot_digest": _as_optional_str(snapshot_digest),
                     "model": _as_optional_str(model),
                     "prompt_schema_version": _as_optional_str(prompt_schema_version)
                     or PROMPT_SCHEMA_VERSION,
@@ -935,6 +1091,7 @@ def build_campaign_manifest(
         "model": _as_optional_str(model) or _as_optional_str(batch_model),
         "prompt_schema_version": _as_optional_str(prompt_schema_version) or PROMPT_SCHEMA_VERSION,
         "package_dir": os.path.abspath(package_dir) if package_dir else "",
+        "context_digest": _as_optional_str(snapshot.get("context_digest")),
         "snapshot_digest": _as_optional_str(snapshot.get("snapshot_digest")),
         "snapshot_path": SNAPSHOT_FILENAME,
         "review_units_path": REVIEW_UNITS_FILENAME,
@@ -1198,6 +1355,9 @@ def collect_campaign_status(
         or manifest.get("package_dir")
         or "",
         "manifest_path": manifest.get("_manifest_path") or "",
+        "context_digest": snapshot.get("context_digest")
+        or manifest.get("context_digest")
+        or "",
         "snapshot_digest": snapshot.get("snapshot_digest")
         or manifest.get("snapshot_digest")
         or "",
@@ -1223,6 +1383,7 @@ def format_status_text(status: Mapping[str, Any]) -> str:
         f"  report_only: {status.get('report_only')}  autofix: {status.get('autofix')}",
         f"  display_name: {status.get('display_name') or '(none)'}",
         f"  package: {status.get('package_dir') or '(none)'}",
+        f"  context_digest: {str(status.get('context_digest') or '')[:16]}…",
         f"  snapshot_digest: {str(status.get('snapshot_digest') or '')[:16]}…",
         f"  units: {status.get('unit_count')}  items: {status.get('item_count')}  "
         f"findings: {status.get('finding_count')}",
@@ -1332,16 +1493,24 @@ def reevaluate_campaign_units(
     units: Sequence[Mapping[str, Any]],
     *,
     live_items_by_unit: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
-    snapshot_digest: str,
+    context_digest: str = "",
+    snapshot_digest: str = "",
     model: str = "",
     prompt_schema_version: str = PROMPT_SCHEMA_VERSION,
     force: bool = False,
 ) -> list[dict[str, Any]]:
-    """Recompute live digests and refresh unit statuses (stale detection)."""
+    """Recompute live digests and refresh unit statuses (stale detection).
+
+    Prefer ``context_digest`` (shared context only). ``snapshot_digest`` is
+    accepted as a legacy fallback when context is omitted.
+    """
+    shared_context = _as_optional_str(context_digest) or _as_optional_str(snapshot_digest)
     out: list[dict[str, Any]] = []
     for unit in units or []:
         row = dict(unit)
         unit_id = _as_optional_str(row.get("unit_id"))
+        # Prefer live shared context; fall back to the unit's frozen context.
+        unit_context = shared_context or _as_optional_str(row.get("context_digest"))
         if live_items_by_unit and unit_id in live_items_by_unit:
             live_items = [normalize_review_item(i) for i in live_items_by_unit[unit_id]]
             items_digest = digest_translation_items(live_items)
@@ -1349,7 +1518,7 @@ def reevaluate_campaign_units(
             live_digest = compute_unit_input_digest(
                 item_ids=item_ids,
                 items_digest=items_digest,
-                snapshot_digest=snapshot_digest,
+                context_digest=unit_context,
                 model=model or row.get("model") or "",
                 prompt_schema_version=prompt_schema_version
                 or row.get("prompt_schema_version")
@@ -1369,7 +1538,7 @@ def reevaluate_campaign_units(
                 live_digest = compute_unit_input_digest(
                     item_ids=item_ids,
                     items_digest=items_digest,
-                    snapshot_digest=snapshot_digest,
+                    context_digest=unit_context,
                     model=model or row.get("model") or "",
                     prompt_schema_version=prompt_schema_version
                     or row.get("prompt_schema_version")

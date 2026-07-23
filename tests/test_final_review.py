@@ -143,8 +143,9 @@ class SnapshotAndDigestTests(unittest.TestCase):
             project_analysis_inject=False,
             project_analysis_fingerprint="fp-1",
             project_analysis_status="published",
+            project_analysis_brief_text="should not bind",
         )
-        # Fingerprint not included when inject is off → digest payload PA empty.
+        # Fingerprint/brief not included when inject is off.
         self.assertFalse(
             with_pa_disabled_inject["digest_payload"]["project_analysis"]["included_in_digest"]
         )
@@ -154,10 +155,102 @@ class SnapshotAndDigestTests(unittest.TestCase):
             project_analysis_inject=True,
             project_analysis_fingerprint="fp-1",
             project_analysis_status="published",
-            project_analysis_version=1,
+            project_analysis_version="2026-07-23T00:00:00Z",
+            project_analysis_brief_text="Published brief body",
+            project_analysis_lineage={
+                "source_fingerprint": "fp-1",
+                "generated_at": "2026-07-23T00:00:00Z",
+                "prompt_schema_version": "project-analysis-llm-v1",
+            },
         )
         self.assertTrue(with_pa["digest_payload"]["project_analysis"]["included_in_digest"])
+        self.assertTrue(with_pa["digest_payload"]["project_analysis"]["brief_text_sha256"])
         self.assertNotEqual(without_pa["snapshot_digest"], with_pa["snapshot_digest"])
+        self.assertNotEqual(without_pa["context_digest"], with_pa["context_digest"])
+
+    def test_same_fingerprint_different_brief_text_changes_digest(self):
+        """Force-republished brief under same structure fingerprint must stale units."""
+        items = _items(("script.rpy", "Hi", "嗨"))
+        lineage = {
+            "source_fingerprint": "fp-same",
+            "generated_at": "2026-07-23T00:00:00Z",
+            "prompt_schema_version": "project-analysis-llm-v1",
+        }
+        common = dict(
+            translation_items=items,
+            project_analysis_enabled=True,
+            project_analysis_inject=True,
+            project_analysis_fingerprint="fp-same",
+            project_analysis_status="published",
+            project_analysis_lineage=lineage,
+        )
+        snap_a = fr.build_context_snapshot(
+            project_analysis_brief_text="Brief version A",
+            **common,
+        )
+        snap_b = fr.build_context_snapshot(
+            project_analysis_brief_text="Brief version B",
+            **common,
+        )
+        self.assertNotEqual(snap_a["context_digest"], snap_b["context_digest"])
+        self.assertNotEqual(
+            snap_a["digest_payload"]["project_analysis"]["brief_text_sha256"],
+            snap_b["digest_payload"]["project_analysis"]["brief_text_sha256"],
+        )
+        units_a = fr.build_review_units(
+            items,
+            chunk_size=4,
+            context_digest=snap_a["context_digest"],
+            snapshot_digest=snap_a["snapshot_digest"],
+        )
+        done = fr.mark_unit_done(units_a[0], finding_count=0)
+        reevaluated = fr.reevaluate_campaign_units(
+            [done],
+            context_digest=snap_b["context_digest"],
+            model="",
+        )
+        self.assertEqual(reevaluated[0]["status"], fr.STATUS_STALE)
+
+    def test_source_index_store_content_changes_snapshot(self):
+        items = _items(("script.rpy", "Hi", "嗨"))
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "source_index"
+            store.mkdir()
+            meta = store / "source_metadata.json"
+            segs = store / "source_segments.jsonl"
+            meta.write_text('{"schema_version": 1, "segments": 1}', encoding="utf-8")
+            segs.write_text('{"id": "s1", "text": "Hello"}\n', encoding="utf-8")
+            # Noise files must not affect digest.
+            (store / "source_segments.jsonl.tmp.12345").write_text("junk", encoding="utf-8")
+            (store / ".lock").write_text("lock", encoding="utf-8")
+
+            snap_a = fr.build_context_snapshot(
+                translation_items=items,
+                source_index_enabled=True,
+                source_index_store_path=str(store),
+            )
+            self.assertTrue(snap_a["layers"]["source_index"]["exists"])
+            self.assertTrue(snap_a["layers"]["source_index"]["sha256"])
+
+            segs.write_text(
+                '{"id": "s1", "text": "Hello"}\n{"id": "s2", "text": "World"}\n',
+                encoding="utf-8",
+            )
+            snap_b = fr.build_context_snapshot(
+                translation_items=items,
+                source_index_enabled=True,
+                source_index_store_path=str(store),
+            )
+            self.assertNotEqual(snap_a["context_digest"], snap_b["context_digest"])
+            self.assertNotEqual(
+                snap_a["layers"]["source_index"]["sha256"],
+                snap_b["layers"]["source_index"]["sha256"],
+            )
+
+            # Directory-as-file path (old bug) would have produced empty hash.
+            bare_dir_meta = fr.digest_path_content(str(store))
+            self.assertFalse(bare_dir_meta["exists"])
+            self.assertEqual(bare_dir_meta["sha256"], "")
 
 
 class UnitDigestAndStatusTests(unittest.TestCase):
@@ -172,6 +265,7 @@ class UnitDigestAndStatusTests(unittest.TestCase):
         units = fr.build_review_units(
             items,
             chunk_size=2,
+            context_digest=snap["context_digest"],
             snapshot_digest=snap["snapshot_digest"],
             model="model-x",
             prompt_schema_version="final-review-v1",
@@ -181,11 +275,13 @@ class UnitDigestAndStatusTests(unittest.TestCase):
         for unit in units:
             self.assertEqual(unit["status"], fr.STATUS_PENDING)
             self.assertTrue(unit["input_digest"])
+            self.assertEqual(unit["context_digest"], snap["context_digest"])
             self.assertEqual(unit["snapshot_digest"], snap["snapshot_digest"])
 
         units2 = fr.build_review_units(
             items,
             chunk_size=2,
+            context_digest=snap["context_digest"],
             snapshot_digest=snap["snapshot_digest"],
             model="model-x",
             prompt_schema_version="final-review-v1",
@@ -200,6 +296,7 @@ class UnitDigestAndStatusTests(unittest.TestCase):
         units = fr.build_review_units(
             items,
             chunk_size=8,
+            context_digest=snap["context_digest"],
             snapshot_digest=snap["snapshot_digest"],
             model="m",
         )
@@ -207,20 +304,78 @@ class UnitDigestAndStatusTests(unittest.TestCase):
         self.assertEqual(unit["status"], fr.STATUS_DONE)
 
         changed = _items(("script.rpy", "Hello", "您好"))
-        snap2 = fr.build_context_snapshot(translation_items=changed)
+        # Shared context unchanged; only this unit's items change.
         reevaluated = fr.reevaluate_campaign_units(
             [unit],
             live_items_by_unit={unit["unit_id"]: changed},
-            snapshot_digest=snap2["snapshot_digest"],
+            context_digest=snap["context_digest"],
             model="m",
         )
         self.assertEqual(reevaluated[0]["status"], fr.STATUS_STALE)
+
+    def test_cross_file_translation_edit_does_not_stale_other_units(self):
+        """P2: unit input digests must not include campaign-wide translations."""
+        items = _items(
+            ("a.rpy", "A", "甲"),
+            ("b.rpy", "B", "乙"),
+        )
+        snap = fr.build_context_snapshot(translation_items=items)
+        units = fr.build_review_units(
+            items,
+            chunk_size=8,
+            context_digest=snap["context_digest"],
+            snapshot_digest=snap["snapshot_digest"],
+        )
+        by_file = {u["file_rel_path"]: fr.mark_unit_done(u, finding_count=0) for u in units}
+        self.assertIn("a.rpy", by_file)
+        self.assertIn("b.rpy", by_file)
+
+        # Only a.rpy translation changes; b.rpy unit must remain skippable.
+        # Preserve original identity ids (index-based helpers renumber if rebuilt alone).
+        unit_a_items = list(by_file["a.rpy"]["items"])
+        unit_b_items = list(by_file["b.rpy"]["items"])
+        changed_a = [
+            {**unit_a_items[0], "current_translation": "甲-改", "source": "A"}
+        ]
+        unchanged_b = [dict(unit_b_items[0])]
+        live = {
+            by_file["a.rpy"]["unit_id"]: changed_a,
+            by_file["b.rpy"]["unit_id"]: unchanged_b,
+        }
+        reevaluated = fr.reevaluate_campaign_units(
+            list(by_file.values()),
+            live_items_by_unit=live,
+            context_digest=snap["context_digest"],
+        )
+        status_by_file = {u["file_rel_path"]: u["status"] for u in reevaluated}
+        self.assertEqual(status_by_file["a.rpy"], fr.STATUS_STALE)
+        self.assertEqual(status_by_file["b.rpy"], fr.STATUS_DONE)
+        self.assertTrue(
+            fr.should_skip_unit(
+                next(u for u in reevaluated if u["file_rel_path"] == "b.rpy"),
+                live_input_digest=next(
+                    u["live_input_digest"] for u in reevaluated if u["file_rel_path"] == "b.rpy"
+                ),
+            )
+        )
+        # Campaign audit snapshot_digest *does* change when any translation moves.
+        snap2 = fr.build_context_snapshot(
+            translation_items=[
+                {**unit_a_items[0], "current_translation": "甲-改"},
+                dict(unit_b_items[0]),
+            ],
+        )
+        self.assertEqual(snap["context_digest"], snap2["context_digest"])
+        self.assertNotEqual(snap["snapshot_digest"], snap2["snapshot_digest"])
 
     def test_skip_done_same_digest(self):
         items = _items(("script.rpy", "Hello", "你好"))
         snap = fr.build_context_snapshot(translation_items=items)
         units = fr.build_review_units(
-            items, chunk_size=4, snapshot_digest=snap["snapshot_digest"]
+            items,
+            chunk_size=4,
+            context_digest=snap["context_digest"],
+            snapshot_digest=snap["snapshot_digest"],
         )
         unit = fr.mark_unit_done(units[0], finding_count=1)
         self.assertTrue(
@@ -232,7 +387,10 @@ class UnitDigestAndStatusTests(unittest.TestCase):
         items = _items(("script.rpy", "Hello", "你好"))
         snap = fr.build_context_snapshot(translation_items=items)
         units = fr.build_review_units(
-            items, chunk_size=4, snapshot_digest=snap["snapshot_digest"]
+            items,
+            chunk_size=4,
+            context_digest=snap["context_digest"],
+            snapshot_digest=snap["snapshot_digest"],
         )
         failed = fr.mark_unit_failed(units[0], "parse_error")
         self.assertEqual(failed["status"], fr.STATUS_FAILED)
@@ -246,7 +404,10 @@ class UnitDigestAndStatusTests(unittest.TestCase):
         items = _items(("script.rpy", "Hello", "你好"))
         snap = fr.build_context_snapshot(translation_items=items)
         units = fr.build_review_units(
-            items, chunk_size=4, snapshot_digest=snap["snapshot_digest"]
+            items,
+            chunk_size=4,
+            context_digest=snap["context_digest"],
+            snapshot_digest=snap["snapshot_digest"],
         )
         units = [fr.mark_unit_failed(units[0], "model_error")]
         counts = fr.summarize_unit_statuses(units)
@@ -342,7 +503,10 @@ class PackageIoTests(unittest.TestCase):
         items = _items(("script.rpy", "Hello", "你好"))
         snap = fr.build_context_snapshot(translation_items=items)
         units = fr.build_review_units(
-            items, chunk_size=4, snapshot_digest=snap["snapshot_digest"]
+            items,
+            chunk_size=4,
+            context_digest=snap["context_digest"],
+            snapshot_digest=snap["snapshot_digest"],
         )
         bad = fr.mark_unit_failed(units[0], "boom")
         bad["status"] = fr.STATUS_DONE
@@ -385,7 +549,10 @@ class CliStatusExportTests(unittest.TestCase):
         readiness = fr.evaluate_readiness(pending_task_count=0, review_item_count=1)
         snap = fr.build_context_snapshot(translation_items=items)
         units = fr.build_review_units(
-            items, chunk_size=4, snapshot_digest=snap["snapshot_digest"]
+            items,
+            chunk_size=4,
+            context_digest=snap["context_digest"],
+            snapshot_digest=snap["snapshot_digest"],
         )
         with tempfile.TemporaryDirectory() as tmp:
             package_dir = os.path.join(tmp, "fr_pkg")

@@ -89,14 +89,14 @@ python gemini_translate_batch.py final-review-export logs/batch_jobs/<package>/m
 - 可选 Story Memory / Source Index（仅当启用）
 - 可选已启用且可注入的 published Project Analysis fingerprint（无 PA 时允许仅靠其它上下文运行）
 
-每个 review unit 保存 `input_digest`（条目 + snapshot + model + prompt schema）。后续续跑将跳过 digest 未变的已完成 unit；上游变化会使 unit `stale`（执行与 resume 在后续 PR）。
+每个 review unit 保存 `input_digest`（本 unit 的 `items_digest` + **共享** `context_digest` + model + prompt schema）。`context_digest` 只绑定 glossary / macro / Story Memory / Source Index / 可注入 PA brief 等共享上下文；**不**把全项目 `translations_digest` 塞进 unit，因此改 A 文件不会让 B 文件的已完成 unit 变 stale。全量译文审计摘要仍记在 campaign 级 `snapshot_digest`。后续续跑将跳过 digest 未变的已完成 unit；相关 unit 的上游变化会使其 `stale`（执行与 resume 在后续 PR）。
 
 ### 产物布局
 
 ```text
 logs/batch_jobs/<ts>_<project>_final_review/
   manifest.json          # mode=final_review, report_only=true
-  snapshot.json          # 冻结上下文摘要与 snapshot_digest
+  snapshot.json          # context_digest + snapshot_digest + 各层摘要
   review_units.jsonl     # unit 状态 / input_digest / items
   findings.jsonl         # 审校发现（执行后填充；build 时为空）
   report.md              # 人类可读报告

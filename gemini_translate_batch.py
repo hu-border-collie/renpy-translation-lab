@@ -3376,9 +3376,14 @@ def _collect_final_review_context_snapshot(translation_items):
     pa_status = ''
     pa_fp = ''
     pa_version = None
+    pa_brief_text = ''
+    pa_lineage = None
     if PROJECT_ANALYSIS_ENABLED and PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
         try:
-            from project_analysis import collect_project_analysis_status
+            from project_analysis import (
+                collect_project_analysis_status,
+                load_injectable_project_brief,
+            )
 
             pa_fp = compute_current_project_analysis_fingerprint(
                 legacy.BASE_DIR, store_dir=PROJECT_ANALYSIS_STORE_DIR or None
@@ -3389,14 +3394,37 @@ def _collect_final_review_context_snapshot(translation_items):
                 expected_source_fingerprint=pa_fp or '',
             )
             pa_status = str(status_payload.get('brief_status') or '')
-            pa_version = status_payload.get('schema_version')
-            # Only pin fingerprint into the review digest when brief is injectable.
-            brief = load_injectable_project_brief_for_prompts()
-            if not brief[0]:
+            # Prefer lineage/version from the brief artifact — not bare schema_version.
+            brief_entry = (status_payload.get('artifacts') or {}).get('project_brief') or {}
+            pa_lineage = brief_entry.get('lineage') if isinstance(brief_entry, dict) else None
+            if isinstance(pa_lineage, dict):
+                pa_version = (
+                    pa_lineage.get('generated_at')
+                    or pa_lineage.get('prompt_schema_version')
+                    or status_payload.get('schema_version')
+                )
+            else:
+                pa_version = status_payload.get('schema_version')
+            # Hash the *actual* injectable text (already max_chars truncated).
+            brief_payload = load_injectable_project_brief(
+                store_dir=PROJECT_ANALYSIS_STORE_DIR or None,
+                base_dir=legacy.BASE_DIR or None,
+                expected_source_fingerprint=pa_fp or '',
+                max_chars=PROJECT_ANALYSIS_MAX_BRIEF_CHARS,
+                enabled=True,
+            )
+            if brief_payload.get('injectable') and brief_payload.get('text'):
+                pa_brief_text = str(brief_payload.get('text') or '')
+            else:
+                # Not injectable → do not pin fingerprint/brief into the digest.
                 pa_fp = ''
+                pa_brief_text = ''
+                pa_lineage = None
         except Exception:
             pa_status = 'error'
             pa_fp = ''
+            pa_brief_text = ''
+            pa_lineage = None
 
     macro_path = ''
     for candidate in (
@@ -3427,6 +3455,8 @@ def _collect_final_review_context_snapshot(translation_items):
         project_analysis_fingerprint=pa_fp,
         project_analysis_version=pa_version,
         project_analysis_store_path=PROJECT_ANALYSIS_STORE_DIR or None,
+        project_analysis_brief_text=pa_brief_text,
+        project_analysis_lineage=pa_lineage,
         include_filters=include_filters,
         base_dir=legacy.BASE_DIR or '',
         tl_dir=legacy.TL_DIR or '',
@@ -3488,7 +3518,8 @@ def create_final_review_package(
     units = fr.build_review_units(
         translation_items,
         chunk_size=chunk_size,
-        snapshot_digest=snapshot['snapshot_digest'],
+        context_digest=snapshot.get('context_digest') or '',
+        snapshot_digest=snapshot.get('snapshot_digest') or '',
         model=model,
         prompt_schema_version=prompt_schema,
     )
@@ -3539,7 +3570,8 @@ def create_final_review_package(
     print(f'Created final-review campaign: {package_dir}')
     print(f"Units: {manifest['summary']['unit_count']}")
     print(f"Items: {manifest['summary']['item_count']}")
-    print(f"Snapshot digest: {snapshot['snapshot_digest'][:16]}…")
+    print(f"Context digest: {str(snapshot.get('context_digest') or '')[:16]}…")
+    print(f"Snapshot digest: {str(snapshot.get('snapshot_digest') or '')[:16]}…")
     print('Mode: final_review (report-only; no autofix)')
     print('Next: final-review-status <package>  (LLM run lands in a follow-up PR)')
     if readiness.reasons:
