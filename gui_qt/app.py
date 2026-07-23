@@ -292,6 +292,8 @@ from .settings_schema import (
 _SETTINGS_WORKSPACE_MANAGED_KEYS = frozenset({"game_root"})
 from .translation_workflow import WorkflowUpdate
 from .user_copy import (
+    SETTINGS_WORKSPACE_IMMEDIATE_SAVE,
+    SETTINGS_WORKSPACE_UNSAVED_CHANGES,
     format_job_fact,
     format_job_state_fact,
     format_manifest_path_fact,
@@ -2583,6 +2585,14 @@ class MainWindow(QMainWindow):
         action_layout = QHBoxLayout(action_bar)
         action_layout.setContentsMargins(12, 10, 12, 10)
         action_layout.setSpacing(8)
+        self.settings_action_context_label = QLabel(
+            SETTINGS_WORKSPACE_IMMEDIATE_SAVE
+        )
+        self.settings_action_context_label.setObjectName(
+            "settings_action_context_label"
+        )
+        self.settings_action_context_label.setProperty("tone", "muted")
+        action_layout.addWidget(self.settings_action_context_label)
         action_layout.addStretch()
         self.reload_config_btn = QPushButton("重新加载")
         self.reload_config_btn.setObjectName("secondary_btn")
@@ -2615,6 +2625,10 @@ class MainWindow(QMainWindow):
         self.settings_nav.setCurrentRow(0)
         self.settings_nav.blockSignals(blocked)
         self.settings_stack.setCurrentIndex(0)
+        self._sync_settings_action_bar_enabled(
+            task_running=self._task_running,
+            nav_row=0,
+        )
 
         self.tab_widget.addTab(tab, "设置")
 
@@ -8288,19 +8302,55 @@ class MainWindow(QMainWindow):
         task_running: bool,
         nav_row: int | None = None,
     ) -> None:
+        """Sync Settings bottom chrome for the active section.
+
+        Workspace/project-list actions write registry state immediately, so the
+        usual reload/restore/save buttons stay hidden and a muted instant-save
+        label is shown — unless another settings section left unsaved config
+        changes. In that dirty case, save and reload reappear with a warning
+        label so the user can persist or discard before switching projects;
+        restore-defaults stays off the project list.
+        """
         if nav_row is None:
             nav = getattr(self, "settings_nav", None)
             current_row = nav.currentRow() if nav is not None else -1
         else:
             current_row = nav_row
         on_workspace = self._settings_nav_rows.get("workspace") == current_row
-        allow_config_save = not task_running and not on_workspace
+        has_unsaved_config = (
+            on_workspace and self._config_tab_has_unsaved_changes()
+        )
+        # Workspace is registry-immediate; hide config chrome unless other
+        # sections left unsaved changes (then offer save + reload-to-discard).
+        show_dirty_config_actions = not on_workspace or has_unsaved_config
+        allow_config_save = not task_running and show_dirty_config_actions
+        context_label = getattr(self, "settings_action_context_label", None)
+        if context_label is not None:
+            context_label.setVisible(on_workspace)
+            if on_workspace:
+                context_label.setText(
+                    SETTINGS_WORKSPACE_UNSAVED_CHANGES
+                    if has_unsaved_config
+                    else SETTINGS_WORKSPACE_IMMEDIATE_SAVE
+                )
+                tone = "warning" if has_unsaved_config else "muted"
+                if context_label.property("tone") != tone:
+                    context_label.setProperty("tone", tone)
+                    self._repolish_widget(context_label)
         if hasattr(self, "save_config_btn"):
+            self.save_config_btn.setVisible(show_dirty_config_actions)
             self.save_config_btn.setEnabled(allow_config_save)
         if hasattr(self, "restore_defaults_btn"):
+            # Restore-defaults stays off the project list (writes UI only for
+            # model/context knobs; not a discard of in-flight edits alone).
+            self.restore_defaults_btn.setVisible(not on_workspace)
             self.restore_defaults_btn.setEnabled(allow_config_save)
         if hasattr(self, "reload_config_btn"):
+            self.reload_config_btn.setVisible(show_dirty_config_actions)
             self.reload_config_btn.setEnabled(not task_running)
+        save_shortcut = getattr(self, "_save_config_shortcut", None)
+        if save_shortcut is not None:
+            save_shortcut.setEnabled(allow_config_save)
 
     def _refresh_api_status(self) -> None:
         # Do not materialize the keys page just to refresh a hidden label.
@@ -8855,6 +8905,11 @@ class MainWindow(QMainWindow):
         self._ensure_settings_pages_for_config()
         self._load_config_to_ui()
         self._refresh_api_status()
+        # Drop workspace dirty chrome after discard-via-reload (same as save).
+        if "save_config_btn" in self.__dict__:
+            self._sync_settings_action_bar_enabled(
+                task_running=bool(getattr(self, "_task_running", False))
+            )
         self._show_settings_status("已重新加载已保存设置。")
 
     def _on_restore_recommended_config(self) -> None:
@@ -11833,6 +11888,10 @@ class MainWindow(QMainWindow):
                 self._show_settings_status("设置已保存，但同步项目目录到工作台失败。", 6000)
                 self._append_log("设置已保存，但同步项目目录到工作台失败。")
                 self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
+                if "save_config_btn" in self.__dict__:
+                    self._sync_settings_action_bar_enabled(
+                        task_running=bool(getattr(self, "_task_running", False))
+                    )
                 return True
             if work_mode_spec(self._current_work_mode()).is_bootstrap:
                 self._apply_work_mode_ui(refresh_manifest_writeback=False)
@@ -11851,6 +11910,10 @@ class MainWindow(QMainWindow):
                 self._append_log(f"提示通知显示失败：{exc}")
                 self.statusBar().showMessage("设置已成功保存", 3000)
             self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
+            if "save_config_btn" in self.__dict__:
+                self._sync_settings_action_bar_enabled(
+                    task_running=bool(getattr(self, "_task_running", False))
+                )
             return True
         except Exception as exc:
             QMessageBox.warning(self, "保存设置失败", str(exc))
