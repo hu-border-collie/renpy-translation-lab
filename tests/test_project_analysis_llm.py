@@ -111,8 +111,9 @@ class MapReduceTests(unittest.TestCase):
             self.assertGreaterEqual(first["labels_refined"], 1)
             self.assertEqual(second["labels_refined"], 0)
             self.assertGreaterEqual(second["labels_skipped"], 1)
-            # Only brief may still call if skip logic differs; labels/routes skip.
-            self.assertLessEqual(len(backend.calls) - calls_after_first, 1)
+            self.assertFalse(second.get("brief_refined", True))
+            # Full no-op: labels, routes, and brief all skip LLM.
+            self.assertEqual(len(backend.calls), calls_after_first)
 
     def test_model_switch_invalidates_label_route_cache(self):
         with tempfile.TemporaryDirectory() as tmp:

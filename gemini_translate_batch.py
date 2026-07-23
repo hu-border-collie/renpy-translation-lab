@@ -10147,6 +10147,9 @@ def main(argv=None):
 
         def _load_settings_quiet():
             if not store_dir or command == 'project-analysis-generate':
+                # generate needs API keys from load_config() for run_sync_request.
+                if command == 'project-analysis-generate':
+                    legacy.load_config()
                 legacy.load_translator_settings(persist_corrected_game_root=False)
                 load_batch_settings()
 

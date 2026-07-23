@@ -450,7 +450,11 @@ def build_structure_drafts(
         )
     )
     routes_touched = route_merge_stats["rebuilt"] + route_merge_stats["cleared_lineage"]
-    if previous_brief_lineage.get("model") and routes_touched == 0:
+    if (
+        previous_brief_lineage.get("model")
+        and routes_touched == 0
+        and previous_brief.strip()
+    ):
         brief_text = previous_brief
     else:
         brief_text = build_project_brief_text(

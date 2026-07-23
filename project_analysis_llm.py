@@ -513,44 +513,85 @@ def run_mapreduce_drafts(
         for r in routes_out
         if (r.get("metadata") or {}).get("unresolved")
     )
-    brief_text = refine_project_brief(
-        routes_out,
-        generate=generate,
-        config=cfg,
+    upstream = [r["id"] for r in routes_out] + [r["id"] for r in labels_out]
+    brief_upstream_digest = digest_upstream_artifacts(upstream)
+    brief_sig = generation_signature(
         source_fingerprint=source_fp,
         provider=prov,
         model=model_name,
-        unresolved_count=unresolved,
+        thinking_level=cfg["thinking_level"],
+        upstream_dependency_digest=brief_upstream_digest,
+        prompt_schema_version=PROMPT_SCHEMA_VERSION,
     )
-    # Keep a short machine header so humans see LLM origin.
-    if not brief_text.lstrip().startswith("#"):
-        brief_text = "# Project Analysis Brief (LLM draft)\n\n" + brief_text
-    store.save_brief_text(brief_text, published=False)
 
     identity = {}
     previous = store.load_manifest()
     if previous:
         identity = dict(previous.get("project_identity") or {})
+    previous_brief_entry = (
+        ((previous or {}).get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {}
+    )
+    previous_brief_text = store.load_brief_text(published=False)
+    previous_brief_record = {
+        "id": previous_brief_entry.get("id") or "project_brief",
+        "kind": KIND_PROJECT_BRIEF,
+        "status": previous_brief_entry.get("status") or STATUS_DRAFT,
+        "source_files": [],
+        "evidence_item_ids": [],
+        "upstream_artifact_ids": list(upstream),
+        "lineage": previous_brief_entry.get("lineage") or empty_lineage(),
+        "summary": previous_brief_text,
+    }
+    brief_inputs_changed = labels_refined > 0 or routes_refined > 0
+    brief_needs_refresh = force or brief_inputs_changed or _needs_llm_refresh(
+        previous_brief_record,
+        expected_signature=brief_sig,
+        force=False,
+    )
+    # Empty previous draft must always rebuild.
+    if not previous_brief_text.strip():
+        brief_needs_refresh = True
+
+    brief_refined = False
+    if brief_needs_refresh:
+        brief_text = refine_project_brief(
+            routes_out,
+            generate=generate,
+            config=cfg,
+            source_fingerprint=source_fp,
+            provider=prov,
+            model=model_name,
+            unresolved_count=unresolved,
+        )
+        # Keep a short machine header so humans see LLM origin.
+        if not brief_text.lstrip().startswith("#"):
+            brief_text = "# Project Analysis Brief (LLM draft)\n\n" + brief_text
+        store.save_brief_text(brief_text, published=False)
+        brief_refined = True
+        brief_lineage = empty_lineage(
+            source_fingerprint=source_fp,
+            prompt_schema_version=PROMPT_SCHEMA_VERSION,
+            provider=prov,
+            model=model_name,
+            thinking_level=cfg["thinking_level"],
+            upstream_dependency_digest=brief_upstream_digest,
+            generated_at=utc_now_iso(),
+        )
+    else:
+        brief_text = previous_brief_text
+        brief_lineage = normalize_lineage(previous_brief_entry.get("lineage"))
+
     manifest = store.rebuild_manifest(
         project_identity=identity,
         expected_source_fingerprint=source_fp,
     )
     brief_entry = dict((manifest.get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {})
-    upstream = [r["id"] for r in routes_out] + [r["id"] for r in labels_out]
     brief_entry.update(
         {
             "status": STATUS_DRAFT,
             "draft_present": True,
             "id": "project_brief",
-            "lineage": empty_lineage(
-                source_fingerprint=source_fp,
-                prompt_schema_version=PROMPT_SCHEMA_VERSION,
-                provider=prov,
-                model=model_name,
-                thinking_level=cfg["thinking_level"],
-                upstream_dependency_digest=digest_upstream_artifacts(upstream),
-                generated_at=utc_now_iso(),
-            ),
+            "lineage": brief_lineage,
         }
     )
     if identity:
@@ -568,6 +609,7 @@ def run_mapreduce_drafts(
         "labels_skipped": labels_skipped,
         "routes_refined": routes_refined,
         "routes_skipped": routes_skipped,
+        "brief_refined": brief_refined,
         "brief_draft_chars": len(brief_text),
         "force": bool(force),
     }
