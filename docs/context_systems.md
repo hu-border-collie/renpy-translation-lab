@@ -53,7 +53,7 @@ logs/story_memory/story_graph.json
 
 ## Project Analysis（项目分析）
 
-> 阶段 1（#256）只交付**产物合同、状态与只读检查**，不调用模型，也不把分析正文注入翻译 prompt。路线感知生成（#254）与最终审校 campaign（#255）将复用同一套 schema / fingerprint / 发布状态。
+> 阶段 1（#256）的产物合同与只读检查已成为后续能力的基础；#254 已接入结构构建、可选 LLM 精炼、人工发布与翻译注入。只有 fingerprint 仍匹配、状态为 published 且设置中开启「用于翻译」的摘要才会进入 prompt。
 
 ### 产物目录
 
@@ -151,7 +151,7 @@ python gemini_translate_batch.py project-analysis-unpublish
 - 动态 `jump expression` / `call expression` 标记为 unresolved，不虚构单一路线。
 - 普通 `call label` **不是**路线分支：调用返回后继续调用者后续语句，枚举路线时不把 call 目标当成与 jump 互斥的分叉；call 仅作附属依赖/元数据。
 - **结构草稿**可无 LLM；**精炼摘要**使用 `project-analysis-generate`（可 mock 的 Sync 路径），结果仍为 draft，须人工 publish。
-- GUI「上下文库」提供：构建结构 / LLM 生成 / 发布 brief / 撤销发布（均走 CLI，不重复门禁逻辑）。
+- GUI「上下文库」把首次静态构建作为「开始分析」主操作，并按 missing / draft / published / stale 生命周期切换为生成、更新或重新构建；审查、启用到翻译、停止用于翻译仍调用同一套 CLI 和核心门禁。
 - **不**写 `glossary.json`、正式 `story_graph.json` 或 `.rpy`。
 
 ### 只读 CLI / GUI

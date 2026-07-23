@@ -32,6 +32,22 @@ MANIFEST_MODE_LABELS = {
     "keyword_extraction": "关键词提取",
 }
 
+PROJECT_ANALYSIS_COPY = {
+    "empty_title": "尚未启用上下文库",
+    "empty_body": (
+        "请先在设置 · 上下文启用记忆库、原文索引或项目剧情分析并保存，"
+        "然后回到这里开始准备。"
+    ),
+    "start": "开始分析",
+    "generate": "生成项目摘要",
+    "refresh": "更新项目摘要",
+    "rebuild": "重新构建",
+    "review": "审查内容",
+    "publish": "启用到翻译",
+    "unpublish": "停止用于翻译",
+}
+
+
 BOOTSTRAP_FIELD_LABELS = {
     "store_dir": "存储目录",
     "scan_scope": "扫描范围",

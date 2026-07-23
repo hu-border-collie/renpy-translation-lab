@@ -18,13 +18,14 @@ from gui_qt.settings_schema import (
 )
 
 try:
-    from PySide6.QtWidgets import QApplication, QCheckBox, QPushButton
+    from PySide6.QtWidgets import QApplication, QCheckBox, QGroupBox, QPushButton
 
     from gui_qt.app import MainWindow
 except ImportError as exc:
     MainWindow = None  # type: ignore[assignment,misc]
     QApplication = None  # type: ignore[assignment,misc]
     QCheckBox = object  # type: ignore[misc,assignment]
+    QGroupBox = object  # type: ignore[misc,assignment]
     QPushButton = object  # type: ignore[misc,assignment]
     IMPORT_ERROR = exc
 else:
@@ -118,6 +119,39 @@ class GuiContextPrimaryUiTests(unittest.TestCase):
                 joined,
                 msg=f"{key} incorrectly under advanced page: {names}",
             )
+
+    def test_project_analysis_has_dedicated_context_group(self) -> None:
+        context_page = self.window._settings_page_bodies["settings_context"]
+        titles = {
+            group.title()
+            for group in context_page.findChildren(QGroupBox)
+        }
+        self.assertIn("项目剧情分析", titles)
+
+    def test_context_lazy_load_includes_project_analysis_model_fields(self) -> None:
+        config = {
+            "batch": {
+                "project_analysis": {
+                    "enabled": True,
+                    "inject_published_brief": True,
+                    "model": "analysis-model",
+                    "thinking_level": "high",
+                }
+            }
+        }
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value=config,
+        ):
+            self.window._load_config_to_ui(pages={"context"})
+        widgets = self.window._advanced_setting_widgets
+        self.assertEqual(
+            widgets["batch_project_analysis_model"].text(), "analysis-model"
+        )
+        self.assertEqual(
+            widgets["batch_project_analysis_thinking_level"].text(), "high"
+        )
 
     def test_restore_recommended_sets_primary_switches(self) -> None:
         widgets = self.window._advanced_setting_widgets

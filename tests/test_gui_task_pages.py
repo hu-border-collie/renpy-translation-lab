@@ -566,10 +566,10 @@ class GuiTaskPageTests(unittest.TestCase):
             page.bootstrap_source_index_btn.parentWidget(),
             page.source_index_status_row,
         )
-        self.assertEqual(page.project_analysis_generate_btn.text(), "LLM 生成")
-        self.assertEqual(page.project_analysis_review_btn.text(), "审查对照")
-        self.assertEqual(page.project_analysis_publish_btn.text(), "发布 brief")
-        self.assertEqual(page.project_analysis_unpublish_btn.text(), "撤销发布")
+        self.assertEqual(page.project_analysis_generate_btn.text(), "开始分析")
+        self.assertEqual(page.project_analysis_review_btn.text(), "审查内容")
+        self.assertEqual(page.project_analysis_publish_btn.text(), "启用到翻译")
+        self.assertEqual(page.project_analysis_unpublish_btn.text(), "停止用于翻译")
 
     def test_context_page_uses_callbacks_and_owns_empty_state(self) -> None:
         page = self.window.context_library_page
@@ -620,6 +620,80 @@ class GuiTaskPageTests(unittest.TestCase):
         )
         self.assertIs(page.page_stack.currentWidget(), page.status_page)
         self.assertIn("已发布", page.project_analysis_status_label.text())
+
+    def test_project_analysis_actions_follow_product_lifecycle(self) -> None:
+        page = self.window.context_library_page
+        actions: list[str] = []
+        page.set_action_callbacks(WorkbenchPageActions(action=actions.append))
+
+        page.set_context_status(
+            rag_enabled=False,
+            source_index_enabled=False,
+            game_root="C:/Games/Example/work",
+            project_analysis_enabled=True,
+            project_analysis_status={
+                "overall_status": "missing",
+                "store_exists": False,
+            },
+        )
+        self.assertIs(page.page_stack.currentWidget(), page.status_page)
+        self.assertEqual(page.project_analysis_generate_btn.text(), "开始分析")
+        self.assertTrue(page.project_analysis_generate_btn.isEnabled())
+        self.assertFalse(page.project_analysis_publish_btn.isEnabled())
+        page.project_analysis_generate_btn.click()
+        self.assertEqual(actions, ["project_analysis_build_structure"])
+
+        page.set_context_status(
+            rag_enabled=False,
+            source_index_enabled=False,
+            game_root="C:/Games/Example/work",
+            project_analysis_enabled=True,
+            project_analysis_status={
+                "overall_status": "draft",
+                "store_exists": True,
+                "label_count": 3,
+                "route_count": 1,
+                "brief_draft_present": True,
+            },
+        )
+        self.assertEqual(page.project_analysis_generate_btn.text(), "生成项目摘要")
+        self.assertTrue(page.project_analysis_review_btn.isEnabled())
+        self.assertTrue(page.project_analysis_publish_btn.isEnabled())
+        self.assertFalse(page.project_analysis_unpublish_btn.isEnabled())
+
+        page.set_context_status(
+            rag_enabled=False,
+            source_index_enabled=False,
+            game_root="C:/Games/Example/work",
+            project_analysis_enabled=True,
+            project_analysis_inject_enabled=True,
+            project_analysis_status={
+                "overall_status": "published",
+                "store_exists": True,
+                "label_count": 3,
+                "route_count": 1,
+                "brief_published_present": True,
+                "injectable": True,
+            },
+        )
+        self.assertEqual(page.project_analysis_generate_btn.text(), "更新项目摘要")
+        self.assertFalse(page.project_analysis_publish_btn.isEnabled())
+        self.assertTrue(page.project_analysis_unpublish_btn.isEnabled())
+        self.assertIn("当前会用于翻译", page.project_analysis_status_label.text())
+
+        page.set_context_status(
+            rag_enabled=False,
+            source_index_enabled=False,
+            game_root="C:/Games/Example/work",
+            project_analysis_enabled=True,
+            project_analysis_status={
+                "overall_status": "stale",
+                "store_exists": True,
+                "label_count": 3,
+            },
+        )
+        self.assertEqual(page.project_analysis_generate_btn.text(), "重新构建")
+
 
     def test_global_prep_buttons_visible_on_all_task_pages(self) -> None:
         for mode in (

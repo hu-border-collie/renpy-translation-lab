@@ -276,6 +276,7 @@ from .settings_schema import (
     ADVANCED_SETTING_FIELDS,
     CONTEXT_PRIMARY_SETTING_CATEGORY,
     CONTEXT_PRIMARY_SETTING_KEYS,
+    PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS,
     context_primary_setting_fields,
     BASIC_RECOMMENDED_VALUES,
     SettingField,
@@ -391,6 +392,7 @@ _CONFIG_SNAPSHOT_KEYS_BY_PAGE: dict[str, frozenset[str]] = {
             "source_index_enabled",
             "bootstrap_on_build",
             "context_storage_location",
+            *PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS,
         }
     ),
     "models": frozenset(
@@ -1281,6 +1283,10 @@ class MainWindow(QMainWindow):
             return "停止生成"
         if command in {"bootstrap_rag", "bootstrap_source_index"}:
             return "停止预建"
+        if command == "project_analysis_build_structure":
+            return "停止构建"
+        if command == "project_analysis_generate":
+            return "停止生成"
         if command == "bootstrap_work":
             return "停止准备"
         if command == "doctor":
@@ -2462,6 +2468,7 @@ class MainWindow(QMainWindow):
             flags = self._saved_batch_context_flags()
             rag_on = bool(flags.get("rag_enabled"))
             idx_on = bool(flags.get("source_index_enabled"))
+            analysis_flags = self._saved_project_analysis_flags()
             game_root = self.state.get_game_root() if hasattr(self, "state") else None
             if running is None:
                 running = self._task_page_running_chrome()
@@ -2487,8 +2494,12 @@ class MainWindow(QMainWindow):
                 game_root=str(game_root or ""),
                 project_analysis_status=analysis_status,
                 project_analysis_label=analysis_label,
+                project_analysis_enabled=analysis_flags["enabled"],
+                project_analysis_inject_enabled=analysis_flags["inject_enabled"],
             )
-            page.set_task_running(running)
+            page.set_task_running(
+                running, getattr(self, "_active_command", "")
+            )
             return
 
     def _refresh_active_workbench_page(self, spec) -> None:
@@ -2945,8 +2956,8 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(context_box)
 
-        # P2b / #165: primary toggles live here only (schema widgets = single write source).
-        primary_box, primary_layout = self._settings_group("同步 / 剧情记忆主开关")
+        # Primary context fields live here only (schema widgets = single write source).
+        primary_box, primary_layout = self._settings_group("同步与剧情记忆")
         primary_hint = QLabel(
             "下列开关与高级页检索参数共用同一配置键；仅在本页编辑主开关，"
             "高级页只保留调参字段。"
@@ -2954,13 +2965,43 @@ class MainWindow(QMainWindow):
         primary_hint.setWordWrap(True)
         primary_hint.setObjectName("config_hint_label")
         primary_layout.addWidget(primary_hint)
-        for field in context_primary_setting_fields():
+        context_fields = context_primary_setting_fields()
+        for field in context_fields:
+            if field.key in PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS:
+                continue
             widget = self._create_advanced_setting_widget(field)
             self._advanced_setting_widgets[field.key] = widget
             row = self._advanced_setting_row(field, widget)
             primary_layout.addWidget(QLabel(f"{field.label}"))
             primary_layout.addWidget(row)
         layout.addWidget(primary_box)
+
+        analysis_box, analysis_layout = self._settings_group("项目剧情分析")
+        analysis_hint = QLabel(
+            "先启用分析并保存，再到「上下文库」开始构建。只有人工确认、"
+            "仍与当前脚本一致且开启“用于翻译”的项目摘要才会进入提示词。"
+            "当前这些选项是全局默认；项目级开关将在 #262 后续阶段收口。"
+        )
+        analysis_hint.setWordWrap(True)
+        analysis_hint.setObjectName("config_hint_label")
+        analysis_layout.addWidget(analysis_hint)
+        for field in context_fields:
+            if field.key not in PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS:
+                continue
+            widget = self._create_advanced_setting_widget(field)
+            self._advanced_setting_widgets[field.key] = widget
+            row = self._advanced_setting_row(field, widget)
+            analysis_layout.addWidget(QLabel(f"{field.label}"))
+            analysis_layout.addWidget(row)
+        analysis_advanced_btn = QPushButton("打开项目分析高级参数")
+        analysis_advanced_btn.setObjectName("secondary_btn")
+        analysis_advanced_btn.clicked.connect(
+            lambda: self._focus_advanced_setting(
+                "batch_project_analysis_max_brief_chars"
+            )
+        )
+        analysis_layout.addWidget(analysis_advanced_btn)
+        layout.addWidget(analysis_box)
         layout.addStretch(1)
         return page
 
@@ -8321,12 +8362,19 @@ class MainWindow(QMainWindow):
                 values[field.key] = widget.text().strip()
         return values
 
-    def _load_advanced_settings_to_ui(self, values: dict[str, object]) -> None:
+    def _load_advanced_settings_to_ui(
+        self,
+        values: dict[str, object],
+        *,
+        keys: frozenset[str] | None = None,
+    ) -> None:
         widgets = getattr(self, "_advanced_setting_widgets", {})
         if not widgets:
             return
         for field in ADVANCED_SETTING_FIELDS:
             if field.key in _SETTINGS_WORKSPACE_MANAGED_KEYS:
+                continue
+            if keys is not None and field.key not in keys:
                 continue
             widget = widgets.get(field.key)
             if widget is None:
@@ -9132,6 +9180,15 @@ class MainWindow(QMainWindow):
             self.state.load_translator_config(),
             game_root=self._game_root_str_for_flags(),
         )
+
+    def _saved_project_analysis_flags(self) -> dict[str, bool]:
+        values = read_advanced_settings(self.state.load_translator_config())
+        return {
+            "enabled": bool(values.get("batch_project_analysis_enabled")),
+            "inject_enabled": bool(
+                values.get("batch_project_analysis_inject_published_brief")
+            ),
+        }
 
     def _submit_max_cost_from_config(self) -> float | None:
         load_config = getattr(self.state, "load_translator_config", None)
@@ -11000,6 +11057,26 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("准备工作目录失败，请查看诊断日志。", 8000)
             return
 
+        project_analysis_commands = {
+            "project_analysis_build_structure": "项目结构构建",
+            "project_analysis_generate": "项目摘要生成",
+            "project_analysis_publish": "项目摘要启用",
+            "project_analysis_unpublish": "项目摘要停用",
+        }
+        if self._active_command in project_analysis_commands:
+            command = self._active_command
+            action_label = project_analysis_commands[command]
+            self._active_command = ""
+            self._set_task_running(False)
+            if exit_code == 0:
+                self.statusBar().showMessage(
+                    f"{action_label}完成；上下文库状态已更新。", 6000
+                )
+            else:
+                self.statusBar().showMessage(
+                    f"{action_label}失败，请查看运行日志。", 8000
+                )
+            return
         if self._active_command == "generate_template":
             summary = summarize_template_generation_output(
                 "\n".join(self._template_generation_output_lines),
@@ -11560,7 +11637,7 @@ class MainWindow(QMainWindow):
                     if backend_combo is not None:
                         self._on_sync_backend_changed(backend_idx)
 
-            if want is None or "advanced" in want:
+            if want is None or "advanced" in want or "context" in want:
                 advanced_values = read_advanced_settings(config)
                 get_game_root = getattr(self.state, "get_game_root", None)
                 current_game_root = get_game_root() if callable(get_game_root) else None
@@ -11569,7 +11646,15 @@ class MainWindow(QMainWindow):
                 ):
                     advanced_values["game_root"] = str(current_game_root)
                 if self.__dict__.get("_advanced_setting_widgets"):
-                    self._load_advanced_settings_to_ui(advanced_values)
+                    context_only = (
+                        want is not None
+                        and "context" in want
+                        and "advanced" not in want
+                    )
+                    self._load_advanced_settings_to_ui(
+                        advanced_values,
+                        keys=PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS if context_only else None,
+                    )
                     self._clear_advanced_setting_errors()
 
             if want is None or "project" in want:

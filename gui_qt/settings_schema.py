@@ -65,17 +65,23 @@ BASIC_RECOMMENDED_VALUES: dict[str, SettingValue] = {
     "batch_thinking_level": "minimal",
 }
 
-# Primary toggles shown only on 设置 · 上下文 (P2b / #165). Must not also appear
-# as independent advanced-page widgets — single write source via schema widgets.
+# Core fields shown only on 设置 · 上下文. They must not also appear as
+# independent advanced-page widgets — keep a single write source per key.
+PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS: frozenset[str] = frozenset(
+    {
+        "batch_project_analysis_enabled",
+        "batch_project_analysis_inject_published_brief",
+        "batch_project_analysis_model",
+        "batch_project_analysis_thinking_level",
+    }
+)
 CONTEXT_PRIMARY_SETTING_KEYS: frozenset[str] = frozenset(
     {
         "sync_rag_enabled",
         "sync_story_memory_enabled",
         "batch_story_memory_enabled",
-        "batch_project_analysis_enabled",
-        "batch_project_analysis_inject_published_brief",
     }
-)
+) | PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS
 CONTEXT_PRIMARY_SETTING_CATEGORY = "上下文主开关"
 
 
