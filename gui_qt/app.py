@@ -8261,6 +8261,15 @@ class MainWindow(QMainWindow):
         task_running: bool,
         nav_row: int | None = None,
     ) -> None:
+        """Sync Settings bottom chrome for the active section.
+
+        Workspace/project-list actions write registry state immediately, so the
+        usual reload/restore/save buttons stay hidden and a muted instant-save
+        label is shown — unless another settings section left unsaved config
+        changes. In that dirty case, save and reload reappear with a warning
+        label so the user can persist or discard before switching projects;
+        restore-defaults stays off the project list.
+        """
         if nav_row is None:
             nav = getattr(self, "settings_nav", None)
             current_row = nav.currentRow() if nav is not None else -1
