@@ -147,6 +147,24 @@
       "review_by": "2026-08-20"
     },
     {
+      "id": "GHSA-7488-6r32-c95q",
+      "package": "litellm",
+      "fix_versions": [
+        "1.84.0"
+      ],
+      "reason": "Direct pin litellm==1.83.7 in optional requirements-litellm.txt. Unauthenticated MCP Streamable HTTP auth bypass (OAuth2 passthrough fallback / public-route guard). Upgrade pin + regenerate platform locks in a dedicated dependency PR.",
+      "review_by": "2026-08-23"
+    },
+    {
+      "id": "GHSA-4g5m-c9r5-49xf",
+      "package": "litellm",
+      "fix_versions": [
+        "1.83.10"
+      ],
+      "reason": "Same optional litellm pin track as GHSA-7488-6r32-c95q / PYSEC-2026-388. Authenticated /health/test_connection local-file read via request-supplied oidc/file/ references. Upgrade with LiteLLM profile regeneration.",
+      "review_by": "2026-08-23"
+    },
+    {
       "id": "PYSEC-2026-2270",
       "package": "python-dotenv",
       "fix_versions": [

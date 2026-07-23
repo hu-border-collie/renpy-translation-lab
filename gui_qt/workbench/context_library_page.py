@@ -5,7 +5,6 @@ from typing import Any, Mapping
 
 from PySide6.QtWidgets import (
     QFrame,
-    QLabel,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -84,23 +83,26 @@ class ContextLibraryPage(QFrame):
         self.source_index_status_label = self.source_index_status_row.status_label
         self.status_layout.root.addWidget(self.source_index_status_row)
 
-        # Phase 2 (#254): status from core module; publish/generate remain CLI-first.
-        self.project_analysis_readonly_label = QLabel("CLI")
-        self.project_analysis_readonly_label.setObjectName(
-            "context_project_analysis_readonly_label"
+        # Project analysis (#254): generate / publish / unpublish via coordinator CLI.
+        self.project_analysis_generate_btn = QPushButton("LLM 生成")
+        self.project_analysis_generate_btn.setObjectName(
+            "context_project_analysis_generate_btn"
         )
-        self.project_analysis_readonly_label.setToolTip(
-            "项目分析：状态在此只读展示。"
-            "导入关键词摘要、构建结构草稿、发布/撤销请用诊断命令参考中的 CLI"
-            "（project-analysis-ingest-keywords / build-structure / publish / unpublish）。"
-            "仅 published 且未过期的 brief 可在配置开启后注入翻译 prompt。"
+        self.project_analysis_generate_btn.setToolTip(
+            "调用 project-analysis-generate：在已有结构草稿上做 label→route→brief 的 LLM 精炼。"
+            "需先 CLI 导入关键词并 build-structure；不会自动发布。"
+        )
+        self.project_analysis_generate_btn.clicked.connect(
+            lambda: self._trigger_action("project_analysis_generate")
         )
         self.project_analysis_status_row = TaskStatusActionRow(
             "项目分析",
-            self.project_analysis_readonly_label,
+            self.project_analysis_generate_btn,
             parent=self.status_page,
         )
         self.project_analysis_status_label = self.project_analysis_status_row.status_label
+        # Keep alias used by older tests that looked for a readonly badge.
+        self.project_analysis_readonly_label = self.project_analysis_generate_btn
         self.status_layout.root.addWidget(self.project_analysis_status_row)
 
         self.context_actions = self.status_layout.add_section(
@@ -108,6 +110,53 @@ class ContextLibraryPage(QFrame):
             role="context_library",
             secondary=True,
         )
+        self.project_analysis_review_btn = QPushButton("审查对照")
+        self.project_analysis_review_btn.setObjectName(
+            "context_project_analysis_review_btn"
+        )
+        self.project_analysis_review_btn.setToolTip(
+            "对照 draft / published brief，并查看 label evidence 与 route 路径。"
+        )
+        self.project_analysis_review_btn.clicked.connect(
+            lambda: self._trigger_action("project_analysis_review")
+        )
+        self.context_actions.add_action(self.project_analysis_review_btn, min_width=100)
+
+        self.project_analysis_publish_btn = QPushButton("发布 brief")
+        self.project_analysis_publish_btn.setObjectName(
+            "context_project_analysis_publish_btn"
+        )
+        self.project_analysis_publish_btn.setToolTip(
+            "将 project_brief.draft.md 发布为 published（可注入）。"
+            "会校验当前脚本 fingerprint；不匹配时拒绝发布。"
+        )
+        self.project_analysis_publish_btn.clicked.connect(
+            lambda: self._trigger_action("project_analysis_publish")
+        )
+        self.context_actions.add_action(self.project_analysis_publish_btn, min_width=100)
+
+        self.project_analysis_unpublish_btn = QPushButton("撤销发布")
+        self.project_analysis_unpublish_btn.setObjectName(
+            "context_project_analysis_unpublish_btn"
+        )
+        self.project_analysis_unpublish_btn.setToolTip("撤销 published brief，停止注入。")
+        self.project_analysis_unpublish_btn.clicked.connect(
+            lambda: self._trigger_action("project_analysis_unpublish")
+        )
+        self.context_actions.add_action(self.project_analysis_unpublish_btn, min_width=100)
+
+        self.project_analysis_build_btn = QPushButton("构建结构")
+        self.project_analysis_build_btn.setObjectName(
+            "context_project_analysis_build_btn"
+        )
+        self.project_analysis_build_btn.setToolTip(
+            "project-analysis-build-structure：静态解析 label/jump，写草稿（无 LLM）。"
+        )
+        self.project_analysis_build_btn.clicked.connect(
+            lambda: self._trigger_action("project_analysis_build_structure")
+        )
+        self.context_actions.add_action(self.project_analysis_build_btn, min_width=100)
+
         self.open_settings_btn = QPushButton("打开设置 · 上下文")
         self.open_settings_btn.setObjectName("secondary_btn")
         self.open_settings_btn.setToolTip(
@@ -205,6 +254,12 @@ class ContextLibraryPage(QFrame):
         self.bootstrap_source_index_btn.setEnabled(
             not self._running and self._source_index_enabled
         )
+        can_pa = not self._running
+        self.project_analysis_generate_btn.setEnabled(can_pa)
+        self.project_analysis_review_btn.setEnabled(can_pa)
+        self.project_analysis_publish_btn.setEnabled(can_pa)
+        self.project_analysis_unpublish_btn.setEnabled(can_pa)
+        self.project_analysis_build_btn.setEnabled(can_pa)
         self.open_settings_btn.setEnabled(not self._running)
         self.stop_btn.setEnabled(self._running)
         self.context_actions.reflow()
@@ -213,6 +268,11 @@ class ContextLibraryPage(QFrame):
         if self._running or self._actions.prebuild is None:
             return
         self._actions.prebuild(kind)
+
+    def _trigger_action(self, name: str) -> None:
+        if self._running or self._actions.action is None:
+            return
+        self._actions.action(name)
 
     def _trigger_open_settings(self) -> None:
         if not self._running and self._actions.open_settings is not None:
