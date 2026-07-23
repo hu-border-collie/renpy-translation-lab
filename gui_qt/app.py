@@ -2580,6 +2580,7 @@ class MainWindow(QMainWindow):
         self.settings_action_context_label.setObjectName(
             "settings_action_context_label"
         )
+        self.settings_action_context_label.setProperty("tone", "muted")
         action_layout.addWidget(self.settings_action_context_label)
         action_layout.addStretch()
         self.reload_config_btn = QPushButton("重新加载")
@@ -8269,9 +8270,10 @@ class MainWindow(QMainWindow):
         has_unsaved_config = (
             on_workspace and self._config_tab_has_unsaved_changes()
         )
-        allow_config_save = not task_running and (
-            not on_workspace or has_unsaved_config
-        )
+        # Workspace is registry-immediate; hide config chrome unless other
+        # sections left unsaved changes (then offer save + reload-to-discard).
+        show_dirty_config_actions = not on_workspace or has_unsaved_config
+        allow_config_save = not task_running and show_dirty_config_actions
         context_label = getattr(self, "settings_action_context_label", None)
         if context_label is not None:
             context_label.setVisible(on_workspace)
@@ -8281,16 +8283,20 @@ class MainWindow(QMainWindow):
                     if has_unsaved_config
                     else SETTINGS_WORKSPACE_IMMEDIATE_SAVE
                 )
+                tone = "warning" if has_unsaved_config else "muted"
+                if context_label.property("tone") != tone:
+                    context_label.setProperty("tone", tone)
+                    self._repolish_widget(context_label)
         if hasattr(self, "save_config_btn"):
-            self.save_config_btn.setVisible(
-                not on_workspace or has_unsaved_config
-            )
+            self.save_config_btn.setVisible(show_dirty_config_actions)
             self.save_config_btn.setEnabled(allow_config_save)
         if hasattr(self, "restore_defaults_btn"):
+            # Restore-defaults stays off the project list (writes UI only for
+            # model/context knobs; not a discard of in-flight edits alone).
             self.restore_defaults_btn.setVisible(not on_workspace)
             self.restore_defaults_btn.setEnabled(allow_config_save)
         if hasattr(self, "reload_config_btn"):
-            self.reload_config_btn.setVisible(not on_workspace)
+            self.reload_config_btn.setVisible(show_dirty_config_actions)
             self.reload_config_btn.setEnabled(not task_running)
         save_shortcut = getattr(self, "_save_config_shortcut", None)
         if save_shortcut is not None:
@@ -8842,6 +8848,11 @@ class MainWindow(QMainWindow):
         self._ensure_settings_pages_for_config()
         self._load_config_to_ui()
         self._refresh_api_status()
+        # Drop workspace dirty chrome after discard-via-reload (same as save).
+        if "save_config_btn" in self.__dict__:
+            self._sync_settings_action_bar_enabled(
+                task_running=bool(getattr(self, "_task_running", False))
+            )
         self._show_settings_status("已重新加载已保存设置。")
 
     def _on_restore_recommended_config(self) -> None:

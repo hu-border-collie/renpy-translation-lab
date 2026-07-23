@@ -36,7 +36,7 @@ SETTINGS_WORKSPACE_IMMEDIATE_SAVE = (
     "项目列表操作即时保存，不受设置保存按钮影响。"
 )
 SETTINGS_WORKSPACE_UNSAVED_CHANGES = (
-    "其他设置有未保存的更改；切换项目前需保存或放弃。"
+    "其他设置有未保存的更改；可保存、重新加载放弃，或切换项目时再处理。"
 )
 
 BOOTSTRAP_FIELD_LABELS = {

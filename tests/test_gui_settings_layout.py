@@ -71,6 +71,10 @@ class GuiSettingsLayoutTests(unittest.TestCase):
             "项目列表操作即时保存，不受设置保存按钮影响。",
         )
         self.assertFalse(self.window.settings_action_context_label.isHidden())
+        self.assertEqual(
+            self.window.settings_action_context_label.property("tone"),
+            "muted",
+        )
         for button in (
             self.window.reload_config_btn,
             self.window.restore_defaults_btn,
@@ -86,10 +90,34 @@ class GuiSettingsLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             self.window.settings_action_context_label.text(),
-            "其他设置有未保存的更改；切换项目前需保存或放弃。",
+            "其他设置有未保存的更改；可保存、重新加载放弃，或切换项目时再处理。",
+        )
+        self.assertEqual(
+            self.window.settings_action_context_label.property("tone"),
+            "warning",
         )
         self.assertFalse(self.window.save_config_btn.isHidden())
+        self.assertFalse(self.window.reload_config_btn.isHidden())
+        self.assertTrue(self.window.restore_defaults_btn.isHidden())
         self.assertTrue(self.window._save_config_shortcut.isEnabled())
+
+        # Clear dirty (save/reload success) while staying on project list.
+        self.window._config_tab_has_unsaved_changes = lambda: False
+        self.window._sync_settings_action_bar_enabled(
+            task_running=False,
+            nav_row=workspace_row,
+        )
+        self.assertEqual(
+            self.window.settings_action_context_label.property("tone"),
+            "muted",
+        )
+        for button in (
+            self.window.reload_config_btn,
+            self.window.restore_defaults_btn,
+            self.window.save_config_btn,
+        ):
+            self.assertTrue(button.isHidden())
+        self.assertFalse(self.window._save_config_shortcut.isEnabled())
 
         self.window.settings_nav.setCurrentRow(project_row)
         _process(self._app, 5)

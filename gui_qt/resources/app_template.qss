@@ -445,6 +445,12 @@ QLabel#settings_action_context_label {
     font-size: 12px;
 }
 
+QLabel#settings_action_context_label[tone="warning"] {
+    color: ${badge_warning_fg};
+    font-size: 12px;
+    font-weight: 600;
+}
+
 QLabel#settings_inline_section_label {
     color: ${fg_secondary};
     font-size: 11px;
