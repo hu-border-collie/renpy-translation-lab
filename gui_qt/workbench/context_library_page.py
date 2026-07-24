@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..empty_state import EmptyStateWidget
+from ..user_copy import CONTEXT_LIBRARY_COPY, PROJECT_ANALYSIS_COPY
 from ..work_modes import WorkMode
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
@@ -34,6 +35,11 @@ class ContextLibraryPage(QFrame):
         self._rag_enabled = False
         self._source_index_enabled = False
         self._project_analysis_present = False
+        self._project_analysis_enabled = False
+        self._project_analysis_inject_enabled = False
+        self._project_analysis_status: dict[str, Any] = {}
+        self._project_analysis_primary_action = "project_analysis_build_structure"
+        self._has_project = False
         self._active_mode = WorkMode.BOOTSTRAP_RAG
 
         outer = QVBoxLayout(self)
@@ -47,8 +53,8 @@ class ContextLibraryPage(QFrame):
 
         self.empty_state = EmptyStateWidget(
             "",
-            "尚未启用上下文库",
-            "请先在设置 · 上下文启用记忆库或原文索引并保存，然后回到这里预建。",
+            CONTEXT_LIBRARY_COPY["empty_title"],
+            CONTEXT_LIBRARY_COPY["empty_body"],
             action_text="打开设置 · 上下文",
         )
         self.empty_state.setObjectName("context_library_empty_state")
@@ -84,16 +90,16 @@ class ContextLibraryPage(QFrame):
         self.status_layout.root.addWidget(self.source_index_status_row)
 
         # Project analysis (#254): generate / publish / unpublish via coordinator CLI.
-        self.project_analysis_generate_btn = QPushButton("LLM 生成")
+        self.project_analysis_generate_btn = QPushButton(PROJECT_ANALYSIS_COPY["start"])
         self.project_analysis_generate_btn.setObjectName(
-            "context_project_analysis_generate_btn"
+            "context_project_analysis_primary_btn"
         )
         self.project_analysis_generate_btn.setToolTip(
             "调用 project-analysis-generate：在已有结构草稿上做 label→route→brief 的 LLM 精炼。"
             "需先 CLI 导入关键词并 build-structure；不会自动发布。"
         )
         self.project_analysis_generate_btn.clicked.connect(
-            lambda: self._trigger_action("project_analysis_generate")
+            self._trigger_project_analysis_primary
         )
         self.project_analysis_status_row = TaskStatusActionRow(
             "项目分析",
@@ -177,6 +183,8 @@ class ContextLibraryPage(QFrame):
         self.page_stack.addWidget(self.status_page)
         self.page_stack.setCurrentWidget(self.empty_state)
 
+
+        self._refresh_action_states()
     def set_action_callbacks(self, actions: WorkbenchPageActions) -> None:
         self._actions = actions
 
@@ -196,10 +204,26 @@ class ContextLibraryPage(QFrame):
         game_root: str,
         project_analysis_status: Mapping[str, Any] | None = None,
         project_analysis_label: str = "",
+        project_analysis_enabled: bool = False,
+        project_analysis_inject_enabled: bool = False,
     ) -> None:
+        """Render context availability and the Project Analysis lifecycle.
+
+        ``rag_enabled`` and ``source_index_enabled`` control their respective
+        context rows. ``project_analysis_enabled`` gates lifecycle actions,
+        while ``project_analysis_inject_enabled`` controls translation
+        eligibility. ``project_analysis_status`` supplies artifact lifecycle
+        state, and ``project_analysis_label`` optionally overrides its rendered
+        label. A non-empty ``game_root`` indicates that project-scoped actions
+        may run.
+        """
         self._rag_enabled = rag_enabled
         self._source_index_enabled = source_index_enabled
         root_hint = game_root or "未选择项目"
+        self._project_analysis_enabled = project_analysis_enabled
+        self._project_analysis_inject_enabled = project_analysis_inject_enabled
+        self._project_analysis_status = dict(project_analysis_status or {})
+        self._has_project = bool(game_root)
         self.rag_status_row.set_status(
             f"{'已启用' if rag_enabled else '未启用'} · 项目 {root_hint}"
             + ("" if rag_enabled else " · 请先在设置 · 上下文开启并保存")
@@ -216,8 +240,20 @@ class ContextLibraryPage(QFrame):
             analysis_text = format_status_label(project_analysis_status)
         else:
             analysis_text = "未检测"
-        self.project_analysis_status_row.set_status(f"{analysis_text} · 项目 {root_hint}")
         overall = ""
+        if not project_analysis_enabled:
+            analysis_text += " · 功能未启用"
+        elif project_analysis_inject_enabled and bool(
+            (project_analysis_status or {}).get("injectable")
+        ):
+            analysis_text += " · 当前会用于翻译"
+        elif project_analysis_inject_enabled:
+            analysis_text += " · 尚不可用于翻译"
+        else:
+            analysis_text += " · 用于翻译：关闭"
+        self.project_analysis_status_row.set_status(
+            f"{analysis_text} · 项目 {root_hint}"
+        )
         if project_analysis_status is not None:
             overall = str(project_analysis_status.get("overall_status") or "")
             self._project_analysis_present = bool(
@@ -229,15 +265,28 @@ class ContextLibraryPage(QFrame):
                 "未生成",
             }
         show_status = (
-            rag_enabled or source_index_enabled or self._project_analysis_present
+            rag_enabled
+            or source_index_enabled
+            or project_analysis_enabled
+            or self._project_analysis_present
         )
         self.page_stack.setCurrentWidget(
             self.status_page if show_status else self.empty_state
         )
         self._refresh_action_states()
 
-    def set_task_running(self, running: bool) -> None:
+    def set_task_running(self, running: bool, operation: str = "") -> None:
         self._running = running
+        if not running:
+            self.stop_btn.setText("停止")
+        elif operation == "project_analysis_build_structure":
+            self.stop_btn.setText("停止构建")
+        elif operation == "project_analysis_generate":
+            self.stop_btn.setText("停止生成")
+        elif operation in {"bootstrap_rag", "bootstrap_source_index"}:
+            self.stop_btn.setText("停止预建")
+        else:
+            self.stop_btn.setText("停止任务")
         self._refresh_action_states()
 
     def reset_project(self) -> None:
@@ -254,15 +303,84 @@ class ContextLibraryPage(QFrame):
         self.bootstrap_source_index_btn.setEnabled(
             not self._running and self._source_index_enabled
         )
-        can_pa = not self._running
-        self.project_analysis_generate_btn.setEnabled(can_pa)
-        self.project_analysis_review_btn.setEnabled(can_pa)
-        self.project_analysis_publish_btn.setEnabled(can_pa)
-        self.project_analysis_unpublish_btn.setEnabled(can_pa)
-        self.project_analysis_build_btn.setEnabled(can_pa)
+        status = self._project_analysis_status
+        overall = str(status.get("overall_status") or "missing")
+        has_draft = bool(status.get("brief_draft_present")) or overall in {
+            "draft",
+            "review_required",
+        }
+        has_published = bool(status.get("brief_published_present"))
+        if "structure_present" in status:
+            has_structure = bool(status.get("structure_present"))
+        else:
+            # Compatibility for older/mocked status payloads.
+            has_structure = bool(
+                has_draft
+                or has_published
+                or status.get("label_count")
+                or status.get("route_count")
+            )
+
+        can_manage = (
+            not self._running
+            and self._has_project
+            and self._project_analysis_enabled
+        )
+
+        if overall == "missing":
+            self._project_analysis_primary_action = (
+                "project_analysis_build_structure"
+            )
+            primary_text = PROJECT_ANALYSIS_COPY["start"]
+            primary_tip = "静态解析 label / jump 并建立项目结构；这是首次分析的必需步骤。"
+        elif overall in {"failed", "stale"} or not has_structure:
+            self._project_analysis_primary_action = (
+                "project_analysis_build_structure"
+            )
+            primary_text = PROJECT_ANALYSIS_COPY["rebuild"]
+            primary_tip = (
+                "上次构建失败，请重新构建并查看运行日志。"
+                if overall == "failed"
+                else "项目结构不可用或已过期，请先重新构建，再更新项目摘要。"
+            )
+        else:
+            self._project_analysis_primary_action = "project_analysis_generate"
+            primary_text = (
+                PROJECT_ANALYSIS_COPY["refresh"]
+                if overall == "published"
+                else PROJECT_ANALYSIS_COPY["generate"]
+            )
+            primary_tip = "基于现有结构生成或更新项目摘要；生成后仍需审查并启用。"
+
+        self.project_analysis_generate_btn.setText(primary_text)
+        self.project_analysis_generate_btn.setToolTip(
+            primary_tip
+            if can_manage
+            else "请先选择项目，并在设置 · 上下文启用项目剧情分析后保存。"
+        )
+        self.project_analysis_generate_btn.setEnabled(can_manage)
+        self.project_analysis_review_btn.setText(PROJECT_ANALYSIS_COPY["review"])
+        self.project_analysis_review_btn.setEnabled(
+            can_manage and (has_structure or has_draft or has_published)
+        )
+        self.project_analysis_publish_btn.setText(PROJECT_ANALYSIS_COPY["publish"])
+        self.project_analysis_publish_btn.setEnabled(
+            can_manage and has_draft and overall in {"draft", "review_required"}
+        )
+        self.project_analysis_unpublish_btn.setText(
+            PROJECT_ANALYSIS_COPY["unpublish"]
+        )
+        self.project_analysis_unpublish_btn.setEnabled(
+            can_manage and has_published
+        )
+        self.project_analysis_build_btn.setText("重新构建结构")
+        self.project_analysis_build_btn.setEnabled(can_manage and has_structure)
         self.open_settings_btn.setEnabled(not self._running)
         self.stop_btn.setEnabled(self._running)
         self.context_actions.reflow()
+
+    def _trigger_project_analysis_primary(self) -> None:
+        self._trigger_action(self._project_analysis_primary_action)
 
     def _trigger_prebuild(self, kind: str) -> None:
         if self._running or self._actions.prebuild is None:

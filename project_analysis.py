@@ -979,7 +979,14 @@ class ProjectAnalysisStore:
         expected_source_fingerprint: str = "",
         project_identity: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Readonly status snapshot for CLI / GUI / doctor (no side effects)."""
+        """Return a readonly CLI / GUI / doctor status snapshot.
+
+        ``structure_present`` is true when the label and route artifact files
+        exist together with either a draft or published brief. Zero-record
+        label and route artifacts are valid structures. This presence signal
+        is independent of ``overall_status`` freshness and ``injectable``
+        translation eligibility.
+        """
         error = ""
         manifest: dict[str, Any] | None = None
         overall = STATUS_MISSING
@@ -1099,12 +1106,18 @@ class ProjectAnalysisStore:
         # overall==published only when every non-missing layer (incl. brief) is published
         # and fingerprint-fresh; brief publish without on-disk file is forced to stale.
         injectable = overall == STATUS_PUBLISHED
+        structure_present = (
+            os.path.isfile(self.artifact_path(LABEL_SUMMARIES_FILENAME))
+            and os.path.isfile(self.artifact_path(ROUTE_SUMMARIES_FILENAME))
+            and (draft_present or published_present)
+        )
         return {
             "store_dir": self.store_dir,
             "store_exists": self.exists(),
             "schema_version": SCHEMA_VERSION,
             "overall_status": overall,
             "injectable": injectable,
+            "structure_present": structure_present,
             "project_identity": (manifest or {}).get("project_identity")
             or dict(project_identity or {}),
             "artifacts": artifacts,
