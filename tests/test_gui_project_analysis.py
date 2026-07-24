@@ -5,13 +5,22 @@ from pathlib import Path
 from unittest.mock import patch
 
 import project_analysis as pa
-from gui_qt.project_analysis_review_dialog import build_project_analysis_review_data
 from gui_qt.project_analysis_workflow import (
     ProjectAnalysisWorkflow,
     discover_keyword_summary_path,
 )
 from gui_qt.work_modes import WorkMode, workbench_nav_for_work_mode, WorkbenchNavItem
 from gui_qt.workflow_factory import create_workflow
+
+try:
+    from gui_qt.project_analysis_review_dialog import (
+        build_project_analysis_review_data,
+    )
+except ImportError as exc:
+    build_project_analysis_review_data = None  # type: ignore[assignment]
+    REVIEW_IMPORT_ERROR = exc
+else:
+    REVIEW_IMPORT_ERROR = None
 
 
 class ProjectAnalysisWorkflowTests(unittest.TestCase):
@@ -81,6 +90,10 @@ class ProjectAnalysisWorkflowTests(unittest.TestCase):
             self.assertEqual(Path(result), copied)
 
 
+@unittest.skipIf(
+    build_project_analysis_review_data is None,
+    f"GUI dependencies unavailable: {REVIEW_IMPORT_ERROR}",
+)
 class ProjectAnalysisReviewTests(unittest.TestCase):
     def test_review_timestamp_preserves_freshness_lineage(self):
         with tempfile.TemporaryDirectory() as tmp:
