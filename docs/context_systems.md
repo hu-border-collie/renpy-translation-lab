@@ -151,7 +151,12 @@ python gemini_translate_batch.py project-analysis-unpublish
 - 动态 `jump expression` / `call expression` 标记为 unresolved，不虚构单一路线。
 - 普通 `call label` **不是**路线分支：调用返回后继续调用者后续语句，枚举路线时不把 call 目标当成与 jump 互斥的分叉；call 仅作附属依赖/元数据。
 - **结构草稿**可无 LLM；**精炼摘要**使用 `project-analysis-generate`（可 mock 的 Sync 路径），结果仍为 draft，须人工 publish。
-- GUI「上下文库」把首次静态构建作为「开始分析」主操作，并按 missing / draft / published / stale / failed 生命周期切换为生成、更新或重新构建；是否已有结构由核心状态中的显式产物信号判断，不依赖 label/route 数量。审查、启用到翻译、停止用于翻译仍调用同一套 CLI 和核心门禁。
+- GUI「上下文库」把项目分析注册为正式 `WorkMode`，通过统一工作流运行 ingest → build → generate；停止后可根据已落盘产物从当前生命周期阶段重新开始。
+- 首次或重新分析时会自动定位当前项目最近的 `keyword_chunk_summaries.jsonl`，但导入前必须明确确认；也可以明确跳过，未找到时可手动选择文件。
+- 生成完成后进入审查工作区：显示完整 draft / published 差异与全文，可搜索 chunk / label / route，并展示 evidence item、来源文件和行跨度；来源文件可打开，`path:line` 可复制定位。
+- 审查工作区的「实际注入预览」直接调用翻译使用的 published + freshness + `max_brief_chars` 装载器，因此会如实显示开关关闭、未发布、陈旧、截断后的正文和诊断。
+- 「确认已审查」写入当前 brief lineage 的 `reviewed_at`；从审查界面启用会先记录审查，再经 fingerprint 门禁发布。停止使用会二次确认并移除 published 副本，保留 draft 与 `.rpy`。
+- GUI 仍按 missing / draft / published / stale / failed 生命周期切换主行动；是否已有结构由核心状态中的显式产物信号判断，不依赖 label/route 数量。
 - **不**写 `glossary.json`、正式 `story_graph.json` 或 `.rpy`。
 
 ### 只读 CLI / GUI
@@ -165,6 +170,7 @@ python gemini_translate_batch.py project-analysis-status --store-dir <path> --so
 - `doctor` 报告中的 `Project analysis:` 行汇总 overall / 计数 / brief 状态。
 - GUI「上下文库」展示「项目分析」状态行；状态判断在 `project_analysis` 模块内完成，GUI 不重复实现失效逻辑。
 - 诊断「命令参考」可复制 ingest / build-structure / publish / unpublish 命令。
+- GUI 的证据与注入预览同样复用 `project_analysis` store / loader，不建立 GUI 专属产物格式。
 
 设计对照与取舍见 [plans/wenyi_reference_and_batch_roadmap.md](plans/wenyi_reference_and_batch_roadmap.md)。
 

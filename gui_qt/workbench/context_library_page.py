@@ -25,6 +25,7 @@ class ContextLibraryPage(QFrame):
     supported_modes = (
         WorkMode.BOOTSTRAP_RAG,
         WorkMode.BOOTSTRAP_SOURCE_INDEX,
+        WorkMode.PROJECT_ANALYSIS,
     )
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -95,8 +96,8 @@ class ContextLibraryPage(QFrame):
             "context_project_analysis_primary_btn"
         )
         self.project_analysis_generate_btn.setToolTip(
-            "调用 project-analysis-generate：在已有结构草稿上做 label→route→brief 的 LLM 精炼。"
-            "需先 CLI 导入关键词并 build-structure；不会自动发布。"
+            "自动衔接可用的剧情概要、结构构建与摘要生成；"
+            "生成后进入审查，不会自动用于翻译。"
         )
         self.project_analysis_generate_btn.clicked.connect(
             self._trigger_project_analysis_primary
@@ -121,7 +122,7 @@ class ContextLibraryPage(QFrame):
             "context_project_analysis_review_btn"
         )
         self.project_analysis_review_btn.setToolTip(
-            "对照 draft / published brief，并查看 label evidence 与 route 路径。"
+            "查看完整差异、摘要全文、证据来源与实际注入预览。"
         )
         self.project_analysis_review_btn.clicked.connect(
             lambda: self._trigger_action("project_analysis_review")
@@ -145,7 +146,7 @@ class ContextLibraryPage(QFrame):
         self.project_analysis_unpublish_btn.setObjectName(
             "context_project_analysis_unpublish_btn"
         )
-        self.project_analysis_unpublish_btn.setToolTip("撤销 published brief，停止注入。")
+        self.project_analysis_unpublish_btn.setToolTip("经确认后撤销 published 副本并停止注入。")
         self.project_analysis_unpublish_btn.clicked.connect(
             lambda: self._trigger_action("project_analysis_unpublish")
         )
@@ -156,7 +157,7 @@ class ContextLibraryPage(QFrame):
             "context_project_analysis_build_btn"
         )
         self.project_analysis_build_btn.setToolTip(
-            "project-analysis-build-structure：静态解析 label/jump，写草稿（无 LLM）。"
+            "重新解析 label / jump / route，并生成新的待审查摘要。"
         )
         self.project_analysis_build_btn.clicked.connect(
             lambda: self._trigger_action("project_analysis_build_structure")
@@ -283,6 +284,8 @@ class ContextLibraryPage(QFrame):
             self.stop_btn.setText("停止构建")
         elif operation == "project_analysis_generate":
             self.stop_btn.setText("停止生成")
+        elif operation == "project_analysis_workflow":
+            self.stop_btn.setText("停止分析")
         elif operation in {"bootstrap_rag", "bootstrap_source_index"}:
             self.stop_btn.setText("停止预建")
         else:
@@ -332,7 +335,7 @@ class ContextLibraryPage(QFrame):
                 "project_analysis_build_structure"
             )
             primary_text = PROJECT_ANALYSIS_COPY["start"]
-            primary_tip = "静态解析 label / jump 并建立项目结构；这是首次分析的必需步骤。"
+            primary_tip = "导入可用剧情概要（可跳过），再构建结构并生成待审查摘要。"
         elif overall in {"failed", "stale"} or not has_structure:
             self._project_analysis_primary_action = (
                 "project_analysis_build_structure"
@@ -341,7 +344,7 @@ class ContextLibraryPage(QFrame):
             primary_tip = (
                 "上次构建失败，请重新构建并查看运行日志。"
                 if overall == "failed"
-                else "项目结构不可用或已过期，请先重新构建，再更新项目摘要。"
+                else "项目结构不可用或已过期，将重新构建并更新项目摘要。"
             )
         else:
             self._project_analysis_primary_action = "project_analysis_generate"
@@ -373,7 +376,7 @@ class ContextLibraryPage(QFrame):
         self.project_analysis_unpublish_btn.setEnabled(
             can_manage and has_published
         )
-        self.project_analysis_build_btn.setText("重新构建结构")
+        self.project_analysis_build_btn.setText("重新分析")
         self.project_analysis_build_btn.setEnabled(can_manage and has_structure)
         self.open_settings_btn.setEnabled(not self._running)
         self.stop_btn.setEnabled(self._running)
