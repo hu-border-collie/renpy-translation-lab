@@ -979,7 +979,14 @@ class ProjectAnalysisStore:
         expected_source_fingerprint: str = "",
         project_identity: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Readonly status snapshot for CLI / GUI / doctor (no side effects)."""
+        """Return a readonly CLI / GUI / doctor status snapshot.
+
+        ``structure_present`` is true when the label and route artifact files
+        exist together with either a draft or published brief. Zero-record
+        label and route artifacts are valid structures. This presence signal
+        is independent of ``overall_status`` freshness and ``injectable``
+        translation eligibility.
+        """
         error = ""
         manifest: dict[str, Any] | None = None
         overall = STATUS_MISSING

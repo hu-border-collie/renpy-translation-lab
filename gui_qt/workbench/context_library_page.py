@@ -207,6 +207,16 @@ class ContextLibraryPage(QFrame):
         project_analysis_enabled: bool = False,
         project_analysis_inject_enabled: bool = False,
     ) -> None:
+        """Render context availability and the Project Analysis lifecycle.
+
+        ``rag_enabled`` and ``source_index_enabled`` control their respective
+        context rows. ``project_analysis_enabled`` gates lifecycle actions,
+        while ``project_analysis_inject_enabled`` controls translation
+        eligibility. ``project_analysis_status`` supplies artifact lifecycle
+        state, and ``project_analysis_label`` optionally overrides its rendered
+        label. A non-empty ``game_root`` indicates that project-scoped actions
+        may run.
+        """
         self._rag_enabled = rag_enabled
         self._source_index_enabled = source_index_enabled
         root_hint = game_root or "未选择项目"
