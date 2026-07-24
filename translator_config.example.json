@@ -114,6 +114,15 @@
       "max_input_chars_per_request": 12000,
       "max_output_tokens": 2048
     },
+    "final_review": {
+      "enabled": true,
+      "require_zero_pending": true,
+      "chunk_size": 16,
+      "prompt_schema_version": "final-review-v1",
+      "model": "",
+      "display_name_prefix": "renpy-final-review",
+      "store_under_batch_jobs": true
+    },
     "submit_max_cost": 0,
     "non_chinese_validation": {
       "extra_static_name_credit_rel_paths": [],

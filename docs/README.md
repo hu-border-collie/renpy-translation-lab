@@ -39,7 +39,7 @@
 
 ### 现行：Batch、上下文与检查
 
-- [Batch 工作流与安全检查](batch_workflows.md)：`build → apply`、订正、关键词、identity v2、A/B、golden corpus。
+- [Batch 工作流与安全检查](batch_workflows.md)：`build → apply`、订正、最终审校 campaign、关键词、identity v2、A/B、golden corpus。
 - [上下文系统](context_systems.md)：RAG、原文索引、Story Memory、store 路径与 benchmark。
 - [环境检查智能建议机制](doctor_recommendations.md)：建议等级、必需/可选并列、workflow_state。
 - [环境检查状态矩阵](doctor_states_matrix.md)：layout / pending / 上下文派生字段与决策漏斗（开发对照）。
