@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from .project_analysis_workflow import ProjectAnalysisWorkflow
 from .keyword_workflow import KeywordBatchWorkflow
 from .revision_workflow import RevisionBatchWorkflow
 from .sync_keyword_workflow import SyncKeywordWorkflow
@@ -40,6 +41,8 @@ def create_workflow(
         return RevisionBatchWorkflow.start_new(submit_max_cost=submit_max_cost)
     if spec.mode == WorkMode.SYNC_REVISION:
         return SyncRevisionWorkflow.start_new()
+    if spec.mode == WorkMode.PROJECT_ANALYSIS:
+        return ProjectAnalysisWorkflow.start_new()
     return None
 
 

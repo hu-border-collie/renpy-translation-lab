@@ -18,6 +18,7 @@ class WorkMode(str, Enum):
     SYNC_KEYWORD_EXTRACTION = "sync_keyword_extraction"
     BOOTSTRAP_RAG = "bootstrap_rag"
     BOOTSTRAP_SOURCE_INDEX = "bootstrap_source_index"
+    PROJECT_ANALYSIS = "project_analysis"
     REVISION = "revision"
     SYNC_REVISION = "sync_revision"
 
@@ -66,6 +67,7 @@ TASK_CATEGORY_SPECS: dict[TaskCategory, TaskCategorySpec] = {
         work_modes=(
             WorkMode.BOOTSTRAP_RAG,
             WorkMode.BOOTSTRAP_SOURCE_INDEX,
+            WorkMode.PROJECT_ANALYSIS,
             WorkMode.KEYWORD_EXTRACTION,
             WorkMode.SYNC_KEYWORD_EXTRACTION,
         ),
@@ -209,6 +211,27 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         implemented=True,
         is_bootstrap=True,
         bootstrap_kind="source_index",
+        manifest_mode=None,
+        not_implemented_message="",
+    ),
+    WorkMode.PROJECT_ANALYSIS: WorkModeSpec(
+        mode=WorkMode.PROJECT_ANALYSIS,
+        category=TaskCategory.ANALYSIS_PREP,
+        label="项目分析",
+        start_button_label="开始分析",
+        resume_button_label="继续分析",
+        task_group_label="分析任务",
+        progress_tab_label="分析进度",
+        writeback_tab_label="审查与启用",
+        idle_workflow_heading="项目分析由上下文库管理",
+        idle_workflow_message=(
+            "自动串联剧情概要导入、结构构建与摘要生成；生成后须人工审查并显式启用。"
+        ),
+        supports_resume=False,
+        supports_translation_writeback=False,
+        implemented=True,
+        is_bootstrap=False,
+        bootstrap_kind="",
         manifest_mode=None,
         not_implemented_message="",
     ),
@@ -392,7 +415,11 @@ WORKBENCH_NAV_SPECS: dict[WorkbenchNavItem, WorkbenchNavSpec] = {
     WorkbenchNavItem.CONTEXT: WorkbenchNavSpec(
         item=WorkbenchNavItem.CONTEXT,
         label="上下文库",
-        work_modes=(WorkMode.BOOTSTRAP_RAG, WorkMode.BOOTSTRAP_SOURCE_INDEX),
+        work_modes=(
+            WorkMode.BOOTSTRAP_RAG,
+            WorkMode.BOOTSTRAP_SOURCE_INDEX,
+            WorkMode.PROJECT_ANALYSIS,
+        ),
         # Dual status cards replace the submode combo (P1c / #162).
         show_submode=False,
     ),
@@ -406,6 +433,7 @@ _WORK_MODE_SUBMODE_LABELS: dict[WorkMode, str] = {
     WorkMode.SYNC_REVISION: "同步",
     WorkMode.BOOTSTRAP_RAG: "记忆库",
     WorkMode.BOOTSTRAP_SOURCE_INDEX: "原文索引",
+    WorkMode.PROJECT_ANALYSIS: "项目分析",
 }
 
 

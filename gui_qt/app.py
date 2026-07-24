@@ -294,9 +294,15 @@ from .translation_workflow import WorkflowUpdate
 from .user_copy import (
     SETTINGS_WORKSPACE_IMMEDIATE_SAVE,
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
+    PROJECT_ANALYSIS_COPY,
     format_job_fact,
     format_job_state_fact,
     format_manifest_path_fact,
+)
+from .project_analysis_review_dialog import ProjectAnalysisReviewDialog
+from .project_analysis_workflow import (
+    ProjectAnalysisWorkflow,
+    discover_keyword_summary_path,
 )
 from .work_modes import (
     WORKBENCH_NAV_ORDER,
@@ -2272,7 +2278,7 @@ class MainWindow(QMainWindow):
         self._start_bootstrap_task(kind)
 
     def _on_context_library_action(self, name: str) -> None:
-        """Run project-analysis CLI actions from the context library page."""
+        """Run the Project Analysis lifecycle from the context-library page."""
         if bool(getattr(self, "_task_running", False)):
             return
         runner = getattr(self, "runner", None)
@@ -2285,48 +2291,113 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
             return
 
-        if name == "project_analysis_review":
+        if name in {"project_analysis_review", "project_analysis_publish"}:
             self._show_project_analysis_review_dialog()
             return
-
-        command_map = {
-            "project_analysis_build_structure": (
-                "project_analysis_build_structure",
-                ["project-analysis-build-structure"],
-                "gemini_translate_batch.py project-analysis-build-structure",
-            ),
-            "project_analysis_generate": (
-                "project_analysis_generate",
-                ["project-analysis-generate"],
-                "gemini_translate_batch.py project-analysis-generate",
-            ),
-            "project_analysis_publish": (
-                "project_analysis_publish",
-                ["project-analysis-publish"],
-                "gemini_translate_batch.py project-analysis-publish",
-            ),
-            "project_analysis_unpublish": (
+        if name == "project_analysis_unpublish":
+            if QMessageBox.question(
+                self,
+                PROJECT_ANALYSIS_COPY["unpublish_confirm_title"],
+                PROJECT_ANALYSIS_COPY["unpublish_confirm_body"],
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            self._run_project_analysis_command(
                 "project_analysis_unpublish",
                 ["project-analysis-unpublish"],
                 "gemini_translate_batch.py project-analysis-unpublish",
-            ),
-        }
-        entry = command_map.get(name)
-        if entry is None:
+            )
             return
-        command, args, log_heading = entry
-        if name == "project_analysis_publish":
-            ok, live_fp, detail = self._project_analysis_publish_gate()
-            if not ok:
-                QMessageBox.warning(
-                    self,
-                    "无法发布项目 brief",
-                    detail or "请先重新构建结构或生成摘要后再发布。",
-                )
+        if name == "project_analysis_build_structure":
+            self._start_project_analysis_workflow(build=True, generate=True, offer_keywords=True)
+            return
+        if name == "project_analysis_generate":
+            self._start_project_analysis_workflow(build=False, generate=True, offer_keywords=False)
+
+    def _project_analysis_max_brief_chars(self) -> int:
+        values = read_advanced_settings(self.state.load_translator_config())
+        try:
+            return max(1, int(values.get("batch_project_analysis_max_brief_chars") or 4000))
+        except (TypeError, ValueError):
+            return 4000
+
+    def _choose_project_analysis_keyword_summary(self) -> tuple[bool, str]:
+        """Ask before importing the newest summary; skipping is always explicit."""
+        game_root = self.state.get_game_root()
+        manifest_path, manifest = self._latest_keyword_extraction_manifest()
+        latest = discover_keyword_summary_path(
+            game_root=str(game_root or ""),
+            manifest_path=manifest_path,
+            manifest=manifest,
+        )
+        if latest:
+            answer = QMessageBox.question(
+                self,
+                "发现剧情概要",
+                f"发现当前项目最近的 keyword_chunk_summaries：\n{latest}\n\n"
+                "是否先导入它，再构建结构？选择“否”会明确跳过导入。",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No
+                | QMessageBox.StandardButton.Cancel,
+            )
+            if answer == QMessageBox.StandardButton.Cancel:
+                return False, ""
+            return True, latest if answer == QMessageBox.StandardButton.Yes else ""
+
+        answer = QMessageBox.question(
+            self,
+            "未发现剧情概要",
+            "没有找到当前项目的 keyword_chunk_summaries.jsonl。\n"
+            "选择“是”可手动导入一个文件；选择“否”会跳过导入并继续静态构建。",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+        )
+        if answer == QMessageBox.StandardButton.Cancel:
+            return False, ""
+        if answer == QMessageBox.StandardButton.No:
+            return True, ""
+        selected, _filter = QFileDialog.getOpenFileName(
+            self,
+            "选择 keyword_chunk_summaries.jsonl",
+            str(Path(game_root).parent if game_root else Path.cwd()),
+            "JSONL (*.jsonl);;所有文件 (*)",
+        )
+        return (bool(selected), selected)
+
+    def _start_project_analysis_workflow(
+        self,
+        *,
+        build: bool,
+        generate: bool,
+        offer_keywords: bool,
+    ) -> None:
+        keyword_path = ""
+        if offer_keywords:
+            proceed, keyword_path = self._choose_project_analysis_keyword_summary()
+            if not proceed:
                 return
-            if live_fp:
-                args = list(args) + ["--source-fingerprint", live_fp]
-                log_heading = f"{log_heading} --source-fingerprint <live>"
+        if self._current_work_mode() != WorkMode.PROJECT_ANALYSIS:
+            self._set_work_mode(WorkMode.PROJECT_ANALYSIS, refresh_manifest_writeback=False)
+        workflow = ProjectAnalysisWorkflow.start_new(
+            keyword_summary_path=keyword_path,
+            build=build,
+            generate=generate,
+        )
+        self._clear_log_view()
+        self._show_workbench_log_drawer()
+        self._active_command = "project_analysis_workflow"
+        self._begin_translation_workflow(
+            workflow,
+            log_heading="正在运行：项目分析",
+            status_tab=1,
+        )
+
+    def _run_project_analysis_command(
+        self,
+        command: str,
+        args: list[str],
+        log_heading: str,
+    ) -> None:
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._active_command = command
@@ -2393,76 +2464,45 @@ class MainWindow(QMainWindow):
             return False, "", f"发布前检查失败：{exc}"
 
     def _show_project_analysis_review_dialog(self) -> None:
-        """Readonly draft vs published brief + evidence summary for human review."""
-        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QTextEdit, QVBoxLayout
-
+        """Open the full review workspace and execute its confirmed lifecycle action."""
+        game_root = self.state.get_game_root() if hasattr(self, "state") else None
+        if not game_root:
+            QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
+            return
+        flags = self._saved_project_analysis_flags()
         try:
-            from project_analysis import (
-                KIND_LABEL,
-                KIND_ROUTE,
-                format_brief_diff,
-                resolve_project_analysis_store,
+            dialog = ProjectAnalysisReviewDialog(
+                base_dir=str(game_root),
+                live_fingerprint=self._project_analysis_live_fingerprint(),
+                inject_enabled=flags["inject_enabled"],
+                max_brief_chars=self._project_analysis_max_brief_chars(),
+                parent=self,
             )
-
-            game_root = self.state.get_game_root() if hasattr(self, "state") else None
-            base = str(game_root) if game_root else None
-            store = resolve_project_analysis_store(base_dir=base)
-            diff = format_brief_diff(store.store_dir)
-            labels = store.load_summaries(KIND_LABEL)
-            routes = store.load_routes()
-            live_fp = self._project_analysis_live_fingerprint()
-            lines = [
-                f"Store: {store.store_dir}",
-                f"Live structure fingerprint: {live_fp or '(unavailable)'}",
-                f"Draft present: {diff.get('draft_present')} ({diff.get('draft_chars')} chars)",
-                f"Published present: {diff.get('published_present')} ({diff.get('published_chars')} chars)",
-                f"Draft == published: {diff.get('identical')}",
-                "",
-                "=== Draft brief (preview) ===",
-                str(diff.get("draft_preview") or "(empty)"),
-                "",
-                "=== Published brief (preview) ===",
-                str(diff.get("published_preview") or "(empty)"),
-                "",
-                f"=== Labels ({len(labels)}) evidence ===",
-            ]
-            for rec in labels[:40]:
-                eids = ", ".join(rec.get("evidence_item_ids") or []) or "(none)"
-                lines.append(
-                    f"- {rec.get('id')}: status={rec.get('status')} evidence=[{eids}]"
-                )
-            if len(labels) > 40:
-                lines.append(f"... and {len(labels) - 40} more labels")
-            lines.append("")
-            lines.append(f"=== Routes ({len(routes)}) ===")
-            for rec in routes[:40]:
-                meta = rec.get("metadata") if isinstance(rec.get("metadata"), dict) else {}
-                path = " -> ".join(meta.get("label_ids") or [])
-                lines.append(
-                    f"- {rec.get('id')}: unresolved={meta.get('unresolved')} path={path}"
-                )
-            if len(routes) > 40:
-                lines.append(f"... and {len(routes) - 40} more routes")
-            text = "\n".join(lines)
         except Exception as exc:
-            text = f"无法加载项目分析审查内容：{exc}"
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("项目分析 · draft / published 对照")
-        dialog.resize(720, 560)
-        layout = QVBoxLayout(dialog)
-        view = QTextEdit()
-        view.setReadOnly(True)
-        view.setPlainText(text)
-        layout.addWidget(view)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(dialog.reject)
-        buttons.accepted.connect(dialog.accept)
-        close_btn = buttons.button(QDialogButtonBox.StandardButton.Close)
-        if close_btn is not None:
-            close_btn.clicked.connect(dialog.accept)
-        layout.addWidget(buttons)
+            QMessageBox.warning(self, "无法打开项目分析审查", str(exc))
+            return
         dialog.exec()
+        if dialog.requested_action == "publish":
+            ok, live_fp, detail = self._project_analysis_publish_gate()
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "无法启用项目摘要",
+                    detail or "请先重新构建结构或生成摘要后再启用。",
+                )
+                return
+            args = ["project-analysis-publish", "--source-fingerprint", live_fp]
+            self._run_project_analysis_command(
+                "project_analysis_publish",
+                args,
+                "gemini_translate_batch.py project-analysis-publish --source-fingerprint <live>",
+            )
+        elif dialog.requested_action == "unpublish":
+            self._run_project_analysis_command(
+                "project_analysis_unpublish",
+                ["project-analysis-unpublish"],
+                "gemini_translate_batch.py project-analysis-unpublish",
+            )
 
     def _refresh_context_library_panel(self, *, running: bool | None = None) -> None:
         page = getattr(self, "context_library_page", None)
@@ -7638,6 +7678,12 @@ class MainWindow(QMainWindow):
             steps = [
                 ("run", "同步运行"),
             ]
+        elif mode == WorkMode.PROJECT_ANALYSIS:
+            steps = [
+                ("project-analysis-ingest-keywords", "导入概要"),
+                ("project-analysis-build-structure", "构建结构"),
+                ("project-analysis-generate", "生成摘要"),
+            ]
         else:
             steps = []
         self.timeline.set_steps(steps)
@@ -9337,6 +9383,15 @@ class MainWindow(QMainWindow):
         if spec.is_bootstrap:
             self._start_bootstrap_task(spec.bootstrap_kind)
             return
+        if spec.mode == WorkMode.PROJECT_ANALYSIS:
+            page = getattr(self, "context_library_page", None)
+            action = getattr(
+                page,
+                "_project_analysis_primary_action",
+                "project_analysis_build_structure",
+            )
+            self._on_context_library_action(str(action))
+            return
         if self._should_generate_template_only():
             self._on_generate_template()
             return
@@ -9423,7 +9478,11 @@ class MainWindow(QMainWindow):
         status_tab: int = 1,
     ) -> None:
         self._workflow = workflow
-        self._active_command = "translation_workflow"
+        self._active_command = (
+            "project_analysis_workflow"
+            if self._current_work_mode() == WorkMode.PROJECT_ANALYSIS
+            else "translation_workflow"
+        )
         self._workflow_step_output_lines = []
         self._focus_workbench_status_tab(status_tab)
         self._append_log(f"=== {log_heading} ===\n")
@@ -10389,7 +10448,7 @@ class MainWindow(QMainWindow):
     def _on_cli_line_ready(self, text: str):
         if self._active_command == "doctor":
             self._doctor_output_lines.append(text)
-        elif self._active_command == "translation_workflow":
+        elif self._active_command in {"translation_workflow", "project_analysis_workflow"}:
             self._workflow_step_output_lines.append(text)
             self._workflow_progress = update_workflow_progress_from_line(
                 text,
@@ -10455,7 +10514,7 @@ class MainWindow(QMainWindow):
         self._workflow_progress_dirty = False
         if self._active_command == "bootstrap_source_index":
             self._apply_bootstrap_progress_ui()
-        elif self._active_command in {"bootstrap_rag", "bootstrap_work", "translation_workflow"}:
+        elif self._active_command in {"bootstrap_rag", "bootstrap_work", "translation_workflow", "project_analysis_workflow"}:
             if self._active_command == "bootstrap_rag":
                 self._apply_bootstrap_progress_ui()
             else:
@@ -10761,7 +10820,7 @@ class MainWindow(QMainWindow):
         self._append_log(message)
         if self._active_command == "doctor":
             self._doctor_output_lines.append(message)
-        elif self._active_command == "translation_workflow":
+        elif self._active_command in {"translation_workflow", "project_analysis_workflow"}:
             self._workflow_step_output_lines.append(message)
         elif self._active_command == "apply":
             self._apply_output_lines.append(message)
@@ -10789,7 +10848,7 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self, exit_code: int):
         self._append_log(f"\n[进程已结束，退出码：{exit_code}]")
-        if self._active_command == "translation_workflow":
+        if self._active_command in {"translation_workflow", "project_analysis_workflow"}:
             self._on_workflow_step_finished(exit_code)
             return
 
@@ -11222,6 +11281,7 @@ class MainWindow(QMainWindow):
         update = self._workflow.complete_current_step(exit_code, step_output)
 
         is_sync_translation_workflow = isinstance(self._workflow, SyncTranslationWorkflow)
+        is_project_analysis_workflow = isinstance(self._workflow, ProjectAnalysisWorkflow)
         if is_sync_translation_workflow and step_key == "preview" and exit_code == 0:
             preview_count_match = re.search(r"^Preview files:\s*(\d+)\s*$", step_output, re.MULTILINE)
             preview_count = int(preview_count_match.group(1)) if preview_count_match else 0
@@ -11273,7 +11333,11 @@ class MainWindow(QMainWindow):
                 exit_code,
                 manifest_path,
             )
-        archive_completed = not update.should_continue and update.status == "done"
+        archive_completed = (
+            not is_project_analysis_workflow
+            and not update.should_continue
+            and update.status == "done"
+        )
         if not archive_completed:
             self._set_workflow_update(update)
         self._clear_workflow_progress_ui()
@@ -11291,6 +11355,10 @@ class MainWindow(QMainWindow):
         self._workflow = None
         self._set_task_running(False)
         finish_spec = work_mode_spec(self._current_work_mode())
+        if is_project_analysis_workflow:
+            self._refresh_context_library_panel(running=False)
+            if update.status == "done":
+                QTimer.singleShot(0, self._show_project_analysis_review_dialog)
         if (
             not finish_spec.supports_translation_writeback
             and finish_spec.mode not in self._revision_writeback_modes()
@@ -11302,7 +11370,12 @@ class MainWindow(QMainWindow):
                     idle_writeback_summary_for_work_mode(finish_spec.mode)
                 )
         if update.status == "failed":
-            self.statusBar().showMessage("翻译任务失败，请查看诊断日志。", 8000)
+            message = (
+                "项目分析失败，请查看诊断与运行日志。"
+                if is_project_analysis_workflow
+                else "翻译任务失败，请查看诊断日志。"
+            )
+            self.statusBar().showMessage(message, 8000)
         elif update.status == "waiting":
             self.statusBar().showMessage("批量任务仍在处理，可稍后继续最新任务。", 8000)
         elif archive_completed:
@@ -11310,7 +11383,12 @@ class MainWindow(QMainWindow):
             self._refresh_workflow_from_latest_manifest()
             self.statusBar().showMessage(update.heading, 6000)
         else:
-            self.statusBar().showMessage("翻译任务流程完成。", 6000)
+            message = (
+                update.heading
+                if is_project_analysis_workflow
+                else "翻译任务流程完成。"
+            )
+            self.statusBar().showMessage(message, 6000)
 
     # --- Config loading/saving helpers ---
 

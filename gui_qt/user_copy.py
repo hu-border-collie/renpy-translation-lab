@@ -48,6 +48,17 @@ PROJECT_ANALYSIS_COPY = {
     "review": "审查内容",
     "publish": "启用到翻译",
     "unpublish": "停止用于翻译",
+    "review_title": "项目分析 · 审查与启用",
+    "review_heading": "先核对摘要变化与证据，再决定是否用于翻译",
+    "review_confirm": "确认已审查",
+    "review_publish": "审查并启用到翻译",
+    "publish_confirm_title": "确认启用项目摘要",
+    "publish_confirm_body": (
+        "将把当前 draft 发布为翻译可用版本。只有设置中的“用于翻译”已开启，"
+        "且 fingerprint 仍匹配时才会实际注入；不会修改 .rpy 文件。"
+    ),
+    "unpublish_confirm_title": "确认停止使用项目摘要",
+    "unpublish_confirm_body": "将删除 published 副本并立即停止注入；draft 与游戏脚本都会保留。",
 }
 
 SETTINGS_WORKSPACE_IMMEDIATE_SAVE = (
