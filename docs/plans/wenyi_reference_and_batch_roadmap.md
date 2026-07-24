@@ -139,7 +139,7 @@
 | **P1** | Project Analysis 阶段 1 合同 | **#256** | 地基；不调模型 |
 | P1 | 实际模型用量账本 | #252 | 可与 #256 并行，勿混 PR |
 | P1 | 路线感知生成与发布 | #254 ← #256 | 仅 published 注入 |
-| P1 | 最终审校 campaign | #255 ← #256 | report-only → revision |
+| P1 | 最终审校 campaign | #255 ← #256 | PR A：合同/闸门/digest；执行与转 revision 后续 |
 | P1a | 术语：build 时按 chunk 裁剪 + 文档化「先 keyword 后翻译」 | 现有 keyword/glossary | 低风险、贴 Batch；可并行 |
 | P2 | 任务类型模型分档 / 路由 | 配置 + GUI；宜参考 #252 | 跨 CLI/GUI |
 | P2/P3 | 可选「风格向」订正策略 | 现有 revision | 显式，非默认 polish |

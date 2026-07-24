@@ -53,7 +53,7 @@ logs/story_memory/story_graph.json
 
 ## Project Analysis（项目分析）
 
-> 阶段 1（#256）的产物合同与只读检查已成为后续能力的基础；#254 已接入结构构建、可选 LLM 精炼、人工发布与翻译注入。只有 fingerprint 仍匹配、状态为 published 且设置中开启「用于翻译」的摘要才会进入 prompt。
+> 阶段 1（#256）的产物合同与只读检查已成为后续能力的基础；#254 已接入结构构建、可选 LLM 精炼、人工发布与翻译注入。只有 fingerprint 仍匹配、状态为 `published` 且设置中开启「用于翻译」的摘要才会进入翻译 prompt。最终审校 campaign（#255）在冻结 snapshot 时也可选纳入该 Project Analysis fingerprint；没有可用 PA 时仍可仅靠其它上下文层运行。详见 [Batch 工作流 · 最终审校](batch_workflows.md#最终审校-campaignreport-only)。
 
 ### 产物目录
 
