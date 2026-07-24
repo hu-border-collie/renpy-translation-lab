@@ -286,6 +286,22 @@ def build_cli_commands(
                 ["final-review-export", manifest_path],
             ),
         ),
+        DiagnosticsCommand(
+            label="最终审校·续跑 requests",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["final-review-resume", manifest_path],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="最终审校·摄入结果",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["final-review-ingest-results", manifest_path],
+            ),
+        ),
     ]
 
     mode = manifest.get("mode")
@@ -309,7 +325,35 @@ def build_cli_commands(
                         ["final-review-export", manifest_path],
                     ),
                 ),
+                DiagnosticsCommand(
+                    label="续跑最终审校 requests",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        ["final-review-resume", manifest_path],
+                    ),
+                ),
+                DiagnosticsCommand(
+                    label="摄入最终审校结果",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        ["final-review-ingest-results", manifest_path],
+                    ),
+                ),
             ]
+        )
+        commands.extend(
+            build_cloud_job_commands(
+                python_exe=python_exe,
+                batch_script_path=batch_script_path,
+                manifest_path=manifest_path,
+                manifest=manifest,
+                submit_max_cost=submit_max_cost,
+                submit_label="提交最终审校任务",
+                status_label="查询最终审校状态",
+                download_label="下载最终审校结果",
+            )
         )
     if mode_text == "revision":
         commands.extend(

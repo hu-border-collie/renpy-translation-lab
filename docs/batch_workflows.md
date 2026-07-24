@@ -67,10 +67,17 @@ python gemini_translate_batch.py sync-revisions --apply
 最终审校是**独立 campaign**，用于在翻译范围完成后批量发现问题。默认 **report-only**：不调用 autofix，也不直接写 `.rpy`。用户选中的 findings 将来会转成现有订正候选，再走 `preview-revisions → apply-revisions`。
 
 ```bash
-# 构建 campaign：完成度闸门 + 冻结上下文/译文 snapshot digest + review units
+# 构建 campaign：完成度闸门 + 冻结上下文 digest + review units + requests.jsonl
 python gemini_translate_batch.py final-review-build
+python gemini_translate_batch.py submit logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py download logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py final-review-ingest-results logs/batch_jobs/<package>/manifest.json
 python gemini_translate_batch.py final-review-status logs/batch_jobs/<package>/manifest.json
 python gemini_translate_batch.py final-review-export logs/batch_jobs/<package>/manifest.json
+
+# 续跑：跳过 digest 未变的 done unit；--force 全部重审
+python gemini_translate_batch.py final-review-resume logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py final-review-resume logs/batch_jobs/<package>/manifest.json --force
 ```
 
 ### 启动闸门
@@ -89,7 +96,9 @@ python gemini_translate_batch.py final-review-export logs/batch_jobs/<package>/m
 - 可选 Story Memory / Source Index（仅当启用）
 - 可选已启用且可注入的 published Project Analysis fingerprint（无 PA 时允许仅靠其它上下文运行）
 
-每个 review unit 保存 `input_digest`（本 unit 的 `items_digest` + **共享** `context_digest` + model + prompt schema）。`context_digest` 只绑定 glossary / macro / Story Memory / Source Index / 可注入 PA brief 等共享上下文；**不**把全项目 `translations_digest` 塞进 unit，因此改 A 文件不会让 B 文件的已完成 unit 变 stale。全量译文审计摘要仍记在 campaign 级 `snapshot_digest`。后续续跑将跳过 digest 未变的已完成 unit；相关 unit 的上游变化会使其 `stale`（执行与 resume 在后续 PR）。
+每个 review unit 保存 `input_digest`（本 unit 的 `items_digest` + **共享** `context_digest` + model + prompt schema）。`context_digest` 只绑定 glossary / macro / Story Memory / Source Index / 可注入 PA brief 等共享上下文；**不**把全项目 `translations_digest` 塞进 unit，因此改 A 文件不会让 B 文件的已完成 unit 变 stale。全量译文审计摘要仍记在 campaign 级 `snapshot_digest`。
+
+`final-review-resume` 跳过 digest 未变的 `done` unit，只为 pending / stale / failed 重建 `requests.jsonl`；`--force` 才重审全部。`final-review-ingest-results` 解析 Batch 结果：成功（含空 findings）→ `done`；解析失败 / 缺响应 → `failed`（**不会**记成「零问题 done」）。
 
 ### 产物布局
 
@@ -106,7 +115,7 @@ logs/batch_jobs/<ts>_<project>_final_review/
 
 - 不自动修改 `.rpy`，无模型直接声称 `fixed` / `applied`。
 - 不把回译抽检当作写回安全闸门。
-- 模型执行、续跑 submit/download、转 revision candidates 与 GUI 完整页在后续 PR 交付；本阶段交付合同、闸门与可重现 digest。
+- 选中 findings → revision candidates 与 GUI 工作台页在后续 PR（#255 PR C）。
 
 相关配置见 `translator_config.example.json` 的 `batch.final_review`。
 
