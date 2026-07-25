@@ -342,9 +342,9 @@ class ContextLibraryPage(QFrame):
             )
             primary_text = PROJECT_ANALYSIS_COPY["rebuild"]
             primary_tip = (
-                "上次分析失败，请重新分析并查看运行日志。"
+                "上次分析失败，请重新分析并查看运行日志。"  # noqa: RUF001
                 if overall == "failed"
-                else "项目结构不可用或已过期，将重新分析并更新项目摘要。"
+                else "项目结构不可用或已过期，将重新分析并更新项目摘要。"  # noqa: RUF001
             )
         else:
             self._project_analysis_primary_action = "project_analysis_generate"

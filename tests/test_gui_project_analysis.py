@@ -94,6 +94,8 @@ class ProjectAnalysisWorkflowTests(unittest.TestCase):
         summary = idle_writeback_summary_for_work_mode(WorkMode.PROJECT_ANALYSIS)
 
         self.assertEqual(spec.writeback_tab_label, "结果说明")
+        self.assertFalse(spec.supports_resume)
+        self.assertEqual(spec.resume_button_label, "")
         self.assertIn("上下文库", summary.message)
         self.assertIn("审查内容", summary.message)
         self.assertIn("启用到翻译", summary.message)
