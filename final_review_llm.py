@@ -31,19 +31,20 @@ from final_review import (
     assert_failure_not_done,
     collect_campaign_status,
     derive_campaign_status,
-    export_findings,
     format_campaign_report_markdown,
     load_campaign_package,
     mark_unit_done,
     mark_unit_failed,
     normalize_finding,
-    reevaluate_campaign_units,
     should_skip_unit,
     summarize_unit_statuses,
     utc_now_iso,
 )
 
 RESULT_JSONL_FILENAME = "results.jsonl"
+PROMPT_CONTEXT_MACRO_LIMIT = 8000
+PROMPT_CONTEXT_BRIEF_LIMIT = 8000
+PROMPT_CONTEXT_GLOSSARY_HITS_LIMIT = 40
 
 # Finding types accepted from the model (unknown → needs_confirmation via normalize_finding).
 FINDING_TYPE_ENUM = [
@@ -75,16 +76,106 @@ def build_system_instruction() -> str:
     )
 
 
-def build_user_prompt(unit: Mapping[str, Any]) -> str:
+def _truncate_text(text: str, limit: int) -> str:
+    body = str(text or "")
+    if limit <= 0 or len(body) <= limit:
+        return body
+    return body[: max(0, limit - 1)] + "…"
+
+
+def glossary_hits_for_unit(
+    unit: Mapping[str, Any],
+    glossary_terms: Sequence[Mapping[str, Any]] | None,
+    *,
+    limit: int = PROMPT_CONTEXT_GLOSSARY_HITS_LIMIT,
+) -> list[dict[str, str]]:
+    """Pick glossary terms that appear in the unit's source text."""
+    if not glossary_terms:
+        return []
+    sources: list[str] = []
+    for item in unit.get("items") or []:
+        if isinstance(item, Mapping):
+            sources.append(str(item.get("source") or item.get("text") or ""))
+    combined = "\n".join(sources)
+    if not combined:
+        return []
+    hits: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for term in glossary_terms:
+        if not isinstance(term, Mapping):
+            continue
+        source = str(term.get("source") or "").strip()
+        if not source or source in seen or source not in combined:
+            continue
+        target = str(term.get("target") or source).strip() or source
+        hits.append({"source": source, "target": target})
+        seen.add(source)
+        if len(hits) >= max(1, int(limit)):
+            break
+    return hits
+
+
+def format_shared_review_context(
+    unit: Mapping[str, Any],
+    shared_context: Mapping[str, Any] | None = None,
+) -> str:
+    """Compact digest-aligned context block for the review prompt."""
+    ctx = dict(shared_context or {})
+    sections: list[str] = []
+
+    glossary_hits = glossary_hits_for_unit(unit, ctx.get("glossary_terms") or [])
+    if glossary_hits:
+        term_lines = []
+        for hit in glossary_hits:
+            source = hit["source"]
+            target = hit["target"]
+            if source == target:
+                term_lines.append(f"- Keep unchanged: {source}")
+            else:
+                term_lines.append(f"- {source} -> {target}")
+        sections.append("术语（本 unit 命中）：\n" + "\n".join(term_lines))
+
+    macro = _truncate_text(
+        str(ctx.get("macro_setting") or ctx.get("macro_setting_text") or ""),
+        PROMPT_CONTEXT_MACRO_LIMIT,
+    ).strip()
+    if macro:
+        sections.append("宏设定 / 风格约束：\n" + macro)
+
+    brief = _truncate_text(
+        str(
+            ctx.get("project_analysis_brief")
+            or ctx.get("project_analysis_brief_text")
+            or ""
+        ),
+        PROMPT_CONTEXT_BRIEF_LIMIT,
+    ).strip()
+    if brief:
+        sections.append("项目分析简报：\n" + brief)
+
+    return "\n\n".join(sections)
+
+
+def build_user_prompt(
+    unit: Mapping[str, Any],
+    shared_context: Mapping[str, Any] | None = None,
+) -> str:
     items = list(unit.get("items") or [])
     lines = [
         f"Review unit: {unit.get('unit_id') or ''}",
         f"File: {unit.get('file_rel_path') or ''}",
         f"Chunk index: {unit.get('chunk_index') or 0}",
         f"Item count: {len(items)}",
-        "",
-        "对照条目（source → current_translation）：",
     ]
+    context_block = format_shared_review_context(unit, shared_context)
+    if context_block:
+        lines.extend(["", "简要上下文：", context_block])
+    lines.extend(
+        [
+            "",
+            "对照条目（source → current_translation）：",
+        ]
+    )
     for index, item in enumerate(items, start=1):
         if not isinstance(item, Mapping):
             continue
@@ -158,6 +249,7 @@ def build_batch_request(
     thinking_level: str = "",
     model: str = "",
     safety_settings: Sequence[Mapping[str, Any]] | None = None,
+    shared_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Gemini Batch JSONL row: ``{key, request}`` keyed by unit_id."""
     unit_id = str(unit.get("unit_id") or "").strip()
@@ -168,7 +260,11 @@ def build_batch_request(
         "contents": [
             {
                 "role": "user",
-                "parts": [{"text": build_user_prompt(unit)}],
+                "parts": [
+                    {
+                        "text": build_user_prompt(unit, shared_context=shared_context),
+                    }
+                ],
             }
         ],
         "generation_config": build_generation_config(
@@ -192,6 +288,7 @@ def write_requests_jsonl(
     thinking_level: str = "",
     model: str = "",
     safety_settings: Sequence[Mapping[str, Any]] | None = None,
+    shared_context: Mapping[str, Any] | None = None,
 ) -> int:
     rows = [
         build_batch_request(
@@ -201,6 +298,7 @@ def write_requests_jsonl(
             thinking_level=thinking_level,
             model=model,
             safety_settings=safety_settings,
+            shared_context=shared_context,
         )
         for unit in units
     ]
@@ -253,12 +351,14 @@ def plan_units_for_run(
             row["status"] = STATUS_PENDING
             row["error"] = ""
             row["live_input_digest"] = live_digest
+            row["live_context_digest"] = live
             to_run.append(row)
             refreshed.append(row)
             continue
 
         if should_skip_unit(row, live_input_digest=live_digest, force=False):
             row["live_input_digest"] = live_digest
+            row["live_context_digest"] = live
             to_skip.append(row)
             refreshed.append(row)
             continue
@@ -280,6 +380,7 @@ def plan_units_for_run(
             if status != STATUS_FAILED:
                 row["error"] = ""
         row["live_input_digest"] = live_digest
+        row["live_context_digest"] = live
         to_run.append(row)
         refreshed.append(row)
 
@@ -455,6 +556,14 @@ def apply_unit_result(
         return failed, []
 
     done = mark_unit_done(unit, finding_count=len(findings))
+    # After a stale re-run (or any run with a live digest), pin the digests that
+    # were actually reviewed so the next plan can skip instead of re-queueing forever.
+    live_digest = str(unit.get("live_input_digest") or "").strip()
+    if live_digest:
+        done["input_digest"] = live_digest
+    live_context = str(unit.get("live_context_digest") or "").strip()
+    if live_context:
+        done["context_digest"] = live_context
     return done, findings
 
 
@@ -602,12 +711,22 @@ def persist_campaign_state(
     manifest_out["_package_dir"] = root
     manifest_path = os.path.join(root, MANIFEST_FILENAME)
     manifest_out["_manifest_path"] = manifest_path
+    unit_list = list(units)
+    prior_summary = dict(manifest_out.get("summary") or {})
+    chunk_count = int(
+        prior_summary.get("chunk_count")
+        or prior_summary.get("request_count")
+        or manifest_out.get("request_count")
+        or len(unit_list)
+        or 0
+    )
     manifest_out["summary"] = {
-        **dict(manifest_out.get("summary") or {}),
-        "unit_count": len(list(units)),
-        "item_count": sum(int(u.get("item_count") or 0) for u in units),
+        **prior_summary,
+        "unit_count": len(unit_list),
+        "item_count": sum(int(u.get("item_count") or 0) for u in unit_list),
         "finding_count": len(finding_rows),
         "status_counts": status_counts,
+        "chunk_count": chunk_count,
     }
     manifest_out["last_ingest_at"] = utc_now_iso()
 
@@ -657,11 +776,83 @@ def merge_findings_preserve_selection(
     return kept
 
 
+def _safe_filename_stamp(value: str) -> str:
+    return re.sub(r"[^0-9A-Za-z_.-]+", "_", str(value or ""))[:48] or "ts"
+
+
+def invalidate_package_download_artifacts(
+    package_dir: str,
+    manifest: dict[str, Any],
+) -> list[str]:
+    """Clear submit/download fields and quarantine prior results.jsonl.
+
+    After resume rewrites requests, a subsequent download must not short-circuit
+    on the previous job's local results + SHA.
+    """
+    moved: list[str] = []
+    stamp = _safe_filename_stamp(utc_now_iso())
+    results_path = os.path.join(package_dir, RESULT_JSONL_FILENAME)
+    for path in (results_path, f"{results_path}.sha256"):
+        if not os.path.isfile(path):
+            continue
+        backup = f"{path}.pre_resume_{stamp}"
+        try:
+            os.replace(path, backup)
+            moved.append(backup)
+        except OSError:
+            try:
+                os.remove(path)
+                moved.append(path)
+            except OSError:
+                pass
+
+    manifest["job_name"] = ""
+    manifest["job_state"] = "LOCAL_ONLY"
+    manifest["result_jsonl_path"] = ""
+    manifest["result_jsonl_sha256"] = ""
+    manifest["result_file_name"] = ""
+    manifest["uploaded_file_name"] = ""
+    if isinstance(manifest.get("uploaded_file_names"), list):
+        manifest["uploaded_file_names"] = []
+    manifest.pop("cost_estimate", None)
+    manifest.pop("downloaded_at", None)
+    return moved
+
+
+def _iso_or_empty(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _result_is_stale_after_resume(
+    manifest: Mapping[str, Any],
+    *,
+    explicit_result: bool,
+    allow_stale_results: bool,
+) -> bool:
+    if allow_stale_results or explicit_result:
+        return False
+    last_resume = _iso_or_empty(manifest.get("last_resume_at"))
+    if not last_resume:
+        return False
+    last_resume_meta = manifest.get("last_resume")
+    run_count = 0
+    if isinstance(last_resume_meta, Mapping):
+        run_count = int(last_resume_meta.get("run_count") or 0)
+    if run_count <= 0:
+        return False
+    downloaded_at = _iso_or_empty(manifest.get("downloaded_at"))
+    # ISO timestamps from utc_now_iso / datetime.isoformat compare lexicographically.
+    if downloaded_at and downloaded_at >= last_resume:
+        return False
+    return True
+
+
 def prepare_resume_requests(
     package_dir: str,
     *,
     force: bool = False,
     live_context_digest: str = "",
+    shared_context: Mapping[str, Any] | None = None,
     temperature: float = 0.2,
     max_output_tokens: int = 8192,
     thinking_level: str = "",
@@ -677,6 +868,9 @@ def prepare_resume_requests(
 
     context = live_context_digest or str(
         snapshot.get("context_digest") or manifest.get("context_digest") or ""
+    )
+    prompt_context = dict(shared_context) if shared_context is not None else dict(
+        snapshot.get("prompt_context") or {}
     )
     plan = plan_units_for_run(units, force=force, live_context_digest=context)
     to_run = plan["to_run"]
@@ -701,18 +895,30 @@ def prepare_resume_requests(
         thinking_level=thinking_level,
         model=model or str(manifest.get("model") or ""),
         safety_settings=safety_settings,
+        shared_context=prompt_context,
     )
 
     manifest["input_jsonl_path"] = requests_path
-    manifest["job_state"] = "LOCAL_ONLY" if request_count else "NO_PENDING_UNITS"
-    manifest["job_name"] = ""
-    manifest["result_jsonl_path"] = ""
     manifest["last_resume_at"] = utc_now_iso()
     manifest["last_resume"] = {
         "force": bool(force),
         "run_count": request_count,
         "skip_count": plan["skip_count"],
+        "live_context_digest": context,
     }
+    if request_count:
+        invalidate_package_download_artifacts(package_dir, manifest)
+        manifest["job_state"] = "LOCAL_ONLY"
+        # Keep summary.chunk_count aligned with the new request set for cost estimate.
+        summary = dict(manifest.get("summary") or {})
+        summary["chunk_count"] = request_count
+        summary["request_count"] = request_count
+        manifest["summary"] = summary
+        manifest["request_count"] = request_count
+    else:
+        manifest["job_state"] = "NO_PENDING_UNITS"
+        manifest["job_name"] = ""
+        manifest["result_jsonl_path"] = ""
 
     paths = persist_campaign_state(
         package_dir,
@@ -744,6 +950,7 @@ def ingest_results_into_package(
     provider: str = "",
     model: str = "",
     extract_text: Callable[[Any], str] | None = None,
+    allow_stale_results: bool = False,
 ) -> dict[str, Any]:
     """Load result JSONL, update units/findings, persist package."""
     package = load_campaign_package(package_dir)
@@ -752,18 +959,36 @@ def ingest_results_into_package(
     existing_findings = list(package["findings"])
     snapshot = dict(package.get("snapshot") or {})
 
+    explicit_result = bool(str(result_path or "").strip())
+    stale_after_resume = _result_is_stale_after_resume(
+        manifest,
+        explicit_result=explicit_result,
+        allow_stale_results=allow_stale_results,
+    )
+
     resolved_result = result_path.strip() if result_path else ""
     if not resolved_result:
         candidate = manifest.get("result_jsonl_path") or ""
         if candidate and not os.path.isabs(str(candidate)):
             candidate = os.path.join(package_dir, str(candidate))
-        if candidate and os.path.isfile(str(candidate)):
+        # After resume with pending work, only accept a download that set
+        # downloaded_at (>= last_resume_at). manifest.result_jsonl_path alone
+        # from a previous job is insufficient.
+        if candidate and os.path.isfile(str(candidate)) and not stale_after_resume:
             resolved_result = str(candidate)
-        else:
+        if not resolved_result:
             fallback = os.path.join(package_dir, RESULT_JSONL_FILENAME)
-            if os.path.isfile(fallback):
+            if os.path.isfile(fallback) and (
+                allow_stale_results or not stale_after_resume
+            ):
                 resolved_result = fallback
     if not resolved_result:
+        if stale_after_resume and not explicit_result:
+            raise FinalReviewError(
+                "stale results after resume: run download (or pass --result / "
+                "--allow-stale-results) before final-review-ingest-results; "
+                "pre-resume results.jsonl is not accepted automatically"
+            )
         raise FinalReviewError(
             "result JSONL not found; pass --result or run download first"
         )
@@ -825,6 +1050,7 @@ def run_units_with_generate(
     *,
     force: bool = False,
     live_context_digest: str = "",
+    shared_context: Mapping[str, Any] | None = None,
     provider: str = "mock",
     model: str = "",
 ) -> dict[str, Any]:
@@ -835,7 +1061,7 @@ def run_units_with_generate(
     result_rows: list[dict[str, Any]] = []
     for unit in plan["to_run"]:
         system = build_system_instruction()
-        user = build_user_prompt(unit)
+        user = build_user_prompt(unit, shared_context=shared_context)
         try:
             text = generate(system, user)
             result_rows.append(

@@ -82,6 +82,25 @@ class PromptAndRequestTests(unittest.TestCase):
         schema = row["request"]["generation_config"]["response_json_schema"]
         self.assertIn("findings", schema["properties"])
 
+    def test_user_prompt_injects_shared_context(self):
+        unit = _unit()
+        prompt = frl.build_user_prompt(
+            unit,
+            shared_context={
+                "macro_setting": "第二人称称呼保持统一",
+                "project_analysis_brief": "世界观：学院奇幻",
+                "glossary_terms": [
+                    {"source": "Hello", "target": "你好"},
+                    {"source": "Unused", "target": "未用"},
+                ],
+            },
+        )
+        self.assertIn("简要上下文", prompt)
+        self.assertIn("第二人称称呼保持统一", prompt)
+        self.assertIn("世界观：学院奇幻", prompt)
+        self.assertIn("Hello -> 你好", prompt)
+        self.assertNotIn("Unused", prompt)
+
 
 class ParseFindingsTests(unittest.TestCase):
     def test_parse_findings_and_strip_applied_claim(self):
@@ -169,6 +188,26 @@ class ResumePlanTests(unittest.TestCase):
         self.assertEqual(plan["run_count"], 1)
         # Recomputed live digest differs → queued
         self.assertEqual(plan["to_run"][0]["status"], fr.STATUS_PENDING)
+
+    def test_context_change_then_done_stays_skippable(self):
+        unit = fr.mark_unit_done(_unit(context_digest="ctx-1"), finding_count=0)
+        plan = frl.plan_units_for_run(
+            [unit], force=False, live_context_digest="ctx-CHANGED"
+        )
+        self.assertEqual(plan["run_count"], 1)
+        queued = plan["to_run"][0]
+        updated, findings = frl.apply_unit_result(
+            queued, response_text='{"findings":[]}'
+        )
+        self.assertEqual(updated["status"], fr.STATUS_DONE)
+        self.assertEqual(findings, [])
+        self.assertEqual(updated["input_digest"], queued["live_input_digest"])
+        self.assertEqual(updated["context_digest"], "ctx-CHANGED")
+        plan2 = frl.plan_units_for_run(
+            [updated], force=False, live_context_digest="ctx-CHANGED"
+        )
+        self.assertEqual(plan2["run_count"], 0)
+        self.assertEqual(plan2["skip_count"], 1)
 
 
 class IngestRowsTests(unittest.TestCase):
@@ -282,6 +321,95 @@ class PackageResumeIngestTests(unittest.TestCase):
             )
             self.assertEqual(result["run_count"], 1)
             self.assertEqual(result["skip_count"], 0)
+
+    def test_resume_invalidates_prior_download_artifacts(self):
+        pending = _unit("pend-u")
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir, snap = self._write_package(tmp, [pending])
+            results_path = Path(package_dir) / "results.jsonl"
+            results_path.write_text(
+                json.dumps({"key": "old", "response_text": '{"findings":[]}'}) + "\n",
+                encoding="utf-8",
+            )
+            (Path(package_dir) / "results.jsonl.sha256").write_text(
+                "deadbeef\n", encoding="utf-8"
+            )
+            # Pretend a previous job finished and was downloaded.
+            manifest_path = Path(package_dir) / fr.MANIFEST_FILENAME
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["job_name"] = "batches/old-job"
+            manifest["result_jsonl_path"] = str(results_path)
+            manifest["result_jsonl_sha256"] = "deadbeef"
+            manifest["result_file_name"] = "files/old-result"
+            manifest["uploaded_file_name"] = "files/old-upload"
+            manifest["downloaded_at"] = "2020-01-01T00:00:00"
+            manifest["cost_estimate"] = {"estimated_cost_max": 1.23}
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
+            result = frl.prepare_resume_requests(
+                package_dir,
+                force=False,
+                live_context_digest=snap["context_digest"],
+            )
+            self.assertEqual(result["run_count"], 1)
+            loaded = fr.load_campaign_package(package_dir)
+            man = loaded["manifest"]
+            self.assertEqual(man.get("job_name"), "")
+            self.assertEqual(man.get("result_jsonl_path"), "")
+            self.assertEqual(man.get("result_jsonl_sha256"), "")
+            self.assertEqual(man.get("result_file_name"), "")
+            self.assertEqual(man.get("uploaded_file_name"), "")
+            self.assertNotIn("cost_estimate", man)
+            self.assertNotIn("downloaded_at", man)
+            self.assertFalse(results_path.is_file())
+            backups = list(Path(package_dir).glob("results.jsonl.pre_resume_*"))
+            self.assertEqual(len(backups), 1)
+
+            with self.assertRaises(fr.FinalReviewError) as ctx:
+                frl.ingest_results_into_package(package_dir)
+            self.assertIn("stale results after resume", str(ctx.exception))
+
+            # Without download timestamp / explicit path, auto ingest is blocked.
+            restored = Path(package_dir) / "results.jsonl"
+            restored.write_text(
+                json.dumps({"key": "pend-u", "response_text": '{"findings":[]}'})
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(fr.FinalReviewError) as ctx2:
+                frl.ingest_results_into_package(package_dir)
+            self.assertIn("stale results after resume", str(ctx2.exception))
+
+            # Explicit --result still works as an escape hatch.
+            out = frl.ingest_results_into_package(
+                package_dir,
+                result_path=str(restored),
+            )
+            self.assertEqual(out["summary"]["done_units"], 1)
+
+        # allow_stale_results escape hatch on a separate package
+        with tempfile.TemporaryDirectory() as tmp2:
+            pending2 = _unit("pend-2")
+            package_dir2, snap2 = self._write_package(tmp2, [pending2])
+            frl.prepare_resume_requests(
+                package_dir2,
+                force=False,
+                live_context_digest=snap2["context_digest"],
+            )
+            restored2 = Path(package_dir2) / "results.jsonl"
+            restored2.write_text(
+                json.dumps({"key": "pend-2", "response_text": '{"findings":[]}'})
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(fr.FinalReviewError):
+                frl.ingest_results_into_package(package_dir2)
+            out2 = frl.ingest_results_into_package(
+                package_dir2, allow_stale_results=True
+            )
+            self.assertEqual(out2["summary"]["done_units"], 1)
 
     def test_ingest_package_persists_findings(self):
         unit = _unit("u1")

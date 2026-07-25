@@ -96,17 +96,19 @@ python gemini_translate_batch.py final-review-resume logs/batch_jobs/<package>/m
 - 可选 Story Memory / Source Index（仅当启用）
 - 可选已启用且可注入的 published Project Analysis fingerprint（无 PA 时允许仅靠其它上下文运行）
 
-每个 review unit 保存 `input_digest`（本 unit 的 `items_digest` + **共享** `context_digest` + model + prompt schema）。`context_digest` 只绑定 glossary / macro / Story Memory / Source Index / 可注入 PA brief 等共享上下文；**不**把全项目 `translations_digest` 塞进 unit，因此改 A 文件不会让 B 文件的已完成 unit 变 stale。全量译文审计摘要仍记在 campaign 级 `snapshot_digest`。
+每个 review unit 保存 `input_digest`（本 unit 的 `items_digest` + **共享** `context_digest` + model + prompt schema）。`context_digest` 只绑定 glossary / macro / Story Memory / Source Index / 可注入 PA brief 等共享上下文；**不**把全项目 `translations_digest` 塞进 unit，因此改 A 文件不会让 B 文件的已完成 unit 变 stale。全量译文审计摘要仍记在 campaign 级 `snapshot_digest`。构建时会把可注入的简要上下文冻结到 `snapshot.prompt_context`（宏设定 / PA brief / glossary 词条），并写入每条 request 的 user prompt。
 
-`final-review-resume` 跳过 digest 未变的 `done` unit，只为 pending / stale / failed 重建 `requests.jsonl`；`--force` 才重审全部。`final-review-ingest-results` 解析 Batch 结果：成功（含空 findings）→ `done`；解析失败 / 缺响应 → `failed`（**不会**记成「零问题 done」）。
+`final-review-resume` 会**重新采集 live 共享上下文**（而非只读冻结 snapshot）来判断 skip / stale，只为 pending / stale / failed 重建 `requests.jsonl`；`--force` 才重审全部。有待跑 unit 时会清空 `job_name` / 下载字段，并把旧 `results.jsonl` 改名为 `results.jsonl.pre_resume_*`，避免 `download` 短路复用上一轮结果。`final-review-ingest-results` 解析 Batch 结果：成功（含空 findings）→ `done`，并在成功时写回本次 live `input_digest`；解析失败 / 缺响应 → `failed`（**不会**记成「零问题 done」）。resume 之后若尚未重新 download，默认**拒绝**用 resume 前的 `results.jsonl`（可用 `--result` 或 `--allow-stale-results` 显式覆盖）。
 
 ### 产物布局
 
 ```text
 logs/batch_jobs/<ts>_<project>_final_review/
   manifest.json          # mode=final_review, report_only=true
-  snapshot.json          # context_digest + snapshot_digest + 各层摘要
+  snapshot.json          # context_digest + snapshot_digest + prompt_context + 各层摘要
   review_units.jsonl     # unit 状态 / input_digest / items
+  requests.jsonl         # Batch 请求（build / resume 写入）
+  results.jsonl          # download 后的模型结果（resume 会作废上一份）
   findings.jsonl         # 审校发现（执行后填充；build 时为空）
   report.md              # 人类可读报告
 ```
