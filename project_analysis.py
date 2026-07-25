@@ -1386,6 +1386,55 @@ def publish_project_brief(
     }
 
 
+def mark_project_brief_reviewed(
+    store_dir: str | os.PathLike[str] | None = None,
+    *,
+    base_dir: str | None = None,
+    reviewed_at: str = "",
+) -> dict[str, Any]:
+    """Record human review of the current draft without publishing it.
+
+    Review metadata is deliberately stored in lineage so it does not alter the
+    source-freshness digest. A later regeneration replaces the brief lineage
+    and therefore clears the review record for the new draft.
+    """
+    store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
+    draft = store.load_brief_text(published=False).strip()
+    if not draft:
+        raise ProjectAnalysisError(
+            "cannot review: project_brief.draft.md is missing or empty"
+        )
+    manifest = store.load_manifest() or empty_manifest(store_dir=store.store_dir)
+    brief_entry = dict((manifest.get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {})
+    current_status = normalize_status(
+        brief_entry.get("status") or STATUS_REVIEW_REQUIRED,
+        allow_missing=True,
+    )
+    reviewed_status = (
+        STATUS_REVIEW_REQUIRED if current_status == STATUS_MISSING else current_status
+    )
+    lineage = dict(normalize_lineage(brief_entry.get("lineage")))
+    timestamp = str(reviewed_at or "").strip() or utc_now_iso()
+    lineage["reviewed_at"] = timestamp
+    brief_entry.update(
+        {
+            "id": brief_entry.get("id") or "project_brief",
+            "status": reviewed_status,
+            "draft_present": True,
+            "lineage": lineage,
+        }
+    )
+    manifest.setdefault("artifacts", {})[KIND_PROJECT_BRIEF] = brief_entry
+    store.save_manifest(manifest)
+    return {
+        "status": brief_entry["status"],
+        "store_dir": store.store_dir,
+        "reviewed_at": timestamp,
+        "changed": True,
+        "message": "brief review recorded",
+    }
+
+
 def unpublish_project_brief(
     store_dir: str | os.PathLike[str] | None = None,
     *,

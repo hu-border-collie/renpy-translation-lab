@@ -378,6 +378,11 @@ def idle_writeback_summary_for_work_mode(mode) -> WritebackSummary:
                 "同步订正默认只出预览报告；请先在左侧「订正」生成预览，"
                 "再在结果区点击「写回订正」。"
             )
+        elif spec.mode == WorkMode.PROJECT_ANALYSIS:
+            message = (
+                "项目分析不会写回游戏脚本。请到左侧「上下文库」使用"
+                "「审查内容」核对摘要，确认后再选择「启用到翻译」。"
+            )
         elif spec.is_bootstrap:
             message = "预建库只更新本地上下文存储，不会启用普通「写回翻译」按钮。"
         else:
