@@ -168,6 +168,14 @@ def estimate_manifest_tokens(manifest, pricing_config=None):
     chunk_count = int(summary.get('chunk_count') or 0)
     if chunk_count <= 0 and isinstance(manifest.get('chunks'), list):
         chunk_count = len(manifest['chunks'])
+    # final-review and other request-only packages expose unit_count / request_count
+    # instead of translation chunks; fall back so --max-cost still bounds output.
+    if chunk_count <= 0:
+        chunk_count = int(summary.get('unit_count') or 0)
+    if chunk_count <= 0:
+        chunk_count = int(summary.get('request_count') or manifest.get('request_count') or 0)
+    if chunk_count <= 0:
+        chunk_count = int(request_count or 0)
 
     estimated_output_tokens = max(0, chunk_count * max_output_tokens)
 

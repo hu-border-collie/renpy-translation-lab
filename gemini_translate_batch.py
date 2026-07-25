@@ -3362,6 +3362,41 @@ def _pending_file_rows_for_final_review(file_jobs):
     return rows
 
 
+def _load_final_review_glossary_terms(glossary_path, limit=200):
+    """Lightweight glossary term list for final-review prompt injection."""
+    path = str(glossary_path or '').strip()
+    if not path or not os.path.isfile(path):
+        return []
+    try:
+        with open(path, 'r', encoding='utf-8-sig') as handle:
+            data = json.load(handle) or {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    pairs = []
+    seen = set()
+    normalize_map = data.get('normalize_map') or {}
+    if isinstance(normalize_map, dict):
+        for source, target in normalize_map.items():
+            key = str(source or '').strip()
+            if not key or key in seen:
+                continue
+            pairs.append({'source': key, 'target': str(target or key).strip() or key})
+            seen.add(key)
+            if len(pairs) >= limit:
+                return pairs
+    for term in data.get('preserve_terms') or []:
+        key = str(term or '').strip()
+        if not key or key in seen:
+            continue
+        pairs.append({'source': key, 'target': key})
+        seen.add(key)
+        if len(pairs) >= limit:
+            break
+    return pairs
+
+
 def _collect_final_review_context_snapshot(translation_items):
     """Build the frozen context snapshot for a final-review campaign."""
     import final_review as fr
@@ -3439,11 +3474,13 @@ def _collect_final_review_context_snapshot(translation_items):
     if SOURCE_INDEX_ENABLED:
         source_index_path = SOURCE_INDEX_STORE_DIR or get_default_source_index_store_dir()
 
-    return fr.build_context_snapshot(
+    glossary_path = getattr(legacy, 'GLOSSARY_FILE', '') or ''
+    macro_text = BATCH_MACRO_SETTING or ''
+    snapshot = fr.build_context_snapshot(
         translation_items=translation_items,
-        glossary_path=getattr(legacy, 'GLOSSARY_FILE', '') or '',
+        glossary_path=glossary_path,
         glossary_enabled=True,
-        macro_setting_text=BATCH_MACRO_SETTING or '',
+        macro_setting_text=macro_text,
         macro_setting_path=macro_path or None,
         story_memory_enabled=bool(STORY_MEMORY_ENABLED),
         story_memory_graph_path=STORY_MEMORY_GRAPH_FILE or None,
@@ -3461,6 +3498,13 @@ def _collect_final_review_context_snapshot(translation_items):
         base_dir=legacy.BASE_DIR or '',
         tl_dir=legacy.TL_DIR or '',
     )
+    # Frozen text actually injected into review prompts (digest-aligned).
+    snapshot['prompt_context'] = {
+        'macro_setting': str(macro_text)[:8000],
+        'project_analysis_brief': str(pa_brief_text or '')[:8000],
+        'glossary_terms': _load_final_review_glossary_terms(glossary_path),
+    }
+    return snapshot
 
 
 def create_final_review_package(
@@ -3535,6 +3579,20 @@ def create_final_review_package(
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
         display_name = f'{FINAL_REVIEW_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
 
+    import final_review_llm as fr_llm
+
+    requests_path = os.path.join(package_dir, fr.REQUESTS_JSONL_FILENAME)
+    request_count = fr_llm.write_requests_jsonl(
+        requests_path,
+        units,
+        temperature=BATCH_TEMPERATURE,
+        max_output_tokens=BATCH_MAX_OUTPUT_TOKENS,
+        thinking_level=BATCH_THINKING_LEVEL,
+        model=model,
+        safety_settings=BATCH_SAFETY_SETTINGS or None,
+        shared_context=snapshot.get('prompt_context') or {},
+    )
+
     manifest = fr.build_campaign_manifest(
         package_dir=package_dir,
         display_name=display_name,
@@ -3555,8 +3613,14 @@ def create_final_review_package(
         extra={
             **_manifest_target_language_fields(),
             'build_warnings': get_batch_risk_warnings(),
+            'input_jsonl_path': requests_path,
+            'request_count': request_count,
         },
     )
+    # batch_cost_estimate uses summary.chunk_count for max output tokens.
+    manifest.setdefault('summary', {})
+    manifest['summary']['chunk_count'] = request_count
+    manifest['summary']['request_count'] = request_count
     paths = fr.write_campaign_package(
         package_dir,
         manifest=manifest,
@@ -3570,10 +3634,14 @@ def create_final_review_package(
     print(f'Created final-review campaign: {package_dir}')
     print(f"Units: {manifest['summary']['unit_count']}")
     print(f"Items: {manifest['summary']['item_count']}")
+    print(f'Requests: {request_count} → {requests_path}')
     print(f"Context digest: {str(snapshot.get('context_digest') or '')[:16]}…")
     print(f"Snapshot digest: {str(snapshot.get('snapshot_digest') or '')[:16]}…")
     print('Mode: final_review (report-only; no autofix)')
-    print('Next: final-review-status <package>  (LLM run lands in a follow-up PR)')
+    print(
+        'Next: submit → download → final-review-ingest-results '
+        '(or final-review-resume after partial completion)'
+    )
     if readiness.reasons:
         print('Notes:')
         for reason in readiness.reasons:
@@ -3612,6 +3680,103 @@ def run_final_review_export(target=None, output_jsonl='', output_markdown=''):
     print(f"Report Markdown: {result['markdown_path']}")
     print(f"Finding count: {result['finding_count']}")
     print(f"Campaign status: {result['status'].get('status')}")
+    return result
+
+
+def run_final_review_resume(target=None, force=False):
+    """Rebuild requests for pending/stale/failed units; skip unchanged done units.
+
+    Recomputes live shared context (glossary/macro/PA…) so digest-based skip /
+    stale detection matches the current workspace, not only the frozen build
+    snapshot. Request prompts also inject the live prompt_context block.
+    """
+    import final_review as fr
+    import final_review_llm as fr_llm
+
+    package_target = manifest_path_for_target(target)
+    package = fr.load_campaign_package(package_target)
+    package_dir = package['paths']['package_dir']
+    frozen_snapshot = dict(package.get('snapshot') or {})
+    frozen_context = str(
+        frozen_snapshot.get('context_digest') or package['manifest'].get('context_digest') or ''
+    )
+    frozen_prompt_context = dict(frozen_snapshot.get('prompt_context') or {})
+
+    items = []
+    for unit in package.get('units') or []:
+        if isinstance(unit, dict):
+            items.extend(unit.get('items') or [])
+    try:
+        live_snapshot = _collect_final_review_context_snapshot(items)
+        live_context = str(live_snapshot.get('context_digest') or '') or frozen_context
+        live_prompt_context = dict(live_snapshot.get('prompt_context') or {}) or frozen_prompt_context
+    except Exception as exc:
+        print(f'Warning: live context refresh failed ({exc}); using frozen campaign snapshot.')
+        live_context = frozen_context
+        live_prompt_context = frozen_prompt_context
+
+    try:
+        result = fr_llm.prepare_resume_requests(
+            package_dir,
+            force=bool(force),
+            live_context_digest=live_context,
+            shared_context=live_prompt_context,
+            temperature=BATCH_TEMPERATURE,
+            max_output_tokens=BATCH_MAX_OUTPUT_TOKENS,
+            thinking_level=BATCH_THINKING_LEVEL,
+            model=FINAL_REVIEW_MODEL or BATCH_MODEL or '',
+            safety_settings=BATCH_SAFETY_SETTINGS or None,
+        )
+    except fr.FinalReviewError as exc:
+        raise SystemExit(f'Final review resume error: {exc}') from exc
+
+    remember_latest_manifest(result['paths']['manifest'])
+    print(f"Resume package: {package_dir}")
+    print(f"Units to run: {result['run_count']}")
+    print(f"Units skipped (done+same digest): {result['skip_count']}")
+    print(f"Force: {bool(force)}")
+    if live_context and frozen_context and live_context != frozen_context:
+        print('Live shared context differs from frozen build snapshot; stale units re-queued.')
+    print(f"Requests JSONL: {os.path.join(package_dir, fr.REQUESTS_JSONL_FILENAME)}")
+    if result['run_count']:
+        print(
+            'Next: submit → download → final-review-ingest-results '
+            '(do not reuse pre-resume results.jsonl)'
+        )
+    else:
+        print('No units to run; campaign is up to date for current digests.')
+    return result
+
+
+def run_final_review_ingest_results(target=None, result_path='', allow_stale_results=False):
+    """Parse downloaded Batch/sync results into findings (report-only)."""
+    import final_review as fr
+    import final_review_llm as fr_llm
+
+    package_target = manifest_path_for_target(target)
+    package = fr.load_campaign_package(package_target)
+    package_dir = package['paths']['package_dir']
+    try:
+        result = fr_llm.ingest_results_into_package(
+            package_dir,
+            result_path=result_path or '',
+            provider=str(SYNC_BACKEND or 'gemini'),
+            model=FINAL_REVIEW_MODEL or BATCH_MODEL or '',
+            extract_text=extract_text_from_response_payload,
+            allow_stale_results=bool(allow_stale_results),
+        )
+    except fr.FinalReviewError as exc:
+        raise SystemExit(f'Final review ingest error: {exc}') from exc
+
+    remember_latest_manifest(result['paths']['manifest'])
+    summary = result.get('summary') or {}
+    print(f"Ingested results for: {package_dir}")
+    print(f"Result rows: {summary.get('result_rows', 0)}")
+    print(f"Done units: {summary.get('done_units', 0)}")
+    print(f"Failed units: {summary.get('failed_units', 0)}")
+    print(f"Findings: {summary.get('finding_count', 0)}")
+    print(f"Campaign status: {(result.get('status') or {}).get('status')}")
+    print('Report-only: no .rpy writes. Use final-review-export; revision hand-off is PR C.')
     return result
 
 
@@ -9980,6 +10145,57 @@ def build_arg_parser():
         help='Output report Markdown path (default: package report.md).',
     )
 
+    final_review_resume_parser = subparsers.add_parser(
+        'final-review-resume',
+        help=(
+            'Rebuild Batch requests for pending/stale/failed review units; '
+            'skip done units whose input_digest is unchanged against live shared context. '
+            'Pass --force to re-run all. Invalidates prior results.jsonl so download cannot reuse it.'
+        ),
+    )
+    final_review_resume_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Campaign package dir or manifest path. Defaults to latest package.',
+    )
+    final_review_resume_parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Re-queue all units, including done units with matching digests.',
+    )
+
+    final_review_ingest_parser = subparsers.add_parser(
+        'final-review-ingest-results',
+        help=(
+            'Parse downloaded final-review result JSONL into findings and unit status '
+            '(report-only; does not write .rpy).'
+        ),
+    )
+    final_review_ingest_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Campaign package dir or manifest path. Defaults to latest package.',
+    )
+    final_review_ingest_parser.add_argument(
+        '--result',
+        default='',
+        help=(
+            'Result JSONL path. Defaults to a post-resume download path '
+            '(manifest result_jsonl_path). Pre-resume package results.jsonl is rejected '
+            'unless --allow-stale-results is set.'
+        ),
+    )
+    final_review_ingest_parser.add_argument(
+        '--allow-stale-results',
+        action='store_true',
+        help=(
+            'Allow ingesting package results.jsonl even when it may predate the last '
+            'resume (escape hatch / re-parse). Prefer a fresh download or --result.'
+        ),
+    )
+
     project_analysis_status_parser = subparsers.add_parser(
         'project-analysis-status',
         help=(
@@ -10504,6 +10720,8 @@ def main(argv=None):
         'final-review-build',
         'final-review-status',
         'final-review-export',
+        'final-review-resume',
+        'final-review-ingest-results',
     }:
         legacy.load_translator_settings(persist_corrected_game_root=False)
         legacy.load_glossary()
@@ -10531,6 +10749,21 @@ def main(argv=None):
                 getattr(args, 'target', '') or None,
                 output_jsonl=getattr(args, 'jsonl', '') or '',
                 output_markdown=getattr(args, 'markdown', '') or '',
+            )
+            return
+        if command == 'final-review-resume':
+            print_banner()
+            run_final_review_resume(
+                getattr(args, 'target', '') or None,
+                force=bool(getattr(args, 'force', False)),
+            )
+            return
+        if command == 'final-review-ingest-results':
+            print_banner()
+            run_final_review_ingest_results(
+                getattr(args, 'target', '') or None,
+                result_path=getattr(args, 'result', '') or '',
+                allow_stale_results=bool(getattr(args, 'allow_stale_results', False)),
             )
             return
 

@@ -50,6 +50,51 @@ class BatchCostEstimateTests(unittest.TestCase):
         self.assertTrue(batch_cost_estimate.cost_estimate_exceeds_max(estimate, 10))
         self.assertFalse(batch_cost_estimate.cost_estimate_exceeds_max(estimate, 12.5))
 
+    def test_estimate_final_review_uses_unit_or_request_count(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jsonl_path = os.path.join(tmp_dir, 'requests.jsonl')
+            with open(jsonl_path, 'w', encoding='utf-8') as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            'key': 'fr-u1',
+                            'request': {
+                                'contents': [
+                                    {'role': 'user', 'parts': [{'text': 'abcd'}]},
+                                ],
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                    + '\n'
+                )
+                handle.write(
+                    json.dumps(
+                        {
+                            'key': 'fr-u2',
+                            'request': {
+                                'contents': [
+                                    {'role': 'user', 'parts': [{'text': 'efgh'}]},
+                                ],
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                    + '\n'
+                )
+
+            manifest = {
+                'batch_model': 'gemini-3.1-flash-lite',
+                'input_jsonl_path': jsonl_path,
+                'settings': {'max_output_tokens': 1000},
+                'mode': 'final_review',
+                'summary': {'unit_count': 2, 'request_count': 2},
+            }
+            tokens = batch_cost_estimate.estimate_manifest_tokens(manifest)
+            self.assertEqual(tokens['request_count'], 2)
+            self.assertEqual(tokens['chunk_count'], 2)
+            self.assertEqual(tokens['estimated_output_tokens_max'], 2000)
+
     def test_ensure_manifest_cost_estimate_exits_when_jsonl_missing(self):
         manifest = {
             'input_jsonl_path': 'missing.jsonl',
