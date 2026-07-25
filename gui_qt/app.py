@@ -1295,6 +1295,8 @@ class MainWindow(QMainWindow):
             return "停止构建"
         if command == "project_analysis_generate":
             return "停止生成"
+        if command == "project_analysis_workflow":
+            return "停止分析"
         if command == "bootstrap_work":
             return "停止准备"
         if command == "doctor":
@@ -2383,6 +2385,7 @@ class MainWindow(QMainWindow):
             build=build,
             generate=generate,
         )
+        self._update_project_analysis_timeline(workflow)
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._active_command = "project_analysis_workflow"
@@ -7687,6 +7690,21 @@ class MainWindow(QMainWindow):
         else:
             steps = []
         self.timeline.set_steps(steps)
+        self.timeline.set_current_step(None, "idle")
+
+    def _update_project_analysis_timeline(
+        self,
+        workflow: ProjectAnalysisWorkflow,
+    ) -> None:
+        """Match Project Analysis progress chrome to the steps that will run."""
+        labels = {
+            "project-analysis-ingest-keywords": "导入概要",
+            "project-analysis-build-structure": "构建结构",
+            "project-analysis-generate": "生成摘要",
+        }
+        self.timeline.set_steps(
+            [(key, labels[key]) for key in workflow.step_keys()]
+        )
         self.timeline.set_current_step(None, "idle")
 
     def _sync_timeline_from_workflow_status(

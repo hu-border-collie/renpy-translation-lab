@@ -693,7 +693,7 @@ class GuiTaskPageTests(unittest.TestCase):
                 "label_count": 3,
             },
         )
-        self.assertEqual(page.project_analysis_generate_btn.text(), "重新构建")
+        self.assertEqual(page.project_analysis_generate_btn.text(), "重新分析")
         page.set_context_status(
             rag_enabled=False,
             source_index_enabled=False,
@@ -705,7 +705,7 @@ class GuiTaskPageTests(unittest.TestCase):
                 "structure_present": False,
             },
         )
-        self.assertEqual(page.project_analysis_generate_btn.text(), "重新构建")
+        self.assertEqual(page.project_analysis_generate_btn.text(), "重新分析")
 
 
     def test_global_prep_buttons_visible_on_all_task_pages(self) -> None:

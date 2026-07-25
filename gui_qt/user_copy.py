@@ -44,7 +44,7 @@ PROJECT_ANALYSIS_COPY = {
     "start": "开始分析",
     "generate": "生成项目摘要",
     "refresh": "更新项目摘要",
-    "rebuild": "重新构建",
+    "rebuild": "重新分析",
     "review": "审查内容",
     "publish": "启用到翻译",
     "unpublish": "停止用于翻译",

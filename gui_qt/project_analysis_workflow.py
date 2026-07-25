@@ -62,6 +62,10 @@ class ProjectAnalysisWorkflow:
         heading, message = STEP_TEXT[key]
         return WorkflowStep(key=key, args=list(args), heading=heading, message=message)
 
+    def step_keys(self) -> tuple[str, ...]:
+        """Return the concrete remaining step sequence for GUI progress chrome."""
+        return tuple(key for key, _args in self._steps)
+
     def complete_current_step(self, exit_code: int, output: str) -> WorkflowUpdate:
         if not self._steps:
             return WorkflowUpdate(

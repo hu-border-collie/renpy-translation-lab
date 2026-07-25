@@ -222,7 +222,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         resume_button_label="继续分析",
         task_group_label="分析任务",
         progress_tab_label="分析进度",
-        writeback_tab_label="审查与启用",
+        writeback_tab_label="结果说明",
         idle_workflow_heading="项目分析由上下文库管理",
         idle_workflow_message=(
             "自动串联剧情概要导入、结构构建与摘要生成；生成后须人工审查并显式启用。"
