@@ -285,6 +285,7 @@ from .settings_schema import (
     grouped_advanced_fields,
     read_advanced_settings,
     recommended_advanced_settings,
+    resolve_project_analysis_flags_for_save,
     validate_advanced_settings,
 )
 
@@ -12051,6 +12052,7 @@ class MainWindow(QMainWindow):
             write_gui_theme_to_config(config, self._current_theme_preference_from_ui())
 
             advanced_values = self._advanced_settings_values_from_ui()
+            complete_advanced_values: dict[str, Any] = {}
             if advanced_values:
                 complete_advanced_values = read_advanced_settings(config)
                 complete_advanced_values.update(advanced_values)
@@ -12098,27 +12100,12 @@ class MainWindow(QMainWindow):
                 config,
                 game_root=self._game_root_str_for_flags(),
             )
-            project_analysis_enabled = bool(
-                saved_context_flags.get("project_analysis_enabled")
-            )
-            project_analysis_inject_enabled = bool(
-                saved_context_flags.get("project_analysis_inject_enabled")
-            )
-            if "batch_project_analysis_enabled" in advanced_values:
-                project_analysis_enabled = bool(
-                    complete_advanced_values.get("batch_project_analysis_enabled")
-                )
-            if "batch_project_analysis_inject_published_brief" in advanced_values:
-                project_analysis_inject_enabled = bool(
-                    complete_advanced_values.get(
-                        "batch_project_analysis_inject_published_brief"
-                    )
-                )
             project_context_flags.update(
-                {
-                    "project_analysis_enabled": project_analysis_enabled,
-                    "project_analysis_inject_enabled": project_analysis_inject_enabled,
-                }
+                resolve_project_analysis_flags_for_save(
+                    saved_context_flags,
+                    advanced_values,
+                    complete_advanced_values,
+                )
             )
             # Validate every field before either settings file is written. This
             # avoids persisting project flags when the UI reports "未保存".

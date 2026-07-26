@@ -1060,6 +1060,37 @@ def read_advanced_settings(config: dict[str, Any]) -> dict[str, SettingValue]:
     return {field.key: read_setting(config, field) for field in ADVANCED_SETTING_FIELDS}
 
 
+def resolve_project_analysis_flags_for_save(
+    saved_context_flags: dict[str, Any],
+    advanced_values: dict[str, Any],
+    complete_advanced_values: dict[str, Any],
+) -> dict[str, bool]:
+    """Resolve project-scoped analysis flags, with present UI values winning.
+
+    Missing/unmaterialized context widgets preserve the current project's saved
+    flags. When those widgets are present, their validated complete values override
+    the saved defaults.
+    """
+    enabled = bool(saved_context_flags.get("project_analysis_enabled"))
+    inject_enabled = bool(
+        saved_context_flags.get("project_analysis_inject_enabled")
+    )
+    if "batch_project_analysis_enabled" in advanced_values:
+        enabled = bool(
+            complete_advanced_values.get("batch_project_analysis_enabled")
+        )
+    if "batch_project_analysis_inject_published_brief" in advanced_values:
+        inject_enabled = bool(
+            complete_advanced_values.get(
+                "batch_project_analysis_inject_published_brief"
+            )
+        )
+    return {
+        "project_analysis_enabled": enabled,
+        "project_analysis_inject_enabled": inject_enabled,
+    }
+
+
 def recommended_advanced_settings() -> dict[str, SettingValue]:
     return {field.key: field.recommended_value for field in ADVANCED_SETTING_FIELDS}
 
