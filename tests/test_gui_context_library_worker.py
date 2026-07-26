@@ -34,13 +34,23 @@ class ContextLibraryStatusCollectionTests(unittest.TestCase):
                 "project_analysis.format_status_label",
                 return_value="已启用",
             ),
+            mock.patch(
+                "gui_qt.bootstrap_report.read_batch_context_flags",
+                return_value={"rag_enabled": True},
+            ) as read_flags,
         ):
-            result = collect_context_library_status("C:/Games/Demo/work")
+            config = {"batch": {"rag": {"enabled": True}}}
+            result = collect_context_library_status("C:/Games/Demo/work", config)
 
         self.assertEqual(result.base_dir, "C:/Games/Demo/work")
         self.assertEqual(result.live_fingerprint, "fp-1")
         self.assertEqual(result.status, status)
         self.assertEqual(result.label, "已启用")
+        self.assertTrue(result.context_flags["rag_enabled"])
+        read_flags.assert_called_once_with(
+            config,
+            game_root="C:/Games/Demo/work",
+        )
         fingerprint.assert_called_once_with("C:/Games/Demo/work")
         collect_status.assert_called_once_with(
             base_dir="C:/Games/Demo/work",

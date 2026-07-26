@@ -812,23 +812,45 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertEqual(page.project_analysis_generate_btn.text(), "重新分析")
 
     def test_context_navigation_uses_background_status_refresh(self) -> None:
+        self.window._context_library_status_cache = None
+        self.window._context_library_status_job = None
+        pool = mock.Mock()
         with (
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=Path("C:/Games/Demo/work"),
+            ),
             mock.patch.object(
                 self.window,
                 "_refresh_context_library_panel",
             ) as sync_refresh,
             mock.patch.object(
-                self.window,
-                "_refresh_context_library_panel_async",
-            ) as async_refresh,
+                self.window.state,
+                "load_translator_config",
+            ) as load_config,
+            mock.patch(
+                "gui_qt.app.QThreadPool.globalInstance",
+                return_value=pool,
+            ),
         ):
             self.window._set_work_mode(
                 WorkMode.BOOTSTRAP_RAG,
                 refresh_manifest_writeback=False,
             )
 
-        self.assertGreaterEqual(async_refresh.call_count, 1)
+        pool.start.assert_called_once()
         sync_refresh.assert_not_called()
+        load_config.assert_not_called()
+        self.window._context_library_status_job = None
+        self.window._context_library_status_pending_base = ""
+
+    def test_project_analysis_primary_action_has_an_icon(self) -> None:
+        self.window._refresh_action_icons()
+
+        self.assertFalse(
+            self.window.context_library_page.project_analysis_generate_btn.icon().isNull()
+        )
 
     def test_project_analysis_complete_user_journey_actions(self) -> None:
         page = self.window.context_library_page
@@ -936,10 +958,23 @@ class GuiTaskPageTests(unittest.TestCase):
             WorkMode.BOOTSTRAP_RAG,
             refresh_manifest_writeback=False,
         )
-        with mock.patch.object(
-            self.window,
-            "_saved_batch_context_flags",
-            return_value={"rag_enabled": True, "source_index_enabled": True},
+        from gui_qt.context_library_worker import ContextLibraryStatusResult
+
+        collected = ContextLibraryStatusResult(
+            base_dir=str(self.window.state.get_game_root() or ""),
+            live_fingerprint="fp",
+            status={"overall_status": "missing", "store_exists": False},
+            label="未生成",
+            context_flags={
+                "rag_enabled": True,
+                "source_index_enabled": True,
+                "project_analysis_enabled": False,
+                "project_analysis_inject_enabled": False,
+            },
+        )
+        with mock.patch(
+            "gui_qt.app.collect_context_library_status",
+            return_value=collected,
         ):
             self.window._refresh_context_library_panel()
             self.assertTrue(self.window.context_bootstrap_rag_btn.isEnabled())

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, Signal
@@ -10,18 +10,29 @@ from PySide6.QtCore import QObject, QRunnable, Signal
 
 @dataclass(frozen=True)
 class ContextLibraryStatusResult:
-    """Readonly Project Analysis status produced outside the GUI thread."""
+    """Readonly context-library status produced outside the GUI thread."""
 
     base_dir: str
     live_fingerprint: str
     status: dict[str, Any] | None
     label: str
+    context_flags: dict[str, bool] = field(default_factory=dict)
     error: str = ""
 
 
-def collect_context_library_status(base_dir: str) -> ContextLibraryStatusResult:
-    """Scan scripts and analysis artifacts without touching Qt widgets."""
+def collect_context_library_status(
+    base_dir: str,
+    config: dict[str, Any] | None = None,
+) -> ContextLibraryStatusResult:
+    """Read project context flags and analysis artifacts outside the GUI thread."""
+    context_flags: dict[str, bool] = {}
     try:
+        from .bootstrap_report import read_batch_context_flags
+
+        context_flags = read_batch_context_flags(
+            config or {},
+            game_root=base_dir or None,
+        )
         import gemini_translate_batch as batch_mod
         from project_analysis import (
             collect_project_analysis_status,
@@ -40,6 +51,7 @@ def collect_context_library_status(base_dir: str) -> ContextLibraryStatusResult:
             live_fingerprint=live_fingerprint,
             status=status,
             label=format_status_label(status),
+            context_flags=context_flags,
         )
     except Exception as exc:
         return ContextLibraryStatusResult(
@@ -47,6 +59,7 @@ def collect_context_library_status(base_dir: str) -> ContextLibraryStatusResult:
             live_fingerprint="",
             status=None,
             label=f"读取失败 · {exc}",
+            context_flags=context_flags,
             error=str(exc),
         )
 
@@ -60,10 +73,17 @@ class ContextLibraryStatusSignals(QObject):
 class ContextLibraryStatusJob(QRunnable):
     """Collect context status in Qt's shared pool without blocking shutdown."""
 
-    def __init__(self, base_dir: str) -> None:
+    def __init__(
+        self,
+        base_dir: str,
+        config: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__()
         self.base_dir = str(base_dir or "")
+        self.config = dict(config or {})
         self.signals = ContextLibraryStatusSignals()
 
     def run(self) -> None:
-        self.signals.completed.emit(collect_context_library_status(self.base_dir))
+        self.signals.completed.emit(
+            collect_context_library_status(self.base_dir, self.config)
+        )

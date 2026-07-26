@@ -491,6 +491,7 @@ class MainWindow(QMainWindow):
         qt_app: QApplication | None = None,
         resources_dir: Path | None = None,
         project_state: ProjectState | None = None,
+        bootstrap_config: dict[str, Any] | None = None,
     ):
         super().__init__()
         self.setWindowTitle("Ren'Py Translation Lab - 图形工作台")
@@ -503,6 +504,10 @@ class MainWindow(QMainWindow):
         self._context_library_status_cache_at = 0.0
         self._context_library_status_job: ContextLibraryStatusJob | None = None
         self._context_library_status_pending_base = ""
+        if bootstrap_config is None:
+            bootstrap_config = self.state.load_translator_config()
+        self._context_library_config_snapshot = copy.deepcopy(bootstrap_config)
+        self._context_library_flags_cache: tuple[str, dict[str, bool]] | None = None
         self._diagnostics_refresh_input_key: tuple[object, ...] | None = None
         self._main_tab_enter_generation = 0
         self._pending_log_lines: list[str] = []
@@ -2564,12 +2569,16 @@ class MainWindow(QMainWindow):
         page = getattr(self, "context_library_page", None)
         if page is None:
             return
-        flags = self._saved_batch_context_flags()
-        analysis_flags = self._saved_project_analysis_flags(context_flags=flags)
         game_root = self.state.get_game_root() if hasattr(self, "state") else None
+        base_dir = str(game_root or "")
+        config = self.state.load_translator_config()
+        self._context_library_config_snapshot = copy.deepcopy(config)
+        result = collect_context_library_status(base_dir, config)
+        flags = result.context_flags
+        self._context_library_flags_cache = (base_dir, dict(flags))
+        analysis_flags = self._saved_project_analysis_flags(context_flags=flags)
         if running is None:
             running = self._task_page_running_chrome()
-        result = collect_context_library_status(str(game_root or ""))
         self._context_library_status_cache = result
         self._context_library_status_cache_at = time.monotonic()
         self._render_context_library_panel(
@@ -2590,10 +2599,10 @@ class MainWindow(QMainWindow):
         page = getattr(self, "context_library_page", None)
         if page is None:
             return
-        flags = self._saved_batch_context_flags()
-        analysis_flags = self._saved_project_analysis_flags(context_flags=flags)
         game_root = self.state.get_game_root() if hasattr(self, "state") else None
         base_dir = str(game_root or "")
+        flags = self._context_library_flags_for_render(base_dir)
+        analysis_flags = self._saved_project_analysis_flags(context_flags=flags)
         if running is None:
             running = self._task_page_running_chrome()
         cached = getattr(self, "_context_library_status_cache", None)
@@ -2615,7 +2624,10 @@ class MainWindow(QMainWindow):
         if job is not None:
             self._context_library_status_pending_base = base_dir
             return
-        job = ContextLibraryStatusJob(base_dir)
+        job = ContextLibraryStatusJob(
+            base_dir,
+            self._context_library_config_snapshot,
+        )
         job.signals.completed.connect(self._on_context_library_status_ready)
         self._context_library_status_job = job
         self._context_library_status_pending_base = ""
@@ -2627,10 +2639,14 @@ class MainWindow(QMainWindow):
             return
         self._context_library_status_cache = result
         self._context_library_status_cache_at = time.monotonic()
+        self._context_library_flags_cache = (
+            result.base_dir,
+            dict(result.context_flags),
+        )
         game_root = self.state.get_game_root() if hasattr(self, "state") else None
         current_base = str(game_root or "")
         if current_base == result.base_dir:
-            flags = self._saved_batch_context_flags()
+            flags = result.context_flags
             analysis_flags = self._saved_project_analysis_flags(context_flags=flags)
             self._render_context_library_panel(
                 flags=flags,
@@ -4772,6 +4788,7 @@ class MainWindow(QMainWindow):
                 (
                     (context_page.bootstrap_rag_btn, "folder-cog", "on_accent"),
                     (context_page.bootstrap_source_index_btn, "folder-cog", "on_accent"),
+                    (context_page.project_analysis_generate_btn, "file-text", "on_accent"),
                     (context_page.open_settings_btn, "folder-cog", "default"),
                     (context_page.stop_btn, "player-stop", "danger"),
                 )
@@ -9505,6 +9522,19 @@ class MainWindow(QMainWindow):
             game_root=self._game_root_str_for_flags(),
         )
 
+    def _context_library_flags_for_render(self, base_dir: str) -> dict[str, bool]:
+        """Return an in-memory snapshot; project overrides arrive via the worker."""
+        cached = getattr(self, "_context_library_flags_cache", None)
+        if cached is not None and cached[0] == base_dir:
+            return dict(cached[1])
+        snapshot = getattr(self, "_context_library_config_snapshot", None)
+        if snapshot is None:
+            return self._saved_batch_context_flags()
+        return read_batch_context_flags(
+            snapshot,
+            game_root=None,
+        )
+
     def _saved_project_analysis_flags(
         self,
         *,
@@ -9529,7 +9559,9 @@ class MainWindow(QMainWindow):
     def _bootstrap_task_ready(self, spec) -> bool:
         if not spec.is_bootstrap:
             return True
-        flags = self._saved_batch_context_flags()
+        flags = self._context_library_flags_for_render(
+            self._game_root_str_for_flags() or ""
+        )
         if spec.bootstrap_kind == "rag":
             return flags["rag_enabled"]
         if spec.bootstrap_kind == "source_index":
@@ -11881,6 +11913,7 @@ class MainWindow(QMainWindow):
         self._loading_config_to_ui = True
         try:
             config = self.state.load_translator_config()
+            self._context_library_config_snapshot = copy.deepcopy(config)
             # Theme QSS is global; only touch appearance widgets / re-apply when needed.
             if want is None or "appearance" in want:
                 self._load_theme_to_ui(config, apply=(want is None or "appearance" in want))
@@ -12231,6 +12264,11 @@ class MainWindow(QMainWindow):
                         f"全局设置回滚失败，请检查 translator_config.json：{rollback_exc}"
                     )
                 raise
+            self._context_library_config_snapshot = copy.deepcopy(config)
+            self._context_library_flags_cache = (
+                self._game_root_str_for_flags() or "",
+                dict(project_context_flags),
+            )
             self._append_log(
                 f"当前项目上下文开关已保存：{project_settings_path}"
             )
@@ -12307,6 +12345,7 @@ def run_app(argv: list[str] | None = None) -> int:
         bootstrap_config = project_state.load_translator_config()
         theme_preference = read_gui_theme_from_config(bootstrap_config)
     except Exception as exc:
+        bootstrap_config = {}
         print(f"警告：无法读取主题配置，将使用系统跟随：{exc}")
         theme_preference = DEFAULT_THEME_PREFERENCE
 
@@ -12318,6 +12357,7 @@ def run_app(argv: list[str] | None = None) -> int:
         qt_app=app,
         resources_dir=resources_dir,
         project_state=project_state,
+        bootstrap_config=bootstrap_config,
     )
     win._theme_preference = normalize_theme_preference(theme_preference)
     try:
