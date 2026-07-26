@@ -40,7 +40,11 @@ from project_analysis import (
     normalize_lineage,
     resolve_project_analysis_store,
 )
-from .user_copy import PROJECT_ANALYSIS_COPY
+from .user_copy import (
+    PROJECT_ANALYSIS_COPY,
+    project_analysis_artifact_label,
+    project_analysis_record_status_label,
+)
 
 
 class UnifiedDiffHighlighter(QSyntaxHighlighter):
@@ -63,17 +67,34 @@ class UnifiedDiffHighlighter(QSyntaxHighlighter):
 
 def _full_unified_diff(published: str, draft: str) -> str:
     if not published and not draft:
-        return "尚无 draft 或 published brief。"
+        return "尚无待审查摘要或已启用版本。"
     if published == draft:
-        return "draft 与 published 完全一致。"
+        return "待审查摘要与已启用版本完全一致。"
     return "".join(
         difflib.unified_diff(
             published.splitlines(keepends=True),
             draft.splitlines(keepends=True),
-            fromfile="published",
-            tofile="draft",
+            fromfile="已启用版本",
+            tofile="待审查摘要",
         )
     )
+
+
+def _injection_reason_label(reason: str) -> str:
+    value = str(reason or "")
+    if not value:
+        return "当前摘要已通过检查"
+    if value == "injection_disabled":
+        return "设置中尚未开启“用于翻译”"
+    if value.startswith("brief_not_published"):
+        return "项目摘要尚未启用"
+    if value == "published_file_missing":
+        return "已启用版本缺失，请重新审查并启用"
+    if value.startswith("brief_not_fresh"):
+        return "游戏脚本在分析后发生了变化，请重新分析"
+    if value == "published_brief_empty":
+        return "已启用版本没有内容"
+    return "当前摘要未通过翻译使用检查"
 
 
 def build_project_analysis_review_data(
@@ -159,7 +180,7 @@ class ProjectAnalysisReviewDialog(QDialog):
         self.tabs.addTab(self._build_diff_tab(), "完整差异")
         self.tabs.addTab(self._build_brief_tab(), "摘要全文")
         self.tabs.addTab(self._build_evidence_tab(), "证据与定位")
-        self.tabs.addTab(self._build_injection_tab(), "实际注入预览")
+        self.tabs.addTab(self._build_injection_tab(), "翻译使用预览")
         root.addWidget(self.tabs, 1)
 
         footer = QHBoxLayout()
@@ -193,7 +214,7 @@ class ProjectAnalysisReviewDialog(QDialog):
     def _build_diff_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        note = QLabel("“+” 是当前 draft 新增内容，“-” 是相对已发布版本删除的内容。")
+        note = QLabel("“+” 是待审查摘要新增内容，“-” 是相对已启用版本删除的内容。")
         note.setWordWrap(True)
         layout.addWidget(note)
         diff_view = self._readonly(self.data["diff"])
@@ -205,8 +226,8 @@ class ProjectAnalysisReviewDialog(QDialog):
         page = QWidget()
         layout = QHBoxLayout(page)
         for title, text in (
-            ("当前 draft", self.data["draft"]),
-            ("已发布版本", self.data["published"]),
+            ("待审查摘要", self.data["draft"]),
+            ("已启用版本", self.data["published"]),
         ):
             column = QVBoxLayout()
             column.addWidget(QLabel(f"{title} · {len(text)} 字符"))
@@ -218,7 +239,7 @@ class ProjectAnalysisReviewDialog(QDialog):
         page = QWidget()
         layout = QVBoxLayout(page)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("搜索 ID、摘要、来源文件或 evidence item…")
+        self.search.setPlaceholderText("搜索编号、摘要、来源文件或证据编号…")
         self.search.textChanged.connect(self._filter_records)
         layout.addWidget(self.search)
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -249,16 +270,16 @@ class ProjectAnalysisReviewDialog(QDialog):
         page = QWidget()
         layout = QVBoxLayout(page)
         injection = self.data["injection"]
-        state = "会注入" if injection.get("injectable") else "不会注入"
-        truncation = " · 已按上限截断" if self.data["injection_truncated"] else ""
-        reason = str(injection.get("reason") or "通过发布与 freshness 门禁")
+        state = "会用于翻译" if injection.get("injectable") else "不会用于翻译"
+        truncation = " · 已按长度上限截取" if self.data["injection_truncated"] else ""
+        reason = _injection_reason_label(str(injection.get("reason") or ""))
         header = QLabel(
             f"当前翻译行为：{state}{truncation} · 上限 {self.data['max_brief_chars']} 字符\n"
-            f"原因：{reason}\n诊断：{injection.get('diagnostics') or '无'}"
+            f"原因：{reason}"
         )
         header.setWordWrap(True)
         layout.addWidget(header)
-        layout.addWidget(self._readonly(str(injection.get("text") or "（无注入内容）")), 1)
+        layout.addWidget(self._readonly(str(injection.get("text") or "（当前无翻译使用内容）")), 1)
         return page
 
     def _populate_records(self, query: str = "") -> None:
@@ -279,7 +300,7 @@ class ProjectAnalysisReviewDialog(QDialog):
             ).casefold()
             if needle and needle not in haystack:
                 continue
-            kind = str(record.get("kind") or "artifact")
+            kind = project_analysis_artifact_label(str(record.get("kind") or ""))
             label = str(record.get("title") or record.get("id") or "未命名")
             item = QListWidgetItem(f"{kind} · {label}")
             item.setData(Qt.ItemDataRole.UserRole, str(index))
@@ -316,9 +337,11 @@ class ProjectAnalysisReviewDialog(QDialog):
             "\n".join(f"- {item}" for item in record.get("evidence_item_ids") or []) or "- 未记录"
         )
         self.record_detail.setPlainText(
-            f"ID：{record.get('id') or ''}\n类型：{record.get('kind') or ''}\n"
-            f"状态：{record.get('status') or ''}\n行号：{span_text}\n\n"
-            f"来源文件：\n{sources}\n\nEvidence items：\n{evidence}\n\n"
+            f"ID：{record.get('id') or ''}\n"
+            f"类型：{project_analysis_artifact_label(str(record.get('kind') or ''))}\n"
+            f"状态：{project_analysis_record_status_label(str(record.get('status') or ''))}\n"
+            f"行号：{span_text}\n\n"
+            f"来源文件：\n{sources}\n\n证据编号：\n{evidence}\n\n"
             f"摘要全文：\n{record.get('summary') or '（空）'}"
         )
 
@@ -350,7 +373,7 @@ class ProjectAnalysisReviewDialog(QDialog):
         reviewed_at = str(self.data.get("reviewed_at") or "")
         self.review_status.setText(
             f"审查记录：{reviewed_at if reviewed_at else '尚未确认'} · "
-            f"存储：{self.data['store_dir']}"
+            f"保存位置：{self.data['store_dir']}"
         )
 
     def _record_review(self) -> bool:

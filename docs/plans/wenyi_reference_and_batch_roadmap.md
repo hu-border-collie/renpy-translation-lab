@@ -1,6 +1,6 @@
 # 文译（Wenyi）参考对照与 Batch 主路径增强计划
 
-> **状态：进行中**（2026-07-22 对照刷新；#256 起落地 Project Analysis 合同）
+> **状态：核心路线已落地**（2026-07-26；#254–#256 与 #262 已完成项目分析、终审和 GUI 产品化）
 > **性质：设计与取舍记录，不是用户手册。**
 > 用户可见行为写入现行文档（如 `batch_workflows.md`、`context_systems.md`）；实现落地后本计划可迁入 `docs/archive/`。
 
@@ -34,9 +34,9 @@
 | 翻译对象 | 长篇小说电子书 | Ren'Py `game/tl/<lang>/` |
 | 主路径 | **同步在线** LLM 调用（进程内长跑） | **Batch 异步**（`build → submit → download → check → apply`） |
 | 「batch」含义 | 切段大小（字符预算） | 远端 Batch 作业 + package/manifest |
-| 全书理解 | `pipeline.book_understanding`：预扫 → 章梗概 + 全书概览，直接注入翻译 prompt | **#256** 合同已交付；**#254 PR A** 结构草稿 + publish 门禁 + 可选 published brief 注入（默认关）；LLM map-reduce 仍待 |
+| 全书理解 | `pipeline.book_understanding`：预扫 → 章梗概 + 全书概览，直接注入翻译 prompt | **#254 / #256 / #262** 已交付：路线结构、分层摘要、人工审查启用、全局与局部上下文注入，以及完整 GUI 生命周期 |
 | 质量手段 | 多阶段 LLM（分析/梗概/译/润/审）+ 段数对齐 | glossary / macro / RAG / Story Memory + **规则闸门** + 订正/关键词 |
-| 最终审校 | 独立 `review` 命令；可 `--force` / 可选 `autofix_severe`；默认关闭 | 规划中：#255 report-only campaign → 现有 revision preview/apply |
+| 最终审校 | 独立 `review` 命令；可 `--force` / 可选 `autofix_severe`；默认关闭 | **#255 已交付** report-only campaign，并把修订候选交给现有 revision preview/apply |
 | 用量 | `state/.../usage.json`：provider-neutral，按 tier/stage 归因，跨续跑增量合并 | 规划中：#252 项目级账本；现有估算 + 分散在 results 的 raw usage |
 | 写回 | 组装 EPUB 等到 `output/` | 写回 `.rpy`，强调 identity、快照、safe check |
 | 状态目录 | `state/<book-slug>/`（manifest、chapters、context、glossary.db、usage…） | `logs/batch_jobs` manifest + 可选 `translation_context/` 上下文库 |
@@ -95,9 +95,9 @@
 
 | 阶段 | Issue | 要点 |
 |------|-------|------|
-| 产物与依赖合同 | **#256**（当前实现） | schema / evidence / fingerprint / draft·published / 失效语义；不调模型 |
-| 路线感知生成与发布 | #254 | chunk → label/scene → route → global brief；仅 published 注入 |
-| 最终审校 campaign | #255 | 稳定上下文快照；report-only → revision candidates |
+| 产物与依赖合同 | **#256（已完成）** | schema / evidence / fingerprint / draft·published / 失效语义；不调模型 |
+| 路线感知生成与发布 | **#254（已完成）** | chunk → label/scene → route → global brief；仅人工启用且有效的摘要进入翻译 |
+| 最终审校 campaign | **#255（已完成）** | 稳定上下文快照；report-only → revision candidates |
 
 **与文译差异：**
 
@@ -136,10 +136,10 @@
 | 优先级 | 主题 | Issue / 依赖 | 备注 |
 |--------|------|--------------|------|
 | P0 | 对照文档刷新 + issue 拆分 | 本文 + #252–#256 | 本轮完成对照刷新 |
-| **P1** | Project Analysis 阶段 1 合同 | **#256** | 地基；不调模型 |
+| **已完成** | Project Analysis 产物合同 | **#256** | 地基；不调模型 |
 | P1 | 实际模型用量账本 | #252 | 可与 #256 并行，勿混 PR |
-| P1 | 路线感知生成与发布 | #254 ← #256 | 仅 published 注入 |
-| P1 | 最终审校 campaign | #255 ← #256 | PR A：合同/闸门/digest；执行与转 revision 后续 |
+| **已完成** | 路线感知生成、审查与启用 | #254 ← #256 | #262 补齐 GUI、组合上下文和用户旅程 |
+| **已完成** | 最终审校 campaign | #255 ← #256 | 合同、闸门、执行与 revision 交接均已接入 |
 | P1a | 术语：build 时按 chunk 裁剪 + 文档化「先 keyword 后翻译」 | 现有 keyword/glossary | 低风险、贴 Batch；可并行 |
 | P2 | 任务类型模型分档 / 路由 | 配置 + GUI；宜参考 #252 | 跨 CLI/GUI |
 | P2/P3 | 可选「风格向」订正策略 | 现有 revision | 显式，非默认 polish |
@@ -175,7 +175,7 @@
 
 ## 9. 开放问题
 
-1. Project Analysis brief 的权威来源优先 TL 注释、解包原文，还是 source index / keyword chunk summaries？（#254 实现时定稿）
+1. 是否需要为极大项目增加可选的分析产物归档/压缩策略，而不影响当前可读 JSON/Markdown 合同？
 2. 术语「本章/本 chunk 裁剪」是否与 preserve_terms / identity 锁定词冲突，如何测？
 3. 是否需要在 doctor 中提示「大批量前建议先 keywords → 合并 glossary」？
 4. #252 账本与 #256 analysis fingerprint 是否共享 digest 工具函数（宜小公共模块，避免互相 import 重量级 batch 入口）？
@@ -186,3 +186,4 @@
 |------|------|
 | 2026-07-21 | 初版：对照文译、Batch 主路径取舍、润色 vs 订正、候选优先级 |
 | 2026-07-22 | 刷新本地 wenyi 至 `b796e45` / v0.3.4；补 prepare/review/usage/tiers；对齐 #252–#256；明确默认不复制源码 |
+| 2026-07-26 | 对齐当前实现：#254–#256 与 #262 已补齐项目分析生成、审查、上下文组合、终审边界和 GUI 产品化；移除“LLM/终审仍待实现”的旧状态 |

@@ -8,9 +8,16 @@ from typing import Any, Mapping
 
 from .translation_workflow import WorkflowStep, WorkflowUpdate
 
-
-
 PROGRESS_PREFIX = "PROJECT_ANALYSIS_PROGRESS "
+
+
+def _generation_stage_label(stage: str) -> str:
+    return {
+        "label": "场景摘要",
+        "route": "路线摘要",
+        "brief": "项目摘要",
+        "complete": "全部完成",
+    }.get(str(stage or ""), "生成中")
 
 
 def generation_facts_from_output(output: str) -> list[str]:
@@ -30,7 +37,7 @@ def generation_facts_from_output(output: str) -> list[str]:
     if not latest:
         return []
     facts = [
-        f"生成进度：{latest.get('stage') or 'unknown'} "
+        f"生成进度：{_generation_stage_label(str(latest.get('stage') or ''))} "
         f"{latest.get('completed', 0)}/{latest.get('total', 0)}",
         f"模型请求：{usage.get('requests', 0)} · "
         f"输入 Token {usage.get('input_tokens', 0)} · "
@@ -42,6 +49,8 @@ def generation_facts_from_output(output: str) -> list[str]:
             f"{usage.get('currency') or 'USD'}（按当前配置价格表）"
         )
     return facts
+
+
 STEP_TEXT = {
     "project-analysis-ingest-keywords": (
         "正在导入剧情概要",
@@ -49,7 +58,7 @@ STEP_TEXT = {
     ),
     "project-analysis-build-structure": (
         "正在构建项目结构",
-        "正在静态解析 label、jump 与 route；不会修改游戏脚本。",
+        "正在读取剧情节点、跳转与路线；不会修改游戏脚本。",
     ),
     "project-analysis-generate": (
         "正在生成项目摘要",
@@ -129,7 +138,7 @@ class ProjectAnalysisWorkflow:
         return WorkflowUpdate(
             status="done",
             heading="项目分析摘要待审查",
-            message="结构与摘要已生成。请审查全文、差异、证据与实际注入预览后再启用。",
+            message="结构与摘要已生成。请审查全文、差异、证据与翻译使用预览后再启用。",
             facts=generation_facts_from_output(output),
         )
 

@@ -29,6 +29,7 @@ from gui_qt.work_modes import (
     work_mode_submode_label,
     workbench_nav_spec,
 )
+from gui_qt.user_copy import PROJECT_ANALYSIS_COPY
 from gui_qt.workbench import WorkbenchPageActions
 from gui_qt.workbench_session import WorkbenchModeSession
 from tests import gui_test_support
@@ -722,7 +723,7 @@ class GuiTaskPageTests(unittest.TestCase):
             },
         )
         self.assertIs(page.page_stack.currentWidget(), page.status_page)
-        self.assertIn("已发布", page.project_analysis_status_label.text())
+        self.assertIn("已启用", page.project_analysis_status_label.text())
 
     def test_project_analysis_actions_follow_product_lifecycle(self) -> None:
         page = self.window.context_library_page
@@ -810,6 +811,134 @@ class GuiTaskPageTests(unittest.TestCase):
         )
         self.assertEqual(page.project_analysis_generate_btn.text(), "重新分析")
 
+    def test_context_navigation_uses_background_status_refresh(self) -> None:
+        self.window._context_library_status_cache = None
+        self.window._context_library_status_job = None
+        pool = mock.Mock()
+        with (
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=Path("C:/Games/Demo/work"),
+            ),
+            mock.patch.object(
+                self.window,
+                "_refresh_context_library_panel",
+            ) as sync_refresh,
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+            ) as load_config,
+            mock.patch(
+                "gui_qt.app.QThreadPool.globalInstance",
+                return_value=pool,
+            ),
+        ):
+            self.window._set_work_mode(
+                WorkMode.BOOTSTRAP_RAG,
+                refresh_manifest_writeback=False,
+            )
+
+        pool.start.assert_called_once()
+        sync_refresh.assert_not_called()
+        load_config.assert_not_called()
+        self.window._context_library_status_job = None
+        self.window._context_library_status_pending_base = ""
+
+    def test_project_analysis_primary_action_has_an_icon(self) -> None:
+        self.window._refresh_action_icons()
+
+        self.assertFalse(
+            self.window.context_library_page.project_analysis_generate_btn.icon().isNull()
+        )
+
+    def test_project_analysis_complete_user_journey_actions(self) -> None:
+        page = self.window.context_library_page
+        actions: list[str] = []
+        page.set_action_callbacks(WorkbenchPageActions(action=actions.append))
+        common = {
+            "rag_enabled": False,
+            "source_index_enabled": False,
+            "game_root": "C:/Games/Example/work",
+            "project_analysis_enabled": True,
+        }
+
+        page.set_context_status(
+            **common,
+            project_analysis_status={"overall_status": "missing", "store_exists": False},
+        )
+        page.project_analysis_generate_btn.click()
+
+        page.set_context_status(
+            **common,
+            project_analysis_status={
+                "overall_status": "draft",
+                "store_exists": True,
+                "structure_present": True,
+                "brief_draft_present": True,
+            },
+        )
+        page.project_analysis_review_btn.click()
+        page.project_analysis_publish_btn.click()
+
+        page.set_context_status(
+            **common,
+            project_analysis_inject_enabled=True,
+            project_analysis_status={
+                "overall_status": "published",
+                "store_exists": True,
+                "structure_present": True,
+                "brief_published_present": True,
+                "injectable": True,
+            },
+        )
+        page.project_analysis_unpublish_btn.click()
+
+        page.set_context_status(
+            **common,
+            project_analysis_status={
+                "overall_status": "stale",
+                "store_exists": True,
+                "structure_present": True,
+            },
+        )
+        page.project_analysis_generate_btn.click()
+
+        self.assertEqual(
+            actions,
+            [
+                "project_analysis_build_structure",
+                "project_analysis_review",
+                "project_analysis_publish",
+                "project_analysis_unpublish",
+                "project_analysis_build_structure",
+            ],
+        )
+        visible_copy = " ".join(
+            [
+                page.project_analysis_generate_btn.text(),
+                page.project_analysis_generate_btn.toolTip(),
+                page.project_analysis_build_btn.toolTip(),
+                page.project_analysis_review_btn.text(),
+                page.project_analysis_publish_btn.text(),
+                page.project_analysis_publish_btn.toolTip(),
+                page.project_analysis_unpublish_btn.text(),
+                page.project_analysis_unpublish_btn.toolTip(),
+            ]
+        ).lower()
+        self.assertEqual(
+            page.project_analysis_build_btn.toolTip(),
+            PROJECT_ANALYSIS_COPY["rebuild_tip"],
+        )
+        for developer_term in (
+            "brief",
+            "draft",
+            "published",
+            "fingerprint",
+            "label",
+            "route",
+        ):
+            self.assertNotIn(developer_term, visible_copy)
 
     def test_global_prep_buttons_visible_on_all_task_pages(self) -> None:
         for mode in (
@@ -829,10 +958,23 @@ class GuiTaskPageTests(unittest.TestCase):
             WorkMode.BOOTSTRAP_RAG,
             refresh_manifest_writeback=False,
         )
-        with mock.patch.object(
-            self.window,
-            "_saved_batch_context_flags",
-            return_value={"rag_enabled": True, "source_index_enabled": True},
+        from gui_qt.context_library_worker import ContextLibraryStatusResult
+
+        collected = ContextLibraryStatusResult(
+            base_dir=str(self.window.state.get_game_root() or ""),
+            live_fingerprint="fp",
+            status={"overall_status": "missing", "store_exists": False},
+            label="未生成",
+            context_flags={
+                "rag_enabled": True,
+                "source_index_enabled": True,
+                "project_analysis_enabled": False,
+                "project_analysis_inject_enabled": False,
+            },
+        )
+        with mock.patch(
+            "gui_qt.app.collect_context_library_status",
+            return_value=collected,
         ):
             self.window._refresh_context_library_panel()
             self.assertTrue(self.window.context_bootstrap_rag_btn.isEnabled())

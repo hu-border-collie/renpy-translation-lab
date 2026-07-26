@@ -48,18 +48,56 @@ PROJECT_ANALYSIS_COPY = {
     "review": "审查内容",
     "publish": "启用到翻译",
     "unpublish": "停止用于翻译",
-    "review_title": "项目分析 · 审查与启用",
-    "review_heading": "先核对摘要变化与证据，再决定是否用于翻译",
+    "review_title": "项目剧情分析 · 审查与启用",
+    "review_heading": "先核对摘要变化与来源，再决定是否用于翻译",
     "review_confirm": "确认已审查",
     "review_publish": "审查并启用到翻译",
+    "publish_tip": (
+        "将待启用的项目摘要保存为翻译使用版本；启用前会核对游戏脚本是否变化。"
+    ),
+    "unpublish_tip": "停止在翻译中使用当前项目摘要；待审查内容和游戏脚本都会保留。",
+    "rebuild_tip": "重新读取剧情节点、跳转与路线，并生成新的待审查项目摘要。",
     "publish_confirm_title": "确认启用项目摘要",
     "publish_confirm_body": (
-        "将把当前 draft 发布为翻译可用版本。只有设置中的“用于翻译”已开启，"
-        "且 fingerprint 仍匹配时才会实际注入；不会修改 .rpy 文件。"
+        "将把当前待审查摘要设为翻译使用版本。只有设置中的“用于翻译”已开启，"
+        "且游戏脚本自分析后没有变化时才会实际使用；不会修改游戏脚本。"
     ),
     "unpublish_confirm_title": "确认停止使用项目摘要",
-    "unpublish_confirm_body": "将删除 published 副本并立即停止注入；draft 与游戏脚本都会保留。",
+    "unpublish_confirm_body": (
+        "将立即停止在翻译中使用当前项目摘要；待审查内容和游戏脚本都会保留。"
+    ),
 }
+
+PROJECT_ANALYSIS_ARTIFACT_LABELS = {
+    "chunk": "剧情概要",
+    "chunk_summary": "剧情概要",
+    "scene": "剧情场景",
+    "label": "场景节点",
+    "label_summary": "场景节点",
+    "route": "剧情路线",
+    "route_summary": "剧情路线",
+    "project_brief": "项目摘要",
+}
+
+PROJECT_ANALYSIS_RECORD_STATUS_LABELS = {
+    "missing": "未生成",
+    "draft": "待审查",
+    "review_required": "待确认",
+    "published": "已启用",
+    "stale": "已过期",
+    "failed": "失败",
+}
+
+
+def project_analysis_artifact_label(kind: str) -> str:
+    """Return a user-facing Project Analysis artifact name."""
+    return PROJECT_ANALYSIS_ARTIFACT_LABELS.get(str(kind or ""), "分析条目")
+
+
+def project_analysis_record_status_label(status: str) -> str:
+    """Return a user-facing Project Analysis lifecycle label."""
+    return PROJECT_ANALYSIS_RECORD_STATUS_LABELS.get(str(status or ""), "未知")
+
 
 SETTINGS_WORKSPACE_IMMEDIATE_SAVE = (
     "项目列表操作即时保存，不受设置保存按钮影响。"

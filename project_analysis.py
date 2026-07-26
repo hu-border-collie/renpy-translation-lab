@@ -1727,9 +1727,9 @@ def format_status_label(status: Mapping[str, Any] | None) -> str:
     overall = str(status.get("overall_status") or STATUS_MISSING)
     labels = {
         STATUS_MISSING: "未生成",
-        STATUS_DRAFT: "草稿",
-        STATUS_REVIEW_REQUIRED: "待审核",
-        STATUS_PUBLISHED: "已发布",
+        STATUS_DRAFT: "待审查",
+        STATUS_REVIEW_REQUIRED: "待确认",
+        STATUS_PUBLISHED: "已启用",
         STATUS_STALE: "已过期",
         STATUS_FAILED: "失败",
     }
@@ -1737,19 +1737,19 @@ def format_status_label(status: Mapping[str, Any] | None) -> str:
     parts = [human]
     if status.get("store_exists"):
         parts.append(
-            f"chunk {status.get('chunk_count', 0)} / "
-            f"label {status.get('label_count', 0)} / "
-            f"route {status.get('route_count', 0)}"
+            f"剧情概要 {status.get('chunk_count', 0)} / "
+            f"场景节点 {status.get('label_count', 0)} / "
+            f"剧情路线 {status.get('route_count', 0)}"
         )
         brief = status.get("brief_status") or STATUS_MISSING
         if brief != STATUS_MISSING:
-            parts.append(f"brief {labels.get(brief, brief)}")
+            parts.append(f"项目摘要 {labels.get(brief, brief)}")
     if status.get("semantic_evidence_warning"):
         parts.append("缺少关键词剧情概要（仅结构分析）")
     if status.get("error"):
         parts.append("读取错误")
     if overall == STATUS_PUBLISHED and not status.get("injectable"):
-        parts.append("不可注入")
+        parts.append("当前不会用于翻译")
     return " · ".join(parts)
 
 
