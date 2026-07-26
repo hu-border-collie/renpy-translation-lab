@@ -111,6 +111,11 @@ def normalize_analysis_inputs(value: Mapping[str, Any] | None) -> dict[str, dict
 
 
 def analysis_inputs_digest(value: Mapping[str, Any] | None) -> str:
+    """Digest optional inputs by content hash and provenance for cache invalidation.
+
+    Raw context content is intentionally excluded from the serialized digest
+    payload; its ``content_sha256`` binds the content without duplicating it.
+    """
     normalized = normalize_analysis_inputs(value)
     payload = {
         name: {
@@ -125,6 +130,7 @@ def analysis_inputs_digest(value: Mapping[str, Any] | None) -> str:
 
 
 def format_analysis_inputs(value: Mapping[str, Any] | None, *, max_chars: int) -> str:
+    """Format optional context for prompts, clipped to the character budget."""
     normalized = normalize_analysis_inputs(value)
     if not normalized:
         return ""
@@ -137,6 +143,19 @@ def format_analysis_inputs(value: Mapping[str, Any] | None, *, max_chars: int) -
         + "\n\n".join(sections),
         max_chars,
     )
+
+
+def _optional_context_and_primary_limit(
+    cfg: Mapping[str, Any],
+    analysis_inputs: Mapping[str, Any] | None,
+) -> tuple[str, int]:
+    """Allocate the request character budget between optional and primary material."""
+    optional_context = format_analysis_inputs(
+        analysis_inputs,
+        max_chars=max(1000, int(cfg["max_input_chars_per_request"]) // 3),
+    )
+    primary_limit = max(1, int(cfg["max_input_chars_per_request"]) - len(optional_context))
+    return optional_context, primary_limit
 
 
 def _analysis_dependency_digest(
@@ -245,11 +264,9 @@ def refine_label_record(
     model_name = model or cfg["model"]
     raw = rec.get("summary") or ""
     meta = rec.get("metadata") if isinstance(rec.get("metadata"), dict) else {}
-    optional_context = format_analysis_inputs(
-        analysis_inputs,
-        max_chars=max(1000, cfg["max_input_chars_per_request"] // 3),
+    optional_context, primary_limit = _optional_context_and_primary_limit(
+        cfg, analysis_inputs
     )
-    primary_limit = max(1, cfg["max_input_chars_per_request"] - len(optional_context))
     user = (
         f"Label id: {rec.get('label_id') or rec.get('id')}\n"
         f"Source files: {', '.join(rec.get('source_files') or [])}\n"
@@ -310,11 +327,9 @@ def refine_route_record(
         else:
             parts.append(f"### {lid}\n(missing label summary)")
     body = "\n\n".join(parts)
-    optional_context = format_analysis_inputs(
-        analysis_inputs,
-        max_chars=max(1000, cfg["max_input_chars_per_request"] // 3),
+    optional_context, primary_limit = _optional_context_and_primary_limit(
+        cfg, analysis_inputs
     )
-    primary_limit = max(1, cfg["max_input_chars_per_request"] - len(optional_context))
     user = (
         f"Route id: {rec.get('id')}\n"
         f"Entry: {meta.get('entry_label')}\n"
@@ -373,11 +388,9 @@ def refine_project_brief(
             f"## {rid}\nentry={meta.get('entry_label')} unresolved={meta.get('unresolved')}\n"
             f"{route.get('summary') or ''}"
         )
-    optional_context = format_analysis_inputs(
-        analysis_inputs,
-        max_chars=max(1000, cfg["max_input_chars_per_request"] // 3),
+    optional_context, primary_limit = _optional_context_and_primary_limit(
+        cfg, analysis_inputs
     )
-    primary_limit = max(1, cfg["max_input_chars_per_request"] - len(optional_context))
     user = (
         f"Unresolved dynamic edges (count): {unresolved_count}\n"
         f"Route count: {len(routes)}\n\n"
@@ -493,6 +506,9 @@ def run_mapreduce_drafts(
     """LLM-refine label → route → brief drafts in the analysis store.
 
     Requires structure drafts already present (run build-structure first).
+    ``analysis_inputs`` supplies optional context to every label, route, and brief
+    request. Its content hashes and provenance participate in each upstream
+    dependency digest, so any change forces a full label → route → brief refresh.
     When provided, ``progress`` receives mappings with ``stage``, ``artifact_id``,
     ``completed``, ``total``, ``action``, and a ``usage`` mapping. ``pricing`` may
     provide ``currency``, ``input_per_million``, and ``output_per_million``; the

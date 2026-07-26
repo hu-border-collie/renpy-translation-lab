@@ -1295,42 +1295,26 @@ def _clip_context_summary(text: Any, limit: int) -> str:
     return value
 
 
-def load_injectable_project_context(
-    store_dir: str | os.PathLike[str] | None = None,
+def select_project_local_context(
+    labels: Sequence[Mapping[str, Any]],
+    routes: Sequence[Mapping[str, Any]],
     *,
-    base_dir: str | None = None,
-    expected_source_fingerprint: str = "",
-    file_rel_path: str = "",
+    file_rel_path: str,
     line_numbers: Sequence[int] | None = None,
-    max_brief_chars: int = 4000,
     max_label_chars: int = 800,
     max_route_chars: int = 1200,
     max_labels: int = 3,
     max_routes: int = 3,
-    enabled: bool = True,
 ) -> dict[str, Any]:
-    """Load the published global brief plus matching label/route summaries.
-
-    Local summaries inherit the published brief gate: they are returned only while
-    that brief is published and fresh for the current project fingerprint. The
-    target file and source line numbers select the narrowest matching labels;
-    routes are then selected from those label dependencies. Ambiguous file-only
-    matches are omitted instead of injecting unrelated route context.
-    """
-    brief = load_injectable_project_brief(
-        store_dir=store_dir,
-        base_dir=base_dir,
-        expected_source_fingerprint=expected_source_fingerprint,
-        max_chars=max_brief_chars,
-        enabled=enabled,
-    )
-    result = {**brief, "labels": [], "routes": [], "local_diagnostics": ""}
-    if not brief.get("injectable") or not str(file_rel_path or "").strip():
+    """Select bounded label and route summaries for one source target."""
+    result: dict[str, Any] = {
+        "labels": [],
+        "routes": [],
+        "local_diagnostics": "",
+    }
+    if not str(file_rel_path or "").strip():
         return result
 
-    store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
-    labels = store.load_summaries(KIND_LABEL)
-    routes = store.load_routes()
     file_labels = [
         record
         for record in labels
@@ -1348,7 +1332,7 @@ def load_injectable_project_context(
         if line > 0:
             normalized_lines.add(line)
 
-    matched_labels: list[dict[str, Any]] = []
+    matched_labels: list[Mapping[str, Any]] = []
     if normalized_lines:
         for record in file_labels:
             span = record.get("line_span")
@@ -1422,6 +1406,57 @@ def load_injectable_project_context(
             f"target={_normalized_context_path(file_rel_path)} "
             f"labels={label_names or '-'} routes={route_names or '-'}"
         )
+    return result
+
+
+def load_injectable_project_context(
+    store_dir: str | os.PathLike[str] | None = None,
+    *,
+    base_dir: str | None = None,
+    expected_source_fingerprint: str = "",
+    file_rel_path: str = "",
+    line_numbers: Sequence[int] | None = None,
+    max_brief_chars: int = 4000,
+    max_label_chars: int = 800,
+    max_route_chars: int = 1200,
+    max_labels: int = 3,
+    max_routes: int = 3,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    """Load the published global brief plus matching label/route summaries.
+
+    Local summaries inherit the published brief gate: they are returned only while
+    that brief is published and fresh for the current project fingerprint. The
+    target file and source line numbers select the narrowest matching labels;
+    routes are then selected from those label dependencies. Ambiguous file-only
+    matches are omitted instead of injecting unrelated route context.
+    """
+    brief = load_injectable_project_brief(
+        store_dir=store_dir,
+        base_dir=base_dir,
+        expected_source_fingerprint=expected_source_fingerprint,
+        max_chars=max_brief_chars,
+        enabled=enabled,
+    )
+    result = {**brief, "labels": [], "routes": [], "local_diagnostics": ""}
+    if not brief.get("injectable") or not str(file_rel_path or "").strip():
+        return result
+
+    store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
+    labels = store.load_summaries(KIND_LABEL)
+    routes = store.load_routes()
+    result.update(
+        select_project_local_context(
+            labels,
+            routes,
+            file_rel_path=file_rel_path,
+            line_numbers=line_numbers,
+            max_label_chars=max_label_chars,
+            max_route_chars=max_route_chars,
+            max_labels=max_labels,
+            max_routes=max_routes,
+        )
+    )
     return result
 
 def publish_project_brief(

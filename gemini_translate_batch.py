@@ -707,12 +707,17 @@ def compute_current_project_analysis_fingerprint(base_dir=None, store_dir=None):
 
 
 def load_injectable_project_context_for_prompts(file_rel_path='', line_numbers=None):
-    """Load the published global brief and target-specific label/route context."""
+    """Load cached global artifacts and select target-local context in memory."""
     global _PROJECT_BRIEF_CACHE, _PROJECT_BRIEF_CACHE_KEY
     empty = {'text': '', 'diagnostics': '', 'labels': [], 'routes': [], 'local_diagnostics': ''}
     if not PROJECT_ANALYSIS_ENABLED or not PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
         return empty
-    from project_analysis import load_injectable_project_context
+    from project_analysis import (
+        KIND_LABEL,
+        load_injectable_project_context,
+        resolve_project_analysis_store,
+        select_project_local_context,
+    )
 
     store_dir = PROJECT_ANALYSIS_STORE_DIR or None
     base_dir = legacy.BASE_DIR or None
@@ -727,34 +732,59 @@ def load_injectable_project_context_for_prompts(file_rel_path='', line_numbers=N
             continue
         if value > 0:
             normalized_lines.append(value)
-    normalized_lines_tuple = tuple(sorted(set(normalized_lines)))
     cache_key = (
         bool(PROJECT_ANALYSIS_ENABLED), bool(PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF),
         store_dir or '', int(PROJECT_ANALYSIS_MAX_BRIEF_CHARS),
         int(PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS),
         int(PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS), str(base_dir or ''), current_fp,
-        str(file_rel_path or '').replace('\\', '/'), normalized_lines_tuple,
     )
-    if _PROJECT_BRIEF_CACHE is not None and _PROJECT_BRIEF_CACHE_KEY == cache_key:
-        return dict(_PROJECT_BRIEF_CACHE)
-    payload = load_injectable_project_context(
-        store_dir=store_dir, base_dir=base_dir,
-        expected_source_fingerprint=current_fp,
-        file_rel_path=file_rel_path, line_numbers=normalized_lines_tuple,
-        max_brief_chars=PROJECT_ANALYSIS_MAX_BRIEF_CHARS,
-        max_label_chars=PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS,
-        max_route_chars=PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS,
-        enabled=True,
+    source = (
+        _PROJECT_BRIEF_CACHE
+        if _PROJECT_BRIEF_CACHE is not None and _PROJECT_BRIEF_CACHE_KEY == cache_key
+        else None
     )
-    result = {
-        'text': str(payload.get('text') or '') if payload.get('injectable') else '',
-        'diagnostics': str(payload.get('diagnostics') or '') if payload.get('injectable') else '',
-        'labels': list(payload.get('labels') or []) if payload.get('injectable') else [],
-        'routes': list(payload.get('routes') or []) if payload.get('injectable') else [],
-        'local_diagnostics': str(payload.get('local_diagnostics') or '') if payload.get('injectable') else '',
-    }
-    _PROJECT_BRIEF_CACHE = dict(result)
-    _PROJECT_BRIEF_CACHE_KEY = cache_key
+    if source is None:
+        try:
+            payload = load_injectable_project_context(
+                store_dir=store_dir, base_dir=base_dir,
+                expected_source_fingerprint=current_fp,
+                max_brief_chars=PROJECT_ANALYSIS_MAX_BRIEF_CHARS,
+                enabled=True,
+            )
+            label_records = []
+            route_records = []
+            if payload.get('injectable'):
+                store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
+                label_records = store.load_summaries(KIND_LABEL)
+                route_records = store.load_routes()
+        except Exception as exc:
+            print(f'Warning: project analysis local context unavailable: {exc}', file=sys.stderr)
+            return empty
+        source = {
+            'result': {
+                'text': str(payload.get('text') or '') if payload.get('injectable') else '',
+                'diagnostics': str(payload.get('diagnostics') or '') if payload.get('injectable') else '',
+                'labels': [],
+                'routes': [],
+                'local_diagnostics': '',
+            },
+            'label_records': label_records,
+            'route_records': route_records,
+        }
+        _PROJECT_BRIEF_CACHE = source
+        _PROJECT_BRIEF_CACHE_KEY = cache_key
+    result = dict(source['result'])
+    if result['text'] and str(file_rel_path or '').strip():
+        result.update(
+            select_project_local_context(
+                source['label_records'],
+                source['route_records'],
+                file_rel_path=file_rel_path,
+                line_numbers=tuple(sorted(set(normalized_lines))),
+                max_label_chars=PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS,
+                max_route_chars=PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS,
+            )
+        )
     return result
 
 

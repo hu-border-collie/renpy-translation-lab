@@ -149,6 +149,12 @@ class SnapshotAndDigestTests(unittest.TestCase):
         self.assertFalse(
             with_pa_disabled_inject["digest_payload"]["project_analysis"]["included_in_digest"]
         )
+        self.assertEqual(
+            without_pa["layers"]["project_analysis"]["local_context_policy"], ""
+        )
+        self.assertEqual(
+            with_pa_disabled_inject["layers"]["project_analysis"]["local_context_policy"], ""
+        )
         with_pa = fr.build_context_snapshot(
             translation_items=items,
             project_analysis_enabled=True,

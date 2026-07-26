@@ -217,6 +217,108 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertEqual(inputs["source_index"]["provenance"]["source_ids"], ["source-1"])
         self.assertEqual(inputs["story_memory"]["provenance"]["query_file"], "script.rpy")
 
+    def test_project_context_artifacts_are_cached_across_targets(self):
+        fake_store = mock.Mock()
+        fake_store.load_summaries.return_value = [
+            {
+                "id": "label:a",
+                "label_id": "a",
+                "summary": "Scene A",
+                "source_files": ["script.rpy"],
+                "line_span": [1, 10],
+            },
+            {
+                "id": "label:b",
+                "label_id": "b",
+                "summary": "Scene B",
+                "source_files": ["script.rpy"],
+                "line_span": [20, 30],
+            },
+        ]
+        fake_store.load_routes.return_value = [
+            {
+                "id": "route:a",
+                "route_id": "route:a",
+                "summary": "Route A",
+                "metadata": {"label_ids": ["a"]},
+            },
+            {
+                "id": "route:b",
+                "route_id": "route:b",
+                "summary": "Route B",
+                "metadata": {"label_ids": ["b"]},
+            },
+        ]
+        global_payload = {
+            "injectable": True,
+            "text": "Global brief",
+            "diagnostics": "status=published",
+            "labels": [],
+            "routes": [],
+            "local_diagnostics": "",
+        }
+        with (
+            mock.patch.object(batch_mod, "PROJECT_ANALYSIS_ENABLED", True),
+            mock.patch.object(batch_mod, "PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF", True),
+            mock.patch.object(batch_mod, "_PROJECT_BRIEF_CACHE", None),
+            mock.patch.object(batch_mod, "_PROJECT_BRIEF_CACHE_KEY", None),
+            mock.patch.object(
+                batch_mod,
+                "compute_current_project_analysis_fingerprint",
+                return_value="fp-1",
+            ),
+            mock.patch(
+                "project_analysis.load_injectable_project_context",
+                return_value=global_payload,
+            ) as load_global,
+            mock.patch(
+                "project_analysis.resolve_project_analysis_store",
+                return_value=fake_store,
+            ) as resolve_store,
+        ):
+            first = batch_mod.load_injectable_project_context_for_prompts(
+                "script.rpy", [5]
+            )
+            second = batch_mod.load_injectable_project_context_for_prompts(
+                "script.rpy", [25]
+            )
+
+        self.assertEqual(first["labels"][0]["label_id"], "a")
+        self.assertEqual(second["labels"][0]["label_id"], "b")
+        load_global.assert_called_once()
+        resolve_store.assert_called_once()
+        fake_store.load_summaries.assert_called_once()
+        fake_store.load_routes.assert_called_once()
+
+    def test_project_context_store_failure_is_non_blocking_and_not_cached(self):
+        with (
+            mock.patch.object(batch_mod, "PROJECT_ANALYSIS_ENABLED", True),
+            mock.patch.object(batch_mod, "PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF", True),
+            mock.patch.object(batch_mod, "_PROJECT_BRIEF_CACHE", None),
+            mock.patch.object(batch_mod, "_PROJECT_BRIEF_CACHE_KEY", None),
+            mock.patch.object(
+                batch_mod,
+                "compute_current_project_analysis_fingerprint",
+                return_value="fp-1",
+            ),
+            mock.patch(
+                "project_analysis.load_injectable_project_context",
+                side_effect=ValueError("corrupt analysis store"),
+            ),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            result = batch_mod.load_injectable_project_context_for_prompts(
+                "script.rpy", [5]
+            )
+            cached = batch_mod._PROJECT_BRIEF_CACHE
+
+        self.assertEqual(
+            result,
+            {"text": "", "diagnostics": "", "labels": [], "routes": [], "local_diagnostics": ""},
+        )
+        self.assertIsNone(cached)
+        self.assertIn("project analysis local context unavailable", stderr.getvalue())
+
     def test_translation_and_revision_prompts_select_target_local_context(self):
         payload = {
             "text": "Global brief",
