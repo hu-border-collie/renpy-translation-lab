@@ -19,6 +19,7 @@ class WorkMode(str, Enum):
     BOOTSTRAP_RAG = "bootstrap_rag"
     BOOTSTRAP_SOURCE_INDEX = "bootstrap_source_index"
     PROJECT_ANALYSIS = "project_analysis"
+    FINAL_REVIEW = "final_review"
     REVISION = "revision"
     SYNC_REVISION = "sync_revision"
 
@@ -78,6 +79,7 @@ TASK_CATEGORY_SPECS: dict[TaskCategory, TaskCategorySpec] = {
         work_modes=(
             WorkMode.REVISION,
             WorkMode.SYNC_REVISION,
+            WorkMode.FINAL_REVIEW,
         ),
     ),
 }
@@ -233,6 +235,25 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         is_bootstrap=False,
         bootstrap_kind="",
         manifest_mode=None,
+        not_implemented_message="",
+    ),
+    WorkMode.FINAL_REVIEW: WorkModeSpec(
+        mode=WorkMode.FINAL_REVIEW,
+        category=TaskCategory.MAINTENANCE,
+        label="最终审校",
+        start_button_label="开始最终审校",
+        resume_button_label="继续审查",
+        task_group_label="最终审校任务",
+        progress_tab_label="审查进度",
+        writeback_tab_label="订正候选",
+        idle_workflow_heading="尚未开始最终审校",
+        idle_workflow_message="先生成问题报告；只有人工选择的问题才会进入订正预览，绝不直接修改脚本。",
+        supports_resume=True,
+        supports_translation_writeback=False,
+        implemented=True,
+        is_bootstrap=False,
+        bootstrap_kind="",
+        manifest_mode="final_review",
         not_implemented_message="",
     ),
     WorkMode.REVISION: WorkModeSpec(
@@ -409,7 +430,7 @@ WORKBENCH_NAV_SPECS: dict[WorkbenchNavItem, WorkbenchNavSpec] = {
     WorkbenchNavItem.REVISION: WorkbenchNavSpec(
         item=WorkbenchNavItem.REVISION,
         label="订正",
-        work_modes=(WorkMode.REVISION, WorkMode.SYNC_REVISION),
+        work_modes=(WorkMode.REVISION, WorkMode.SYNC_REVISION, WorkMode.FINAL_REVIEW),
         show_submode=True,
     ),
     WorkbenchNavItem.CONTEXT: WorkbenchNavSpec(
@@ -429,6 +450,7 @@ WORKBENCH_NAV_SPECS: dict[WorkbenchNavItem, WorkbenchNavSpec] = {
 _WORK_MODE_SUBMODE_LABELS: dict[WorkMode, str] = {
     WorkMode.KEYWORD_EXTRACTION: "批量",
     WorkMode.SYNC_KEYWORD_EXTRACTION: "同步",
+    WorkMode.FINAL_REVIEW: "终审",
     WorkMode.REVISION: "批量",
     WorkMode.SYNC_REVISION: "同步",
     WorkMode.BOOTSTRAP_RAG: "记忆库",

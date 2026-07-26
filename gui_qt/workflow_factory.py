@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from .project_analysis_workflow import ProjectAnalysisWorkflow
+from .final_review_workflow import FinalReviewWorkflow
 from .keyword_workflow import KeywordBatchWorkflow
 from .revision_workflow import RevisionBatchWorkflow
 from .sync_keyword_workflow import SyncKeywordWorkflow
@@ -37,6 +38,8 @@ def create_workflow(
         return KeywordBatchWorkflow.start_new(submit_max_cost=submit_max_cost)
     if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
         return SyncKeywordWorkflow.start_new()
+    if spec.mode == WorkMode.FINAL_REVIEW:
+        return FinalReviewWorkflow.start_new(submit_max_cost=submit_max_cost)
     if spec.mode == WorkMode.REVISION:
         return RevisionBatchWorkflow.start_new(submit_max_cost=submit_max_cost)
     if spec.mode == WorkMode.SYNC_REVISION:
@@ -64,6 +67,12 @@ def resume_workflow(
         )
     if spec.mode == WorkMode.KEYWORD_EXTRACTION:
         return KeywordBatchWorkflow.resume_manifest(
+            manifest_path,
+            manifest,
+            submit_max_cost=submit_max_cost,
+        )
+    if spec.mode == WorkMode.FINAL_REVIEW:
+        return FinalReviewWorkflow.resume_manifest(
             manifest_path,
             manifest,
             submit_max_cost=submit_max_cost,

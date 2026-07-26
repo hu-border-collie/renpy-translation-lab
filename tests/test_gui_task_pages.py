@@ -37,6 +37,7 @@ class TaskPageMetaTests(unittest.TestCase):
         self.assertEqual(work_mode_submode_label(WorkMode.KEYWORD_EXTRACTION), "批量")
         self.assertEqual(work_mode_submode_label(WorkMode.SYNC_KEYWORD_EXTRACTION), "同步")
         self.assertEqual(work_mode_submode_label(WorkMode.REVISION), "批量")
+        self.assertEqual(work_mode_submode_label(WorkMode.FINAL_REVIEW), "终审")
         self.assertEqual(work_mode_submode_label(WorkMode.BOOTSTRAP_RAG), "记忆库")
 
     def test_context_nav_hides_submode_combo(self) -> None:
@@ -400,6 +401,16 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(page.writeback_btn.isEnabled())
         self.assertTrue(page.stop_btn.isEnabled())
 
+    def test_final_review_is_integrated_into_revision_page(self) -> None:
+        self.window._set_work_mode(WorkMode.FINAL_REVIEW, refresh_manifest_writeback=False)
+        page = self.window.revision_page
+        self.assertIs(self.window.workbench_stack.currentWidget(), page)
+        self.assertEqual(self.window._workbench_nav_item, WorkbenchNavItem.REVISION)
+        self.assertEqual(page.mode_combo.currentData(), WorkMode.FINAL_REVIEW.value)
+        self.assertEqual(page.start_btn.text(), "开始最终审校")
+        self.assertFalse(page.review_findings_btn.isHidden())
+        self.assertEqual(page.writeback_btn.text(), "写回所选订正")
+        self.assertIn("人工选择", self.window.work_mode_hint_label.text())
     def test_batch_page_owns_actions_and_running_lock(self) -> None:
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,

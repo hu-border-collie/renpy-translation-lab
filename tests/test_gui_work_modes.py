@@ -55,10 +55,10 @@ class GuiWorkModesTests(unittest.TestCase):
 
     def test_maintenance_category_contains_revision_modes(self):
         modes = work_modes_for_category(TaskCategory.MAINTENANCE)
-        self.assertEqual(modes, (WorkMode.REVISION, WorkMode.SYNC_REVISION))
+        self.assertEqual(modes, (WorkMode.REVISION, WorkMode.SYNC_REVISION, WorkMode.FINAL_REVIEW))
 
     def test_revision_modes_are_implemented(self):
-        for mode in (WorkMode.REVISION, WorkMode.SYNC_REVISION):
+        for mode in (WorkMode.REVISION, WorkMode.SYNC_REVISION, WorkMode.FINAL_REVIEW):
             with self.subTest(mode=mode):
                 spec = work_mode_spec(mode)
                 self.assertTrue(spec.implemented)

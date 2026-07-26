@@ -343,6 +343,16 @@ def build_cli_commands(
                 ),
             ]
         )
+        commands.append(
+            DiagnosticsCommand(
+                label="把已选 findings 生成订正预览",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["final-review-create-revisions", manifest_path],
+                ),
+            )
+        )
         commands.extend(
             build_cloud_job_commands(
                 python_exe=python_exe,
@@ -356,18 +366,19 @@ def build_cli_commands(
             )
         )
     if mode_text == "revision":
-        commands.extend(
-            build_cloud_job_commands(
-                python_exe=python_exe,
-                batch_script_path=batch_script_path,
-                manifest_path=manifest_path,
-                manifest=manifest,
-                submit_max_cost=submit_max_cost,
-                submit_label="提交订正任务",
-                status_label="查询订正状态",
-                download_label="下载订正结果",
+        if not manifest.get("submit_disabled"):
+            commands.extend(
+                build_cloud_job_commands(
+                    python_exe=python_exe,
+                    batch_script_path=batch_script_path,
+                    manifest_path=manifest_path,
+                    manifest=manifest,
+                    submit_max_cost=submit_max_cost,
+                    submit_label="提交订正任务",
+                    status_label="查询订正状态",
+                    download_label="下载订正结果",
+                )
             )
-        )
         commands.append(
             DiagnosticsCommand(
                 label="预览订正结果",

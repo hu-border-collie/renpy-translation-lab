@@ -250,6 +250,17 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("preview-revisions", by_label["预览订正结果"])
         self.assertIn("apply-revisions", by_label["写回订正（预览确认后）"])
 
+    def test_local_final_review_candidates_omit_cloud_submit(self):
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=r"C:\logs\batch_jobs\local-review\manifest.json",
+            manifest={"mode": "revision", "submit_disabled": True},
+        )
+        labels = [command.label for command in commands]
+        self.assertNotIn("提交订正任务", labels)
+        self.assertIn("预览订正结果", labels)
+        self.assertIn("写回订正（预览确认后）", labels)
     def test_applied_revision_manifest_omits_revision_apply_command(self):
         commands = build_cli_commands(
             python_exe="python",
