@@ -121,6 +121,30 @@ class DoctorLayoutStatusMatrixTests(unittest.TestCase):
 
 
 class DoctorRecommendationMatrixTests(unittest.TestCase):
+    def test_enabled_project_analysis_reports_actionable_setup_and_stale_codes(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=1,
+            layout_status="ready",
+        )
+        report["context_status"] = {
+            "project_analysis": {
+                "enabled": True,
+                "model": "",
+                "api_key_count": 0,
+                "overall_status": "stale",
+            }
+        }
+        codes = doctor_rec.doctor_recommendation_codes(
+            batch_mod.collect_doctor_recommendations(report)
+        )
+
+        self.assertIn(doctor_rec.CONFIGURE_PROJECT_ANALYSIS_MODEL, codes)
+        self.assertIn(doctor_rec.CONFIGURE_PROJECT_ANALYSIS_API, codes)
+        self.assertIn(doctor_rec.REFRESH_PROJECT_ANALYSIS, codes)
+        self.assertTrue(
+            set(codes).issubset(doctor_rec.OPTIONAL_RECOMMENDATION_CODES)
+        )
     def test_switch_to_work_only_recommends_switch_and_bootstrap(self):
         report = _layout_report(
             base_dir="C:/Games/Example",

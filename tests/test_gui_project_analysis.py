@@ -9,6 +9,7 @@ import project_analysis as pa
 from gui_qt.check_report import idle_writeback_summary_for_work_mode
 from gui_qt.project_analysis_workflow import (
     ProjectAnalysisWorkflow,
+    generation_facts_from_output,
     discover_keyword_summary_path,
 )
 from gui_qt.translation_workflow import WorkflowUpdate
@@ -62,6 +63,18 @@ class ProjectAnalysisWorkflowTests(unittest.TestCase):
         self.assertEqual(update.status, "done")
         self.assertFalse(update.should_continue)
 
+    def test_generation_progress_is_rendered_as_gui_facts(self):
+        output = (
+            'PROJECT_ANALYSIS_PROGRESS '
+            '{"stage":"complete","completed":1,"total":1,'
+            '"usage":{"requests":4,"input_tokens":40,"output_tokens":16,'
+            '"estimated_cost":0.000104,"currency":"USD"}}\n'
+        )
+        facts = generation_facts_from_output(output)
+
+        self.assertIn("complete 1/1", facts[0])
+        self.assertIn("模型请求：4", facts[1])
+        self.assertIn("0.000104 USD", facts[2])
     def test_step_keys_match_concrete_requested_sequence(self):
         self.assertEqual(
             ProjectAnalysisWorkflow.start_new(build=False, generate=True).step_keys(),

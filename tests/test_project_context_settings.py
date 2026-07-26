@@ -101,6 +101,40 @@ class ProjectContextSettingsTests(unittest.TestCase):
             self.assertTrue(flags["source_index_enabled"])
             self.assertTrue(flags["bootstrap_on_build"])
 
+    def test_project_analysis_flags_are_project_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            global_config = {
+                "batch": {
+                    "rag": {"enabled": False},
+                    "source_index": {"enabled": False},
+                    "project_analysis": {
+                        "enabled": False,
+                        "inject_published_brief": False,
+                    },
+                }
+            }
+            save_project_context_settings(
+                root,
+                {
+                    "rag_enabled": False,
+                    "source_index_enabled": False,
+                    "bootstrap_on_build": True,
+                    "project_analysis_enabled": True,
+                    "project_analysis_inject_enabled": True,
+                },
+            )
+
+            data = json.loads(Path(project_context_settings_path(root)).read_text(encoding="utf-8"))
+            self.assertTrue(data["batch_project_analysis_enabled"])
+            self.assertTrue(data["batch_project_analysis_inject_published_brief"])
+            flags = resolve_batch_context_flags(global_config, root)
+            self.assertTrue(flags["project_analysis_enabled"])
+            self.assertTrue(flags["project_analysis_inject_enabled"])
+            applied = apply_project_context_settings_to_config(dict(global_config), root)
+            self.assertTrue(applied["batch"]["project_analysis"]["enabled"])
+            self.assertTrue(applied["batch"]["project_analysis"]["inject_published_brief"])
+
 
 if __name__ == "__main__":
     unittest.main()

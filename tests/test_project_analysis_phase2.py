@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -103,6 +104,34 @@ class RouteParseTests(unittest.TestCase):
             fp2 = routes.digest_script_paths([str(script)], base_dir=tmp)
             self.assertNotEqual(fp1, fp2)
 
+    def test_relative_script_roots_survive_project_relocation(self):
+        import gemini_translate_batch as batch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "project_a"
+            scripts = source / "custom_scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "script.rpy").write_text(
+                "label start:\n    return\n", encoding="utf-8"
+            )
+            store_dir = source / "analysis"
+            built = gen.build_structure_drafts(
+                store_dir=str(store_dir),
+                base_dir=str(source),
+                script_roots=[str(scripts)],
+                entry_labels=["start"],
+            )
+            identity = pa.ProjectAnalysisStore(str(store_dir)).load_manifest()[
+                "project_identity"
+            ]
+            self.assertEqual(identity["script_roots"], ["custom_scripts"])
+
+            relocated = Path(tmp) / "project_b"
+            shutil.copytree(source, relocated)
+            fingerprint = batch_mod.compute_current_project_analysis_fingerprint(
+                str(relocated), store_dir=str(relocated / "analysis")
+            )
+            self.assertEqual(fingerprint, built["source_fingerprint"])
     def test_call_expression_not_parsed_as_named_call(self):
         text = "label a:\n    call expression some_flag\n    call helper\n"
         labels, edges = routes.parse_rpy_labels_and_edges(text, file_rel_path="x.rpy")
@@ -163,6 +192,13 @@ class GenerateAndPublishTests(unittest.TestCase):
             )
             self.assertTrue(status["structure_present"])
             self.assertTrue(status["brief_draft_present"])
+            self.assertEqual(
+                status["semantic_evidence_warning"], "keyword_summaries_missing"
+            )
+            self.assertIn("仅结构分析", pa.format_status_label(status))
+            self.assertTrue(
+                any("Warning:" in line for line in pa.format_status_lines(status))
+            )
 
     def test_ingest_build_publish_inject_cycle(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -214,6 +250,7 @@ class GenerateAndPublishTests(unittest.TestCase):
             )
             self.assertTrue(allowed["injectable"])
             self.assertIn("Project Analysis Brief", allowed["text"])
+            self.assertNotIn("keyword_summaries_missing", allowed["diagnostics"])
 
             # Script edit changes fingerprint → injection blocked (use temp copy).
             with tempfile.TemporaryDirectory() as tmp2:

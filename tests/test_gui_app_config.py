@@ -1,4 +1,5 @@
 import copy
+import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -456,6 +457,42 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(flags["rag_enabled"])
         self.assertFalse(flags["source_index_enabled"])
 
+    def test_saved_project_analysis_flags_reads_project_override(self):
+        from project_context_settings import save_project_context_settings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            game_root = Path(tmp)
+            save_project_context_settings(
+                game_root,
+                {
+                    "rag_enabled": False,
+                    "source_index_enabled": False,
+                    "bootstrap_on_build": True,
+                    "project_analysis_enabled": True,
+                    "project_analysis_inject_enabled": True,
+                },
+            )
+
+            class FakeState:
+                def get_game_root(self):
+                    return game_root
+
+                def load_translator_config(self):
+                    return {
+                        "batch": {
+                            "project_analysis": {
+                                "enabled": False,
+                                "inject_published_brief": False,
+                            }
+                        }
+                    }
+
+            self.window.state = FakeState()
+
+            flags = self.window._saved_project_analysis_flags()
+
+            self.assertTrue(flags["enabled"])
+            self.assertTrue(flags["inject_enabled"])
     def test_save_config_persists_context_storage_and_rolls_back_on_project_failure(self):
         from gui_qt.work_modes import WorkMode
 
@@ -523,6 +560,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                 "rag_enabled": True,
                 "source_index_enabled": True,
                 "bootstrap_on_build": False,
+                "project_analysis_enabled": False,
+                "project_analysis_inject_enabled": False,
             },
         )
         # Legacy global values remain fallback defaults for projects without

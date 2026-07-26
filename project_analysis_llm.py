@@ -403,6 +403,8 @@ def run_mapreduce_drafts(
     force: bool = False,
     provider: str = "",
     model: str = "",
+    progress: Callable[[Mapping[str, Any]], None] | None = None,
+    pricing: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """LLM-refine label → route → brief drafts in the analysis store.
 
@@ -415,6 +417,71 @@ def run_mapreduce_drafts(
         def generate(request: SyncGenerationRequest) -> SyncGenerationResult:
             return backend.generate(request)
 
+    usage_summary: dict[str, Any] = {
+        "requests": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "by_stage": {},
+    }
+    current_request = {"stage": "", "artifact_id": ""}
+    raw_generate = generate
+
+    def _usage_int(metadata: Mapping[str, Any], *keys: str) -> int:
+        for key in keys:
+            try:
+                value = int(metadata.get(key) or 0)
+            except (TypeError, ValueError):
+                continue
+            if value:
+                return value
+        return 0
+
+    def _tracked_generate(request: SyncGenerationRequest) -> SyncGenerationResult:
+        result = raw_generate(request)
+        metadata = dict(getattr(result, "usage_metadata", None) or {})
+        input_tokens = _usage_int(metadata, "prompt_token_count", "prompt_tokens", "input_tokens")
+        output_tokens = _usage_int(
+            metadata, "candidates_token_count", "completion_tokens", "output_tokens"
+        )
+        total_tokens = _usage_int(metadata, "total_token_count", "total_tokens")
+        if not total_tokens:
+            total_tokens = input_tokens + output_tokens
+        usage_summary["requests"] += 1
+        usage_summary["input_tokens"] += input_tokens
+        usage_summary["output_tokens"] += output_tokens
+        usage_summary["total_tokens"] += total_tokens
+        stage = current_request["stage"] or "unknown"
+        stage_usage = usage_summary["by_stage"].setdefault(
+            stage,
+            {"requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        )
+        stage_usage["requests"] += 1
+        stage_usage["input_tokens"] += input_tokens
+        stage_usage["output_tokens"] += output_tokens
+        stage_usage["total_tokens"] += total_tokens
+        return result
+
+    def _emit_progress(stage: str, completed: int, total: int, action: str) -> None:
+        if progress is None:
+            return
+        progress(
+            {
+                "stage": stage,
+                "artifact_id": current_request["artifact_id"],
+                "completed": completed,
+                "total": total,
+                "action": action,
+                "usage": {
+                    "requests": usage_summary["requests"],
+                    "input_tokens": usage_summary["input_tokens"],
+                    "output_tokens": usage_summary["output_tokens"],
+                    "total_tokens": usage_summary["total_tokens"],
+                },
+            }
+        )
+
+    generate = _tracked_generate
     cfg = merge_llm_config(config)
     if model:
         cfg["model"] = model
@@ -431,28 +498,28 @@ def run_mapreduce_drafts(
             "no label/route drafts found; run project-analysis-build-structure first"
         )
 
-    # Prefer structure fingerprint from existing records / manifest.
+    # The brief/injection contract uses the project-wide structure fingerprint.
+    # Individual label/route records carry narrower fingerprints for cache reuse.
     source_fp = ""
-    if labels:
+    existing_manifest = store.load_manifest() or {}
+    brief = (existing_manifest.get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {}
+    source_fp = str(
+        normalize_lineage(brief.get("lineage")).get("source_fingerprint") or ""
+    )
+    if not source_fp and labels:
         source_fp = str(
-            (normalize_lineage(labels[0].get("lineage")).get("source_fingerprint") or "")
+            normalize_lineage(labels[0].get("lineage")).get("source_fingerprint") or ""
         )
     if not source_fp and routes:
         source_fp = str(
-            (normalize_lineage(routes[0].get("lineage")).get("source_fingerprint") or "")
-        )
-    if not source_fp:
-        manifest = store.load_manifest() or {}
-        brief = (manifest.get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {}
-        source_fp = str(
-            (normalize_lineage(brief.get("lineage")).get("source_fingerprint") or "")
+            normalize_lineage(routes[0].get("lineage")).get("source_fingerprint") or ""
         )
 
     prov = provider or getattr(backend, "provider", "") or ""
     model_name = cfg["model"]
 
     base_sig = generation_signature(
-        source_fingerprint=source_fp,
+        source_fingerprint="",
         provider=prov,
         model=model_name,
         thinking_level=cfg["thinking_level"],
@@ -463,21 +530,30 @@ def run_mapreduce_drafts(
     labels_refined = 0
     labels_skipped = 0
     for rec in labels:
-        if not _needs_llm_refresh(rec, expected_signature=base_sig, force=force):
+        record_fp = str(
+            normalize_lineage(rec.get("lineage")).get("source_fingerprint") or source_fp
+        )
+        record_sig = dict(base_sig, source_fingerprint=record_fp)
+        if not _needs_llm_refresh(rec, expected_signature=record_sig, force=force):
             labels_out.append(normalize_summary_record(rec, default_kind=KIND_LABEL))
             labels_skipped += 1
+            current_request.update(stage="label", artifact_id=str(rec.get("id") or ""))
+            _emit_progress("label", labels_refined + labels_skipped, len(labels), "skipped")
             continue
+        current_request.update(stage="label", artifact_id=str(rec.get("id") or ""))
+        _emit_progress("label", labels_refined + labels_skipped, len(labels), "requesting")
         labels_out.append(
             refine_label_record(
                 rec,
                 generate=generate,
                 config=cfg,
-                source_fingerprint=source_fp,
+                source_fingerprint=record_fp,
                 provider=prov,
                 model=model_name,
             )
         )
         labels_refined += 1
+        _emit_progress("label", labels_refined + labels_skipped, len(labels), "refined")
 
     label_by_id = {r["id"]: r for r in labels_out}
     for r in labels_out:
@@ -488,22 +564,31 @@ def run_mapreduce_drafts(
     routes_refined = 0
     routes_skipped = 0
     for rec in routes:
-        if not _needs_llm_refresh(rec, expected_signature=base_sig, force=force):
+        record_fp = str(
+            normalize_lineage(rec.get("lineage")).get("source_fingerprint") or source_fp
+        )
+        record_sig = dict(base_sig, source_fingerprint=record_fp)
+        if not _needs_llm_refresh(rec, expected_signature=record_sig, force=force):
             routes_out.append(normalize_summary_record(rec, default_kind=KIND_ROUTE))
             routes_skipped += 1
+            current_request.update(stage="route", artifact_id=str(rec.get("id") or ""))
+            _emit_progress("route", routes_refined + routes_skipped, len(routes), "skipped")
             continue
+        current_request.update(stage="route", artifact_id=str(rec.get("id") or ""))
+        _emit_progress("route", routes_refined + routes_skipped, len(routes), "requesting")
         routes_out.append(
             refine_route_record(
                 rec,
                 label_by_id,
                 generate=generate,
                 config=cfg,
-                source_fingerprint=source_fp,
+                source_fingerprint=record_fp,
                 provider=prov,
                 model=model_name,
             )
         )
         routes_refined += 1
+        _emit_progress("route", routes_refined + routes_skipped, len(routes), "refined")
 
     store.save_summaries(KIND_LABEL, labels_out)
     store.save_routes(routes_out)
@@ -554,6 +639,8 @@ def run_mapreduce_drafts(
 
     brief_refined = False
     if brief_needs_refresh:
+        current_request.update(stage="brief", artifact_id="project_brief")
+        _emit_progress("brief", 0, 1, "requesting")
         brief_text = refine_project_brief(
             routes_out,
             generate=generate,
@@ -568,6 +655,7 @@ def run_mapreduce_drafts(
             brief_text = "# Project Analysis Brief (LLM draft)\n\n" + brief_text
         store.save_brief_text(brief_text, published=False)
         brief_refined = True
+        _emit_progress("brief", 1, 1, "refined")
         brief_lineage = empty_lineage(
             source_fingerprint=source_fp,
             prompt_schema_version=PROMPT_SCHEMA_VERSION,
@@ -581,6 +669,24 @@ def run_mapreduce_drafts(
         brief_text = previous_brief_text
         brief_lineage = normalize_lineage(previous_brief_entry.get("lineage"))
 
+    price = dict(pricing or {})
+    try:
+        input_rate = float(price.get("input_per_million") or 0.0)
+        output_rate = float(price.get("output_per_million") or 0.0)
+    except (TypeError, ValueError):
+        input_rate = output_rate = 0.0
+    usage_summary["currency"] = str(price.get("currency") or "USD")
+    usage_summary["input_per_million"] = input_rate
+    usage_summary["output_per_million"] = output_rate
+    usage_summary["estimated_cost"] = round(
+        (usage_summary["input_tokens"] * input_rate
+         + usage_summary["output_tokens"] * output_rate)
+        / 1_000_000,
+        6,
+    )
+    usage_summary["cost_is_estimate"] = True
+    current_request.update(stage="complete", artifact_id="project_brief")
+    _emit_progress("complete", 1, 1, "done")
     manifest = store.rebuild_manifest(
         project_identity=identity,
         expected_source_fingerprint=source_fp,
@@ -597,6 +703,18 @@ def run_mapreduce_drafts(
     if identity:
         manifest["project_identity"] = identity
     manifest.setdefault("artifacts", {})[KIND_PROJECT_BRIEF] = brief_entry
+    manifest["generation"] = {
+        "model": model_name,
+        "provider": prov,
+        "prompt_schema_version": PROMPT_SCHEMA_VERSION,
+        "completed_at": utc_now_iso(),
+        "labels_refined": labels_refined,
+        "labels_skipped": labels_skipped,
+        "routes_refined": routes_refined,
+        "routes_skipped": routes_skipped,
+        "brief_refined": brief_refined,
+        "usage": usage_summary,
+    }
     store.save_manifest(manifest)
 
     return {
@@ -611,5 +729,6 @@ def run_mapreduce_drafts(
         "routes_skipped": routes_skipped,
         "brief_refined": brief_refined,
         "brief_draft_chars": len(brief_text),
+        "usage": usage_summary,
         "force": bool(force),
     }

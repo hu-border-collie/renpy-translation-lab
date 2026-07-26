@@ -9411,12 +9411,13 @@ class MainWindow(QMainWindow):
         )
 
     def _saved_project_analysis_flags(self) -> dict[str, bool]:
-        values = read_advanced_settings(self.state.load_translator_config())
+        flags = read_batch_context_flags(
+            self.state.load_translator_config(),
+            game_root=self._game_root_str_for_flags(),
+        )
         return {
-            "enabled": bool(values.get("batch_project_analysis_enabled")),
-            "inject_enabled": bool(
-                values.get("batch_project_analysis_inject_published_brief")
-            ),
+            "enabled": bool(flags.get("project_analysis_enabled")),
+            "inject_enabled": bool(flags.get("project_analysis_inject_enabled")),
         }
 
     def _submit_max_cost_from_config(self) -> float | None:
@@ -11900,6 +11901,16 @@ class MainWindow(QMainWindow):
 
             if want is None or "advanced" in want or "context" in want:
                 advanced_values = read_advanced_settings(config)
+                project_flags = read_batch_context_flags(
+                    config,
+                    game_root=self._game_root_str_for_flags(),
+                )
+                advanced_values["batch_project_analysis_enabled"] = project_flags[
+                    "project_analysis_enabled"
+                ]
+                advanced_values[
+                    "batch_project_analysis_inject_published_brief"
+                ] = project_flags["project_analysis_inject_enabled"]
                 get_game_root = getattr(self.state, "get_game_root", None)
                 current_game_root = get_game_root() if callable(get_game_root) else None
                 if current_game_root and not self._config_string(
@@ -11991,7 +12002,7 @@ class MainWindow(QMainWindow):
                 )
                 or "translation_context"
             )
-            # RAG / source-index / bootstrap_on_build are per-project only.
+            # Context enablement is per-project only; model/budget defaults stay global.
             # Do not write them into the global translator_config.json.
             project_context_flags = {
                 "rag_enabled": self.rag_enabled_cb.isChecked(),
@@ -12056,6 +12067,22 @@ class MainWindow(QMainWindow):
                     return False
                 self._clear_advanced_setting_errors()
                 apply_advanced_settings(config, complete_advanced_values)
+                # These two values are persisted in the current project's
+                # project_context_settings.json, not as shared global state.
+                original_project_analysis = self._config_section(
+                    self._config_section(original_config, "batch"),
+                    "project_analysis",
+                )
+                saved_project_analysis = self._ensure_config_section(
+                    batch_config, "project_analysis"
+                )
+                for setting_key in ("enabled", "inject_published_brief"):
+                    if setting_key in original_project_analysis:
+                        saved_project_analysis[setting_key] = original_project_analysis[
+                            setting_key
+                        ]
+                    else:
+                        saved_project_analysis.pop(setting_key, None)
                 # Persist only non-builtin catalog extensions; drop empty keys.
                 write_model_catalog_extras(
                     config,
@@ -12067,6 +12094,23 @@ class MainWindow(QMainWindow):
                     ),
                 )
 
+            project_values = (
+                complete_advanced_values
+                if advanced_values
+                else read_advanced_settings(config)
+            )
+            project_context_flags.update(
+                {
+                    "project_analysis_enabled": bool(
+                        project_values.get("batch_project_analysis_enabled")
+                    ),
+                    "project_analysis_inject_enabled": bool(
+                        project_values.get(
+                            "batch_project_analysis_inject_published_brief"
+                        )
+                    ),
+                }
+            )
             # Validate every field before either settings file is written. This
             # avoids persisting project flags when the UI reports "未保存".
             from project_context_settings import save_project_context_settings
@@ -12103,7 +12147,7 @@ class MainWindow(QMainWindow):
                 self._apply_work_mode_ui(refresh_manifest_writeback=False)
             self._append_log(
                 "设置已成功保存（全局项 → translator_config.json；"
-                "RAG/原文索引 → 当前项目 project_context_settings.json）。"
+                "RAG/原文索引/项目分析开关 → 当前项目 project_context_settings.json）。"
             )
             # Refresh select-only model dropdowns / rotation checklist from catalog.
             try:
