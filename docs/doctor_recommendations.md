@@ -199,7 +199,7 @@ GUI 主文案通常取**第一条**（最高优先的必需准备）；其余建
 
 `start_pending_batch`、`start_incremental_batch`、`substantially_complete` 和 `no_pending_lines` 现在作为 `workflow_state` 输出，不进入建议列表；对旧版 CLI 建议行仍保留解析兼容。
 
-当存在**必需准备**建议（例如 `bootstrap_source_index` / `bootstrap_rag`）时，`workflow_state` 应留空，避免 CLI 同时出现「可开始翻译」与「必须先准备」。可选优化（`bootstrap_rag_or_warm_on_build`、`enable_rag_for_consistency`、`enable_source_index_for_new_project`，以及 `build_project_analysis` / `refresh_project_analysis` / 项目分析模型与 API 配置建议）不抑制 `workflow_state`。
+当存在**必须执行的准备**建议（例如 `bootstrap_source_index` / `bootstrap_rag`）时，`workflow_state` 应留空，避免 CLI 同时出现「可开始翻译」与「必须先准备」。可选优化（`bootstrap_rag_or_warm_on_build`、`enable_rag_for_consistency`、`enable_source_index_for_new_project`，以及 `build_project_analysis` / `refresh_project_analysis` / 项目分析模型与 API 配置建议）不抑制 `workflow_state`。
 
 ## 文案要求
 

@@ -135,16 +135,21 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
                 "overall_status": "stale",
             }
         }
-        codes = doctor_rec.doctor_recommendation_codes(
-            batch_mod.collect_doctor_recommendations(report)
+        recommendations = batch_mod.collect_doctor_recommendations(report)
+        codes = doctor_rec.doctor_recommendation_codes(recommendations)
+
+        self.assertCountEqual(
+            codes,
+            [
+                doctor_rec.CONFIGURE_PROJECT_ANALYSIS_MODEL,
+                doctor_rec.CONFIGURE_PROJECT_ANALYSIS_API,
+                doctor_rec.REFRESH_PROJECT_ANALYSIS,
+            ],
+        )
+        self.assertFalse(
+            doctor_rec.recommendations_block_workflow_state(recommendations)
         )
 
-        self.assertIn(doctor_rec.CONFIGURE_PROJECT_ANALYSIS_MODEL, codes)
-        self.assertIn(doctor_rec.CONFIGURE_PROJECT_ANALYSIS_API, codes)
-        self.assertIn(doctor_rec.REFRESH_PROJECT_ANALYSIS, codes)
-        self.assertTrue(
-            set(codes).issubset(doctor_rec.OPTIONAL_RECOMMENDATION_CODES)
-        )
     def test_switch_to_work_only_recommends_switch_and_bootstrap(self):
         report = _layout_report(
             base_dir="C:/Games/Example",

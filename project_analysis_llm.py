@@ -409,6 +409,10 @@ def run_mapreduce_drafts(
     """LLM-refine label → route → brief drafts in the analysis store.
 
     Requires structure drafts already present (run build-structure first).
+    When provided, ``progress`` receives mappings with ``stage``, ``artifact_id``,
+    ``completed``, ``total``, ``action``, and a ``usage`` mapping. ``pricing`` may
+    provide ``currency``, ``input_per_million``, and ``output_per_million``; the
+    final progress event, return value, and manifest then include estimated cost.
     """
     if generate is None:
         if backend is None:
@@ -472,12 +476,7 @@ def run_mapreduce_drafts(
                 "completed": completed,
                 "total": total,
                 "action": action,
-                "usage": {
-                    "requests": usage_summary["requests"],
-                    "input_tokens": usage_summary["input_tokens"],
-                    "output_tokens": usage_summary["output_tokens"],
-                    "total_tokens": usage_summary["total_tokens"],
-                },
+                "usage": dict(usage_summary),
             }
         )
 

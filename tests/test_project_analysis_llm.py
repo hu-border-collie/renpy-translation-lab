@@ -222,10 +222,16 @@ class MapReduceTests(unittest.TestCase):
             self.assertEqual(result["usage"]["total_tokens"], len(backend.calls) * 14)
             self.assertGreater(result["usage"]["estimated_cost"], 0)
             self.assertEqual(events[-1]["stage"], "complete")
-            manifest = pa.ProjectAnalysisStore(store_dir).load_manifest()
+            self.assertEqual(events[-1]["usage"], result["usage"])
+            self.assertEqual(events[-1]["usage"]["currency"], "USD")
+            store = pa.ProjectAnalysisStore(store_dir)
+            manifest = store.load_manifest()
             self.assertEqual(
                 manifest["generation"]["usage"]["requests"], len(backend.calls)
             )
+            generation = manifest["generation"]
+            store.rebuild_manifest()
+            self.assertEqual(store.load_manifest()["generation"], generation)
 
     def test_script_edit_regenerates_only_affected_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:

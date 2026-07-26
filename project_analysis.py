@@ -882,6 +882,7 @@ class ProjectAnalysisStore:
             identity = dict(previous.get("project_identity") or {})
 
         manifest = empty_manifest(project_identity=identity, store_dir=self.store_dir)
+        manifest["generation"] = dict((previous or {}).get("generation") or {})
         manifest["artifacts"][KIND_CHUNK] = _kind_entry(chunks)
         manifest["artifacts"][KIND_SCENE] = _kind_entry(scenes)
         manifest["artifacts"][KIND_LABEL] = _kind_entry(labels)

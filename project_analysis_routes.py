@@ -380,7 +380,11 @@ def graph_to_label_records(
     chunk_by_label: dict[str, list[dict[str, Any]]] | None = None,
     source_fingerprint: str = "",
 ) -> list[dict[str, Any]]:
-    """Build draft label summary records from the graph (+ optional chunk texts)."""
+    """Build label drafts with a local content fingerprint for selective refresh.
+
+    ``lineage.source_fingerprint`` prefers the label body plus assigned chunk hash;
+    the project-wide ``source_fingerprint`` remains a compatibility fallback.
+    """
     chunk_by_label = chunk_by_label or {}
     records: list[dict[str, Any]] = []
     for name, node in sorted(graph.labels.items()):
@@ -451,7 +455,11 @@ def graph_to_route_records(
     label_records: Sequence[dict[str, Any]] | None = None,
     source_fingerprint: str = "",
 ) -> list[dict[str, Any]]:
-    """Build draft route summary records."""
+    """Build route drafts with a dependency-local fingerprint for cache reuse.
+
+    ``lineage.source_fingerprint`` prefers a hash of the route and member-label
+    fingerprints; the project-wide ``source_fingerprint`` is only a fallback.
+    """
     label_by_name = {
         str(r.get("label_id") or "").strip(): r
         for r in (label_records or [])

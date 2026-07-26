@@ -635,6 +635,10 @@ def compute_current_project_analysis_fingerprint(base_dir=None, store_dir=None):
     Prefers ``project_identity.script_roots`` persisted by
     ``build_structure_drafts`` so custom ``--script-root`` builds stay injectable.
     Falls back to default game/work/original discovery under *base_dir*.
+
+    When a project moves or is copied, relative graph/root paths are rebased onto
+    the current *base_dir*. Legacy absolute paths that were inside the stored
+    project base are rebased by the same relative offset; external roots stay put.
     """
     from project_analysis import resolve_project_analysis_store
     from project_analysis_routes import digest_script_paths, discover_script_files
