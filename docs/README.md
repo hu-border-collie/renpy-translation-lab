@@ -18,6 +18,7 @@
 | 启用 RAG / 原文索引 / 剧情记忆 | [上下文系统](context_systems.md) · [setup.md](setup.md) 中的项目级开关 |
 | 角色关系 / 语义分析 | [关系与语义分析](relation_analysis.md) · [`relation_analyzer/README.md`](../relation_analyzer/README.md) |
 | 项目边界与安全 | [项目说明](project_notes.md) |
+| 了解项目如何从 OpenCode 原型演化而来 | [项目沿革](project_history.md) |
 | 查看版本变化 | [变更日志](../CHANGELOG.md) · [v1.0.0 发行说明](releases/v1.0.0.md) |
 | 参与开发 / AI 协作 | 根目录 [AGENTS.md](../AGENTS.md) → [CONTRIBUTING.md](../CONTRIBUTING.md)（含 **CLI / GUI 同步**） |
 | 理解 PR 门禁与定时集成 | [CI 与定时集成检查](ci.md)（含 lint / type / audit） |
@@ -50,6 +51,7 @@
 - [CI 与定时集成检查](ci.md)
 - [依赖输入与哈希锁](dependencies.md)
 - [项目说明](project_notes.md)
+- [项目沿革](project_history.md)
 - [story_graph.example.json](story_graph.example.json) · [story_graph.schema.json](story_graph.schema.json)
 
 ### 规划中（非用户手册）

@@ -68,6 +68,7 @@ python -m gui_qt
 | Batch 与写回安全 | [batch_workflows.md](docs/batch_workflows.md) |
 | RAG / 索引 / Story Memory | [context_systems.md](docs/context_systems.md) |
 | 边界、安全与烟测 | [project_notes.md](docs/project_notes.md) |
+| 项目沿革 | [project_history.md](docs/project_history.md) |
 | Agent 开发约定 | [AGENTS.md](AGENTS.md) |
 | 贡献与 CLI/GUI 同步 | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | 历史设计/审计稿 | [docs/archive/](docs/archive/README.md) |
