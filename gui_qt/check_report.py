@@ -378,6 +378,11 @@ def idle_writeback_summary_for_work_mode(mode) -> WritebackSummary:
                 "同步订正默认只出预览报告；请先在左侧「订正」生成预览，"
                 "再在结果区点击「写回订正」。"
             )
+        elif spec.mode == WorkMode.FINAL_REVIEW:
+            message = (
+                "最终审校必须先生成问题报告；只有人工选择的问题会进入订正预览，"
+                "确认预览后才可写回所选订正。"
+            )
         elif spec.mode == WorkMode.PROJECT_ANALYSIS:
             message = (
                 "项目分析不会写回游戏脚本。请到左侧「上下文库」使用"

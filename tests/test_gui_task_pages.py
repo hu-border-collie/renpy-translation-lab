@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from unittest import mock
 
 try:
@@ -11,6 +12,7 @@ try:
     from gui_qt.app import MainWindow
     from gui_qt.check_report import WritebackSummary
     from gui_qt.doctor_report import DoctorSummary
+    from gui_qt.final_review_dialog import FinalReviewFindingsDialog
 except ImportError as exc:
     MainWindow = None  # type: ignore[assignment,misc]
     QApplication = None  # type: ignore[assignment,misc]
@@ -411,6 +413,96 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(page.review_findings_btn.isHidden())
         self.assertEqual(page.writeback_btn.text(), "写回所选订正")
         self.assertIn("人工选择", self.window.work_mode_hint_label.text())
+
+    def test_final_review_project_reset_preserves_resume_contract(self) -> None:
+        page = self.window.revision_page
+        page.activate(WorkMode.FINAL_REVIEW, WorkbenchModeSession())
+        page.reset_project()
+
+        self.assertFalse(page.resume_btn.isHidden())
+        self.assertEqual(page.resume_btn.text(), "继续审查")
+        self.assertFalse(page.resume_btn.isEnabled())
+
+    def test_final_review_findings_button_requires_an_enabled_action(self) -> None:
+        page = self.window.revision_page
+        actions: list[str] = []
+        page.set_action_callbacks(WorkbenchPageActions(action=actions.append))
+        page.activate(WorkMode.FINAL_REVIEW, WorkbenchModeSession())
+        page.review_findings_btn.setEnabled(False)
+        page._trigger_review_findings()
+        self.assertEqual(actions, [])
+
+        page.review_findings_btn.setEnabled(True)
+        page.review_findings_btn.click()
+        self.assertEqual(actions, ["select_final_review_findings"])
+
+    def test_final_review_dialog_disables_preview_until_selection(self) -> None:
+        dialog = FinalReviewFindingsDialog([
+            {
+                "finding_id": "f1",
+                "suggested_revision": "新译文",
+                "selection_state": "none",
+                "revision_state": "none",
+            }
+        ])
+        self.assertFalse(dialog._ok_button.isEnabled())
+        dialog.table.item(0, 0).setCheckState(Qt.CheckState.Checked)
+        self.assertTrue(dialog._ok_button.isEnabled())
+        dialog.close()
+        empty_dialog = FinalReviewFindingsDialog([])
+        self.assertFalse(empty_dialog._ok_button.isEnabled())
+        empty_dialog.close()
+
+
+    def test_final_review_context_cache_reloads_after_invalidation(self) -> None:
+        self.window._work_mode = WorkMode.FINAL_REVIEW
+        manifest_path = Path(__file__)
+        package = {"manifest": {"status": "done"}, "findings": []}
+        with mock.patch.object(
+            self.window.state,
+            "get_game_root",
+            return_value=manifest_path.parent,
+        ), mock.patch.object(
+            self.window.state,
+            "get_latest_manifest_path_for_mode",
+            return_value=manifest_path,
+        ), mock.patch(
+            "final_review.load_campaign_package",
+            return_value=package,
+        ) as load:
+            self.assertEqual(self.window._final_review_findings_context()[1], package)
+            self.assertEqual(self.window._final_review_findings_context()[1], package)
+            self.assertEqual(load.call_count, 1)
+            self.window._invalidate_manifest_caches(manifest_path)
+            self.assertEqual(self.window._final_review_findings_context()[1], package)
+            self.assertEqual(load.call_count, 2)
+
+    def test_final_review_action_rechecks_running_guards(self) -> None:
+        with mock.patch.object(
+            self.window,
+            "_confirm_unsaved_config_before_workflow",
+            return_value=True,
+        ) as confirm, mock.patch.object(
+            self.window,
+            "_final_review_findings_context",
+        ) as context:
+            self.window._task_running = True
+            self.window._on_final_review_page_action("select_final_review_findings")
+            confirm.assert_not_called()
+            context.assert_not_called()
+
+            self.window._task_running = False
+            self.window.runner.is_running = lambda: True
+            self.window._on_final_review_page_action("select_final_review_findings")
+            confirm.assert_not_called()
+            context.assert_not_called()
+
+            self.window.runner.is_running = lambda: False
+            confirm.return_value = False
+            self.window._on_final_review_page_action("select_final_review_findings")
+            confirm.assert_called_once_with()
+            context.assert_not_called()
+
     def test_batch_page_owns_actions_and_running_lock(self) -> None:
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,

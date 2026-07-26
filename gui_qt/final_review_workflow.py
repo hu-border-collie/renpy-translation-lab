@@ -49,7 +49,13 @@ class FinalReviewWorkflow:
     def resume_manifest(cls, manifest_path, manifest, *, submit_max_cost=None):
         summary = manifest.get("summary") if isinstance(manifest.get("summary"), dict) else {}
         counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
-        if manifest.get("status") == "done" or (counts and counts.get("done") == summary.get("unit_count")):
+        done_count = counts.get("done")
+        unit_count = summary.get("unit_count")
+        if manifest.get("status") == "done" or (
+            done_count is not None
+            and unit_count is not None
+            and done_count == unit_count
+        ):
             return cls([], manifest_path, submit_max_cost=submit_max_cost)
         if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
             steps = ["download", "final-review-ingest-results"]

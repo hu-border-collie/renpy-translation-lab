@@ -17,6 +17,21 @@ class FinalReviewWorkflowTests(unittest.TestCase):
         self.assertTrue(update.should_continue)
         self.assertEqual(workflow.current_step().key, "submit")
 
+    def test_failed_step_stops_the_workflow(self):
+        workflow = FinalReviewWorkflow.start_new()
+        update = workflow.complete_current_step(1, "failed")
+        self.assertEqual(update.status, "failed")
+        self.assertEqual(update.heading, "最终审校流程中断")
+        self.assertIsNone(workflow.current_step())
+
+    def test_build_without_created_campaign_stops_before_submit(self):
+        workflow = FinalReviewWorkflow.start_new()
+        update = workflow.complete_current_step(0, "build completed without package")
+        self.assertEqual(update.status, "failed")
+        self.assertEqual(update.heading, "无法准备最终审校")
+        self.assertIsNone(workflow.current_step())
+
+
     def test_succeeded_status_downloads_and_ingests_report(self):
         workflow = FinalReviewWorkflow(["status"], "C:/tmp/review/manifest.json")
         update = workflow.complete_current_step(0, "State: JOB_STATE_SUCCEEDED")
@@ -35,6 +50,7 @@ class FinalReviewWorkflowTests(unittest.TestCase):
         self.assertEqual(update.status, "ready")
         self.assertFalse(update.should_continue)
         self.assertIsNone(workflow.current_step())
+
     def test_selected_findings_use_one_local_preview_step(self):
         workflow = FinalReviewWorkflow.create_revisions("C:/tmp/review/manifest.json", ["f1", "f2"])
         self.assertEqual(workflow.current_step().args, [
@@ -60,6 +76,12 @@ class FinalReviewWorkflowTests(unittest.TestCase):
         self.assertIsInstance(workflow, FinalReviewWorkflow)
         self.assertEqual(workflow.current_step().args, ["status", "C:/tmp/review/manifest.json"])
 
+    def test_resume_does_not_treat_missing_counts_as_complete(self):
+        workflow = FinalReviewWorkflow.resume_manifest(
+            "C:/tmp/review/manifest.json",
+            {"mode": "final_review", "summary": {"status_counts": {}}},
+        )
+        self.assertEqual(workflow.current_step().key, "final-review-resume")
 
 if __name__ == "__main__":
     unittest.main()

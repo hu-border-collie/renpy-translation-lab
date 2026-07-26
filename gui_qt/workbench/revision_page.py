@@ -136,11 +136,12 @@ class RevisionPage(QFrame):
 
     def reset_project(self) -> None:
         self.set_task_running(False)
+        final_review = self._active_mode == WorkMode.FINAL_REVIEW
         self.set_controls(
             start_enabled=False,
             resume_enabled=False,
-            resume_visible=self._active_mode == WorkMode.REVISION,
-            resume_label="继续订正",
+            resume_visible=self._active_mode in (WorkMode.REVISION, WorkMode.FINAL_REVIEW),
+            resume_label="继续审查" if final_review else "继续订正",
             writeback_enabled=False,
             result_message="项目已切换；请先完成环境检查并重新生成订正预览。",
         )
@@ -167,8 +168,13 @@ class RevisionPage(QFrame):
             self._actions.stop()
 
     def _trigger_review_findings(self) -> None:
-        if not self._running and self._actions.action is not None:
+        if (
+            not self._running
+            and self.review_findings_btn.isEnabled()
+            and self._actions.action is not None
+        ):
             self._actions.action("select_final_review_findings")
+
     def _trigger_writeback(self) -> None:
         if (
             not self._running

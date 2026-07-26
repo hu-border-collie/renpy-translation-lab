@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from final_review import REVISION_STATE_APPLIED, SELECTION_STATE_SELECTED
+
 
 class FinalReviewFindingsDialog(QDialog):
     def __init__(self, findings: Sequence[Mapping[str, object]], parent: QWidget | None = None):
@@ -28,7 +30,7 @@ class FinalReviewFindingsDialog(QDialog):
         for finding in findings:
             if not str(finding.get("suggested_revision") or "").strip():
                 continue
-            if str(finding.get("revision_state") or "") == "applied":
+            if str(finding.get("revision_state") or "") == REVISION_STATE_APPLIED:
                 continue
             row = self.table.rowCount()
             self.table.insertRow(row)
@@ -36,7 +38,11 @@ class FinalReviewFindingsDialog(QDialog):
             self._finding_ids.append(finding_id)
             check = QTableWidgetItem()
             check.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
-            check.setCheckState(Qt.CheckState.Checked if finding.get("selection_state") == "selected" else Qt.CheckState.Unchecked)
+            check.setCheckState(
+                Qt.CheckState.Checked
+                if finding.get("selection_state") == SELECTION_STATE_SELECTED
+                else Qt.CheckState.Unchecked
+            )
             self.table.setItem(row, 0, check)
             values = (
                 finding.get("severity"), finding.get("finding_type"), finding.get("file_rel_path"),
@@ -50,14 +56,20 @@ class FinalReviewFindingsDialog(QDialog):
         self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("生成订正预览")
+        self._ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self._ok_button.setText("生成订正预览")
         buttons.accepted.connect(self._accept_selection)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self.table.itemChanged.connect(self._sync_accept_enabled)
+        self._sync_accept_enabled()
 
     def _accept_selection(self) -> None:
         if self.selected_finding_ids():
             self.accept()
+
+    def _sync_accept_enabled(self, *_args) -> None:
+        self._ok_button.setEnabled(bool(self.selected_finding_ids()))
 
     def selected_finding_ids(self) -> list[str]:
         return [finding_id for row, finding_id in enumerate(self._finding_ids)

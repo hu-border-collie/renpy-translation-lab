@@ -11,6 +11,12 @@ from atomic_io import atomic_write_json, atomic_write_jsonl, atomic_write_text
 
 
 def finding_digest(finding: Mapping[str, Any]) -> str:
+    """Return the stable content fingerprint used by write-back safety checks.
+
+    Mutable ``selection_state`` and ``revision_state`` fields are intentionally
+    excluded so the digest remains valid while a finding advances from selected
+    to candidate, previewed, and applied.
+    """
     keys = ("finding_id", "identity_v2", "file_rel_path", "source", "current_translation",
             "suggested_revision", "review_unit_id", "review_unit_digest")
     return fr.stable_json_sha256({key: finding.get(key) or "" for key in keys})

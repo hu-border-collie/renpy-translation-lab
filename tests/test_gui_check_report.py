@@ -243,6 +243,14 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertIn("同步翻译", summary.message)
         self.assertNotIn("重新检查", summary.message)
 
+    def test_idle_writeback_summary_for_final_review_explains_manual_selection(self):
+        summary = idle_writeback_summary_for_work_mode(WorkMode.FINAL_REVIEW)
+
+        self.assertFalse(summary.can_apply)
+        self.assertIn("问题报告", summary.message)
+        self.assertIn("人工选择", summary.message)
+        self.assertIn("订正预览", summary.message)
+
     def test_build_recheck_cli_args(self):
         self.assertEqual(
             build_recheck_cli_args(r"C:\pkg\manifest.json"),

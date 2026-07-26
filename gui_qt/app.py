@@ -523,6 +523,8 @@ class MainWindow(QMainWindow):
             item: default_work_mode_for_nav(item) for item in WORKBENCH_NAV_ORDER
         }
         self._workflow_step_output_lines: list[str] = []
+        self._final_review_findings_cache_key: tuple[str, int] | None = None
+        self._final_review_findings_cache: tuple[str, dict[str, object] | None] | None = None
         self._apply_output_lines: list[str] = []
         self._recheck_output_lines: list[str] = []
         self._probe_output_lines: list[str] = []
@@ -7047,7 +7049,7 @@ class MainWindow(QMainWindow):
         if self._context_switching_locked():
             self._sync_task_selectors_from_work_mode()
             return
-        if mode in {WorkMode.REVISION, WorkMode.SYNC_REVISION, WorkMode.FINAL_REVIEW}:
+        if mode in self._revision_writeback_modes():
             self._set_work_mode(mode, refresh_manifest_writeback=True)
 
     def _set_work_mode(
@@ -7447,6 +7449,11 @@ class MainWindow(QMainWindow):
             self._refresh_active_workbench_page(work_mode_spec(mode))
 
     def _final_review_findings_context(self):
+        """Load the latest final-review package once per manifest revision.
+
+        The returned package is later gated on ``STATUS_DONE`` and only manual
+        finding selections are allowed to enter the revision-preview workflow.
+        """
         if self._current_work_mode() != WorkMode.FINAL_REVIEW:
             return "", None
         game_root = self.state.get_game_root()
@@ -7455,17 +7462,42 @@ class MainWindow(QMainWindow):
         path = self.state.get_latest_manifest_path_for_mode(game_root, WorkMode.FINAL_REVIEW)
         if path is None:
             return "", None
+        path_text = str(path)
+        try:
+            cache_key = (path_text, Path(path).stat().st_mtime_ns)
+        except OSError:
+            cache_key = (path_text, -1)
+        if (
+            self._final_review_findings_cache_key == cache_key
+            and self._final_review_findings_cache is not None
+        ):
+            return self._final_review_findings_cache
         try:
             import final_review as fr
 
-            package = fr.load_campaign_package(str(path))
-            return str(path), package
+            result: tuple[str, dict[str, object] | None] = (
+                path_text,
+                fr.load_campaign_package(path_text),
+            )
         except (fr.FinalReviewError, OSError, ValueError):
-            return str(path), None
+            result = (path_text, None)
+        self._final_review_findings_cache_key = cache_key
+        self._final_review_findings_cache = result
+        return result
 
     def _on_final_review_page_action(self, action: str) -> None:
+        """Start manual finding selection only for a completed review campaign."""
         if action != "select_final_review_findings":
             return
+        if bool(getattr(self, "_task_running", False)):
+            return
+        runner = getattr(self, "runner", None)
+        is_running = getattr(runner, "is_running", None) if runner is not None else None
+        if callable(is_running) and bool(is_running()):
+            return
+        if not self._confirm_unsaved_config_before_workflow():
+            return
+
         manifest_path, package = self._final_review_findings_context()
         if package is None:
             QMessageBox.information(self, "没有可审核的报告", "请先完成一个最终审校任务。")
@@ -7496,7 +7528,7 @@ class MainWindow(QMainWindow):
         if page is None:
             return
         mode = self._current_work_mode()
-        if mode not in {WorkMode.REVISION, WorkMode.SYNC_REVISION, WorkMode.FINAL_REVIEW}:
+        if mode not in self._revision_writeback_modes():
             return
         if running is None:
             running = self._task_page_running_chrome()
@@ -7811,6 +7843,8 @@ class MainWindow(QMainWindow):
 
     def _invalidate_manifest_caches(self, manifest_path: str | Path | None = None) -> None:
         state = getattr(self, "state", None)
+        self._final_review_findings_cache_key = None
+        self._final_review_findings_cache = None
         if state is None:
             return
         invalidate_history = getattr(state, "invalidate_manifest_history_cache", None)
