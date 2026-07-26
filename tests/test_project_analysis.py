@@ -513,7 +513,7 @@ class CliStatusTests(unittest.TestCase):
                 "injectable": True,
             }
         )
-        self.assertIn("已发布", label)
+        self.assertIn("已启用", label)
 
 
 class DoctorIntegrationTests(unittest.TestCase):

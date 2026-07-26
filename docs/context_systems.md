@@ -160,9 +160,9 @@ python gemini_translate_batch.py project-analysis-unpublish
 - `project-analysis-generate` 会输出逐 label / route / brief 的机器可读进度，并汇总请求数、输入/输出 Token 与按 `batch.pricing` 当前模型费率计算的**估算成本**。结果保存在 manifest 的 `generation`，GUI 完成摘要会显示同一份统计。
 - GUI「上下文库」把项目分析注册为正式 `WorkMode`，通过统一工作流运行 ingest → build → generate；停止后可根据已落盘产物从当前生命周期阶段重新开始。
 - 首次或重新分析时会自动定位当前项目最近的 `keyword_chunk_summaries.jsonl`，但导入前必须明确确认；也可以明确跳过，未找到时可手动选择文件。未导入时仍允许静态结构分析，但 CLI 状态、上下文库状态和实际注入预览会持续显示“仅结构分析”的非阻断警告。
-- 生成完成后进入审查工作区：显示完整 draft / published 差异与全文，可搜索 chunk / label / route，并展示 evidence item、来源文件和行跨度；来源文件可打开，`path:line` 可复制定位。
-- 审查工作区的「实际注入预览」直接调用翻译使用的 published + freshness + `max_brief_chars` 装载器，因此会如实显示开关关闭、未发布、陈旧、截断后的正文和诊断。
-- 「确认已审查」写入当前 brief lineage 的 `reviewed_at`；从审查界面启用会先记录审查，再经 fingerprint 门禁发布。停止使用会二次确认并移除 published 副本，保留 draft 与 `.rpy`。
+- 生成完成后进入审查工作区：界面以「待审查摘要 / 已启用版本」显示完整差异与全文，可搜索剧情概要、场景节点和剧情路线，并展示证据编号、来源文件和行跨度；来源文件可打开，`path:line` 可复制定位。
+- 审查工作区的「翻译使用预览」直接调用翻译使用的 published + freshness + `max_brief_chars` 装载器；界面用普通语言说明未启用、脚本已变化或长度缩短，原始门禁代码仍只保留在 CLI / 日志中。
+- 「确认已审查」写入当前 brief lineage 的 `reviewed_at`；从审查界面启用会先记录审查，再经 fingerprint 门禁发布。界面称为「启用到翻译 / 停止用于翻译」，停止后保留待审查摘要与 `.rpy`。
 - GUI 仍按 missing / draft / published / stale / failed 生命周期切换主行动；是否已有结构由核心状态中的显式产物信号判断，不依赖 label/route 数量。
 - **不**写 `glossary.json`、正式 `story_graph.json` 或 `.rpy`。
 - 最终审校 campaign 只冻结并复用**已发布的全局 brief**；label/route 局部摘要限定在翻译/订正请求内。该边界写入 campaign snapshot 的 `project_analysis.local_context_policy=translation_revision_only`，避免一个局部摘要变化使整个终审 campaign 无差别失效。
@@ -176,9 +176,9 @@ python gemini_translate_batch.py project-analysis-status --store-dir <path> --so
 ```
 
 - `doctor` 报告中的 `Project analysis:` 行汇总 overall / 计数 / brief 状态；功能已启用时，还会针对产物缺失、已过期、缺少生成模型或 API Key 给出可执行建议。这些属于项目分析的可选准备，不会阻断正常翻译。
-- GUI「上下文库」展示「项目分析」状态行；状态判断在 `project_analysis` 模块内完成，GUI 不重复实现失效逻辑。
+- GUI「上下文库」展示「项目分析」状态行；状态判断在 `project_analysis` 模块内完成，GUI 不重复实现失效逻辑。切入页面时先渲染缓存/读取中状态，再通过 Qt 线程池计算脚本 fingerprint 和读取产物；同一项目的重复切页不会重复扫描。
 - 诊断「命令参考」可复制 ingest / build-structure / publish / unpublish 命令。
-- GUI 的证据与注入预览同样复用 `project_analysis` store / loader，不建立 GUI 专属产物格式。
+- GUI 的证据与翻译使用预览同样复用 `project_analysis` store / loader，不建立 GUI 专属产物格式；真正启用前仍同步重新计算 fingerprint，不依赖可能过期的页面缓存。
 
 设计对照与取舍见 [plans/wenyi_reference_and_batch_roadmap.md](plans/wenyi_reference_and_batch_roadmap.md)。
 

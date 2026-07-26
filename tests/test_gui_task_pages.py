@@ -722,7 +722,7 @@ class GuiTaskPageTests(unittest.TestCase):
             },
         )
         self.assertIs(page.page_stack.currentWidget(), page.status_page)
-        self.assertIn("已发布", page.project_analysis_status_label.text())
+        self.assertIn("已启用", page.project_analysis_status_label.text())
 
     def test_project_analysis_actions_follow_product_lifecycle(self) -> None:
         page = self.window.context_library_page
@@ -810,6 +810,107 @@ class GuiTaskPageTests(unittest.TestCase):
         )
         self.assertEqual(page.project_analysis_generate_btn.text(), "重新分析")
 
+    def test_context_navigation_uses_background_status_refresh(self) -> None:
+        with (
+            mock.patch.object(
+                self.window,
+                "_refresh_context_library_panel",
+            ) as sync_refresh,
+            mock.patch.object(
+                self.window,
+                "_refresh_context_library_panel_async",
+            ) as async_refresh,
+        ):
+            self.window._set_work_mode(
+                WorkMode.BOOTSTRAP_RAG,
+                refresh_manifest_writeback=False,
+            )
+
+        self.assertGreaterEqual(async_refresh.call_count, 1)
+        sync_refresh.assert_not_called()
+
+    def test_project_analysis_complete_user_journey_actions(self) -> None:
+        page = self.window.context_library_page
+        actions: list[str] = []
+        page.set_action_callbacks(WorkbenchPageActions(action=actions.append))
+        common = {
+            "rag_enabled": False,
+            "source_index_enabled": False,
+            "game_root": "C:/Games/Example/work",
+            "project_analysis_enabled": True,
+        }
+
+        page.set_context_status(
+            **common,
+            project_analysis_status={"overall_status": "missing", "store_exists": False},
+        )
+        page.project_analysis_generate_btn.click()
+
+        page.set_context_status(
+            **common,
+            project_analysis_status={
+                "overall_status": "draft",
+                "store_exists": True,
+                "structure_present": True,
+                "brief_draft_present": True,
+            },
+        )
+        page.project_analysis_review_btn.click()
+        page.project_analysis_publish_btn.click()
+
+        page.set_context_status(
+            **common,
+            project_analysis_inject_enabled=True,
+            project_analysis_status={
+                "overall_status": "published",
+                "store_exists": True,
+                "structure_present": True,
+                "brief_published_present": True,
+                "injectable": True,
+            },
+        )
+        page.project_analysis_unpublish_btn.click()
+
+        page.set_context_status(
+            **common,
+            project_analysis_status={
+                "overall_status": "stale",
+                "store_exists": True,
+                "structure_present": True,
+            },
+        )
+        page.project_analysis_generate_btn.click()
+
+        self.assertEqual(
+            actions,
+            [
+                "project_analysis_build_structure",
+                "project_analysis_review",
+                "project_analysis_publish",
+                "project_analysis_unpublish",
+                "project_analysis_build_structure",
+            ],
+        )
+        visible_copy = " ".join(
+            [
+                page.project_analysis_generate_btn.text(),
+                page.project_analysis_generate_btn.toolTip(),
+                page.project_analysis_review_btn.text(),
+                page.project_analysis_publish_btn.text(),
+                page.project_analysis_publish_btn.toolTip(),
+                page.project_analysis_unpublish_btn.text(),
+                page.project_analysis_unpublish_btn.toolTip(),
+            ]
+        ).lower()
+        for developer_term in (
+            "brief",
+            "draft",
+            "published",
+            "fingerprint",
+            "label",
+            "route",
+        ):
+            self.assertNotIn(developer_term, visible_copy)
 
     def test_global_prep_buttons_visible_on_all_task_pages(self) -> None:
         for mode in (

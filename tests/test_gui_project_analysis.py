@@ -72,9 +72,10 @@ class ProjectAnalysisWorkflowTests(unittest.TestCase):
         )
         facts = generation_facts_from_output(output)
 
-        self.assertIn("complete 1/1", facts[0])
+        self.assertIn("全部完成 1/1", facts[0])
         self.assertIn("模型请求：4", facts[1])
         self.assertIn("0.000104 USD", facts[2])
+
     def test_step_keys_match_concrete_requested_sequence(self):
         self.assertEqual(
             ProjectAnalysisWorkflow.start_new(build=False, generate=True).step_keys(),

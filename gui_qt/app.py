@@ -11,12 +11,22 @@ import copy
 import importlib.util
 import os
 import sys
+import time
 import re
 import json
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, QProcess, QProcessEnvironment, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import (
+    QEvent,
+    QProcess,
+    QProcessEnvironment,
+    QSize,
+    Qt,
+    QThreadPool,
+    QTimer,
+    QUrl,
+)
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -302,6 +312,10 @@ from .user_copy import (
 )
 from .final_review_dialog import FinalReviewFindingsDialog
 from .final_review_workflow import FinalReviewWorkflow
+from .context_library_worker import (
+    ContextLibraryStatusJob,
+    ContextLibraryStatusResult,
+)
 from .project_analysis_review_dialog import ProjectAnalysisReviewDialog
 from .project_analysis_workflow import (
     ProjectAnalysisWorkflow,
@@ -483,6 +497,10 @@ class MainWindow(QMainWindow):
 
         self.state = project_state or ProjectState()
         self._diagnostics_context_fingerprint: tuple[object, ...] | None = None
+        self._context_library_status_cache: ContextLibraryStatusResult | None = None
+        self._context_library_status_cache_at = 0.0
+        self._context_library_status_job: ContextLibraryStatusJob | None = None
+        self._context_library_status_pending_base = ""
         self._diagnostics_refresh_input_key: tuple[object, ...] | None = None
         self._main_tab_enter_generation = 0
         self._pending_log_lines: list[str] = []
@@ -2444,7 +2462,7 @@ class MainWindow(QMainWindow):
             store = resolve_project_analysis_store(base_dir=base)
             draft = store.load_brief_text(published=False).strip()
             if not draft:
-                return False, live_fp, "没有可发布的 draft brief。请先构建结构或 LLM 生成。"
+                return False, live_fp, "没有待启用的项目摘要。请先构建结构或生成项目摘要。"
             manifest = store.load_manifest() or {}
             brief = (manifest.get("artifacts") or {}).get(KIND_PROJECT_BRIEF) or {}
             lineage = normalize_lineage(brief.get("lineage"))
@@ -2453,20 +2471,20 @@ class MainWindow(QMainWindow):
                 return (
                     False,
                     "",
-                    "无法计算当前脚本 fingerprint（未找到 .rpy 或路径不可用）。",
+                    "无法核对当前游戏脚本。请确认项目路径有效且包含 RenPy 脚本。",
                 )
             if not draft_fp:
                 return (
                     False,
                     live_fp,
-                    "draft 缺少 source_fingerprint。请先运行「构建结构」。",
+                    "待审查摘要缺少脚本版本记录。请先运行「构建结构」。",
                 )
             if draft_fp != live_fp:
                 return (
                     False,
                     live_fp,
-                    "脚本已相对 draft 变更（fingerprint 不匹配）。\n"
-                    "请先「构建结构」并（如需要）「LLM 生成」，再发布。",
+                    "游戏脚本在分析后发生了变化。\n"
+                    "请先重新分析并生成项目摘要，再启用到翻译。",
                 )
             return True, live_fp, ""
         except Exception as exc:
@@ -2513,52 +2531,149 @@ class MainWindow(QMainWindow):
                 "gemini_translate_batch.py project-analysis-unpublish",
             )
 
-    def _refresh_context_library_panel(self, *, running: bool | None = None) -> None:
+    def _render_context_library_panel(
+        self,
+        *,
+        flags: dict[str, bool],
+        analysis_flags: dict[str, bool],
+        game_root: object,
+        result: ContextLibraryStatusResult | None,
+        running: bool,
+    ) -> None:
+        """Apply an already-collected status snapshot without disk work."""
         page = getattr(self, "context_library_page", None)
-        if page is not None:
-            flags = self._saved_batch_context_flags()
-            rag_on = bool(flags.get("rag_enabled"))
-            idx_on = bool(flags.get("source_index_enabled"))
-            analysis_flags = self._saved_project_analysis_flags()
-            game_root = self.state.get_game_root() if hasattr(self, "state") else None
-            if running is None:
-                running = self._task_page_running_chrome()
-            analysis_status = None
-            analysis_label = "未检测"
-            try:
-                from project_analysis import (
-                    collect_project_analysis_status,
-                    format_status_label,
-                )
-
-                live_fp = self._project_analysis_live_fingerprint()
-                analysis_status = collect_project_analysis_status(
-                    base_dir=str(game_root) if game_root else None,
-                    expected_source_fingerprint=live_fp,
-                )
-                analysis_label = format_status_label(analysis_status)
-            except Exception as exc:
-                analysis_label = f"读取失败 · {exc}"
-            page.set_context_status(
-                rag_enabled=rag_on,
-                source_index_enabled=idx_on,
-                game_root=str(game_root or ""),
-                project_analysis_status=analysis_status,
-                project_analysis_label=analysis_label,
-                project_analysis_enabled=analysis_flags["enabled"],
-                project_analysis_inject_enabled=analysis_flags["inject_enabled"],
-            )
-            page.set_task_running(
-                running, getattr(self, "_active_command", "")
-            )
+        if page is None:
             return
+        page.set_context_status(
+            rag_enabled=bool(flags.get("rag_enabled")),
+            source_index_enabled=bool(flags.get("source_index_enabled")),
+            game_root=str(game_root or ""),
+            project_analysis_status=result.status if result is not None else None,
+            project_analysis_label=(
+                result.label if result is not None else "正在读取项目摘要状态…"
+            ),
+            project_analysis_enabled=analysis_flags["enabled"],
+            project_analysis_inject_enabled=analysis_flags["inject_enabled"],
+        )
+        page.set_task_running(running, getattr(self, "_active_command", ""))
+
+    def _refresh_context_library_panel(self, *, running: bool | None = None) -> None:
+        """Synchronously refresh status for explicit lifecycle/config changes."""
+        page = getattr(self, "context_library_page", None)
+        if page is None:
+            return
+        flags = self._saved_batch_context_flags()
+        analysis_flags = self._saved_project_analysis_flags(context_flags=flags)
+        game_root = self.state.get_game_root() if hasattr(self, "state") else None
+        if running is None:
+            running = self._task_page_running_chrome()
+        analysis_status = None
+        analysis_label = "未检测"
+        live_fp = ""
+        try:
+            from project_analysis import (
+                collect_project_analysis_status,
+                format_status_label,
+            )
+
+            live_fp = self._project_analysis_live_fingerprint()
+            analysis_status = collect_project_analysis_status(
+                base_dir=str(game_root) if game_root else None,
+                expected_source_fingerprint=live_fp,
+            )
+            analysis_label = format_status_label(analysis_status)
+        except Exception as exc:
+            analysis_label = f"读取失败 · {exc}"
+        result = ContextLibraryStatusResult(
+            base_dir=str(game_root or ""),
+            live_fingerprint=live_fp,
+            status=analysis_status,
+            label=analysis_label,
+            error=(analysis_label if analysis_label.startswith("读取失败") else ""),
+        )
+        self._context_library_status_cache = result
+        self._context_library_status_cache_at = time.monotonic()
+        self._render_context_library_panel(
+            flags=flags,
+            analysis_flags=analysis_flags,
+            game_root=game_root,
+            result=result,
+            running=bool(running),
+        )
+
+    def _refresh_context_library_panel_async(
+        self,
+        *,
+        running: bool | None = None,
+        force: bool = False,
+    ) -> None:
+        """Paint cached context status immediately and refresh it off the UI thread."""
+        page = getattr(self, "context_library_page", None)
+        if page is None:
+            return
+        flags = self._saved_batch_context_flags()
+        analysis_flags = self._saved_project_analysis_flags(context_flags=flags)
+        game_root = self.state.get_game_root() if hasattr(self, "state") else None
+        base_dir = str(game_root or "")
+        if running is None:
+            running = self._task_page_running_chrome()
+        cached = getattr(self, "_context_library_status_cache", None)
+        if cached is not None and cached.base_dir != base_dir:
+            cached = None
+        self._render_context_library_panel(
+            flags=flags,
+            analysis_flags=analysis_flags,
+            game_root=game_root,
+            result=cached,
+            running=bool(running),
+        )
+        cache_age = time.monotonic() - float(
+            getattr(self, "_context_library_status_cache_at", 0.0) or 0.0
+        )
+        if not base_dir or (cached is not None and not force and cache_age < 2.0):
+            return
+        job = getattr(self, "_context_library_status_job", None)
+        if job is not None:
+            self._context_library_status_pending_base = base_dir
+            return
+        job = ContextLibraryStatusJob(base_dir)
+        job.signals.completed.connect(self._on_context_library_status_ready)
+        self._context_library_status_job = job
+        self._context_library_status_pending_base = ""
+        QThreadPool.globalInstance().start(job, -1)
+
+    def _on_context_library_status_ready(self, result: object) -> None:
+        self._context_library_status_job = None
+        if not isinstance(result, ContextLibraryStatusResult):
+            return
+        self._context_library_status_cache = result
+        self._context_library_status_cache_at = time.monotonic()
+        game_root = self.state.get_game_root() if hasattr(self, "state") else None
+        current_base = str(game_root or "")
+        if current_base == result.base_dir:
+            flags = self._saved_batch_context_flags()
+            analysis_flags = self._saved_project_analysis_flags(context_flags=flags)
+            self._render_context_library_panel(
+                flags=flags,
+                analysis_flags=analysis_flags,
+                game_root=game_root,
+                result=result,
+                running=self._task_page_running_chrome(),
+            )
+        pending = str(getattr(self, "_context_library_status_pending_base", "") or "")
+        self._context_library_status_pending_base = ""
+        if pending and pending != result.base_dir:
+            QTimer.singleShot(
+                0,
+                lambda: self._refresh_context_library_panel_async(force=True),
+            )
 
     def _refresh_active_workbench_page(self, spec) -> None:
         """Refresh the active real page and hide internal readiness adapters."""
         nav = workbench_nav_for_work_mode(spec.mode)
         self._workbench_coordinator.resize(nav)
         if nav == WorkbenchNavItem.CONTEXT:
-            self._refresh_context_library_panel()
+            self._refresh_context_library_panel_async()
 
         self.translate_btn.setVisible(False)
         self.resume_btn.setVisible(False)
@@ -9411,16 +9526,21 @@ class MainWindow(QMainWindow):
             game_root=self._game_root_str_for_flags(),
         )
 
-    def _saved_project_analysis_flags(self) -> dict[str, bool]:
-        flags = read_batch_context_flags(
-            self.state.load_translator_config(),
-            game_root=self._game_root_str_for_flags(),
-        )
+    def _saved_project_analysis_flags(
+        self,
+        *,
+        context_flags: dict[str, bool] | None = None,
+    ) -> dict[str, bool]:
+        flags = context_flags
+        if flags is None:
+            flags = read_batch_context_flags(
+                self.state.load_translator_config(),
+                game_root=self._game_root_str_for_flags(),
+            )
         return {
             "enabled": bool(flags.get("project_analysis_enabled")),
             "inject_enabled": bool(flags.get("project_analysis_inject_enabled")),
         }
-
     def _submit_max_cost_from_config(self) -> float | None:
         load_config = getattr(self.state, "load_translator_config", None)
         if not callable(load_config):
@@ -10764,9 +10884,13 @@ class MainWindow(QMainWindow):
         self._sync_batch_translation_page_controls(running=page_running)
         self._sync_keywords_page_controls(running=page_running)
         self._sync_revision_page_controls(running=page_running)
-        # Context-library prebuild CTAs stay on-page while nav is locked; gate them here.
-        if hasattr(self, "context_library_panel"):
-            self._refresh_context_library_panel(running=page_running)
+        # Context-library actions only need task chrome here. Status collection can
+        # scan every script, so lifecycle completions refresh it explicitly.
+        if hasattr(self, "context_library_page"):
+            self.context_library_page.set_task_running(
+                page_running,
+                getattr(self, "_active_command", ""),
+            )
         self._sync_task_shortcuts()
         self._reflow_button_bars()
         self._sync_workbench_empty_states(resume_available=resume_available)

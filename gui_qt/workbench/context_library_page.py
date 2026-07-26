@@ -129,13 +129,12 @@ class ContextLibraryPage(QFrame):
         )
         self.context_actions.add_action(self.project_analysis_review_btn, min_width=100)
 
-        self.project_analysis_publish_btn = QPushButton("发布 brief")
+        self.project_analysis_publish_btn = QPushButton(PROJECT_ANALYSIS_COPY["publish"])
         self.project_analysis_publish_btn.setObjectName(
             "context_project_analysis_publish_btn"
         )
         self.project_analysis_publish_btn.setToolTip(
-            "将 project_brief.draft.md 发布为 published（可注入）。"
-            "会校验当前脚本 fingerprint；不匹配时拒绝发布。"
+            PROJECT_ANALYSIS_COPY["publish_tip"]
         )
         self.project_analysis_publish_btn.clicked.connect(
             lambda: self._trigger_action("project_analysis_publish")
@@ -146,7 +145,7 @@ class ContextLibraryPage(QFrame):
         self.project_analysis_unpublish_btn.setObjectName(
             "context_project_analysis_unpublish_btn"
         )
-        self.project_analysis_unpublish_btn.setToolTip("经确认后撤销 published 副本并停止注入。")
+        self.project_analysis_unpublish_btn.setToolTip(PROJECT_ANALYSIS_COPY["unpublish_tip"])
         self.project_analysis_unpublish_btn.clicked.connect(
             lambda: self._trigger_action("project_analysis_unpublish")
         )
@@ -157,7 +156,7 @@ class ContextLibraryPage(QFrame):
             "context_project_analysis_build_btn"
         )
         self.project_analysis_build_btn.setToolTip(
-            "重新解析 label / jump / route，并生成新的待审查摘要。"
+            PROJECT_ANALYSIS_COPY["rebuild_tip"]
         )
         self.project_analysis_build_btn.clicked.connect(
             lambda: self._trigger_action("project_analysis_build_structure")
