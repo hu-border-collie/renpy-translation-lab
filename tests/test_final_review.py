@@ -168,6 +168,25 @@ class SnapshotAndDigestTests(unittest.TestCase):
         self.assertNotEqual(without_pa["snapshot_digest"], with_pa["snapshot_digest"])
         self.assertNotEqual(without_pa["context_digest"], with_pa["context_digest"])
 
+    def test_final_review_records_global_only_project_analysis_policy(self):
+        snapshot = fr.build_context_snapshot(
+            translation_items=_items(("script.rpy", "Hi", "嗨")),
+            project_analysis_enabled=True,
+            project_analysis_inject=True,
+            project_analysis_status="published",
+            project_analysis_fingerprint="fp-1",
+            project_analysis_brief_text="Published global brief",
+        )
+
+        self.assertEqual(
+            snapshot["layers"]["project_analysis"]["local_context_policy"],
+            "translation_revision_only",
+        )
+        self.assertEqual(
+            snapshot["digest_payload"]["project_analysis"]["local_context_policy"],
+            "translation_revision_only",
+        )
+
     def test_same_fingerprint_different_brief_text_changes_digest(self):
         """Force-republished brief under same structure fingerprint must stale units."""
         items = _items(("script.rpy", "Hi", "嗨"))

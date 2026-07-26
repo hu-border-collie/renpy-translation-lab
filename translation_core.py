@@ -85,6 +85,9 @@ class ContextBundle:
     source_hits: list = field(default_factory=list)
     project_brief_text: str = ''
     project_brief_diagnostics: str = ''
+    project_local_labels: list = field(default_factory=list)
+    project_local_routes: list = field(default_factory=list)
+    project_local_diagnostics: str = ''
 
 
 @dataclass
@@ -435,6 +438,9 @@ def build_context_bundle(
     source_hits=None,
     project_brief_text='',
     project_brief_diagnostics='',
+    project_local_labels=None,
+    project_local_routes=None,
+    project_local_diagnostics='',
 ):
     return ContextBundle(
         glossary_hits=list(glossary_hits or []),
@@ -444,6 +450,9 @@ def build_context_bundle(
         source_hits=list(source_hits or []),
         project_brief_text=str(project_brief_text or ''),
         project_brief_diagnostics=str(project_brief_diagnostics or ''),
+        project_local_labels=list(project_local_labels or []),
+        project_local_routes=list(project_local_routes or []),
+        project_local_diagnostics=str(project_local_diagnostics or ''),
     )
 
 
@@ -464,6 +473,9 @@ def build_reference_blocks(
         source_hits=context_bundle.source_hits,
         project_brief_text=context_bundle.project_brief_text,
         project_brief_diagnostics=context_bundle.project_brief_diagnostics,
+        project_local_labels=context_bundle.project_local_labels,
+        project_local_routes=context_bundle.project_local_routes,
+        project_local_diagnostics=context_bundle.project_local_diagnostics,
         history_char_limit=history_char_limit,
         story_char_limit=story_char_limit,
         include_source_text=include_source_text,

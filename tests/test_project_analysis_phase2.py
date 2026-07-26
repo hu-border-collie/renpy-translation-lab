@@ -423,6 +423,46 @@ class GenerateAndPublishTests(unittest.TestCase):
         self.assertNotIn("route-b", plan.stale_artifact_ids)
         self.assertTrue(plan.brief_stale)
 
+    def test_injectable_context_selects_matching_label_and_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            gen.ingest_keyword_summaries(str(KEYWORDS), store_dir=store_dir)
+            built = gen.build_structure_drafts(
+                store_dir=store_dir,
+                base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)],
+                entry_labels=["start"],
+            )
+            pa.publish_project_brief(store_dir=store_dir)
+            store = pa.ProjectAnalysisStore(store_dir)
+            target = next(
+                record
+                for record in store.load_summaries(pa.KIND_LABEL)
+                if record.get("source_files") and record.get("line_span")
+            )
+            payload = pa.load_injectable_project_context(
+                store_dir=store_dir,
+                expected_source_fingerprint=built["source_fingerprint"],
+                file_rel_path=target["source_files"][0],
+                line_numbers=[target["line_span"][0]],
+            )
+
+            self.assertTrue(payload["injectable"])
+            self.assertEqual(payload["labels"][0]["label_id"], target["label_id"])
+            self.assertTrue(payload["routes"])
+            self.assertIn(target["label_id"], payload["routes"][0]["label_ids"])
+            self.assertIn("labels=", payload["local_diagnostics"])
+
+            stale = pa.load_injectable_project_context(
+                store_dir=store_dir,
+                expected_source_fingerprint="different-project-fingerprint",
+                file_rel_path=target["source_files"][0],
+                line_numbers=[target["line_span"][0]],
+            )
+            self.assertFalse(stale["injectable"])
+            self.assertEqual(stale["labels"], [])
+            self.assertEqual(stale["routes"], [])
+
 
 class PromptInjectionTests(unittest.TestCase):
     def test_reference_blocks_include_brief_only_when_text_present(self):
@@ -439,6 +479,21 @@ class PromptInjectionTests(unittest.TestCase):
         )
         self.assertIn("PROJECT BRIEF", with_brief)
         self.assertIn("Hello route world", with_brief)
+
+    def test_reference_blocks_include_target_specific_local_context(self):
+        text = prompt_context.build_reference_blocks(
+            include_translation_memory=False,
+            project_brief_text="Global brief",
+            project_local_labels=[{"label_id": "route_a", "summary": "Label summary"}],
+            project_local_routes=[{"route_id": "route:start", "summary": "Route summary"}],
+            project_local_diagnostics="target=script.rpy labels=route_a",
+        )
+
+        self.assertIn("PROJECT BRIEF", text)
+        self.assertIn("PROJECT LOCAL CONTEXT", text)
+        self.assertIn("Label: route_a", text)
+        self.assertIn("Route: route:start", text)
+        self.assertIn("target=script.rpy", text)
 
     def test_context_bundle_passes_brief_through(self):
         bundle = translation_core.build_context_bundle(

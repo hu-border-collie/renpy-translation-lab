@@ -149,6 +149,8 @@ python gemini_translate_batch.py project-analysis-unpublish
 其中 `enabled` / `inject_published_brief` 在 GUI 保存后写入当前项目的 `project_context_settings.json`；上述全局值仅作为该项目尚无设置文件时的回退默认值。模型、思考等级、长度、输出上限与价格表仍是工具级配置。
 
 - 仅当 `enabled` 且 `inject_published_brief` 为 true，并且 brief 为 **published 且 fingerprint 有效** 时，才会向翻译/订正 prompt 注入 `PROJECT BRIEF` 分区。
+- 同一发布门禁有效时，翻译与订正还会按当前目标的 `file_rel_path + line_numbers` 选择最窄匹配的 label 摘要，并反查包含该 label 的候选 route，作为 `PROJECT LOCAL CONTEXT` 注入；无法唯一定位时宁可省略局部层，不猜路线。全局 brief 始终保留为上层背景。
+- `project-analysis-generate` 会复用当前已配置的上下文组件作为**非阻塞可选输入**：glossary 与宏设定在存在时加入；Source Index / Story Memory 仅在各自已启用且能检索到内容时加入。每层在 manifest `generation.analysis_inputs` 中只记录来源类型、产物标识/命中信息和内容摘要，不复制原始上下文正文；输入摘要进入生成签名，内容变化会触发重新生成。
 - **draft 永不注入**；stale / 缺 published 文件会跳过注入。
 - 动态 `jump expression` / `call expression` 标记为 unresolved，不虚构单一路线。
 - 普通 `call label` **不是**路线分支：调用返回后继续调用者后续语句，枚举路线时不把 call 目标当成与 jump 互斥的分叉；call 仅作附属依赖/元数据。
@@ -163,6 +165,7 @@ python gemini_translate_batch.py project-analysis-unpublish
 - 「确认已审查」写入当前 brief lineage 的 `reviewed_at`；从审查界面启用会先记录审查，再经 fingerprint 门禁发布。停止使用会二次确认并移除 published 副本，保留 draft 与 `.rpy`。
 - GUI 仍按 missing / draft / published / stale / failed 生命周期切换主行动；是否已有结构由核心状态中的显式产物信号判断，不依赖 label/route 数量。
 - **不**写 `glossary.json`、正式 `story_graph.json` 或 `.rpy`。
+- 最终审校 campaign 只冻结并复用**已发布的全局 brief**；label/route 局部摘要限定在翻译/订正请求内。该边界写入 campaign snapshot 的 `project_analysis.local_context_policy=translation_revision_only`，避免一个局部摘要变化使整个终审 campaign 无差别失效。
 
 ### 只读 CLI / GUI
 

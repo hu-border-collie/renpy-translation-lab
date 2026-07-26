@@ -157,6 +157,105 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertNotIn('enum', candidate_schema['properties']['category'])
         self.assertIn('chunk_summary', keyword_schema['required'])
 
+    def test_project_analysis_optional_inputs_collect_all_available_layers(self):
+        fake_store = mock.Mock()
+        fake_store.load_summaries.return_value = [
+            {
+                "summary": "Alice enters the library.",
+                "source_files": ["script.rpy"],
+            }
+        ]
+        with (
+            mock.patch(
+                "project_analysis.resolve_project_analysis_store",
+                return_value=fake_store,
+            ),
+            mock.patch.object(
+                batch_mod,
+                "_load_final_review_glossary_terms",
+                return_value=[{"source": "Alice", "target": "爱丽丝"}],
+            ),
+            mock.patch.object(batch_mod, "BATCH_MACRO_SETTING", "Tone: restrained"),
+            mock.patch.object(batch_mod, "SOURCE_INDEX_ENABLED", True),
+            mock.patch.object(batch_mod, "SOURCE_INDEX_STORE_DIR", "context/source_index"),
+            mock.patch.object(batch_mod, "STORY_MEMORY_ENABLED", True),
+            mock.patch.object(batch_mod, "STORY_MEMORY_GRAPH_FILE", "context/story_graph.json"),
+            mock.patch.object(
+                batch_mod,
+                "retrieve_source_hits",
+                return_value=(
+                    [
+                        {
+                            "source_id": "source-1",
+                            "file_rel_path": "script.rpy",
+                            "line_start": 1,
+                            "line_end": 3,
+                            "source_text": "Alice enters.",
+                            "score": 0.9,
+                        }
+                    ],
+                    {"store_dir": "context/source_index"},
+                ),
+            ),
+            mock.patch.object(batch_mod, "retrieve_batch_story_hits", return_value={"hit": True}),
+            mock.patch.object(batch_mod.story_memory, "has_story_hits", return_value=True),
+            mock.patch.object(
+                batch_mod.story_memory,
+                "format_story_hits_block",
+                return_value="Alice knows Bob.",
+            ),
+        ):
+            inputs = batch_mod.collect_project_analysis_optional_inputs(
+                store_dir="context/project_analysis",
+                base_dir="C:/Game",
+            )
+
+        self.assertEqual(
+            set(inputs),
+            {"glossary", "macro_setting", "source_index", "story_memory"},
+        )
+        self.assertEqual(inputs["source_index"]["provenance"]["source_ids"], ["source-1"])
+        self.assertEqual(inputs["story_memory"]["provenance"]["query_file"], "script.rpy")
+
+    def test_translation_and_revision_prompts_select_target_local_context(self):
+        payload = {
+            "text": "Global brief",
+            "diagnostics": "status=published",
+            "labels": [{"label_id": "scene_a", "summary": "Local label"}],
+            "routes": [{"route_id": "route:start", "summary": "Local route"}],
+            "local_diagnostics": "target=script.rpy labels=scene_a",
+        }
+        with mock.patch(
+            "gemini_translate_batch.load_injectable_project_context_for_prompts",
+            return_value=payload,
+        ) as load_context:
+            translation_prompt = batch_mod.build_user_prompt(
+                [],
+                [{"id": "line-1", "text": "Hello", "line": 9}],
+                [],
+                file_rel_path="script.rpy",
+            )
+            revision_prompt = batch_mod.build_revision_user_prompt(
+                {
+                    "file_rel_path": "script.rpy",
+                    "line_numbers": [20],
+                    "items": [
+                        {
+                            "id": "line-2",
+                            "source": "Hello",
+                            "current_translation": "你好",
+                            "line_number": 20,
+                        }
+                    ],
+                }
+            )
+
+        self.assertIn("PROJECT LOCAL CONTEXT", translation_prompt)
+        self.assertIn("Local label", translation_prompt)
+        self.assertIn("Local route", revision_prompt)
+        self.assertEqual(load_context.call_args_list[0].args, ("script.rpy", [10]))
+        self.assertEqual(load_context.call_args_list[1].args, ("script.rpy", [20]))
+
     def test_translation_prompts_emphasize_renpy_interpolation_preservation(self):
         system_text = translation_core.build_translation_system_instruction(['[Gil_name!t]'])
         self.assertIn('[Gil_name!t]', system_text)

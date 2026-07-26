@@ -1272,6 +1272,158 @@ def load_injectable_project_brief(
     }
 
 
+def _normalized_context_path(value: Any) -> str:
+    return str(value or "").replace("\\", "/").strip().lstrip("./").lower()
+
+
+def _context_paths_match(left: Any, right: Any) -> bool:
+    left_path = _normalized_context_path(left)
+    right_path = _normalized_context_path(right)
+    if not left_path or not right_path:
+        return False
+    return (
+        left_path == right_path
+        or left_path.endswith("/" + right_path)
+        or right_path.endswith("/" + left_path)
+    )
+
+
+def _clip_context_summary(text: Any, limit: int) -> str:
+    value = str(text or "").strip()
+    if limit > 0 and len(value) > limit:
+        return value[: max(0, limit - 1)].rstrip() + "…"
+    return value
+
+
+def load_injectable_project_context(
+    store_dir: str | os.PathLike[str] | None = None,
+    *,
+    base_dir: str | None = None,
+    expected_source_fingerprint: str = "",
+    file_rel_path: str = "",
+    line_numbers: Sequence[int] | None = None,
+    max_brief_chars: int = 4000,
+    max_label_chars: int = 800,
+    max_route_chars: int = 1200,
+    max_labels: int = 3,
+    max_routes: int = 3,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    """Load the published global brief plus matching label/route summaries.
+
+    Local summaries inherit the published brief gate: they are returned only while
+    that brief is published and fresh for the current project fingerprint. The
+    target file and source line numbers select the narrowest matching labels;
+    routes are then selected from those label dependencies. Ambiguous file-only
+    matches are omitted instead of injecting unrelated route context.
+    """
+    brief = load_injectable_project_brief(
+        store_dir=store_dir,
+        base_dir=base_dir,
+        expected_source_fingerprint=expected_source_fingerprint,
+        max_chars=max_brief_chars,
+        enabled=enabled,
+    )
+    result = {**brief, "labels": [], "routes": [], "local_diagnostics": ""}
+    if not brief.get("injectable") or not str(file_rel_path or "").strip():
+        return result
+
+    store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
+    labels = store.load_summaries(KIND_LABEL)
+    routes = store.load_routes()
+    file_labels = [
+        record
+        for record in labels
+        if any(
+            _context_paths_match(source_file, file_rel_path)
+            for source_file in (record.get("source_files") or [])
+        )
+    ]
+    normalized_lines: set[int] = set()
+    for raw_line in line_numbers or ():
+        try:
+            line = int(raw_line)
+        except (TypeError, ValueError):
+            continue
+        if line > 0:
+            normalized_lines.add(line)
+
+    matched_labels: list[dict[str, Any]] = []
+    if normalized_lines:
+        for record in file_labels:
+            span = record.get("line_span")
+            if not isinstance(span, (list, tuple)) or len(span) != 2:
+                continue
+            try:
+                start, end = int(span[0]), int(span[1])
+            except (TypeError, ValueError):
+                continue
+            if any(start <= line <= end for line in normalized_lines):
+                matched_labels.append(record)
+        matched_labels.sort(
+            key=lambda record: (
+                int((record.get("line_span") or [0, 0])[1])
+                - int((record.get("line_span") or [0, 0])[0]),
+                str(record.get("id") or ""),
+            )
+        )
+    elif len(file_labels) == 1:
+        matched_labels = file_labels
+
+    selected_labels: list[dict[str, Any]] = []
+    for record in matched_labels[: max(0, int(max_labels))]:
+        summary = _clip_context_summary(record.get("summary"), max_label_chars)
+        if summary:
+            selected_labels.append(
+                {
+                    "id": str(record.get("id") or ""),
+                    "label_id": str(record.get("label_id") or record.get("id") or ""),
+                    "summary": summary,
+                    "source_files": list(record.get("source_files") or []),
+                    "line_span": record.get("line_span"),
+                }
+            )
+
+    label_ids = {item["label_id"] for item in selected_labels if item["label_id"]}
+    matched_routes = [
+        record
+        for record in routes
+        if label_ids.intersection(
+            str(value or "")
+            for value in ((record.get("metadata") or {}).get("label_ids") or [])
+        )
+    ]
+    matched_routes.sort(
+        key=lambda record: (
+            bool((record.get("metadata") or {}).get("unresolved")),
+            str(record.get("id") or ""),
+        )
+    )
+    selected_routes: list[dict[str, Any]] = []
+    for record in matched_routes[: max(0, int(max_routes))]:
+        summary = _clip_context_summary(record.get("summary"), max_route_chars)
+        if summary:
+            selected_routes.append(
+                {
+                    "id": str(record.get("id") or ""),
+                    "route_id": str(record.get("route_id") or record.get("id") or ""),
+                    "summary": summary,
+                    "label_ids": list((record.get("metadata") or {}).get("label_ids") or []),
+                    "unresolved": bool((record.get("metadata") or {}).get("unresolved")),
+                }
+            )
+
+    result["labels"] = selected_labels
+    result["routes"] = selected_routes
+    if selected_labels or selected_routes:
+        label_names = ",".join(item["label_id"] for item in selected_labels)
+        route_names = ",".join(item["route_id"] for item in selected_routes)
+        result["local_diagnostics"] = (
+            f"target={_normalized_context_path(file_rel_path)} "
+            f"labels={label_names or '-'} routes={route_names or '-'}"
+        )
+    return result
+
 def publish_project_brief(
     store_dir: str | os.PathLike[str] | None = None,
     *,

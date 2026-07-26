@@ -32,7 +32,7 @@ from project_analysis import (
 )
 from sync_model_backend import SyncGenerationRequest, SyncModelBackend, SyncGenerationResult
 
-PROMPT_SCHEMA_VERSION = "project-analysis-llm-v1"
+PROMPT_SCHEMA_VERSION = "project-analysis-llm-v2"
 
 GenerateFn = Callable[[SyncGenerationRequest], SyncGenerationResult]
 
@@ -86,6 +86,68 @@ def _clip(text: str, limit: int) -> str:
     if limit > 0 and len(text) > limit:
         return text[: max(0, limit - 1)].rstrip() + "…"
     return text
+
+
+def normalize_analysis_inputs(value: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Normalize bounded optional context layers and their provenance metadata."""
+    normalized: dict[str, dict[str, Any]] = {}
+    for name, raw in sorted(dict(value or {}).items()):
+        if not isinstance(raw, Mapping):
+            continue
+        content = str(raw.get("content") or "").strip()
+        if not content:
+            continue
+        provenance = (
+            dict(raw.get("provenance") or {})
+            if isinstance(raw.get("provenance"), Mapping)
+            else {}
+        )
+        normalized[str(name)] = {
+            "content": content,
+            "content_sha256": sha256_text(content),
+            "provenance": provenance,
+        }
+    return normalized
+
+
+def analysis_inputs_digest(value: Mapping[str, Any] | None) -> str:
+    normalized = normalize_analysis_inputs(value)
+    payload = {
+        name: {
+            "content_sha256": item["content_sha256"],
+            "provenance": item["provenance"],
+        }
+        for name, item in normalized.items()
+    }
+    return sha256_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+
+
+def format_analysis_inputs(value: Mapping[str, Any] | None, *, max_chars: int) -> str:
+    normalized = normalize_analysis_inputs(value)
+    if not normalized:
+        return ""
+    sections = [
+        f"## {name}\nsource={json.dumps(item['provenance'], ensure_ascii=False, sort_keys=True)}\n{item['content']}"
+        for name, item in normalized.items()
+    ]
+    return _clip(
+        "Optional project context (use only when relevant):\n\n"
+        + "\n\n".join(sections),
+        max_chars,
+    )
+
+
+def _analysis_dependency_digest(
+    artifact_ids: Sequence[str],
+    analysis_inputs: Mapping[str, Any] | None,
+) -> str:
+    context_digest = analysis_inputs_digest(analysis_inputs)
+    dependencies = list(artifact_ids or [])
+    if context_digest:
+        dependencies.append(f"analysis-context:{context_digest}")
+    return digest_upstream_artifacts(dependencies)
 
 
 def _build_request(
@@ -176,19 +238,26 @@ def refine_label_record(
     source_fingerprint: str,
     provider: str = "",
     model: str = "",
+    analysis_inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     rec = normalize_summary_record(record, default_kind=KIND_LABEL)
     cfg = merge_llm_config(config)
     model_name = model or cfg["model"]
     raw = rec.get("summary") or ""
     meta = rec.get("metadata") if isinstance(rec.get("metadata"), dict) else {}
+    optional_context = format_analysis_inputs(
+        analysis_inputs,
+        max_chars=max(1000, cfg["max_input_chars_per_request"] // 3),
+    )
+    primary_limit = max(1, cfg["max_input_chars_per_request"] - len(optional_context))
     user = (
         f"Label id: {rec.get('label_id') or rec.get('id')}\n"
         f"Source files: {', '.join(rec.get('source_files') or [])}\n"
         f"Evidence item ids: {', '.join(rec.get('evidence_item_ids') or [])}\n"
         f"Unresolved outgoing: {meta.get('unresolved_outgoing')}\n"
         f"Outgoing targets: {meta.get('outgoing_targets')}\n\n"
-        f"Current draft notes (may be mechanical):\n{_clip(str(raw), cfg['max_input_chars_per_request'])}\n"
+        f"Current draft notes (may be mechanical):\n{_clip(str(raw), primary_limit)}\n"
+        f"\n{optional_context}\n"
     )
     text, _usage = complete_analysis_text(
         generate,
@@ -210,8 +279,8 @@ def refine_label_record(
         provider=provider,
         model=model_name,
         thinking_level=cfg["thinking_level"],
-        upstream_dependency_digest=digest_upstream_artifacts(
-            rec.get("upstream_artifact_ids") or []
+        upstream_dependency_digest=_analysis_dependency_digest(
+            rec.get("upstream_artifact_ids") or [], analysis_inputs
         ),
         generated_at=utc_now_iso(),
     )
@@ -227,6 +296,7 @@ def refine_route_record(
     source_fingerprint: str,
     provider: str = "",
     model: str = "",
+    analysis_inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     rec = normalize_summary_record(record, default_kind=KIND_ROUTE)
     cfg = merge_llm_config(config)
@@ -240,13 +310,19 @@ def refine_route_record(
         else:
             parts.append(f"### {lid}\n(missing label summary)")
     body = "\n\n".join(parts)
+    optional_context = format_analysis_inputs(
+        analysis_inputs,
+        max_chars=max(1000, cfg["max_input_chars_per_request"] // 3),
+    )
+    primary_limit = max(1, cfg["max_input_chars_per_request"] - len(optional_context))
     user = (
         f"Route id: {rec.get('id')}\n"
         f"Entry: {meta.get('entry_label')}\n"
         f"Unresolved: {meta.get('unresolved')}\n"
         f"Shared labels: {meta.get('shared_labels')}\n"
         f"Evidence item ids: {', '.join(rec.get('evidence_item_ids') or [])}\n\n"
-        f"Label summaries:\n{_clip(body, cfg['max_input_chars_per_request'])}\n"
+        f"Label summaries:\n{_clip(body, primary_limit)}\n"
+        f"\n{optional_context}\n"
     )
     text, _usage = complete_analysis_text(
         generate,
@@ -268,8 +344,8 @@ def refine_route_record(
         provider=provider,
         model=model_name,
         thinking_level=cfg["thinking_level"],
-        upstream_dependency_digest=digest_upstream_artifacts(
-            rec.get("upstream_artifact_ids") or []
+        upstream_dependency_digest=_analysis_dependency_digest(
+            rec.get("upstream_artifact_ids") or [], analysis_inputs
         ),
         generated_at=utc_now_iso(),
     )
@@ -285,6 +361,7 @@ def refine_project_brief(
     provider: str = "",
     model: str = "",
     unresolved_count: int = 0,
+    analysis_inputs: Mapping[str, Any] | None = None,
 ) -> str:
     cfg = merge_llm_config(config)
     model_name = model or cfg["model"]
@@ -296,10 +373,16 @@ def refine_project_brief(
             f"## {rid}\nentry={meta.get('entry_label')} unresolved={meta.get('unresolved')}\n"
             f"{route.get('summary') or ''}"
         )
+    optional_context = format_analysis_inputs(
+        analysis_inputs,
+        max_chars=max(1000, cfg["max_input_chars_per_request"] // 3),
+    )
+    primary_limit = max(1, cfg["max_input_chars_per_request"] - len(optional_context))
     user = (
         f"Unresolved dynamic edges (count): {unresolved_count}\n"
         f"Route count: {len(routes)}\n\n"
-        f"{_clip(chr(10).join(parts), cfg['max_input_chars_per_request'])}\n"
+        f"{_clip(chr(10).join(parts), primary_limit)}\n"
+        f"\n{optional_context}\n"
     )
     text, _usage = complete_analysis_text(
         generate,
@@ -405,6 +488,7 @@ def run_mapreduce_drafts(
     model: str = "",
     progress: Callable[[Mapping[str, Any]], None] | None = None,
     pricing: Mapping[str, Any] | None = None,
+    analysis_inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """LLM-refine label → route → brief drafts in the analysis store.
 
@@ -482,6 +566,7 @@ def run_mapreduce_drafts(
 
     generate = _tracked_generate
     cfg = merge_llm_config(config)
+    normalized_inputs = normalize_analysis_inputs(analysis_inputs)
     if model:
         cfg["model"] = model
     if not cfg["model"]:
@@ -529,7 +614,13 @@ def run_mapreduce_drafts(
         record_fp = str(
             normalize_lineage(rec.get("lineage")).get("source_fingerprint") or source_fp
         )
-        record_sig = dict(base_sig, source_fingerprint=record_fp)
+        record_sig = dict(
+            base_sig,
+            source_fingerprint=record_fp,
+            upstream_dependency_digest=_analysis_dependency_digest(
+                rec.get("upstream_artifact_ids") or [], normalized_inputs
+            ),
+        )
         if not _needs_llm_refresh(rec, expected_signature=record_sig, force=force):
             labels_out.append(normalize_summary_record(rec, default_kind=KIND_LABEL))
             labels_skipped += 1
@@ -546,6 +637,7 @@ def run_mapreduce_drafts(
                 source_fingerprint=record_fp,
                 provider=prov,
                 model=model_name,
+                analysis_inputs=normalized_inputs,
             )
         )
         labels_refined += 1
@@ -563,7 +655,13 @@ def run_mapreduce_drafts(
         record_fp = str(
             normalize_lineage(rec.get("lineage")).get("source_fingerprint") or source_fp
         )
-        record_sig = dict(base_sig, source_fingerprint=record_fp)
+        record_sig = dict(
+            base_sig,
+            source_fingerprint=record_fp,
+            upstream_dependency_digest=_analysis_dependency_digest(
+                rec.get("upstream_artifact_ids") or [], normalized_inputs
+            ),
+        )
         if not _needs_llm_refresh(rec, expected_signature=record_sig, force=force):
             routes_out.append(normalize_summary_record(rec, default_kind=KIND_ROUTE))
             routes_skipped += 1
@@ -581,6 +679,7 @@ def run_mapreduce_drafts(
                 source_fingerprint=record_fp,
                 provider=prov,
                 model=model_name,
+                analysis_inputs=normalized_inputs,
             )
         )
         routes_refined += 1
@@ -595,7 +694,7 @@ def run_mapreduce_drafts(
         if (r.get("metadata") or {}).get("unresolved")
     )
     upstream = [r["id"] for r in routes_out] + [r["id"] for r in labels_out]
-    brief_upstream_digest = digest_upstream_artifacts(upstream)
+    brief_upstream_digest = _analysis_dependency_digest(upstream, normalized_inputs)
     brief_sig = generation_signature(
         source_fingerprint=source_fp,
         provider=prov,
@@ -645,6 +744,7 @@ def run_mapreduce_drafts(
             provider=prov,
             model=model_name,
             unresolved_count=unresolved,
+            analysis_inputs=normalized_inputs,
         )
         # Keep a short machine header so humans see LLM origin.
         if not brief_text.lstrip().startswith("#"):
@@ -710,6 +810,14 @@ def run_mapreduce_drafts(
         "routes_skipped": routes_skipped,
         "brief_refined": brief_refined,
         "usage": usage_summary,
+        "analysis_inputs": {
+            name: {
+                "content_sha256": item["content_sha256"],
+                "provenance": item["provenance"],
+            }
+            for name, item in normalized_inputs.items()
+        },
+        "analysis_inputs_digest": analysis_inputs_digest(normalized_inputs),
     }
     store.save_manifest(manifest)
 

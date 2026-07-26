@@ -706,49 +706,62 @@ def compute_current_project_analysis_fingerprint(base_dir=None, store_dir=None):
     return digest_script_paths(paths, base_dir=graph_base or base)
 
 
-def load_injectable_project_brief_for_prompts():
-    """Return (text, diagnostics) for published brief when injection is enabled.
-
-    Always passes the *current* structure fingerprint so post-publish script
-    edits mark the brief stale and block silent injection.
-    """
+def load_injectable_project_context_for_prompts(file_rel_path='', line_numbers=None):
+    """Load the published global brief and target-specific label/route context."""
     global _PROJECT_BRIEF_CACHE, _PROJECT_BRIEF_CACHE_KEY
+    empty = {'text': '', 'diagnostics': '', 'labels': [], 'routes': [], 'local_diagnostics': ''}
     if not PROJECT_ANALYSIS_ENABLED or not PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
-        return '', ''
-    from project_analysis import load_injectable_project_brief
+        return empty
+    from project_analysis import load_injectable_project_context
 
     store_dir = PROJECT_ANALYSIS_STORE_DIR or None
     base_dir = legacy.BASE_DIR or None
-    current_fp = compute_current_project_analysis_fingerprint(
-        base_dir, store_dir=store_dir
-    )
+    current_fp = compute_current_project_analysis_fingerprint(base_dir, store_dir=store_dir)
     if not current_fp:
-        # Cannot verify freshness against live scripts — do not inject.
-        return '', ''
+        return empty
+    normalized_lines = []
+    for raw_value in line_numbers or []:
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            normalized_lines.append(value)
+    normalized_lines_tuple = tuple(sorted(set(normalized_lines)))
     cache_key = (
-        bool(PROJECT_ANALYSIS_ENABLED),
-        bool(PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF),
-        store_dir or '',
-        int(PROJECT_ANALYSIS_MAX_BRIEF_CHARS),
-        str(base_dir or ''),
-        current_fp,
+        bool(PROJECT_ANALYSIS_ENABLED), bool(PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF),
+        store_dir or '', int(PROJECT_ANALYSIS_MAX_BRIEF_CHARS),
+        int(PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS),
+        int(PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS), str(base_dir or ''), current_fp,
+        str(file_rel_path or '').replace('\\', '/'), normalized_lines_tuple,
     )
     if _PROJECT_BRIEF_CACHE is not None and _PROJECT_BRIEF_CACHE_KEY == cache_key:
-        return _PROJECT_BRIEF_CACHE
-    payload = load_injectable_project_brief(
-        store_dir=store_dir,
-        base_dir=base_dir,
+        return dict(_PROJECT_BRIEF_CACHE)
+    payload = load_injectable_project_context(
+        store_dir=store_dir, base_dir=base_dir,
         expected_source_fingerprint=current_fp,
-        max_chars=PROJECT_ANALYSIS_MAX_BRIEF_CHARS,
+        file_rel_path=file_rel_path, line_numbers=normalized_lines_tuple,
+        max_brief_chars=PROJECT_ANALYSIS_MAX_BRIEF_CHARS,
+        max_label_chars=PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS,
+        max_route_chars=PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS,
         enabled=True,
     )
-    result = (
-        str(payload.get('text') or '') if payload.get('injectable') else '',
-        str(payload.get('diagnostics') or '') if payload.get('injectable') else '',
-    )
-    _PROJECT_BRIEF_CACHE = result
+    result = {
+        'text': str(payload.get('text') or '') if payload.get('injectable') else '',
+        'diagnostics': str(payload.get('diagnostics') or '') if payload.get('injectable') else '',
+        'labels': list(payload.get('labels') or []) if payload.get('injectable') else [],
+        'routes': list(payload.get('routes') or []) if payload.get('injectable') else [],
+        'local_diagnostics': str(payload.get('local_diagnostics') or '') if payload.get('injectable') else '',
+    }
+    _PROJECT_BRIEF_CACHE = dict(result)
     _PROJECT_BRIEF_CACHE_KEY = cache_key
     return result
+
+
+def load_injectable_project_brief_for_prompts():
+    """Compatibility wrapper returning only the published global brief."""
+    payload = load_injectable_project_context_for_prompts()
+    return payload['text'], payload['diagnostics']
 
 
 def load_progress():
@@ -2632,8 +2645,17 @@ def build_user_prompt(
     history_hits=None,
     story_hits=None,
     source_hits=None,
+    file_rel_path='',
 ):
-    brief_text, brief_diag = load_injectable_project_brief_for_prompts()
+    target_units = translation_core.units_from_items(target_items)
+    target_file = file_rel_path or next(
+        (unit.file_rel_path for unit in target_units if unit.file_rel_path),
+        '',
+    )
+    project_context = load_injectable_project_context_for_prompts(
+        target_file,
+        [unit.display_line_number for unit in target_units],
+    )
     return translation_core.build_translation_user_prompt(
         translation_core.ContextWindow(context_past, context_future),
         target_items,
@@ -2642,8 +2664,11 @@ def build_user_prompt(
             history_hits=history_hits,
             story_hits=story_hits,
             source_hits=source_hits,
-            project_brief_text=brief_text,
-            project_brief_diagnostics=brief_diag,
+            project_brief_text=project_context['text'],
+            project_brief_diagnostics=project_context['diagnostics'],
+            project_local_labels=project_context['labels'],
+            project_local_routes=project_context['routes'],
+            project_local_diagnostics=project_context['local_diagnostics'],
         ),
         history_char_limit=RAG_HISTORY_CHAR_LIMIT,
         story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
@@ -2690,6 +2715,7 @@ def build_batch_request(chunk):
                             history_hits=chunk.get('history_hits') or [],
                             story_hits=chunk.get('story_hits') if 'story_hits' in chunk else None,
                             source_hits=chunk.get('source_hits') or [],
+                            file_rel_path=chunk.get('file_rel_path') or '',
                         )
                     }
                 ],
@@ -3190,7 +3216,13 @@ def build_revision_system_instruction():
 
 
 def build_revision_user_prompt(chunk):
-    brief_text, brief_diag = load_injectable_project_brief_for_prompts()
+    project_context = load_injectable_project_context_for_prompts(
+        chunk.get('file_rel_path') or '',
+        chunk.get('line_numbers') or [
+            item.get('line_number') or (int(item.get('line') or 0) + 1)
+            for item in (chunk.get('items') or [])
+        ],
+    )
     return translation_core.build_revision_user_prompt(
         translation_core.ContextWindow(
             chunk.get('context_past') or [],
@@ -3207,8 +3239,11 @@ def build_revision_user_prompt(chunk):
             history_hits=chunk.get('history_hits') or [],
             story_hits=chunk.get('story_hits'),
             rag_stats=chunk.get('rag_stats') or {},
-            project_brief_text=brief_text,
-            project_brief_diagnostics=brief_diag,
+            project_brief_text=project_context['text'],
+            project_brief_diagnostics=project_context['diagnostics'],
+            project_local_labels=project_context['labels'],
+            project_local_routes=project_context['routes'],
+            project_local_diagnostics=project_context['local_diagnostics'],
         ),
         history_char_limit=RAG_HISTORY_CHAR_LIMIT,
         story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
@@ -3426,6 +3461,93 @@ def _load_final_review_glossary_terms(glossary_path, limit=200):
             break
     return pairs
 
+
+def collect_project_analysis_optional_inputs(store_dir=None, base_dir=None):
+    """Collect bounded, non-blocking context layers with explicit provenance."""
+    from project_analysis import resolve_project_analysis_store
+
+    store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
+    labels = store.load_summaries("label")
+    query_text = truncate_text(
+        "\n".join(str(record.get("summary") or "") for record in labels if record.get("summary")),
+        4000,
+    )
+    first_file = next(
+        (
+            str(source_file)
+            for record in labels
+            for source_file in (record.get("source_files") or [])
+            if str(source_file or "").strip()
+        ),
+        "",
+    )
+    inputs = {}
+
+    glossary_path = getattr(legacy, "GLOSSARY_FILE", "") or ""
+    glossary_terms = _load_final_review_glossary_terms(glossary_path, limit=120)
+    if glossary_terms:
+        inputs["glossary"] = {
+            "content": prompt_context.format_glossary_hits_block(glossary_terms),
+            "provenance": {
+                "kind": "glossary",
+                "artifact": os.path.basename(glossary_path),
+                "term_count": len(glossary_terms),
+            },
+        }
+
+    macro_text = truncate_text(BATCH_MACRO_SETTING, 4000).strip()
+    if macro_text:
+        inputs["macro_setting"] = {
+            "content": macro_text,
+            "provenance": {
+                "kind": "macro_setting",
+                "artifact": "batch.macro_setting",
+                "char_count": len(macro_text),
+            },
+        }
+
+    if SOURCE_INDEX_ENABLED and query_text:
+        source_hits, source_stats = retrieve_source_hits([{"text": query_text}], [])
+        if source_hits:
+            inputs["source_index"] = {
+                "content": prompt_context.format_source_hits_block(source_hits),
+                "provenance": {
+                    "kind": "source_index",
+                    "store": os.path.basename(str(source_stats.get("store_dir") or SOURCE_INDEX_STORE_DIR)),
+                    "hit_count": len(source_hits),
+                    "source_ids": [str(hit.get("source_id") or "") for hit in source_hits],
+                },
+            }
+
+    if STORY_MEMORY_ENABLED and query_text:
+        try:
+            story_hits = retrieve_batch_story_hits(
+                first_file,
+                [{"text": query_text}],
+                [],
+                [],
+            )
+            if story_memory.has_story_hits(story_hits):
+                story_text = story_memory.format_story_hits_block(
+                    story_hits,
+                    min(4000, STORY_MEMORY_MAX_CONTEXT_CHARS),
+                )
+                inputs["story_memory"] = {
+                    "content": story_text,
+                    "provenance": {
+                        "kind": "story_memory",
+                        "artifact": os.path.basename(
+                            STORY_MEMORY_GRAPH_FILE or "story_graph.json"
+                        ),
+                        "query_file": first_file,
+                    },
+                }
+        except Exception as exc:
+            print(
+                f"Warning: optional Story Memory input unavailable: {exc}",
+                file=sys.stderr,
+            )
+    return inputs
 
 def _collect_final_review_context_snapshot(translation_items):
     """Build the frozen context snapshot for a final-review campaign."""
@@ -8304,6 +8426,7 @@ def build_repair_request(job):
                             job['context_future'],
                             story_hits=job.get('story_hits') if 'story_hits' in job else None,
                             source_hits=job.get('source_hits') or [],
+                            file_rel_path=job.get('file_rel_path') or '',
                         )
                     }
                 ],
@@ -11028,6 +11151,10 @@ def main(argv=None):
                         "input_per_million": model_rates.get("input_per_million") or 0.0,
                         "output_per_million": model_rates.get("output_per_million") or 0.0,
                     },
+                    analysis_inputs=collect_project_analysis_optional_inputs(
+                        store_dir=store_dir,
+                        base_dir=legacy.BASE_DIR or None,
+                    ),
                 )
             if command == 'project-analysis-inspect':
                 store = resolve_project_analysis_store(
