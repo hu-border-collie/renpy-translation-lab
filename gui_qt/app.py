@@ -12094,21 +12094,30 @@ class MainWindow(QMainWindow):
                     ),
                 )
 
-            project_values = (
-                complete_advanced_values
-                if advanced_values
-                else read_advanced_settings(config)
+            saved_context_flags = read_batch_context_flags(
+                config,
+                game_root=self._game_root_str_for_flags(),
             )
+            project_analysis_enabled = bool(
+                saved_context_flags.get("project_analysis_enabled")
+            )
+            project_analysis_inject_enabled = bool(
+                saved_context_flags.get("project_analysis_inject_enabled")
+            )
+            if "batch_project_analysis_enabled" in advanced_values:
+                project_analysis_enabled = bool(
+                    complete_advanced_values.get("batch_project_analysis_enabled")
+                )
+            if "batch_project_analysis_inject_published_brief" in advanced_values:
+                project_analysis_inject_enabled = bool(
+                    complete_advanced_values.get(
+                        "batch_project_analysis_inject_published_brief"
+                    )
+                )
             project_context_flags.update(
                 {
-                    "project_analysis_enabled": bool(
-                        project_values.get("batch_project_analysis_enabled")
-                    ),
-                    "project_analysis_inject_enabled": bool(
-                        project_values.get(
-                            "batch_project_analysis_inject_published_brief"
-                        )
-                    ),
+                    "project_analysis_enabled": project_analysis_enabled,
+                    "project_analysis_inject_enabled": project_analysis_inject_enabled,
                 }
             )
             # Validate every field before either settings file is written. This

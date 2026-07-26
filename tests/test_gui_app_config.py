@@ -547,7 +547,18 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._refresh_project_label = lambda: None
         self.window.statusBar = lambda: FakeStatusBar()
 
-        with mock.patch("project_context_settings.save_project_context_settings") as save_project:
+        with (
+            mock.patch(
+                "gui_qt.app.read_batch_context_flags",
+                return_value={
+                    "project_analysis_enabled": True,
+                    "project_analysis_inject_enabled": True,
+                },
+            ),
+            mock.patch(
+                "project_context_settings.save_project_context_settings"
+            ) as save_project,
+        ):
             saved = self.window._on_save_config()
 
         self.assertTrue(saved)
@@ -560,8 +571,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                 "rag_enabled": True,
                 "source_index_enabled": True,
                 "bootstrap_on_build": False,
-                "project_analysis_enabled": False,
-                "project_analysis_inject_enabled": False,
+                "project_analysis_enabled": True,
+                "project_analysis_inject_enabled": True,
             },
         )
         # Legacy global values remain fallback defaults for projects without

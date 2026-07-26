@@ -505,13 +505,10 @@ def run_mapreduce_drafts(
     source_fp = str(
         normalize_lineage(brief.get("lineage")).get("source_fingerprint") or ""
     )
-    if not source_fp and labels:
-        source_fp = str(
-            normalize_lineage(labels[0].get("lineage")).get("source_fingerprint") or ""
-        )
-    if not source_fp and routes:
-        source_fp = str(
-            normalize_lineage(routes[0].get("lineage")).get("source_fingerprint") or ""
+    if not source_fp:
+        raise ProjectAnalysisError(
+            "project-wide structure fingerprint is missing; "
+            "rerun project-analysis-build-structure before generation"
         )
 
     prov = provider or getattr(backend, "provider", "") or ""

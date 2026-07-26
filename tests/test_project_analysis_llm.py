@@ -278,6 +278,33 @@ class MapReduceTests(unittest.TestCase):
             self.assertGreater(result["labels_refined"], 0)
             self.assertGreater(result["labels_skipped"], 0)
             self.assertGreater(result["routes_skipped"], 0)
+
+    def test_missing_project_fingerprint_requires_structure_rebuild(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            gen.build_structure_drafts(
+                store_dir=store_dir,
+                base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)],
+                entry_labels=["start"],
+            )
+            store = pa.ProjectAnalysisStore(store_dir)
+            manifest = store.load_manifest()
+            manifest["artifacts"][pa.KIND_PROJECT_BRIEF]["lineage"] = pa.empty_lineage()
+            store.save_manifest(manifest)
+            backend = FakeBackend()
+
+            with self.assertRaisesRegex(
+                pa.ProjectAnalysisError, "rerun project-analysis-build-structure"
+            ):
+                llm.run_mapreduce_drafts(
+                    store_dir=store_dir,
+                    backend=backend,
+                    config={"model": "fake-model"},
+                )
+
+            self.assertEqual(backend.calls, [])
+
     def test_requires_structure(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(pa.ProjectAnalysisError):
