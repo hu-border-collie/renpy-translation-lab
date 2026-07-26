@@ -518,6 +518,7 @@ def _project_analysis_digest_fields(
         "lineage_digest": lineage_digest if included else "",
         "lineage": lineage_slice if included else {},
         "included_in_digest": included,
+        "local_context_policy": "translation_revision_only" if included else "",
     }
     return meta
 
@@ -671,6 +672,11 @@ def build_context_snapshot(
             "lineage_digest": pa_meta.get("lineage_digest")
             if pa_meta.get("included_in_digest")
             else "",
+            "local_context_policy": (
+                pa_meta.get("local_context_policy")
+                if pa_meta.get("included_in_digest")
+                else ""
+            ),
         },
         "extra": dict(extra or {}),
     }

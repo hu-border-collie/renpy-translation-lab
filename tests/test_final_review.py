@@ -149,6 +149,12 @@ class SnapshotAndDigestTests(unittest.TestCase):
         self.assertFalse(
             with_pa_disabled_inject["digest_payload"]["project_analysis"]["included_in_digest"]
         )
+        self.assertEqual(
+            without_pa["layers"]["project_analysis"]["local_context_policy"], ""
+        )
+        self.assertEqual(
+            with_pa_disabled_inject["layers"]["project_analysis"]["local_context_policy"], ""
+        )
         with_pa = fr.build_context_snapshot(
             translation_items=items,
             project_analysis_enabled=True,
@@ -167,6 +173,25 @@ class SnapshotAndDigestTests(unittest.TestCase):
         self.assertTrue(with_pa["digest_payload"]["project_analysis"]["brief_text_sha256"])
         self.assertNotEqual(without_pa["snapshot_digest"], with_pa["snapshot_digest"])
         self.assertNotEqual(without_pa["context_digest"], with_pa["context_digest"])
+
+    def test_final_review_records_global_only_project_analysis_policy(self):
+        snapshot = fr.build_context_snapshot(
+            translation_items=_items(("script.rpy", "Hi", "嗨")),
+            project_analysis_enabled=True,
+            project_analysis_inject=True,
+            project_analysis_status="published",
+            project_analysis_fingerprint="fp-1",
+            project_analysis_brief_text="Published global brief",
+        )
+
+        self.assertEqual(
+            snapshot["layers"]["project_analysis"]["local_context_policy"],
+            "translation_revision_only",
+        )
+        self.assertEqual(
+            snapshot["digest_payload"]["project_analysis"]["local_context_policy"],
+            "translation_revision_only",
+        )
 
     def test_same_fingerprint_different_brief_text_changes_digest(self):
         """Force-republished brief under same structure fingerprint must stale units."""

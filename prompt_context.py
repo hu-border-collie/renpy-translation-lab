@@ -70,6 +70,23 @@ def format_project_brief_block(brief_text, *, diagnostics="", empty_label="(none
     return text
 
 
+def format_project_local_context_block(labels=None, routes=None, diagnostics=""):
+    sections = []
+    for label in labels or []:
+        label_id = str((label or {}).get("label_id") or (label or {}).get("id") or "")
+        summary = str((label or {}).get("summary") or "").strip()
+        if summary:
+            sections.append(f"### Label: {label_id}\n{summary}")
+    for route in routes or []:
+        route_id = str((route or {}).get("route_id") or (route or {}).get("id") or "")
+        summary = str((route or {}).get("summary") or "").strip()
+        if summary:
+            sections.append(f"### Route: {route_id}\n{summary}")
+    if diagnostics and sections:
+        sections.append(f"[{diagnostics}]")
+    return "\n\n".join(sections)
+
+
 def build_reference_blocks(
     *,
     include_translation_memory=True,
@@ -79,6 +96,9 @@ def build_reference_blocks(
     source_hits=None,
     project_brief_text="",
     project_brief_diagnostics="",
+    project_local_labels=None,
+    project_local_routes=None,
+    project_local_diagnostics="",
     history_char_limit=220,
     story_char_limit=1200,
     include_source_text=True,
@@ -99,6 +119,13 @@ def build_reference_blocks(
             "PROJECT BRIEF:\n"
             f"{format_project_brief_block(brief, diagnostics=project_brief_diagnostics, empty_label=empty_label)}\n\n"
         )
+    local_context = format_project_local_context_block(
+        project_local_labels,
+        project_local_routes,
+        project_local_diagnostics,
+    )
+    if local_context:
+        blocks.append(f"PROJECT LOCAL CONTEXT:\n{local_context}\n\n")
     if source_hits:
         blocks.append(
             "RELATED PROJECT CONTEXT:\n"

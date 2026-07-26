@@ -87,6 +87,71 @@ class MapReduceTests(unittest.TestCase):
             with_ids = [r for r in labels if r.get("evidence_item_ids")]
             self.assertTrue(with_ids)
 
+    def test_optional_inputs_are_prompted_persisted_and_invalidate_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            gen.ingest_keyword_summaries(str(KEYWORDS), store_dir=store_dir)
+            gen.build_structure_drafts(
+                store_dir=store_dir,
+                base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)],
+                entry_labels=["start"],
+            )
+            backend = FakeBackend()
+            inputs = {
+                "macro_setting": {
+                    "content": "Tone: restrained",
+                    "provenance": {"kind": "macro_setting", "artifact": "batch.macro_setting"},
+                }
+            }
+            first = llm.run_mapreduce_drafts(
+                store_dir=store_dir,
+                backend=backend,
+                config={"model": "fake-model"},
+                provider="fake",
+                analysis_inputs=inputs,
+            )
+            self.assertGreater(first["labels_refined"], 0)
+            self.assertTrue(
+                any(
+                    "Optional project context" in str(request.contents)
+                    and "Tone: restrained" in str(request.contents)
+                    for request in backend.calls
+                )
+            )
+            manifest = pa.ProjectAnalysisStore(store_dir).load_manifest()
+            generation = manifest["generation"]
+            self.assertIn("macro_setting", generation["analysis_inputs"])
+            self.assertTrue(generation["analysis_inputs_digest"])
+            self.assertNotIn("content", generation["analysis_inputs"]["macro_setting"])
+
+            calls_after_first = len(backend.calls)
+            second = llm.run_mapreduce_drafts(
+                store_dir=store_dir,
+                backend=backend,
+                config={"model": "fake-model"},
+                provider="fake",
+                analysis_inputs=inputs,
+            )
+            self.assertEqual(second["labels_refined"], 0)
+            self.assertEqual(len(backend.calls), calls_after_first)
+
+            changed_inputs = {
+                "macro_setting": {
+                    "content": "Tone: playful",
+                    "provenance": {"kind": "macro_setting", "artifact": "batch.macro_setting"},
+                }
+            }
+            refreshed = llm.run_mapreduce_drafts(
+                store_dir=store_dir,
+                backend=backend,
+                config={"model": "fake-model"},
+                provider="fake",
+                analysis_inputs=changed_inputs,
+            )
+            self.assertGreater(refreshed["labels_refined"], 0)
+            self.assertGreater(len(backend.calls), calls_after_first)
+
     def test_skip_when_already_refined(self):
         with tempfile.TemporaryDirectory() as tmp:
             store_dir = os.path.join(tmp, "pa")

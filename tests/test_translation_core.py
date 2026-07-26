@@ -157,6 +157,207 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertNotIn('enum', candidate_schema['properties']['category'])
         self.assertIn('chunk_summary', keyword_schema['required'])
 
+    def test_project_analysis_optional_inputs_collect_all_available_layers(self):
+        fake_store = mock.Mock()
+        fake_store.load_summaries.return_value = [
+            {
+                "summary": "Alice enters the library.",
+                "source_files": ["script.rpy"],
+            }
+        ]
+        with (
+            mock.patch(
+                "project_analysis.resolve_project_analysis_store",
+                return_value=fake_store,
+            ),
+            mock.patch.object(
+                batch_mod,
+                "_load_final_review_glossary_terms",
+                return_value=[{"source": "Alice", "target": "爱丽丝"}],
+            ),
+            mock.patch.object(batch_mod, "BATCH_MACRO_SETTING", "Tone: restrained"),
+            mock.patch.object(batch_mod, "SOURCE_INDEX_ENABLED", True),
+            mock.patch.object(batch_mod, "SOURCE_INDEX_STORE_DIR", "context/source_index"),
+            mock.patch.object(batch_mod, "STORY_MEMORY_ENABLED", True),
+            mock.patch.object(batch_mod, "STORY_MEMORY_GRAPH_FILE", "context/story_graph.json"),
+            mock.patch.object(
+                batch_mod,
+                "retrieve_source_hits",
+                return_value=(
+                    [
+                        {
+                            "source_id": "source-1",
+                            "file_rel_path": "script.rpy",
+                            "line_start": 1,
+                            "line_end": 3,
+                            "source_text": "Alice enters.",
+                            "score": 0.9,
+                        }
+                    ],
+                    {"store_dir": "context/source_index"},
+                ),
+            ),
+            mock.patch.object(batch_mod, "retrieve_batch_story_hits", return_value={"hit": True}),
+            mock.patch.object(batch_mod.story_memory, "has_story_hits", return_value=True),
+            mock.patch.object(
+                batch_mod.story_memory,
+                "format_story_hits_block",
+                return_value="Alice knows Bob.",
+            ),
+        ):
+            inputs = batch_mod.collect_project_analysis_optional_inputs(
+                store_dir="context/project_analysis",
+                base_dir="C:/Game",
+            )
+
+        self.assertEqual(
+            set(inputs),
+            {"glossary", "macro_setting", "source_index", "story_memory"},
+        )
+        self.assertEqual(inputs["source_index"]["provenance"]["source_ids"], ["source-1"])
+        self.assertEqual(inputs["story_memory"]["provenance"]["query_file"], "script.rpy")
+
+    def test_project_context_artifacts_are_cached_across_targets(self):
+        fake_store = mock.Mock()
+        fake_store.load_summaries.return_value = [
+            {
+                "id": "label:a",
+                "label_id": "a",
+                "summary": "Scene A",
+                "source_files": ["script.rpy"],
+                "line_span": [1, 10],
+            },
+            {
+                "id": "label:b",
+                "label_id": "b",
+                "summary": "Scene B",
+                "source_files": ["script.rpy"],
+                "line_span": [20, 30],
+            },
+        ]
+        fake_store.load_routes.return_value = [
+            {
+                "id": "route:a",
+                "route_id": "route:a",
+                "summary": "Route A",
+                "metadata": {"label_ids": ["a"]},
+            },
+            {
+                "id": "route:b",
+                "route_id": "route:b",
+                "summary": "Route B",
+                "metadata": {"label_ids": ["b"]},
+            },
+        ]
+        global_payload = {
+            "injectable": True,
+            "text": "Global brief",
+            "diagnostics": "status=published",
+            "labels": [],
+            "routes": [],
+            "local_diagnostics": "",
+        }
+        with (
+            mock.patch.object(batch_mod, "PROJECT_ANALYSIS_ENABLED", True),
+            mock.patch.object(batch_mod, "PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF", True),
+            mock.patch.object(batch_mod, "_PROJECT_BRIEF_CACHE", None),
+            mock.patch.object(batch_mod, "_PROJECT_BRIEF_CACHE_KEY", None),
+            mock.patch.object(
+                batch_mod,
+                "compute_current_project_analysis_fingerprint",
+                return_value="fp-1",
+            ),
+            mock.patch(
+                "project_analysis.load_injectable_project_context",
+                return_value=global_payload,
+            ) as load_global,
+            mock.patch(
+                "project_analysis.resolve_project_analysis_store",
+                return_value=fake_store,
+            ) as resolve_store,
+        ):
+            first = batch_mod.load_injectable_project_context_for_prompts(
+                "script.rpy", [5]
+            )
+            second = batch_mod.load_injectable_project_context_for_prompts(
+                "script.rpy", [25]
+            )
+
+        self.assertEqual(first["labels"][0]["label_id"], "a")
+        self.assertEqual(second["labels"][0]["label_id"], "b")
+        load_global.assert_called_once()
+        resolve_store.assert_called_once()
+        fake_store.load_summaries.assert_called_once()
+        fake_store.load_routes.assert_called_once()
+
+    def test_project_context_store_failure_is_non_blocking_and_not_cached(self):
+        with (
+            mock.patch.object(batch_mod, "PROJECT_ANALYSIS_ENABLED", True),
+            mock.patch.object(batch_mod, "PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF", True),
+            mock.patch.object(batch_mod, "_PROJECT_BRIEF_CACHE", None),
+            mock.patch.object(batch_mod, "_PROJECT_BRIEF_CACHE_KEY", None),
+            mock.patch.object(
+                batch_mod,
+                "compute_current_project_analysis_fingerprint",
+                return_value="fp-1",
+            ),
+            mock.patch(
+                "project_analysis.load_injectable_project_context",
+                side_effect=ValueError("corrupt analysis store"),
+            ),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            result = batch_mod.load_injectable_project_context_for_prompts(
+                "script.rpy", [5]
+            )
+            cached = batch_mod._PROJECT_BRIEF_CACHE
+
+        self.assertEqual(
+            result,
+            {"text": "", "diagnostics": "", "labels": [], "routes": [], "local_diagnostics": ""},
+        )
+        self.assertIsNone(cached)
+        self.assertIn("project analysis local context unavailable", stderr.getvalue())
+
+    def test_translation_and_revision_prompts_select_target_local_context(self):
+        payload = {
+            "text": "Global brief",
+            "diagnostics": "status=published",
+            "labels": [{"label_id": "scene_a", "summary": "Local label"}],
+            "routes": [{"route_id": "route:start", "summary": "Local route"}],
+            "local_diagnostics": "target=script.rpy labels=scene_a",
+        }
+        with mock.patch(
+            "gemini_translate_batch.load_injectable_project_context_for_prompts",
+            return_value=payload,
+        ) as load_context:
+            translation_prompt = batch_mod.build_user_prompt(
+                [],
+                [{"id": "line-1", "text": "Hello", "line": 9}],
+                [],
+                file_rel_path="script.rpy",
+            )
+            revision_prompt = batch_mod.build_revision_user_prompt(
+                {
+                    "file_rel_path": "script.rpy",
+                    "line_numbers": [20],
+                    "items": [
+                        {
+                            "id": "line-2",
+                            "source": "Hello",
+                            "current_translation": "你好",
+                            "line_number": 20,
+                        }
+                    ],
+                }
+            )
+
+        self.assertIn("PROJECT LOCAL CONTEXT", translation_prompt)
+        self.assertIn("Local label", translation_prompt)
+        self.assertIn("Local route", revision_prompt)
+        self.assertEqual(load_context.call_args_list[0].args, ("script.rpy", [10]))
+        self.assertEqual(load_context.call_args_list[1].args, ("script.rpy", [20]))
+
     def test_translation_prompts_emphasize_renpy_interpolation_preservation(self):
         system_text = translation_core.build_translation_system_instruction(['[Gil_name!t]'])
         self.assertIn('[Gil_name!t]', system_text)
