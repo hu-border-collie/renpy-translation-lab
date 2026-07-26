@@ -299,6 +299,8 @@ from .user_copy import (
     format_job_state_fact,
     format_manifest_path_fact,
 )
+from .final_review_dialog import FinalReviewFindingsDialog
+from .final_review_workflow import FinalReviewWorkflow
 from .project_analysis_review_dialog import ProjectAnalysisReviewDialog
 from .project_analysis_workflow import (
     ProjectAnalysisWorkflow,
@@ -521,6 +523,8 @@ class MainWindow(QMainWindow):
             item: default_work_mode_for_nav(item) for item in WORKBENCH_NAV_ORDER
         }
         self._workflow_step_output_lines: list[str] = []
+        self._final_review_findings_cache_key: tuple[str, int] | None = None
+        self._final_review_findings_cache: tuple[str, dict[str, object] | None] | None = None
         self._apply_output_lines: list[str] = []
         self._recheck_output_lines: list[str] = []
         self._probe_output_lines: list[str] = []
@@ -1699,6 +1703,7 @@ class MainWindow(QMainWindow):
                         stop=self._on_kill,
                         writeback=self._on_apply_revision,
                         select_mode=self._on_revision_page_mode_selected,
+                        action=self._on_final_review_page_action,
                     )
                 )
                 self.revision_page = page
@@ -6870,7 +6875,7 @@ class MainWindow(QMainWindow):
         )
 
     def _revision_writeback_modes(self) -> frozenset[WorkMode]:
-        return frozenset({WorkMode.REVISION, WorkMode.SYNC_REVISION})
+        return frozenset({WorkMode.REVISION, WorkMode.SYNC_REVISION, WorkMode.FINAL_REVIEW})
 
     def _uses_revision_writeback(self, mode: WorkMode | None = None) -> bool:
         return work_mode_spec(mode or self._current_work_mode()).mode in (
@@ -7044,7 +7049,7 @@ class MainWindow(QMainWindow):
         if self._context_switching_locked():
             self._sync_task_selectors_from_work_mode()
             return
-        if mode in {WorkMode.REVISION, WorkMode.SYNC_REVISION}:
+        if mode in self._revision_writeback_modes():
             self._set_work_mode(mode, refresh_manifest_writeback=True)
 
     def _set_work_mode(
@@ -7443,19 +7448,121 @@ class MainWindow(QMainWindow):
         if workbench_nav_for_work_mode(mode) == WorkbenchNavItem.KEYWORDS:
             self._refresh_active_workbench_page(work_mode_spec(mode))
 
+    def _final_review_findings_context(self):
+        """Load the latest final-review package once per manifest revision.
+
+        The returned package is later gated on ``STATUS_DONE`` and only manual
+        finding selections are allowed to enter the revision-preview workflow.
+        """
+        if self._current_work_mode() != WorkMode.FINAL_REVIEW:
+            return "", None
+        game_root = self.state.get_game_root()
+        if game_root is None:
+            return "", None
+        path = self.state.get_latest_manifest_path_for_mode(game_root, WorkMode.FINAL_REVIEW)
+        if path is None:
+            return "", None
+        path_text = str(path)
+        try:
+            cache_key = (path_text, Path(path).stat().st_mtime_ns)
+        except OSError:
+            cache_key = (path_text, -1)
+        if (
+            self._final_review_findings_cache_key == cache_key
+            and self._final_review_findings_cache is not None
+        ):
+            return self._final_review_findings_cache
+        try:
+            import final_review as fr
+
+            result: tuple[str, dict[str, object] | None] = (
+                path_text,
+                fr.load_campaign_package(path_text),
+            )
+        except (fr.FinalReviewError, OSError, ValueError):
+            result = (path_text, None)
+        self._final_review_findings_cache_key = cache_key
+        self._final_review_findings_cache = result
+        return result
+
+    def _on_final_review_page_action(self, action: str) -> None:
+        """Start manual finding selection only for a completed review campaign."""
+        if action != "select_final_review_findings":
+            return
+        if bool(getattr(self, "_task_running", False)):
+            return
+        runner = getattr(self, "runner", None)
+        is_running = getattr(runner, "is_running", None) if runner is not None else None
+        if callable(is_running) and bool(is_running()):
+            return
+        if not self._confirm_unsaved_config_before_workflow():
+            return
+
+        manifest_path, package = self._final_review_findings_context()
+        if package is None:
+            QMessageBox.information(self, "没有可审核的报告", "请先完成一个最终审校任务。")
+            return
+        import final_review as fr
+
+        status = fr.collect_campaign_status(package=package)
+        if status.get("status") != fr.STATUS_DONE:
+            QMessageBox.information(self, "最终审校尚未完成", "请先继续任务并整理全部审查结果。")
+            return
+        dialog = FinalReviewFindingsDialog(package.get("findings") or [], self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        finding_ids = dialog.selected_finding_ids()
+        if not finding_ids:
+            return
+        self._set_writeback_summary(idle_writeback_summary_for_work_mode(WorkMode.FINAL_REVIEW))
+        self._clear_log_view()
+        self._show_workbench_log_drawer()
+        self._begin_translation_workflow(
+            FinalReviewWorkflow.create_revisions(manifest_path, finding_ids),
+            log_heading="正在把所选问题生成订正预览",
+            status_tab=1,
+        )
     def _sync_revision_page_controls(self, *, running: bool | None = None) -> None:
         """Mirror coordinator-owned revision actions onto the real page."""
         page = getattr(self, "revision_page", None)
         if page is None:
             return
         mode = self._current_work_mode()
-        if mode not in {WorkMode.REVISION, WorkMode.SYNC_REVISION}:
+        if mode not in self._revision_writeback_modes():
             return
         if running is None:
             running = self._task_page_running_chrome()
         summary = self._current_writeback_summary()
+        findings_enabled = False
+        review_status_message = ""
+        if mode == WorkMode.FINAL_REVIEW:
+            _path, package = self._final_review_findings_context()
+            if package is not None:
+                import final_review as fr
+                review_status = fr.collect_campaign_status(package=package)
+                scope = review_status.get("scope") or {}
+                counts = review_status.get("status_counts") or {}
+                snapshot = str(review_status.get("snapshot_digest") or "")
+                review_status_message = (
+                    f"最终审校：{review_status.get('status')}；"
+                    f"范围 {scope.get('file_count', 0)} 个文件 / {scope.get('item_count', 0)} 条译文；"
+                    f"unit 完成 {counts.get('done', 0)}、失败 {counts.get('failed', 0)}、"
+                    f"过期 {counts.get('stale', 0)}；findings {review_status.get('finding_count', 0)}；"
+                    f"快照 {snapshot[:12] or '—'}。"
+                )
+
+                findings_enabled = (
+                    review_status.get("status") == fr.STATUS_DONE
+                    and any(
+                        str(row.get("suggested_revision") or "").strip()
+                        and row.get("revision_state") != fr.REVISION_STATE_APPLIED
+                        for row in package.get("findings") or []
+                    )
+                )
         if summary.can_apply:
             result_message = summary.message or "订正预览已通过，可安全写回。"
+        elif review_status_message:
+            result_message = review_status_message
         elif summary.message:
             result_message = f"订正结果：{summary.message}"
         else:
@@ -7471,6 +7578,7 @@ class MainWindow(QMainWindow):
             resume_visible=work_mode_spec(mode).supports_resume,
             resume_label=self.resume_btn.text(),
             writeback_enabled=summary.can_apply,
+            findings_enabled=findings_enabled,
             result_message=result_message,
         )
         if workbench_nav_for_work_mode(mode) == WorkbenchNavItem.REVISION:
@@ -7735,6 +7843,8 @@ class MainWindow(QMainWindow):
 
     def _invalidate_manifest_caches(self, manifest_path: str | Path | None = None) -> None:
         state = getattr(self, "state", None)
+        self._final_review_findings_cache_key = None
+        self._final_review_findings_cache = None
         if state is None:
             return
         invalidate_history = getattr(state, "invalidate_manifest_history_cache", None)

@@ -62,9 +62,9 @@ python gemini_translate_batch.py sync-revisions --apply
 
 `sync-revisions` 复用订正 prompt、schema、RAG / Story Memory 注入、预览报告和写回前源快照校验；默认只预览，传 `--apply` 才调用 `apply-revisions` 写回。
 
-## 最终审校 campaign（report-only）
+## 最终审校（report-only → 人工选择 → 订正预览）
 
-最终审校是**独立 campaign**，用于在翻译范围完成后批量发现问题。默认 **report-only**：不调用 autofix，也不直接写 `.rpy`。用户选中的 findings 将来会转成现有订正候选，再走 `preview-revisions → apply-revisions`。
+最终审校先以**独立 campaign** 批量发现问题，默认 **report-only**：不调用 autofix，也不直接写 `.rpy`。只有用户明确选择的 findings 才会转成普通 revision manifest，并强制走 `preview-revisions → apply-revisions`；模型不能声称问题已经修复或写回。
 
 ```bash
 # 构建 campaign：完成度闸门 + 冻结上下文 digest + review units + requests.jsonl
@@ -78,6 +78,11 @@ python gemini_translate_batch.py final-review-export logs/batch_jobs/<package>/m
 # 续跑：跳过 digest 未变的 done unit；--force 全部重审
 python gemini_translate_batch.py final-review-resume logs/batch_jobs/<package>/manifest.json
 python gemini_translate_batch.py final-review-resume logs/batch_jobs/<package>/manifest.json --force
+
+# 将明确选择的问题转换为订正候选并立即生成预览（--finding-id 可重复）
+python gemini_translate_batch.py final-review-create-revisions logs/batch_jobs/<package>/manifest.json --finding-id <finding-id>
+# 确认预览后，仍使用现有安全写回入口
+python gemini_translate_batch.py apply-revisions logs/batch_jobs/<revision-package>/manifest.json
 ```
 
 ### 启动闸门
@@ -113,11 +118,16 @@ logs/batch_jobs/<ts>_<project>_final_review/
   report.md              # 人类可读报告
 ```
 
-### 非目标（当前）
+### 选择、状态与 GUI
 
 - 不自动修改 `.rpy`，无模型直接声称 `fixed` / `applied`。
 - 不把回译抽检当作写回安全闸门。
-- 选中 findings → revision candidates 与 GUI 工作台页在后续 PR（#255 PR C）。
+- 同一译文上的多个 finding 若给出冲突建议，转换会拒绝，要求用户只保留一种建议。
+- 转换时重新校验 campaign 完成状态、review unit digest、项目 identity、原文和当前译文；任一已变化就拒绝并要求先续跑最终审校。
+- finding 状态只由真实生命周期推进：成功建包为 `candidate`，成功预览为 `previewed`，实际写入该 identity 后才是 `applied`。被二次校验跳过的条目不会误标已写回。
+- GUI 位于「订正」页面的「终审」子模式，复用统一的开始 / 继续 / 停止、云端状态和写回交互。报告完成后用“选择问题并生成预览”表格人工勾选，不占用「上下文库」。
+
+最终审校生成的 revision manifest 带有来源 campaign、snapshot digest 和 finding digest；后续预览 / 写回会验证这些 provenance，防止把被编辑或属于其他项目的报告状态写回。
 
 相关配置见 `translator_config.example.json` 的 `batch.final_review`。
 

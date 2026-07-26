@@ -1,8 +1,8 @@
 """Final-review campaign contract: readiness, snapshots, digests, package I/O.
 
-Phase A (#255 PR A) owns report-only campaign structure without calling models
-or writing ``.rpy`` files. Review execution (LLM / Batch) and revision hand-off
-land in later PRs; they must reuse these digests and status rules rather than
+The campaign remains report-only and never writes ``.rpy`` files. Review
+execution and the selected-finding revision hand-off reuse these digests and
+status rules rather than
 re-implement readiness or ``fixed``/``applied`` claims in the GUI.
 
 Design constraints from #255:
@@ -1341,9 +1341,15 @@ def collect_campaign_status(
     campaign_status = derive_campaign_status(status_counts)
 
     finding_type_counts: dict[str, int] = {}
+    selection_state_counts: dict[str, int] = {}
+    revision_state_counts: dict[str, int] = {}
     for finding in findings:
         ftype = _as_optional_str(finding.get("finding_type")) or "unknown"
         finding_type_counts[ftype] = finding_type_counts.get(ftype, 0) + 1
+        selection = _as_optional_str(finding.get("selection_state")) or SELECTION_STATE_OPEN
+        revision = _as_optional_str(finding.get("revision_state")) or REVISION_STATE_NONE
+        selection_state_counts[selection] = selection_state_counts.get(selection, 0) + 1
+        revision_state_counts[revision] = revision_state_counts.get(revision, 0) + 1
 
     return {
         "mode": MANIFEST_MODE_FINAL_REVIEW,
@@ -1369,6 +1375,8 @@ def collect_campaign_status(
         "finding_count": len(findings),
         "status_counts": status_counts,
         "finding_type_counts": dict(sorted(finding_type_counts.items())),
+        "selection_state_counts": dict(sorted(selection_state_counts.items())),
+        "revision_state_counts": dict(sorted(revision_state_counts.items())),
         "readiness": manifest.get("readiness") or {},
         "scope": snapshot.get("scope") or manifest.get("scope") or {},
         "created_at": manifest.get("created_at") or "",
@@ -1431,6 +1439,10 @@ def format_campaign_report_markdown(
             lines.append(
                 f"- `{finding.get('finding_id')}` · **{finding.get('finding_type')}** "
                 f"({finding.get('severity')}) · `{finding.get('identity_v2')}`"
+            )
+            lines.append(
+                f"  - state: selection=`{finding.get('selection_state') or SELECTION_STATE_OPEN}` · "
+                f"revision=`{finding.get('revision_state') or REVISION_STATE_NONE}`"
             )
             reason = str(finding.get("reason") or "").strip()
             if reason:

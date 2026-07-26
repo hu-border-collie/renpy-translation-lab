@@ -395,7 +395,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "batch_final_review_model",
         ("batch", "final_review", "model"),
         "最终审校模型",
-        "后续审校执行使用的模型；留空则回退到 Batch 模型。首版 build 仅记录 digest。",
+        "最终审校执行使用的模型；留空则回退到 Batch 模型。",
         "str",
         "",
         "最终审校",

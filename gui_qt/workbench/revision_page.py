@@ -12,7 +12,7 @@ from .task_controls import TaskPageLayout
 class RevisionPage(QFrame):
     """Page-local controls for batch and synchronous revision workflows."""
 
-    supported_modes = (WorkMode.REVISION, WorkMode.SYNC_REVISION)
+    supported_modes = (WorkMode.REVISION, WorkMode.SYNC_REVISION, WorkMode.FINAL_REVIEW)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -62,6 +62,13 @@ class RevisionPage(QFrame):
         self.writeback_btn.setToolTip("仅在订正预览通过后写回；不会使用翻译写回入口。")
         self.writeback_btn.clicked.connect(self._trigger_writeback)
         self.actions.add_action(self.writeback_btn, min_width=108)
+        self.review_findings_btn = QPushButton("选择问题并生成预览")
+        self.review_findings_btn.setObjectName("final_review_select_btn")
+        self.review_findings_btn.setEnabled(False)
+        self.review_findings_btn.setVisible(False)
+        self.review_findings_btn.setToolTip("只转换人工勾选的问题；仍需经过订正预览后才能写回。")
+        self.review_findings_btn.clicked.connect(self._trigger_review_findings)
+        self.actions.add_action(self.review_findings_btn, min_width=160)
         self.actions.finish_setup()
 
         self.result_hint = self.task_layout.add_result_hint(
@@ -84,6 +91,16 @@ class RevisionPage(QFrame):
             blocked = self.mode_combo.blockSignals(True)
             self.mode_combo.setCurrentIndex(index)
             self.mode_combo.blockSignals(blocked)
+        final_review = mode == WorkMode.FINAL_REVIEW
+        self.actions.title_label.setText("最终审校任务" if final_review else "订正任务")
+        self.start_btn.setText("开始最终审校" if final_review else "生成订正预览")
+        self.writeback_btn.setText("写回所选订正" if final_review else "写回订正")
+        self.review_findings_btn.setVisible(final_review)
+        self.result_hint.setText(
+            "审查完成后，选择需要处理的问题并生成订正预览。"
+            if final_review
+            else "生成预览后，可在此确认订正结果并安全写回。"
+        )
         del session
 
     def set_task_running(self, running: bool) -> None:
@@ -94,6 +111,7 @@ class RevisionPage(QFrame):
             self.start_btn.setEnabled(False)
             self.resume_btn.setEnabled(False)
             self.writeback_btn.setEnabled(False)
+            self.review_findings_btn.setEnabled(False)
 
     def set_controls(
         self,
@@ -104,23 +122,26 @@ class RevisionPage(QFrame):
         resume_label: str,
         writeback_enabled: bool,
         result_message: str,
+        findings_enabled: bool = False,
     ) -> None:
         self.start_btn.setEnabled(start_enabled and not self._running)
         self.resume_btn.setVisible(resume_visible)
         self.resume_btn.setText(resume_label)
         self.resume_btn.setEnabled(resume_enabled and not self._running)
         self.writeback_btn.setEnabled(writeback_enabled and not self._running)
+        self.review_findings_btn.setEnabled(findings_enabled and not self._running)
         self.result_hint.setText(result_message)
         self.task_layout.reflow()
         self.updateGeometry()
 
     def reset_project(self) -> None:
         self.set_task_running(False)
+        final_review = self._active_mode == WorkMode.FINAL_REVIEW
         self.set_controls(
             start_enabled=False,
             resume_enabled=False,
-            resume_visible=self._active_mode == WorkMode.REVISION,
-            resume_label="继续订正",
+            resume_visible=self._active_mode in (WorkMode.REVISION, WorkMode.FINAL_REVIEW),
+            resume_label="继续审查" if final_review else "继续订正",
             writeback_enabled=False,
             result_message="项目已切换；请先完成环境检查并重新生成订正预览。",
         )
@@ -145,6 +166,14 @@ class RevisionPage(QFrame):
     def _trigger_stop(self) -> None:
         if self._running and self._actions.stop is not None:
             self._actions.stop()
+
+    def _trigger_review_findings(self) -> None:
+        if (
+            not self._running
+            and self.review_findings_btn.isEnabled()
+            and self._actions.action is not None
+        ):
+            self._actions.action("select_final_review_findings")
 
     def _trigger_writeback(self) -> None:
         if (

@@ -3776,8 +3776,15 @@ def run_final_review_ingest_results(target=None, result_path='', allow_stale_res
     print(f"Failed units: {summary.get('failed_units', 0)}")
     print(f"Findings: {summary.get('finding_count', 0)}")
     print(f"Campaign status: {(result.get('status') or {}).get('status')}")
-    print('Report-only: no .rpy writes. Use final-review-export; revision hand-off is PR C.')
+    print('Report-only: no .rpy writes. Select findings before creating revision candidates.')
     return result
+
+
+def run_final_review_create_revisions(target=None, finding_ids=None):
+    import final_review_revision
+    import sys
+
+    return final_review_revision.create_revision_package(sys.modules[__name__], target, finding_ids)
 
 
 def should_include_keyword_source(text):
@@ -4818,6 +4825,11 @@ def submit_manifest(
             return None
         manifest = load_manifest(manifest_path)
 
+    if manifest.get('submit_disabled'):
+        raise SystemExit(
+            'Submit disabled for this manifest: it contains local revision candidates '
+            'and must use preview-revisions/apply-revisions.'
+        )
     if manifest.get('job_name'):
         raise SystemExit(f"Manifest already submitted: {manifest['job_name']}")
 
@@ -6390,6 +6402,11 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
         'summary': summary,
     }
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    if manifest.get('final_review_source'):
+        import final_review as fr
+        import final_review_revision
+
+        final_review_revision.sync_linked_findings(manifest, fr.REVISION_STATE_PREVIEWED)
     print_revision_summary(summary)
     print(f'Preview JSONL: {jsonl_path}')
     print(f'Preview Markdown: {markdown_path}')
@@ -7065,6 +7082,11 @@ def apply_revisions(target=None, force=False):
         raise SystemExit('Revision manifest was already applied. Re-run apply-revisions with --force to bypass this guard; source validation still applies.')
 
     require_manifest_project_match(manifest, 'apply-revisions')
+    if manifest.get('final_review_source'):
+        import final_review as fr
+        import final_review_revision
+
+        final_review_revision.sync_linked_findings(manifest, fr.REVISION_STATE_PREVIEWED)
     transaction_path = os.path.join(
         manifest['_package_dir'],
         '.revision_writeback_transaction.json',
@@ -7150,6 +7172,26 @@ def apply_revisions(target=None, force=False):
     }
     manifest['last_revision_apply_summary'] = summary
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    if manifest.get('final_review_source'):
+        import final_review as fr
+        import final_review_revision
+
+        applied_lines_by_file = {
+            file_key: set(line_numbers)
+            for file_key, line_numbers, _file_path in revision_updates
+        }
+        applied_item_ids = {
+            str(item.get('id') or '')
+            for chunk in manifest.get('chunks', [])
+            for item in chunk.get('items', [])
+            if item.get('line')
+            in applied_lines_by_file.get(chunk.get('file_rel_path'), set())
+        }
+        final_review_revision.sync_linked_findings(
+            manifest,
+            fr.REVISION_STATE_APPLIED,
+            identity_ids=applied_item_ids,
+        )
 
     print_revision_summary(summary)
     print(f'Applied files: {applied_files}')
@@ -10196,6 +10238,28 @@ def build_arg_parser():
         ),
     )
 
+    final_review_revisions_parser = subparsers.add_parser(
+        'final-review-create-revisions',
+        help=(
+            'Convert explicitly selected final-review findings into a normal revision '
+            'package and run preview-revisions. Never writes .rpy files.'
+        ),
+    )
+    final_review_revisions_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Final-review campaign package or manifest. Defaults to latest package.',
+    )
+    final_review_revisions_parser.add_argument(
+        '--finding-id',
+        action='append',
+        default=[],
+        help=(
+            'Finding id to convert (repeatable). Without this option, uses findings '
+            'already marked selection_state=selected.'
+        ),
+    )
     project_analysis_status_parser = subparsers.add_parser(
         'project-analysis-status',
         help=(
@@ -10722,6 +10786,7 @@ def main(argv=None):
         'final-review-export',
         'final-review-resume',
         'final-review-ingest-results',
+        'final-review-create-revisions',
     }:
         legacy.load_translator_settings(persist_corrected_game_root=False)
         legacy.load_glossary()
@@ -10767,6 +10832,13 @@ def main(argv=None):
             )
             return
 
+        if command == 'final-review-create-revisions':
+            print_banner()
+            run_final_review_create_revisions(
+                getattr(args, 'target', '') or None,
+                finding_ids=getattr(args, 'finding_id', []) or [],
+            )
+            return
     if command in {
         'project-analysis-status',
         'project-analysis-ingest-keywords',
