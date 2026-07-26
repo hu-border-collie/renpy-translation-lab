@@ -17,7 +17,7 @@ def _generation_stage_label(stage: str) -> str:
         "route": "路线摘要",
         "brief": "项目摘要",
         "complete": "全部完成",
-    }.get(str(stage or ""), "项目摘要")
+    }.get(str(stage or ""), "生成中")
 
 
 def generation_facts_from_output(output: str) -> list[str]:
@@ -138,7 +138,7 @@ class ProjectAnalysisWorkflow:
         return WorkflowUpdate(
             status="done",
             heading="项目分析摘要待审查",
-            message="结构与摘要已生成。请审查全文、差异、证据与实际注入预览后再启用。",
+            message="结构与摘要已生成。请审查全文、差异、证据与翻译使用预览后再启用。",
             facts=generation_facts_from_output(output),
         )
 

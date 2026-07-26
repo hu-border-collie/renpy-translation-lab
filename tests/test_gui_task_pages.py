@@ -29,6 +29,7 @@ from gui_qt.work_modes import (
     work_mode_submode_label,
     workbench_nav_spec,
 )
+from gui_qt.user_copy import PROJECT_ANALYSIS_COPY
 from gui_qt.workbench import WorkbenchPageActions
 from gui_qt.workbench_session import WorkbenchModeSession
 from tests import gui_test_support
@@ -895,6 +896,7 @@ class GuiTaskPageTests(unittest.TestCase):
             [
                 page.project_analysis_generate_btn.text(),
                 page.project_analysis_generate_btn.toolTip(),
+                page.project_analysis_build_btn.toolTip(),
                 page.project_analysis_review_btn.text(),
                 page.project_analysis_publish_btn.text(),
                 page.project_analysis_publish_btn.toolTip(),
@@ -902,6 +904,10 @@ class GuiTaskPageTests(unittest.TestCase):
                 page.project_analysis_unpublish_btn.toolTip(),
             ]
         ).lower()
+        self.assertEqual(
+            page.project_analysis_build_btn.toolTip(),
+            PROJECT_ANALYSIS_COPY["rebuild_tip"],
+        )
         for developer_term in (
             "brief",
             "draft",

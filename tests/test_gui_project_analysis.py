@@ -62,6 +62,8 @@ class ProjectAnalysisWorkflowTests(unittest.TestCase):
         update = workflow.complete_current_step(0, "{}")
         self.assertEqual(update.status, "done")
         self.assertFalse(update.should_continue)
+        self.assertIn("翻译使用预览", update.message)
+        self.assertNotIn("实际注入预览", update.message)
 
     def test_generation_progress_is_rendered_as_gui_facts(self):
         output = (
@@ -75,6 +77,11 @@ class ProjectAnalysisWorkflowTests(unittest.TestCase):
         self.assertIn("全部完成 1/1", facts[0])
         self.assertIn("模型请求：4", facts[1])
         self.assertIn("0.000104 USD", facts[2])
+
+        unknown = generation_facts_from_output(
+            'PROJECT_ANALYSIS_PROGRESS {"stage":"future","completed":0,"total":1}'
+        )
+        self.assertIn("生成中 0/1", unknown[0])
 
     def test_step_keys_match_concrete_requested_sequence(self):
         self.assertEqual(
@@ -372,6 +379,19 @@ class ProjectAnalysisAppGlueTests(unittest.TestCase):
             == "_show_project_analysis_review_dialog"
         ]
         self.assertEqual(len(review_callbacks), 1)
+
+    def test_direct_command_completion_refreshes_context_status(self):
+        self.window._append_log = mock.Mock()
+        self.window._set_task_running = mock.Mock()
+        self.window._refresh_context_library_panel = mock.Mock()
+        self.window.statusBar().showMessage = mock.Mock()
+        self.window._active_command = "project_analysis_publish"
+
+        self.window._on_finished(0)
+
+        self.window._set_task_running.assert_called_once_with(False)
+        self.window._refresh_context_library_panel.assert_called_once_with(running=False)
+        self.assertEqual(self.window._active_command, "")
 
     def test_publish_action_rechecks_gate_and_blocks_run(self):
         class FakeDialog:

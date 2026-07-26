@@ -513,7 +513,18 @@ class CliStatusTests(unittest.TestCase):
                 "injectable": True,
             }
         )
-        self.assertIn("已启用", label)
+        for expected in ("已启用", "剧情概要", "场景节点", "剧情路线", "项目摘要"):
+            self.assertIn(expected, label)
+
+        disabled_label = pa.format_status_label(
+            {
+                "overall_status": pa.STATUS_PUBLISHED,
+                "store_exists": True,
+                "brief_status": pa.STATUS_PUBLISHED,
+                "injectable": False,
+            }
+        )
+        self.assertIn("当前不会用于翻译", disabled_label)
 
 
 class DoctorIntegrationTests(unittest.TestCase):

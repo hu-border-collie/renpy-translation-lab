@@ -315,6 +315,7 @@ from .final_review_workflow import FinalReviewWorkflow
 from .context_library_worker import (
     ContextLibraryStatusJob,
     ContextLibraryStatusResult,
+    collect_context_library_status,
 )
 from .project_analysis_review_dialog import ProjectAnalysisReviewDialog
 from .project_analysis_workflow import (
@@ -371,6 +372,7 @@ _BATCH_STAGE_RESULT = 2  # 写回 / 结果
 _LOG_FLUSH_INTERVAL_MS = 80
 _LAYOUT_SYNC_DEBOUNCE_MS = 32
 _UI_PROGRESS_FLUSH_INTERVAL_MS = 100
+_CONTEXT_STATUS_CACHE_TTL_S = 2.0
 
 # Unified application-shell routes. The legacy tab/list widgets remain as
 # internal state adapters, while these semantic destinations drive the only
@@ -2567,30 +2569,7 @@ class MainWindow(QMainWindow):
         game_root = self.state.get_game_root() if hasattr(self, "state") else None
         if running is None:
             running = self._task_page_running_chrome()
-        analysis_status = None
-        analysis_label = "未检测"
-        live_fp = ""
-        try:
-            from project_analysis import (
-                collect_project_analysis_status,
-                format_status_label,
-            )
-
-            live_fp = self._project_analysis_live_fingerprint()
-            analysis_status = collect_project_analysis_status(
-                base_dir=str(game_root) if game_root else None,
-                expected_source_fingerprint=live_fp,
-            )
-            analysis_label = format_status_label(analysis_status)
-        except Exception as exc:
-            analysis_label = f"读取失败 · {exc}"
-        result = ContextLibraryStatusResult(
-            base_dir=str(game_root or ""),
-            live_fingerprint=live_fp,
-            status=analysis_status,
-            label=analysis_label,
-            error=(analysis_label if analysis_label.startswith("读取失败") else ""),
-        )
+        result = collect_context_library_status(str(game_root or ""))
         self._context_library_status_cache = result
         self._context_library_status_cache_at = time.monotonic()
         self._render_context_library_panel(
@@ -2630,7 +2609,7 @@ class MainWindow(QMainWindow):
         cache_age = time.monotonic() - float(
             getattr(self, "_context_library_status_cache_at", 0.0) or 0.0
         )
-        if not base_dir or (cached is not None and not force and cache_age < 2.0):
+        if not base_dir or (cached is not None and not force and cache_age < _CONTEXT_STATUS_CACHE_TTL_S):
             return
         job = getattr(self, "_context_library_status_job", None)
         if job is not None:
@@ -11436,6 +11415,7 @@ class MainWindow(QMainWindow):
             action_label = project_analysis_commands[command]
             self._active_command = ""
             self._set_task_running(False)
+            self._refresh_context_library_panel(running=False)
             if exit_code == 0:
                 self.statusBar().showMessage(
                     f"{action_label}完成；上下文库状态已更新。", 6000
