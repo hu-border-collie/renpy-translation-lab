@@ -15,6 +15,10 @@ BOOTSTRAP_SOURCE_INDEX_INCOMPLETE = "bootstrap_source_index_incomplete"
 BOOTSTRAP_RAG = "bootstrap_rag"
 BOOTSTRAP_RAG_OR_WARM_ON_BUILD = "bootstrap_rag_or_warm_on_build"
 ENABLE_RAG_FOR_CONSISTENCY = "enable_rag_for_consistency"
+BUILD_PROJECT_ANALYSIS = "build_project_analysis"
+REFRESH_PROJECT_ANALYSIS = "refresh_project_analysis"
+CONFIGURE_PROJECT_ANALYSIS_MODEL = "configure_project_analysis_model"
+CONFIGURE_PROJECT_ANALYSIS_API = "configure_project_analysis_api"
 SUBSTANTIALLY_COMPLETE = "substantially_complete"
 ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT = "enable_source_index_for_new_project"
 START_INCREMENTAL_BATCH = "start_incremental_batch"
@@ -34,6 +38,10 @@ ALL_CODES = frozenset(
         BOOTSTRAP_RAG,
         BOOTSTRAP_RAG_OR_WARM_ON_BUILD,
         ENABLE_RAG_FOR_CONSISTENCY,
+        BUILD_PROJECT_ANALYSIS,
+        REFRESH_PROJECT_ANALYSIS,
+        CONFIGURE_PROJECT_ANALYSIS_MODEL,
+        CONFIGURE_PROJECT_ANALYSIS_API,
         SUBSTANTIALLY_COMPLETE,
         ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT,
         START_INCREMENTAL_BATCH,
@@ -41,7 +49,6 @@ ALL_CODES = frozenset(
         NO_PENDING_LINES,
     }
 )
-
 WORKFLOW_STATE_CODES = frozenset(
     {
         SUBSTANTIALLY_COMPLETE,
@@ -57,9 +64,12 @@ OPTIONAL_RECOMMENDATION_CODES = frozenset(
         BOOTSTRAP_RAG_OR_WARM_ON_BUILD,
         ENABLE_RAG_FOR_CONSISTENCY,
         ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT,
+        BUILD_PROJECT_ANALYSIS,
+        REFRESH_PROJECT_ANALYSIS,
+        CONFIGURE_PROJECT_ANALYSIS_MODEL,
+        CONFIGURE_PROJECT_ANALYSIS_API,
     }
 )
-
 _BOOTSTRAP_WORK_MESSAGE = (
     "work directory is missing or empty and original/game exists; "
     "run: python gemini_translate_batch.py bootstrap-work "
@@ -88,6 +98,20 @@ _BOOTSTRAP_RAG_MESSAGE = (
 _BOOTSTRAP_RAG_OR_WARM_MESSAGE = (
     "RAG store is empty; run bootstrap-rag before batch translation, "
     "or start batch translation to warm the store automatically on build."
+)
+_BUILD_PROJECT_ANALYSIS_MESSAGE = (
+    "Project Analysis is enabled but missing; run project-analysis-build-structure "
+    "then project-analysis-generate, or use Context Library > Project Analysis."
+)
+_REFRESH_PROJECT_ANALYSIS_MESSAGE = (
+    "Project Analysis is stale; rebuild structure and regenerate the affected summaries."
+)
+_CONFIGURE_PROJECT_ANALYSIS_MODEL_MESSAGE = (
+    "Project Analysis has no generation model; set batch.project_analysis.model "
+    "or configure a Batch/sync model."
+)
+_CONFIGURE_PROJECT_ANALYSIS_API_MESSAGE = (
+    "Project Analysis generation needs an API key; configure api_keys.json or GEMINI_API_KEY."
 )
 _ENABLE_RAG_MESSAGE = (
     "Existing translations detected with RAG disabled; enable RAG and run bootstrap-rag "
@@ -139,6 +163,10 @@ _DETAIL_MESSAGES: dict[str, str] = {
     BOOTSTRAP_RAG: _BOOTSTRAP_RAG_MESSAGE,
     BOOTSTRAP_RAG_OR_WARM_ON_BUILD: _BOOTSTRAP_RAG_OR_WARM_MESSAGE,
     ENABLE_RAG_FOR_CONSISTENCY: _ENABLE_RAG_MESSAGE,
+    BUILD_PROJECT_ANALYSIS: _BUILD_PROJECT_ANALYSIS_MESSAGE,
+    REFRESH_PROJECT_ANALYSIS: _REFRESH_PROJECT_ANALYSIS_MESSAGE,
+    CONFIGURE_PROJECT_ANALYSIS_MODEL: _CONFIGURE_PROJECT_ANALYSIS_MODEL_MESSAGE,
+    CONFIGURE_PROJECT_ANALYSIS_API: _CONFIGURE_PROJECT_ANALYSIS_API_MESSAGE,
     SUBSTANTIALLY_COMPLETE: _SUBSTANTIALLY_COMPLETE_MESSAGE,
     ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT: _ENABLE_SOURCE_INDEX_MESSAGE,
     START_INCREMENTAL_BATCH: _START_INCREMENTAL_MESSAGE,

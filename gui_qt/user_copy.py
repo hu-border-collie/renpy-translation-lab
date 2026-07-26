@@ -91,6 +91,10 @@ DOCTOR_RECOMMENDATION_CODE_TRANSLATIONS: dict[str, str] = {
     doctor_rec.ENABLE_PREPARE: "建议：在「设置 · 高级」启用 prepare 后，再点「开始翻译」生成模板",
     doctor_rec.BOOTSTRAP_SOURCE_INDEX: "建议：先到左侧「上下文库」运行「预建原文索引」",
     doctor_rec.BOOTSTRAP_SOURCE_INDEX_INCOMPLETE: "建议：继续在「上下文库」运行「预建原文索引」补全索引",
+    doctor_rec.BUILD_PROJECT_ANALYSIS: "建议：到「上下文库」开始项目分析并生成待审查摘要",
+    doctor_rec.REFRESH_PROJECT_ANALYSIS: "建议：到「上下文库」重新分析；只会重建受影响的摘要",
+    doctor_rec.CONFIGURE_PROJECT_ANALYSIS_MODEL: "建议：在「设置 · 上下文」配置项目分析模型",
+    doctor_rec.CONFIGURE_PROJECT_ANALYSIS_API: "建议：配置 Gemini API Key 后再生成项目分析摘要",
     doctor_rec.BOOTSTRAP_RAG: "建议：先到左侧「上下文库」运行「预建记忆库」，再开始批量翻译",
     doctor_rec.BOOTSTRAP_RAG_OR_WARM_ON_BUILD: (
         "可选准备：记忆库为空；可先到「上下文库」预建记忆库，也可直接「开始翻译」并自动暖库"
@@ -134,6 +138,10 @@ DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES: dict[str, str] = {
     ),
     doctor_rec.BOOTSTRAP_SOURCE_INDEX: "原文索引尚未就绪，请先到左侧「上下文库」预建原文索引。",
     doctor_rec.BOOTSTRAP_SOURCE_INDEX_INCOMPLETE: "原文索引尚未就绪，请先到左侧「上下文库」继续预建。",
+    doctor_rec.BUILD_PROJECT_ANALYSIS: "项目分析已启用但尚未生成；可到「上下文库」开始分析。",
+    doctor_rec.REFRESH_PROJECT_ANALYSIS: "项目分析已过期；请到「上下文库」增量更新。",
+    doctor_rec.CONFIGURE_PROJECT_ANALYSIS_MODEL: "项目分析缺少生成模型；请先在设置中配置。",
+    doctor_rec.CONFIGURE_PROJECT_ANALYSIS_API: "项目分析生成缺少 API Key；请先完成配置。",
     doctor_rec.BOOTSTRAP_WORK: "请先准备工作目录，再开始翻译流程。",
     doctor_rec.ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT: (
         "可选优化：全新项目可在「设置 · 上下文」启用原文索引，再到「上下文库」预建。"

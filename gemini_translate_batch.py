@@ -635,6 +635,10 @@ def compute_current_project_analysis_fingerprint(base_dir=None, store_dir=None):
     Prefers ``project_identity.script_roots`` persisted by
     ``build_structure_drafts`` so custom ``--script-root`` builds stay injectable.
     Falls back to default game/work/original discovery under *base_dir*.
+
+    When a project moves or is copied, relative graph/root paths are rebased onto
+    the current *base_dir*. Legacy absolute paths that were inside the stored
+    project base are rebased by the same relative offset; external roots stay put.
     """
     from project_analysis import resolve_project_analysis_store
     from project_analysis_routes import digest_script_paths, discover_script_files
@@ -648,14 +652,40 @@ def compute_current_project_analysis_fingerprint(base_dir=None, store_dir=None):
         manifest = store.load_manifest() or {}
         identity = manifest.get('project_identity') if isinstance(manifest, dict) else {}
         if isinstance(identity, dict):
-            stored_roots = identity.get('script_roots') or []
-            if isinstance(stored_roots, list):
-                roots = [str(r) for r in stored_roots if str(r or '').strip()]
-            stored_base = str(identity.get('graph_base') or identity.get('base_dir') or '').strip()
+            stored_identity_base = str(identity.get('base_dir') or '').strip()
+            stored_base = str(identity.get('graph_base') or stored_identity_base).strip()
+            if base and stored_base and os.path.isabs(stored_base) and stored_identity_base:
+                try:
+                    relative_graph_base = os.path.relpath(stored_base, stored_identity_base)
+                except ValueError:
+                    relative_graph_base = ''
+                if relative_graph_base and not relative_graph_base.startswith('..'):
+                    stored_base = os.path.join(base, relative_graph_base)
             if stored_base:
-                graph_base = stored_base
+                if not os.path.isabs(stored_base) and base:
+                    graph_base = os.path.abspath(os.path.join(base, stored_base))
+                else:
+                    graph_base = stored_base
             elif base:
                 graph_base = base
+            stored_roots = identity.get('script_roots') or []
+            if isinstance(stored_roots, list):
+                for raw_root in stored_roots:
+                    root = str(raw_root or '').strip()
+                    if not root:
+                        continue
+                    if not os.path.isabs(root):
+                        relocation_base = base or stored_base
+                        if relocation_base:
+                            root = os.path.join(relocation_base, root)
+                    elif base and stored_identity_base:
+                        try:
+                            relative_root = os.path.relpath(root, stored_identity_base)
+                        except ValueError:
+                            relative_root = ''
+                        if relative_root and not relative_root.startswith('..'):
+                            root = os.path.join(base, relative_root)
+                    roots.append(root)
     except Exception:
         roots = []
 
@@ -9164,6 +9194,7 @@ def collect_doctor_recommendations(report):
     context_status = report.get('context_status') or {}
     source_index = context_status.get('source_index') or {}
     rag = context_status.get('rag') or {}
+    project_analysis = context_status.get('project_analysis') or {}
 
     source_index_status = _doctor_source_index_needs_bootstrap(source_index)
     if source_index_status == 'missing':
@@ -9194,6 +9225,32 @@ def collect_doctor_recommendations(report):
             doctor_rec.make_doctor_recommendation(doctor_rec.ENABLE_RAG_FOR_CONSISTENCY)
         )
 
+    if project_analysis.get('enabled'):
+        if not project_analysis.get('model'):
+            recommendations.append(
+                doctor_rec.make_doctor_recommendation(
+                    doctor_rec.CONFIGURE_PROJECT_ANALYSIS_MODEL
+                )
+            )
+        if int(project_analysis.get('api_key_count') or 0) <= 0:
+            recommendations.append(
+                doctor_rec.make_doctor_recommendation(
+                    doctor_rec.CONFIGURE_PROJECT_ANALYSIS_API
+                )
+            )
+        analysis_status = str(project_analysis.get('overall_status') or 'missing')
+        if analysis_status == 'missing':
+            recommendations.append(
+                doctor_rec.make_doctor_recommendation(
+                    doctor_rec.BUILD_PROJECT_ANALYSIS
+                )
+            )
+        elif analysis_status == 'stale':
+            recommendations.append(
+                doctor_rec.make_doctor_recommendation(
+                    doctor_rec.REFRESH_PROJECT_ANALYSIS
+                )
+            )
     if (
         not source_index.get('enabled')
         and pending > 0
@@ -9308,6 +9365,14 @@ def collect_doctor_context_status():
         from project_analysis import collect_project_analysis_status
 
         project_analysis_status = collect_project_analysis_status()
+        project_analysis_status.update(
+            {
+                'enabled': bool(PROJECT_ANALYSIS_ENABLED),
+                'inject_published_brief': bool(PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF),
+                'model': PROJECT_ANALYSIS_MODEL or BATCH_MODEL or SYNC_MODEL or '',
+                'api_key_count': len(getattr(legacy, 'API_KEYS', []) or []),
+            }
+        )
     except Exception as exc:
         project_analysis_status = {
             'store_dir': '',
@@ -10927,6 +10992,20 @@ def main(argv=None):
                         usage_metadata=dict(raw.get('usage_metadata') or {}),
                     )
 
+                pricing_config = batch_cost_estimate.load_pricing_config(
+                    _read_translator_config_object()
+                )
+                model_rates = (
+                    batch_cost_estimate.resolve_model_pricing(model, pricing_config) or {}
+                )
+
+                def _project_analysis_progress(event):
+                    print(
+                        "PROJECT_ANALYSIS_PROGRESS "
+                        + json.dumps(dict(event), ensure_ascii=False, sort_keys=True),
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 return run_mapreduce_drafts(
                     store_dir=store_dir,
                     base_dir=legacy.BASE_DIR or None,
@@ -10943,6 +11022,12 @@ def main(argv=None):
                     force=bool(getattr(args, 'force', False)),
                     provider=SYNC_BACKEND or 'gemini',
                     model=model,
+                    progress=_project_analysis_progress,
+                    pricing={
+                        "currency": pricing_config.get("currency") or "USD",
+                        "input_per_million": model_rates.get("input_per_million") or 0.0,
+                        "output_per_million": model_rates.get("output_per_million") or 0.0,
+                    },
                 )
             if command == 'project-analysis-inspect':
                 store = resolve_project_analysis_store(

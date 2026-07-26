@@ -572,6 +572,7 @@ def empty_manifest(
         "store_name": STORE_NAME,
         "store_dir": store_dir,
         "project_identity": dict(project_identity or {}),
+        "generation": {},
         "artifacts": {
             KIND_CHUNK: {"status": STATUS_MISSING, "count": 0, "lineage": empty_lineage()},
             KIND_SCENE: {"status": STATUS_MISSING, "count": 0, "lineage": empty_lineage()},
@@ -634,6 +635,8 @@ def normalize_manifest(raw: Any, *, store_dir: str = "") -> dict[str, Any]:
                 "count": max(0, count),
                 "lineage": normalize_lineage(entry.get("lineage")),
             }
+    generation = raw.get("generation") if isinstance(raw.get("generation"), Mapping) else {}
+    base["generation"] = dict(generation)
     base["updated_at"] = _as_optional_str(raw.get("updated_at"))
     return base
 
@@ -879,6 +882,7 @@ class ProjectAnalysisStore:
             identity = dict(previous.get("project_identity") or {})
 
         manifest = empty_manifest(project_identity=identity, store_dir=self.store_dir)
+        manifest["generation"] = dict((previous or {}).get("generation") or {})
         manifest["artifacts"][KIND_CHUNK] = _kind_entry(chunks)
         manifest["artifacts"][KIND_SCENE] = _kind_entry(scenes)
         manifest["artifacts"][KIND_LABEL] = _kind_entry(labels)
@@ -1111,6 +1115,10 @@ class ProjectAnalysisStore:
             and os.path.isfile(self.artifact_path(ROUTE_SUMMARIES_FILENAME))
             and (draft_present or published_present)
         )
+        chunk_count = int((artifacts.get(KIND_CHUNK) or {}).get("count") or 0)
+        semantic_evidence_warning = (
+            "keyword_summaries_missing" if structure_present and chunk_count == 0 else ""
+        )
         return {
             "store_dir": self.store_dir,
             "store_exists": self.exists(),
@@ -1121,7 +1129,8 @@ class ProjectAnalysisStore:
             "project_identity": (manifest or {}).get("project_identity")
             or dict(project_identity or {}),
             "artifacts": artifacts,
-            "chunk_count": int((artifacts.get(KIND_CHUNK) or {}).get("count") or 0),
+            "chunk_count": chunk_count,
+            "semantic_evidence_warning": semantic_evidence_warning,
             "scene_count": int((artifacts.get(KIND_SCENE) or {}).get("count") or 0),
             "label_count": int((artifacts.get(KIND_LABEL) or {}).get("count") or 0),
             "route_count": int((artifacts.get(KIND_ROUTE) or {}).get("count") or 0),
@@ -1130,6 +1139,7 @@ class ProjectAnalysisStore:
             "brief_published_present": bool(
                 brief.get("published_present", published_present)
             ),
+            "generation": dict((manifest or {}).get("generation") or {}),
             "updated_at": (manifest or {}).get("updated_at") or "",
             "error": error,
         }
@@ -1251,6 +1261,8 @@ def load_injectable_project_brief(
         f"schema={SCHEMA_VERSION} status=published "
         f"fingerprint={fp[:12] + ('…' if len(fp) > 12 else '')}"
     )
+    if status.get("semantic_evidence_warning"):
+        diagnostics += " warning=keyword_summaries_missing(structure_only)"
     return {
         "text": text,
         "injectable": True,
@@ -1512,6 +1524,10 @@ def format_status_lines(status: Mapping[str, Any]) -> list[str]:
         f"published={bool(status.get('brief_published_present'))})",
         f"- Updated at: {status.get('updated_at') or ''}",
     ]
+    if status.get("semantic_evidence_warning"):
+        lines.append(
+            "- Warning: keyword summaries missing; analysis uses static structure only"
+        )
     if status.get("error"):
         lines.append(f"- Error: {status.get('error')}")
     return lines
@@ -1541,6 +1557,8 @@ def format_status_label(status: Mapping[str, Any] | None) -> str:
         brief = status.get("brief_status") or STATUS_MISSING
         if brief != STATUS_MISSING:
             parts.append(f"brief {labels.get(brief, brief)}")
+    if status.get("semantic_evidence_warning"):
+        parts.append("缺少关键词剧情概要（仅结构分析）")
     if status.get("error"):
         parts.append("读取错误")
     if overall == STATUS_PUBLISHED and not status.get("injectable"):

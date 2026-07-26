@@ -2,12 +2,46 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
 from .translation_workflow import WorkflowStep, WorkflowUpdate
 
 
+
+PROGRESS_PREFIX = "PROJECT_ANALYSIS_PROGRESS "
+
+
+def generation_facts_from_output(output: str) -> list[str]:
+    """Render the latest machine progress event as compact GUI facts."""
+    latest: dict[str, Any] = {}
+    for raw_line in str(output or "").splitlines():
+        line = raw_line.strip()
+        if not line.startswith(PROGRESS_PREFIX):
+            continue
+        try:
+            event = json.loads(line[len(PROGRESS_PREFIX) :])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            latest = event
+    usage = latest.get("usage") if isinstance(latest.get("usage"), dict) else {}
+    if not latest:
+        return []
+    facts = [
+        f"生成进度：{latest.get('stage') or 'unknown'} "
+        f"{latest.get('completed', 0)}/{latest.get('total', 0)}",
+        f"模型请求：{usage.get('requests', 0)} · "
+        f"输入 Token {usage.get('input_tokens', 0)} · "
+        f"输出 Token {usage.get('output_tokens', 0)}",
+    ]
+    if usage.get("estimated_cost") is not None:
+        facts.append(
+            f"估算成本：{float(usage.get('estimated_cost') or 0.0):.6f} "
+            f"{usage.get('currency') or 'USD'}（按当前配置价格表）"
+        )
+    return facts
 STEP_TEXT = {
     "project-analysis-ingest-keywords": (
         "正在导入剧情概要",
@@ -96,7 +130,7 @@ class ProjectAnalysisWorkflow:
             status="done",
             heading="项目分析摘要待审查",
             message="结构与摘要已生成。请审查全文、差异、证据与实际注入预览后再启用。",
-            facts=[],
+            facts=generation_facts_from_output(output),
         )
 
 

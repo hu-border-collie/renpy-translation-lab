@@ -45,6 +45,11 @@ class FakeBackend:
             execution_mode=SYNC_EXECUTION_MODE,
             response_payload={"text": text},
             response_text=text,
+            usage_metadata={
+                "prompt_token_count": 10,
+                "candidates_token_count": 4,
+                "total_token_count": 14,
+            },
         )
 
 
@@ -186,6 +191,119 @@ class MapReduceTests(unittest.TestCase):
             for lid, summary in before.items():
                 if summary and "LLM-LABEL" in str(summary):
                     self.assertEqual(after.get(lid), summary)
+
+    def test_usage_progress_and_cost_are_persisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            gen.ingest_keyword_summaries(str(KEYWORDS), store_dir=store_dir)
+            gen.build_structure_drafts(
+                store_dir=store_dir,
+                base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)],
+                entry_labels=["start"],
+            )
+            backend = FakeBackend()
+            events = []
+            result = llm.run_mapreduce_drafts(
+                store_dir=store_dir,
+                backend=backend,
+                config={"model": "fake-model"},
+                force=True,
+                provider="fake",
+                progress=events.append,
+                pricing={
+                    "currency": "USD",
+                    "input_per_million": 1.0,
+                    "output_per_million": 2.0,
+                },
+            )
+
+            self.assertEqual(result["usage"]["requests"], len(backend.calls))
+            self.assertEqual(result["usage"]["total_tokens"], len(backend.calls) * 14)
+            self.assertGreater(result["usage"]["estimated_cost"], 0)
+            self.assertEqual(events[-1]["stage"], "complete")
+            self.assertEqual(events[-1]["usage"], result["usage"])
+            self.assertEqual(events[-1]["usage"]["currency"], "USD")
+            store = pa.ProjectAnalysisStore(store_dir)
+            manifest = store.load_manifest()
+            self.assertEqual(
+                manifest["generation"]["usage"]["requests"], len(backend.calls)
+            )
+            generation = manifest["generation"]
+            store.rebuild_manifest()
+            self.assertEqual(store.load_manifest()["generation"], generation)
+
+    def test_script_edit_regenerates_only_affected_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scripts = Path(tmp) / "scripts"
+            scripts.mkdir()
+            script = scripts / "script.rpy"
+            script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+            store_dir = os.path.join(tmp, "pa")
+            gen.build_structure_drafts(
+                store_dir=store_dir,
+                base_dir=tmp,
+                script_roots=[str(scripts)],
+                entry_labels=["start"],
+            )
+            backend = FakeBackend()
+            llm.run_mapreduce_drafts(
+                store_dir=store_dir,
+                backend=backend,
+                config={"model": "fake-model"},
+                force=True,
+                provider="fake",
+            )
+            script.write_text(
+                script.read_text(encoding="utf-8").replace(
+                    'label path_a:\n', 'label path_a:\n    "local edit"\n'
+                ),
+                encoding="utf-8",
+            )
+            rebuilt = gen.build_structure_drafts(
+                store_dir=store_dir,
+                base_dir=tmp,
+                script_roots=[str(scripts)],
+                entry_labels=["start"],
+            )
+            result = llm.run_mapreduce_drafts(
+                store_dir=store_dir,
+                backend=backend,
+                config={"model": "fake-model"},
+                force=False,
+                provider="fake",
+            )
+
+            self.assertGreater(rebuilt["label_merge"]["preserved"], 0)
+            self.assertGreater(result["labels_refined"], 0)
+            self.assertGreater(result["labels_skipped"], 0)
+            self.assertGreater(result["routes_skipped"], 0)
+
+    def test_missing_project_fingerprint_requires_structure_rebuild(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            gen.build_structure_drafts(
+                store_dir=store_dir,
+                base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)],
+                entry_labels=["start"],
+            )
+            store = pa.ProjectAnalysisStore(store_dir)
+            manifest = store.load_manifest()
+            manifest["artifacts"][pa.KIND_PROJECT_BRIEF]["lineage"] = pa.empty_lineage()
+            store.save_manifest(manifest)
+            backend = FakeBackend()
+
+            with self.assertRaisesRegex(
+                pa.ProjectAnalysisError, "rerun project-analysis-build-structure"
+            ):
+                llm.run_mapreduce_drafts(
+                    store_dir=store_dir,
+                    backend=backend,
+                    config={"model": "fake-model"},
+                )
+
+            self.assertEqual(backend.calls, [])
 
     def test_requires_structure(self):
         with tempfile.TemporaryDirectory() as tmp:

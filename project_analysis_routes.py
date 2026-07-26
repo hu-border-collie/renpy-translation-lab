@@ -52,6 +52,7 @@ class LabelNode:
     file_rel_path: str
     line_start: int
     line_end: int = 0
+    content_fingerprint: str = ""
     outgoing: list[RouteEdge] = field(default_factory=list)
 
 
@@ -71,6 +72,7 @@ class RouteGraph:
                     "file_rel_path": node.file_rel_path,
                     "line_start": node.line_start,
                     "line_end": node.line_end,
+                    "content_fingerprint": node.content_fingerprint,
                     "outgoing": [edge.__dict__ for edge in node.outgoing],
                 }
                 for name, node in sorted(self.labels.items())
@@ -148,6 +150,7 @@ def parse_rpy_labels_and_edges(text: str, *, file_rel_path: str = "") -> tuple[l
             file_rel_path=file_rel_path,
             line_start=start,
             line_end=end,
+            content_fingerprint=sha256_text(text[match.start() : end_index]),
         )
         # Jumps / calls inside this label body.
         for jm in _JUMP_RE.finditer(body):
@@ -377,7 +380,11 @@ def graph_to_label_records(
     chunk_by_label: dict[str, list[dict[str, Any]]] | None = None,
     source_fingerprint: str = "",
 ) -> list[dict[str, Any]]:
-    """Build draft label summary records from the graph (+ optional chunk texts)."""
+    """Build label drafts with a local content fingerprint for selective refresh.
+
+    ``lineage.source_fingerprint`` prefers the label body plus assigned chunk hash;
+    the project-wide ``source_fingerprint`` remains a compatibility fallback.
+    """
     chunk_by_label = chunk_by_label or {}
     records: list[dict[str, Any]] = []
     for name, node in sorted(graph.labels.items()):
@@ -399,6 +406,19 @@ def graph_to_label_records(
         unresolved = any(e.unresolved for e in node.outgoing)
         if unresolved:
             body += "\n[unresolved dynamic jump/call present]"
+        local_fingerprint = stable_json_sha256(
+            {
+                "label_body": node.content_fingerprint,
+                "chunks": [
+                    {
+                        "id": chunk.get("id") or "",
+                        "source_checksum": chunk.get("source_checksum") or "",
+                        "summary": chunk.get("summary") or "",
+                    }
+                    for chunk in chunks
+                ],
+            }
+        )
         records.append(
             {
                 "id": f"label:{name}",
@@ -411,7 +431,8 @@ def graph_to_label_records(
                 "source_checksum": sha256_text(body),
                 "upstream_artifact_ids": upstream,
                 "lineage": empty_lineage(
-                    source_fingerprint=source_fingerprint
+                    source_fingerprint=local_fingerprint
+                    or source_fingerprint
                     or sha256_text("|".join(graph.source_files)),
                     upstream_dependency_digest=digest_upstream_artifacts(upstream),
                     generated_at="",
@@ -434,7 +455,11 @@ def graph_to_route_records(
     label_records: Sequence[dict[str, Any]] | None = None,
     source_fingerprint: str = "",
 ) -> list[dict[str, Any]]:
-    """Build draft route summary records."""
+    """Build route drafts with a dependency-local fingerprint for cache reuse.
+
+    ``lineage.source_fingerprint`` prefers a hash of the route and member-label
+    fingerprints; the project-wide ``source_fingerprint`` is only a fallback.
+    """
     label_by_name = {
         str(r.get("label_id") or "").strip(): r
         for r in (label_records or [])
@@ -460,6 +485,23 @@ def graph_to_route_records(
         if route.get("unresolved"):
             parts.append("[route contains unresolved dynamic jump/call]")
         body = "\n\n".join(parts) if parts else f"Route from {route.get('entry_label')}"
+        route_fingerprint = stable_json_sha256(
+            {
+                "route_id": route["id"],
+                "labels": [
+                    {
+                        "id": name,
+                        "source_fingerprint": (
+                            (label_by_name.get(name) or {}).get("lineage") or {}
+                        ).get("source_fingerprint")
+                        or "",
+                    }
+                    for name in path
+                ],
+                "unresolved": bool(route.get("unresolved")),
+                "shared_labels": list(route.get("shared_labels") or []),
+            }
+        )
         records.append(
             {
                 "id": route["id"],
@@ -472,7 +514,8 @@ def graph_to_route_records(
                 "source_checksum": sha256_text(body),
                 "upstream_artifact_ids": upstream,
                 "lineage": empty_lineage(
-                    source_fingerprint=source_fingerprint
+                    source_fingerprint=route_fingerprint
+                    or source_fingerprint
                     or sha256_text("|".join(graph.source_files)),
                     upstream_dependency_digest=digest_upstream_artifacts(upstream),
                 ),

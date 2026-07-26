@@ -463,13 +463,29 @@ def build_structure_drafts(
             unresolved_count=len(graph.unresolved_edges),
         )
     store.save_brief_text(brief_text, published=False)
-    # Persist absolute script roots so runtime fingerprint reuse matches build-time roots
-    # (custom --script-root must not fall back to default game/ layout only).
     abs_roots = [os.path.abspath(r) for r in roots]
+    # Store roots relative to the project whenever possible. This keeps the
+    # analysis reusable after a project directory is moved or copied.
+    identity_base = os.path.abspath(base_dir) if base_dir else ""
+    stored_roots: list[str] = []
+    for root in abs_roots:
+        if identity_base:
+            try:
+                common = os.path.commonpath([identity_base, root])
+            except ValueError:
+                common = ""
+            if os.path.normcase(common) == os.path.normcase(identity_base):
+                stored_roots.append(os.path.relpath(root, identity_base))
+                continue
+        stored_roots.append(root)
     identity = {
-        "base_dir": os.path.abspath(base_dir) if base_dir else "",
-        "script_roots": abs_roots,
-        "graph_base": os.path.abspath(graph_base) if graph_base else "",
+        "base_dir": identity_base,
+        "script_roots": stored_roots,
+        "script_roots_relative_to_base": bool(identity_base),
+        "graph_base": "."
+        if identity_base
+        and os.path.normcase(os.path.abspath(graph_base)) == os.path.normcase(identity_base)
+        else (os.path.abspath(graph_base) if graph_base else ""),
     }
     # Update brief lineage in manifest.
     manifest = store.rebuild_manifest(
@@ -492,7 +508,7 @@ def build_structure_drafts(
                 generated_at=utc_now_iso(),
             ),
             "metadata": {
-                "script_roots": abs_roots,
+                "script_roots": stored_roots,
                 "graph_base": identity["graph_base"],
             },
         }
@@ -511,7 +527,7 @@ def build_structure_drafts(
         "chunks": len(chunks),
         "source_fingerprint": source_fp,
         "brief_draft_chars": len(brief_text),
-        "script_roots": abs_roots,
+        "script_roots": stored_roots,
         "label_merge": label_merge_stats,
         "route_merge": route_merge_stats,
         "graph": graph.to_dict(),

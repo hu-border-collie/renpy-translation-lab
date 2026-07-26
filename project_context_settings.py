@@ -1,9 +1,11 @@
-"""Per-project batch context flags (RAG / source index / bootstrap_on_build).
+"""Per-project batch context flags (RAG / source index / Project Analysis).
 
-Global defaults still live in translator_config.json under batch.rag / batch.source_index.
+Global defaults still live in translator_config.json under batch.rag / batch.source_index /
+batch.project_analysis.
 When a game work directory has project_context_settings.json, those values override the
 global defaults for that project only.
 """
+
 from __future__ import annotations
 
 import json
@@ -21,6 +23,8 @@ PROJECT_CONTEXT_FLAG_KEYS = (
     "batch_rag_enabled",
     "batch_source_index_enabled",
     "batch_rag_bootstrap_on_build",
+    "batch_project_analysis_enabled",
+    "batch_project_analysis_inject_published_brief",
 )
 
 
@@ -60,10 +64,17 @@ def default_context_flags_from_config(config: dict[str, Any] | None) -> dict[str
     source_index = batch.get("source_index")
     if not isinstance(source_index, dict):
         source_index = {}
+    project_analysis = batch.get("project_analysis")
+    if not isinstance(project_analysis, dict):
+        project_analysis = {}
     return {
         "rag_enabled": _coerce_bool(rag.get("enabled"), False),
         "source_index_enabled": _coerce_bool(source_index.get("enabled"), False),
         "bootstrap_on_build": _coerce_bool(rag.get("bootstrap_on_build"), True),
+        "project_analysis_enabled": _coerce_bool(project_analysis.get("enabled"), False),
+        "project_analysis_inject_enabled": _coerce_bool(
+            project_analysis.get("inject_published_brief"), False
+        ),
     }
 
 
@@ -82,26 +93,22 @@ def load_project_context_settings(
     if not isinstance(data, dict):
         return None
 
+    aliases = {
+        "batch_rag_enabled": ("rag_enabled", False),
+        "batch_source_index_enabled": ("source_index_enabled", False),
+        "batch_rag_bootstrap_on_build": ("bootstrap_on_build", True),
+        "batch_project_analysis_enabled": ("project_analysis_enabled", False),
+        "batch_project_analysis_inject_published_brief": (
+            "project_analysis_inject_enabled",
+            False,
+        ),
+    }
     flags: dict[str, bool] = {}
-    if "batch_rag_enabled" in data:
-        flags["rag_enabled"] = _coerce_bool(data.get("batch_rag_enabled"), False)
-    if "batch_source_index_enabled" in data:
-        flags["source_index_enabled"] = _coerce_bool(
-            data.get("batch_source_index_enabled"), False
-        )
-    if "batch_rag_bootstrap_on_build" in data:
-        flags["bootstrap_on_build"] = _coerce_bool(
-            data.get("batch_rag_bootstrap_on_build"), True
-        )
-    # Also accept the UI-shaped keys if present.
-    if "rag_enabled" in data and "rag_enabled" not in flags:
-        flags["rag_enabled"] = _coerce_bool(data.get("rag_enabled"), False)
-    if "source_index_enabled" in data and "source_index_enabled" not in flags:
-        flags["source_index_enabled"] = _coerce_bool(
-            data.get("source_index_enabled"), False
-        )
-    if "bootstrap_on_build" in data and "bootstrap_on_build" not in flags:
-        flags["bootstrap_on_build"] = _coerce_bool(data.get("bootstrap_on_build"), True)
+    for stored_key, (flag_key, default) in aliases.items():
+        if stored_key in data:
+            flags[flag_key] = _coerce_bool(data.get(stored_key), default)
+        elif flag_key in data:
+            flags[flag_key] = _coerce_bool(data.get(flag_key), default)
     return flags or None
 
 
@@ -118,11 +125,13 @@ def save_project_context_settings(
     payload = {
         "schema_version": SCHEMA_VERSION,
         "batch_rag_enabled": _coerce_bool(flags.get("rag_enabled"), False),
-        "batch_source_index_enabled": _coerce_bool(
-            flags.get("source_index_enabled"), False
+        "batch_source_index_enabled": _coerce_bool(flags.get("source_index_enabled"), False),
+        "batch_rag_bootstrap_on_build": _coerce_bool(flags.get("bootstrap_on_build"), True),
+        "batch_project_analysis_enabled": _coerce_bool(
+            flags.get("project_analysis_enabled"), False
         ),
-        "batch_rag_bootstrap_on_build": _coerce_bool(
-            flags.get("bootstrap_on_build"), True
+        "batch_project_analysis_inject_published_brief": _coerce_bool(
+            flags.get("project_analysis_inject_enabled"), False
         ),
     }
     tmp_path = ""
@@ -164,7 +173,7 @@ def apply_project_context_settings_to_config(
     config: dict[str, Any],
     game_root: str | os.PathLike[str] | None,
 ) -> dict[str, Any]:
-    """Mutate config so batch.rag / batch.source_index.enabled match the project."""
+    """Mutate config so context enablement matches the selected project."""
     if not isinstance(config, dict):
         return {}
     flags = resolve_batch_context_flags(config, game_root)
@@ -180,9 +189,15 @@ def apply_project_context_settings_to_config(
     if not isinstance(source_index, dict):
         source_index = {}
         batch["source_index"] = source_index
+    project_analysis = batch.get("project_analysis")
+    if not isinstance(project_analysis, dict):
+        project_analysis = {}
+        batch["project_analysis"] = project_analysis
     rag["enabled"] = flags["rag_enabled"]
     rag["bootstrap_on_build"] = flags["bootstrap_on_build"]
     source_index["enabled"] = flags["source_index_enabled"]
+    project_analysis["enabled"] = flags["project_analysis_enabled"]
+    project_analysis["inject_published_brief"] = flags["project_analysis_inject_enabled"]
     return config
 
 

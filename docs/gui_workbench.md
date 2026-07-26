@@ -120,7 +120,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 - **项目**：术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。Ren'Py SDK 须显式配置： **查找 SDK**（用户点击后才扫描附近）、**浏览…**，或确认后 **下载推荐 SDK…**（官方固定版本）；留空不会自动搜其它目录或联网。结果写入 `prepare.renpy_sdk_dir`，保存设置后生效。当前 `game_root` 只读展示；需换项目请用「项目与环境」或「项目列表」。
 - **模型**：同步 / 批量翻译模型、embedding model、批量 thinking level。
 - **上下文**：
-  - **按当前项目保存**（`work/project_context_settings.json`）：启用批量 RAG、启用原文索引、开始翻译时自动暖 RAG。切换游戏互不影响。
+  - **按当前项目保存**（`work/project_context_settings.json`）：启用批量 RAG、启用原文索引、开始翻译时自动暖 RAG，以及项目分析的启用 / 用于翻译。切换游戏互不影响。
   - **工具全局**（`translator_config.json`）：上下文库保存位置（工具 `logs/` 或游戏旁 `translation_context/`）；以及 **同步 RAG / 同步·批量剧情记忆主开关**（仅在本分区编辑，高级页不重复）。
   - 启用项目级开关后须点 **保存设置**，再到工作台 **上下文库** 页预建。
 - **外观**：浅色 / 深色 / 跟随系统。切换主题会立即预览，保存设置后才写入 `translator_config.json`。
@@ -133,7 +133,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 底部 **重新加载 / 恢复推荐值 / 保存设置**：
 - 全局项写入 `translator_config.json`；
-- 上述三项上下文开关写入**当前项目**的 `project_context_settings.json`；
+- 上述五项上下文开关写入**当前项目**的 `project_context_settings.json`；
 - **工作区**总表与切换项目即时写 registry，不依赖「保存设置」。
 - 进入**项目列表**时底部改为显示即时保存提示，不显示上述三个配置按钮。
 - 若其他设置尚未保存，项目列表底部会保留 **重新加载** 与 **保存设置**（仍不显示「恢复推荐值」）；切换项目时必须先选择保存、放弃或取消。
@@ -346,7 +346,7 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 「确认已审查」会写入 `reviewed_at`；「审查并启用到翻译」还会二次确认并走实时 fingerprint 发布门禁。停止用于翻译同样需要确认，只移除 published 副本，不删除 draft 或修改 `.rpy`。任务中断后可根据上下文库显示的已落盘阶段重新开始。
 
-启用开关、是否用于翻译、模型和思考等级集中在「设置 → 上下文 → 项目剧情分析」；其余长度、并发等参数仍在高级设置。详见 [上下文系统 · Project Analysis](context_systems.md#project-analysis项目分析)。
+启用开关和是否用于翻译按当前项目保存；模型和思考等级是工具全局设置。它们集中在「设置 → 上下文 → 项目剧情分析」；其余长度、并发等参数仍在高级设置。详见 [上下文系统 · Project Analysis](context_systems.md#project-analysis项目分析)。
 
 预建流程：
 
@@ -365,7 +365,7 @@ bootstrap-source-index
 project-analysis-status
 ```
 
-预建和项目分析结果以普通语言摘要显示；失败细节可在「诊断与运行日志」的原始输出查看。任务运行中，上下文库内其他动作会禁用并提供与当前任务对应的停止按钮，避免叠跑。项目分析状态还会明确显示功能是否启用，以及当前发布摘要是否实际用于翻译。
+预建和项目分析结果以普通语言摘要显示；项目分析生成完成后还会显示 label / route 进度、请求数、输入/输出 Token 和按当前价格表估算的成本。失败细节可在「诊断与运行日志」的原始输出查看。任务运行中，上下文库内其他动作会禁用并提供与当前任务对应的停止按钮，避免叠跑。项目分析状态还会明确显示功能是否启用，以及当前发布摘要是否实际用于翻译。
 
 若开启了 build 时自动补建，后续 `build` 仍可能自动补建；图形预建入口适合在首次翻译前手动确认 store 状态。
 
@@ -399,7 +399,7 @@ GUI 不提供普通用户入口来运行 `apply --force`。`apply --force` 只�
 当前 GUI 是稳定版支持范围内的正式工作台，采用源码安装运行。以下是当前明确限制：
 
 - 暂不提供打包安装器；源码安装是当前正式交付方式。
-- 模型 / chunk 等多数参数仍是**工具全局**一份配置；仅批量 RAG / 原文索引 / 暖库开关按项目隔离（`project_context_settings.json`）。
+- 模型 / chunk 等多数参数仍是**工具全局**一份配置；批量 RAG / 原文索引 / 暖库开关和项目分析的启用 / 注入开关按项目隔离（`project_context_settings.json`）。
 - 还没有完整可视化 diff 编辑器。
 - 同步修补会直接改翻译文件，不提供内嵌 diff 编辑器；复杂问题仍需 CLI 或人工处理。
 - 同步关键词 / 同步订正不支持从任务记录恢复（与批量模式不同）。

@@ -6,11 +6,54 @@ from gui_qt.settings_schema import (
     filter_gemini_rotation_models,
     read_advanced_settings,
     recommended_advanced_settings,
+    resolve_project_analysis_flags_for_save,
     validate_advanced_settings,
 )
 
 
 class GuiSettingsSchemaTests(unittest.TestCase):
+    def test_project_analysis_save_flags_preserve_saved_values_without_widgets(self):
+        flags = resolve_project_analysis_flags_for_save(
+            {
+                "project_analysis_enabled": True,
+                "project_analysis_inject_enabled": False,
+            },
+            {},
+            {},
+        )
+
+        self.assertEqual(
+            flags,
+            {
+                "project_analysis_enabled": True,
+                "project_analysis_inject_enabled": False,
+            },
+        )
+
+    def test_project_analysis_save_flags_use_present_ui_values(self):
+        flags = resolve_project_analysis_flags_for_save(
+            {
+                "project_analysis_enabled": True,
+                "project_analysis_inject_enabled": False,
+            },
+            {
+                "batch_project_analysis_enabled": False,
+                "batch_project_analysis_inject_published_brief": True,
+            },
+            {
+                "batch_project_analysis_enabled": False,
+                "batch_project_analysis_inject_published_brief": True,
+            },
+        )
+
+        self.assertEqual(
+            flags,
+            {
+                "project_analysis_enabled": False,
+                "project_analysis_inject_enabled": True,
+            },
+        )
+
     def test_read_advanced_settings_uses_defaults_for_missing_config(self):
         values = read_advanced_settings({})
 
