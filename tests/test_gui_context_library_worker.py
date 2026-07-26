@@ -5,9 +5,19 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from gui_qt.context_library_worker import collect_context_library_status
+try:
+    from gui_qt.context_library_worker import collect_context_library_status
+except ImportError as exc:
+    collect_context_library_status = None  # type: ignore[assignment]
+    IMPORT_ERROR = exc
+else:
+    IMPORT_ERROR = None
 
 
+@unittest.skipIf(
+    collect_context_library_status is None,
+    f"GUI dependencies are unavailable: {IMPORT_ERROR}",
+)
 class ContextLibraryStatusCollectionTests(unittest.TestCase):
     def test_collects_fingerprint_and_status_for_one_project(self) -> None:
         status = {"overall_status": "published", "injectable": True}
