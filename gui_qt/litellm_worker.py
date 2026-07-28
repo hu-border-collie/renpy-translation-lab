@@ -15,10 +15,10 @@ from litellm_provider_config import (
     build_native_catalog_headers,
     installed_litellm_version,
     latest_compatible_litellm_version,
-    models_for_provider,
     models_from_native_catalog_payload,
     models_from_remote_catalog,
     native_catalog_endpoint,
+    providers_from_remote_catalog,
 )
 from litellm_sync_backend import LiteLLMSyncBackend
 from sync_model_backend import SyncGenerationRequest
@@ -124,12 +124,34 @@ class LiteLLMModelCatalogWorker(QThread):
             models = self._fetch_litellm_catalog()
             self.completed.emit(models, "online", None)
         except Exception as exc:
-            try:
-                models = models_for_provider(self.provider)
-            except Exception as local_exc:
-                self.completed.emit((), "", f"联网失败：{exc}；本地读取失败：{local_exc}")
-                return
-            self.completed.emit(models, "local", f"联网失败，已改用本地目录：{exc}")
+            self.completed.emit((), "", f"联网加载模型失败：{exc}")
+
+
+class LiteLLMProviderCatalogWorker(QThread):
+    """Fetch the current LiteLLM provider catalog only on explicit user action."""
+
+    completed = Signal(object, object, object)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setPriority(QThread.Priority.LowPriority)
+
+    def run(self) -> None:
+        try:
+            request = Request(
+                LITELLM_CATALOG_URL,
+                headers={"User-Agent": "renpy-translation-lab"},
+            )
+            with urlopen(request, timeout=CATALOG_TIMEOUT_SECONDS) as response:
+                catalog = json.load(response)
+            if not isinstance(catalog, dict):
+                raise ValueError("LiteLLM 官方目录格式无效")
+            providers = providers_from_remote_catalog(catalog)
+            if not providers:
+                raise ValueError("LiteLLM 官方目录未返回供应商")
+            self.completed.emit(providers, "online", None)
+        except Exception as exc:
+            self.completed.emit((), "", f"联网加载供应商失败：{exc}")
 
 
 class LiteLLMVersionWorker(QThread):

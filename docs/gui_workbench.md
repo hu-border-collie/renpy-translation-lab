@@ -116,7 +116,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 - **工作区 / 项目列表**：先 **创建 / 接入工作区…**（预览后初始化或接入 `games_registry.json`，成功后再写 `workspace_root`；默认未设置，不会用工具上一级），再浏览总表、扫描/刷新、同步 `GAMES.md`、编辑详情并**切换当前 `game_root`**。主工具条为项目刷新 + **维护**；展开后带「项目发现 / 总表维护」小标题，左对齐略缩进，宽屏四钮尽量同行。总览表与项目详情可拖拽分隔，详情可收起。未指定工作区时本区为空状态。「切换到此项目」成功后**留在项目列表**；术语表 / 准备流程等到「项目」分区调整。此分区的操作即时写入 registry / `workspace_root`，不使用底部「保存设置」。
 - **密钥**：读取 / 保存 `api_keys.json`；环境变量 Key 只读提示。
-- **LiteLLM**：选择 Provider 和模型、从已安装的 LiteLLM 目录刷新模型列表、在操作系统凭据管理器中单独保存供应商密钥，并可后台测试连接。
+- **LiteLLM**：按“联网加载供应商 → 选择 Provider → 配置该 Provider 凭据 → 联网加载模型 → 选择模型 → 保存设置”配置同步替代后端。首次打开不会默认选择 OpenAI 或模型，也不会静默联网；Provider / 模型均可手动填写。
 - **项目**：术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。Ren'Py SDK 须显式配置： **查找 SDK**（用户点击后才扫描附近）、**浏览…**，或确认后 **下载推荐 SDK…**（官方固定版本）；留空不会自动搜其它目录或联网。结果写入 `prepare.renpy_sdk_dir`，保存设置后生效。当前 `game_root` 只读展示；需换项目请用「项目与环境」或「项目列表」。
 - **模型**：同步 / 批量翻译模型、embedding model、批量 thinking level。
 - **上下文**：
@@ -233,7 +233,8 @@ GUI 不要求手写 JSON 变体文件。对话框以 **baseline + 可选覆盖�
 GUI 不引入新的主配置系统。
 
 - API Key 仍保存到 `api_keys.json` 的 `api_keys` 列表。
-- LiteLLM 的供应商密钥保存到操作系统凭据管理器，不写入 `api_keys.json` 或 `translator_config.json`；已有的供应商环境变量仍可使用。
+- LiteLLM 的供应商密钥按 Provider 保存到操作系统凭据管理器，不写入 `api_keys.json`、用户级目录缓存或 `translator_config.json`，也不会回显；已有的供应商环境变量仍可使用。若两者同时存在，系统凭据管理器中的密钥优先。切换或取消 Provider 会丢弃尚未保存的明文输入，但不会删除已保存凭据。
+- LiteLLM 的 Provider / 模型目录、目录来源、抓取时间和每个 Provider 的上次选择保存在用户级 GUI 缓存，不污染项目配置。只有用户点击加载按钮才会联网；失败时保留旧缓存，没有缓存则保持空白，不回填内置默认模型。LiteLLM 在线价格 / 上下文目录可能只是供应商目录的子集；无法枚举的 Provider、Azure 部署或自建 OpenAI-compatible 模型仍可手动填写，并按 LiteLLM 文档配置对应的 API Base、版本和额外认证环境变量。
 - 项目路径、准备流程、过滤器、模型、embedding model、批量 thinking level、GUI 主题、任务专用参数和上下文参数等写入 `translator_config.json`。
 - 保存设置时应保留未知字段，避免破坏手写配置。
 - 如果 API Key 来自 `GEMINI_API_KEY` 等环境变量，GUI 只提示只读状态，不强行写回文件。
@@ -257,6 +258,7 @@ build -> submit -> status -> download -> check
 #### LiteLLM 同步替代边界
 
 - **默认与回退**：Gemini Batch 始终是推荐的批量主路径。要停止使用 LiteLLM，在「设置 → LiteLLM」把同步执行后端切回「Gemini 同步（推荐）」并保存；这不会改动 Batch 模型或 RAG Embedding 配置。
+- **目录与运行配置**：用户级目录缓存只帮助恢复 GUI 选择；项目实际运行仍以 `translator_config.json` 的 `sync.backend` / `sync.litellm_model` 为准，已保存模型优先于 GUI 历史。只选择 Provider 而不选择模型时不能保存为可运行的 LiteLLM 配置。取消 Provider 不会清除目录缓存或系统凭据。
 - **费用与吞吐**：LiteLLM 同步请求按所选供应商和模型计费，不具有 Gemini Batch 的远程排队、恢复或 Batch 折扣语义；大项目可能更贵且吞吐量更低。工具不为任意供应商提供统一价格保证，正式运行前应查看供应商定价并先做小样本。
 - **隐私**：本项目直接调用 LiteLLM Python SDK，不经过本项目自建代理。待译文本、提示词和必要上下文会发送给所选模型供应商；应按该供应商的日志、训练和数据保留政策评估敏感内容。供应商密钥保存到操作系统凭据管理器或由环境变量提供，不写入 `translator_config.json`。
 - **安全边界**：同步翻译默认只生成预览，显式 apply 才会写入当前项目；仍应先备份并小范围验证。同步 manifest 使用独立的项目绑定、源文件快照和制品哈希复核，不复用 Batch manifest 的 `check=safe` 状态。

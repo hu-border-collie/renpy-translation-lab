@@ -18,6 +18,7 @@ SUPPORTED_PROVIDERS: tuple[tuple[str, str], ...] = (
     ("xai", "xAI"),
     ("ollama", "Ollama（本地）"),
 )
+_PROVIDER_LABELS = dict(SUPPORTED_PROVIDERS)
 DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     "openai": ("openai/gpt-5",),
     "anthropic": ("anthropic/claude-sonnet-4-5-20250929",),
@@ -140,6 +141,12 @@ def provider_from_model(model: str) -> str:
     return text.split("/", 1)[0].strip().lower()
 
 
+def provider_display_label(provider: str) -> str:
+    """Return a friendly label without restricting dynamic provider ids."""
+    provider = str(provider or "").strip().lower()
+    return _PROVIDER_LABELS.get(provider, provider)
+
+
 def _keyring(keyring_module: Any = None) -> Any:
     if keyring_module is not None:
         return keyring_module
@@ -248,6 +255,27 @@ def models_from_remote_catalog(
             continue
         models.add(model if model_provider == provider else f"{provider}/{model}")
     return tuple(sorted(models, key=str.casefold))
+
+
+def providers_from_remote_catalog(
+    catalog: Mapping[str, object],
+) -> tuple[str, ...]:
+    """Discover provider ids represented by LiteLLM's current online catalog.
+
+    Native endpoints are included even when the pricing/context catalog has no
+    current entry for them. The result is a discovery aid, not a guarantee
+    that every provider exposes a native model-list endpoint.
+    """
+    providers = set(NATIVE_CATALOG_ENDPOINTS)
+    for raw_model, raw_metadata in catalog.items():
+        if not isinstance(raw_metadata, Mapping):
+            continue
+        provider = str(raw_metadata.get("litellm_provider") or "").strip().lower()
+        if not provider:
+            provider = provider_from_model(str(raw_model or ""))
+        if provider:
+            providers.add(provider)
+    return tuple(sorted(providers, key=str.casefold))
 
 
 def models_from_openrouter_payload(payload: Mapping[str, object] | object) -> tuple[str, ...]:

@@ -235,7 +235,13 @@ from .work_bootstrap_report import (
 from .litellm_worker import (
     LiteLLMConnectionTestWorker,
     LiteLLMModelCatalogWorker,
+    LiteLLMProviderCatalogWorker,
     LiteLLMVersionWorker,
+)
+from .litellm_catalog_cache import (
+    CatalogSnapshot,
+    LiteLLMCatalogCache,
+    catalog_snapshot_warning,
 )
 from .litellm_settings import (
     provider_credential_status,
@@ -251,10 +257,9 @@ from gemini_model_catalog import (
     write_model_catalog_extras,
 )
 from litellm_provider_config import (
-    DEFAULT_MODELS,
-    SUPPORTED_PROVIDERS,
     catalog_source_label,
     installed_litellm_version,
+    provider_display_label,
     version_key,
     ProviderCredentialStoreError,
     delete_provider_api_key,
@@ -457,6 +462,9 @@ _SETTINGS_LAZY_ATTR_TO_PAGE: dict[str, str] = {
     "batch_thinking_combo": "models",
     "sync_backend_combo": "litellm",
     "litellm_provider_combo": "litellm",
+    "litellm_refresh_providers_btn": "litellm",
+    "litellm_clear_provider_btn": "litellm",
+    "litellm_provider_catalog_status_label": "litellm",
     "litellm_model_combo": "litellm",
     "litellm_refresh_models_btn": "litellm",
     "litellm_catalog_status_label": "litellm",
@@ -465,6 +473,7 @@ _SETTINGS_LAZY_ATTR_TO_PAGE: dict[str, str] = {
     "litellm_check_version_btn": "litellm",
     "install_litellm_btn": "litellm",
     "litellm_install_progress": "litellm",
+    "litellm_credentials_box": "litellm",
     "litellm_provider_label": "litellm",
     "litellm_api_key_edit": "litellm",
     "litellm_save_key_btn": "litellm",
@@ -492,6 +501,7 @@ class MainWindow(QMainWindow):
         resources_dir: Path | None = None,
         project_state: ProjectState | None = None,
         bootstrap_config: dict[str, Any] | None = None,
+        litellm_catalog_cache: LiteLLMCatalogCache | None = None,
     ):
         super().__init__()
         self.setWindowTitle("Ren'Py Translation Lab - 图形工作台")
@@ -499,6 +509,7 @@ class MainWindow(QMainWindow):
         self.resize(1180, 780)
 
         self.state = project_state or ProjectState()
+        self._litellm_cache = litellm_catalog_cache or LiteLLMCatalogCache()
         self._diagnostics_context_fingerprint: tuple[object, ...] | None = None
         self._context_library_status_cache: ContextLibraryStatusResult | None = None
         self._context_library_status_cache_at = 0.0
@@ -594,15 +605,14 @@ class MainWindow(QMainWindow):
         self._last_main_tab_index = 0
         self._handling_config_tab_leave = False
         self._task_running = False
+        self._litellm_provider_catalog_worker: LiteLLMProviderCatalogWorker | None = None
         self._litellm_catalog_worker: LiteLLMModelCatalogWorker | None = None
         self._litellm_version_worker: LiteLLMVersionWorker | None = None
         self._litellm_latest_version = ""
         self._litellm_latest_compatible_version = ""
         self._litellm_latest_requires_python = ""
-        self._litellm_catalog_source = ""
         self._litellm_connection_worker: LiteLLMConnectionTestWorker | None = None
         self._font_install_worker: FontInstallWorker | None = None
-        self._litellm_catalog_models: dict[str, tuple[str, ...]] = {}
         self._updating_litellm_provider = False
         # _games_registry_panel is intentionally NOT set here so attribute access
         # triggers __getattr__ lazy materialization of 设置 · 项目列表.
@@ -3423,25 +3433,48 @@ class MainWindow(QMainWindow):
         backend_layout.addRow("同步执行后端：", self.sync_backend_combo)
 
         self.litellm_provider_combo = NoWheelComboBox()
-        for provider, label in SUPPORTED_PROVIDERS:
-            self.litellm_provider_combo.addItem(label, provider)
-        backend_layout.addRow("Provider：", self.litellm_provider_combo)
+        self._configure_editable_model_combo(self.litellm_provider_combo)
+        self.litellm_provider_combo.lineEdit().setPlaceholderText("尚未选择供应商")
+        provider_row = QWidget()
+        provider_layout = QHBoxLayout(provider_row)
+        provider_layout.setContentsMargins(0, 0, 0, 0)
+        provider_layout.setSpacing(8)
+        provider_layout.addWidget(self.litellm_provider_combo, 1)
+        self.litellm_refresh_providers_btn = QPushButton("联网加载供应商")
+        self.litellm_refresh_providers_btn.setObjectName("secondary_btn")
+        self.litellm_refresh_providers_btn.clicked.connect(
+            self._on_refresh_litellm_providers
+        )
+        provider_layout.addWidget(self.litellm_refresh_providers_btn)
+        self.litellm_clear_provider_btn = QPushButton("取消选择")
+        self.litellm_clear_provider_btn.setObjectName("secondary_btn")
+        self.litellm_clear_provider_btn.clicked.connect(self._on_clear_litellm_provider)
+        provider_layout.addWidget(self.litellm_clear_provider_btn)
+        backend_layout.addRow("Provider：", provider_row)
+        self.litellm_provider_catalog_status_label = QLabel()
+        self.litellm_provider_catalog_status_label.setWordWrap(True)
+        self.litellm_provider_catalog_status_label.setObjectName("config_hint_label")
+        backend_layout.addRow(self.litellm_provider_catalog_status_label)
+        self._populate_litellm_providers(
+            self._litellm_cache.providers.values,
+            selected=self._litellm_cache.selected_provider,
+        )
 
         self.litellm_model_combo = NoWheelComboBox()
         self._configure_editable_model_combo(self.litellm_model_combo)
-        self.litellm_model_combo.addItems(DEFAULT_MODELS["openai"])
+        self.litellm_model_combo.lineEdit().setPlaceholderText("尚未加载模型")
         self.litellm_model_combo.currentTextChanged.connect(self._on_litellm_model_changed)
         model_row = QWidget()
         model_layout = QHBoxLayout(model_row)
         model_layout.setContentsMargins(0, 0, 0, 0)
         model_layout.setSpacing(8)
         model_layout.addWidget(self.litellm_model_combo, 1)
-        self.litellm_refresh_models_btn = QPushButton("联网更新列表")
+        self.litellm_refresh_models_btn = QPushButton("联网加载模型")
         self.litellm_refresh_models_btn.setObjectName("secondary_btn")
         self.litellm_refresh_models_btn.clicked.connect(self._on_refresh_litellm_models)
         model_layout.addWidget(self.litellm_refresh_models_btn)
         backend_layout.addRow("LiteLLM 模型：", model_row)
-        self.litellm_catalog_status_label = QLabel("目录来源：内置兜底；尚未联网更新。")
+        self.litellm_catalog_status_label = QLabel("模型目录：尚未加载。")
         self.litellm_catalog_status_label.setWordWrap(True)
         self.litellm_catalog_status_label.setObjectName("config_hint_label")
         backend_layout.addRow(self.litellm_catalog_status_label)
@@ -3481,6 +3514,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(backend_box)
 
         credentials_box, credentials_layout = self._settings_group("Provider 凭据")
+        self.litellm_credentials_box = credentials_box
         credentials_hint = QLabel(
             "密钥与 Gemini 配置完全分离，并保存到操作系统凭据管理器；"
             "不会写入 translator_config.json。也可继续使用 LiteLLM 约定的环境变量。"
@@ -3525,6 +3559,11 @@ class MainWindow(QMainWindow):
         self.litellm_provider_combo.currentIndexChanged.connect(
             self._on_litellm_provider_changed
         )
+        self.litellm_provider_combo.lineEdit().editingFinished.connect(
+            self._on_litellm_provider_changed
+        )
+        self._restore_litellm_cached_selection()
+        self._refresh_litellm_catalog_status()
         self._refresh_litellm_credential_status()
         layout.addStretch(1)
         return page
@@ -6510,27 +6549,163 @@ class MainWindow(QMainWindow):
 
     def _litellm_model_text(self) -> str:
         combo = self._settings_widget("litellm_model_combo")
-        model = combo.currentText().strip() if combo is not None else ""
+        current_text = getattr(combo, "currentText", None)
+        model = str(current_text() or "").strip() if callable(current_text) else ""
         if not model or "/" in model:
             return model
-        provider_combo = self._settings_widget("litellm_provider_combo")
-        provider = (
-            str(provider_combo.currentData() or "").strip().lower()
-            if provider_combo is not None
-            else ""
-        )
+        provider = self._litellm_provider_combo_value()
         return f"{provider}/{model}" if provider else model
+
+    def _litellm_provider_combo_value(self) -> str:
+        combo = self._settings_widget("litellm_provider_combo")
+        if combo is None:
+            return ""
+        index = combo.currentIndex()
+        if index >= 0 and combo.currentText() == combo.itemText(index):
+            data = str(combo.itemData(index) or "").strip().lower()
+            if data:
+                return data
+        return combo.currentText().strip().lower()
 
     def _current_litellm_provider(self) -> str:
         model_provider = provider_from_model(self._litellm_model_text())
         if model_provider:
             return model_provider
+        return self._litellm_provider_combo_value()
+
+    def _ensure_litellm_provider_item(self, provider: str) -> int:
+        combo = self._settings_widget("litellm_provider_combo")
+        provider = str(provider or "").strip().lower()
+        if combo is None or not provider:
+            return -1
+        index = combo.findData(provider)
+        if index < 0:
+            combo.addItem(provider_display_label(provider), provider)
+            index = combo.findData(provider)
+        return index
+
+    def _populate_litellm_providers(
+        self,
+        providers: tuple[str, ...],
+        *,
+        selected: str = "",
+    ) -> None:
+        combo = self._settings_widget("litellm_provider_combo")
+        if combo is None:
+            return
+        selected = str(selected or "").strip().lower()
+        combo.blockSignals(True)
+        combo.clear()
+        for provider in providers:
+            provider = str(provider or "").strip().lower()
+            if provider:
+                combo.addItem(provider_display_label(provider), provider)
+        if selected:
+            index = self._ensure_litellm_provider_item(selected)
+            combo.setCurrentIndex(index)
+        else:
+            combo.setCurrentIndex(-1)
+            if combo.isEditable():
+                combo.lineEdit().clear()
+        combo.blockSignals(False)
+
+    @staticmethod
+    def _litellm_snapshot_status(subject: str, snapshot: CatalogSnapshot) -> str:
+        if not snapshot.values:
+            return f"{subject}：尚未联网加载。"
+        source = (
+            catalog_source_label(snapshot.source)
+            if subject == "模型目录"
+            else "来源：LiteLLM 官方在线目录。"
+        )
+        fetched = f"缓存时间：{snapshot.fetched_at}。" if snapshot.fetched_at else ""
+        version = (
+            f"LiteLLM {snapshot.litellm_version}。"
+            if snapshot.litellm_version
+            else ""
+        )
+        warning = catalog_snapshot_warning(
+            snapshot,
+            current_litellm_version=installed_litellm_version(),
+        )
+        return " ".join(
+            part
+            for part in (
+                f"{subject}：已缓存 {len(snapshot.values)} 项。",
+                source,
+                fetched,
+                version,
+                warning,
+            )
+            if part
+        )
+
+    def _refresh_litellm_catalog_status(self) -> None:
+        provider_label = self._settings_widget("litellm_provider_catalog_status_label")
+        if provider_label is not None:
+            message = self._litellm_snapshot_status(
+                "供应商目录",
+                self._litellm_cache.providers,
+            )
+            if self._litellm_cache.load_error:
+                message = f"{message} {self._litellm_cache.load_error}"
+            provider_label.setText(message)
+        model_label = self._settings_widget("litellm_catalog_status_label")
+        if model_label is not None:
+            model_label.setText(
+                self._litellm_snapshot_status(
+                    "模型目录",
+                    self._litellm_cache.models(self._litellm_provider_combo_value()),
+                )
+            )
+
+    def _save_litellm_cache(self, action) -> None:
+        try:
+            action()
+        except OSError as exc:
+            self._append_log(f"保存 LiteLLM 用户目录缓存失败：{exc}")
+            self.statusBar().showMessage(
+                "LiteLLM 选择已更新，但用户目录缓存写入失败。",
+                6000,
+            )
+
+    def _restore_litellm_cached_selection(self) -> None:
+        cache = self.__dict__.get("_litellm_cache")
+        if cache is None:
+            return
+        provider = cache.selected_provider
+        if not provider:
+            self._set_litellm_models("", ())
+            return
+        index = self._ensure_litellm_provider_item(provider)
         combo = self._settings_widget("litellm_provider_combo")
         if combo is not None:
-            provider = str(combo.currentData() or "").strip().lower()
-            if provider:
-                return provider
-        return provider_from_model(self._litellm_model_text())
+            combo.blockSignals(True)
+            combo.setCurrentIndex(index)
+            combo.blockSignals(False)
+        snapshot = cache.models(provider)
+        self._set_litellm_models(
+            provider,
+            snapshot.values,
+            selected=self._litellm_cache.selected_model(provider),
+        )
+
+    def _restore_configured_litellm_model(self, model: str) -> None:
+        model = str(model or "").strip()
+        if not model:
+            self._restore_litellm_cached_selection()
+            return
+        provider = provider_from_model(model)
+        if provider:
+            index = self._ensure_litellm_provider_item(provider)
+            combo = self._settings_widget("litellm_provider_combo")
+            if combo is not None:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(index)
+                combo.blockSignals(False)
+        cache = self.__dict__.get("_litellm_cache")
+        snapshot = cache.models(provider) if cache is not None else CatalogSnapshot()
+        self._set_litellm_models(provider, snapshot.values, selected=model)
 
     def _set_litellm_models(
         self,
@@ -6538,20 +6713,25 @@ class MainWindow(QMainWindow):
         models: tuple[str, ...],
         *,
         preserve_current: bool = False,
+        selected: str = "",
     ) -> None:
         combo = self._settings_widget("litellm_model_combo")
         if combo is None:
             return
         current = combo.currentText().strip()
-        selected = current if preserve_current else ""
-        values = models or DEFAULT_MODELS.get(provider, ())
+        selected = current if preserve_current else str(selected or "").strip()
+        values = tuple(
+            dict.fromkeys(str(model).strip() for model in models if str(model).strip())
+        )
         combo.blockSignals(True)
         combo.clear()
         combo.addItems(list(values))
         if selected:
-            self._set_combo_value(combo, selected)
-        elif values:
-            combo.setCurrentIndex(0)
+            combo.setEditText(selected)
+        else:
+            combo.setCurrentIndex(-1)
+            if combo.isEditable():
+                combo.lineEdit().clear()
         combo.blockSignals(False)
         self._on_litellm_model_changed(combo.currentText())
 
@@ -6560,16 +6740,30 @@ class MainWindow(QMainWindow):
         status_label = self._settings_widget("litellm_credential_status_label")
         if provider_label is None or status_label is None:
             return
-        status = provider_credential_status(self._litellm_model_text(), os.environ)
-        provider_label.setText(
-            f"当前 provider：{status.provider}" if status.provider else "当前 provider：尚未识别"
+        provider = self._current_litellm_provider()
+        model = self._litellm_model_text()
+        status = provider_credential_status(
+            model or (f"{provider}/_" if provider else ""),
+            os.environ,
         )
+        provider_label.setText(
+            f"当前 Provider：{provider_display_label(provider)}"
+            if provider
+            else "当前 Provider：尚未选择"
+        )
+        credentials_box = self._settings_widget("litellm_credentials_box")
+        if credentials_box is not None:
+            credentials_box.setTitle(
+                f"Provider 凭据 — {provider_display_label(provider)}"
+                if provider
+                else "Provider 凭据"
+            )
         saved_message = ""
-        if status.provider and status.provider != "ollama":
+        if provider and provider != "ollama":
             try:
                 saved_message = (
-                    "系统凭据管理器中已保存密钥。"
-                    if load_provider_api_key(status.provider)
+                    "系统凭据管理器中已保存密钥；如同时存在环境变量，请求优先使用此密钥。"
+                    if load_provider_api_key(provider)
                     else "系统凭据管理器中尚未保存密钥。"
                 )
             except ProviderCredentialStoreError as exc:
@@ -6577,34 +6771,65 @@ class MainWindow(QMainWindow):
         status_label.setText(" ".join(part for part in (saved_message, status.message) if part))
 
     def _on_litellm_model_changed(self, _text: str) -> None:
-        provider = provider_from_model(self._litellm_model_text())
+        model = self._litellm_model_text()
+        provider = provider_from_model(model)
         provider_combo = self._settings_widget("litellm_provider_combo")
         if provider and provider_combo is not None and not getattr(self, "_updating_litellm_provider", False):
-            index = provider_combo.findData(provider)
-            if index >= 0 and index != provider_combo.currentIndex():
+            if provider != self._litellm_provider_combo_value():
+                api_key_edit = self._settings_widget("litellm_api_key_edit")
+                if api_key_edit is not None:
+                    api_key_edit.clear()
+            index = self._ensure_litellm_provider_item(provider)
+            if index != provider_combo.currentIndex():
                 provider_combo.blockSignals(True)
                 provider_combo.setCurrentIndex(index)
                 provider_combo.blockSignals(False)
+            if not self._loading_config_to_ui:
+                self._save_litellm_cache(
+                    lambda: self._litellm_cache.select_provider(provider)
+                )
+        provider = provider or self._litellm_provider_combo_value()
+        if provider and model and not self._loading_config_to_ui:
+            self._save_litellm_cache(
+                lambda: self._litellm_cache.select_model(provider, model)
+            )
         self._refresh_litellm_credential_status()
 
-    def _on_litellm_provider_changed(self, _index: int) -> None:
+    def _on_clear_litellm_provider(self) -> None:
+        combo = self._settings_widget("litellm_provider_combo")
+        if combo is None:
+            return
+        combo.blockSignals(True)
+        combo.setCurrentIndex(-1)
+        if combo.isEditable():
+            combo.lineEdit().clear()
+        combo.blockSignals(False)
+        self._on_litellm_provider_changed()
+
+    def _on_litellm_provider_changed(self, _value: object = None) -> None:
         if self._updating_litellm_provider:
             return
-        provider_combo = self._settings_widget("litellm_provider_combo")
-        provider = (
-            str(provider_combo.currentData() or "").strip().lower()
-            if provider_combo is not None
-            else ""
-        )
+        provider = self._litellm_provider_combo_value()
+        api_key_edit = self._settings_widget("litellm_api_key_edit")
+        if api_key_edit is not None:
+            api_key_edit.clear()
+        if not self._loading_config_to_ui:
+            self._save_litellm_cache(
+                lambda: self._litellm_cache.select_provider(provider)
+            )
         self._updating_litellm_provider = True
         try:
+            snapshot = self._litellm_cache.models(provider)
             self._set_litellm_models(
                 provider,
-                self._litellm_catalog_models.get(provider, DEFAULT_MODELS.get(provider, ())),
+                snapshot.values,
+                selected=self._litellm_cache.selected_model(provider),
             )
         finally:
             self._updating_litellm_provider = False
+        self._refresh_litellm_catalog_status()
         self._refresh_litellm_credential_status()
+        self._on_sync_backend_changed(-1)
 
     def _refresh_litellm_version_label(self) -> None:
         label = self._settings_widget("litellm_version_label")
@@ -6681,6 +6906,51 @@ class MainWindow(QMainWindow):
                 label.setText(f"{current}；检查更新失败，请稍后重试。")
         self._on_sync_backend_changed(-1)
 
+    def _on_refresh_litellm_providers(self) -> None:
+        if self._litellm_provider_catalog_worker is not None:
+            return
+        button = self._settings_widget("litellm_refresh_providers_btn")
+        if button is not None:
+            button.setEnabled(False)
+            button.setText("正在加载…")
+        worker = LiteLLMProviderCatalogWorker(self)
+        worker.completed.connect(self._on_litellm_providers_loaded)
+        self._litellm_provider_catalog_worker = worker
+        worker.start()
+
+    def _on_litellm_providers_loaded(
+        self,
+        providers: object,
+        source: str,
+        error: object,
+    ) -> None:
+        worker = self._litellm_provider_catalog_worker
+        self._litellm_provider_catalog_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        button = self._settings_widget("litellm_refresh_providers_btn")
+        if button is not None:
+            button.setText("联网加载供应商")
+        self._on_sync_backend_changed(-1)
+        if error and not providers:
+            QMessageBox.warning(self, "供应商列表加载失败", str(error))
+            return
+        values = tuple(str(provider).strip().lower() for provider in providers)
+        current = self._litellm_provider_combo_value()
+        self._save_litellm_cache(
+            lambda: self._litellm_cache.update_providers(
+                values,
+                source=source,
+                litellm_version=installed_litellm_version(),
+            )
+        )
+        self._populate_litellm_providers(values, selected=current)
+        self._refresh_litellm_catalog_status()
+        self.statusBar().showMessage(
+            f"已加载 {len(values)} 个 LiteLLM 供应商；未自动选择。",
+            8000,
+        )
+
     def _on_refresh_litellm_models(self) -> None:
         if self._litellm_catalog_worker is not None:
             return
@@ -6715,17 +6985,21 @@ class MainWindow(QMainWindow):
             worker.deleteLater()
         button = self._settings_widget("litellm_refresh_models_btn")
         if button is not None:
-            button.setText("联网更新列表")
+            button.setText("联网加载模型")
         self._on_sync_backend_changed(-1)
         if error and not models:
             QMessageBox.warning(self, "模型列表加载失败", str(error))
             return
         values = tuple(str(model) for model in models)
-        self._litellm_catalog_models[provider] = values
-        self._litellm_catalog_source = source
-        source_label = self._settings_widget("litellm_catalog_status_label")
-        if source_label is not None:
-            source_label.setText(catalog_source_label(str(source or "")))
+        self._save_litellm_cache(
+            lambda: self._litellm_cache.update_models(
+                provider,
+                values,
+                source=source,
+                litellm_version=installed_litellm_version(),
+            )
+        )
+        self._refresh_litellm_catalog_status()
         if self._current_litellm_provider() == provider:
             self._set_litellm_models(provider, values, preserve_current=True)
         message = f"已加载 {len(values)} 个 {provider} 模型。"
@@ -6865,8 +7139,29 @@ class MainWindow(QMainWindow):
                 install_progress.setFormat("正在后台更新 LiteLLM…" if installed else "正在后台安装 LiteLLM…")
 
         model_combo = self._settings_widget("litellm_model_combo")
+        litellm_active = backend == "litellm" and not installing
+        provider = self._current_litellm_provider()
+        model = self._litellm_model_text()
+        provider_combo = self._settings_widget("litellm_provider_combo")
+        if provider_combo is not None:
+            provider_combo.setEnabled(litellm_active)
+        provider_button = self._settings_widget("litellm_refresh_providers_btn")
+        if provider_button is not None:
+            provider_button.setEnabled(
+                litellm_active and self._litellm_provider_catalog_worker is None
+            )
+        clear_provider = self._settings_widget("litellm_clear_provider_btn")
+        if clear_provider is not None:
+            clear_provider.setEnabled(litellm_active and bool(provider))
         if model_combo is not None:
-            model_combo.setEnabled(backend == "litellm" and not installing)
+            model_combo.setEnabled(litellm_active and bool(provider))
+        model_button = self._settings_widget("litellm_refresh_models_btn")
+        if model_button is not None:
+            model_button.setEnabled(
+                litellm_active
+                and bool(provider)
+                and self._litellm_catalog_worker is None
+            )
         # Never getattr(sync_model_combo): that would force-build the models page.
         gemini_sync_model_combo = self._settings_widget("sync_model_combo")
         if gemini_sync_model_combo is not None:
@@ -6876,17 +7171,31 @@ class MainWindow(QMainWindow):
                 if backend == "litellm"
                 else ""
             )
-        for name in (
-            "litellm_provider_combo",
-            "litellm_refresh_models_btn",
-            "litellm_api_key_edit",
-            "litellm_save_key_btn",
-            "litellm_delete_key_btn",
-            "litellm_test_connection_btn",
-        ):
+        credential_enabled = litellm_active and bool(provider) and provider != "ollama"
+        api_key_edit = self._settings_widget("litellm_api_key_edit")
+        if api_key_edit is not None:
+            api_key_edit.setEnabled(credential_enabled)
+            api_key_edit.setPlaceholderText(
+                f"输入新的 {provider_display_label(provider)} API Key（不会回显已保存密钥）"
+                if credential_enabled
+                else (
+                    "该 Provider 不需要 API Key"
+                    if provider == "ollama"
+                    else "请先选择 Provider"
+                )
+            )
+        for name in ("litellm_save_key_btn", "litellm_delete_key_btn"):
             widget = self._settings_widget(name)
             if widget is not None:
-                widget.setEnabled(backend == "litellm" and not installing)
+                widget.setEnabled(credential_enabled)
+        test_button = self._settings_widget("litellm_test_connection_btn")
+        if test_button is not None:
+            test_button.setEnabled(
+                litellm_active
+                and bool(provider)
+                and bool(model)
+                and self._litellm_connection_worker is None
+            )
         version_button = self._settings_widget("litellm_check_version_btn")
         if version_button is not None:
             checking = getattr(self, "_litellm_version_worker", None) is not None
@@ -12029,11 +12338,7 @@ class MainWindow(QMainWindow):
                         self._set_batch_thinking_value(thinking_val)
 
                 if need_litellm:
-                    litellm_combo = self._settings_widget("litellm_model_combo")
-                    if litellm_combo is not None:
-                        self._set_combo_value(
-                            litellm_combo, backend_models.litellm_model
-                        )
+                    self._restore_configured_litellm_model(backend_models.litellm_model)
                     if backend_combo is not None:
                         self._on_sync_backend_changed(backend_idx)
 

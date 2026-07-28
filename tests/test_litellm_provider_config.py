@@ -13,6 +13,7 @@ from litellm_provider_config import (
     models_from_openrouter_payload,
     models_from_remote_catalog,
     native_catalog_endpoint,
+    providers_from_remote_catalog,
     version_key,
     provider_from_model,
     python_requirement_allows,
@@ -106,6 +107,19 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
             models_from_remote_catalog("openai", catalog),
             ("openai/gpt-current", "openai/gpt-responses"),
         )
+
+    def test_remote_catalog_discovers_dynamic_and_native_providers(self):
+        catalog = {
+            "custom/model": {
+                "litellm_provider": "custom_provider",
+                "mode": "chat",
+            },
+            "other/model": {"mode": "chat"},
+        }
+        providers = providers_from_remote_catalog(catalog)
+        self.assertIn("custom_provider", providers)
+        self.assertIn("other", providers)
+        self.assertIn("ollama", providers)
 
     def test_openrouter_payload_prefixes_and_skips_non_text_and_aliases(self):
         payload = {
