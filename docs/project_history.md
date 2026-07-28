@@ -42,10 +42,11 @@ GLM 的重构版看起来更加完整，但实际运行未能正确调用 Gemini
 `00_tools` 不只是代码中转站，其中的设计文档也直接塑造了后来的功能：
 
 - 2026 年 1 月的流水线任务说明提出了“抽取 → 去重/分批 → 回填 → 占位符校验”的分阶段结构，以及断点续跑、翻译记忆和术语表。
-- 2026 年 3 月的 Batch 计划和 RAG 架构稿定义了请求分块、结果恢复、manifest 诊断、邻近上下文、历史记忆检索、写回后回灌和失败降级等方向。
+- 2026 年 3 月 6 日，Google AI Studio 的 Batch 半价通知触发了新的演化路线。OpenClaw 先解释并写出最小调度脚本；用户随后提出“全文打包、前后文窗口、只翻译中间十句、附带作品大纲”的请求结构，OpenClaw 将其整理为三层“三明治架构”，Codex 再把它接入 Windows 上的既有翻译工具。3 月 8 日的 Batch 稳定性计划来自这套方案的首次真实故障。
+- 2026 年 3 月 11 日，Google AI Studio 发布 Gemini Embedding 2 的官方消息触发了新一轮讨论：用户先向 OpenClaw 分享官方帖子，随后收到并转发题为 `Build multimodal RAG with new Gemini Embedding` 的 Google AI Studio 邮件。邮件明确介绍了统一多模态向量空间、multimodal RAG 和 ChromaDB；用户进一步提出如何让无状态短请求获得长期记忆。OpenClaw 据此设计了“Embedding 检索 → 动态记忆层 → 生成后回灌”的首版 RAG 三明治并写成架构稿，随后由 Codex 扩写实施方案和代码。
 - 2026 年 3 月的项目路线图及技术评审提出了 `safe / warn / block` 质检分级、强制 `check → apply` 门禁、golden corpus、稳定翻译单元标识、结构化角色/关系记忆和轻量校对工作台。
 
-这些内容后来以不同节奏进入 Git 实现。根提交中的 `docs/roadmap.md` 本身就是 3 月路线图的精简版本；后续的安全门禁、golden corpus、identity v2、Story Memory 和 GUI 工作台，也能在这些早期文档中找到明确的设计前身。
+路线图和技术评审同样来自一次多模型协作：ChatGPT 先做项目 Review，Codex 据此生成路线图，再由模拟的资深 Tech Lead 给出技术评审；OpenClaw 对话承担讨论和决策中枢。这些内容后来以不同节奏进入 Git 实现。根提交中的 `docs/roadmap.md` 本身就是 3 月路线图的精简版本；后续的安全门禁、golden corpus、identity v2、Story Memory 和 GUI 工作台，也能在这些早期文档中找到明确的设计前身。
 
 因此，项目谱系既包括脚本之间的代码继承，也包括从 `00_tools` 设计稿到后续 Git 功能的设计继承。这些旧文档是历史依据，不是当前实现规范。
 
