@@ -67,6 +67,25 @@ JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning �
 
 严格模式的错误 envelope 可能使用 `STALE_STATE`、`PRECONDITION_FAILED`、`COMMAND_BLOCKED`、`REMOTE_RETRYABLE`、`COMMAND_REFUSED` 或 `INTERNAL_ERROR`。同时读取 `retryable`、`suggested_action` 和权威的 `details.semantic_exit_code`，不要解析 `message` 文本。未启用严格模式时保持 schema v1 的兼容行为：拒绝类错误仍为 `COMMAND_REFUSED`，意外异常仍为 `INTERNAL_ERROR`，且不承诺 `semantic_exit_code`。
 
+
+## 严格非交互与显式 manifest
+
+七个核心命令支持 `--non-interactive`。当前核心流程本身不会读取 stdin；该选项进一步禁止 manifest 消费命令使用隐藏 target：
+
+```powershell
+python gemini_translate_batch.py status <manifest> --output json --non-interactive --strict-exit-codes
+```
+
+在 `submit / status / download / check / apply` 中，`--non-interactive` 要求显式传入 manifest 路径或 package 目录：
+
+- 不再读取 `latest_manifest.txt` 或扫描最新 package；
+- `submit` 不再因 target 为空而隐式执行 build；
+- 缺少 target 时返回 `error.code=EXPLICIT_TARGET_REQUIRED`、`suggested_action=pass_manifest_path`；
+- 同时启用 `--strict-exit-codes` 时退出码为 `5`。
+
+如果只想禁止 target 回退、但不需要声明完整非交互契约，可使用 `--require-explicit-target`。`doctor` 与 `build` 本来不消费 manifest，因此这两个命令在非交互模式下不要求 target。
+
+默认模式保持兼容：未传这两个新选项时，现有 latest-manifest 与 submit-build 回退仍然可用。Agent 应优先使用 `--output json --non-interactive --strict-exit-codes`，并始终显式传递同一 manifest。
 没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式只承诺覆盖上面的七个核心命令；其他子命令以各自 `--help` 和落盘产物为准。
 
 ## 1. 安装核心依赖

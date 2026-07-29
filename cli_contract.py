@@ -22,6 +22,27 @@ EXIT_BLOCKED = 4
 EXIT_INVALID_STATE = 5
 EXIT_RETRYABLE = 6
 
+class MachineContractError(SystemExit):
+    """Structured refusal raised by opt-in machine invocation guards."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code_name: str,
+        suggested_action: str,
+        semantic_exit_code: int = EXIT_INVALID_STATE,
+        retryable: bool = False,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(str(message))
+        self.code_name = str(code_name)
+        self.suggested_action = str(suggested_action)
+        self.semantic_exit_code = int(semantic_exit_code)
+        self.retryable = bool(retryable)
+        self.details = dict(details or {})
+
+
 
 def classify_error(message: str, *, exception_type: str = "") -> dict[str, Any]:
     """Classify existing CLI failures without changing their human-readable text."""

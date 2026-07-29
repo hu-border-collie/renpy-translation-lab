@@ -21,9 +21,84 @@ class BatchCliContractTests(unittest.TestCase):
                 strict_args = parser.parse_args(
                     [command, "--output", "json", "--strict-exit-codes"]
                 )
+                strict_invocation = parser.parse_args(
+                    [command, "--non-interactive", "--require-explicit-target"]
+                )
+                self.assertTrue(strict_invocation.non_interactive)
+                self.assertTrue(strict_invocation.require_explicit_target)
+
                 self.assertTrue(strict_args.strict_exit_codes)
 
+    def test_non_interactive_requires_explicit_manifest_target(self):
+        for command in sorted(batch.EXPLICIT_TARGET_COMMANDS):
+            with self.subTest(command=command):
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with (
+                    contextlib.redirect_stdout(stdout),
+                    contextlib.redirect_stderr(stderr),
+                ):
+                    exit_code = batch.main(
+                        [
+                            command,
+                            "--output",
+                            "json",
+                            "--non-interactive",
+                            "--strict-exit-codes",
+                        ]
+                    )
+
+                payload = json.loads(stdout.getvalue())
+                self.assertEqual(exit_code, batch.cli_contract.EXIT_INVALID_STATE)
+                self.assertEqual(
+                    payload["error"]["code"],
+                    "EXPLICIT_TARGET_REQUIRED",
+                )
+                self.assertEqual(
+                    payload["error"]["suggested_action"],
+                    "pass_manifest_path",
+                )
+                self.assertEqual(
+                    payload["error"]["details"]["required_argument"],
+                    "target",
+                )
+
+    def test_explicit_target_guard_is_opt_in_and_skips_targetless_commands(self):
+        parser = batch.build_arg_parser()
+        accepted = (
+            ["doctor", "--non-interactive"],
+            ["build", "--non-interactive"],
+            ["status"],
+            ["status", "manifest.json", "--non-interactive"],
+            ["apply", "manifest.json", "--require-explicit-target"],
+        )
+
+        for argv in accepted:
+            with self.subTest(argv=argv):
+                batch.validate_machine_invocation(parser.parse_args(argv))
+
+    def test_explicit_target_error_is_structured_without_strict_exit_codes(self):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = batch.main(
+                [
+                    "status",
+                    "--output",
+                    "json",
+                    "--require-explicit-target",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(payload["error"]["code"], "EXPLICIT_TARGET_REQUIRED")
+        self.assertEqual(
+            payload["error"]["details"]["semantic_exit_code"],
+            batch.cli_contract.EXIT_INVALID_STATE,
+        )
+
     def test_machine_result_builder_covers_manifest_workflow(self):
+
         args = SimpleNamespace(target="")
         base_manifest = {
             "_manifest_path": "C:/jobs/demo/manifest.json",

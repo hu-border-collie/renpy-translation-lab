@@ -78,6 +78,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'apply',
     }
 )
+EXPLICIT_TARGET_COMMANDS = frozenset({'submit', 'status', 'download', 'check', 'apply'})
 
 
 class DualLogger(object):
@@ -10256,6 +10257,22 @@ def add_machine_output_argument(command_parser):
             'blocked, invalid-state, and retryable outcomes.'
         ),
     )
+    command_parser.add_argument(
+        '--non-interactive',
+        action='store_true',
+        help=(
+            'Guarantee no stdin prompts; manifest-consuming commands also require '
+            'an explicit target.'
+        ),
+    )
+    command_parser.add_argument(
+        '--require-explicit-target',
+        action='store_true',
+        help=(
+            'Reject implicit latest-manifest or submit-build fallback for commands '
+            'that consume a manifest.'
+        ),
+    )
     return command_parser
 
 
@@ -11001,11 +11018,32 @@ def build_arg_parser():
     return parser
 
 
+def validate_machine_invocation(args):
+    """Enforce opt-in deterministic invocation rules before workflow setup."""
+
+    command = str(getattr(args, 'command', '') or '')
+    require_target = bool(
+        getattr(args, 'non_interactive', False)
+        or getattr(args, 'require_explicit_target', False)
+    )
+    target = str(getattr(args, 'target', '') or '').strip()
+    if require_target and command in EXPLICIT_TARGET_COMMANDS and not target:
+        raise cli_contract.MachineContractError(
+            f'{command} requires an explicit manifest path or package directory.',
+            code_name='EXPLICIT_TARGET_REQUIRED',
+            suggested_action='pass_manifest_path',
+            details={'required_argument': 'target'},
+        )
+
+
 def dispatch_command(parser, args):
     command = args.command
     if command is None:
         parser.print_help()
         return
+
+    if command in MACHINE_OUTPUT_COMMANDS:
+        validate_machine_invocation(args)
 
     if command == 'doctor':
         legacy.load_translator_settings()
@@ -11644,7 +11682,23 @@ def run_machine_command(parser, args):
         _write_machine_diagnostics(diagnostics)
         message = _system_exit_message(exc)
         legacy_exit_code = exc.code if isinstance(exc.code, int) and exc.code else 1
-        if args.strict_exit_codes:
+        if isinstance(exc, cli_contract.MachineContractError):
+            details = dict(exc.details)
+            details.update(
+                {
+                    'exit_code': legacy_exit_code,
+                    'semantic_exit_code': exc.semantic_exit_code,
+                }
+            )
+            envelope = cli_contract.error_envelope(
+                command,
+                code=exc.code_name,
+                message=message,
+                retryable=exc.retryable,
+                suggested_action=exc.suggested_action,
+                details=details,
+            )
+        elif args.strict_exit_codes:
             classification = cli_contract.classify_error(
                 message,
                 exception_type='SystemExit',
