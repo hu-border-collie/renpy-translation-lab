@@ -152,7 +152,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 **上方内层 Tab**（`任务上下文` / `命令参考` / `任务记录`）：
 
 - **任务上下文**：任务记录路径、翻译包、云端任务状态、最近检查结果、是否已写回；报告路径逐行展示并支持复制。
-- **命令参考**：按当前任务记录生成可复制的手动命令（`doctor`、`submit`、`status`、`download`、`check`、`apply` 等）。GUI 保留人类可读文本模式；Agent、脚本或 CI 可在这些核心命令后追加 `--output json`，让 stdout 只返回版本化结果 envelope，并可再追加 `--strict-exit-codes` 获得稳定的语义退出码。需要禁止 stdin 与 latest-manifest 回退时，Agent 可使用 `--non-interactive`；只禁止 target 回退时使用 `--require-explicit-target`。批量翻译任务记录还会显示 `compare-variants` 试跑命令模板。当最近一次检查为「需处理」时，也会补出补译相关命令（底层为 `build-retry`、`merge-retry` 等）。
+- **命令参考**：按当前任务记录生成可复制的手动命令（`doctor`、`submit`、`status`、`download`、`check`、`apply` 等）。GUI 保留人类可读文本模式；Agent、脚本或 CI 可在这些核心命令后追加 `--output json`，让 stdout 只返回版本化结果 envelope，并可再追加 `--strict-exit-codes` 获得稳定的语义退出码。需要禁止 stdin 与 latest-manifest 回退时，Agent 可使用 `--non-interactive`；只禁止 target 回退时使用 `--require-explicit-target`。Agent 还可通过 `capabilities` 和 `schema <command>` 直接读取当前 argparse 生成的机器命令索引与参数 schema，GUI 不复制维护另一份命令定义。批量翻译任务记录还会显示 `compare-variants` 试跑命令模板。当最近一次检查为「需处理」时，也会补出补译相关命令（底层为 `build-retry`、`merge-retry` 等）。
 - **任务记录**：只读 JSON 预览（省略 `chunks` / `files` 大字段）。
 
 **下方（原始输出）**：始终可见，显示 CLI 的 stdout/stderr。

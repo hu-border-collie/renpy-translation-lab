@@ -52,6 +52,10 @@ python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json -
 只需关闭 target 回退时可单独使用 `--require-explicit-target`。默认模式保持现有 latest-manifest 和 submit-build 行为；`doctor / build` 不消费 manifest，不受显式 target 要求影响。
 结构化输出当前覆盖 `doctor / build / submit / status / download / check / apply`；其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
 
+机器发现使用 `capabilities` 与 `schema <command>`；两者在加载项目配置前直接输出 JSON。`capabilities.commands` 已提供完整命令索引，因此不另设重复的 `commands`。单命令 schema 从当前 argparse action 动态生成，包含参数类型、required、repeatable、choices、默认值和帮助文本，避免文档与实际 parser 漂移。
+
+Discovery schema 与核心结果 envelope 当前都使用 `schema_version=1`，但通过顶层 `type`（`capabilities` / `command_schema`）区分用途。
+
 - `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出。
 - Batch 产物默认写到 `logs/batch_jobs/<package>/`。
 - `doctor` 只检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，不调用 Gemini，也不会写回 `.rpy`。

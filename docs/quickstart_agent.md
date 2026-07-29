@@ -86,6 +86,23 @@ python gemini_translate_batch.py status <manifest> --output json --non-interacti
 如果只想禁止 target 回退、但不需要声明完整非交互契约，可使用 `--require-explicit-target`。`doctor` 与 `build` 本来不消费 manifest，因此这两个命令在非交互模式下不要求 target。
 
 默认模式保持兼容：未传这两个新选项时，现有 latest-manifest 与 submit-build 回退仍然可用。Agent 应优先使用 `--output json --non-interactive --strict-exit-codes`，并始终显式传递同一 manifest。
+
+## 机器发现
+
+Agent 可在不加载项目配置、不读取 API Key、也不触发 workflow 的情况下查询当前 CLI：
+
+```powershell
+python gemini_translate_batch.py capabilities
+python gemini_translate_batch.py schema status
+```
+
+两个命令都直接向 stdout 输出 `schema_version=1` 的 JSON：
+
+- `capabilities` 返回 CLI 版本、结果契约版本、完整命令索引，以及每个命令是否支持 JSON、严格退出码、非交互和显式 target；
+- `schema <command>` 返回该命令当前的 positional/options、类型、required、repeatable、choices、默认值和帮助文本；
+- schema 直接从现行 argparse 定义生成，`--help` 仍是人类阅读的事实来源，不维护第二份手写命令表。
+
+没有单独提供 `commands` 命令，因为 `capabilities.commands` 已覆盖同一用途。输出裁剪选项另行演进，不属于 discovery schema 的隐藏行为。
 没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式只承诺覆盖上面的七个核心命令；其他子命令以各自 `--help` 和落盘产物为准。
 
 ## 1. 安装核心依赖
