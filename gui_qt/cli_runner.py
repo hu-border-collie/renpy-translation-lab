@@ -124,6 +124,9 @@ class CliRunner(QObject):
     def _on_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
         if self._proc is None:
             return
+        # QProcess may still hold final bytes when finished is delivered.
+        self._on_stdout_ready()
+        self._on_stderr_ready()
         for buffer_name, channel_signal in (
             ("_stdout_pending_buffer", self.stdout_line_ready),
             ("_stderr_pending_buffer", self.stderr_line_ready),

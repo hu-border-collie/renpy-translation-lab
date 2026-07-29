@@ -65,7 +65,9 @@ JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning、
 | `5` | 输入、配置或状态已失效 | stale check、manifest/results 漂移、前置产物缺失 |
 | `6` | 远端临时错误，可稍后重试 | rate limit、quota、timeout、service unavailable |
 
-严格模式的错误 envelope 可能使用 `STALE_STATE`、`PRECONDITION_FAILED`、`COMMAND_BLOCKED`、`REMOTE_RETRYABLE`、`COMMAND_REFUSED` 或 `INTERNAL_ERROR`。Manifest 读取还会使用 `INVALID_MANIFEST_JSON`、`INVALID_MANIFEST_ENCODING`、`INVALID_MANIFEST_SHAPE` 或 `MANIFEST_UNREADABLE`；这些错误在严格模式下退出 `5`。同时读取 `retryable`、`suggested_action` 和权威的 `details.semantic_exit_code`，不要解析 `message` 文本。未启用严格模式时保持 schema v1 的兼容退出行为。
+严格模式的兜底错误 envelope 可能使用 `STALE_STATE`、`PRECONDITION_FAILED`、`COMMAND_BLOCKED`、`REMOTE_RETRYABLE`、`COMMAND_REFUSED` 或 `INTERNAL_ERROR`。核心前置条件优先返回稳定错误码：manifest 读取与身份问题使用 `MANIFEST_NOT_FOUND`、`INVALID_MANIFEST_JSON`、`INVALID_MANIFEST_ENCODING`、`INVALID_MANIFEST_SHAPE`、`MANIFEST_UNREADABLE`、`INVALID_MANIFEST_PATH`、`MANIFEST_PROJECT_IDENTITY_MISSING`、`MANIFEST_PROJECT_MISMATCH`、`MANIFEST_MODE_MISMATCH` 或 `MANIFEST_PACKAGE_DIR_MISSING`；Batch 输入问题使用 `BATCH_INPUT_NOT_FOUND` 或 `INVALID_BATCH_INPUT_JSON`；apply 门禁使用 `APPLY_CHECK_REQUIRED`、`STALE_CHECK_CONTRACT`、`STALE_CHECK_FINGERPRINT` 或 `UNSAFE_CHECK_STATUS`。
+
+除 `UNSAFE_CHECK_STATUS` 按安全门禁退出 `4` 外，上述前置条件错误在严格模式下退出 `5`。同时读取 `retryable`、`suggested_action` 和权威的 `details.semantic_exit_code`，不要解析 `message` 文本。未启用严格模式时保持 schema v1 的兼容退出行为。
 
 
 ## 严格非交互与显式 manifest
@@ -115,7 +117,9 @@ python gemini_translate_batch.py check <manifest> `
   --compact --output-file .\check-result.json
 ```
 
-命令的业务退出码保持不变；调用方随后读取自己传入的文件路径。若文件无法创建或原子替换，命令失败并把诊断写入 stderr。
+成功写入时，命令的业务退出码保持不变；调用方随后读取自己传入的文件路径。CLI 会在 workflow 执行前探测明显不可写的目标，避免已知失败路径触发业务副作用。
+
+若文件无法创建或原子替换，诊断写入 stderr，完整的 `OUTPUT_FILE_WRITE_FAILED` envelope 改为回退到 stdout（不应用 `--fields` 投影）；严格模式退出 `5`，兼容模式退出 `1`。调用方必须同时检查 `error.details.workflow_started` 与 `command_completed`：前者为 `false` 表示前置探测失败、workflow 未执行；前者为 `true` 而后者为 `false` 表示 workflow 已启动但以错误结束；两者都为 `true` 表示 workflow 已成功完成后结果文件落盘失败，写操作可能已经生效。后两种情况可结合 `original_ok`、`original_status` 或 `original_error_code` 判断原命令结果。
 
 ## 机器发现
 

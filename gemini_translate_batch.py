@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 import tokenize
 import traceback
@@ -1061,7 +1062,12 @@ def _canonical_manifest_dir(value, field_name):
         return ''
     raw = value.strip()
     if not os.path.isabs(raw):
-        raise SystemExit(f'Manifest {field_name} must be an absolute path: {raw}')
+        raise cli_contract.MachineContractError(
+            f'Manifest {field_name} must be an absolute path: {raw}',
+            code_name='INVALID_MANIFEST_PATH',
+            suggested_action='rebuild_or_repair_manifest',
+            details={'field': field_name, 'path': raw},
+        )
     return _canonical_abs_path(raw)
 
 
@@ -1080,31 +1086,49 @@ def _infer_legacy_manifest_tl_dir(manifest):
             candidate = os.path.dirname(candidate)
         resolved = resolve_path_under_dir(candidate, rel_path, f'manifest file key {file_key}')
         if _normalized_abs_path(resolved) != _normalized_abs_path(path_value):
-            raise SystemExit(
-                f'Unsafe legacy manifest file path for {file_key}: '
-                'path escapes the inferred translation directory or does not match its file key.'
+            raise cli_contract.MachineContractError(
+                (
+                    f'Unsafe legacy manifest file path for {file_key}: '
+                    'path escapes the inferred translation directory or does not match its file key.'
+                ),
+                code_name='INVALID_MANIFEST_PATH',
+                suggested_action='rebuild_or_repair_manifest',
+                details={'field': f'files.{file_key}.path', 'path': path_value},
             )
         candidates.append(_canonical_abs_path(candidate))
     if not candidates:
         return ''
     first = candidates[0]
     if any(_normalized_abs_path(candidate) != _normalized_abs_path(first) for candidate in candidates[1:]):
-        raise SystemExit('Legacy manifest file paths do not share one translation directory.')
+        raise cli_contract.MachineContractError(
+            'Legacy manifest file paths do not share one translation directory.',
+            code_name='INVALID_MANIFEST_PATH',
+            suggested_action='rebuild_or_repair_manifest',
+            details={'field': 'files'},
+        )
     return first
 
 
 def manifest_project_identity(manifest):
     if not isinstance(manifest, dict):
-        raise SystemExit('Manifest project identity is missing; rebuild the batch package.')
+        raise cli_contract.MachineContractError(
+            'Manifest project identity is missing; rebuild the batch package.',
+            code_name='MANIFEST_PROJECT_IDENTITY_MISSING',
+            suggested_action='rebuild_batch_package',
+        )
     manifest_tl_dir = _canonical_manifest_dir(manifest.get('tl_dir'), 'tl_dir')
     identity_source = 'manifest'
     if not manifest_tl_dir:
         manifest_tl_dir = _infer_legacy_manifest_tl_dir(manifest)
         identity_source = 'legacy_file_paths'
     if not manifest_tl_dir:
-        raise SystemExit(
-            'Manifest project identity is missing and cannot be inferred from absolute file paths; '
-            'rebuild the batch package before check/apply.'
+        raise cli_contract.MachineContractError(
+            (
+                'Manifest project identity is missing and cannot be inferred from absolute file paths; '
+                'rebuild the batch package before check/apply.'
+            ),
+            code_name='MANIFEST_PROJECT_IDENTITY_MISSING',
+            suggested_action='rebuild_batch_package',
         )
     return {
         'base_dir': _canonical_manifest_dir(manifest.get('base_dir'), 'base_dir'),
@@ -1117,16 +1141,34 @@ def require_manifest_project_match(manifest, command_name):
     identity = manifest_project_identity(manifest)
     active_tl_dir = _canonical_abs_path(legacy.TL_DIR)
     if _normalized_abs_path(identity['tl_dir']) != _normalized_abs_path(active_tl_dir):
-        raise SystemExit(
-            f'{command_name} refused: manifest project does not match the active project '
-            f'(manifest tl_dir={identity["tl_dir"]}, active tl_dir={active_tl_dir}).'
+        raise cli_contract.MachineContractError(
+            (
+                f'{command_name} refused: manifest project does not match the active project '
+                f'(manifest tl_dir={identity["tl_dir"]}, active tl_dir={active_tl_dir}).'
+            ),
+            code_name='MANIFEST_PROJECT_MISMATCH',
+            suggested_action='select_matching_project_or_manifest',
+            details={
+                'command': command_name,
+                'manifest_tl_dir': identity['tl_dir'],
+                'active_tl_dir': active_tl_dir,
+            },
         )
     if identity['base_dir']:
         active_base_dir = _canonical_abs_path(legacy.BASE_DIR)
         if _normalized_abs_path(identity['base_dir']) != _normalized_abs_path(active_base_dir):
-            raise SystemExit(
-                f'{command_name} refused: manifest project does not match the active project '
-                f'(manifest base_dir={identity["base_dir"]}, active base_dir={active_base_dir}).'
+            raise cli_contract.MachineContractError(
+                (
+                    f'{command_name} refused: manifest project does not match the active project '
+                    f'(manifest base_dir={identity["base_dir"]}, active base_dir={active_base_dir}).'
+                ),
+                code_name='MANIFEST_PROJECT_MISMATCH',
+                suggested_action='select_matching_project_or_manifest',
+                details={
+                    'command': command_name,
+                    'manifest_base_dir': identity['base_dir'],
+                    'active_base_dir': active_base_dir,
+                },
             )
     return identity
 
@@ -1826,7 +1868,12 @@ def manifest_path_for_target(target):
             candidate = os.path.join(candidate, 'manifest.json')
         if os.path.isfile(candidate):
             return candidate
-        raise SystemExit(f'Manifest not found: {target}')
+        raise cli_contract.MachineContractError(
+            f'Manifest not found: {target}',
+            code_name='MANIFEST_NOT_FOUND',
+            suggested_action='pass_existing_manifest_path',
+            details={'target': str(target), 'resolved_path': candidate},
+        )
 
     if os.path.isfile(LATEST_MANIFEST_FILE):
         with open(LATEST_MANIFEST_FILE, 'r', encoding='utf-8') as handle:
@@ -1839,7 +1886,12 @@ def manifest_path_for_target(target):
         if 'manifest.json' in files:
             manifests.append(os.path.join(root, 'manifest.json'))
     if not manifests:
-        raise SystemExit('No batch manifest found.')
+        raise cli_contract.MachineContractError(
+            'No batch manifest found.',
+            code_name='MANIFEST_NOT_FOUND',
+            suggested_action='build_batch_package',
+            details={'search_directory': os.path.abspath(BATCH_JOBS_DIR)},
+        )
     manifests.sort(key=lambda path: os.path.getmtime(path), reverse=True)
     return manifests[0]
 
@@ -1912,9 +1964,18 @@ def manifest_mode(manifest):
 def require_manifest_mode(manifest, expected_mode, command_name):
     current_mode = manifest_mode(manifest)
     if current_mode != expected_mode:
-        raise SystemExit(
-            f'{command_name} only supports {expected_mode} manifests; '
-            f'this manifest is {current_mode}.'
+        raise cli_contract.MachineContractError(
+            (
+                f'{command_name} only supports {expected_mode} manifests; '
+                f'this manifest is {current_mode}.'
+            ),
+            code_name='MANIFEST_MODE_MISMATCH',
+            suggested_action='use_matching_workflow',
+            details={
+                'command': command_name,
+                'expected_mode': expected_mode,
+                'actual_mode': current_mode,
+            },
         )
 
 
@@ -2411,7 +2472,25 @@ def fail_apply_preflight(manifest, reason_code, message, current_fingerprint=Non
         current_fingerprint=current_fingerprint,
     )
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
-    raise SystemExit(f'{message} Report: {report_path}')
+    blocked = reason_code == 'unsafe_check_status'
+    raise cli_contract.MachineContractError(
+        f'{message} Report: {report_path}',
+        code_name={
+            'missing_check': 'APPLY_CHECK_REQUIRED',
+            'stale_check_contract': 'STALE_CHECK_CONTRACT',
+            'stale_check_fingerprint': 'STALE_CHECK_FINGERPRINT',
+            'unsafe_check_status': 'UNSAFE_CHECK_STATUS',
+        }.get(reason_code, 'APPLY_PREFLIGHT_FAILED'),
+        suggested_action='repair_results_or_run_check' if blocked else 'run_check_again',
+        semantic_exit_code=(
+            cli_contract.EXIT_BLOCKED if blocked else cli_contract.EXIT_INVALID_STATE
+        ),
+        details={
+            'reason_code': reason_code,
+            'report_path': report_path,
+            'current_fingerprint': current_fingerprint or {},
+        },
+    )
 
 
 def require_safe_check_for_apply(manifest):
@@ -2454,14 +2533,34 @@ def require_safe_check_for_apply(manifest):
 def load_request_rows(manifest):
     input_jsonl_path = manifest.get('input_jsonl_path')
     if not input_jsonl_path or not os.path.isfile(input_jsonl_path):
-        raise SystemExit(f"Input JSONL not found: {input_jsonl_path}")
+        raise cli_contract.MachineContractError(
+            f"Input JSONL not found: {input_jsonl_path}",
+            code_name='BATCH_INPUT_NOT_FOUND',
+            suggested_action='rebuild_batch_package',
+            details={'input_jsonl_path': input_jsonl_path or ''},
+        )
     rows = []
     with open(input_jsonl_path, 'r', encoding='utf-8') as handle:
-        for raw_line in handle:
+        for line_number, raw_line in enumerate(handle, start=1):
             line = raw_line.strip()
             if not line:
                 continue
-            rows.append(json.loads(line))
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise cli_contract.MachineContractError(
+                    (
+                        f'Batch input JSONL is not valid JSON: {input_jsonl_path} '
+                        f'(line {line_number}, column {exc.colno}).'
+                    ),
+                    code_name='INVALID_BATCH_INPUT_JSON',
+                    suggested_action='rebuild_batch_package',
+                    details={
+                        'input_jsonl_path': input_jsonl_path,
+                        'line': line_number,
+                        'column': exc.colno,
+                    },
+                ) from exc
     return rows
 
 
@@ -4980,13 +5079,23 @@ def ensure_manifest_cost_estimate(manifest):
         )
     except FileNotFoundError as exc:
         jsonl_path = manifest.get('input_jsonl_path') or ''
-        raise SystemExit(
-            f'Batch input JSONL not found: {jsonl_path or exc}'
+        raise cli_contract.MachineContractError(
+            f'Batch input JSONL not found: {jsonl_path or exc}',
+            code_name='BATCH_INPUT_NOT_FOUND',
+            suggested_action='rebuild_batch_package',
+            details={'input_jsonl_path': jsonl_path},
         ) from exc
     except json.JSONDecodeError as exc:
         jsonl_path = manifest.get('input_jsonl_path') or ''
-        raise SystemExit(
-            f'Batch input JSONL is not valid JSON: {jsonl_path} ({exc})'
+        raise cli_contract.MachineContractError(
+            f'Batch input JSONL is not valid JSON: {jsonl_path} ({exc})',
+            code_name='INVALID_BATCH_INPUT_JSON',
+            suggested_action='rebuild_batch_package',
+            details={
+                'input_jsonl_path': jsonl_path,
+                'line': exc.lineno,
+                'column': exc.colno,
+            },
         ) from exc
 
 
@@ -4997,7 +5106,11 @@ def _manifest_package_dir(manifest):
     manifest_path = manifest.get('_manifest_path')
     if manifest_path:
         return os.path.dirname(manifest_path)
-    raise SystemExit('Manifest package directory is missing.')
+    raise cli_contract.MachineContractError(
+        'Manifest package directory is missing.',
+        code_name='MANIFEST_PACKAGE_DIR_MISSING',
+        suggested_action='rebuild_or_repair_manifest',
+    )
 
 
 def _raise_uncertain_submit_blocked(uncertain_state):
@@ -11139,13 +11252,21 @@ def dispatch_command(parser, args):
             explicit_target_commands=EXPLICIT_TARGET_COMMANDS,
             result_schema_version=cli_contract.CLI_SCHEMA_VERSION,
         )
-        _write_json_payload(payload, args)
-        return payload
+        return _write_machine_document(
+            payload,
+            args,
+            command_completed=True,
+            workflow_started=True,
+        )
 
     if command == 'schema':
         payload = cli_discovery.command_schema(parser, args.schema_command)
-        _write_json_payload(payload, args)
-        return payload
+        return _write_machine_document(
+            payload,
+            args,
+            command_completed=True,
+            workflow_started=True,
+        )
 
 
     if command in MACHINE_OUTPUT_COMMANDS:
@@ -11805,8 +11926,134 @@ def _write_json_payload(document, args, *, record_output_artifact=False):
     cli_contract.write_json_envelope(payload, sys.stdout, compact=compact)
 
 
-def _write_machine_envelope(envelope, args):
-    _write_json_payload(envelope, args, record_output_artifact=True)
+def _is_output_file_failure(document):
+    error = document.get('error') if isinstance(document, dict) else None
+    return isinstance(error, dict) and error.get('code') == 'OUTPUT_FILE_WRITE_FAILED'
+
+
+def _output_file_failure_envelope(
+    args,
+    exc,
+    *,
+    workflow_started,
+    command_completed,
+    original_document=None,
+):
+    output_file = str(getattr(args, 'output_file', '') or '').strip()
+    details = {
+        'output_file': os.path.abspath(output_file) if output_file else '',
+        'exception_type': exc.__class__.__name__,
+        'reason': str(exc),
+        'command_completed': bool(command_completed),
+        'semantic_exit_code': cli_contract.EXIT_INVALID_STATE,
+        'workflow_started': bool(workflow_started),
+    }
+    if isinstance(original_document, dict):
+        if isinstance(original_document.get('status'), str):
+            details['original_status'] = original_document['status']
+        if isinstance(original_document.get('ok'), bool):
+            details['original_ok'] = original_document['ok']
+        original_error = original_document.get('error')
+        if isinstance(original_error, dict) and original_error.get('code'):
+            details['original_error_code'] = str(original_error['code'])
+    return cli_contract.error_envelope(
+        str(getattr(args, 'command', '') or ''),
+        code='OUTPUT_FILE_WRITE_FAILED',
+        message=f'Could not write JSON output file: {details["output_file"] or output_file}.',
+        suggested_action='choose_writable_output_path',
+        details=details,
+    )
+
+
+def _write_output_file_failure(
+    args,
+    exc,
+    *,
+    workflow_started,
+    command_completed,
+    original_document=None,
+):
+    envelope = _output_file_failure_envelope(
+        args,
+        exc,
+        command_completed=command_completed,
+        original_document=original_document,
+        workflow_started=workflow_started,
+    )
+    print(
+        f'Failed to write --output-file; returning structured error on stdout: {exc}',
+        file=sys.stderr,
+    )
+    fallback_args = copy.copy(args)
+    fallback_args.output_file = ''
+    fallback_args.fields = []
+    _write_json_payload(envelope, fallback_args)
+    return envelope
+
+
+def _write_machine_document(
+    document,
+    args,
+    *,
+    record_output_artifact=False,
+    command_completed=False,
+    workflow_started=False,
+):
+    """Write a document, falling back to stdout only for output-file failures."""
+
+    try:
+        _write_json_payload(
+            document,
+            args,
+            record_output_artifact=record_output_artifact,
+        )
+    except (OSError, ValueError) as exc:
+        if not str(getattr(args, 'output_file', '') or '').strip():
+            raise
+        return _write_output_file_failure(
+            args,
+            exc,
+            command_completed=command_completed,
+            original_document=document,
+            workflow_started=workflow_started,
+        )
+    return document
+
+
+def _preflight_output_file(args):
+    """Verify that an output target is writable before workflow side effects."""
+
+    output_file = str(getattr(args, 'output_file', '') or '').strip()
+    if not output_file:
+        return
+    target = os.path.abspath(output_file)
+    if os.path.isdir(target):
+        raise IsADirectoryError(f'Output path is a directory: {target}')
+    directory = os.path.dirname(target) or os.curdir
+    os.makedirs(directory, exist_ok=True)
+    fd, probe_path = tempfile.mkstemp(
+        prefix=f'.{os.path.basename(target)}.',
+        suffix='.probe.tmp',
+        dir=directory,
+    )
+    os.close(fd)
+    os.unlink(probe_path)
+
+
+def _output_file_failure_exit_code(args):
+    if getattr(args, 'strict_exit_codes', False):
+        return cli_contract.EXIT_INVALID_STATE
+    return 1
+
+
+def _write_machine_envelope(envelope, args, *, command_completed):
+    return _write_machine_document(
+        envelope,
+        args,
+        record_output_artifact=True,
+        command_completed=command_completed,
+        workflow_started=True,
+    )
 
 
 def _write_machine_usage_error(args, *, code, message, suggested_action):
@@ -11822,11 +12069,14 @@ def _write_machine_usage_error(args, *, code, message, suggested_action):
         suggested_action=suggested_action,
         details={'semantic_exit_code': cli_contract.EXIT_USAGE},
     )
-    _write_json_payload(
+    emitted = _write_machine_document(
         envelope,
         safe_args,
         record_output_artifact=command in MACHINE_OUTPUT_COMMANDS,
+        command_completed=False,
     )
+    if _is_output_file_failure(emitted):
+        return _output_file_failure_exit_code(args)
     return cli_contract.EXIT_USAGE
 
 
@@ -11883,9 +12133,11 @@ def run_machine_command(parser, args):
                 message=message,
                 details={'exit_code': legacy_exit_code},
             )
-        _write_machine_envelope(envelope, args)
+        emitted = _write_machine_envelope(envelope, args, command_completed=False)
+        if _is_output_file_failure(emitted):
+            return _output_file_failure_exit_code(args)
         if args.strict_exit_codes:
-            return cli_contract.strict_exit_code(envelope)
+            return cli_contract.strict_exit_code(emitted)
         return legacy_exit_code
     except Exception as exc:
         traceback.print_exc(file=sys.stderr)
@@ -11914,14 +12166,18 @@ def run_machine_command(parser, args):
                 message=message,
                 details={'exception_type': exception_type},
             )
-        _write_machine_envelope(envelope, args)
+        emitted = _write_machine_envelope(envelope, args, command_completed=False)
+        if _is_output_file_failure(emitted):
+            return _output_file_failure_exit_code(args)
         if args.strict_exit_codes:
-            return cli_contract.strict_exit_code(envelope)
+            return cli_contract.strict_exit_code(emitted)
         return 1
 
-    _write_machine_envelope(envelope, args)
+    emitted = _write_machine_envelope(envelope, args, command_completed=True)
+    if _is_output_file_failure(emitted):
+        return _output_file_failure_exit_code(args)
     if args.strict_exit_codes:
-        return cli_contract.strict_exit_code(envelope)
+        return cli_contract.strict_exit_code(emitted)
     return 0
 
 
@@ -11956,19 +12212,32 @@ def main(argv=None):
                     suggested_action='fix_field_path',
                 )
             parser.error(str(exc))
-    if output == 'json':
-        if args.command not in MACHINE_OUTPUT_COMMANDS:
-            cli_contract.write_json_envelope(
-                cli_contract.error_envelope(
-                    str(args.command or ''),
-                    code='OUTPUT_NOT_SUPPORTED',
-                    message='JSON output is not supported for this command.',
-                ),
-                sys.stdout,
+    if output == 'json' and args.command not in MACHINE_OUTPUT_COMMANDS:
+        cli_contract.write_json_envelope(
+            cli_contract.error_envelope(
+                str(args.command or ''),
+                code='OUTPUT_NOT_SUPPORTED',
+                message='JSON output is not supported for this command.',
+            ),
+            sys.stdout,
+        )
+        return 2
+    if getattr(args, 'output_file', ''):
+        try:
+            _preflight_output_file(args)
+        except (OSError, ValueError) as exc:
+            _write_output_file_failure(
+                args,
+                exc,
+                command_completed=False,
+                workflow_started=False,
             )
-            return 2
+            return _output_file_failure_exit_code(args)
+    if output == 'json':
         return run_machine_command(parser, args)
-    dispatch_command(parser, args)
+    result = dispatch_command(parser, args)
+    if args.command in {'capabilities', 'schema'} and _is_output_file_failure(result):
+        return _output_file_failure_exit_code(args)
     return 0
 
 
