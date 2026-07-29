@@ -25,7 +25,7 @@ def _json_compatible(value: Any) -> Any:
         return {str(key): _json_compatible(item) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_json_compatible(item) for item in value]
-    if isinstance(value, set):
+    if isinstance(value, (set, frozenset)):
         return sorted((_json_compatible(item) for item in value), key=str)
     return str(value)
 

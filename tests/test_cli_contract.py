@@ -11,7 +11,11 @@ class CliContractTests(unittest.TestCase):
         envelope = cli_contract.success_envelope(
             "check",
             status="safe",
-            result={"path": Path("manifest.json"), "values": {2, 1}},
+            result={
+                "path": Path("manifest.json"),
+                "values": {2, 1},
+                "frozen_values": frozenset({4, 3}),
+            },
             artifacts={"manifest": Path("manifest.json")},
             warnings=["note"],
         )
@@ -20,6 +24,7 @@ class CliContractTests(unittest.TestCase):
         self.assertTrue(envelope["ok"])
         self.assertEqual(envelope["status"], "safe")
         self.assertEqual(envelope["result"]["path"], "manifest.json")
+        self.assertEqual(envelope["result"]["frozen_values"], [3, 4])
         self.assertEqual(envelope["result"]["values"], [1, 2])
         self.assertIsNone(envelope["error"])
 
