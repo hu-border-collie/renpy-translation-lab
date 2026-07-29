@@ -58,6 +58,7 @@
 
 进行中的设计与路线图在 [plans/](plans/README.md)。落地后应写入现行手册，旧稿可迁 [archive/](archive/README.md)。
 
+- [Engine Adapter P0：Ren'Py 当前调用链与合同设计](plans/engine_adapter_contract.md)
 - [文译参考对照与 Batch 主路径增强计划](plans/wenyi_reference_and_batch_roadmap.md)
 
 ### 历史参考（已归档）
