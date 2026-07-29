@@ -2,16 +2,17 @@
 
 面向 Ren'Py 视觉小说的翻译工作台：Gemini Batch 作业流、上下文增强、轻量 RAG 记忆层，以及写回前安全校验。
 
-**稳定版（v1.0.0）。** CLI 是事实来源和高级用户主路径；可选图形工作台降低常规流程门槛。正式交付为源码安装运行，暂无零配置安装包。版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+**稳定版（v1.0.0）。** GUI 是普通用户的推荐入口；CLI 是 Agent、脚本、CI 与高级用户的自动化事实来源。正式交付为源码安装运行，暂无零配置安装包。版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 这是什么
 
-- **Batch CLI**（`gemini_translate_batch.py`）：推荐主路径，覆盖 `build / submit / status / probe / download / check / apply / split / repair` 等。
+- **GUI**（`python -m gui_qt`）：普通用户的推荐入口，覆盖项目准备、翻译、检查、问题处理和安全写回。
+- **Batch CLI**（`gemini_translate_batch.py`）：Agent 与自动化主路径，覆盖 `build / submit / status / probe / download / check / apply / split / repair` 等。
 - **同步 CLI**（`gemini_translate.py`）：小范围即时翻译、补译、局部修复与 smoke test。
 - **上下文**：glossary / macro setting、RAG（`rag_memory.py`）、可选 Story Memory（`story_memory.py`）。
 - **共用 runtime**（`translator_runtime.py`）：配置、SDK、校验、响应解析与文件处理。
 - **可选分析**（`extract_relations.py` / `relation_analyzer/`）：关系与语义分析。
-- **可选 GUI**（`python -m gui_qt`）：统一侧边导航（项目与环境、批量/同步翻译、关键词、订正、上下文库、设置）；不装 GUI 时 CLI 可独立使用。
+- **可独立使用的 CLI**：不安装 GUI 依赖时，Agent、脚本和高级用户仍可完成全部核心工作流。
 
 稳定范围是翻译工作台本身；一键安装、游戏解包/重打包与面向普通用户的零配置发行不在当前支持范围内。边界与烟测记录见 [项目说明](docs/project_notes.md)。
 

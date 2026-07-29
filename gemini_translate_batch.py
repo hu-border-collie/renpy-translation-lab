@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import argparse
 import ast
+import contextlib
 import copy
 import hashlib
 import io
@@ -10,6 +11,7 @@ import re
 import sys
 import time
 import tokenize
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -31,6 +33,7 @@ from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreL
 import batch_cost_estimate
 import batch_non_chinese_rules
 import batch_submit_recovery
+import cli_contract
 import doctor_recommendations as doctor_rec
 import keyword_glossary_merge
 import prompt_context
@@ -64,6 +67,17 @@ REPAIR_RUNS_DIR = os.path.join(LOG_DIR, 'repair_runs')
 SYNC_RUNS_DIR = os.path.join(LOG_DIR, 'sync_runs')
 SYNC_BACKEND = 'gemini'
 SYNC_MODEL = ''
+MACHINE_OUTPUT_COMMANDS = frozenset(
+    {
+        'doctor',
+        'build',
+        'submit',
+        'status',
+        'download',
+        'check',
+        'apply',
+    }
+)
 
 
 class DualLogger(object):
@@ -10227,6 +10241,16 @@ def print_banner():
     print('=' * 60)
 
 
+def add_machine_output_argument(command_parser):
+    command_parser.add_argument(
+        '--output',
+        choices=('text', 'json'),
+        default='text',
+        help='Output human-readable text (default) or one machine-readable JSON document.',
+    )
+    return command_parser
+
+
 def build_arg_parser():
     parser = argparse.ArgumentParser(
         description='Batch translator for Ren\'Py tl files using Gemini Batch API.'
@@ -10234,7 +10258,8 @@ def build_arg_parser():
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     subparsers = parser.add_subparsers(dest='command')
 
-    subparsers.add_parser('doctor', help='Inspect prepare, SDK, and TL template compatibility without writing files.')
+    doctor_parser = subparsers.add_parser('doctor', help='Inspect prepare, SDK, and TL template compatibility without writing files.')
+    add_machine_output_argument(doctor_parser)
 
     bootstrap_work_parser = subparsers.add_parser(
         'bootstrap-work',
@@ -10252,6 +10277,7 @@ def build_arg_parser():
     )
 
     build_parser = subparsers.add_parser('build', help='Build local batch package and JSONL only.')
+    add_machine_output_argument(build_parser)
     build_parser.add_argument('--display-name', default='', help='Override Batch display name.')
     build_parser.add_argument(
         '--skip-prepare',
@@ -10597,6 +10623,7 @@ def build_arg_parser():
     pa_unpublish.add_argument('--store-dir', default='', help='Override analysis store directory.')
 
     submit_parser = subparsers.add_parser('submit', help='Create and submit a batch job.')
+    add_machine_output_argument(submit_parser)
     submit_parser.add_argument(
         'target',
         nargs='?',
@@ -10650,6 +10677,7 @@ def build_arg_parser():
     )
 
     status_parser = subparsers.add_parser('status', help='Refresh and show batch job status.')
+    add_machine_output_argument(status_parser)
     status_parser.add_argument(
         'target',
         nargs='?',
@@ -10658,6 +10686,7 @@ def build_arg_parser():
     )
 
     check_parser = subparsers.add_parser('check', help='Dry-run parse downloaded results and summarize recoverable items.')
+    add_machine_output_argument(check_parser)
     check_parser.add_argument(
         'target',
         nargs='?',
@@ -10677,6 +10706,7 @@ def build_arg_parser():
     probe_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
 
     download_parser = subparsers.add_parser('download', help='Download batch results for a succeeded job.')
+    add_machine_output_argument(download_parser)
     download_parser.add_argument(
         'target',
         nargs='?',
@@ -10686,6 +10716,7 @@ def build_arg_parser():
     download_parser.add_argument('--force', action='store_true', help='Overwrite local results.jsonl.')
 
     apply_parser = subparsers.add_parser('apply', help='Apply downloaded results back into tl files.')
+    add_machine_output_argument(apply_parser)
     apply_parser.add_argument(
         'target',
         nargs='?',
@@ -10962,9 +10993,7 @@ def build_arg_parser():
     return parser
 
 
-def main(argv=None):
-    parser = build_arg_parser()
-    args = parser.parse_args(argv)
+def dispatch_command(parser, args):
     command = args.command
     if command is None:
         parser.print_help()
@@ -10975,8 +11004,9 @@ def main(argv=None):
         legacy.load_glossary()
         load_batch_settings()
         print_banner()
-        print_doctor_report(collect_doctor_report())
-        return
+        report = collect_doctor_report()
+        print_doctor_report(report)
+        return report
 
     if command == 'bootstrap-work':
         legacy.load_translator_settings()
@@ -11273,11 +11303,10 @@ def main(argv=None):
     print_banner()
 
     if command == 'build':
-        create_batch_package(
+        return create_batch_package(
             display_name_override=args.display_name,
             skip_prepare=args.skip_prepare,
         )
-        return
 
     if command == 'build-keywords':
         create_keyword_package(
@@ -11313,7 +11342,7 @@ def main(argv=None):
         return
 
     if command == 'submit':
-        submit_manifest(
+        return submit_manifest(
             target=args.target or None,
             display_name_override=args.display_name,
             model_override=args.model,
@@ -11321,7 +11350,6 @@ def main(argv=None):
             force_resubmit=args.force,
             resume_upload=args.resume,
         )
-        return
 
     if command == 'recover-submit':
         recover_submit_manifest(
@@ -11331,12 +11359,10 @@ def main(argv=None):
         return
 
     if command == 'status':
-        show_status(args.target or None)
-        return
+        return show_status(args.target or None)
 
     if command == 'check':
-        check_results(args.target or None)
-        return
+        return check_results(args.target or None)
 
     if command == 'probe':
         probe_requests(
@@ -11348,12 +11374,10 @@ def main(argv=None):
         return
 
     if command == 'download':
-        download_results(args.target or None, force=args.force)
-        return
+        return download_results(args.target or None, force=args.force)
 
     if command == 'apply':
-        apply_results(args.target or None, force=args.force)
-        return
+        return apply_results(args.target or None, force=args.force)
 
     if command == 'export-keywords':
         export_keyword_candidates(
@@ -11481,5 +11505,183 @@ def main(argv=None):
     parser.print_help()
 
 
+def _nonempty_artifacts(**paths):
+    return {
+        name: value
+        for name, value in paths.items()
+        if value not in (None, '')
+    }
+
+
+def _machine_manifest_summary(manifest):
+    return {
+        'mode': manifest.get('mode', ''),
+        'job_name': manifest.get('job_name', ''),
+        'job_state': manifest.get('job_state', ''),
+        'summary': dict(manifest.get('summary') or {}),
+        'batch_stats': dict(manifest.get('batch_stats') or {}),
+        'last_status_checked_at': manifest.get('last_status_checked_at', ''),
+        'downloaded_at': manifest.get('downloaded_at', ''),
+        'applied_at': manifest.get('applied_at', ''),
+    }
+
+
+def _load_machine_manifest(command, value, args):
+    if isinstance(value, dict):
+        return value
+    if command in {'build', 'submit'} and value:
+        return load_manifest(value)
+    return load_manifest(getattr(args, 'target', '') or None)
+
+
+def build_machine_success_envelope(command, value, args):
+    """Translate existing command return values into the versioned CLI contract."""
+
+    if command == 'doctor':
+        report = dict(value or {})
+        recommendations = list(report.get('recommendations') or [])
+        blocked = doctor_rec.recommendations_block_workflow_state(recommendations)
+        status = (
+            'blocked'
+            if blocked
+            else report.get('workflow_state') or report.get('mode') or 'ready'
+        )
+        return cli_contract.success_envelope(
+            command,
+            status=status,
+            result=report,
+            warnings=report.get('warnings') or [],
+        )
+
+    if command in {'build', 'submit'} and not value:
+        return cli_contract.success_envelope(
+            command,
+            status='no_work',
+            result={'reason': 'no_pending_translation_work'},
+        )
+
+    manifest = _load_machine_manifest(command, value, args)
+    result = _machine_manifest_summary(manifest)
+    artifacts = _nonempty_artifacts(
+        manifest=manifest.get('_manifest_path'),
+        input_jsonl=manifest.get('input_jsonl_path'),
+        result_jsonl=manifest.get('result_jsonl_path'),
+        result_sha256=(
+            f"{manifest.get('result_jsonl_path')}.sha256"
+            if manifest.get('result_jsonl_sha256') and manifest.get('result_jsonl_path')
+            else ''
+        ),
+        status_snapshot=manifest.get('last_status_snapshot_path'),
+        check_report=manifest.get('last_check_report_path'),
+        apply_failure_report=manifest.get('last_apply_failure_report_path'),
+    )
+    warnings = list(manifest.get('build_warnings') or [])
+    status = 'completed'
+
+    if command == 'build':
+        status = str(manifest.get('job_state') or 'LOCAL_ONLY')
+        result['cost_estimate'] = dict(manifest.get('cost_estimate') or {})
+    elif command in {'submit', 'status'}:
+        status = str(manifest.get('job_state') or 'unknown')
+        if manifest.get('job_error'):
+            result['job_error'] = manifest.get('job_error')
+    elif command == 'download':
+        status = 'downloaded'
+        result['result_jsonl_sha256'] = manifest.get('result_jsonl_sha256', '')
+    elif command == 'check':
+        check_summary = dict(manifest.get('last_check_summary') or {})
+        result['check'] = check_summary
+        status = str(check_summary.get('safety_level') or 'unknown')
+    elif command == 'apply':
+        result['apply'] = dict(manifest.get('apply_summary') or {})
+        status = 'applied' if manifest.get('applied_at') else 'completed'
+
+    return cli_contract.success_envelope(
+        command,
+        status=status,
+        result=result,
+        artifacts=artifacts,
+        warnings=warnings,
+    )
+
+
+def _write_machine_diagnostics(buffer):
+    diagnostics = buffer.getvalue()
+    if not diagnostics:
+        return
+    sys.stderr.write(diagnostics)
+    if not diagnostics.endswith('\n'):
+        sys.stderr.write('\n')
+    sys.stderr.flush()
+
+
+def _system_exit_message(exc):
+    if isinstance(exc.code, str) and exc.code.strip():
+        return exc.code.strip()
+    if exc.code not in (None, 0):
+        return f'Command exited with status {exc.code}.'
+    return 'Command stopped before producing a result.'
+
+
+def run_machine_command(parser, args):
+    """Run one supported command with clean JSON stdout and text diagnostics."""
+
+    command = str(args.command or '')
+    diagnostics = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(diagnostics):
+            value = dispatch_command(parser, args)
+            envelope = build_machine_success_envelope(command, value, args)
+    except SystemExit as exc:
+        _write_machine_diagnostics(diagnostics)
+        cli_contract.write_json_envelope(
+            cli_contract.error_envelope(
+                command,
+                code='COMMAND_REFUSED',
+                message=_system_exit_message(exc),
+                details={'exit_code': exc.code if isinstance(exc.code, int) else 1},
+            ),
+            sys.stdout,
+        )
+        return exc.code if isinstance(exc.code, int) and exc.code else 1
+    except Exception as exc:
+        _write_machine_diagnostics(diagnostics)
+        traceback.print_exc(file=sys.stderr)
+        cli_contract.write_json_envelope(
+            cli_contract.error_envelope(
+                command,
+                code='INTERNAL_ERROR',
+                message=str(exc) or exc.__class__.__name__,
+                details={'exception_type': exc.__class__.__name__},
+            ),
+            sys.stdout,
+        )
+        return 1
+
+    _write_machine_diagnostics(diagnostics)
+    cli_contract.write_json_envelope(envelope, sys.stdout)
+    return 0
+
+
+def main(argv=None):
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+    output = getattr(args, 'output', 'text')
+    if output == 'json':
+        if args.command not in MACHINE_OUTPUT_COMMANDS:
+            cli_contract.write_json_envelope(
+                cli_contract.error_envelope(
+                    str(args.command or ''),
+                    code='OUTPUT_NOT_SUPPORTED',
+                    message='JSON output is not supported for this command.',
+                ),
+                sys.stdout,
+            )
+            return 2
+        return run_machine_command(parser, args)
+    dispatch_command(parser, args)
+    return 0
+
+
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

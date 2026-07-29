@@ -26,6 +26,16 @@
 
 ## 命令说明
 
+普通用户推荐通过 GUI 执行这条流程；Agent、脚本和 CI 可在七个核心命令后追加 `--output json`，获得 `schema_version=1` 的统一结果 envelope：
+
+```powershell
+python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json --output json
+```
+
+JSON 模式下 stdout 只包含结果文档，原有 banner、进度和诊断文本进入 stderr。`result` 提供业务摘要，`artifacts` 提供 manifest / results / 报告路径，`status` 表示 job state 或 `safe / warn / block` 等业务状态。文本模式保持兼容；当前仍须根据 `status` 而非单独根据退出码决定是否可以继续写回。
+
+结构化输出当前覆盖 `doctor / build / submit / status / download / check / apply`；其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
+
 - `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出。
 - Batch 产物默认写到 `logs/batch_jobs/<package>/`。
 - `doctor` 只检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，不调用 Gemini，也不会写回 `.rpy`。

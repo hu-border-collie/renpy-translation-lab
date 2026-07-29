@@ -16,6 +16,44 @@ CLI 是自动化操作的事实来源。必要时可以使用 GUI 做可视验�
 - 只有 `check` 对当前 manifest/results 返回 `safe` 时才执行 `apply`。
 - 不要用 `--force` 规避安全判断；它只处理有限的重复/恢复场景，不能绕过 stale check、源快照校验或 `block`。
 
+## 机器可读输出
+
+普通用户推荐使用 GUI；Agent、脚本和 CI 调用 Batch CLI 时，核心流程命令支持 `--output json`：
+
+```powershell
+python gemini_translate_batch.py doctor --output json
+python gemini_translate_batch.py build --output json
+python gemini_translate_batch.py submit <manifest> --output json
+python gemini_translate_batch.py status <manifest> --output json
+python gemini_translate_batch.py download <manifest> --output json
+python gemini_translate_batch.py check <manifest> --output json
+python gemini_translate_batch.py apply <manifest> --output json
+```
+
+JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning 和原有文本摘要会写入 stderr，完整 Batch 控制台日志仍会落盘。成功结果使用版本化 envelope：
+
+```json
+{
+  "schema_version": 1,
+  "command": "check",
+  "ok": true,
+  "status": "safe",
+  "result": {},
+  "artifacts": {},
+  "warnings": [],
+  "error": null
+}
+```
+
+其中：
+
+- `status` 表示业务状态，例如 Batch job state、`safe / warn / block` 或 `applied`；
+- `result` 是命令摘要，`artifacts` 给出 manifest、results、检查报告等产物路径；
+- 命令拒绝执行时 `ok=false`，`error.code` 与 `error.message` 用于程序判断和诊断；
+- 当前默认退出码仍保持兼容；不要仅凭 `check` 的退出码决定是否写回，必须读取 `status`，并且只有 `safe` 才能继续 `apply`。
+
+没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式只承诺覆盖上面的七个核心命令；其他子命令以各自 `--help` 和落盘产物为准。
+
 ## 1. 安装核心依赖
 
 ```powershell
