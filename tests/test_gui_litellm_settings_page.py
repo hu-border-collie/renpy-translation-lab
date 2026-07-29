@@ -6,7 +6,8 @@ from unittest import mock
 from gui_qt.litellm_catalog_cache import LiteLLMCatalogCache
 
 try:
-    from PySide6.QtWidgets import QApplication, QGroupBox, QLineEdit
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QCompleter, QGroupBox, QLineEdit
 
     from gui_qt.app import MainWindow
 except ImportError as exc:
@@ -75,6 +76,19 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         )
         self.assertTrue(self.window.litellm_model_combo.isEditable())
         self.assertTrue(self.window.litellm_provider_combo.isEditable())
+        provider_completer = self.window.litellm_provider_combo.completer()
+        self.assertEqual(
+            provider_completer.caseSensitivity(),
+            Qt.CaseSensitivity.CaseInsensitive,
+        )
+        self.assertEqual(
+            provider_completer.filterMode(),
+            Qt.MatchFlag.MatchContains,
+        )
+        self.assertEqual(
+            provider_completer.completionMode(),
+            QCompleter.CompletionMode.PopupCompletion,
+        )
         self.assertEqual(
             self.window.litellm_api_key_edit.echoMode(),
             QLineEdit.EchoMode.Password,
@@ -93,7 +107,26 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertIn("combo_popup_action", actions)
         self.assertFalse(actions["combo_popup_action"].icon().isNull())
 
+    def test_common_providers_are_listed_before_dynamic_providers(self):
+        self.window._populate_litellm_providers(
+            ("zzz_custom", "deepseek", "openrouter", "anthropic", "openai", "aaa_custom"),
+        )
+        values = tuple(
+            self.window.litellm_provider_combo.itemData(index)
+            for index in range(self.window.litellm_provider_combo.count())
+        )
+        self.assertEqual(
+            values,
+            ("openai", "anthropic", "openrouter", "deepseek", "aaa_custom", "zzz_custom"),
+        )
+        completer = self.window.litellm_provider_combo.completer()
+        completer.setCompletionPrefix("router")
+        self.assertEqual(completer.completionCount(), 1)
+        self.assertEqual(completer.currentCompletion(), "OpenRouter")
+
+
     def test_typed_model_prefix_takes_priority_for_credentials(self):
+
         self._load_provider_choices()
         self.window.litellm_provider_combo.setCurrentIndex(
             self.window.litellm_provider_combo.findData("openai")

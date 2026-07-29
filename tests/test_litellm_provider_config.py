@@ -14,6 +14,7 @@ from litellm_provider_config import (
     models_from_remote_catalog,
     native_catalog_endpoint,
     providers_from_remote_catalog,
+    sort_provider_ids,
     version_key,
     provider_from_model,
     python_requirement_allows,
@@ -120,6 +121,16 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
         self.assertIn("custom_provider", providers)
         self.assertIn("other", providers)
         self.assertIn("ollama", providers)
+
+    def test_provider_sort_places_common_choices_before_dynamic_catalog(self):
+        providers = sort_provider_ids(
+            ("zzz_custom", "deepseek", "anthropic", "aaa_custom", "openai")
+        )
+        self.assertEqual(
+            providers,
+            ("openai", "anthropic", "deepseek", "aaa_custom", "zzz_custom"),
+        )
+
 
     def test_openrouter_payload_prefixes_and_skips_non_text_and_aliases(self):
         payload = {

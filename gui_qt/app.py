@@ -38,6 +38,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QCompleter,
     QDialog,
     QMainWindow,
     QWidget,
@@ -260,6 +261,7 @@ from litellm_provider_config import (
     catalog_source_label,
     installed_litellm_version,
     provider_display_label,
+    sort_provider_ids,
     version_key,
     ProviderCredentialStoreError,
     delete_provider_api_key,
@@ -3434,7 +3436,18 @@ class MainWindow(QMainWindow):
 
         self.litellm_provider_combo = NoWheelComboBox()
         self._configure_editable_model_combo(self.litellm_provider_combo)
-        self.litellm_provider_combo.lineEdit().setPlaceholderText("尚未选择供应商")
+        self.litellm_provider_combo.lineEdit().setPlaceholderText(
+            "搜索或输入自定义 Provider"
+        )
+        provider_completer = self.litellm_provider_combo.completer()
+        if provider_completer is not None:
+            provider_completer.setCaseSensitivity(
+                Qt.CaseSensitivity.CaseInsensitive
+            )
+            provider_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            provider_completer.setCompletionMode(
+                QCompleter.CompletionMode.PopupCompletion
+            )
         provider_row = QWidget()
         provider_layout = QHBoxLayout(provider_row)
         provider_layout.setContentsMargins(0, 0, 0, 0)
@@ -6596,7 +6609,7 @@ class MainWindow(QMainWindow):
         selected = str(selected or "").strip().lower()
         combo.blockSignals(True)
         combo.clear()
-        for provider in providers:
+        for provider in sort_provider_ids(providers):
             provider = str(provider or "").strip().lower()
             if provider:
                 combo.addItem(provider_display_label(provider), provider)

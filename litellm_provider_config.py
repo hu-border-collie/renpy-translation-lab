@@ -13,11 +13,17 @@ KEYRING_SERVICE = "renpy-translation-lab:litellm"
 SUPPORTED_PROVIDERS: tuple[tuple[str, str], ...] = (
     ("openai", "OpenAI"),
     ("anthropic", "Anthropic"),
+    ("gemini", "Google Gemini"),
     ("openrouter", "OpenRouter"),
     ("deepseek", "DeepSeek"),
     ("xai", "xAI"),
+    ("azure", "Azure OpenAI"),
+    ("vertex_ai", "Google Vertex AI"),
     ("ollama", "Ollama（本地）"),
 )
+_COMMON_PROVIDER_INDEX = {
+    provider: index for index, (provider, _label) in enumerate(SUPPORTED_PROVIDERS)
+}
 _PROVIDER_LABELS = dict(SUPPORTED_PROVIDERS)
 DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     "openai": ("openai/gpt-5",),
@@ -145,6 +151,26 @@ def provider_display_label(provider: str) -> str:
     """Return a friendly label without restricting dynamic provider ids."""
     provider = str(provider or "").strip().lower()
     return _PROVIDER_LABELS.get(provider, provider)
+
+
+def sort_provider_ids(providers: object) -> tuple[str, ...]:
+    """Place common providers first and sort all remaining ids by name."""
+    if not isinstance(providers, (list, tuple, set, frozenset)):
+        return ()
+    cleaned = {
+        str(provider or "").strip().lower()
+        for provider in providers
+        if str(provider or "").strip()
+    }
+    return tuple(
+        sorted(
+            cleaned,
+            key=lambda provider: (
+                _COMMON_PROVIDER_INDEX.get(provider, len(_COMMON_PROVIDER_INDEX)),
+                provider.casefold(),
+            ),
+        )
+    )
 
 
 def _keyring(keyring_module: Any = None) -> Any:
@@ -275,7 +301,7 @@ def providers_from_remote_catalog(
             provider = provider_from_model(str(raw_model or ""))
         if provider:
             providers.add(provider)
-    return tuple(sorted(providers, key=str.casefold))
+    return sort_provider_ids(providers)
 
 
 def models_from_openrouter_payload(payload: Mapping[str, object] | object) -> tuple[str, ...]:
