@@ -32,7 +32,7 @@
 python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json --output json
 ```
 
-JSON 模式下 stdout 只包含结果文档，原有 banner、进度和诊断文本进入 stderr。`result` 提供业务摘要，`artifacts` 提供 manifest / results / 报告路径，`status` 表示 job state 或 `safe / warn / block` 等业务状态。文本模式、默认退出码以及非严格 JSON 的既有 `COMMAND_REFUSED / INTERNAL_ERROR` 分类保持兼容；仍须根据 `status` 判断是否可以继续写回。
+JSON 模式下 stdout 只包含结果文档，原有 banner、进度、prepare 子进程输出和诊断文本实时进入 stderr。`result` 提供业务摘要，`artifacts` 提供 manifest / results / 报告路径，`status` 表示 job state 或 `safe / warn / block` 等业务状态。文本模式和默认退出码保持兼容；仍须根据 `status` 判断是否可以继续写回。
 
 Agent 可追加 `--strict-exit-codes`（必须与 `--output json` 同时使用），启用稳定的语义退出码：`0` 成功/继续轮询，`1` 未分类内部错误，`2` 用法错误，`3` 需要处理（例如 `warn`），`4` 被安全门禁阻止或任务终止失败，`5` 输入/配置/状态失效，`6` 远端临时错误、可稍后重试。例如：
 
@@ -53,7 +53,7 @@ python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json -
 结构化输出当前覆盖 `doctor / build / submit / status / download / check / apply`；其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
 
 机器发现使用 `capabilities` 与 `schema <command>`；两者在加载项目配置前直接输出 JSON。`capabilities.commands` 已提供完整命令索引，因此不另设重复的 `commands`。单命令 schema 从当前 argparse action 动态生成，包含参数类型、required、repeatable、choices、默认值和帮助文本，避免文档与实际 parser 漂移。
-核心 JSON 命令可用 `--compact` 压缩序列化、用 `--fields status result.check.safety_level` 按点路径保留必要字段，或用 `--output-file <path>` 将最终文档原子写入文件并保持 stdout 为空。三者只接受显式 `--output json`；裁剪不影响业务状态和严格退出码，文件结果会在未被投影掉时记录 `artifacts.output_file` 绝对路径。
+核心 JSON 命令可用 `--compact` 压缩序列化、用 `--fields status result.check.safety_level` 按点路径保留必要字段，或用 `--output-file <path>` 将最终文档原子写入文件并保持 stdout 为空。三者只接受显式 `--output json`；裁剪不影响业务状态和严格退出码，文件结果会在未被投影掉时记录 `artifacts.output_file` 绝对路径。空路径或连续点等非法字段路径会在 workflow 执行前返回 `INVALID_FIELD_PATH` 和退出码 `2`。
 `capabilities / schema` 也支持这三个选项；它们原生输出 JSON，因此无需 `--output json`。
 
 

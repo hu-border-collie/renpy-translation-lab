@@ -1851,8 +1851,47 @@ def remember_latest_manifest(manifest_path):
 
 def load_manifest(target=None):
     manifest_path = manifest_path_for_target(target)
-    with open(manifest_path, 'r', encoding='utf-8') as handle:
-        manifest = json.load(handle)
+    try:
+        with open(manifest_path, 'r', encoding='utf-8') as handle:
+            manifest = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise cli_contract.MachineContractError(
+            (
+                f'Manifest is not valid JSON: {manifest_path} '
+                f'(line {exc.lineno}, column {exc.colno}).'
+            ),
+            code_name='INVALID_MANIFEST_JSON',
+            suggested_action='rebuild_or_repair_manifest',
+            details={
+                'manifest_path': manifest_path,
+                'line': exc.lineno,
+                'column': exc.colno,
+            },
+        ) from exc
+    except UnicodeDecodeError as exc:
+        raise cli_contract.MachineContractError(
+            f'Manifest is not valid UTF-8: {manifest_path}.',
+            code_name='INVALID_MANIFEST_ENCODING',
+            suggested_action='rebuild_or_repair_manifest',
+            details={'manifest_path': manifest_path},
+        ) from exc
+    except OSError as exc:
+        raise cli_contract.MachineContractError(
+            f'Manifest could not be read: {manifest_path} ({exc}).',
+            code_name='MANIFEST_UNREADABLE',
+            suggested_action='inspect_manifest_permissions',
+            details={'manifest_path': manifest_path},
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise cli_contract.MachineContractError(
+            f'Manifest root must be a JSON object: {manifest_path}.',
+            code_name='INVALID_MANIFEST_SHAPE',
+            suggested_action='rebuild_or_repair_manifest',
+            details={
+                'manifest_path': manifest_path,
+                'actual_type': type(manifest).__name__,
+            },
+        )
     manifest['_manifest_path'] = manifest_path
     manifest['_package_dir'] = os.path.dirname(manifest_path)
     return manifest
@@ -11712,16 +11751,6 @@ def build_machine_success_envelope(command, value, args):
     )
 
 
-def _write_machine_diagnostics(buffer):
-    diagnostics = buffer.getvalue()
-    if not diagnostics:
-        return
-    sys.stderr.write(diagnostics)
-    if not diagnostics.endswith('\n'):
-        sys.stderr.write('\n')
-    sys.stderr.flush()
-
-
 def _system_exit_message(exc):
     if isinstance(exc.code, str) and exc.code.strip():
         return exc.code.strip()
@@ -11735,11 +11764,13 @@ def _machine_field_paths(args):
     for group in getattr(args, 'fields', []) or []:
         values = group if isinstance(group, (list, tuple)) else [group]
         for value in values:
-            paths.extend(
-                item.strip()
-                for item in str(value).split(',')
-                if item.strip()
-            )
+            raw_items = str(value).split(',')
+            if any(not item.strip() for item in raw_items):
+                raise ValueError(f'Invalid field path list: {value!r}')
+            for item in raw_items:
+                path = item.strip()
+                cli_contract.field_path_parts(path)
+                paths.append(path)
     return list(dict.fromkeys(paths))
 
 
@@ -11771,17 +11802,39 @@ def _write_machine_envelope(envelope, args):
     _write_json_payload(envelope, args, record_output_artifact=True)
 
 
+def _write_machine_usage_error(args, *, code, message, suggested_action):
+    """Write a usage error without reapplying invalid output projection."""
+
+    command = str(getattr(args, 'command', '') or '')
+    safe_args = copy.copy(args)
+    safe_args.fields = []
+    envelope = cli_contract.error_envelope(
+        command,
+        code=code,
+        message=message,
+        suggested_action=suggested_action,
+        details={'semantic_exit_code': cli_contract.EXIT_USAGE},
+    )
+    _write_json_payload(
+        envelope,
+        safe_args,
+        record_output_artifact=command in MACHINE_OUTPUT_COMMANDS,
+    )
+    return cli_contract.EXIT_USAGE
+
+
 def run_machine_command(parser, args):
     """Run one supported command with clean JSON stdout and text diagnostics."""
 
     command = str(args.command or '')
-    diagnostics = io.StringIO()
     try:
-        with contextlib.redirect_stdout(diagnostics):
+        with (
+            cli_contract.machine_output_context(),
+            contextlib.redirect_stdout(sys.stderr),
+        ):
             value = dispatch_command(parser, args)
             envelope = build_machine_success_envelope(command, value, args)
     except SystemExit as exc:
-        _write_machine_diagnostics(diagnostics)
         message = _system_exit_message(exc)
         legacy_exit_code = exc.code if isinstance(exc.code, int) and exc.code else 1
         if isinstance(exc, cli_contract.MachineContractError):
@@ -11828,7 +11881,6 @@ def run_machine_command(parser, args):
             return cli_contract.strict_exit_code(envelope)
         return legacy_exit_code
     except Exception as exc:
-        _write_machine_diagnostics(diagnostics)
         traceback.print_exc(file=sys.stderr)
         message = str(exc) or exc.__class__.__name__
         exception_type = exc.__class__.__name__
@@ -11860,7 +11912,6 @@ def run_machine_command(parser, args):
             return cli_contract.strict_exit_code(envelope)
         return 1
 
-    _write_machine_diagnostics(diagnostics)
     _write_machine_envelope(envelope, args)
     if args.strict_exit_codes:
         return cli_contract.strict_exit_code(envelope)
@@ -11886,6 +11937,18 @@ def main(argv=None):
         and args.command not in {'capabilities', 'schema'}
     ):
         parser.error(f"{', '.join(json_only_options)} requires --output json")
+    if getattr(args, 'fields', None):
+        try:
+            _machine_field_paths(args)
+        except ValueError as exc:
+            if output == 'json' or args.command in {'capabilities', 'schema'}:
+                return _write_machine_usage_error(
+                    args,
+                    code='INVALID_FIELD_PATH',
+                    message=str(exc),
+                    suggested_action='fix_field_path',
+                )
+            parser.error(str(exc))
     if output == 'json':
         if args.command not in MACHINE_OUTPUT_COMMANDS:
             cli_contract.write_json_envelope(

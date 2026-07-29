@@ -33,6 +33,7 @@ def locked_runtime_state():
         yield
 
 from atomic_io import atomic_write_json, atomic_write_lines, file_sha256
+import cli_contract
 from gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
@@ -2537,6 +2538,29 @@ def _render_prepare_command(command, variables):
     raise RuntimeError(f"Unsupported prepare command type: {type(command).__name__}")
 
 
+def _machine_subprocess_diagnostic_stream():
+    """Return an OS-backed stderr stream for child diagnostics in machine mode."""
+
+    if not cli_contract.machine_output_active():
+        return None
+    for stream in (sys.stderr, sys.__stderr__):
+        if stream is None:
+            continue
+        try:
+            stream.fileno()
+        except (AttributeError, io.UnsupportedOperation, OSError):
+            continue
+        return stream
+    return subprocess.DEVNULL
+
+
+def _machine_subprocess_output_kwargs():
+    stream = _machine_subprocess_diagnostic_stream()
+    if stream is None:
+        return {}
+    return {"stdout": stream, "stderr": stream}
+
+
 def _run_prepare_command(command, cwd, step_name):
     use_shell = prepare_command_uses_shell(command)
     if use_shell and not PREP_ALLOW_SHELL_COMMANDS:
@@ -2553,7 +2577,13 @@ def _run_prepare_command(command, cwd, step_name):
     print(f"[Prepare]   command: {shown}")
 
     try:
-        result = subprocess.run(command, cwd=cwd, shell=use_shell, check=False)
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            shell=use_shell,
+            check=False,
+            **_machine_subprocess_output_kwargs(),
+        )
     except Exception as e:
         print(f"[Prepare] {step_name} failed to start: {e}")
         return False

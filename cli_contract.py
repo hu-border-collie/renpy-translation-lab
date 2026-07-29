@@ -9,11 +9,17 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from os import PathLike
-from typing import Any, TextIO
+from typing import Any, Iterator, TextIO
 
 CLI_SCHEMA_VERSION = 1
 _MISSING = object()
+_MACHINE_OUTPUT_ACTIVE: ContextVar[bool] = ContextVar(
+    "cli_machine_output_active",
+    default=False,
+)
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -21,6 +27,23 @@ EXIT_NEEDS_ACTION = 3
 EXIT_BLOCKED = 4
 EXIT_INVALID_STATE = 5
 EXIT_RETRYABLE = 6
+
+
+def machine_output_active() -> bool:
+    """Return whether the current call is executing a machine-output command."""
+
+    return _MACHINE_OUTPUT_ACTIVE.get()
+
+
+@contextmanager
+def machine_output_context() -> Iterator[None]:
+    """Mark nested core work as part of a machine-output CLI invocation."""
+
+    token = _MACHINE_OUTPUT_ACTIVE.set(True)
+    try:
+        yield
+    finally:
+        _MACHINE_OUTPUT_ACTIVE.reset(token)
 
 
 def parse_result_envelope(text: str) -> dict[str, Any]:
@@ -287,9 +310,7 @@ def project_fields(
     source = _json_compatible(dict(document))
     projected: dict[str, Any] = {}
     for raw_path in field_paths:
-        parts = [part.strip() for part in str(raw_path).split(".")]
-        if not parts or any(not part for part in parts):
-            raise ValueError(f"Invalid field path: {raw_path!r}")
+        parts = field_path_parts(raw_path)
         value: Any = source
         for part in parts:
             if not isinstance(value, Mapping) or part not in value:
@@ -307,6 +328,15 @@ def project_fields(
             target = existing
         target[parts[-1]] = value
     return projected
+
+
+def field_path_parts(raw_path: Any) -> list[str]:
+    """Validate and split one dot-separated machine-output field path."""
+
+    parts = [part.strip() for part in str(raw_path).split(".")]
+    if not parts or any(not part for part in parts):
+        raise ValueError(f"Invalid field path: {raw_path!r}")
+    return parts
 
 
 def write_json_envelope(

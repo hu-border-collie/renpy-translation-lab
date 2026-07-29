@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import cli_contract
 import gemini_translate_batch as batch_mod
 import translator_runtime as runtime
 
@@ -150,6 +151,31 @@ class RunPrepareCommandTests(unittest.TestCase):
         printed = ' '.join(str(call.args[0]) for call in print_mock.call_args_list if call.args)
         self.assertIn('cwd: /tmp/work', printed)
         self.assertIn('shell: False', printed)
+
+    def test_run_routes_child_output_to_stderr_in_machine_mode(self):
+        completed = mock.Mock(returncode=0)
+        diagnostics_stream = object()
+        with (
+            cli_contract.machine_output_context(),
+            mock.patch.object(runtime, 'PREP_ALLOW_SHELL_COMMANDS', False),
+            mock.patch.object(
+                runtime,
+                '_machine_subprocess_diagnostic_stream',
+                return_value=diagnostics_stream,
+            ),
+            mock.patch.object(runtime.subprocess, 'run', return_value=completed) as run_mock,
+            mock.patch('builtins.print'),
+        ):
+            ok = runtime._run_prepare_command(
+                ['python', 'tool.py'],
+                cwd='/tmp/work',
+                step_name='Custom RPA unpack',
+            )
+
+        self.assertTrue(ok)
+        _args, kwargs = run_mock.call_args
+        self.assertIs(kwargs['stdout'], diagnostics_stream)
+        self.assertIs(kwargs['stderr'], diagnostics_stream)
 
     def test_run_refuses_shell_string_without_opt_in(self):
         with (
