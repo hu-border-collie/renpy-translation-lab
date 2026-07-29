@@ -53,6 +53,9 @@ python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json -
 结构化输出当前覆盖 `doctor / build / submit / status / download / check / apply`；其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
 
 机器发现使用 `capabilities` 与 `schema <command>`；两者在加载项目配置前直接输出 JSON。`capabilities.commands` 已提供完整命令索引，因此不另设重复的 `commands`。单命令 schema 从当前 argparse action 动态生成，包含参数类型、required、repeatable、choices、默认值和帮助文本，避免文档与实际 parser 漂移。
+核心 JSON 命令可用 `--compact` 压缩序列化、用 `--fields status result.check.safety_level` 按点路径保留必要字段，或用 `--output-file <path>` 将最终文档原子写入文件并保持 stdout 为空。三者只接受显式 `--output json`；裁剪不影响业务状态和严格退出码，文件结果会在未被投影掉时记录 `artifacts.output_file` 绝对路径。
+`capabilities / schema` 也支持这三个选项；它们原生输出 JSON，因此无需 `--output json`。
+
 
 Discovery schema 与核心结果 envelope 当前都使用 `schema_version=1`，但通过顶层 `type`（`capabilities` / `command_schema`）区分用途。
 

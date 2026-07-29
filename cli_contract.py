@@ -14,6 +14,7 @@ from typing import Any, TextIO
 
 
 CLI_SCHEMA_VERSION = 1
+_MISSING = object()
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -241,15 +242,56 @@ def error_envelope(
     }
 
 
-def write_json_envelope(envelope: Mapping[str, Any], stream: TextIO) -> None:
+def project_fields(
+    document: Mapping[str, Any],
+    field_paths: Sequence[str],
+) -> dict[str, Any]:
+    """Project a JSON object using dot-separated mapping paths.
+
+    Missing paths are omitted so callers can request optional fields across
+    workflow states without treating their absence as a command failure.
+    """
+
+    source = _json_compatible(dict(document))
+    projected: dict[str, Any] = {}
+    for raw_path in field_paths:
+        parts = [part.strip() for part in str(raw_path).split(".")]
+        if not parts or any(not part for part in parts):
+            raise ValueError(f"Invalid field path: {raw_path!r}")
+        value: Any = source
+        for part in parts:
+            if not isinstance(value, Mapping) or part not in value:
+                value = _MISSING
+                break
+            value = value[part]
+        if value is _MISSING:
+            continue
+        target = projected
+        for part in parts[:-1]:
+            existing = target.get(part)
+            if not isinstance(existing, dict):
+                existing = {}
+                target[part] = existing
+            target = existing
+        target[parts[-1]] = value
+    return projected
+
+
+def write_json_envelope(
+    envelope: Mapping[str, Any],
+    stream: TextIO,
+    *,
+    compact: bool = False,
+) -> None:
     """Write exactly one JSON document followed by a newline."""
 
     json.dump(
         _json_compatible(dict(envelope)),
         stream,
         ensure_ascii=False,
-        indent=2,
+        indent=None if compact else 2,
         sort_keys=True,
+        separators=(",", ":") if compact else None,
     )
     stream.write("\n")
     stream.flush()

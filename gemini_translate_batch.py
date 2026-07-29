@@ -20,6 +20,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from atomic_io import (
+    atomic_write,
     atomic_write_json,
     atomic_write_jsonl,
     atomic_write_many_lines,
@@ -10243,6 +10244,32 @@ def print_banner():
     print('=' * 60)
 
 
+def add_json_shaping_arguments(command_parser):
+    command_parser.add_argument(
+        '--compact',
+        action='store_true',
+        help='Emit JSON without indentation or extra spaces.',
+    )
+    command_parser.add_argument(
+        '--fields',
+        action='append',
+        nargs='+',
+        default=[],
+        metavar='PATH',
+        help=(
+            'Project JSON output to dot-separated field paths. May be repeated; '
+            'comma-separated paths are also accepted.'
+        ),
+    )
+    command_parser.add_argument(
+        '--output-file',
+        default='',
+        metavar='PATH',
+        help='Atomically write the final JSON document to PATH instead of stdout.',
+    )
+    return command_parser
+
+
 def add_machine_output_argument(command_parser):
     command_parser.add_argument(
         '--output',
@@ -10274,7 +10301,7 @@ def add_machine_output_argument(command_parser):
             'that consume a manifest.'
         ),
     )
-    return command_parser
+    return add_json_shaping_arguments(command_parser)
 
 
 def build_arg_parser():
@@ -11015,10 +11042,11 @@ def build_arg_parser():
     repair_parser.add_argument('--context-before', type=int, default=2, help='How many prior nearby entries to include as context.')
     repair_parser.add_argument('--context-after', type=int, default=2, help='How many following nearby entries to include as context.')
     repair_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
-    subparsers.add_parser(
+    capabilities_parser = subparsers.add_parser(
         'capabilities',
         help='Print machine-readable CLI capabilities and the command index.',
     )
+    add_json_shaping_arguments(capabilities_parser)
     schema_parser = subparsers.add_parser(
         'schema',
         help='Print the machine-readable argparse schema for one command.',
@@ -11028,6 +11056,7 @@ def build_arg_parser():
         choices=sorted(subparsers.choices),
         help='Command whose current argparse schema should be returned.',
     )
+    add_json_shaping_arguments(schema_parser)
 
 
     return parser
@@ -11064,12 +11093,12 @@ def dispatch_command(parser, args):
             explicit_target_commands=EXPLICIT_TARGET_COMMANDS,
             result_schema_version=cli_contract.CLI_SCHEMA_VERSION,
         )
-        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        _write_json_payload(payload, args)
         return payload
 
     if command == 'schema':
         payload = cli_discovery.command_schema(parser, args.schema_command)
-        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        _write_json_payload(payload, args)
         return payload
 
 
@@ -11700,6 +11729,47 @@ def _system_exit_message(exc):
     return 'Command stopped before producing a result.'
 
 
+def _machine_field_paths(args):
+    paths = []
+    for group in getattr(args, 'fields', []) or []:
+        values = group if isinstance(group, (list, tuple)) else [group]
+        for value in values:
+            paths.extend(
+                item.strip()
+                for item in str(value).split(',')
+                if item.strip()
+            )
+    return list(dict.fromkeys(paths))
+
+
+def _write_json_payload(document, args, *, record_output_artifact=False):
+    output_file = str(getattr(args, 'output_file', '') or '').strip()
+    payload = dict(document)
+    if output_file and record_output_artifact:
+        payload['artifacts'] = dict(payload.get('artifacts') or {})
+        payload['artifacts']['output_file'] = os.path.abspath(output_file)
+    field_paths = _machine_field_paths(args)
+    if field_paths:
+        payload = cli_contract.project_fields(payload, field_paths)
+
+    compact = bool(getattr(args, 'compact', False))
+    if output_file:
+        atomic_write(
+            output_file,
+            lambda stream: cli_contract.write_json_envelope(
+                payload,
+                stream,
+                compact=compact,
+            ),
+        )
+        return
+    cli_contract.write_json_envelope(payload, sys.stdout, compact=compact)
+
+
+def _write_machine_envelope(envelope, args):
+    _write_json_payload(envelope, args, record_output_artifact=True)
+
+
 def run_machine_command(parser, args):
     """Run one supported command with clean JSON stdout and text diagnostics."""
 
@@ -11752,7 +11822,7 @@ def run_machine_command(parser, args):
                 message=message,
                 details={'exit_code': legacy_exit_code},
             )
-        cli_contract.write_json_envelope(envelope, sys.stdout)
+        _write_machine_envelope(envelope, args)
         if args.strict_exit_codes:
             return cli_contract.strict_exit_code(envelope)
         return legacy_exit_code
@@ -11784,13 +11854,13 @@ def run_machine_command(parser, args):
                 message=message,
                 details={'exception_type': exception_type},
             )
-        cli_contract.write_json_envelope(envelope, sys.stdout)
+        _write_machine_envelope(envelope, args)
         if args.strict_exit_codes:
             return cli_contract.strict_exit_code(envelope)
         return 1
 
     _write_machine_diagnostics(diagnostics)
-    cli_contract.write_json_envelope(envelope, sys.stdout)
+    _write_machine_envelope(envelope, args)
     if args.strict_exit_codes:
         return cli_contract.strict_exit_code(envelope)
     return 0
@@ -11800,8 +11870,21 @@ def main(argv=None):
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     output = getattr(args, 'output', 'text')
-    if getattr(args, 'strict_exit_codes', False) and output != 'json':
-        parser.error('--strict-exit-codes requires --output json')
+    json_only_options = []
+    if getattr(args, 'strict_exit_codes', False):
+        json_only_options.append('--strict-exit-codes')
+    if getattr(args, 'compact', False):
+        json_only_options.append('--compact')
+    if getattr(args, 'fields', None):
+        json_only_options.append('--fields')
+    if getattr(args, 'output_file', ''):
+        json_only_options.append('--output-file')
+    if (
+        json_only_options
+        and output != 'json'
+        and args.command not in {'capabilities', 'schema'}
+    ):
+        parser.error(f"{', '.join(json_only_options)} requires --output json")
     if output == 'json':
         if args.command not in MACHINE_OUTPUT_COMMANDS:
             cli_contract.write_json_envelope(

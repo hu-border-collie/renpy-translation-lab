@@ -33,8 +33,28 @@ class CliDiscoveryTests(unittest.TestCase):
         }["capabilities"]
         self.assertTrue(capabilities["machine_output"])
         self.assertTrue(capabilities["supports_json"])
+        self.assertTrue(capabilities["supports_compact"])
+        self.assertTrue(capabilities["supports_fields"])
+        self.assertTrue(capabilities["supports_output_file"])
         load_config.assert_not_called()
         load_settings.assert_not_called()
+
+    def test_discovery_output_can_be_compacted_and_projected(self):
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = batch.main(
+                [
+                    "capabilities",
+                    "--compact",
+                    "--fields",
+                    "type,command_count",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(set(json.loads(stdout.getvalue())), {"type", "command_count"})
+        self.assertNotIn(": ", stdout.getvalue())
 
     def test_capabilities_derive_agent_support_from_current_parser(self):
         parser = batch.build_arg_parser()
@@ -51,6 +71,9 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertTrue(commands["status"]["supports_json"])
         self.assertTrue(commands["status"]["supports_strict_exit_codes"])
         self.assertTrue(commands["status"]["supports_non_interactive"])
+        self.assertTrue(commands["status"]["supports_compact"])
+        self.assertTrue(commands["status"]["supports_fields"])
+        self.assertTrue(commands["status"]["supports_output_file"])
         self.assertTrue(commands["status"]["requires_explicit_target_in_agent_mode"])
         self.assertFalse(commands["build"]["requires_explicit_target_in_agent_mode"])
         self.assertFalse(commands["split"]["supports_json"])
@@ -70,6 +93,8 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertEqual(arguments["target"]["nargs"], "?")
         self.assertEqual(arguments["output"]["choices"], ["text", "json"])
         self.assertEqual(arguments["non_interactive"]["value_type"], "boolean")
+        self.assertTrue(arguments["fields"]["repeatable"])
+        self.assertEqual(arguments["fields"]["nargs"], "+")
 
     def test_schema_preserves_required_and_repeatable_arguments(self):
         parser = batch.build_arg_parser()
