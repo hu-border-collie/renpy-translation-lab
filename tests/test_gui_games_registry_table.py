@@ -5,8 +5,10 @@ import unittest
 from types import SimpleNamespace
 
 from gui_qt.games_registry_table import (
+    REGISTRY_DEFAULT_VISIBLE_COLUMN_IDS,
     REGISTRY_PREF_TABLE_COLUMN_WIDTHS,
     REGISTRY_PREF_TABLE_COLUMN_WIDTHS_LEGACY,
+    REGISTRY_PREF_VISIBLE_COLUMNS,
     REGISTRY_TABLE_COLUMN_DEFS,
     REGISTRY_TABLE_PATH_COLUMN,
     clamp_width_for_fit,
@@ -16,7 +18,9 @@ from gui_qt.games_registry_table import (
     interactive_column_ids,
     migrate_stored_widths,
     min_width_for_column,
+    normalize_visible_column_ids,
     row_cell_values,
+    visible_column_ids_for_persist,
     widths_for_persist,
 )
 
@@ -29,17 +33,41 @@ class GamesRegistryTablePresetsTests(unittest.TestCase):
         self.assertEqual(REGISTRY_TABLE_COLUMN_DEFS[-1].id, "path")
         self.assertEqual(
             column_headers(),
-            ["项目", "目录状态", "版本", "游玩", "翻译", "路径"],
+            [
+                "项目",
+                "目录状态",
+                "版本",
+                "游玩",
+                "翻译",
+                "来源",
+                "翻译进度",
+                "引擎",
+                "最近刷新",
+                "备注摘要",
+                "路径",
+            ],
         )
         self.assertEqual(
             interactive_column_ids(),
-            ["name", "layout", "version", "play", "translation"],
+            [
+                "name",
+                "layout",
+                "version",
+                "play",
+                "translation",
+                "source",
+                "progress",
+                "engine",
+                "last_refresh",
+                "notes",
+            ],
         )
         self.assertEqual(REGISTRY_PREF_TABLE_COLUMN_WIDTHS, "table_column_widths")
         self.assertEqual(
             REGISTRY_PREF_TABLE_COLUMN_WIDTHS_LEGACY,
             "table_column_width_fractions",
         )
+        self.assertEqual(REGISTRY_PREF_VISIBLE_COLUMNS, "visible_columns")
 
     def test_row_cell_values_follow_column_order(self) -> None:
         row = SimpleNamespace(
@@ -48,11 +76,42 @@ class GamesRegistryTablePresetsTests(unittest.TestCase):
             version="1.0",
             play_status="进行中",
             translation_status="翻译中",
+            source_site="itch.io",
+            translation_progress="73% · 待译 412",
+            engine="renpy",
+            last_refresh_at="2026-07-29T12:00:00+00:00",
+            notes="待校对",
             path="Game_Demo",
         )
         self.assertEqual(
             row_cell_values(row),
-            ["Demo", "就绪", "1.0", "进行中", "翻译中", "Game_Demo"],
+            [
+                "Demo",
+                "就绪",
+                "1.0",
+                "进行中",
+                "翻译中",
+                "itch.io",
+                "73% · 待译 412",
+                "renpy",
+                "2026-07-29T12:00:00+00:00",
+                "待校对",
+                "Game_Demo",
+            ],
+        )
+
+    def test_visible_columns_default_normalize_and_keep_name(self) -> None:
+        self.assertEqual(
+            normalize_visible_column_ids(None),
+            list(REGISTRY_DEFAULT_VISIBLE_COLUMN_IDS),
+        )
+        self.assertEqual(
+            normalize_visible_column_ids(["progress", "path", "unknown"]),
+            ["name", "progress", "path"],
+        )
+        self.assertEqual(
+            visible_column_ids_for_persist(["notes", "source"]),
+            ["name", "source", "notes"],
         )
 
     def test_min_width_covers_header_and_longest_enum_sample(self) -> None:

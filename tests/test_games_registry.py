@@ -101,7 +101,10 @@ class GamesRegistryTests(unittest.TestCase):
         }
         rendered = registry.render_games_md(payload)
         self.assertIn("generated from games_registry.json", rendered)
-        self.assertIn("| Alpha | `Game_Alpha` | 1.0 | 就绪 | 待确认 | 待翻译 | 下一步：初译。 |", rendered)
+        self.assertIn(
+            "| Alpha | `Game_Alpha` |  | 1.0 | 就绪 | 待确认 | 待翻译 | 下一步：初译。 |",
+            rendered,
+        )
 
     def test_suggest_translation_status_for_empty_work(self):
         project = {"translation_status_source": "doctor"}

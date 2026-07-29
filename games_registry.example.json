@@ -3,11 +3,23 @@
   "workspace_root": "C:/RenPy_Workspace",
   "updated_at": "2026-07-04T00:00:00+00:00",
   "update_summary": "示例 registry；请用 import-md 从 GAMES.md 初始化",
+  "preferences": {
+    "visible_columns": [
+      "name",
+      "layout",
+      "version",
+      "play",
+      "translation",
+      "source",
+      "path"
+    ]
+  },
   "projects": [
     {
       "id": "game_example",
       "name": "Example Game",
       "path": "Game_Example",
+      "source_url": "https://example.itch.io/example-game",
       "engine": "renpy",
       "in_renpy_pipeline": true,
       "version": "1.0.0",

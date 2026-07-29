@@ -46,6 +46,9 @@ RenPy_Workspace/              # 用户指定的工作区根
 每条 `projects[]` 记录通常包含：
 
 - **人工字段**：`name`、`path`、`version`、`play_status`、`translation_status`、`notes` 等
+- **发布来源**：可选 `source_url`，只保存一个人工维护的主要发布页；允许留空，
+  非空值必须是完整的 `http://` 或 `https://` URL。它不参与项目 identity、
+  `game_root` 切换或 Batch 安全指纹
 - **自动字段**（写在 `auto` 下）：最近刷新时间、TL 文件数、待译条数、对话完成比例、是否有活跃批次等
 - **`version` / `version_source`**：刷新时由 `detect_game_version()` 探测（见下）；`version_source=manual` 且已有 version 时刷新不覆盖
 - **`translation_status_source`**：标记翻译状态由谁维护
@@ -55,6 +58,9 @@ RenPy_Workspace/              # 用户指定的工作区根
   - `batch`：写回后 `record-batch` 更新
 
 游玩状态（`play_status`）可在 GUI「项目详情」或 JSON 中维护；刷新不会改写。
+`source_url` 同样由人工维护：扫描、导入新项目、快速 / 深度刷新和 Batch
+记录不会猜测、联网补全或覆盖已有值；新项目默认留空。旧 registry 没有该字段时
+可直接读取，不需要迁移 schema。
 
 ### 版本如何探测
 
@@ -77,7 +83,11 @@ JSON 使用字段 `version` / `game_version` / `build_version`。
 | **MD → JSON** | GUI「从 GAMES.md 导入」或 `import-md` | 解析 MD 表格写入 JSON；已有 registry 时可用 `--merge` **按路径合并** |
 | **日常真源** | 刷新、写回 `record-batch`、GUI 编辑 | 一律写入 `games_registry.json` |
 
-合并导入时：同路径项目的 `name` / 版本 / 状态 / 备注等以 GAMES.md 为准；**未出现在 MD 中的 JSON 项目会保留**。合并后若要让 Markdown 与 JSON 一致，请再执行「同步 GAMES.md」。
+合并导入时：同路径项目的 `name` / 版本 / 状态 / 备注等以 GAMES.md 为准；
+**未出现在 MD 中的 JSON 项目会保留**。新增的“来源”列会更新 `source_url`
+（空单元格可清空）；旧七列表格没有来源语义，因此不会意外清空 JSON 中已有的
+`source_url`。`render-md` 对非空来源输出可点击 Markdown 链接。合并后若要让
+Markdown 与 JSON 一致，请再执行「同步 GAMES.md」。
 
 手改 `GAMES.md` 后不要用「同步 GAMES.md」（会覆盖你的修改）；应使用「从 GAMES.md 导入」拉回 JSON。
 
@@ -141,11 +151,12 @@ python games_registry.py show --project game_example
 安装 GUI 依赖后，在图形界面 **设置 → 项目列表** 分区中管理总表：
 
 - **创建 / 接入工作区…**：首次使用必做。选择目录后只读预览（空目录 / 已有总表 / 仅 GAMES.md / 仅 Game_* / 混合 / 损坏），确认后再写入 `games_registry.json`，成功后才保存 `workspace_root`。未指定前项目列表为空状态，不可扫描/导入/切换。重复执行幂等，不会整表覆盖已有合法总表
-- 表格列（EUI 列预设 + Carbon 资源表扫读顺序）：**项目、目录状态、版本、游玩、翻译、路径**  
+- 表格列（EUI 列预设 + Carbon 资源表扫读顺序）：默认显示 **项目、目录状态、版本、游玩、翻译、来源、路径**
   - **目录状态**为短中文：就绪 / 需关注 / 建议使用 work / 不可用 / 非 Ren'Py  
   - **路径列在最后**，为唯一弹性列（`StretchLastSection`），自动占满剩余宽度；长路径省略，悬停看全文  
   - **其它列为可拖 Interactive 列**；最小宽度取 max(表头, 已知枚举最长文案)（EUI predefined-value 规则）；过长单元格省略 + tooltip  
-  - 表头右键：重置列宽 / 按内容调整固定列；偏好写入 `preferences.table_column_widths`（列 id→px；仍可读旧键 `table_column_width_fractions`）
+  - 表头右键的“显示列”可开关列并恢复默认显示；项目名称始终可见，列顺序固定，路径在可见时仍是最后一个弹性列。默认显示：**项目、目录状态、版本、游玩、翻译、来源、路径**；可选显示：**翻译进度、引擎、最近刷新、备注摘要**。可见列写入 `preferences.visible_columns`；隐藏列不丢数据、搜索能力或原宽度
+  - 同一菜单还可重置列宽 / 按内容调整固定列；宽度写入 `preferences.table_column_widths`（列 id→px；仍可读旧键 `table_column_width_fractions`）
   - 总览表有最小高度，并与下方**项目详情**共用可拖拽竖向分隔（`QSplitter`）；无选中行时详情收起，表格占满剩余高度
 - 悬停 tooltip：自动扫描摘要、翻译状态来源、备注等
 - **项目刷新**（始终可见）：**刷新当前 / 刷新全部**、**扫描模式**（快速 / 深度）、**停止**、**维护 ▾**（同一左侧操作簇）
@@ -156,9 +167,12 @@ python games_registry.py show --project game_example
 - **同步 GAMES.md**：由当前 `games_registry.json` 重新生成 Markdown 总表
 - **停止**：刷新或导入进行中可用；会等待当前任务协作式完成后停
 - **切换到此项目**：将工作台 `game_root` 切到选中行（优先 `work/`），**留在项目列表**，不自动跳到「项目」分区
-- **项目详情**：可改显示名称、游玩 / 翻译 / 备注；只读展示目录状态、Doctor 模式、最近刷新时间；可用 **收起详情** 把高度还给总览表
+- **项目详情**：可改显示名称、发布地址、游玩 / 翻译 / 备注；发布地址允许清空，
+  非空只接受 HTTP(S)。只有点击 **打开发布页** 才调用系统浏览器，不会自动联网抓取
+  标题、版本、封面或其它远程数据；只读展示目录状态、Doctor 模式、最近刷新时间
+- **收起详情**：把高度还给总览表
 - **删除项目**：仅从总表移除记录，不删除磁盘上的 `Game_*` 目录
-- **搜索 / 筛选 / 排序**：按关键词、引擎、翻译状态过滤，并按名称 / 路径 / 翻译状态 / 最近刷新排序
+- **搜索 / 筛选 / 排序**：关键词同时匹配完整发布地址、显示站点名及其它现有字段；可按引擎、翻译状态过滤，并按名称 / 路径 / 翻译状态 / 最近刷新排序
 - **打开分区时自动扫描新项目**：**默认关闭**；可在「维护」中手动勾选。开启后进入本分区会扫描工作区内未登记的 `Game_*`。偏好写入 `games_registry.json` 的 `preferences`
 - **刷新成功后**会询问是否同步 `GAMES.md`（与写回后行为一致）
 - 刷新时表格**仍可滚动**；切换与刷新按钮会暂时禁用
@@ -254,3 +268,5 @@ python -m pytest tests/test_game_ingest.py tests/test_games_registry.py tests/te
 - `ingest` v1 仅支持目录与 `.zip`（复制、不移动）；不自动 bootstrap-work；目标 `Game_*` 已存在时需换游戏名称
 - 未勾选「打开时自动扫描」时，不会自动写入新发现的项目；需在「维护」中手动点「扫描新项目」或运行 `discover`
 - GUI 可改显示名称，但**不能**通过对话框变更项目路径（`path`）或移动磁盘目录
+- 每个项目目前只维护一个主要 `source_url`；不自动搜索来源、不监控版本，也不下载
+  更新。需要多 storefront 时应另行扩展结构

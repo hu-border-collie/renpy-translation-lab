@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterator
+from urllib.parse import urlsplit
 
 ProgressCallback = Callable[[int, int, str], None]
 CancelCheck = Callable[[], bool]
@@ -55,6 +56,11 @@ TRANSLATION_STATUSES = frozenset(
 )
 ENGINES = frozenset({"renpy", "unity", "tyrano", "other"})
 STATUS_SOURCES = frozenset({"manual", "doctor", "batch", "scan"})
+SOURCE_URL_SCHEMES = frozenset({"http", "https"})
+SOURCE_URL_VALIDATION_MESSAGE = (
+    "发布地址仅支持完整的 http:// 或 https:// URL；"
+    "可清空，或输入例如 https://example.itch.io/example-game。"
+)
 WORKSPACE_SKIP_DIR_NAMES = frozenset(
     {
         "renpy-translation-lab",
@@ -93,13 +99,10 @@ GAMES_MD_HEADER = """# 游戏状态总表
 
 ## 项目状态
 
-| 项目 | 路径 | 当前版本 | 目录状态 | 游玩状态 | 翻译状态 | 备注 / 下一步 |
-|---|---|---|---|---|---|---|
+| 项目 | 路径 | 来源 | 当前版本 | 目录状态 | 游玩状态 | 翻译状态 | 备注 / 下一步 |
+|---|---|---|---|---|---|---|---|
 """
 
-TABLE_ROW_RE = re.compile(
-    r"^\|\s*(?P<name>[^|]+?)\s*\|\s*`(?P<path>[^`]+)`\s*\|\s*(?P<version>[^|]*?)\s*\|\s*(?P<layout>[^|]*?)\s*\|\s*(?P<play>[^|]*?)\s*\|\s*(?P<translation>[^|]*?)\s*\|\s*(?P<notes>[^|]*?)\s*\|$"
-)
 VERSION_CONFIG_RE = re.compile(
     r"""config\.version\s*=\s*['"]([^'"]+)['"]""",
     re.IGNORECASE,
@@ -258,6 +261,45 @@ def humanize_project_name(rel_path: str) -> str:
     return leaf.replace("_", " ").strip() or rel_path
 
 
+def normalize_source_url(raw: object) -> str:
+    """Return a trimmed HTTP(S) source URL, or raise a user-actionable error."""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if any(char.isspace() or ord(char) < 32 for char in text):
+        raise ValueError(SOURCE_URL_VALIDATION_MESSAGE)
+    try:
+        parsed = urlsplit(text)
+        hostname = parsed.hostname
+    except ValueError as exc:
+        raise ValueError(SOURCE_URL_VALIDATION_MESSAGE) from exc
+    if parsed.scheme.lower() not in SOURCE_URL_SCHEMES or not parsed.netloc or not hostname:
+        raise ValueError(SOURCE_URL_VALIDATION_MESSAGE)
+    return text
+
+
+def source_site_name(raw: object) -> str:
+    """Return a compact storefront/site label for a valid source URL."""
+    try:
+        text = normalize_source_url(raw)
+    except ValueError:
+        return ""
+    if not text:
+        return ""
+    hostname = (urlsplit(text).hostname or "").lower().rstrip(".")
+    if hostname == "itch.io" or hostname.endswith(".itch.io"):
+        return "itch.io"
+    if hostname in {"steampowered.com", "store.steampowered.com", "steamcommunity.com"}:
+        return "Steam"
+    if hostname == "gog.com" or hostname.endswith(".gog.com"):
+        return "GOG"
+    if hostname == "patreon.com" or hostname.endswith(".patreon.com"):
+        return "Patreon"
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+    return hostname
+
+
 def iter_workspace_project_paths(workspace_root: Path) -> list[str]:
     """Return relative paths for workspace folders that look like game projects."""
     paths: list[str] = []
@@ -305,6 +347,7 @@ def make_project_from_discovered_path(workspace_root: Path, rel_path: str) -> di
         "path": normalized_path,
         "version": version or "待确认",
         "version_source": version_source,
+        "source_url": "",
         "layout_status": "",
         "play_status": "待确认",
         "translation_status": "待确认",
@@ -875,37 +918,155 @@ def suggest_translation_status(project: dict[str, Any], auto: dict[str, Any]) ->
     return "待润色"
 
 
+_GAMES_MD_HEADER_FIELDS: dict[str, str] = {
+    "项目": "name",
+    "路径": "path",
+    "来源": "source_url",
+    "当前版本": "version",
+    "版本": "version",
+    "目录状态": "layout_status",
+    "游玩状态": "play_status",
+    "游玩": "play_status",
+    "翻译状态": "translation_status",
+    "翻译": "translation_status",
+    "备注/下一步": "notes",
+    "备注": "notes",
+}
+_GAMES_MD_OLD_FIELDS = (
+    "name",
+    "path",
+    "version",
+    "layout_status",
+    "play_status",
+    "translation_status",
+    "notes",
+)
+_GAMES_MD_SOURCE_FIELDS = (
+    "name",
+    "path",
+    "source_url",
+    "version",
+    "layout_status",
+    "play_status",
+    "translation_status",
+    "notes",
+)
+_MD_LINK_RE = re.compile(
+    r"^\[[^\]]*\]\(\s*(?:<(?P<angle>[^>]*)>|(?P<plain>.*))\s*\)$"
+)
+
+
+def _split_md_table_row(line: str) -> list[str]:
+    """Split a Markdown table row while preserving escaped pipes."""
+    text = line.strip()
+    if not text.startswith("|"):
+        return []
+    body = text[1:-1] if text.endswith("|") else text[1:]
+    cells: list[str] = []
+    cell: list[str] = []
+    index = 0
+    while index < len(body):
+        char = body[index]
+        if char == "\\" and index + 1 < len(body) and body[index + 1] in {"\\", "|"}:
+            cell.append(body[index + 1])
+            index += 2
+            continue
+        if char == "|":
+            cells.append("".join(cell).strip())
+            cell = []
+        else:
+            cell.append(char)
+        index += 1
+    cells.append("".join(cell).strip())
+    return cells
+
+
+def _games_md_header_field(cell: str) -> str:
+    normalized = re.sub(r"\s+", "", cell)
+    return _GAMES_MD_HEADER_FIELDS.get(normalized, "")
+
+
+def _strip_md_code_cell(cell: str) -> str:
+    text = cell.strip()
+    if len(text) >= 2 and text.startswith("`") and text.endswith("`"):
+        return text[1:-1].strip()
+    return text
+
+
+def _parse_source_url_cell(cell: str) -> str:
+    text = cell.strip()
+    if not text:
+        return ""
+    match = _MD_LINK_RE.match(text)
+    if match:
+        text = (match.group("angle") or match.group("plain") or "").strip()
+    elif len(text) >= 2 and text.startswith("<") and text.endswith(">"):
+        text = text[1:-1].strip()
+    return normalize_source_url(text)
+
+
 def parse_games_md_table(content: str) -> list[dict[str, Any]]:
+    """Parse both legacy seven-column and source-aware Markdown tables."""
     projects: list[dict[str, Any]] = []
     seen_paths: set[str] = set()
+    header_fields: list[str] | None = None
 
-    for line in content.splitlines():
-        if not line.startswith("|") or line.startswith("|---"):
+    for line_number, line in enumerate(content.splitlines(), start=1):
+        cells = _split_md_table_row(line)
+        if not cells:
             continue
-        match = TABLE_ROW_RE.match(line)
-        if not match:
+        if all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells):
             continue
-        path = match.group("path").strip()
-        if path in seen_paths:
+
+        candidate_header = [_games_md_header_field(cell) for cell in cells]
+        if "name" in candidate_header and "path" in candidate_header:
+            header_fields = candidate_header
+            continue
+
+        if header_fields is not None:
+            if len(cells) != len(header_fields):
+                continue
+            values = {
+                field: cell
+                for field, cell in zip(header_fields, cells)
+                if field
+            }
+        elif len(cells) == len(_GAMES_MD_OLD_FIELDS):
+            values = dict(zip(_GAMES_MD_OLD_FIELDS, cells))
+        elif len(cells) == len(_GAMES_MD_SOURCE_FIELDS):
+            values = dict(zip(_GAMES_MD_SOURCE_FIELDS, cells))
+        else:
+            continue
+
+        path = _strip_md_code_cell(values.get("path", ""))
+        name = values.get("name", "").strip()
+        if not path or not name or path in seen_paths:
             continue
         seen_paths.add(path)
 
-        name = match.group("name").strip()
-        projects.append(
-            {
-                "id": slugify_project_id(path, name),
-                "name": name,
-                "path": path,
-                "version": match.group("version").strip(),
-                "version_source": "manual",
-                "layout_status": match.group("layout").strip(),
-                "play_status": match.group("play").strip() or "待确认",
-                "translation_status": normalize_translation_status(match.group("translation")),
-                "translation_status_source": "manual",
-                "notes": match.group("notes").strip(),
-                "auto": {},
-            }
-        )
+        project: dict[str, Any] = {
+            "id": slugify_project_id(path, name),
+            "name": name,
+            "path": path,
+            "version": values.get("version", "").strip(),
+            "version_source": "manual",
+            "layout_status": values.get("layout_status", "").strip(),
+            "play_status": values.get("play_status", "").strip() or "待确认",
+            "translation_status": normalize_translation_status(
+                values.get("translation_status", "")
+            ),
+            "translation_status_source": "manual",
+            "notes": values.get("notes", "").strip(),
+            "auto": {},
+        }
+        if "source_url" in values:
+            try:
+                project["source_url"] = _parse_source_url_cell(values["source_url"])
+            except ValueError as exc:
+                raise ValueError(
+                    f"GAMES.md 第 {line_number} 行（{path}）：{exc}"
+                ) from exc
+        projects.append(project)
     return projects
 
 
@@ -1186,7 +1347,7 @@ def plan_workspace_setup(path: Path | str) -> WorkspaceSetupPlan:
         try:
             content = md_path.read_text(encoding="utf-8-sig")
             games_md_row_count = len(parse_games_md_table(content))
-        except (OSError, UnicodeError) as exc:
+        except (OSError, UnicodeError, ValueError) as exc:
             games_md_parse_ok = False
             notes.append(f"读取 GAMES.md 失败：{exc}")
 
@@ -1607,6 +1768,8 @@ def import_from_games_md(
             f"从 {md_path.name} 合并导入：新增 {added} 个，更新 {updated} 个"
         )
     else:
+        for project in projects:
+            project.setdefault("source_url", "")
         registry = empty_registry(workspace)
         registry["projects"] = projects
         registry["update_summary"] = f"从 {md_path.name} 导入 {len(projects)} 个项目"
@@ -1630,6 +1793,7 @@ def _merge_projects_by_path(
         path_key = str(project["path"]).replace("\\", "/").strip("/")
         current = existing_by_path.get(path_key)
         if current is None:
+            project.setdefault("source_url", "")
             project["id"] = ensure_unique_project_id(registry, str(project.get("id") or ""))
             registry.setdefault("projects", []).append(project)
             existing_by_path[path_key] = project
@@ -1651,6 +1815,8 @@ def _merge_projects_by_path(
             value = project.get(field)
             if value not in (None, ""):
                 current[field] = value
+        if "source_url" in project:
+            current["source_url"] = str(project.get("source_url") or "").strip()
         updated += 1
     return added, updated
 
@@ -1715,7 +1881,11 @@ def update_project_manual_fields(
     play_status: str | None = None,
     translation_status: str | None = None,
     notes: str | None = None,
+    source_url: str | None = None,
 ) -> dict[str, Any] | None:
+    normalized_source_url = (
+        normalize_source_url(source_url) if source_url is not None else None
+    )
     project = find_project(registry, project_id)
     if project is None:
         return None
@@ -1731,6 +1901,8 @@ def update_project_manual_fields(
         project["translation_status_source"] = "manual"
     if notes is not None:
         project["notes"] = notes.strip()
+    if normalized_source_url is not None:
+        project["source_url"] = normalized_source_url
     return project
 
 
@@ -1835,7 +2007,36 @@ def render_notes(project: dict[str, Any]) -> str:
 
 
 def _escape_md_table_cell(text: str) -> str:
-    return str(text).replace("|", "\\|")
+    return (
+        str(text)
+        .replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r\n", " ")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
+def _escape_md_link_destination(url: str) -> str:
+    return (
+        url.replace("\\", "%5C")
+        .replace("|", "%7C")
+        .replace("<", "%3C")
+        .replace(">", "%3E")
+        .replace(" ", "%20")
+    )
+
+
+def render_source_url(project: dict[str, Any]) -> str:
+    raw = str(project.get("source_url") or "").strip()
+    if not raw:
+        return ""
+    try:
+        source_url = normalize_source_url(raw)
+    except ValueError:
+        return _escape_md_table_cell(raw)
+    label = _escape_md_table_cell(source_site_name(source_url) or "发布页")
+    return f"[{label}](<{_escape_md_link_destination(source_url)}>)"
 
 
 def render_games_md(registry: dict[str, Any]) -> str:
@@ -1846,6 +2047,7 @@ def render_games_md(registry: dict[str, Any]) -> str:
     for project in projects:
         name = _escape_md_table_cell(project.get("name", ""))
         path = _escape_md_table_cell(project.get("path", ""))
+        source = render_source_url(project)
         version = _escape_md_table_cell(project.get("version") or "待确认")
         layout = _escape_md_table_cell(
             format_layout_status_label(resolve_layout_status(project))
@@ -1854,7 +2056,7 @@ def render_games_md(registry: dict[str, Any]) -> str:
         translation = _escape_md_table_cell(render_translation_status(project))
         notes = _escape_md_table_cell(render_notes(project))
         lines.append(
-            f"| {name} | `{path}` | {version} | {layout} | {play} | {translation} | {notes} |"
+            f"| {name} | `{path}` | {source} | {version} | {layout} | {play} | {translation} | {notes} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -2157,12 +2359,16 @@ def main(argv: list[str] | None = None) -> int:
         if not source_md.is_file():
             print(f"GAMES.md not found: {source_md}", file=sys.stderr)
             return 1
-        registry = import_from_games_md(
-            md_path=source_md,
-            registry_path=registry_path,
-            workspace_root=workspace,
-            merge=getattr(args, "merge", False),
-        )
+        try:
+            registry = import_from_games_md(
+                md_path=source_md,
+                registry_path=registry_path,
+                workspace_root=workspace,
+                merge=getattr(args, "merge", False),
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
         print(f"Imported {len(registry.get('projects', []))} projects -> {registry_path}")
         return 0
 

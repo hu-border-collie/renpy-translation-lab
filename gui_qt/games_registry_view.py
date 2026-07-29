@@ -20,6 +20,7 @@ from games_registry import (
     load_registry,
     resolve_doctor_mode,
     resolve_layout_status,
+    source_site_name,
 )
 from translator_runtime import canonical_abs_path, resolve_effective_game_root
 
@@ -64,6 +65,9 @@ class RegistryRow:
     in_renpy_pipeline: bool
     work_dir: str
 
+    source_url: str = ""
+    source_site: str = ""
+    translation_progress: str = ""
     auto_summary: str = ""
     translation_status_source: str = ""
     doctor_mode: str = ""
@@ -120,6 +124,18 @@ def format_auto_summary(auto: dict[str, Any]) -> str:
     return "；".join(parts)
 
 
+def format_translation_progress(auto: dict[str, Any]) -> str:
+    """Compact optional-column summary from existing scan fields."""
+    parts: list[str] = []
+    pct = auto.get("dialogue_translated_pct")
+    if isinstance(pct, (int, float)) and not isinstance(pct, bool):
+        parts.append(f"{pct:g}%")
+    pending = auto.get("pending_tasks")
+    if isinstance(pending, int) and not isinstance(pending, bool):
+        parts.append(f"待译 {pending}")
+    return " · ".join(parts)
+
+
 def resolve_project_work_dir(workspace_root: Path, project_path: str) -> Path:
     project_root = workspace_root / Path(project_path.replace("\\", "/"))
     return Path(canonical_abs_path(resolve_effective_game_root(str(project_root))))
@@ -142,6 +158,7 @@ def registry_row_from_project(workspace_root: Path, project: dict[str, Any]) -> 
     auto = project.get("auto") if isinstance(project.get("auto"), dict) else {}
     engine = str(project.get("engine") or auto.get("engine") or "renpy")
     status_source = str(project.get("translation_status_source") or "")
+    source_url = str(project.get("source_url") or "").strip()
     return RegistryRow(
         project_id=str(project.get("id") or ""),
         name=str(project.get("name") or ""),
@@ -154,6 +171,9 @@ def registry_row_from_project(workspace_root: Path, project: dict[str, Any]) -> 
         engine=engine,
         in_renpy_pipeline=bool(project.get("in_renpy_pipeline", True)),
         work_dir=resolve_project_work_dir(workspace_root, path).as_posix() if path else "",
+        source_url=source_url,
+        source_site=source_site_name(source_url) or source_url,
+        translation_progress=format_translation_progress(auto),
         auto_summary=format_auto_summary(auto),
         translation_status_source=status_source,
         doctor_mode=format_doctor_mode_label(resolve_doctor_mode(project)),
@@ -271,10 +291,14 @@ def _row_search_blob(row: RegistryRow) -> str:
             row.layout_status,
             row.play_status,
             row.translation_status,
+            row.source_url,
+            row.source_site,
+            row.translation_progress,
             row.notes,
             row.engine,
             row.doctor_mode,
             row.auto_summary,
+            row.last_refresh_at,
         )
     ).lower()
 

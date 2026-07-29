@@ -337,11 +337,12 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
             registry_path.write_text(json.dumps({"projects": []}), encoding="utf-8")
 
             dialog = GamesRegistryDialog(None, workspace_root=workspace)
-            self.assertEqual(dialog._table.columnCount(), 6)
+            self.assertEqual(dialog._table.columnCount(), 11)
             self.assertTrue(hasattr(dialog, "_import_md_btn"))
             self.assertTrue(hasattr(dialog, "_discover_btn"))
             self.assertTrue(hasattr(dialog, "_sync_md_btn"))
             self.assertTrue(hasattr(dialog, "_save_fields_btn"))
+            self.assertTrue(hasattr(dialog, "_source_url_edit"))
 
     def test_save_selected_project_fields_updates_registry(self):
         with tempfile.TemporaryDirectory() as tmp:

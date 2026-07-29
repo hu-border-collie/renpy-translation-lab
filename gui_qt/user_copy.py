@@ -106,6 +106,21 @@ SETTINGS_WORKSPACE_UNSAVED_CHANGES = (
     "其他设置有未保存的更改；可保存、重新加载放弃，或切换项目时再处理。"
 )
 
+
+GAMES_REGISTRY_SOURCE_URL_COPY = {
+    "field_label": "发布地址",
+    "placeholder": "https://…（可留空）",
+    "tooltip": "游戏发布来源，仅接受 http:// 或 https://；不会自动访问网络。",
+    "open_action": "打开发布页",
+    "invalid_title": "发布地址无效",
+    "open_failed_title": "无法打开发布页",
+    "open_failed_body": (
+        "系统浏览器未能打开该地址；请检查默认浏览器设置，"
+        "或复制发布地址后手动打开。"
+    ),
+    "save_tooltip": "保存当前选中项目的名称、发布地址、游玩/翻译状态及备注。",
+}
+
 BOOTSTRAP_FIELD_LABELS = {
     "store_dir": "存储目录",
     "scan_scope": "扫描范围",
