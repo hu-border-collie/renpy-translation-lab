@@ -6,7 +6,9 @@ from gui_qt.check_report import (
     idle_writeback_summary_for_work_mode,
     parse_check_output,
     recheck_writeback_ready,
+    summarize_apply_envelope,
     summarize_apply_output,
+    summarize_check_envelope,
     summarize_check_output,
     summarize_manifest_writeback,
 )
@@ -107,6 +109,50 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertEqual(summary.message.count("补译"), 1)
         self.assertIn("重新检查", summary.message)
         self.assertIn("可写回", summary.message)
+
+    def test_summarize_check_envelope_uses_structured_counts_and_reasons(self):
+        summary = summarize_check_envelope(
+            {
+                "ok": True,
+                "status": "warn",
+                "result": {
+                    "check": {
+                        "pending_files": 1,
+                        "pending_lines": 4,
+                        "failure_items": 2,
+                        "safety_reasons": {"warn": {"source_mismatch": 2}},
+                    }
+                },
+                "artifacts": {"check_report": r"C:\pkg\check.jsonl"},
+            },
+            exit_code=0,
+            manifest_path=r"C:\pkg\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "warn")
+        self.assertIn("1 个文件", "\n".join(summary.facts))
+        self.assertTrue(any("source_mismatch" in item for item in summary.findings))
+
+    def test_summarize_apply_envelope_uses_structured_result(self):
+        summary = summarize_apply_envelope(
+            {
+                "ok": True,
+                "status": "applied",
+                "result": {
+                    "apply": {
+                        "applied_files": 2,
+                        "applied_lines": 18,
+                        "next_split_manifest": r"C:\pkg\part02\manifest.json",
+                    }
+                },
+            },
+            exit_code=0,
+            manifest_path=r"C:\pkg\part01\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "applied")
+        self.assertIn("已写回 2 个文件", "\n".join(summary.facts))
+        self.assertIn("下一拆分包", "\n".join(summary.facts))
 
     def test_summarize_apply_output_marks_completed(self):
         summary = summarize_apply_output(
@@ -254,7 +300,7 @@ class GuiCheckReportTests(unittest.TestCase):
     def test_build_recheck_cli_args(self):
         self.assertEqual(
             build_recheck_cli_args(r"C:\pkg\manifest.json"),
-            ["check", r"C:\pkg\manifest.json"],
+            ["check", r"C:\pkg\manifest.json", "--output", "json", "--non-interactive"],
         )
 
     def test_recheck_writeback_ready_requires_batch_translation_and_manifest(self):

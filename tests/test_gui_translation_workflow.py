@@ -1,4 +1,7 @@
+import json
 import unittest
+
+import cli_contract
 
 from gui_qt.translation_workflow import (
     TranslationWorkflow,
@@ -36,17 +39,61 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
         self.assertEqual(extract_job_state("State: JOB_STATE_SUCCEEDED\n"), "JOB_STATE_SUCCEEDED")
         self.assertEqual(extract_safety_status("Safety status: safe\n"), "safe")
 
+    def test_extracts_shared_json_envelope_fields(self):
+        manifest_path = r"C:\pkg\manifest.json"
+        status_output = json.dumps(
+            cli_contract.success_envelope(
+                "status",
+                status="JOB_STATE_SUCCEEDED",
+                artifacts={"manifest": manifest_path},
+            )
+        )
+        check_output = json.dumps(
+            cli_contract.success_envelope(
+                "check",
+                status="safe",
+                artifacts={"manifest": manifest_path},
+            )
+        )
+
+        self.assertEqual(extract_job_state(status_output), "JOB_STATE_SUCCEEDED")
+        self.assertEqual(extract_safety_status(check_output), "safe")
+
+    def test_json_build_envelope_sets_manifest_without_parsing_console_copy(self):
+        manifest_path = r"C:\pkg\manifest.json"
+        workflow = TranslationWorkflow.start_new()
+        output = json.dumps(
+            cli_contract.success_envelope(
+                "build",
+                status="LOCAL_ONLY",
+                artifacts={"manifest": manifest_path},
+            )
+        )
+
+        update = workflow.complete_current_step(0, output)
+
+        self.assertTrue(update.should_continue)
+        self.assertEqual(workflow.manifest_path, manifest_path)
+
     def test_start_workflow_builds_then_submits_created_manifest(self):
         workflow = TranslationWorkflow.start_new()
 
-        self.assertEqual(workflow.current_step().args, ["build"])
+        self.assertEqual(
+            workflow.current_step().args, ["build", "--output", "json", "--non-interactive"]
+        )
         update = workflow.complete_current_step(0, BUILD_OUTPUT)
 
         self.assertTrue(update.should_continue)
         self.assertEqual(update.status, "running")
         self.assertEqual(
             workflow.current_step().args,
-            ["submit", "C:\\Games\\Example\\work\\logs\\batch_jobs\\job1\\manifest.json"],
+            [
+                "submit",
+                "C:\\Games\\Example\\work\\logs\\batch_jobs\\job1\\manifest.json",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
         )
 
     def test_build_without_pending_lines_finishes_without_submitting_stale_manifest(self):
@@ -73,7 +120,10 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
             {"job_name": ""},
         )
 
-        self.assertEqual(workflow.current_step().args, ["submit", "C:\\package\\manifest.json"])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["submit", "C:\\package\\manifest.json", "--output", "json", "--non-interactive"],
+        )
 
     def test_resume_submitted_manifest_starts_from_status(self):
         workflow = TranslationWorkflow.resume_manifest(
@@ -81,7 +131,10 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
             {"job_name": "batches/example"},
         )
 
-        self.assertEqual(workflow.current_step().args, ["status", "C:\\package\\manifest.json"])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["status", "C:\\package\\manifest.json", "--output", "json", "--non-interactive"],
+        )
 
     def test_resume_safe_retry_manifest_merges_then_checks_parent(self):
         retry_path = r"C:\package\retry_parts\retry1\manifest.json"
@@ -99,7 +152,10 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
         self.assertEqual(workflow.current_step().args, ["merge-retry", parent_path, retry_path])
         update = workflow.complete_current_step(0, f"Merged retry results into: {parent_path}\n")
         self.assertTrue(update.should_continue)
-        self.assertEqual(workflow.current_step().args, ["check", parent_path])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["check", parent_path, "--output", "json", "--non-interactive"],
+        )
         final = workflow.complete_current_step(0, "Safety status: safe\n")
         self.assertEqual(final.status, "done")
         self.assertEqual(workflow.manifest_path, parent_path)
@@ -116,9 +172,17 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(workflow.current_step().args, ["download", retry_path])
-        workflow.complete_current_step(0, r"Saved results to: C:\package\retry_parts\retry1\results.jsonl" + "\n")
-        self.assertEqual(workflow.current_step().args, ["check", retry_path])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["download", retry_path, "--output", "json", "--non-interactive"],
+        )
+        workflow.complete_current_step(
+            0, r"Saved results to: C:\package\retry_parts\retry1\results.jsonl" + "\n"
+        )
+        self.assertEqual(
+            workflow.current_step().args,
+            ["check", retry_path, "--output", "json", "--non-interactive"],
+        )
         update = workflow.complete_current_step(0, "Safety status: safe\n")
 
         self.assertTrue(update.should_continue)
@@ -143,20 +207,34 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
             {"job_name": "batches/example", "job_state": "JOB_STATE_SUCCEEDED"},
         )
 
-        self.assertEqual(workflow.current_step().args, ["download", manifest_path])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["download", manifest_path, "--output", "json", "--non-interactive"],
+        )
         workflow.complete_current_step(0, "Saved results to: " + r"C:\package\results.jsonl" + "\n")
-        self.assertEqual(workflow.current_step().args, ["check", manifest_path])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["check", manifest_path, "--output", "json", "--non-interactive"],
+        )
 
     def test_status_succeeded_continues_to_download_and_check(self):
         workflow = TranslationWorkflow.resume_latest("C:\\package\\manifest.json")
 
         status_update = workflow.complete_current_step(0, "State: JOB_STATE_SUCCEEDED\n")
         self.assertTrue(status_update.should_continue)
-        self.assertEqual(workflow.current_step().args, ["download", "C:\\package\\manifest.json"])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["download", "C:\\package\\manifest.json", "--output", "json", "--non-interactive"],
+        )
 
-        download_update = workflow.complete_current_step(0, "Saved results to: C:\\package\\results.jsonl\n")
+        download_update = workflow.complete_current_step(
+            0, "Saved results to: C:\\package\\results.jsonl\n"
+        )
         self.assertTrue(download_update.should_continue)
-        self.assertEqual(workflow.current_step().args, ["check", "C:\\package\\manifest.json"])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["check", "C:\\package\\manifest.json", "--output", "json", "--non-interactive"],
+        )
 
         check_update = workflow.complete_current_step(0, "Safety status: safe\n")
         self.assertEqual(check_update.status, "done")

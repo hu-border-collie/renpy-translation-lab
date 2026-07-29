@@ -3,10 +3,15 @@
 This module only plans and interprets CLI steps. The GUI still executes the
 existing command-line tool through ``CliRunner``.
 """
+
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import PurePosixPath, PureWindowsPath
+
+import cli_contract
 
 from .batch_workflow_support import (
     build_recover_submit_cli_args,
@@ -14,6 +19,7 @@ from .batch_workflow_support import (
     load_cost_estimate_facts_from_manifest,
     load_non_chinese_rules_facts_from_manifest,
     load_target_language_facts_from_manifest,
+    machine_output_args,
     output_blocked_by_max_cost,
     output_blocked_by_uncertain_submit,
     plan_unsubmitted_workflow_steps,
@@ -26,8 +32,6 @@ from .user_copy import (
     job_state_label,
     safety_level_label,
 )
-from pathlib import PurePosixPath, PureWindowsPath
-
 
 TERMINAL_FAILURE_STATES = {
     "JOB_STATE_FAILED",
@@ -71,22 +75,54 @@ def extract_created_package_path(output: str) -> str:
     return _extract_line_value(output, "Created batch package:")
 
 
+def _result_envelope(output: str) -> dict[str, object] | None:
+    try:
+        return cli_contract.parse_result_envelope(output)
+    except ValueError:
+        return None
+
+
 def extract_manifest_path(output: str) -> str:
+    envelope = _result_envelope(output)
+    artifacts = envelope.get("artifacts") if envelope else None
+    if isinstance(artifacts, Mapping):
+        manifest = artifacts.get("manifest")
+        if isinstance(manifest, str) and manifest.strip():
+            return manifest.strip()
     return _extract_line_value(output, "Manifest:")
 
 
 def extract_job_state(output: str) -> str:
+    envelope = _result_envelope(output)
+    if envelope:
+        status = envelope.get("status")
+        if isinstance(status, str):
+            return status.strip()
     return _extract_line_value(output, "State:")
 
 
 def extract_safety_status(output: str) -> str:
+    envelope = _result_envelope(output)
+    if envelope:
+        status = envelope.get("status")
+        if isinstance(status, str):
+            return status.strip()
     return _extract_line_value(output, "Safety status:")
+
+
+def extract_error_message(output: str) -> str:
+    envelope = _result_envelope(output)
+    error = envelope.get("error") if envelope else None
+    if isinstance(error, Mapping):
+        message = error.get("message")
+        if isinstance(message, str):
+            return message.strip()
+    return ""
 
 
 def output_has_quota_error(output: str) -> bool:
     return any(
-        marker in output
-        for marker in ("RESOURCE_EXHAUSTED", "429", "Quota/resource limit hit")
+        marker in output for marker in ("RESOURCE_EXHAUSTED", "429", "Quota/resource limit hit")
     )
 
 
@@ -95,7 +131,11 @@ def extract_suggested_split_command(output: str) -> str:
 
 
 def manifest_path_for_package(package_path: str) -> str:
-    if re.match(r"^[A-Za-z]:", package_path) or package_path.startswith("\\\\") or "\\" in package_path:
+    if (
+        re.match(r"^[A-Za-z]:", package_path)
+        or package_path.startswith("\\\\")
+        or "\\" in package_path
+    ):
         return str(PureWindowsPath(package_path) / "manifest.json")
     return str(PurePosixPath(package_path) / "manifest.json")
 
@@ -272,7 +312,8 @@ class TranslationWorkflow:
         return self._continue_or_finish()
 
     def _finish_failed_step(self, key: str, output: str) -> WorkflowUpdate:
-        message = f"{STEP_TEXT[key][0]}没有正常完成，请查看下方原始输出。"
+        structured_error = extract_error_message(output)
+        message = structured_error or f"{STEP_TEXT[key][0]}没有正常完成，请查看下方原始输出。"
         extra_facts: list[str] = []
         if key in {"submit", "recover-submit"} and output_blocked_by_max_cost(output):
             message = (
@@ -282,7 +323,9 @@ class TranslationWorkflow:
             extra_facts.append("建议：检查高级设置中的提交成本上限，或先运行 split 拆包。")
         elif key in {"submit", "recover-submit"} and output_blocked_by_uncertain_submit(output):
             message = uncertain_submit_failure_message(output)
-            extra_facts.append("建议：在诊断与工具运行 recover-submit，或按提示使用 --resume / --force。")
+            extra_facts.append(
+                "建议：在诊断与工具运行 recover-submit，或按提示使用 --resume / --force。"
+            )
         elif key == "submit" and output_has_quota_error(output):
             message = (
                 "提交云端任务时命中配额或资源限制。当前批量包可能过大，"
@@ -301,9 +344,13 @@ class TranslationWorkflow:
         )
 
     def _finish_build(self, output: str) -> WorkflowUpdate:
+        manifest_path = extract_manifest_path(output)
         package_path = extract_created_package_path(output)
-        if not package_path:
-            if "No pending lines to translate." in output:
+        envelope = _result_envelope(output)
+        if not manifest_path and not package_path:
+            if (
+                envelope and envelope.get("status") == "no_work"
+            ) or "No pending lines to translate." in output:
                 self._pending_steps.clear()
                 return WorkflowUpdate(
                     status="done",
@@ -319,7 +366,7 @@ class TranslationWorkflow:
                 facts=[],
             )
 
-        self.manifest_path = manifest_path_for_package(package_path)
+        self.manifest_path = manifest_path or manifest_path_for_package(package_path)
         extra_facts = load_target_language_facts_from_manifest(self.manifest_path)
         extra_facts.extend(load_non_chinese_rules_facts_from_manifest(self.manifest_path))
         extra_facts.extend(load_cost_estimate_facts_from_manifest(self.manifest_path))
@@ -401,13 +448,17 @@ class TranslationWorkflow:
         if key == "merge-retry":
             return ["merge-retry", self.retry_parent_manifest_path, self.manifest_path]
         if key == "check-parent":
-            return ["check", self.retry_parent_manifest_path]
-        if key == "build" or not self.manifest_path:
+            return machine_output_args(["check", self.retry_parent_manifest_path])
+        if key == "build":
+            return machine_output_args([key])
+        if not self.manifest_path:
             return [key]
         if key == "submit":
             return build_submit_cli_args(self.manifest_path, self.submit_max_cost)
         if key == "recover-submit":
             return build_recover_submit_cli_args(self.manifest_path)
+        if key in {"status", "download", "check"}:
+            return machine_output_args([key, self.manifest_path])
         return [key, self.manifest_path]
 
     def _facts(self, extra_facts: list[str] | None = None) -> list[str]:

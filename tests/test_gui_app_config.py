@@ -19,7 +19,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
     def setUp(self):
         self.window = MainWindow.__new__(MainWindow)
 
-    def test_on_cli_line_ready_updates_workflow_progress_bar(self):
+    def test_cli_channels_keep_progress_out_of_structured_stdout(self):
         from gui_qt.workflow_progress import create_workflow_progress_state
 
         class FakeProgressBar:
@@ -59,7 +59,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         self.window._on_cli_line_ready("[2/4] sync-key")
 
-        self.assertEqual(self.window._workflow_step_output_lines, ["[2/4] sync-key"])
+        self.assertEqual(self.window._workflow_step_output_lines, [])
         self.assertTrue(self.window.workflow_progress_bar.visible)
         self.assertEqual(self.window.workflow_progress_bar.range_values, (0, 4))
         self.assertEqual(self.window.workflow_progress_bar.value, 2)
@@ -69,6 +69,30 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             "Manifest: C:/dummy/manifest.json\n当前请求：sync-key",
         )
 
+        self.window._on_cli_stdout_line_ready('{"status":"completed"}')
+        self.assertEqual(
+            self.window._workflow_step_output_lines,
+            ['{"status":"completed"}'],
+        )
+
+    def test_workflow_writeback_gate_accepts_json_check_envelope(self):
+        import json
+
+        import cli_contract
+        from gui_qt.app import _workflow_output_updates_writeback
+
+        output = json.dumps(cli_contract.success_envelope("check", status="safe"))
+
+        self.assertTrue(_workflow_output_updates_writeback("check", output))
+        self.assertTrue(
+            _workflow_output_updates_writeback(
+                "check-parent",
+                "Safety status: safe",
+            )
+        )
+        self.assertFalse(
+            _workflow_output_updates_writeback("check", "Safety status: safe")
+        )
     def test_clear_log_view_flushes_pending_buffer(self):
         class FakeLogView:
             def __init__(self):
@@ -351,9 +375,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         return self.window.runner
 
     def test_bootstrap_rag_uses_skip_prepare(self):
-        runner = self._prepare_bootstrap_window(
-            {"batch": {"rag": {"enabled": True}}}
-        )
+        runner = self._prepare_bootstrap_window({"batch": {"rag": {"enabled": True}}})
 
         self.window._start_bootstrap_task("rag")
 
@@ -368,9 +390,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         )
 
     def test_bootstrap_source_index_uses_skip_prepare(self):
-        runner = self._prepare_bootstrap_window(
-            {"batch": {"source_index": {"enabled": True}}}
-        )
+        runner = self._prepare_bootstrap_window({"batch": {"source_index": {"enabled": True}}})
 
         self.window._start_bootstrap_task("source_index")
 
@@ -493,28 +513,37 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
             self.assertTrue(flags["enabled"])
             self.assertTrue(flags["inject_enabled"])
+
     def test_save_config_persists_context_storage_and_rolls_back_on_project_failure(self):
         from gui_qt.work_modes import WorkMode
 
         saved_configs = []
         config = {
             "sync": {"rag": {}},
-            "batch": {"rag": {"enabled": False}, "source_index": {"enabled": True}, "model": "gemini-3.1-flash-lite"},
+            "batch": {
+                "rag": {"enabled": False},
+                "source_index": {"enabled": True},
+                "model": "gemini-3.1-flash-lite",
+            },
         }
 
         class FakeState:
             def get_game_root(self):
                 return Path("C:/Game/work")
+
             def normalize_game_root(self, path):
                 return Path("C:/Game/work"), False
+
             def load_translator_config(self):
                 return config
+
             def save_translator_config(self, saved_config):
                 saved_configs.append(copy.deepcopy(saved_config))
 
         class FakeCheckBox:
             def __init__(self, checked):
                 self._checked = checked
+
             def isChecked(self):
                 return self._checked
 
@@ -522,8 +551,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def __init__(self, text="", data=""):
                 self._text = text
                 self._data = data
+
             def currentText(self):
                 return self._text
+
             def currentData(self):
                 return self._data
 
@@ -555,16 +586,16 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                     "project_analysis_inject_enabled": True,
                 },
             ),
-            mock.patch(
-                "project_context_settings.save_project_context_settings"
-            ) as save_project,
+            mock.patch("project_context_settings.save_project_context_settings") as save_project,
         ):
             saved = self.window._on_save_config()
 
         self.assertTrue(saved)
         self.assertEqual(len(saved_configs), 1)
         self.assertEqual(saved_configs[0]["context_storage"]["location"], "game")
-        self.assertEqual(saved_configs[0]["context_storage"]["game_dir_name"], "translation_context")
+        self.assertEqual(
+            saved_configs[0]["context_storage"]["game_dir_name"], "translation_context"
+        )
         save_project.assert_called_once_with(
             Path("C:/Game/work"),
             {
@@ -608,16 +639,20 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeState:
             def get_game_root(self):
                 return Path("C:/Game/work")
+
             def normalize_game_root(self, path):
                 return Path("C:/Game/work"), False
+
             def load_translator_config(self):
                 return config
+
             def save_translator_config(self, saved_config):
                 saved_configs.append(saved_config)
 
         class FakeCheckBox:
             def __init__(self, checked):
                 self._checked = checked
+
             def isChecked(self):
                 return self._checked
 
@@ -625,8 +660,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def __init__(self, text="", data=""):
                 self._text = text
                 self._data = data
+
             def currentText(self):
                 return self._text
+
             def currentData(self):
                 return self._data
 
@@ -673,16 +710,20 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeState:
             def get_game_root(self):
                 return Path("C:/Game/work")
+
             def normalize_game_root(self, path):
                 return Path("C:/Game/work"), False
+
             def load_translator_config(self):
                 return config
+
             def save_translator_config(self, saved_config):
                 saved_configs.append(saved_config)
 
         class FakeCheckBox:
             def __init__(self, checked):
                 self._checked = checked
+
             def isChecked(self):
                 return self._checked
 
@@ -690,8 +731,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def __init__(self, text="", data=""):
                 self._text = text
                 self._data = data
+
             def currentText(self):
                 return self._text
+
             def currentData(self):
                 return self._data
 
@@ -699,16 +742,20 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def __init__(self, text):
                 self._text = text
                 self.focused = False
+
             def text(self):
                 return self._text
+
             def setFocus(self):
                 self.focused = True
 
         class FakeValue:
             def __init__(self, value):
                 self._value = value
+
             def value(self):
                 return self._value
+
             def setFocus(self):
                 pass
 
@@ -733,7 +780,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             "batch_temperature": FakeValue(0.4),
             "context_storage_game_dir_name": FakeText("custom_context"),
             "include_files": FakeText("chapter01.rpy\nchapter02.rpy"),
-            "prepare_unpack_command": FakeText("[\"python\", \"unpack.py\"]"),
+            "prepare_unpack_command": FakeText('["python", "unpack.py"]'),
             "batch_safety_settings": FakeText("relaxed_adult"),
             "batch_macro_setting": FakeText("Use a concise voice.\nKeep honorifics."),
             "batch_source_index_store_dir": FakeText("C:/ctx/source"),
@@ -761,7 +808,9 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(saved_config["include_files"], ["chapter01.rpy", "chapter02.rpy"])
         self.assertEqual(saved_config["prepare"]["unpack_command"], ["python", "unpack.py"])
         self.assertEqual(saved_config["batch"]["safety_settings"], "relaxed_adult")
-        self.assertEqual(saved_config["batch"]["macro_setting"], "Use a concise voice.\nKeep honorifics.")
+        self.assertEqual(
+            saved_config["batch"]["macro_setting"], "Use a concise voice.\nKeep honorifics."
+        )
         self.assertEqual(saved_config["batch"]["source_index"]["store_dir"], "C:/ctx/source")
 
     def test_save_config_validation_error_blocks_write(self):
@@ -776,14 +825,17 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeState:
             def get_game_root(self):
                 return Path("C:/Game/work")
+
             def load_translator_config(self):
                 return config
+
             def save_translator_config(self, saved_config):
                 saved_configs.append(saved_config)
 
         class FakeCheckBox:
             def __init__(self, checked):
                 self._checked = checked
+
             def isChecked(self):
                 return self._checked
 
@@ -791,8 +843,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def __init__(self, text="", data=""):
                 self._text = text
                 self._data = data
+
             def currentText(self):
                 return self._text
+
             def currentData(self):
                 return self._data
 
@@ -800,26 +854,31 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def __init__(self, text):
                 self._text = text
                 self.focused = False
+
             def text(self):
                 return self._text
+
             def setFocus(self):
                 self.focused = True
 
         class FakeLabel:
             def __init__(self):
                 self.text = ""
+
             def setText(self, value):
                 self.text = value
 
         class FakeNav:
             def __init__(self):
                 self.row = None
+
             def setCurrentRow(self, row):
                 self.row = row
 
         class FakeStatusBar:
             def __init__(self):
                 self.messages = []
+
             def showMessage(self, text, timeout):
                 self.messages.append((text, timeout))
 
@@ -1130,7 +1189,9 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.settings_stack = FakeStack()
         self.window._settings_nav_rows = {"workspace": 0, "project": 1}
         self.window._games_registry_panel = FakePanel()
-        self.window.state = type("FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")})()
+        self.window.state = type(
+            "FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")}
+        )()
         self.window._task_running = False
         self.window._sync_settings_action_bar_enabled = lambda **_kwargs: None
 
@@ -1178,7 +1239,9 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.settings_nav = FakeNav()
         self.window._settings_nav_rows = {"workspace": 0, "project": 1}
         self.window._games_registry_panel = FakePanel()
-        self.window.state = type("FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")})()
+        self.window.state = type(
+            "FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")}
+        )()
         self.window._handling_config_tab_leave = False
         self.window._last_main_tab_index = 0
         self.window._refresh_api_status = lambda: None
@@ -1326,7 +1389,9 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             (),
             {"set_current_game_root": lambda self, _root: None},
         )()
-        self.window.state = type("FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")})()
+        self.window.state = type(
+            "FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")}
+        )()
 
         with patch("gui_qt.app.QMessageBox", FakeMessageBox):
             result = self.window._on_registry_switch_project("C:/Game/work")
@@ -1389,7 +1454,9 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             (),
             {"set_current_game_root": lambda self, _root: None},
         )()
-        self.window.state = type("FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")})()
+        self.window.state = type(
+            "FakeState", (), {"get_game_root": lambda self: Path("C:/Game/work")}
+        )()
 
         with patch("gui_qt.app.QMessageBox", FakeMessageBox):
             result = self.window._on_registry_switch_project("C:/Game/work")
@@ -1519,8 +1586,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeCheckBox:
             def __init__(self):
                 self.checked = None
+
             def setChecked(self, value):
                 self.checked = value
+
             def isChecked(self):
                 return bool(self.checked)
 
@@ -1529,56 +1598,69 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                 self.items = []
                 self.current_index = -1
                 self.current_data = ""
+
             def findText(self, text):
                 try:
                     return self.items.index((text, text))
                 except ValueError:
                     return -1
+
             def addItem(self, text, data=None):
                 self.items.append((text, text if data is None else data))
+
             def count(self):
                 return len(self.items)
+
             def setCurrentIndex(self, index):
                 self.current_index = index
                 if 0 <= index < len(self.items):
                     self.current_data = self.items[index][1]
+
             def findData(self, data):
                 for index, (_text, item_data) in enumerate(self.items):
                     if item_data == data:
                         return index
                 return -1
+
             def currentText(self):
                 if 0 <= self.current_index < len(self.items):
                     return self.items[self.current_index][0]
                 return ""
+
             def currentData(self):
                 return self.current_data
 
         class FakeValue:
             def __init__(self):
                 self.saved = None
+
             def setValue(self, value):
                 self.saved = value
+
             def value(self):
                 return self.saved
 
         class FakeText:
             def __init__(self):
                 self.saved = None
+
             def setText(self, value):
                 self.saved = value
+
             def text(self):
                 return self.saved or ""
 
         class FakeLabel:
             def __init__(self):
                 self.text = "stale"
+
             def setText(self, value):
                 self.text = value
 
         class FakeStatusBar:
             def __init__(self):
                 self.messages = []
+
             def showMessage(self, text, timeout):
                 self.messages.append((text, timeout))
 
@@ -1716,9 +1798,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         from gui_qt.font_worker import FontInstallResult
 
-        self.window._on_recommended_fonts_downloaded(
-            FontInstallResult(False, error="network down")
-        )
+        self.window._on_recommended_fonts_downloaded(FontInstallResult(False, error="network down"))
 
         self.assertIsNone(self.window._font_install_worker)
         self.assertTrue(worker.deleted)
@@ -1758,8 +1838,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeCheckBox:
             def __init__(self):
                 self._checked = False
+
             def isChecked(self):
                 return self._checked
+
             def setChecked(self, checked):
                 self._checked = checked
 
@@ -1767,20 +1849,28 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def __init__(self, text=""):
                 self._text = text
                 self._index = -1
+
             def findData(self, _data):
                 return 0
+
             def findText(self, _text):
                 return -1
+
             def setCurrentIndex(self, index):
                 self._index = index
+
             def addItem(self, text, _data=None):
                 self._text = text
+
             def count(self):
                 return 1
+
             def currentText(self):
                 return self._text
+
             def currentData(self):
                 return ""
+
             def setEnabled(self, _enabled):
                 pass
 
@@ -1817,8 +1907,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeCheckBox:
             def __init__(self):
                 self._checked = False
+
             def isChecked(self):
                 return self._checked
+
             def setChecked(self, checked):
                 self._checked = checked
 
@@ -1826,20 +1918,28 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def __init__(self, text=""):
                 self._text = text
                 self._index = -1
+
             def findData(self, _data):
                 return 0
+
             def findText(self, _text):
                 return -1
+
             def setCurrentIndex(self, index):
                 self._index = index
+
             def addItem(self, text, _data=None):
                 self._text = text
+
             def count(self):
                 return 1
+
             def currentText(self):
                 return self._text
+
             def currentData(self):
                 return ""
+
             def setEnabled(self, _enabled):
                 pass
 
@@ -2131,7 +2231,11 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.timeline = self._fake_timeline()
 
         summary_calls = []
-        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+        self.window._set_workflow_summary = (
+            lambda status, heading, message, facts=None: summary_calls.append(
+                (status, heading, message, facts)
+            )
+        )
         self.window._refresh_diagnostics_context = MagicMock()
         self.window._refresh_writeback_from_latest_manifest = MagicMock()
         self.window._current_writeback_summary = lambda: type("Summary", (), {"status": "safe"})()
@@ -2141,8 +2245,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeStatusBar:
             def __init__(self):
                 self.messages = []
+
             def showMessage(self, text, timeout):
                 self.messages.append((text, timeout))
+
         status_bar = FakeStatusBar()
         self.window.statusBar = lambda: status_bar
 
@@ -2187,6 +2293,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeRunner:
             def __init__(self):
                 self.calls = []
+
             def run(self, script_path, args):
                 self.calls.append((script_path, args))
 
@@ -2207,14 +2314,20 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._append_log = lambda message: None
         self.window._set_task_running = lambda running: None
         summary_calls = []
-        self.window._set_workflow_summary = lambda status, heading, message, facts=None: summary_calls.append((status, heading, message, facts))
+        self.window._set_workflow_summary = (
+            lambda status, heading, message, facts=None: summary_calls.append(
+                (status, heading, message, facts)
+            )
+        )
 
         self.window._on_resume_translation()
 
         self.assertEqual(len(self.window.runner.calls), 1)
         script_path, args = self.window.runner.calls[0]
         self.assertEqual(script_path, Path("C:/tool/gemini_translate_batch.py"))
-        self.assertEqual(args, ["download", str(manifest_path)])
+        self.assertEqual(
+            args, ["download", str(manifest_path), "--output", "json", "--non-interactive"]
+        )
         self.assertEqual(summary_calls[-1][0], "running")
         self.assertTrue(self.window.timeline.visible)
         self.assertEqual(self.window.timeline.current_step_key, "download")
@@ -2247,6 +2360,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeStatusBar:
             def __init__(self):
                 self.messages = []
+
             def showMessage(self, text, timeout):
                 self.messages.append((text, timeout))
 
@@ -2267,7 +2381,9 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         self.window._on_workflow_step_finished(0)
 
-        self.window._copy_keyword_reports_to_game_parent.assert_called_once_with("C:/dummy/manifest.json")
+        self.window._copy_keyword_reports_to_game_parent.assert_called_once_with(
+            "C:/dummy/manifest.json"
+        )
         self.window._refresh_writeback_from_latest_manifest.assert_called_once()
         self.window._set_writeback_summary.assert_not_called()
         self.assertIn("关键词提取完成", status_bar.messages[-1][0])
@@ -2300,10 +2416,13 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeStatusBar:
             def __init__(self):
                 self.messages = []
+
             def showMessage(self, text, timeout):
                 self.messages.append((text, timeout))
 
-        output = "Sync keyword run: C:/dummy/sync_keywords\nKeyword candidates: 2 deduped from 3 raw"
+        output = (
+            "Sync keyword run: C:/dummy/sync_keywords\nKeyword candidates: 2 deduped from 3 raw"
+        )
         self.window._workflow = FakeWorkflow()
         self.window._workflow_step_output_lines = output.splitlines()
         self.window._current_work_mode = lambda: WorkMode.SYNC_KEYWORD_EXTRACTION
@@ -2332,6 +2451,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeMessageBox:
             class Icon:
                 Warning = object()
+
             class ButtonRole:
                 AcceptRole = object()
                 DestructiveRole = object()
@@ -2342,22 +2462,30 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def __init__(self, parent=None):
                 self._stay_btn = object()
                 self._buttons = []
+
             def setIcon(self, icon):
                 pass
+
             def setWindowTitle(self, title):
                 pass
+
             def setText(self, text):
                 pass
+
             def setInformativeText(self, text):
                 pass
+
             def addButton(self, text, role):
                 button = self._stay_btn if text == "留在设置页" else object()
                 self._buttons.append((text, button))
                 return button
+
             def setDefaultButton(self, button):
                 pass
+
             def exec(self):
                 FakeMessageBox.shown = True
+
             def clickedButton(self):
                 return self._stay_btn
 
@@ -2366,8 +2494,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                 self.config_tab = config_tab
                 self.other_tab = other_tab
                 self.current_index = 1
+
             def widget(self, index):
                 return self.config_tab if index == 1 else self.other_tab
+
             def setCurrentIndex(self, index):
                 self.current_index = index
 
@@ -2413,8 +2543,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         class FakeState:
             def get_game_root(self):
                 return Path("C:/dummy/project")
+
             def get_latest_manifest_path_for_mode(self, game_root, mode):
                 return Path("C:/dummy/manifest.json")
+
             def load_resume_manifest(self, path, work_mode):
                 return {
                     "_manifest_path": str(path),
@@ -2430,6 +2562,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                         },
                     },
                 }
+
         self.window.state = FakeState()
 
         summaries = []
@@ -2471,9 +2604,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         summaries = []
         split_refreshes = []
         self.window._set_writeback_summary = lambda summary: summaries.append(summary)
-        self.window._refresh_split_status_ui = (
-            lambda **kwargs: split_refreshes.append(kwargs)
-        )
+        self.window._refresh_split_status_ui = lambda **kwargs: split_refreshes.append(kwargs)
 
         self.window._refresh_writeback_from_latest_manifest()
 
@@ -2495,8 +2626,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def __init__(self):
                 self.visible = True
                 self.enabled = True
+
             def setVisible(self, visible):
                 self.visible = visible
+
             def setEnabled(self, enabled):
                 self.enabled = enabled
 
@@ -2556,10 +2689,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                 return None
 
         def load_manifest(path):
-            if (
-                path
-                and canonical_abs_path(path).lower() == expected_manifest_path
-            ):
+            if path and canonical_abs_path(path).lower() == expected_manifest_path:
                 return keyword_manifest
             return None
 
@@ -2600,10 +2730,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                 return None
 
         def load_manifest(path):
-            if (
-                path
-                and canonical_abs_path(path).lower() == expected_manifest_path
-            ):
+            if path and canonical_abs_path(path).lower() == expected_manifest_path:
                 return keyword_manifest
             return None
 
@@ -2825,6 +2952,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             class FakeState:
                 def get_game_root(self):
                     return game_root
+
             self.window.state = FakeState()
 
             logged_messages = []
@@ -2836,7 +2964,9 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             self.assertTrue(target_dir.exists())
             self.assertTrue((target_dir / "keyword_candidates.md").exists())
             self.assertTrue((target_dir / "keyword_chunk_summaries.md").exists())
-            self.assertEqual((target_dir / "keyword_candidates.md").read_text(encoding="utf-8"), "candidates")
+            self.assertEqual(
+                (target_dir / "keyword_candidates.md").read_text(encoding="utf-8"), "candidates"
+            )
 
             self.assertTrue(any("已将关键词提取报告复制一份至" in msg for msg in logged_messages))
 
@@ -2856,20 +2986,22 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             class FakeState:
                 def get_game_root(self):
                     return game_root
+
             self.window.state = FakeState()
 
             logged_messages = []
             self.window._append_log = lambda msg: logged_messages.append(msg)
 
             self.window._copy_sync_keyword_reports_to_game_parent(
-                f"Sync keyword run: {sync_dir}\n"
-                "Keyword candidates: 2 deduped from 3 raw\n"
+                f"Sync keyword run: {sync_dir}\nKeyword candidates: 2 deduped from 3 raw\n"
             )
 
             target_dir = tmp_path / "Game" / "extracted_keywords"
             self.assertTrue((target_dir / "keyword_candidates.md").exists())
             self.assertTrue((target_dir / "keyword_chunk_summaries.md").exists())
-            self.assertEqual((target_dir / "keyword_candidates.md").read_text(encoding="utf-8"), "candidates")
+            self.assertEqual(
+                (target_dir / "keyword_candidates.md").read_text(encoding="utf-8"), "candidates"
+            )
             self.assertTrue(any("已将关键词提取报告复制一份至" in msg for msg in logged_messages))
 
     def test_sync_layout_sizes_skips_scrollable_doctor_labels(self):
@@ -2987,6 +3119,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         # Switching into a mode without a prior session clears active completed snapshot.
         self.assertEqual(cleared, [True])
+
 
 if __name__ == "__main__":
     unittest.main()

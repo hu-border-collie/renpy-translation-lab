@@ -33,11 +33,19 @@ class GuiBatchWorkflowSupportTests(unittest.TestCase):
     def test_build_submit_cli_args_appends_max_cost(self):
         self.assertEqual(
             build_submit_cli_args("pkg/manifest.json"),
-            ["submit", "pkg/manifest.json"],
+            ["submit", "pkg/manifest.json", "--output", "json", "--non-interactive"],
         )
         self.assertEqual(
             build_submit_cli_args("pkg/manifest.json", 5),
-            ["submit", "pkg/manifest.json", "--max-cost", "5"],
+            [
+                "submit",
+                "pkg/manifest.json",
+                "--max-cost",
+                "5",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
         )
 
     def test_format_cost_estimate_facts(self):
@@ -102,7 +110,7 @@ class GuiBatchWorkflowSupportTests(unittest.TestCase):
             )
             self.assertEqual(
                 build_submit_cli_args(manifest_path),
-                ["submit", manifest_path, "--resume"],
+                ["submit", manifest_path, "--resume", "--output", "json", "--non-interactive"],
             )
 
     def test_plan_unsubmitted_workflow_steps_prefers_recover_submit(self):
@@ -140,7 +148,15 @@ class GuiBatchWorkflowSupportTests(unittest.TestCase):
 
         self.assertEqual(
             workflow.current_step().args,
-            ["submit", r"C:\package\manifest.json", "--max-cost", "3.5"],
+            [
+                "submit",
+                r"C:\package\manifest.json",
+                "--max-cost",
+                "3.5",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
         )
 
     def test_load_non_chinese_rules_facts_from_manifest(self):

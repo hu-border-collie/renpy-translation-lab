@@ -39,7 +39,9 @@ class GuiSplitBatchTests(unittest.TestCase):
             ),
         ]
 
-        self.assertEqual([entry.part_label for entry in entries], ["part01/03", "part02/03", "part03/03"])
+        self.assertEqual(
+            [entry.part_label for entry in entries], ["part01/03", "part02/03", "part03/03"]
+        )
         self.assertFalse(entries[0].selectable)
         self.assertEqual(entries[0].status_kind, "running")
         self.assertTrue(entries[1].selectable)
@@ -81,13 +83,17 @@ class GuiSplitBatchTests(unittest.TestCase):
         part1 = r"C:\pkg\part01_of_02\manifest.json"
         part2 = r"C:\pkg\part02_of_02\manifest.json"
         entries = [
-            entry_from_manifest(part1, {"split_index": 1, "split_total": 2, "job_name": "batches/one"}),
+            entry_from_manifest(
+                part1, {"split_index": 1, "split_total": 2, "job_name": "batches/one"}
+            ),
             entry_from_manifest(part2, {"split_index": 2, "split_total": 2, "job_name": ""}),
         ]
 
         workflow = SplitBatchQueueWorkflow.submit_remaining(entries, anchor_manifest_path=part1)
 
-        self.assertEqual(workflow.current_step().args, ["submit", part2])
+        self.assertEqual(
+            workflow.current_step().args, ["submit", part2, "--output", "json", "--non-interactive"]
+        )
         update = workflow.complete_current_step(0, "Manifest: ignored\n")
         self.assertEqual(update.status, "waiting")
         self.assertEqual(update.timeline_step_key, "status")
@@ -99,14 +105,21 @@ class GuiSplitBatchTests(unittest.TestCase):
         part2 = r"C:\pkg\part02_of_03\manifest.json"
         part3 = r"C:\pkg\part03_of_03\manifest.json"
         entries = [
-            entry_from_manifest(part1, {"split_index": 1, "split_total": 3, "job_name": "batches/one"}),
-            entry_from_manifest(part2, {"split_index": 2, "split_total": 3, "job_name": "batches/two", "applied_at": "x"}),
+            entry_from_manifest(
+                part1, {"split_index": 1, "split_total": 3, "job_name": "batches/one"}
+            ),
+            entry_from_manifest(
+                part2,
+                {"split_index": 2, "split_total": 3, "job_name": "batches/two", "applied_at": "x"},
+            ),
             entry_from_manifest(part3, {"split_index": 3, "split_total": 3, "job_name": ""}),
         ]
 
         workflow = SplitBatchQueueWorkflow.refresh_status(entries, anchor_manifest_path=part1)
 
-        self.assertEqual(workflow.current_step().args, ["status", part1])
+        self.assertEqual(
+            workflow.current_step().args, ["status", part1, "--output", "json", "--non-interactive"]
+        )
         update = workflow.complete_current_step(0, "State: JOB_STATE_RUNNING\n")
         self.assertEqual(update.status, "ready")
         self.assertIsNone(workflow.current_step())

@@ -90,6 +90,7 @@ class BatchCliContractTests(unittest.TestCase):
             },
         )
         self.assertNotIn(": ", stdout.getvalue())
+
     def test_field_projection_does_not_change_strict_exit_code(self):
         manifest = {
             "_manifest_path": "C:/jobs/demo/manifest.json",
@@ -216,7 +217,6 @@ class BatchCliContractTests(unittest.TestCase):
         )
 
     def test_machine_result_builder_covers_manifest_workflow(self):
-
         args = SimpleNamespace(target="")
         base_manifest = {
             "_manifest_path": "C:/jobs/demo/manifest.json",
@@ -225,6 +225,7 @@ class BatchCliContractTests(unittest.TestCase):
             "summary": {"item_count": 2},
             "last_check_summary": {"safety_level": "safe"},
             "apply_summary": {"applied_lines": 2},
+            "next_split_manifest_path": "C:/jobs/part02/manifest.json",
             "applied_at": "2026-07-29T12:00:00",
         }
         expected_status = {
@@ -250,6 +251,11 @@ class BatchCliContractTests(unittest.TestCase):
                     envelope["artifacts"]["manifest"],
                     "C:/jobs/demo/manifest.json",
                 )
+                if command == "apply":
+                    self.assertEqual(
+                        envelope["result"]["apply"]["next_split_manifest"],
+                        "C:/jobs/part02/manifest.json",
+                    )
 
     def test_build_without_pending_work_does_not_load_latest_manifest(self):
         args = SimpleNamespace(target="")
@@ -379,9 +385,7 @@ class BatchCliContractTests(unittest.TestCase):
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
-            exit_code = batch.main(
-                ["status", "manifest.json", "--output", "json"]
-            )
+            exit_code = batch.main(["status", "manifest.json", "--output", "json"])
 
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 1)
@@ -429,9 +433,7 @@ class BatchCliContractTests(unittest.TestCase):
             mock.patch.object(batch, "dispatch_command", return_value=manifest),
             contextlib.redirect_stdout(stdout),
         ):
-            exit_code = batch.main(
-                ["check", "manifest.json", "--output", "json"]
-            )
+            exit_code = batch.main(["check", "manifest.json", "--output", "json"])
 
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
@@ -449,14 +451,14 @@ class BatchCliContractTests(unittest.TestCase):
                 {"job_state": "JOB_STATE_FAILED"},
                 batch.cli_contract.EXIT_BLOCKED,
             ),
-        )
-
-        for command, manifest, expected_exit in cases:
             (
                 "submit",
                 {"job_state": "JOB_STATE_FAILED"},
                 batch.cli_contract.EXIT_BLOCKED,
             ),
+        )
+
+        for command, manifest, expected_exit in cases:
             with self.subTest(command=command):
                 stdout = io.StringIO()
                 manifest["_manifest_path"] = "C:/jobs/demo/manifest.json"
@@ -490,9 +492,7 @@ class BatchCliContractTests(unittest.TestCase):
             ),
             contextlib.redirect_stdout(stdout),
         ):
-            exit_code = batch.main(
-                ["doctor", "--output", "json", "--strict-exit-codes"]
-            )
+            exit_code = batch.main(["doctor", "--output", "json", "--strict-exit-codes"])
 
         self.assertEqual(exit_code, batch.cli_contract.EXIT_BLOCKED)
         self.assertEqual(json.loads(stdout.getvalue())["status"], "blocked")
@@ -511,9 +511,7 @@ class BatchCliContractTests(unittest.TestCase):
             contextlib.redirect_stderr(stderr),
         ):
             exit_code = batch.main(
-                [
-                    "status", "manifest.json", "--output", "json", "--strict-exit-codes"
-                ]
+                ["status", "manifest.json", "--output", "json", "--strict-exit-codes"]
             )
 
         payload = json.loads(stdout.getvalue())
@@ -540,9 +538,7 @@ class BatchCliContractTests(unittest.TestCase):
                     contextlib.redirect_stdout(stdout),
                 ):
                     exit_code = batch.main(
-                        [
-                            "apply", "manifest.json", "--output", "json", "--strict-exit-codes"
-                        ]
+                        ["apply", "manifest.json", "--output", "json", "--strict-exit-codes"]
                     )
 
                 payload = json.loads(stdout.getvalue())

@@ -1,4 +1,5 @@
 """GUI final-review workflow tests (#255 PR C)."""
+
 from __future__ import annotations
 
 import unittest
@@ -31,7 +32,6 @@ class FinalReviewWorkflowTests(unittest.TestCase):
         self.assertEqual(update.heading, "无法准备最终审校")
         self.assertIsNone(workflow.current_step())
 
-
     def test_succeeded_status_downloads_and_ingests_report(self):
         workflow = FinalReviewWorkflow(["status"], "C:/tmp/review/manifest.json")
         update = workflow.complete_current_step(0, "State: JOB_STATE_SUCCEEDED")
@@ -53,19 +53,30 @@ class FinalReviewWorkflowTests(unittest.TestCase):
 
     def test_selected_findings_use_one_local_preview_step(self):
         workflow = FinalReviewWorkflow.create_revisions("C:/tmp/review/manifest.json", ["f1", "f2"])
-        self.assertEqual(workflow.current_step().args, [
-            "final-review-create-revisions", "C:/tmp/review/manifest.json",
-            "--finding-id", "f1", "--finding-id", "f2",
-        ])
-        output = "\n".join([
-            "Created final-review revision package: C:/tmp/revisions",
-            "Recoverable revision items: 2",
-            "Failure items: 0",
-            "Preview JSONL: C:/tmp/revisions/revision_preview.jsonl",
-        ])
+        self.assertEqual(
+            workflow.current_step().args,
+            [
+                "final-review-create-revisions",
+                "C:/tmp/review/manifest.json",
+                "--finding-id",
+                "f1",
+                "--finding-id",
+                "f2",
+            ],
+        )
+        output = "\n".join(
+            [
+                "Created final-review revision package: C:/tmp/revisions",
+                "Recoverable revision items: 2",
+                "Failure items: 0",
+                "Preview JSONL: C:/tmp/revisions/revision_preview.jsonl",
+            ]
+        )
         update = workflow.complete_current_step(0, output)
         self.assertEqual(update.heading, "订正预览已生成")
-        self.assertTrue(workflow.manifest_path.replace("\\", "/").endswith("revisions/manifest.json"))
+        self.assertTrue(
+            workflow.manifest_path.replace("\\", "/").endswith("revisions/manifest.json")
+        )
 
     def test_resume_final_review_manifest_uses_final_review_commands(self):
         workflow = resume_workflow(
@@ -74,7 +85,10 @@ class FinalReviewWorkflowTests(unittest.TestCase):
             {"mode": "final_review", "job_name": "jobs/1", "job_state": "JOB_STATE_RUNNING"},
         )
         self.assertIsInstance(workflow, FinalReviewWorkflow)
-        self.assertEqual(workflow.current_step().args, ["status", "C:/tmp/review/manifest.json"])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["status", "C:/tmp/review/manifest.json", "--output", "json", "--non-interactive"],
+        )
 
     def test_resume_does_not_treat_missing_counts_as_complete(self):
         workflow = FinalReviewWorkflow.resume_manifest(
@@ -82,6 +96,7 @@ class FinalReviewWorkflowTests(unittest.TestCase):
             {"mode": "final_review", "summary": {"status_counts": {}}},
         )
         self.assertEqual(workflow.current_step().key, "final-review-resume")
+
 
 if __name__ == "__main__":
     unittest.main()

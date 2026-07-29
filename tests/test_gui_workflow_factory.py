@@ -19,7 +19,9 @@ class GuiWorkflowFactoryTests(unittest.TestCase):
         workflow = create_workflow(WorkMode.BATCH_TRANSLATION)
 
         self.assertIsInstance(workflow, TranslationWorkflow)
-        self.assertEqual(workflow.current_step().args, ["build"])
+        self.assertEqual(
+            workflow.current_step().args, ["build", "--output", "json", "--non-interactive"]
+        )
 
     def test_create_workflow_returns_sync_translation_workflow(self):
         workflow = create_workflow(WorkMode.SYNC_TRANSLATION)
@@ -78,7 +80,7 @@ class GuiWorkflowFactoryTests(unittest.TestCase):
         self.assertIsInstance(workflow, TranslationWorkflow)
         self.assertEqual(
             workflow.current_step().args,
-            ["status", "C:\\package\\manifest.json"],
+            ["status", "C:\\package\\manifest.json", "--output", "json", "--non-interactive"],
         )
 
     def test_resume_workflow_returns_revision_resume(self):
@@ -91,7 +93,7 @@ class GuiWorkflowFactoryTests(unittest.TestCase):
         self.assertIsInstance(workflow, RevisionBatchWorkflow)
         self.assertEqual(
             workflow.current_step().args,
-            ["status", "C:\\package\\manifest.json"],
+            ["status", "C:\\package\\manifest.json", "--output", "json", "--non-interactive"],
         )
 
     def test_resume_workflow_returns_none_for_sync_revision(self):
@@ -113,7 +115,7 @@ class GuiWorkflowFactoryTests(unittest.TestCase):
         self.assertIsInstance(workflow, KeywordBatchWorkflow)
         self.assertEqual(
             workflow.current_step().args,
-            ["status", "C:\\package\\manifest.json"],
+            ["status", "C:\\package\\manifest.json", "--output", "json", "--non-interactive"],
         )
 
     def test_validate_resume_manifest_accepts_keyword_extraction_mode(self):

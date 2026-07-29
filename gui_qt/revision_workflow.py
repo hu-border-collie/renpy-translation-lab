@@ -7,6 +7,7 @@ from .revision_report import summarize_revision_preview_output
 from .batch_workflow_support import (
     build_recover_submit_cli_args,
     build_submit_cli_args,
+    machine_output_args,
     output_blocked_by_max_cost,
     output_blocked_by_uncertain_submit,
     plan_unsubmitted_workflow_steps,
@@ -242,6 +243,8 @@ class RevisionBatchWorkflow:
             return build_submit_cli_args(self.manifest_path, self.submit_max_cost)
         if key == "recover-submit":
             return build_recover_submit_cli_args(self.manifest_path)
+        if key in {"status", "download"}:
+            return machine_output_args([key, self.manifest_path])
         return [key, self.manifest_path]
 
     def _facts(self, extra_facts: list[str] | None = None) -> list[str]:

@@ -165,6 +165,22 @@ class CliContractTests(unittest.TestCase):
             cli_contract.EXIT_BLOCKED,
         )
 
+    def test_parse_result_envelope_accepts_shared_contract(self):
+        envelope = cli_contract.success_envelope(
+            "status",
+            status="JOB_STATE_RUNNING",
+        )
+
+        parsed = cli_contract.parse_result_envelope(json.dumps(envelope))
+
+        self.assertEqual(parsed, envelope)
+
+    def test_parse_result_envelope_rejects_unknown_or_incomplete_schema(self):
+        with self.assertRaises(ValueError):
+            cli_contract.parse_result_envelope('{"schema_version": 999}')
+        with self.assertRaises(ValueError):
+            cli_contract.parse_result_envelope("[]")
+
 
 if __name__ == "__main__":
     unittest.main()
