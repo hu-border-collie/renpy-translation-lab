@@ -70,6 +70,23 @@ Discovery schema 与核心结果 envelope 当前都使用 `schema_version=1`，�
 - `apply` 写回前会再次校验当前源文本；如果 apply 阶段发现漂移，会拒绝写回并在包目录写入 `apply_failure_report.json` / `failures.jsonl`。
 - 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包。
 
+## 实际模型用量
+
+Batch 下载、同步关键词/订正、普通同步翻译、repair、probe、A/B 与项目分析会把 provider 返回的实际 usage metadata 汇总到当前项目的本地账本。该旁路统计不改变 Batch 状态，也不放宽 `check -> apply` 写回门禁。
+
+```powershell
+python gemini_translate_batch.py usage-import logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py usage-report
+python gemini_translate_batch.py usage-report --provider gemini --group-by task,stage,model --json
+```
+
+- `usage-import` 只读取已下载结果，可重复执行；不会联网或重新调用模型。
+- retry / split 使用 provider response identity 和结果 fingerprint 幂等去重；合并 retry 后会展开原始结果 lineage，不把本地合成行算作新调用。
+- token 或 cost 未返回时保持未知，不会显示成 0；估算成本与 provider 报告的实际成本分列。
+- 账本按 `game_root` 隔离，默认写到 `<game_root>/translation_usage/usage_ledger.json`。
+
+完整字段、过滤器、成本与隐私语义见 [实际模型用量账本](model_usage_ledger.md)。
+
 ## 订正流程
 
 订正模式扫描已有 `old/new` / TL 注释译文，先生成预览，显式 apply 后才写回当前译文行：

@@ -40,6 +40,15 @@ CONTEXT_LIBRARY_COPY = {
     ),
 }
 
+USAGE_LEDGER_COPY = {
+    "empty": "模型用量：当前项目暂无实际响应记录",
+    "load_error": "模型用量账本读取失败，统计暂不可用",
+    "total": "模型用量",
+    "recent": "最近一次运行",
+    "estimated_cost": "估算成本（非 provider 账单）",
+    "actual_cost": "Provider 报告成本",
+}
+
 PROJECT_ANALYSIS_COPY = {
     "start": "开始分析",
     "generate": "生成项目摘要",
@@ -295,6 +304,67 @@ def format_job_state_fact(state: str) -> str:
 
 def format_safety_fact(level: str, *, prefix: str = "检查结果") -> str:
     return f"{prefix}：{safety_level_label(level)}"
+
+
+def _format_usage_cost_values(metric: Any) -> str:
+    if not isinstance(metric, dict):
+        return ""
+    values = metric.get("values")
+    if not isinstance(values, dict) or not values:
+        return ""
+    return "、".join(
+        f"{float(value):.6f} {currency}"
+        for currency, value in sorted(values.items())
+    )
+
+
+def format_usage_ledger_facts(report: Any) -> list[str]:
+    """Render the shared usage report for the diagnostics facts list."""
+    if not isinstance(report, dict):
+        return []
+    totals = report.get("totals")
+    if not isinstance(totals, dict):
+        return []
+    records = int(totals.get("records") or 0)
+    if records <= 0:
+        return [USAGE_LEDGER_COPY["empty"]]
+
+    calls = int(totals.get("calls") or 0)
+    total_tokens = totals.get("total_tokens")
+    unknown_tokens = int(totals.get("total_tokens_unknown_records") or 0)
+    if total_tokens is None:
+        token_text = "token 数未知"
+    else:
+        token_text = f"{int(total_tokens):,} token"
+        if unknown_tokens:
+            token_text += f"；另有 {unknown_tokens} 条记录未知"
+    facts = [
+        f"{USAGE_LEDGER_COPY['total']}：累计 {calls} 次调用；{token_text}",
+    ]
+
+    recent = report.get("recent_run")
+    if isinstance(recent, dict):
+        recent_totals = recent.get("totals")
+        recent_totals = recent_totals if isinstance(recent_totals, dict) else {}
+        recent_tokens = recent_totals.get("total_tokens")
+        recent_token_text = (
+            "token 数未知" if recent_tokens is None else f"{int(recent_tokens):,} token"
+        )
+        dimensions = " / ".join(
+            ", ".join(str(value) for value in recent.get(key) or [])
+            for key in ("task_modes", "stages", "providers", "models")
+        )
+        facts.append(
+            f"{USAGE_LEDGER_COPY['recent']}：{dimensions or '未知'}；{recent_token_text}"
+        )
+
+    estimated = _format_usage_cost_values(totals.get("estimated_cost"))
+    if estimated:
+        facts.append(f"{USAGE_LEDGER_COPY['estimated_cost']}：{estimated}")
+    actual = _format_usage_cost_values(totals.get("actual_cost"))
+    if actual:
+        facts.append(f"{USAGE_LEDGER_COPY['actual_cost']}：{actual}")
+    return facts
 
 
 def format_notice_fact(text: str) -> str:

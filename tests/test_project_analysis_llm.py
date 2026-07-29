@@ -65,16 +65,23 @@ class MapReduceTests(unittest.TestCase):
                 entry_labels=["start"],
             )
             backend = FakeBackend()
+            usage_events = []
             result = llm.run_mapreduce_drafts(
                 store_dir=store_dir,
                 backend=backend,
                 config={"model": "fake-model"},
                 force=True,
+                usage_recorder=usage_events.append,
             )
             self.assertGreaterEqual(result["labels_refined"], 1)
             self.assertGreaterEqual(result["routes_refined"], 1)
             self.assertGreater(len(backend.calls), 0)
             self.assertEqual(result["prompt_schema_version"], llm.PROMPT_SCHEMA_VERSION)
+            self.assertEqual(len(usage_events), len(backend.calls))
+            self.assertTrue({"label", "route", "brief"}.issubset(
+                {event["stage"] for event in usage_events}
+            ))
+            self.assertTrue(all("result" in event for event in usage_events))
 
             store = pa.ProjectAnalysisStore(store_dir)
             labels = store.load_summaries(pa.KIND_LABEL)
@@ -86,6 +93,32 @@ class MapReduceTests(unittest.TestCase):
             # Evidence IDs preserved on at least one refined label when present.
             with_ids = [r for r in labels if r.get("evidence_item_ids")]
             self.assertTrue(with_ids)
+
+    def test_usage_recorder_failure_does_not_abort_generation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            gen.ingest_keyword_summaries(str(KEYWORDS), store_dir=store_dir)
+            gen.build_structure_drafts(
+                store_dir=store_dir,
+                base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)],
+                entry_labels=["start"],
+            )
+            backend = FakeBackend()
+
+            def boom(_event):
+                raise RuntimeError("ledger unavailable")
+
+            result = llm.run_mapreduce_drafts(
+                store_dir=store_dir,
+                backend=backend,
+                config={"model": "fake-model"},
+                force=True,
+                usage_recorder=boom,
+            )
+            self.assertGreaterEqual(result["labels_refined"], 1)
+            self.assertGreaterEqual(result["routes_refined"], 1)
+            self.assertGreater(len(backend.calls), 0)
 
     def test_optional_inputs_are_prompted_persisted_and_invalidate_cache(self):
         with tempfile.TemporaryDirectory() as tmp:

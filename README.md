@@ -67,6 +67,7 @@ python -m gui_qt
 | 安装与配置 | [setup.md](docs/setup.md) |
 | GUI 工作台 | [gui_workbench.md](docs/gui_workbench.md) |
 | Batch 与写回安全 | [batch_workflows.md](docs/batch_workflows.md) |
+| 实际模型用量账本 | [model_usage_ledger.md](docs/model_usage_ledger.md) |
 | RAG / 索引 / Story Memory | [context_systems.md](docs/context_systems.md) |
 | 边界、安全与烟测 | [project_notes.md](docs/project_notes.md) |
 | 项目沿革 | [project_history.md](docs/project_history.md) |

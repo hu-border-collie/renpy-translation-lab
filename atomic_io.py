@@ -12,6 +12,9 @@ import os
 import shutil
 import stat
 import tempfile
+import time
+import uuid
+from contextlib import contextmanager
 from typing import Any, Callable, Iterable, TextIO
 
 
@@ -25,6 +28,88 @@ def file_sha256(path: str | os.PathLike[str], *, chunk_size: int = 1024 * 1024) 
 
 def sha256_text(text: str, *, encoding: str = "utf-8") -> str:
     return hashlib.sha256(text.encode(encoding)).hexdigest()
+
+
+class AtomicFileLockTimeoutError(TimeoutError):
+    """Raised when a same-directory exclusive file lock cannot be acquired."""
+
+
+@contextmanager
+def exclusive_file_lock(
+    lock_path: str | os.PathLike[str],
+    *,
+    timeout: float = 30.0,
+    poll_interval: float = 0.01,
+    stale_after: float = 300.0,
+):
+    """Serialize cooperating writers with an exclusive same-directory lock file.
+
+    The lock uses atomic ``O_EXCL`` creation so it works on Windows and POSIX.
+    A token prevents one owner from deleting a replacement lock, and abandoned
+    regular lock files are recovered after ``stale_after`` seconds.
+    """
+    target = os.path.abspath(os.fspath(lock_path))
+    directory = os.path.dirname(target) or "."
+    os.makedirs(directory, exist_ok=True)
+    token = uuid.uuid4().hex
+    owner = {
+        "pid": os.getpid(),
+        "token": token,
+        "created_at": time.time(),
+    }
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    delay = max(0.001, float(poll_interval))
+
+    while True:
+        try:
+            fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            try:
+                lock_stat = os.lstat(target)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(lock_stat.st_mode):
+                raise OSError(f"File lock path is not a regular file: {target}")
+            age = max(0.0, time.time() - lock_stat.st_mtime)
+            if stale_after >= 0 and age >= float(stale_after):
+                try:
+                    os.unlink(target)
+                except FileNotFoundError:
+                    pass
+                continue
+            if time.monotonic() >= deadline:
+                raise AtomicFileLockTimeoutError(
+                    f"Timed out waiting for file lock: {target}"
+                )
+            time.sleep(delay)
+            continue
+
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(owner, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except Exception:
+            try:
+                os.unlink(target)
+            except OSError:
+                pass
+            raise
+        break
+
+    try:
+        yield owner
+    finally:
+        try:
+            with open(target, "r", encoding="utf-8") as handle:
+                current = json.load(handle)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            current = {}
+        if isinstance(current, dict) and current.get("token") == token:
+            try:
+                os.unlink(target)
+            except FileNotFoundError:
+                pass
 
 
 def atomic_write(

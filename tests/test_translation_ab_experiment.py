@@ -221,6 +221,7 @@ class TranslationAbExperimentTests(unittest.TestCase):
                 json.dump(manifest, handle, ensure_ascii=False, indent=2)
 
             loaded = batch_mod.load_manifest(manifest_path)
+            loaded['base_dir'] = tmp
             variants = ab_mod.load_variants_file(str(FIXTURE_VARIANTS))
             calls = []
 
@@ -232,21 +233,72 @@ class TranslationAbExperimentTests(unittest.TestCase):
                     'usage_metadata': {'total_tokens': 12},
                 }
 
-            summary = ab_mod.run_translation_ab_experiment(
-                loaded,
-                variants,
-                limit=1,
-                offset=0,
-                output_dir=os.path.join(tmp, 'experiment'),
-                dry_run=False,
-                sync_runner=fake_sync_runner,
-            )
+            with mock.patch.object(
+                ab_mod.model_usage_ledger, 'record_generation_usage'
+            ) as usage_recorder:
+                summary = ab_mod.run_translation_ab_experiment(
+                    loaded,
+                    variants,
+                    limit=1,
+                    offset=0,
+                    output_dir=os.path.join(tmp, 'experiment'),
+                    dry_run=False,
+                    sync_runner=fake_sync_runner,
+                )
             self.assertEqual(len(calls), 2)
+            self.assertEqual(usage_recorder.call_count, 2)
+            self.assertEqual(usage_recorder.call_args.kwargs['game_root'], tmp)
             with open(summary['results_path'], 'r', encoding='utf-8') as handle:
                 row = json.loads(handle.readline())
             translations = {variant['name']: variant['translations'] for variant in row['variants']}
             self.assertEqual(translations['baseline'][SAMPLE_ITEM_ID], '你好')
             self.assertEqual(translations['story_memory'][SAMPLE_ITEM_ID], '你好')
+
+    def test_run_translation_ab_experiment_usage_ledger_error_does_not_fail_variant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = os.path.join(tmp, 'manifest.json')
+            with open(FIXTURE_MANIFEST, 'r', encoding='utf-8') as source:
+                manifest = json.load(source)
+            manifest['mode'] = batch_mod.MANIFEST_MODE_TRANSLATION
+            with open(manifest_path, 'w', encoding='utf-8') as handle:
+                json.dump(manifest, handle, ensure_ascii=False, indent=2)
+
+            loaded = batch_mod.load_manifest(manifest_path)
+            loaded['base_dir'] = tmp
+            variants = ab_mod.load_variants_file(str(FIXTURE_VARIANTS))
+
+            def fake_sync_runner(request_payload, model_name, api_key_index=None):
+                return {
+                    'response_text': _full_chunk_translations(),
+                    'finish_reason': 'STOP',
+                    'usage_metadata': {'total_tokens': 12},
+                }
+
+            with mock.patch.object(
+                ab_mod.model_usage_ledger,
+                'record_generation_usage',
+                side_effect=TypeError('unexpected usage shape'),
+            ):
+                summary = ab_mod.run_translation_ab_experiment(
+                    loaded,
+                    variants,
+                    limit=1,
+                    offset=0,
+                    output_dir=os.path.join(tmp, 'experiment'),
+                    dry_run=False,
+                    sync_runner=fake_sync_runner,
+                )
+            with open(summary['results_path'], 'r', encoding='utf-8') as handle:
+                row = json.loads(handle.readline())
+            errors = {
+                variant['name']: variant.get('error', '') for variant in row['variants']
+            }
+            self.assertEqual(errors['baseline'], '')
+            self.assertEqual(errors['story_memory'], '')
+            translations = {
+                variant['name']: variant['translations'] for variant in row['variants']
+            }
+            self.assertEqual(translations['baseline'][SAMPLE_ITEM_ID], '你好')
 
     def test_run_translation_ab_experiment_records_variant_sync_errors(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -258,6 +310,7 @@ class TranslationAbExperimentTests(unittest.TestCase):
                 json.dump(manifest, handle, ensure_ascii=False, indent=2)
 
             loaded = batch_mod.load_manifest(manifest_path)
+            loaded['base_dir'] = tmp
             variants = ab_mod.load_variants_file(str(FIXTURE_VARIANTS))
             call_count = {'value': 0}
 
@@ -271,16 +324,20 @@ class TranslationAbExperimentTests(unittest.TestCase):
                     }
                 raise RuntimeError('sync failed')
 
-            summary = ab_mod.run_translation_ab_experiment(
-                loaded,
-                variants,
-                limit=1,
-                offset=0,
-                output_dir=os.path.join(tmp, 'experiment'),
-                dry_run=False,
-                sync_runner=flaky_sync_runner,
-            )
+            with mock.patch.object(
+                ab_mod.model_usage_ledger, 'record_generation_usage'
+            ) as usage_recorder:
+                summary = ab_mod.run_translation_ab_experiment(
+                    loaded,
+                    variants,
+                    limit=1,
+                    offset=0,
+                    output_dir=os.path.join(tmp, 'experiment'),
+                    dry_run=False,
+                    sync_runner=flaky_sync_runner,
+                )
             self.assertTrue(os.path.isfile(summary['report_path']))
+            usage_recorder.assert_called_once()
             with open(summary['results_path'], 'r', encoding='utf-8') as handle:
                 row = json.loads(handle.readline())
             self.assertEqual(len(row['variants']), 2)

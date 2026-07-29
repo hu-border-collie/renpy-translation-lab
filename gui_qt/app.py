@@ -77,6 +77,7 @@ from PySide6.QtWidgets import (
 )
 from project_version import __version__
 import cli_contract
+import model_usage_ledger
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
 from .responsive_layout import FlowButtonBar, ResponsiveActionPanel
@@ -6313,6 +6314,7 @@ class MainWindow(QMainWindow):
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
             submit_max_cost=self._submit_max_cost_from_config(),
+            game_root=str(self.state.get_game_root() or ""),
         )
         merged_context = DiagnosticsContext(
             status=str(merge_summary["status"]),
@@ -6418,17 +6420,31 @@ class MainWindow(QMainWindow):
     ) -> None:
         spec = work_mode_spec(self._current_work_mode())
         running = self.kill_btn.isEnabled()
+        game_root = self.state.get_game_root()
+        usage_ledger_path = ""
+        if game_root is not None:
+            try:
+                usage_ledger_path = model_usage_ledger.usage_ledger_path(game_root)
+            except model_usage_ledger.UsageLedgerError:
+                usage_ledger_path = ""
+        usage_ledger_mtime = self._diagnostics_manifest_mtime_ns(
+            usage_ledger_path or None
+        )
         if spec.mode == WorkMode.SYNC_TRANSLATION:
             input_key = (
                 "sync",
                 str(self.state.get_sync_script_path()),
                 sys.executable,
+                str(game_root or ""),
+                usage_ledger_mtime,
                 running,
             )
             if not force and self._diagnostics_refresh_input_key == input_key:
                 return
             context = sync_diagnostics_context(
                 sync_script_path=str(self.state.get_sync_script_path()),
+                batch_script_path=str(self.state.get_batch_script_path()),
+                game_root=str(game_root or ""),
                 python_exe=sys.executable,
             )
             self._set_diagnostics_context(context)
@@ -6444,7 +6460,6 @@ class MainWindow(QMainWindow):
             return
 
         uses_batch_manifest = spec.manifest_mode is not None
-        game_root = self.state.get_game_root()
         latest_manifest = latest_manifest_path
         if latest_manifest is None and uses_batch_manifest and game_root is not None:
             latest_manifest = self.state.get_latest_manifest_path_for_mode(
@@ -6470,6 +6485,7 @@ class MainWindow(QMainWindow):
             str(self.state.get_logs_dir()),
             submit_max_cost,
             running,
+            usage_ledger_mtime,
         )
         if not force and self._diagnostics_refresh_input_key == input_key:
             # Inputs unchanged since last tab visit — skip disk/widget rebuild.
@@ -6487,6 +6503,7 @@ class MainWindow(QMainWindow):
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
             submit_max_cost=submit_max_cost,
+            game_root=str(game_root or ""),
         )
         self._set_diagnostics_context(context)
         self._diagnostics_refresh_input_key = input_key
@@ -10561,6 +10578,7 @@ class MainWindow(QMainWindow):
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
             submit_max_cost=self._submit_max_cost_from_config(),
+            game_root=str(self.state.get_game_root() or ""),
         )
         self._set_diagnostics_context(
             probe_summary_to_diagnostics_context(
@@ -10615,6 +10633,7 @@ class MainWindow(QMainWindow):
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
             submit_max_cost=self._submit_max_cost_from_config(),
+            game_root=str(self.state.get_game_root() or ""),
         )
         self._set_diagnostics_context(
             ab_experiment_summary_to_diagnostics_context(
@@ -10664,6 +10683,7 @@ class MainWindow(QMainWindow):
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
             submit_max_cost=self._submit_max_cost_from_config(),
+            game_root=str(self.state.get_game_root() or ""),
         )
         self._set_diagnostics_context(
             split_summary_to_diagnostics_context(
@@ -10882,6 +10902,7 @@ class MainWindow(QMainWindow):
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
             submit_max_cost=self._submit_max_cost_from_config(),
+            game_root=str(self.state.get_game_root() or ""),
         )
         self._set_diagnostics_context(
             repair_summary_to_diagnostics_context(
@@ -11635,6 +11656,7 @@ class MainWindow(QMainWindow):
                 logs_dir=str(self.state.get_logs_dir()),
                 python_exe=sys.executable,
                 submit_max_cost=self._submit_max_cost_from_config(),
+                game_root=str(self.state.get_game_root() or ""),
             )
             self._set_diagnostics_context(
                 probe_summary_to_diagnostics_context(probe_summary, base_context)
@@ -11666,6 +11688,7 @@ class MainWindow(QMainWindow):
                 logs_dir=str(self.state.get_logs_dir()),
                 python_exe=sys.executable,
                 submit_max_cost=self._submit_max_cost_from_config(),
+                game_root=str(self.state.get_game_root() or ""),
             )
             self._set_diagnostics_context(
                 ab_experiment_summary_to_diagnostics_context(ab_summary, base_context)
@@ -11707,6 +11730,7 @@ class MainWindow(QMainWindow):
                 logs_dir=str(self.state.get_logs_dir()),
                 python_exe=sys.executable,
                 submit_max_cost=self._submit_max_cost_from_config(),
+                game_root=str(self.state.get_game_root() or ""),
             )
             self._set_diagnostics_context(
                 split_summary_to_diagnostics_context(split_summary, base_context)
@@ -11756,6 +11780,7 @@ class MainWindow(QMainWindow):
                 logs_dir=str(self.state.get_logs_dir()),
                 python_exe=sys.executable,
                 submit_max_cost=self._submit_max_cost_from_config(),
+                game_root=str(self.state.get_game_root() or ""),
             )
             self._set_diagnostics_context(
                 repair_summary_to_diagnostics_context(parsed, base_context)

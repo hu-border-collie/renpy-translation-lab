@@ -48,6 +48,31 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         self.assertEqual(result.finish_reason, "stop")
         self.assertEqual(result.usage_metadata["prompt_tokens"], 8)
 
+    def test_preserves_provider_reported_cost_from_hidden_params(self):
+        class Response:
+            _hidden_params = {
+                "response_cost": 0.00125,
+                "response_cost_currency": "USD",
+            }
+
+            def model_dump(self):
+                return {
+                    "choices": [{
+                        "message": {"content": "ok"},
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {"prompt_tokens": 8, "completion_tokens": 6},
+                }
+
+        backend = LiteLLMSyncBackend(completion=lambda **kwargs: Response())
+        result = backend.generate(
+            SyncGenerationRequest("openai/test", "hello")
+        )
+
+        self.assertEqual(
+            result.response_payload["_hidden_params"]["response_cost"], 0.00125
+        )
+
     def test_uses_json_object_for_deepseek(self):
         calls = []
 

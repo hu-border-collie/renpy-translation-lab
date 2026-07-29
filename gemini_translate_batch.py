@@ -39,6 +39,7 @@ import cli_contract
 import cli_discovery
 import doctor_recommendations as doctor_rec
 import keyword_glossary_merge
+import model_usage_ledger
 import prompt_context
 import translation_ab_experiment
 import story_memory
@@ -4977,6 +4978,9 @@ def merge_retry_results(parent_target, retry_target):
     if missing_retry_rows:
         raise SystemExit(f'Retry result is missing rows for chunks: {sorted(missing_retry_rows)[:5]}')
 
+    import_manifest_usage_best_effort(parent_manifest)
+    import_manifest_usage_best_effort(retry_manifest, result_path=retry_result_path)
+
     direct_retry_keys = []
     partial_chunks_by_parent = {}
     for chunk in retry_chunks:
@@ -5413,6 +5417,7 @@ def download_results(target=None, force=False):
     expected_sha = manifest.get('result_jsonl_sha256')
     if os.path.isfile(result_path) and not force:
         if result_artifact_is_complete(result_path, expected_sha):
+            import_manifest_usage_best_effort(manifest)
             print(f'Result file already exists: {result_path}')
             return result_path
         print(
@@ -5441,6 +5446,7 @@ def download_results(target=None, force=False):
     manifest['downloaded_at'] = datetime.now().isoformat(timespec='seconds')
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
+    import_manifest_usage_best_effort(manifest)
     print(f'Saved results to: {result_path}')
     return result_path
 
@@ -5497,12 +5503,126 @@ def extract_usage_metadata(response_payload):
 def summarize_usage_metadata(usage_metadata):
     if not isinstance(usage_metadata, dict):
         return {}
-    summary = {}
-    for key in ('promptTokenCount', 'thoughtsTokenCount', 'candidatesTokenCount', 'totalTokenCount'):
-        value = usage_metadata.get(key)
-        if value is not None:
-            summary[key] = value
-    return summary
+    return dict(usage_metadata)
+
+
+def import_manifest_usage(manifest, result_path=None):
+    """Offline-import real provider result sources for one manifest lineage.
+
+    A merged retry file can contain locally synthesized rows. For that state,
+    import the original parent result plus each retry result instead of treating
+    the merged JSONL as another provider call.
+    """
+    pricing_config = batch_cost_estimate.load_pricing_config(
+        _read_translator_config_object()
+    )
+    sources = []
+    if result_path:
+        sources.append((manifest, result_path))
+    else:
+        merge_history = manifest.get('retry_merge_history')
+        if isinstance(merge_history, list) and merge_history:
+            first = merge_history[0] if isinstance(merge_history[0], dict) else {}
+            parent_result = first.get('previous_result_jsonl_path')
+            if parent_result:
+                sources.append((manifest, parent_result))
+            for entry in merge_history:
+                if not isinstance(entry, dict):
+                    continue
+                retry_manifest_path = entry.get('retry_manifest')
+                if not retry_manifest_path:
+                    continue
+                retry_manifest = load_manifest(retry_manifest_path)
+                retry_result = (
+                    entry.get('retry_result_jsonl_path')
+                    or resolve_manifest_result_path(retry_manifest)
+                )
+                sources.append((retry_manifest, retry_result))
+        if not sources:
+            sources.append((manifest, resolve_manifest_result_path(manifest)))
+
+    summaries = [
+        model_usage_ledger.import_manifest_results(
+            source_manifest,
+            result_path=source_result,
+            pricing_config=pricing_config,
+        )
+        for source_manifest, source_result in sources
+    ]
+    last = summaries[-1]
+    combined = {
+        **last,
+        'result_path': last.get('result_path') if len(summaries) == 1 else '',
+        'result_paths': [item.get('result_path') for item in summaries],
+    }
+    for key in (
+        'scanned_rows', 'candidate_records', 'skipped_rows',
+        'inserted_records', 'duplicate_records',
+    ):
+        combined[key] = sum(int(item.get(key) or 0) for item in summaries)
+    return combined
+
+
+def import_manifest_usage_best_effort(manifest, result_path=None):
+    """Record auxiliary usage without changing the translation/result workflow."""
+    try:
+        return import_manifest_usage(manifest, result_path=result_path)
+    except (
+        OSError,
+        ValueError,
+        model_usage_ledger.UsageLedgerError,
+    ) as exc:
+        print(f'Warning: Model usage ledger import failed: {exc}')
+        return {
+            'inserted_records': 0,
+            'duplicate_records': 0,
+            'error': str(exc),
+        }
+
+
+def record_generation_usage_best_effort(
+    *,
+    task_mode,
+    stage,
+    result,
+    operation_id,
+    run_id,
+    source_key,
+    thinking_level='',
+    source=None,
+    pricing_config=None,
+):
+    """Record one successful synchronous response without failing its caller."""
+    if not legacy.BASE_DIR:
+        return {
+            'inserted_records': 0,
+            'duplicate_records': 0,
+            'error': 'game_root is unset',
+        }
+    try:
+        return model_usage_ledger.record_generation_usage(
+            game_root=legacy.BASE_DIR,
+            task_mode=task_mode,
+            stage=stage,
+            provider=str(result.get('provider') or SYNC_BACKEND or 'unknown'),
+            model=str(result.get('model') or SYNC_MODEL or BATCH_MODEL or 'unknown'),
+            usage_metadata=result.get('usage_metadata') or {},
+            response_payload=result.get('response_payload') or {},
+            operation_id=operation_id,
+            run_id=run_id,
+            thinking_level=thinking_level,
+            execution_mode=str(result.get('execution_mode') or 'sync'),
+            source_key=source_key,
+            source=source or {},
+            pricing_config=pricing_config,
+        )
+    except (OSError, ValueError, model_usage_ledger.UsageLedgerError) as exc:
+        print(f'Warning: Model usage ledger record failed: {exc}')
+        return {
+            'inserted_records': 0,
+            'duplicate_records': 0,
+            'error': str(exc),
+        }
 
 
 def bump_counter(bucket, name, amount=1):
@@ -7157,6 +7277,13 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
     if not sample:
         raise SystemExit('No request rows available for the requested probe range.')
 
+    usage_run_id = model_usage_ledger.new_run_id('probe')
+    usage_operation_id = (
+        'probe-manifest-'
+        + hashlib.sha256(
+            str(manifest.get('_manifest_path') or '').encode('utf-8')
+        ).hexdigest()[:20]
+    )
     client = create_batch_client(api_key_index=api_key_index)
     summary = {
         'sample_count': len(sample),
@@ -7205,6 +7332,22 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
         except Exception as exc:
             summary['request_errors'] += 1
             parse_error = str(exc)
+        else:
+            record_generation_usage_best_effort(
+                task_mode='analysis',
+                stage='probe',
+                result=_sync_result_to_dict(result),
+                operation_id=usage_operation_id,
+                run_id=usage_run_id,
+                source_key=str(key),
+                thinking_level=str((manifest.get('settings') or {}).get('thinking_level') or ''),
+                source={
+                    'kind': 'probe_response',
+                    'manifest_path': str(manifest.get('_manifest_path') or ''),
+                    'row_key': str(key),
+                    'sample_index': index,
+                },
+            )
         if response_text:
             try:
                 payload = parse_json_payload(response_text)
@@ -8808,6 +8951,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
     manifest['result_jsonl_path'] = result_path
     manifest['result_jsonl_sha256'] = content_sha
     save_manifest(manifest, update_latest=False)
+    import_manifest_usage_best_effort(manifest)
     return manifest
 
 
@@ -9058,6 +9202,11 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
     run_dir = os.path.join(REPAIR_RUNS_DIR, f'{timestamp}_{report_stem}')
     os.makedirs(run_dir, exist_ok=True)
 
+    usage_run_id = f'repair-{os.path.basename(run_dir)}'
+    usage_operation_id = (
+        'repair-report-'
+        + hashlib.sha256(os.path.abspath(report_path).encode('utf-8')).hexdigest()[:20]
+    )
     request_log_path = os.path.join(run_dir, 'repair_requests.jsonl')
     result_log_path = os.path.join(run_dir, 'repair_results.jsonl')
     failure_log_path = os.path.join(run_dir, 'repair_failures.jsonl')
@@ -9147,6 +9296,23 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                 }
             )
             continue
+
+        record_generation_usage_best_effort(
+            task_mode='repair',
+            stage='repair',
+            result=response_data,
+            operation_id=usage_operation_id,
+            run_id=usage_run_id,
+            source_key=str(job.get('key') or index),
+            thinking_level=BATCH_THINKING_LEVEL,
+            source={
+                'kind': 'repair_response',
+                'report_path': os.path.abspath(report_path),
+                'run_dir': os.path.abspath(run_dir),
+                'job_key': str(job.get('key') or ''),
+                'request_index': index,
+            },
+        )
 
         if response_text:
             try:
@@ -10888,6 +11054,41 @@ def build_arg_parser():
         help='Manifest path or package dir. Defaults to latest package.',
     )
 
+    usage_import_parser = subparsers.add_parser(
+        'usage-import',
+        help='Offline-import provider usage from an existing results.jsonl into the project ledger.',
+    )
+    usage_import_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Manifest path or package dir. Defaults to latest package.',
+    )
+    usage_import_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='Print a machine-readable JSON import summary.',
+    )
+
+    usage_report_parser = subparsers.add_parser(
+        'usage-report',
+        help='Report actual recorded model usage for the current project.',
+    )
+    usage_report_parser.add_argument('--task', default='', help='Filter by task mode.')
+    usage_report_parser.add_argument('--stage', default='', help='Filter by pipeline stage.')
+    usage_report_parser.add_argument('--provider', default='', help='Filter by provider.')
+    usage_report_parser.add_argument('--model', default='', help='Filter by model.')
+    usage_report_parser.add_argument(
+        '--group-by',
+        default='task,stage,provider,model',
+        help='Comma-separated grouping fields: task, stage, provider, model, run, operation, execution.',
+    )
+    usage_report_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='Print a machine-readable JSON report.',
+    )
+
     status_parser = subparsers.add_parser('status', help='Refresh and show batch job status.')
     add_machine_output_argument(status_parser)
     status_parser.add_argument(
@@ -11370,9 +11571,6 @@ def dispatch_command(parser, args):
         'project-analysis-publish',
         'project-analysis-unpublish',
     }:
-        import contextlib
-        import io
-
         from project_analysis import (
             ProjectAnalysisError,
             collect_project_analysis_status,
@@ -11425,6 +11623,12 @@ def dispatch_command(parser, args):
                 model = (
                     getattr(args, 'model', '') or PROJECT_ANALYSIS_MODEL or BATCH_MODEL or SYNC_MODEL
                 )
+                analysis_usage_run_id = model_usage_ledger.new_run_id('project-analysis')
+                analysis_usage_operation_id = (
+                    'project-analysis-'
+                    + hashlib.sha256(str(legacy.BASE_DIR or '').encode('utf-8')).hexdigest()[:20]
+                )
+
 
                 def _generate(request: SyncGenerationRequest):
                     # Reuse production sync path (Gemini / LiteLLM).
@@ -11455,6 +11659,27 @@ def dispatch_command(parser, args):
                     batch_cost_estimate.resolve_model_pricing(model, pricing_config) or {}
                 )
 
+                def _record_project_analysis_usage(event):
+                    result = event.get('result')
+                    if result is None:
+                        return
+                    record_generation_usage_best_effort(
+                        task_mode='analysis',
+                        stage=str(event.get('stage') or 'project_analysis'),
+                        result=_sync_result_to_dict(result),
+                        operation_id=analysis_usage_operation_id,
+                        run_id=analysis_usage_run_id,
+                        source_key=str(event.get('artifact_id') or ''),
+                        thinking_level=PROJECT_ANALYSIS_THINKING_LEVEL,
+                        source={
+                            'kind': 'project_analysis_response',
+                            'store_dir': str(store_dir or ''),
+                            'artifact_id': str(event.get('artifact_id') or ''),
+                            'stage': str(event.get('stage') or ''),
+                        },
+                        pricing_config=pricing_config,
+                    )
+
                 def _project_analysis_progress(event):
                     print(
                         "PROJECT_ANALYSIS_PROGRESS "
@@ -11479,6 +11704,7 @@ def dispatch_command(parser, args):
                     provider=SYNC_BACKEND or 'gemini',
                     model=model,
                     progress=_project_analysis_progress,
+                    usage_recorder=_record_project_analysis_usage,
                     pricing={
                         "currency": pricing_config.get("currency") or "USD",
                         "input_per_million": model_rates.get("input_per_million") or 0.0,
@@ -11569,6 +11795,55 @@ def dispatch_command(parser, args):
             raise SystemExit(f'Project analysis error: {exc}') from exc
 
     initialize_batch_logging()
+    if command in {'usage-import', 'usage-report'}:
+        as_json = bool(getattr(args, 'json', False))
+
+        def _run_usage_command():
+            legacy.load_config(require_api_key=False)
+            legacy.load_translator_settings(persist_corrected_game_root=False)
+            load_batch_settings()
+            if command == 'usage-import':
+                manifest = load_manifest(getattr(args, 'target', '') or None)
+                result = import_manifest_usage(manifest)
+                result['report'] = model_usage_ledger.query_usage(result['game_root'])
+                return result
+            if not legacy.BASE_DIR:
+                raise model_usage_ledger.UsageLedgerError(
+                    'game_root is required for usage-report'
+                )
+            return model_usage_ledger.query_usage(
+                legacy.BASE_DIR,
+                task=getattr(args, 'task', '') or '',
+                stage=getattr(args, 'stage', '') or '',
+                provider=getattr(args, 'provider', '') or '',
+                model=getattr(args, 'model', '') or '',
+                group_by=getattr(args, 'group_by', '') or '',
+            )
+
+        try:
+            if as_json:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    result = _run_usage_command()
+                print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                return result
+            result = _run_usage_command()
+            if command == 'usage-import':
+                print('Model usage import:')
+                result_paths = result.get('result_paths') or [result.get('result_path')]
+                for result_path in result_paths:
+                    if result_path:
+                        print(f"- result: {result_path}")
+                print(f"- scanned rows: {int(result.get('scanned_rows') or 0)}")
+                print(f"- inserted records: {int(result.get('inserted_records') or 0)}")
+                print(f"- duplicate records: {int(result.get('duplicate_records') or 0)}")
+                print(f"- ledger: {result.get('ledger_path') or ''}")
+            else:
+                for line in model_usage_ledger.format_usage_report(result):
+                    print(line)
+            return result
+        except model_usage_ledger.UsageLedgerError as exc:
+            raise SystemExit(f'Model usage ledger error: {exc}') from exc
+
     legacy.load_config()
     legacy.load_translator_settings()
     legacy.load_glossary()
