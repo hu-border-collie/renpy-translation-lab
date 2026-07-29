@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from importlib import metadata
 import re
@@ -18,6 +18,29 @@ SUPPORTED_PROVIDERS: tuple[tuple[str, str], ...] = (
     ("xai", "xAI"),
     ("ollama", "Ollama（本地）"),
 )
+_COMMON_PROVIDER_ORDER = (
+    "openai",
+    "anthropic",
+    "gemini",
+    "openrouter",
+    "deepseek",
+    "xai",
+    "azure",
+    "vertex_ai",
+    "ollama",
+)
+_COMMON_PROVIDER_INDEX = {
+    provider: index for index, provider in enumerate(_COMMON_PROVIDER_ORDER)
+}
+_PROVIDER_LABELS = dict(SUPPORTED_PROVIDERS) | {
+    "gemini": "Google Gemini",
+    "azure": "Azure OpenAI",
+    "vertex_ai": "Google Vertex AI",
+}
+_LABEL_TO_PROVIDER_ID = {
+    str(label).strip().casefold(): provider
+    for provider, label in _PROVIDER_LABELS.items()
+}
 DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     "openai": ("openai/gpt-5",),
     "anthropic": ("anthropic/claude-sonnet-4-5-20250929",),
@@ -140,6 +163,52 @@ def provider_from_model(model: str) -> str:
     return text.split("/", 1)[0].strip().lower()
 
 
+def provider_display_label(provider: str) -> str:
+    """Return a friendly label without restricting dynamic provider ids."""
+    provider = str(provider or "").strip().lower()
+    return _PROVIDER_LABELS.get(provider, provider)
+
+
+def resolve_provider_id(value: str) -> str:
+    """Map free-typed provider input to a LiteLLM provider id when possible.
+
+    Accepts known ids, known display labels (e.g. ``Ollama（本地）`` → ``ollama``),
+    and otherwise returns the lowercased free-text id for custom providers.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if lowered in _PROVIDER_LABELS or lowered in _COMMON_PROVIDER_INDEX:
+        return lowered
+    mapped = _LABEL_TO_PROVIDER_ID.get(text.casefold())
+    if mapped:
+        return mapped
+    return lowered
+
+
+def sort_provider_ids(providers: object) -> tuple[str, ...]:
+    """Place common providers first and sort all remaining ids by name."""
+    if isinstance(providers, (str, bytes, bytearray)) or not isinstance(
+        providers, Collection
+    ):
+        return ()
+    cleaned = {
+        str(provider or "").strip().lower()
+        for provider in providers
+        if str(provider or "").strip()
+    }
+    return tuple(
+        sorted(
+            cleaned,
+            key=lambda provider: (
+                _COMMON_PROVIDER_INDEX.get(provider, len(_COMMON_PROVIDER_INDEX)),
+                provider.casefold(),
+            ),
+        )
+    )
+
+
 def _keyring(keyring_module: Any = None) -> Any:
     if keyring_module is not None:
         return keyring_module
@@ -248,6 +317,27 @@ def models_from_remote_catalog(
             continue
         models.add(model if model_provider == provider else f"{provider}/{model}")
     return tuple(sorted(models, key=str.casefold))
+
+
+def providers_from_remote_catalog(
+    catalog: Mapping[str, object],
+) -> tuple[str, ...]:
+    """Discover provider ids represented by LiteLLM's current online catalog.
+
+    Native endpoints are included even when the pricing/context catalog has no
+    current entry for them. The result is a discovery aid, not a guarantee
+    that every provider exposes a native model-list endpoint.
+    """
+    providers = set(NATIVE_CATALOG_ENDPOINTS)
+    for raw_model, raw_metadata in catalog.items():
+        if not isinstance(raw_metadata, Mapping):
+            continue
+        provider = str(raw_metadata.get("litellm_provider") or "").strip().lower()
+        if not provider:
+            provider = provider_from_model(str(raw_model or ""))
+        if provider:
+            providers.add(provider)
+    return sort_provider_ids(providers)
 
 
 def models_from_openrouter_payload(payload: Mapping[str, object] | object) -> tuple[str, ...]:
@@ -380,8 +470,6 @@ def catalog_source_label(source: str) -> str:
     token = str(source or "").strip().lower()
     if token == "online":
         return "目录来源：LiteLLM 官方在线目录。"
-    if token == "local":
-        return "目录来源：本机 LiteLLM 随包目录（联网失败，可能过时）。"
     endpoint = NATIVE_CATALOG_ENDPOINTS.get(token)
     if endpoint is not None:
         if token == "ollama":

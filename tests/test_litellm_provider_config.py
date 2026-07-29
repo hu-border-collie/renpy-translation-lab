@@ -13,6 +13,9 @@ from litellm_provider_config import (
     models_from_openrouter_payload,
     models_from_remote_catalog,
     native_catalog_endpoint,
+    providers_from_remote_catalog,
+    resolve_provider_id,
+    sort_provider_ids,
     version_key,
     provider_from_model,
     python_requirement_allows,
@@ -107,6 +110,35 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
             ("openai/gpt-current", "openai/gpt-responses"),
         )
 
+    def test_remote_catalog_discovers_dynamic_and_native_providers(self):
+        catalog = {
+            "custom/model": {
+                "litellm_provider": "custom_provider",
+                "mode": "chat",
+            },
+            "other/model": {"mode": "chat"},
+        }
+        providers = providers_from_remote_catalog(catalog)
+        self.assertIn("custom_provider", providers)
+        self.assertIn("other", providers)
+        self.assertIn("ollama", providers)
+
+    def test_provider_sort_places_common_choices_before_dynamic_catalog(self):
+        providers = sort_provider_ids(
+            ("zzz_custom", "deepseek", "anthropic", "aaa_custom", "openai")
+        )
+        self.assertEqual(
+            providers,
+            ("openai", "anthropic", "deepseek", "aaa_custom", "zzz_custom"),
+        )
+
+    def test_provider_sort_accepts_mapping_views(self):
+        providers = sort_provider_ids(
+            {"zzz_custom": None, "openai": None, "anthropic": None}.keys()
+        )
+
+        self.assertEqual(providers, ("openai", "anthropic", "zzz_custom"))
+
     def test_openrouter_payload_prefixes_and_skips_non_text_and_aliases(self):
         payload = {
             "data": [
@@ -192,6 +224,17 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
         self.assertIn("OpenAI 官方模型列表", catalog_source_label("openai"))
         self.assertIn("Ollama 本机", catalog_source_label("ollama"))
         self.assertIn("LiteLLM 官方在线目录", catalog_source_label("online"))
+        self.assertEqual(catalog_source_label("local"), "目录来源：未知。")
+
+    def test_resolve_provider_id_maps_display_labels_and_known_ids(self):
+        self.assertEqual(resolve_provider_id("openai"), "openai")
+        self.assertEqual(resolve_provider_id("OpenAI"), "openai")
+        self.assertEqual(resolve_provider_id("Ollama（本地）"), "ollama")
+        self.assertEqual(resolve_provider_id("Google Gemini"), "gemini")
+        self.assertEqual(resolve_provider_id("Azure OpenAI"), "azure")
+        self.assertEqual(resolve_provider_id("Google Vertex AI"), "vertex_ai")
+        self.assertEqual(resolve_provider_id("MyCustomProvider"), "mycustomprovider")
+        self.assertEqual(resolve_provider_id(""), "")
 
     def test_python_requirement_rejects_litellm_latest_on_python_314(self):
         self.assertFalse(

@@ -9,6 +9,7 @@ try:
         CONNECTION_TEST_TIMEOUT_SECONDS,
         LiteLLMConnectionTestWorker,
         LiteLLMModelCatalogWorker,
+        LiteLLMProviderCatalogWorker,
         LiteLLMVersionWorker,
     )
     from litellm_sync_backend import LiteLLMBackendError
@@ -222,25 +223,59 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         self.assertEqual(completed[0][1], "online")
         self.assertIn("OpenRouter 官方列表失败", completed[0][2])
 
-    def test_model_catalog_marks_local_fallback_as_possibly_stale(self):
+    def test_model_catalog_failure_does_not_inject_local_defaults(self):
         completed = []
         worker = LiteLLMModelCatalogWorker("openai")
         worker.completed.connect(
             lambda models, source, error: completed.append((models, source, error))
         )
 
-        with (
-            mock.patch("gui_qt.litellm_worker.urlopen", side_effect=OSError("offline")),
-            mock.patch(
-                "gui_qt.litellm_worker.models_for_provider",
-                return_value=("openai/local-model",),
-            ),
+        with mock.patch(
+            "gui_qt.litellm_worker.urlopen",
+            side_effect=OSError("offline"),
         ):
             worker.run()
 
-        self.assertEqual(completed[0][0], ("openai/local-model",))
-        self.assertEqual(completed[0][1], "local")
-        self.assertIn("已改用本地目录", completed[0][2])
+        self.assertEqual(completed[0][0], ())
+        self.assertEqual(completed[0][1], "")
+        self.assertIn("联网加载模型失败", completed[0][2])
+
+    def test_provider_catalog_is_loaded_only_when_worker_runs(self):
+        payload = {
+            "gpt-current": {"litellm_provider": "openai", "mode": "chat"},
+            "claude-current": {"litellm_provider": "anthropic", "mode": "chat"},
+        }
+        response = mock.MagicMock()
+        response.__enter__.return_value = io.BytesIO(
+            json.dumps(payload).encode("utf-8")
+        )
+        completed = []
+        worker = LiteLLMProviderCatalogWorker()
+        worker.completed.connect(
+            lambda providers, source, error: completed.append((providers, source, error))
+        )
+        with mock.patch("gui_qt.litellm_worker.urlopen", return_value=response):
+            worker.run()
+        self.assertIn("openai", completed[0][0])
+        self.assertIn("anthropic", completed[0][0])
+        self.assertEqual(completed[0][1:], ("online", None))
+
+    def test_provider_catalog_failure_reports_empty_result(self):
+        completed = []
+        worker = LiteLLMProviderCatalogWorker()
+        worker.completed.connect(
+            lambda providers, source, error: completed.append(
+                (providers, source, error)
+            )
+        )
+        with mock.patch(
+            "gui_qt.litellm_worker.urlopen",
+            side_effect=OSError("offline"),
+        ):
+            worker.run()
+        self.assertEqual(completed[0][0], ())
+        self.assertEqual(completed[0][1], "")
+        self.assertIn("联网加载供应商失败", completed[0][2])
 
     def test_version_worker_reads_latest_stable_version_from_pypi(self):
         payload = {
