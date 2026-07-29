@@ -87,7 +87,37 @@ python gemini_translate_batch.py status <manifest> --output json --non-interacti
 
 默认模式保持兼容：未传这两个新选项时，现有 latest-manifest 与 submit-build 回退仍然可用。Agent 应优先使用 `--output json --non-interactive --strict-exit-codes`，并始终显式传递同一 manifest。
 
+## 输出裁剪与文件输出
+
+七个核心 JSON 命令还支持三个可组合选项：
+
+```powershell
+python gemini_translate_batch.py status <manifest> --output json --compact
+python gemini_translate_batch.py check <manifest> --output json --fields command status result.check.safety_level artifacts.manifest
+python gemini_translate_batch.py status <manifest> --output json --output-file .\status.json
+```
+
+- `--compact` 移除缩进和多余空格，但仍输出一个以换行结尾的合法 JSON 文档；
+- `--fields` 使用点路径投影结果，保留嵌套结构；可一次传入多个路径、用逗号分隔，或重复传入该选项；
+- 请求的可选路径不存在时会被省略，命令不会因此失败；列表不支持按下标继续投影，应选择整个列表字段；
+- `--output-file` 将最终 JSON 原子写入指定路径，并保持 stdout 为空；父目录会按需创建；
+- 文件中的 `artifacts.output_file` 记录绝对输出路径，除非 `--fields` 主动将它裁掉；
+- 三个选项都必须显式配合 `--output json`，不会改变文本模式。
+
+字段投影只改变展示形状，不改变命令执行结果或严格退出码。例如 `check` 返回 `warn` 时，即使只输出 `status`，配合 `--strict-exit-codes` 仍退出 `3`。需要稳定 envelope 时不要使用 `--fields`；需要最小上下文时应至少选择 `command / ok / status / error` 以及当前动作所需的 `result`、`artifacts` 路径。
+
+`--output-file` 适合把结果交给后续脚本或避免终端上下文膨胀：
+
+```powershell
+python gemini_translate_batch.py check <manifest> `
+  --output json --non-interactive --strict-exit-codes `
+  --compact --output-file .\check-result.json
+```
+
+命令的业务退出码保持不变；调用方随后读取自己传入的文件路径。若文件无法创建或原子替换，命令失败并把诊断写入 stderr。
+
 ## 机器发现
+
 
 Agent 可在不加载项目配置、不读取 API Key、也不触发 workflow 的情况下查询当前 CLI：
 
@@ -100,9 +130,12 @@ python gemini_translate_batch.py schema status
 
 - `capabilities` 返回 CLI 版本、结果契约版本、完整命令索引，以及每个命令是否支持 JSON、严格退出码、非交互和显式 target；
 - `schema <command>` 返回该命令当前的 positional/options、类型、required、repeatable、choices、默认值和帮助文本；
+- `capabilities.commands` 也声明各命令是否支持 compact、字段投影和文件输出；`schema` 给出这些选项的实时 argparse 形状；
 - schema 直接从现行 argparse 定义生成，`--help` 仍是人类阅读的事实来源，不维护第二份手写命令表。
 
-没有单独提供 `commands` 命令，因为 `capabilities.commands` 已覆盖同一用途。输出裁剪选项另行演进，不属于 discovery schema 的隐藏行为。
+`capabilities` 与 `schema` 本身就是 JSON 命令，也接受 `--compact / --fields / --output-file`，但不需要也不提供冗余的 `--output json`。
+
+没有单独提供 `commands` 命令，因为 `capabilities.commands` 已覆盖同一用途。输出裁剪是公开参数，不存在 discovery schema 之外的隐藏 Agent 行为。
 没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式只承诺覆盖上面的七个核心命令；其他子命令以各自 `--help` 和落盘产物为准。
 
 ## 1. 安装核心依赖

@@ -1,7 +1,9 @@
 import contextlib
 import io
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -28,6 +30,122 @@ class BatchCliContractTests(unittest.TestCase):
                 self.assertTrue(strict_invocation.require_explicit_target)
 
                 self.assertTrue(strict_args.strict_exit_codes)
+
+    def test_core_commands_expose_output_trimming_arguments(self):
+        parser = batch.build_arg_parser()
+
+        args = parser.parse_args(
+            [
+                "status",
+                "manifest.json",
+                "--output",
+                "json",
+                "--compact",
+                "--fields",
+                "status",
+                "result.job_state,artifacts.manifest",
+                "--output-file",
+                "result.json",
+            ]
+        )
+
+        self.assertTrue(args.compact)
+        self.assertEqual(
+            batch._machine_field_paths(args),
+            ["status", "result.job_state", "artifacts.manifest"],
+        )
+        self.assertEqual(args.output_file, "result.json")
+
+    def test_compact_fields_project_machine_stdout(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "job_state": "JOB_STATE_PENDING",
+        }
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "dispatch_command", return_value=manifest),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                [
+                    "status",
+                    "manifest.json",
+                    "--output",
+                    "json",
+                    "--fields",
+                    "command,status,result.job_state,artifacts.manifest",
+                    "--compact",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            json.loads(stdout.getvalue()),
+            {
+                "command": "status",
+                "status": "JOB_STATE_PENDING",
+                "result": {"job_state": "JOB_STATE_PENDING"},
+                "artifacts": {"manifest": "C:/jobs/demo/manifest.json"},
+            },
+        )
+        self.assertNotIn(": ", stdout.getvalue())
+    def test_field_projection_does_not_change_strict_exit_code(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "last_check_summary": {"safety_level": "warn"},
+        }
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "dispatch_command", return_value=manifest),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                [
+                    "check",
+                    "manifest.json",
+                    "--output",
+                    "json",
+                    "--strict-exit-codes",
+                    "--fields",
+                    "status",
+                ]
+            )
+
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_NEEDS_ACTION)
+        self.assertEqual(json.loads(stdout.getvalue()), {"status": "warn"})
+
+    def test_output_file_is_atomic_and_leaves_stdout_empty(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "job_state": "JOB_STATE_SUCCEEDED",
+        }
+        stdout = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "nested" / "status.json"
+            with (
+                mock.patch.object(batch, "dispatch_command", return_value=manifest),
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = batch.main(
+                    [
+                        "status",
+                        "manifest.json",
+                        "--output",
+                        "json",
+                        "--output-file",
+                        str(output_path),
+                    ]
+                )
+
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(payload["status"], "JOB_STATE_SUCCEEDED")
+        self.assertEqual(payload["artifacts"]["output_file"], str(output_path))
 
     def test_non_interactive_requires_explicit_manifest_target(self):
         for command in sorted(batch.EXPLICIT_TARGET_COMMANDS):
@@ -479,6 +597,23 @@ class BatchCliContractTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("requires --output json", stderr.getvalue())
+
+    def test_output_trimming_options_require_json_output(self):
+        cases = (
+            ["doctor", "--compact"],
+            ["doctor", "--fields", "status"],
+            ["doctor", "--output-file", "result.json"],
+        )
+
+        for argv in cases:
+            with self.subTest(argv=argv):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    with self.assertRaises(SystemExit) as raised:
+                        batch.main(argv)
+
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("requires --output json", stderr.getvalue())
 
     def test_text_mode_preserves_human_stdout(self):
         stdout = io.StringIO()

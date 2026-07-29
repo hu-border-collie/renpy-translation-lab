@@ -52,6 +52,44 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual(json.loads(stream.getvalue()), envelope)
         self.assertTrue(stream.getvalue().endswith("\n"))
 
+    def test_write_json_envelope_supports_compact_serialization(self):
+        stream = io.StringIO()
+        envelope = cli_contract.success_envelope("status", status="pending")
+
+        cli_contract.write_json_envelope(envelope, stream, compact=True)
+
+        self.assertEqual(json.loads(stream.getvalue()), envelope)
+        self.assertNotIn("\n  ", stream.getvalue())
+        self.assertNotIn(": ", stream.getvalue())
+        self.assertTrue(stream.getvalue().endswith("\n"))
+
+    def test_project_fields_preserves_nested_shape_and_omits_missing_paths(self):
+        envelope = cli_contract.success_envelope(
+            "check",
+            status="warn",
+            result={"check": {"safety_level": "warn", "failure_items": 2}},
+            artifacts={"manifest": "manifest.json"},
+        )
+
+        projected = cli_contract.project_fields(
+            envelope,
+            [
+                "command",
+                "status",
+                "result.check.safety_level",
+                "artifacts.missing",
+            ],
+        )
+
+        self.assertEqual(
+            projected,
+            {
+                "command": "check",
+                "status": "warn",
+                "result": {"check": {"safety_level": "warn"}},
+            },
+        )
+
     def test_error_classification_exposes_stable_machine_actions(self):
         stale = cli_contract.classify_error(
             "Manifest or results changed after the last check.",

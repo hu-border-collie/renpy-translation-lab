@@ -121,6 +121,9 @@ def capabilities(
                 "supports_json": "output" in action_dests or name in discovery_commands,
                 "supports_strict_exit_codes": "strict_exit_codes" in action_dests,
                 "supports_non_interactive": "non_interactive" in action_dests,
+                "supports_compact": "compact" in action_dests,
+                "supports_fields": "fields" in action_dests,
+                "supports_output_file": "output_file" in action_dests,
                 "requires_explicit_target_in_agent_mode": name in explicit_commands,
             }
         )
