@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -205,7 +206,7 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertFalse(payload["error"]["details"]["command_completed"])
         self.assertEqual(
             payload["error"]["details"]["output_file"],
-            str(output_path.resolve()),
+            os.path.abspath(str(output_path)),
         )
         self.assertNotIn("Traceback", stderr.getvalue())
         dispatch.assert_not_called()
