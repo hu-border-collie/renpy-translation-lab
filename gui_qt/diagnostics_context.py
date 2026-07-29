@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
+import model_usage_ledger
 from keyword_glossary_merge import build_merge_keywords_cli_command
 
 from .batch_workflow_support import (
@@ -19,6 +20,7 @@ from .batch_workflow_support import (
     load_uncertain_submit_facts_from_manifest,
 )
 from .user_copy import (
+    format_usage_ledger_facts,
     format_job_fact,
     format_job_state_fact,
     format_manifest_path_fact,
@@ -570,6 +572,25 @@ def build_cli_commands(
         )
     )
 
+    commands.extend(
+        [
+            DiagnosticsCommand(
+                label="导入当前结果用量",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["usage-import", manifest_path],
+                ),
+            ),
+            DiagnosticsCommand(
+                label="查看项目模型用量",
+                command=format_cli_command(
+                    python_exe, batch_script_path, ["usage-report"]
+                ),
+            ),
+        ]
+    )
+
     return commands
 
 
@@ -798,12 +819,42 @@ def build_manifest_facts(manifest: dict[str, object], manifest_path: str) -> lis
     return facts
 
 
-def idle_diagnostics_context() -> DiagnosticsContext:
+def _project_usage_facts(game_root: str | None) -> list[str]:
+    if not game_root:
+        return []
+    try:
+        return format_usage_ledger_facts(model_usage_ledger.query_usage(game_root))
+    except (OSError, ValueError, model_usage_ledger.UsageLedgerError):
+        return []
+
+
+def _usage_report_command(
+    batch_script_path: str,
+    python_exe: str,
+) -> list[DiagnosticsCommand]:
+    if not batch_script_path:
+        return []
+    return [
+        DiagnosticsCommand(
+            label="查看项目模型用量",
+            command=format_cli_command(
+                python_exe, batch_script_path, ["usage-report"]
+            ),
+        )
+    ]
+
+
+def idle_diagnostics_context(
+    *,
+    game_root: str | None = None,
+    batch_script_path: str = "",
+    python_exe: str = "python",
+) -> DiagnosticsContext:
     return DiagnosticsContext(
         status="idle",
         heading="暂无任务上下文",
         message="开始任务后，这里会显示任务记录、翻译包、云端任务和可复制命令。",
-        facts=[],
+        facts=_project_usage_facts(game_root),
         paths=[],
         commands=[],
         manifest_json_preview="",
@@ -813,16 +864,20 @@ def idle_diagnostics_context() -> DiagnosticsContext:
 def sync_diagnostics_context(
     *,
     sync_script_path: str,
+    batch_script_path: str = "",
+    game_root: str | None = None,
     python_exe: str = "python",
 ) -> DiagnosticsContext:
     command = format_cli_command(python_exe, sync_script_path, [])
+    commands = [DiagnosticsCommand(label="同步翻译", command=command)]
+    commands.extend(_usage_report_command(batch_script_path, python_exe))
     return DiagnosticsContext(
         status="ready",
         heading="同步翻译上下文",
         message="同步模式不生成批量任务记录；以下为可手动运行的同步命令。",
-        facts=[],
+        facts=_project_usage_facts(game_root),
         paths=[],
-        commands=[DiagnosticsCommand(label="同步翻译", command=command)],
+        commands=commands,
         manifest_json_preview="",
     )
 
@@ -836,11 +891,16 @@ def build_diagnostics_context(
     python_exe: str = "python",
     path_exists: Callable[[str], bool] | None = None,
     submit_max_cost: float | None = None,
+    game_root: str | None = None,
 ) -> DiagnosticsContext:
     exists = path_exists or _default_path_exists
 
     if not latest_manifest_path and not manifest:
-        return idle_diagnostics_context()
+        return idle_diagnostics_context(
+            game_root=game_root,
+            batch_script_path=batch_script_path,
+            python_exe=python_exe,
+        )
 
     manifest_path = ""
     if manifest:
@@ -856,12 +916,16 @@ def build_diagnostics_context(
                 status="warning",
                 heading="无法读取任务记录",
                 message="找到了任务记录路径，但内容未能加载。请查看下方原始日志。",
-                facts=[format_manifest_path_fact(manifest_path)],
+                facts=[format_manifest_path_fact(manifest_path)] + _project_usage_facts(game_root),
                 paths=[],
                 commands=[],
                 manifest_json_preview="",
             )
-        return idle_diagnostics_context()
+        return idle_diagnostics_context(
+            game_root=game_root,
+            batch_script_path=batch_script_path,
+            python_exe=python_exe,
+        )
 
     package_dir = resolve_package_dir(manifest_path, manifest)
     facts = build_manifest_facts(manifest, manifest_path)
@@ -870,6 +934,8 @@ def build_diagnostics_context(
     if exists(latest_pointer):
         facts.append(f"最近任务指针：{latest_pointer}")
 
+    effective_game_root = game_root or str(manifest.get("base_dir") or "")
+    facts.extend(_project_usage_facts(effective_game_root))
     paths = collect_existing_report_paths(package_dir, manifest, path_exists=exists)
     commands = build_cli_commands(
         python_exe=python_exe,

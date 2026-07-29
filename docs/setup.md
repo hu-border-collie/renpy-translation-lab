@@ -17,6 +17,7 @@
 
 - `glossary.example.json` -> `<game_root>/glossary.json`
 - `macro_setting.example.md` -> `<game_root>/macro_setting.md`
+- 模型调用后会生成 `<game_root>/translation_usage/usage_ledger.json`，这是按项目隔离的本地运行状态，不应提交；详见 [实际模型用量账本](model_usage_ledger.md)。
 
 这些文件通常包含 API key、本地游戏路径、项目私有术语或剧情设定，不应提交到公开仓库。
 

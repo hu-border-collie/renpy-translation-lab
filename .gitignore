@@ -30,6 +30,7 @@ outputs/
 batch_runs/
 artifacts/
 downloads/
+translation_usage/
 *.log
 *.tmp
 *.bak

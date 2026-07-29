@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
@@ -11,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable
 
+import model_usage_ledger
 import story_memory
 import translator_runtime as legacy
 
@@ -106,6 +108,7 @@ def summarize_variant_settings() -> dict:
         'macro_setting_preview': _macro_preview(batch_mod.BATCH_MACRO_SETTING),
         'temperature': batch_mod.BATCH_TEMPERATURE,
         'max_output_tokens': batch_mod.BATCH_MAX_OUTPUT_TOKENS,
+        'thinking_level': batch_mod.BATCH_THINKING_LEVEL,
     }
 
 
@@ -525,6 +528,7 @@ def run_variant_for_chunk(
     api_key_index: int | None = None,
     dry_run: bool = False,
     sync_runner: Callable[..., dict] | None = None,
+    usage_context: dict | None = None,
 ) -> VariantRunResult:
     model_name = model_override.strip() or settings.get('model') or _batch().BATCH_MODEL
     try:
@@ -540,6 +544,32 @@ def run_variant_for_chunk(
 
         runner = sync_runner or _batch().run_sync_request
         response = runner(request_payload, model_name, api_key_index=api_key_index)
+        game_root = str((usage_context or {}).get('game_root') or legacy.BASE_DIR or '')
+        if usage_context and game_root:
+            try:
+                model_usage_ledger.record_generation_usage(
+                    game_root=game_root,
+                    task_mode='analysis',
+                    stage='compare_variants',
+                    provider=str(response.get('provider') or _batch().SYNC_BACKEND or 'unknown'),
+                    model=str(response.get('model') or model_name),
+                    usage_metadata=response.get('usage_metadata') or {},
+                    response_payload=response.get('response_payload') or {},
+                    operation_id=str(usage_context.get('operation_id') or ''),
+                    run_id=str(usage_context.get('run_id') or ''),
+                    thinking_level=str(settings.get('thinking_level') or ''),
+                    execution_mode=str(response.get('execution_mode') or 'sync'),
+                    source_key=f"{chunk.get('key') or ''}:{variant_name}",
+                    source={
+                        'kind': 'translation_ab_response',
+                        'manifest_path': str(usage_context.get('manifest_path') or ''),
+                        'output_dir': str(usage_context.get('output_dir') or ''),
+                        'chunk_key': str(chunk.get('key') or ''),
+                        'variant': variant_name,
+                    },
+                )
+            except (OSError, ValueError, model_usage_ledger.UsageLedgerError) as exc:
+                usage_context.setdefault('errors', []).append(str(exc))
         translations, parse_error = extract_translation_map(
             response.get('response_text') or '',
             enriched.get('items') or [],
@@ -581,6 +611,18 @@ def run_translation_ab_experiment(
         slug = batch_mod.guess_project_slug()
         output_dir = create_experiment_output_dir(f'{slug}_ab')
 
+    manifest_path = str(manifest.get('_manifest_path') or '')
+    usage_context = {
+        'operation_id': (
+            'compare-variants-manifest-'
+            + hashlib.sha256(manifest_path.encode('utf-8')).hexdigest()[:20]
+        ),
+        'run_id': f'compare-variants-{os.path.basename(output_dir)}',
+        'manifest_path': manifest_path,
+        'output_dir': os.path.abspath(output_dir),
+        'game_root': str(manifest.get('base_dir') or legacy.BASE_DIR or ''),
+        'errors': [],
+    }
     chunk_results: list[ChunkExperimentResult] = [
         ChunkExperimentResult(
             chunk_key=str(chunk.get('key') or ''),
@@ -603,6 +645,7 @@ def run_translation_ab_experiment(
                             api_key_index=api_key_index,
                             dry_run=dry_run,
                             sync_runner=sync_runner,
+                            usage_context=usage_context,
                         )
                     )
     except Exception as exc:
@@ -636,4 +679,6 @@ def run_translation_ab_experiment(
     }
     if experiment_error:
         result['experiment_error'] = experiment_error
+    if usage_context.get('errors'):
+        result['usage_ledger_errors'] = list(usage_context['errors'])
     return result

@@ -23,18 +23,26 @@ class LiteLLMCapabilityError(LiteLLMBackendError):
 
 
 def _serialize_response(response: Any) -> Mapping[str, Any]:
+    payload: Dict[str, Any] | None = None
     if isinstance(response, Mapping):
-        return dict(response)
-    for method_name in ("model_dump", "to_dict"):
-        method = getattr(response, method_name, None)
-        if callable(method):
-            payload = method()
-            if isinstance(payload, Mapping):
-                return dict(payload)
-    raise LiteLLMBackendError(
-        f"LiteLLM returned unsupported response type: {type(response).__name__}",
-        category="invalid_response",
-    )
+        payload = dict(response)
+    else:
+        for method_name in ("model_dump", "to_dict"):
+            method = getattr(response, method_name, None)
+            if callable(method):
+                serialized = method()
+                if isinstance(serialized, Mapping):
+                    payload = dict(serialized)
+                    break
+    if payload is None:
+        raise LiteLLMBackendError(
+            f"LiteLLM returned unsupported response type: {type(response).__name__}",
+            category="invalid_response",
+        )
+    hidden = getattr(response, "_hidden_params", None)
+    if isinstance(hidden, Mapping) and "_hidden_params" not in payload:
+        payload["_hidden_params"] = dict(hidden)
+    return payload
 
 
 def _instruction_text(value: Any) -> str:

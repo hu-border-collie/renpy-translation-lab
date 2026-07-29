@@ -221,6 +221,7 @@ class TranslationAbExperimentTests(unittest.TestCase):
                 json.dump(manifest, handle, ensure_ascii=False, indent=2)
 
             loaded = batch_mod.load_manifest(manifest_path)
+            loaded['base_dir'] = tmp
             variants = ab_mod.load_variants_file(str(FIXTURE_VARIANTS))
             calls = []
 
@@ -232,16 +233,21 @@ class TranslationAbExperimentTests(unittest.TestCase):
                     'usage_metadata': {'total_tokens': 12},
                 }
 
-            summary = ab_mod.run_translation_ab_experiment(
-                loaded,
-                variants,
-                limit=1,
-                offset=0,
-                output_dir=os.path.join(tmp, 'experiment'),
-                dry_run=False,
-                sync_runner=fake_sync_runner,
-            )
+            with mock.patch.object(
+                ab_mod.model_usage_ledger, 'record_generation_usage'
+            ) as usage_recorder:
+                summary = ab_mod.run_translation_ab_experiment(
+                    loaded,
+                    variants,
+                    limit=1,
+                    offset=0,
+                    output_dir=os.path.join(tmp, 'experiment'),
+                    dry_run=False,
+                    sync_runner=fake_sync_runner,
+                )
             self.assertEqual(len(calls), 2)
+            self.assertEqual(usage_recorder.call_count, 2)
+            self.assertEqual(usage_recorder.call_args.kwargs['game_root'], tmp)
             with open(summary['results_path'], 'r', encoding='utf-8') as handle:
                 row = json.loads(handle.readline())
             translations = {variant['name']: variant['translations'] for variant in row['variants']}
@@ -258,6 +264,7 @@ class TranslationAbExperimentTests(unittest.TestCase):
                 json.dump(manifest, handle, ensure_ascii=False, indent=2)
 
             loaded = batch_mod.load_manifest(manifest_path)
+            loaded['base_dir'] = tmp
             variants = ab_mod.load_variants_file(str(FIXTURE_VARIANTS))
             call_count = {'value': 0}
 
@@ -271,16 +278,20 @@ class TranslationAbExperimentTests(unittest.TestCase):
                     }
                 raise RuntimeError('sync failed')
 
-            summary = ab_mod.run_translation_ab_experiment(
-                loaded,
-                variants,
-                limit=1,
-                offset=0,
-                output_dir=os.path.join(tmp, 'experiment'),
-                dry_run=False,
-                sync_runner=flaky_sync_runner,
-            )
+            with mock.patch.object(
+                ab_mod.model_usage_ledger, 'record_generation_usage'
+            ) as usage_recorder:
+                summary = ab_mod.run_translation_ab_experiment(
+                    loaded,
+                    variants,
+                    limit=1,
+                    offset=0,
+                    output_dir=os.path.join(tmp, 'experiment'),
+                    dry_run=False,
+                    sync_runner=flaky_sync_runner,
+                )
             self.assertTrue(os.path.isfile(summary['report_path']))
+            usage_recorder.assert_called_once()
             with open(summary['results_path'], 'r', encoding='utf-8') as handle:
                 row = json.loads(handle.readline())
             self.assertEqual(len(row['variants']), 2)

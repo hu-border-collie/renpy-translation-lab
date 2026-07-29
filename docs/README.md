@@ -41,6 +41,7 @@
 ### 现行：Batch、上下文与检查
 
 - [Batch 工作流与安全检查](batch_workflows.md)：`build → apply`、订正、最终审校 campaign、关键词、identity v2、A/B、golden corpus。
+- [实际模型用量账本](model_usage_ledger.md)：按当前项目、任务、阶段、provider 与模型归集 Batch / 同步实际调用，并说明离线补录、成本和未知值语义。
 - [上下文系统](context_systems.md)：RAG、原文索引、Story Memory、store 路径与 benchmark。
 - [环境检查智能建议机制](doctor_recommendations.md)：建议等级、必需/可选并列、workflow_state。
 - [环境检查状态矩阵](doctor_states_matrix.md)：layout / pending / 上下文派生字段与决策漏斗（开发对照）。
@@ -76,6 +77,7 @@
 | 工具全局 | `translator_config.json`、`api_keys.json` | `game_root`、模型、chunk、SDK、RAG/索引的**默认** |
 | **当前项目** | `<work>/project_context_settings.json` | 是否启用批量 RAG、原文索引、build 时暖库 |
 | 项目资产 | `<work>/glossary.json`、`macro_setting.md` 等 | 术语、口吻 |
+| 项目运行状态 | `<work>/translation_usage/usage_ledger.json` | 实际模型调用的本地用量账本（不要提交） |
 | 工作区总表 | 工作区根 `games_registry.json` | 多游戏进度（非 lab 仓库内默认） |
 
 ## 维护约定

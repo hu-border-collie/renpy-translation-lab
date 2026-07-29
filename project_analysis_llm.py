@@ -500,6 +500,7 @@ def run_mapreduce_drafts(
     provider: str = "",
     model: str = "",
     progress: Callable[[Mapping[str, Any]], None] | None = None,
+    usage_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     pricing: Mapping[str, Any] | None = None,
     analysis_inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -513,6 +514,8 @@ def run_mapreduce_drafts(
     ``completed``, ``total``, ``action``, and a ``usage`` mapping. ``pricing`` may
     provide ``currency``, ``input_per_million``, and ``output_per_million``; the
     final progress event, return value, and manifest then include estimated cost.
+    ``usage_recorder`` receives each successful response together with its
+    stage and artifact id so callers can persist provider-neutral usage.
     """
     if generate is None:
         if backend is None:
@@ -544,11 +547,17 @@ def run_mapreduce_drafts(
     def _tracked_generate(request: SyncGenerationRequest) -> SyncGenerationResult:
         result = raw_generate(request)
         metadata = dict(getattr(result, "usage_metadata", None) or {})
-        input_tokens = _usage_int(metadata, "prompt_token_count", "prompt_tokens", "input_tokens")
-        output_tokens = _usage_int(
-            metadata, "candidates_token_count", "completion_tokens", "output_tokens"
+        input_tokens = _usage_int(
+            metadata, "promptTokenCount", "prompt_token_count", "prompt_tokens", "input_tokens"
         )
-        total_tokens = _usage_int(metadata, "total_token_count", "total_tokens")
+        output_tokens = _usage_int(
+            metadata,
+            "candidatesTokenCount", "candidates_token_count",
+            "completion_tokens", "output_tokens",
+        )
+        total_tokens = _usage_int(
+            metadata, "totalTokenCount", "total_token_count", "total_tokens"
+        )
         if not total_tokens:
             total_tokens = input_tokens + output_tokens
         usage_summary["requests"] += 1
@@ -564,6 +573,15 @@ def run_mapreduce_drafts(
         stage_usage["input_tokens"] += input_tokens
         stage_usage["output_tokens"] += output_tokens
         stage_usage["total_tokens"] += total_tokens
+        if usage_recorder is not None:
+            usage_recorder(
+                {
+                    "stage": stage,
+                    "artifact_id": current_request["artifact_id"],
+                    "result": result,
+                    "usage_metadata": metadata,
+                }
+            )
         return result
 
     def _emit_progress(stage: str, completed: int, total: int, action: str) -> None:

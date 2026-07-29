@@ -391,6 +391,9 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertTrue(any("最近检查：可写回" in fact for fact in context.facts))
         self.assertTrue(any(entry.label == "批量请求" for entry in context.paths))
         self.assertTrue(context.commands)
+        command_labels = {entry.label for entry in context.commands}
+        self.assertIn("导入当前结果用量", command_labels)
+        self.assertIn("查看项目模型用量", command_labels)
         self.assertIn('"mode": "translation"', context.manifest_json_preview)
 
     def test_build_diagnostics_context_warns_when_latest_differs(self):

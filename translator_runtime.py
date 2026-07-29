@@ -51,6 +51,7 @@ from rpa_safety import (
     member_output_size,
     read_bounded_compressed_index,
 )
+import model_usage_ledger
 import prompt_context
 import story_memory
 import sync_translation_preview
@@ -4145,7 +4146,7 @@ def normalize_result_items(payload):
     )
 
 
-def call_gemini_sdk(prompt, items):
+def call_gemini_sdk(prompt, items, usage_run_id=''):
     """Calls the explicitly configured synchronous backend."""
     model_name = get_current_model()
     generation_config = {
@@ -4170,12 +4171,40 @@ def call_gemini_sdk(prompt, items):
             serialize_response=serialize_unknown,
             extract_text=extract_text_from_response_payload,
             extract_finish_reason=extract_finish_reason,
+            extract_usage=model_usage_ledger.extract_provider_usage,
         )
         result = backend.generate(SyncGenerationRequest(
             model=model_name,
             contents=prompt,
             config=generation_config,
         ))
+
+    if usage_run_id and BASE_DIR:
+        item_ids = [str(item.get('id') or '') for item in items]
+        try:
+            project_id = model_usage_ledger.project_identity(BASE_DIR)['project_id']
+            model_usage_ledger.record_generation_usage(
+                game_root=BASE_DIR,
+                task_mode='translation',
+                stage='sync_translation',
+                provider=result.provider,
+                model=result.model,
+                usage_metadata=result.usage_metadata,
+                response_payload=result.response_payload,
+                operation_id=f'sync-translation-{project_id[:20]}',
+                run_id=usage_run_id,
+                execution_mode=result.execution_mode,
+                source_key='|'.join(item_ids),
+                source={
+                    'kind': 'sync_translation_response',
+                    'item_ids': item_ids,
+                },
+            )
+        except (OSError, ValueError, model_usage_ledger.UsageLedgerError) as exc:
+            print(
+                f'Warning: Model usage ledger record failed: {exc}',
+                flush=True,
+            )
 
     if result.parsed is not None:
         return normalize_result_items(serialize_unknown(result.parsed))
@@ -4191,7 +4220,7 @@ def call_gemini_sdk(prompt, items):
     detail = f" ({'; '.join(diagnostics)})" if diagnostics else ""
     raise ValueError(f"Invalid response from API. Missing structured text{detail}.")
 
-def process_batch(batch, replacements):
+def process_batch(batch, replacements, usage_run_id=''):
     glossary_hits = retrieve_sync_glossary_hits(batch) if SYNC_RAG_ENABLED else []
     history_hits, rag_stats = retrieve_sync_history_hits(batch) if SYNC_RAG_ENABLED else ([], {})
     story_hits = retrieve_sync_story_hits(batch) if SYNC_STORY_MEMORY_ENABLED else None
@@ -4205,7 +4234,7 @@ def process_batch(batch, replacements):
     )
 
     # Call API (SDK handles connection details)
-    results = call_gemini_sdk(prompt, batch)
+    results = call_gemini_sdk(prompt, batch, usage_run_id=usage_run_id)
 
     if not isinstance(results, list):
         raise RuntimeError(f"API returned {type(results)} instead of list")
@@ -4248,7 +4277,7 @@ def process_batch(batch, replacements):
     return valid_progress_entries
 
 
-def process_batch_with_retry(batch, replacements, retry_depth=0):
+def process_batch_with_retry(batch, replacements, retry_depth=0, usage_run_id=''):
     if retry_depth >= 5:
         log_failure(batch, "Max retry depth reached")
         return []
@@ -4260,7 +4289,7 @@ def process_batch_with_retry(batch, replacements, retry_depth=0):
             # Respect rate limits
             time.sleep(get_random_delay())
 
-            return process_batch(batch, replacements)
+            return process_batch(batch, replacements, usage_run_id=usage_run_id)
 
         except Exception as e:
             error_str = str(e)
@@ -4310,8 +4339,14 @@ def process_batch_with_retry(batch, replacements, retry_depth=0):
     if len(batch) > 1:
         print("  > Splitting batch...", flush=True)
         mid = len(batch) // 2
-        r1 = process_batch_with_retry(batch[:mid], replacements, retry_depth + 1)
-        r2 = process_batch_with_retry(batch[mid:], replacements, retry_depth + 1)
+        r1 = process_batch_with_retry(
+            batch[:mid], replacements, retry_depth + 1,
+            usage_run_id=usage_run_id,
+        )
+        r2 = process_batch_with_retry(
+            batch[mid:], replacements, retry_depth + 1,
+            usage_run_id=usage_run_id,
+        )
         return r1 + r2
 
     log_failure(batch, f"Failed after retries: {error_str}")
@@ -4859,6 +4894,7 @@ def run_translation(*, prepare=False):
     print("Synchronous Translator Preview (Ren'Py)")
     print(f"Sync backend: {SYNC_BACKEND}")
     print(f"Models: {MODELS}")
+    usage_run_id = model_usage_ledger.new_run_id('sync-translation')
     if SYNC_BACKEND == "gemini":
         print(f"Gemini API Keys Loaded: {len(API_KEYS)}")
     else:
@@ -4937,13 +4973,17 @@ def run_translation(*, prepare=False):
             if batch and (
                 len(batch) >= MAX_ITEMS or current_batch_chars + task_len > MAX_CHARS
             ):
-                successful_entries.extend(process_batch_with_retry(batch, replacements))
+                successful_entries.extend(process_batch_with_retry(
+                    batch, replacements, usage_run_id=usage_run_id,
+                ))
                 batch = []
                 current_batch_chars = 0
             batch.append(task)
             current_batch_chars += task_len
         if batch:
-            successful_entries.extend(process_batch_with_retry(batch, replacements))
+            successful_entries.extend(process_batch_with_retry(
+                batch, replacements, usage_run_id=usage_run_id,
+            ))
 
         if replacements:
             normalized_entries = _normalize_progress_entries(successful_entries)

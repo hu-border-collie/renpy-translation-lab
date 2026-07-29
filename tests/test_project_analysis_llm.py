@@ -65,16 +65,23 @@ class MapReduceTests(unittest.TestCase):
                 entry_labels=["start"],
             )
             backend = FakeBackend()
+            usage_events = []
             result = llm.run_mapreduce_drafts(
                 store_dir=store_dir,
                 backend=backend,
                 config={"model": "fake-model"},
                 force=True,
+                usage_recorder=usage_events.append,
             )
             self.assertGreaterEqual(result["labels_refined"], 1)
             self.assertGreaterEqual(result["routes_refined"], 1)
             self.assertGreater(len(backend.calls), 0)
             self.assertEqual(result["prompt_schema_version"], llm.PROMPT_SCHEMA_VERSION)
+            self.assertEqual(len(usage_events), len(backend.calls))
+            self.assertTrue({"label", "route", "brief"}.issubset(
+                {event["stage"] for event in usage_events}
+            ))
+            self.assertTrue(all("result" in event for event in usage_events))
 
             store = pa.ProjectAnalysisStore(store_dir)
             labels = store.load_summaries(pa.KIND_LABEL)
