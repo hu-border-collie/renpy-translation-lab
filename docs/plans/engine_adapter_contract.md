@@ -45,11 +45,21 @@ P0 只交付两类内容：
 
 1. `collect_tasks_with_progress()`：待翻译 task 与已译计数；
 2. `scan_all_translation_units()`：identity v2 到 live span 的重定位表；
-3. `collect_translation_entries_from_lines()` /
-   `collect_repair_entries_from_lines()`：revision、keyword、repair、RAG 的
-   source/translation pair。
+3. revision、keyword、repair、RAG 的 source/translation pair 扫描；这里存在同名但
+   不同语义的两套实现：
+   - `translator_runtime.collect_translation_entries_from_lines(lines)` 服务 sync RAG，
+     不绑定 identity v2；
+   - `gemini_translate_batch.collect_translation_entries_from_lines(
+     lines, file_rel_path="")` 服务 revision / Batch RAG，并通过
+     `build_identity_v2_by_span()` 绑定 identity v2；
+   - `gemini_translate_batch.collect_repair_entries_from_lines(lines)` 在后一套结果上
+     追加 `translator_runtime.collect_tasks()` 找到的 pending task。
 
 Project Analysis 另有第四种结构扫描，不能和翻译候选扫描互相证明完整。
+两套同名 collector 的签名、source literal 解码、source marker 配对和附加字段并不
+完全一致，这是现状债务。P1 的等价性主张只覆盖
+`collect_tasks_with_progress()` 与 `scan_all_translation_units()`；不得只包装其中一套
+pair collector 就宣称 revision/repair 已统一。
 
 ### 2.2 discover / scan / build / relocate / validate / render / check / apply
 
@@ -98,11 +108,12 @@ adapter 可以在 P1 继续提供现有 `progress_entry` 兼容值，但 progres
 #### RAG 回灌
 
 - sync apply callback：`maybe_update_sync_rag_store(full_file=True)` ->
-  `collect_translation_entries_from_lines()` -> segment -> embed/upsert，并清理该文件
-  旧的 `file_scan` 记录；
+  `translator_runtime.collect_translation_entries_from_lines()` -> segment ->
+  embed/upsert，并清理该文件旧的 `file_scan` 记录；
 - Batch translation/revision apply：收集已写入文件为 `rag_jobs` ->
   `sync_rag_store_for_jobs()` -> `collect_rag_seed_records_for_jobs()` ->
-  `collect_translation_entries_from_lines()` -> embed/upsert；
+  `gemini_translate_batch.collect_translation_entries_from_lines()` ->
+  embed/upsert；
 - Batch build 可由 `prepare_rag_store(..., scan_all_files=True)` 预建派生索引。
 
 当前 `memory_id` 仍绑定路径、行范围和原文，embedding 可重建，部分扫描还会替换或
@@ -115,7 +126,7 @@ adapter 可以在 P1 继续提供现有 `progress_entry` 兼容值，但 progres
 |---|---|---|
 | revision | `collect_revision_file_jobs() -> collect_translation_entries_from_lines()`；后者再用 `build_identity_v2_by_span() -> scan_all_translation_units(mode=revision)` 绑定 identity v2。preview/apply 继续走 source validation、Ren'Py renderer 和原子写回。 | 已译 occurrence 提取与 translation pending 扫描相邻但不同；P1 不抢先迁移，P2 与 relocation/validation/writeback plan 一起收敛。 |
 | keyword | `collect_keyword_file_jobs() -> collect_repair_entries_from_lines()`，同时合并 source/translation pair 与 `legacy.collect_tasks()`。输出 glossary candidates，不写 `.rpy`。 | P1 保持原状；以后消费 candidate inventory 的“可分析文本投影”，不能把关键词任务等同翻译覆盖。 |
-| Project Analysis | `build_structure_drafts() -> discover_script_files()` 扫 source `.rpy` 且跳过 `tl/`，再由 `build_route_graph()` 解析 label/jump/call/menu；content fingerprint 与 lineage 存在自己的 store。 | 保留独立剧情结构 parser。后续只把 fresh coverage digest/review status 作为 publish upstream gate；不把全部 UI 文本注入分析 prompt。 |
+| Project Analysis | `project_analysis_generate.build_structure_drafts()` 调用 `project_analysis_routes.discover_script_files()` 扫 source `.rpy` 且跳过 `tl/`，再调用 `project_analysis_routes.build_route_graph()` 解析 label/jump/call/menu；content fingerprint 与 lineage 存在自己的 store。 | 保留独立剧情结构 parser。后续只把 fresh coverage digest/review status 作为 publish upstream gate；不把全部 UI 文本注入分析 prompt。 |
 | Final Review | `create_final_review_package()` 以 `collect_pending_file_jobs()` 判断 pending，以 `collect_revision_file_jobs()` 取得已译 pairs；`evaluate_readiness()` 当前主要依赖 pending=0 与 review items>0，snapshot/context digest 冻结翻译与上下文。 | P1 保持原状；后续把 coverage dependency 加进 readiness 与 snapshot/upstream digest，不能只凭已识别 pending=0 宣称完成。 |
 
 ## 3. 目标模块归属
@@ -276,6 +287,10 @@ migration 必须显式、纯数据、保留原件，不能在 read 时静默覆�
 }
 ```
 
+`translation_unit.id` 这里只展示 identity v2 的字段形态，`abcd1234` 是示意值，
+不是由示例文本计算出的真实 hash。真实值继续由
+`translation_core.build_identity_v2()` 生成。
+
 内存对象应直接持有 `TranslationUnit` 实例；artifact JSON 才使用
 `translation_unit` 表示。P1 接入旧调用链时取 `occurrence.unit`，继续交给现有
 `translation_core` prompt/result 逻辑。
@@ -316,9 +331,17 @@ P0/P1 不向现有 manifest v1/v2 序列化 occurrence 信封，因此 manifest 
 ```
 
 必需字段为 `file_rel_path`、`translate_block`、`block_occurrence`、`ordinal`。
-`line/start/end` 仅为 hint。`source_marker_kind` 为 `comment`、`old_new` 或
-`direct_source`。公共层只做 JSON schema/version/size 检查，把 locator 原样交回
-同一 engine adapter；不得读取 Ren'Py 字段作业务判断。
+坐标约定为：
+
+- `line_hint` 是 1-based 文件行号，面向诊断显示并与当前 `line_number` 口径一致；
+- `start_col_hint` / `end_col_hint` 是该行 Python 字符串/tokenizer 的 0-based
+  字符偏移，使用半开区间 `[start_col_hint, end_col_hint)`，不是 tab 展开后的视觉列；
+- 三者都只是 adapter-private relocation hint，不是公共业务坐标。adapter 可以用它们
+  缩小重定位候选，但不能只凭 hint 跳过 identity/source 校验。
+
+`source_marker_kind` 为 `comment`、`old_new` 或 `direct_source`。公共层只做 JSON
+schema/version/size 检查，把 locator 原样交回同一 engine adapter；不得读取或校验
+Ren'Py hint 字段作业务判断。
 
 公共 writeback safety 需要的 `target_rel_path`、source hash 和 span 由
 `WritebackPlan.operations` 单独暴露，不能通过偷看 locator 获得。
@@ -352,6 +375,17 @@ code。common 层把 adapter result 与公共 policy result 合并，严重度�
 - writeback preflight：`writeback.project_mismatch`、
   `writeback.source_snapshot_mismatch`、`writeback.span_mismatch`、
   `writeback.path_escape`、`writeback.overlap`、`writeback.plan_stale`。
+
+当前 `translator_runtime.validate_translation()` 的 `(bool, message)` 到 v1 合同的
+迁移草表如下；这是 P2 显式映射输入，不改变 P0 的返回值或用户文案：
+
+| 当前 message 模式 | v1 reason code | 默认 status |
+|---|---|---|
+| `OK` | 无 reason code | `pass` |
+| `Empty translation` | `common.translation.empty` | `block` |
+| `Preserved terms missing: ...` | `common.preserve_term.missing` | `block` |
+| `Ren'Py placeholders/tags changed: ...` | 按 token 差异拆为 `renpy.placeholder.missing` / `renpy.placeholder.added` / `renpy.tag.changed` / `renpy.field.changed` / `renpy.percent_token.changed` | `block` |
+| `No Chinese characters` | `common.target_language.missing` | `block` |
 
 现有 Batch `CHECK_WARN_REASON_CODES` / `CHECK_BLOCK_REASON_CODES` 保持原样；上述
 adapter reason codes 在 P2 需要显式映射，不能通过错误字符串推断。
@@ -387,6 +421,19 @@ adapter reason codes 在 P2 需要显式映射，不能通过错误字符串推�
   "plan_digest": "sha256..."
 }
 ```
+
+operation 坐标与 locator hint 不是同一权威层：
+
+- `line` 是 0-based 文件行索引，与当前 `WritebackAction` / relocation 输出一致；
+- `start_col` / `end_col` 是该行 Python 字符串/tokenizer 的 0-based 字符偏移，
+  使用半开区间 `[start_col, end_col)`；
+- common 层只验证 operation 上的 `line/start_col/end_col`、hash 和重叠关系，
+  不得把 locator 的 `line_hint/*_col_hint` 当作 writeback span。
+
+`replacement_fragment` 已是包含字符串 prefix、quote 与 escape 的最终 Ren'Py
+fragment。adapter 负责按 Ren'Py renderer 语义生成它；common 层只做 span/hash/
+validation 校验并拼接，不得再次调用 `render_replacement_lines()`、`quote_with()` 或
+其他 engine renderer 二次渲染。
 
 v1 只允许 common 层实现并注册的 operation kinds。Ren'Py 首个 kind 为
 `text_span_replace`。plan：
@@ -740,7 +787,8 @@ P1 的最小切入顺序：
 1. 当前 scanner 的宽泛 `except Exception: continue` 会静默丢失 tokenizer/AST
    失败；P1 inventory 必须报告，但 extracted unit 集合仍需先保持等价。
 2. pending scan、relocation scan、revision/repair scan 对 source marker、voice、
-   keyword argument 的规则并非完全同一实现；不能只包装其中一个就宣称统一。
+   keyword argument 的规则并非完全同一实现；P0 characterization 固定这些已有分支，
+   但 P1 不能只包装其中一个就宣称统一。
 3. Project Analysis 扫 source tree，翻译扫 TL catalog；两者 source roots 与
    fingerprint 口径不同，coverage dependency 必须显式桥接。
 4. native Ren'Py catalog 当前没有统一记录 generation provenance；首次只能标记
@@ -757,7 +805,12 @@ P1 的最小切入顺序：
 - source marker、speaker、translated count 与重复 translate block 的扫描输出；
 - identity v2 在行漂移后的稳定性和 duplicate block occurrence 区分；
 - `relocate_v2_chunk_items()` 按 live identity 更新 span，并报告 unresolved item；
-- `render_replacement_lines()` 的多 replacement 逆序应用、quote escaping 和输入不变。
+- `render_replacement_lines()` 的多 replacement 逆序应用、quote escaping 和输入不变；
+- runtime / Batch 同名 pair collector 对 voice、dangling source marker、source
+  literal 解码、speaker/identity 附加字段的当前分歧；
+- repair collector 追加 direct pending task，同时跳过 voice statement 与 keyword
+  argument 字符串的当前行为。
 
 这些测试描述当前行为，不授权 P0 修改生产实现。P1 adapter 必须先在这些结果上做到
-等价，再单独增加 candidate/error reporting。
+等价，再单独增加 candidate/error reporting。这里的“等价”对 pair collector 指
+不得意外改变已固定分支，不表示两套 collector 已经统一。

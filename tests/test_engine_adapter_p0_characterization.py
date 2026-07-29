@@ -224,5 +224,103 @@ class TestEngineAdapterP0Characterization(unittest.TestCase):
         )
 
 
+    def test_revision_collectors_preserve_known_pairing_and_decode_divergence(self):
+        lines = [
+            "translate schinese start:\n",
+            '    # voice "audio/line.ogg"\n',
+            '    # e "Line one"\n',
+            '    voice "audio/line.ogg"\n',
+            '    e "第一行"\n',
+            '    # e "Dangling source"\n',
+            '    old "Menu source"\n',
+            '    new "菜单译文"\n',
+            '    # e "Escaped \\"source\\""\n',
+            '    e "转义"\n',
+        ]
+
+        runtime_entries = runtime.collect_translation_entries_from_lines(lines)
+        batch_entries = batch.collect_translation_entries_from_lines(
+            lines,
+            file_rel_path="script.rpy",
+        )
+
+        self.assertEqual(
+            [
+                (entry["line_number"], entry["source"], entry["translation"])
+                for entry in runtime_entries
+            ],
+            [
+                (5, "Line one", "第一行"),
+                (8, "Menu source", "菜单译文"),
+                (10, 'Escaped "source"', "转义"),
+            ],
+        )
+        self.assertEqual(
+            [
+                (entry["line_number"], entry["source"], entry["translation"])
+                for entry in batch_entries
+            ],
+            [
+                (5, "Line one", "第一行"),
+                (7, "Dangling source", "Menu source"),
+                (10, 'Escaped \\"source\\"', "转义"),
+            ],
+        )
+        self.assertNotIn("source_line_number", runtime_entries[0])
+        self.assertNotIn("identity_v2", runtime_entries[0])
+        self.assertEqual(batch_entries[0]["source_line_number"], 3)
+        self.assertEqual(batch_entries[0]["speaker_id"], "e")
+        self.assertEqual(
+            batch_entries[0]["identity_v2"],
+            translation_core.build_identity_v2(
+                "script.rpy",
+                "start",
+                1,
+                "Line one",
+            ),
+        )
+        self.assertFalse(
+            any("audio/line.ogg" in entry["source"] for entry in runtime_entries)
+        )
+        self.assertFalse(
+            any("audio/line.ogg" in entry["source"] for entry in batch_entries)
+        )
+
+    def test_repair_collector_adds_pending_and_skips_keyword_and_voice_literals(self):
+        lines = [
+            "translate schinese start:\n",
+            '    # e "Line one"\n',
+            '    e "第一行"\n',
+            '    text "Direct pending"\n',
+            '    call screen prefs(title="Keyword target")\n',
+            '    voice "audio/line.ogg"\n',
+        ]
+
+        pair_entries = batch.collect_translation_entries_from_lines(
+            lines,
+            file_rel_path="script.rpy",
+        )
+        repair_entries = batch.collect_repair_entries_from_lines(lines)
+
+        self.assertEqual(
+            [(entry["source"], entry["translation"]) for entry in pair_entries],
+            [("Line one", "第一行")],
+        )
+        self.assertEqual(
+            [
+                (entry["line_number"], entry["source"], entry["translation"])
+                for entry in repair_entries
+            ],
+            [
+                (3, "Line one", "第一行"),
+                (4, "Direct pending", "Direct pending"),
+            ],
+        )
+        repair_text = "\n".join(
+            f'{entry["source"]}\n{entry["translation"]}'
+            for entry in repair_entries
+        )
+        self.assertNotIn("Keyword target", repair_text)
+        self.assertNotIn("audio/line.ogg", repair_text)
 if __name__ == "__main__":
     unittest.main()
