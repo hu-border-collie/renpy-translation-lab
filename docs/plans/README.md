@@ -9,3 +9,9 @@
 | 已稳定的用法说明 | 写进 `docs/` 现行手册（如 `batch_workflows.md`） |
 
 读本目录时：以文首状态横幅为准；实现与界面以代码和现行手册为准。
+
+## 当前设计
+
+- [Engine Adapter P0：Ren'Py 当前调用链与合同设计](engine_adapter_contract.md)：
+  #265 / #285 的调用链审计、adapter/coverage schema 与阶段接入边界；P0 不代表
+  adapter 已进入生产调用链。
