@@ -1850,6 +1850,13 @@ def remember_latest_manifest(manifest_path):
 
 
 def load_manifest(target=None):
+    """Load and validate a JSON manifest or raise a structured contract error.
+
+    Raises:
+        cli_contract.MachineContractError: If the manifest cannot be read as
+            UTF-8 JSON or its root value is not a JSON object.
+    """
+
     manifest_path = manifest_path_for_target(target)
     try:
         with open(manifest_path, 'r', encoding='utf-8') as handle:
