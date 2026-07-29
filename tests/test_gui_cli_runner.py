@@ -1,8 +1,20 @@
+"""Channel buffering and finished-drain behavior for Gui CLI runner."""
+from __future__ import annotations
+
 import unittest
 
-from PySide6.QtCore import QProcess
+from tests import gui_test_support
 
-from gui_qt.cli_runner import CliRunner
+try:
+    from PySide6.QtCore import QProcess
+
+    from gui_qt.cli_runner import CliRunner
+except ImportError as exc:
+    CliRunner = None  # type: ignore[assignment,misc]
+    QProcess = None  # type: ignore[assignment,misc]
+    IMPORT_ERROR = exc
+else:
+    IMPORT_ERROR = None
 
 
 class _FakeProcess:
@@ -17,6 +29,7 @@ class _FakeProcess:
         return self.stderr_chunks.pop(0) if self.stderr_chunks else b""
 
 
+@gui_test_support.skip_unless_gui(CliRunner is None, IMPORT_ERROR)
 class CliRunnerChannelTests(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
@@ -43,7 +56,10 @@ class CliRunnerChannelTests(unittest.TestCase):
 
         self.assertEqual(self.stdout_lines, ['{', '  "ok": true', '}'])
         self.assertEqual(self.stderr_lines, ['progress 1', 'partial diagnostic'])
-        self.assertEqual(self.all_lines, self.stdout_lines[:-1] + ['progress 1', '}','partial diagnostic'])
+        self.assertEqual(
+            self.all_lines,
+            self.stdout_lines[:-1] + ['progress 1', '}', 'partial diagnostic'],
+        )
         self.assertEqual(self.finished_codes, [0])
         self.assertIsNone(self.runner._proc)
 
