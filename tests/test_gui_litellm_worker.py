@@ -260,6 +260,23 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         self.assertIn("anthropic", completed[0][0])
         self.assertEqual(completed[0][1:], ("online", None))
 
+    def test_provider_catalog_failure_reports_empty_result(self):
+        completed = []
+        worker = LiteLLMProviderCatalogWorker()
+        worker.completed.connect(
+            lambda providers, source, error: completed.append(
+                (providers, source, error)
+            )
+        )
+        with mock.patch(
+            "gui_qt.litellm_worker.urlopen",
+            side_effect=OSError("offline"),
+        ):
+            worker.run()
+        self.assertEqual(completed[0][0], ())
+        self.assertEqual(completed[0][1], "")
+        self.assertIn("联网加载供应商失败", completed[0][2])
+
     def test_version_worker_reads_latest_stable_version_from_pypi(self):
         payload = {
             "info": {"version": "1.92.0", "requires_python": ">=3.10,<3.14"},

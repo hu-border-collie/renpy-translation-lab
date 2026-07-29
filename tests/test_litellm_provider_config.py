@@ -131,6 +131,12 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
             ("openai", "anthropic", "deepseek", "aaa_custom", "zzz_custom"),
         )
 
+    def test_provider_sort_accepts_mapping_views(self):
+        providers = sort_provider_ids(
+            {"zzz_custom": None, "openai": None, "anthropic": None}.keys()
+        )
+
+        self.assertEqual(providers, ("openai", "anthropic", "zzz_custom"))
 
     def test_openrouter_payload_prefixes_and_skips_non_text_and_aliases(self):
         payload = {

@@ -24,7 +24,9 @@ class LiteLLMCatalogCacheTests(unittest.TestCase):
     def test_catalogs_and_per_provider_selections_survive_reload(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "catalog.json"
-            now = lambda: datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+            def now():
+                return datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+
             cache = LiteLLMCatalogCache(path, now=now)
             cache.update_providers(
                 ["anthropic", "openai"],

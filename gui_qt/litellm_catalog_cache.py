@@ -144,12 +144,14 @@ class LiteLLMCatalogCache:
         return self._models.get(provider, CatalogSnapshot())
 
     def select_provider(self, provider: str) -> None:
+        """Lowercase and atomically persist the provider; OSError may propagate."""
         self._selected_provider = _clean_text(
             provider, limit=_MAX_PROVIDER_LENGTH
         ).lower()
         self._save()
 
     def select_model(self, provider: str, model: str) -> None:
+        """Persist a model atomically, removing it when empty; OSError may propagate."""
         provider = _clean_text(provider, limit=_MAX_PROVIDER_LENGTH).lower()
         model = _clean_text(model, limit=_MAX_MODEL_LENGTH)
         if not provider:
@@ -167,6 +169,7 @@ class LiteLLMCatalogCache:
         source: str,
         litellm_version: str = "",
     ) -> None:
+        """Normalize and atomically persist providers; OSError may propagate."""
         self._providers = CatalogSnapshot(
             values=tuple(
                 value.lower()
@@ -189,6 +192,7 @@ class LiteLLMCatalogCache:
         source: str,
         litellm_version: str = "",
     ) -> None:
+        """Normalize and atomically persist provider models; OSError may propagate."""
         provider = _clean_text(provider, limit=_MAX_PROVIDER_LENGTH).lower()
         if not provider:
             raise ValueError("Provider 不能为空。")

@@ -46,6 +46,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window._populate_litellm_providers((), selected="")
         self.window._set_litellm_models("", ())
         self.window.litellm_api_key_edit.clear()
+        self.window._litellm_saved_key_status.clear()
         self.window._refresh_litellm_catalog_status()
         self.window._on_sync_backend_changed(-1)
 
@@ -56,7 +57,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             selected="openai",
         )
 
-    def test_00_fresh_state_does_not_preselect_provider_or_model(self):
+    def test_fresh_state_does_not_preselect_provider_or_model(self):
         self.assertEqual(self.window.litellm_provider_combo.count(), 0)
         self.assertEqual(self.window.litellm_provider_combo.currentText(), "")
         self.assertEqual(self.window.litellm_model_combo.count(), 0)
@@ -155,6 +156,16 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
 
             self.window.litellm_provider_combo.setCurrentIndex(openai_index)
 
+    def test_unchanged_provider_focus_out_preserves_unsaved_fields(self):
+        self._load_provider_choices()
+        self.window.litellm_api_key_edit.setText("unsaved-key")
+        self.window.litellm_model_combo.setEditText("gpt-custom")
+
+        self.window._on_litellm_provider_changed()
+
+        self.assertEqual(self.window.litellm_api_key_edit.text(), "unsaved-key")
+        self.assertEqual(self.window.litellm_model_combo.currentText(), "gpt-custom")
+
     def test_cancel_provider_discards_typed_key_but_does_not_delete_credential(self):
         self._load_provider_choices()
         self.window.litellm_provider_combo.setCurrentIndex(
@@ -231,7 +242,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
     def test_saved_credential_is_reported_as_environment_override(self):
         self._load_provider_choices()
         with (
-            mock.patch("gui_qt.app.load_provider_api_key", return_value="saved"),
+            mock.patch("gui_qt.app.load_provider_api_key", return_value="saved") as load_key,
             mock.patch.dict("gui_qt.app.os.environ", {"OPENAI_API_KEY": "env"}, clear=True),
         ):
             self.window.litellm_provider_combo.setCurrentIndex(
@@ -239,6 +250,13 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             )
             self.window.litellm_model_combo.setEditText("openai/test")
             self.window._refresh_litellm_credential_status()
+            self.window._refresh_litellm_credential_status()
+            self.window._refresh_litellm_credential_status()
+        status = self.window.litellm_credential_status_label.text()
+        self.assertIn("系统凭据管理器中已保存密钥", status)
+        self.assertIn("OPENAI_API_KEY", status)
+        load_key.assert_called_once_with("openai")
+
     def test_gemini_key_page_does_not_contain_litellm_controls(self):
         row = self.window._settings_nav_rows["api_keys"]
         page = self.window.settings_stack.widget(row)

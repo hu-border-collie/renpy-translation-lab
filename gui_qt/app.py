@@ -15,7 +15,7 @@ import time
 import re
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PySide6.QtCore import (
     QEvent,
@@ -616,6 +616,8 @@ class MainWindow(QMainWindow):
         self._litellm_connection_worker: LiteLLMConnectionTestWorker | None = None
         self._font_install_worker: FontInstallWorker | None = None
         self._updating_litellm_provider = False
+        self._applied_litellm_provider = ""
+        self._litellm_saved_key_status: dict[str, str] = {}
         # _games_registry_panel is intentionally NOT set here so attribute access
         # triggers __getattr__ lazy materialization of 设置 · 项目列表.
         self._litellm_install: OptionalFeatureInstallController | None = None
@@ -6621,16 +6623,17 @@ class MainWindow(QMainWindow):
             if combo.isEditable():
                 combo.lineEdit().clear()
         combo.blockSignals(False)
+        self._applied_litellm_provider = selected
 
     @staticmethod
-    def _litellm_snapshot_status(subject: str, snapshot: CatalogSnapshot) -> str:
+    def _litellm_snapshot_status(
+        subject: str,
+        snapshot: CatalogSnapshot,
+        *,
+        source_label: str,
+    ) -> str:
         if not snapshot.values:
             return f"{subject}：尚未联网加载。"
-        source = (
-            catalog_source_label(snapshot.source)
-            if subject == "模型目录"
-            else "来源：LiteLLM 官方在线目录。"
-        )
         fetched = f"缓存时间：{snapshot.fetched_at}。" if snapshot.fetched_at else ""
         version = (
             f"LiteLLM {snapshot.litellm_version}。"
@@ -6645,7 +6648,7 @@ class MainWindow(QMainWindow):
             part
             for part in (
                 f"{subject}：已缓存 {len(snapshot.values)} 项。",
-                source,
+                source_label,
                 fetched,
                 version,
                 warning,
@@ -6659,20 +6662,23 @@ class MainWindow(QMainWindow):
             message = self._litellm_snapshot_status(
                 "供应商目录",
                 self._litellm_cache.providers,
+                source_label="来源：LiteLLM 官方在线目录。",
             )
             if self._litellm_cache.load_error:
                 message = f"{message} {self._litellm_cache.load_error}"
             provider_label.setText(message)
         model_label = self._settings_widget("litellm_catalog_status_label")
         if model_label is not None:
+            snapshot = self._litellm_cache.models(self._litellm_provider_combo_value())
             model_label.setText(
                 self._litellm_snapshot_status(
                     "模型目录",
-                    self._litellm_cache.models(self._litellm_provider_combo_value()),
+                    snapshot,
+                    source_label=catalog_source_label(snapshot.source),
                 )
             )
 
-    def _save_litellm_cache(self, action) -> None:
+    def _save_litellm_cache(self, action: Callable[[], None]) -> None:
         try:
             action()
         except OSError as exc:
@@ -6688,6 +6694,7 @@ class MainWindow(QMainWindow):
             return
         provider = cache.selected_provider
         if not provider:
+            self._applied_litellm_provider = ""
             self._set_litellm_models("", ())
             return
         index = self._ensure_litellm_provider_item(provider)
@@ -6696,6 +6703,7 @@ class MainWindow(QMainWindow):
             combo.blockSignals(True)
             combo.setCurrentIndex(index)
             combo.blockSignals(False)
+        self._applied_litellm_provider = provider
         snapshot = cache.models(provider)
         self._set_litellm_models(
             provider,
@@ -6716,6 +6724,7 @@ class MainWindow(QMainWindow):
                 combo.blockSignals(True)
                 combo.setCurrentIndex(index)
                 combo.blockSignals(False)
+            self._applied_litellm_provider = provider
         cache = self.__dict__.get("_litellm_cache")
         snapshot = cache.models(provider) if cache is not None else CatalogSnapshot()
         self._set_litellm_models(provider, snapshot.values, selected=model)
@@ -6773,14 +6782,17 @@ class MainWindow(QMainWindow):
             )
         saved_message = ""
         if provider and provider != "ollama":
-            try:
-                saved_message = (
-                    "系统凭据管理器中已保存密钥；如同时存在环境变量，请求优先使用此密钥。"
-                    if load_provider_api_key(provider)
-                    else "系统凭据管理器中尚未保存密钥。"
-                )
-            except ProviderCredentialStoreError as exc:
-                saved_message = str(exc)
+            saved_message = self._litellm_saved_key_status.get(provider, "")
+            if not saved_message:
+                try:
+                    saved_message = (
+                        "系统凭据管理器中已保存密钥；如同时存在环境变量，请求优先使用此密钥。"
+                        if load_provider_api_key(provider)
+                        else "系统凭据管理器中尚未保存密钥。"
+                    )
+                except ProviderCredentialStoreError as exc:
+                    saved_message = str(exc)
+                self._litellm_saved_key_status[provider] = saved_message
         status_label.setText(" ".join(part for part in (saved_message, status.message) if part))
 
     def _on_litellm_model_changed(self, _text: str) -> None:
@@ -6797,6 +6809,7 @@ class MainWindow(QMainWindow):
                 provider_combo.blockSignals(True)
                 provider_combo.setCurrentIndex(index)
                 provider_combo.blockSignals(False)
+            self._applied_litellm_provider = provider
             if not self._loading_config_to_ui:
                 self._save_litellm_cache(
                     lambda: self._litellm_cache.select_provider(provider)
@@ -6823,6 +6836,9 @@ class MainWindow(QMainWindow):
         if self._updating_litellm_provider:
             return
         provider = self._litellm_provider_combo_value()
+        if provider == self._applied_litellm_provider:
+            return
+        self._applied_litellm_provider = provider
         api_key_edit = self._settings_widget("litellm_api_key_edit")
         if api_key_edit is not None:
             api_key_edit.clear()
@@ -7029,6 +7045,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "无法保存密钥", str(exc))
             return
         self.litellm_api_key_edit.clear()
+        self._litellm_saved_key_status[provider] = (
+            "系统凭据管理器中已保存密钥；如同时存在环境变量，请求优先使用此密钥。"
+        )
         self._refresh_litellm_credential_status()
         self.statusBar().showMessage(f"已安全保存 {provider} 密钥。", 5000)
 
@@ -7040,6 +7059,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "无法删除密钥", str(exc))
             return
         self.litellm_api_key_edit.clear()
+        self._litellm_saved_key_status[provider] = "系统凭据管理器中尚未保存密钥。"
         self._refresh_litellm_credential_status()
         message = "已删除保存的密钥。" if deleted else "没有找到已保存的密钥。"
         self.statusBar().showMessage(message, 5000)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from importlib import metadata
 import re
@@ -167,7 +167,9 @@ def provider_display_label(provider: str) -> str:
 
 def sort_provider_ids(providers: object) -> tuple[str, ...]:
     """Place common providers first and sort all remaining ids by name."""
-    if not isinstance(providers, (list, tuple, set, frozenset)):
+    if isinstance(providers, (str, bytes, bytearray)) or not isinstance(
+        providers, Collection
+    ):
         return ()
     cleaned = {
         str(provider or "").strip().lower()
