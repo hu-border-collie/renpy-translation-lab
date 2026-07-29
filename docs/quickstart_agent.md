@@ -50,7 +50,22 @@ JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning �
 - `status` 表示业务状态，例如 Batch job state、`safe / warn / block` 或 `applied`；
 - `result` 是命令摘要，`artifacts` 给出 manifest、results、检查报告等产物路径；
 - 命令拒绝执行时 `ok=false`，`error.code` 与 `error.message` 用于程序判断和诊断；
-- 当前默认退出码仍保持兼容；不要仅凭 `check` 的退出码决定是否写回，必须读取 `status`，并且只有 `safe` 才能继续 `apply`。
+- 默认退出码仍保持兼容。Agent 可同时传入 `--output json --strict-exit-codes`，让业务状态映射为稳定退出码；严格模式只与 JSON 输出组合使用。
+- 无论是否启用严格退出码，都必须读取 `status`；只有 `check` 的 `status=safe` 才能继续 `apply`。
+
+严格退出码约定：
+
+| 退出码 | 含义 | 常见场景 |
+|---:|---|---|
+| `0` | 命令成功，可继续或继续轮询 | `safe`、job pending/running、无待处理工作 |
+| `1` | 未分类的内部错误，默认不可重试 | 意外异常或未知 SDK 错误 |
+| `2` | 命令行用法错误 | 参数缺失、严格模式未配合 JSON 输出 |
+| `3` | 命令完成，但需要 Agent 处理 | `check` 返回 `warn` |
+| `4` | 被门禁阻止或进入终止失败状态 | `block`、doctor blocked、job failed/cancelled |
+| `5` | 输入、配置或状态已失效 | stale check、manifest/results 漂移、前置产物缺失 |
+| `6` | 远端临时错误，可稍后重试 | rate limit、quota、timeout、service unavailable |
+
+严格模式的错误 envelope 可能使用 `STALE_STATE`、`PRECONDITION_FAILED`、`COMMAND_BLOCKED`、`REMOTE_RETRYABLE`、`COMMAND_REFUSED` 或 `INTERNAL_ERROR`。同时读取 `retryable`、`suggested_action` 和权威的 `details.semantic_exit_code`，不要解析 `message` 文本。未启用严格模式时保持 schema v1 的兼容行为：拒绝类错误仍为 `COMMAND_REFUSED`，意外异常仍为 `INTERNAL_ERROR`，且不承诺 `semantic_exit_code`。
 
 没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式只承诺覆盖上面的七个核心命令；其他子命令以各自 `--help` 和落盘产物为准。
 
