@@ -13,18 +13,30 @@ KEYRING_SERVICE = "renpy-translation-lab:litellm"
 SUPPORTED_PROVIDERS: tuple[tuple[str, str], ...] = (
     ("openai", "OpenAI"),
     ("anthropic", "Anthropic"),
-    ("gemini", "Google Gemini"),
     ("openrouter", "OpenRouter"),
     ("deepseek", "DeepSeek"),
     ("xai", "xAI"),
-    ("azure", "Azure OpenAI"),
-    ("vertex_ai", "Google Vertex AI"),
     ("ollama", "Ollama（本地）"),
 )
+_COMMON_PROVIDER_ORDER = (
+    "openai",
+    "anthropic",
+    "gemini",
+    "openrouter",
+    "deepseek",
+    "xai",
+    "azure",
+    "vertex_ai",
+    "ollama",
+)
 _COMMON_PROVIDER_INDEX = {
-    provider: index for index, (provider, _label) in enumerate(SUPPORTED_PROVIDERS)
+    provider: index for index, provider in enumerate(_COMMON_PROVIDER_ORDER)
 }
-_PROVIDER_LABELS = dict(SUPPORTED_PROVIDERS)
+_PROVIDER_LABELS = dict(SUPPORTED_PROVIDERS) | {
+    "gemini": "Google Gemini",
+    "azure": "Azure OpenAI",
+    "vertex_ai": "Google Vertex AI",
+}
 DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     "openai": ("openai/gpt-5",),
     "anthropic": ("anthropic/claude-sonnet-4-5-20250929",),
