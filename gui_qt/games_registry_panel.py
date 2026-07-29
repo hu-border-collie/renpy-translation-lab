@@ -4,8 +4,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QBrush, QColor, QShowEvent
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -43,6 +43,7 @@ from games_registry import (
     format_doctor_mode_label,
     format_layout_status_label,
     normalize_play_status,
+    normalize_source_url,
     normalize_translation_status,
 )
 
@@ -72,8 +73,10 @@ from .widget_helpers import (
     message_box_warning,
 )
 from .games_registry_table import (
+    REGISTRY_DEFAULT_VISIBLE_COLUMN_IDS,
     REGISTRY_PREF_TABLE_COLUMN_WIDTHS,
     REGISTRY_PREF_TABLE_COLUMN_WIDTHS_LEGACY,
+    REGISTRY_PREF_VISIBLE_COLUMNS,
     REGISTRY_TABLE_COLUMN_DEFS,
     REGISTRY_TABLE_PATH_COLUMN,
     clamp_width,
@@ -84,7 +87,9 @@ from .games_registry_table import (
     interactive_column_indexes,
     migrate_stored_widths,
     min_width_for_column,
+    normalize_visible_column_ids,
     row_cell_values,
+    visible_column_ids_for_persist,
     widths_for_persist,
 )
 from .games_registry_view import (
@@ -102,6 +107,7 @@ from .games_registry_view import (
     resolve_registry_path,
     row_matches_game_root,
 )
+from .user_copy import GAMES_REGISTRY_SOURCE_URL_COPY
 
 SwitchProjectHandler = Callable[[str], bool]
 DoctorReportProvider = Callable[[], dict | None]
@@ -214,6 +220,7 @@ class GamesRegistryPanel(QWidget):
         self._refresh_ui_busy = False
         # Interactive column widths by id (path is last flex section, not stored).
         self._table_column_widths: dict[str, int] = default_width_map()
+        self._visible_column_ids = list(REGISTRY_DEFAULT_VISIBLE_COLUMN_IDS)
         self._applying_table_columns = False
         self._column_width_save_timer = QTimer(self)
         self._column_width_save_timer.setSingleShot(True)
@@ -403,7 +410,7 @@ class GamesRegistryPanel(QWidget):
 
         filter_row = QHBoxLayout()
         self._search_edit = QLineEdit()
-        self._search_edit.setPlaceholderText("搜索项目、路径、备注、状态…")
+        self._search_edit.setPlaceholderText("搜索项目、来源、路径、备注、状态…")
         self._search_edit.textChanged.connect(self._apply_filters)
         filter_row.addWidget(self._search_edit, 2)
 
@@ -475,6 +482,8 @@ class GamesRegistryPanel(QWidget):
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.cellDoubleClicked.connect(self._on_row_activated)
         self._load_table_column_widths()
+        self._load_table_visible_columns()
+        self._apply_table_column_visibility()
         self._apply_table_column_layout()
 
         self._edit_group = QGroupBox("项目详情")
@@ -487,6 +496,33 @@ class GamesRegistryPanel(QWidget):
         self._name_edit = QLineEdit()
         self._name_edit.setPlaceholderText("显示名称")
         edit_layout.addRow("项目名称", self._name_edit)
+
+        source_host = QWidget()
+        source_host.setObjectName("games_registry_source_url_host")
+        source_layout = QHBoxLayout(source_host)
+        source_layout.setContentsMargins(0, 0, 0, 0)
+        source_layout.setSpacing(8)
+        self._source_url_edit = QLineEdit()
+        self._source_url_edit.setObjectName("games_registry_source_url_edit")
+        self._source_url_edit.setPlaceholderText(
+            GAMES_REGISTRY_SOURCE_URL_COPY["placeholder"]
+        )
+        self._source_url_edit.setToolTip(GAMES_REGISTRY_SOURCE_URL_COPY["tooltip"])
+        self._source_url_edit.textChanged.connect(
+            self._update_open_source_button_state
+        )
+        source_layout.addWidget(self._source_url_edit, 1)
+        self._open_source_btn = QPushButton(
+            GAMES_REGISTRY_SOURCE_URL_COPY["open_action"]
+        )
+        self._open_source_btn.setObjectName("secondary_btn")
+        self._open_source_btn.setEnabled(False)
+        self._open_source_btn.clicked.connect(self._open_selected_source_url)
+        source_layout.addWidget(self._open_source_btn)
+        edit_layout.addRow(
+            GAMES_REGISTRY_SOURCE_URL_COPY["field_label"],
+            source_host,
+        )
 
         self._layout_status_label = QLabel("—")
         self._layout_status_label.setWordWrap(False)
@@ -560,7 +596,9 @@ class GamesRegistryPanel(QWidget):
         edit_actions.addWidget(self._collapse_detail_btn)
         self._save_fields_btn = QPushButton("保存修改")
         self._save_fields_btn.setObjectName("primary_btn")
-        self._save_fields_btn.setToolTip("保存当前选中项目的名称、游玩/翻译状态及备注。")
+        self._save_fields_btn.setToolTip(
+            GAMES_REGISTRY_SOURCE_URL_COPY["save_tooltip"]
+        )
         self._save_fields_btn.clicked.connect(self._save_selected_project_fields)
         self._save_fields_btn.setEnabled(False)
         edit_actions.addWidget(self._save_fields_btn)
@@ -614,6 +652,8 @@ class GamesRegistryPanel(QWidget):
         self._auto_discover_checkbox.setChecked(bool(prefs.get(REGISTRY_PREF_AUTO_DISCOVER, False)))
         self._auto_discover_checkbox.blockSignals(False)
         self._load_table_column_widths()
+        self._load_table_visible_columns()
+        self._apply_table_column_visibility()
         self._apply_workspace_presence_ui()
         if self._workspace_root is not None:
             self._reload_table_from_disk(force=True)
@@ -761,15 +801,22 @@ class GamesRegistryPanel(QWidget):
             raw = prefs.get(REGISTRY_PREF_TABLE_COLUMN_WIDTHS_LEGACY)
         self._table_column_widths = migrate_stored_widths(raw)
 
+    def _load_table_visible_columns(self) -> None:
+        prefs = load_registry_preferences(workspace_root=self._workspace_root)
+        self._visible_column_ids = normalize_visible_column_ids(
+            prefs.get(REGISTRY_PREF_VISIBLE_COLUMNS)
+        )
+
     def _persist_table_column_widths(self) -> None:
         if self._applying_table_columns:
             return
         if self._workspace_root is None:
             return
-        live: dict[str, int] = {}
+        # Hidden columns keep their stored width instead of persisting Qt's zero.
+        live: dict[str, int] = dict(self._table_column_widths)
         for index in interactive_column_indexes():
             column = column_at(index)
-            if column is None:
+            if column is None or self._table.isColumnHidden(index):
                 continue
             live[column.id] = int(self._table.columnWidth(index))
         self._table_column_widths = widths_for_persist(live)
@@ -778,6 +825,69 @@ class GamesRegistryPanel(QWidget):
             key=REGISTRY_PREF_TABLE_COLUMN_WIDTHS,
             value=dict(self._table_column_widths),
         )
+
+    def _persist_table_column_visibility(self) -> None:
+        if self._workspace_root is None:
+            return
+        self._visible_column_ids = visible_column_ids_for_persist(
+            self._visible_column_ids
+        )
+        save_registry_dialog_preference(
+            self._workspace_root,
+            key=REGISTRY_PREF_VISIBLE_COLUMNS,
+            value=list(self._visible_column_ids),
+        )
+
+    def _apply_table_column_visibility(self) -> None:
+        table = getattr(self, "_table", None)
+        if table is None:
+            return
+        visible = set(normalize_visible_column_ids(self._visible_column_ids))
+        self._visible_column_ids = [
+            column.id
+            for column in REGISTRY_TABLE_COLUMN_DEFS
+            if column.id in visible
+        ]
+        self._applying_table_columns = True
+        try:
+            for index, column in enumerate(REGISTRY_TABLE_COLUMN_DEFS):
+                table.setColumnHidden(index, column.id not in visible)
+            path_visible = "path" in visible
+            table.horizontalHeader().setStretchLastSection(path_visible)
+        finally:
+            self._applying_table_columns = False
+
+    def _set_table_column_visible(self, column_id: str, visible: bool) -> None:
+        if (
+            self._host_task_running
+            or self._refresh_ui_busy
+            or self._is_registry_task_running()
+        ):
+            return
+        known = {column.id for column in REGISTRY_TABLE_COLUMN_DEFS}
+        if column_id not in known or (column_id == "name" and not visible):
+            return
+        selected = set(self._visible_column_ids)
+        if visible:
+            selected.add(column_id)
+        else:
+            selected.discard(column_id)
+        self._visible_column_ids = visible_column_ids_for_persist(list(selected))
+        self._apply_table_column_visibility()
+        self._apply_table_column_layout()
+        self._persist_table_column_visibility()
+
+    def _reset_table_column_visibility(self) -> None:
+        if (
+            self._host_task_running
+            or self._refresh_ui_busy
+            or self._is_registry_task_running()
+        ):
+            return
+        self._visible_column_ids = list(REGISTRY_DEFAULT_VISIBLE_COLUMN_IDS)
+        self._apply_table_column_visibility()
+        self._apply_table_column_layout()
+        self._persist_table_column_visibility()
 
     def _apply_table_column_layout(self) -> None:
         """Push stored interactive widths; path Stretch fills remaining space."""
@@ -788,7 +898,7 @@ class GamesRegistryPanel(QWidget):
         try:
             for index in interactive_column_indexes():
                 column = column_at(index)
-                if column is None:
+                if column is None or table.isColumnHidden(index):
                     continue
                 minimum = self._header_min_width(index)
                 preferred = int(
@@ -840,12 +950,39 @@ class GamesRegistryPanel(QWidget):
 
     def _on_table_header_menu(self, pos) -> None:
         menu = QMenu(self)
+        mutate_enabled = not (
+            self._host_task_running
+            or self._refresh_ui_busy
+            or self._is_registry_task_running()
+        )
+        columns_menu = menu.addMenu("显示列")
+        visible = set(self._visible_column_ids)
+        for column in REGISTRY_TABLE_COLUMN_DEFS:
+            action = QAction(column.title, self)
+            action.setCheckable(True)
+            action.setChecked(column.id in visible)
+            action.setEnabled(mutate_enabled and column.id != "name")
+            action.toggled.connect(
+                lambda checked, column_id=column.id: self._set_table_column_visible(
+                    column_id,
+                    checked,
+                )
+            )
+            columns_menu.addAction(action)
+        columns_menu.addSeparator()
+        restore_action = QAction("恢复默认显示", self)
+        restore_action.setEnabled(mutate_enabled)
+        restore_action.triggered.connect(self._reset_table_column_visibility)
+        columns_menu.addAction(restore_action)
+        menu.addSeparator()
         reset_action = QAction("重置列宽", self)
         reset_action.setToolTip("恢复默认固定列宽；路径列继续自动占满剩余空间")
+        reset_action.setEnabled(mutate_enabled)
         reset_action.triggered.connect(self._reset_table_column_layout)
         menu.addAction(reset_action)
         fit_action = QAction("按内容调整固定列", self)
         fit_action.setToolTip("按当前单元格内容调整固定列（受列最大宽限制），路径列仍弹性")
+        fit_action.setEnabled(mutate_enabled)
         fit_action.triggered.connect(self._fit_all_table_columns)
         menu.addAction(fit_action)
         header = self._table.horizontalHeader()
@@ -861,7 +998,7 @@ class GamesRegistryPanel(QWidget):
         try:
             for index in interactive_column_indexes():
                 column = column_at(index)
-                if column is None:
+                if column is None or self._table.isColumnHidden(index):
                     continue
                 minimum = self._header_min_width(index)
                 self._table.resizeColumnToContents(index)
@@ -980,7 +1117,13 @@ class GamesRegistryPanel(QWidget):
             for column_index, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 # Full cell text in tooltip when elided; keep row scan summary too.
-                tips = [part for part in (value, row.tooltip) if part and part.strip()]
+                column = column_at(column_index)
+                primary_tip = (
+                    row.source_url if column is not None and column.id == "source" else value
+                )
+                tips = [
+                    part for part in (primary_tip, row.tooltip) if part and part.strip()
+                ]
                 if tips:
                     unique: list[str] = []
                     for part in tips:
@@ -1055,6 +1198,7 @@ class GamesRegistryPanel(QWidget):
         try:
             if row is None:
                 self._name_edit.clear()
+                self._source_url_edit.clear()
                 self._layout_status_label.setText("—")
                 self._doctor_mode_label.setText("—")
                 self._last_refresh_label.setText("—")
@@ -1067,6 +1211,7 @@ class GamesRegistryPanel(QWidget):
                 return
 
             self._name_edit.setText(row.name)
+            self._source_url_edit.setText(row.source_url)
             self._layout_status_label.setText(row.layout_status or "—")
             self._doctor_mode_label.setText(row.doctor_mode or "—")
             self._last_refresh_label.setText(row.last_refresh_at or "—")
@@ -1125,6 +1270,53 @@ class GamesRegistryPanel(QWidget):
         finally:
             self._edit_loading = False
 
+    def _update_open_source_button_state(self, _text: str = "") -> None:
+        if self._edit_loading:
+            return
+        row = self._selected_row()
+        blocked = (
+            self._host_task_running
+            or self._refresh_ui_busy
+            or self._is_registry_task_running()
+        )
+        try:
+            source_url = normalize_source_url(self._source_url_edit.text())
+        except ValueError:
+            source_url = ""
+        self._open_source_btn.setEnabled(
+            not blocked
+            and row is not None
+            and bool(row.project_id)
+            and bool(source_url)
+        )
+
+    def _open_selected_source_url(self) -> None:
+        """Open only after an explicit click and only for a valid HTTP(S) URL."""
+        if (
+            self._host_task_running
+            or self._refresh_ui_busy
+            or self._is_registry_task_running()
+        ):
+            return
+        try:
+            source_url = normalize_source_url(self._source_url_edit.text())
+        except ValueError as exc:
+            message_box_warning(
+                self,
+                GAMES_REGISTRY_SOURCE_URL_COPY["invalid_title"],
+                str(exc),
+            )
+            self._source_url_edit.setFocus()
+            return
+        if not source_url:
+            return
+        if not QDesktopServices.openUrl(QUrl(source_url)):
+            message_box_warning(
+                self,
+                GAMES_REGISTRY_SOURCE_URL_COPY["open_failed_title"],
+                GAMES_REGISTRY_SOURCE_URL_COPY["open_failed_body"],
+            )
+
     def _on_more_actions_toggled(self, checked: bool) -> None:
         host = getattr(self, "_more_host", None)
         button = getattr(self, "_more_btn", None)
@@ -1176,6 +1368,7 @@ class GamesRegistryPanel(QWidget):
             self._refresh_current_btn.setEnabled(can_use_row)
             self._save_fields_btn.setEnabled(can_use_row)
             self._delete_project_btn.setEnabled(can_use_row)
+            self._update_open_source_button_state()
         elif not refresh_busy and self._host_task_running:
             self._switch_btn.setEnabled(False)
             self._refresh_current_btn.setEnabled(False)
@@ -1184,11 +1377,13 @@ class GamesRegistryPanel(QWidget):
             # Keep detail fields read-only while host task runs.
             for widget in (
                 self._name_edit,
+                self._source_url_edit,
                 self._play_status_combo,
                 self._translation_status_combo,
                 self._notes_edit,
             ):
                 widget.setEnabled(False)
+            self._open_source_btn.setEnabled(False)
 
     def _selected_refresh_mode(self) -> str:
         mode = self._refresh_mode_combo.currentData()
@@ -1231,6 +1426,8 @@ class GamesRegistryPanel(QWidget):
             self._save_fields_btn,
             self._delete_project_btn,
             self._name_edit,
+            self._source_url_edit,
+            self._open_source_btn,
             self._play_status_combo,
             self._translation_status_combo,
             self._notes_edit,
@@ -1428,13 +1625,27 @@ class GamesRegistryPanel(QWidget):
         self._handle_action_result(result, title="同步失败")
 
     def _save_selected_project_fields(self) -> None:
-        if self._is_registry_task_running():
+        if (
+            self._host_task_running
+            or self._refresh_ui_busy
+            or self._is_registry_task_running()
+        ):
             return
         workspace = self._require_workspace()
         if workspace is None:
             return
         row = self._selected_row()
         if row is None or not row.project_id:
+            return
+        try:
+            source_url = normalize_source_url(self._source_url_edit.text())
+        except ValueError as exc:
+            message_box_warning(
+                self,
+                GAMES_REGISTRY_SOURCE_URL_COPY["invalid_title"],
+                str(exc),
+            )
+            self._source_url_edit.setFocus()
             return
         result = save_registry_project_fields(
             workspace,
@@ -1443,6 +1654,7 @@ class GamesRegistryPanel(QWidget):
             play_status=self._play_status_combo.currentText(),
             translation_status=self._translation_status_combo.currentText(),
             notes=self._notes_edit.toPlainText(),
+            source_url=source_url,
         )
         self._preserved_project_id = row.project_id
         self._handle_action_result(result, title="保存失败")

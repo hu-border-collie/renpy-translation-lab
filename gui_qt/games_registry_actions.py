@@ -318,20 +318,25 @@ def save_registry_project_fields(
     play_status: str,
     translation_status: str,
     notes: str,
+    source_url: str | None = None,
 ) -> RegistryActionResult:
     registry_path = _registry_file(workspace_root)
     if not registry_path.is_file():
         return RegistryActionResult(False, f"未找到 {registry_path.name}。")
 
     data = load_registry(registry_path)
-    project = update_project_manual_fields(
-        data,
-        project_id,
-        name=name,
-        play_status=play_status,
-        translation_status=translation_status,
-        notes=notes,
-    )
+    try:
+        project = update_project_manual_fields(
+            data,
+            project_id,
+            name=name,
+            play_status=play_status,
+            translation_status=translation_status,
+            notes=notes,
+            source_url=source_url,
+        )
+    except ValueError as exc:
+        return RegistryActionResult(False, str(exc))
     if project is None:
         return RegistryActionResult(False, f"未找到项目：{project_id}")
 

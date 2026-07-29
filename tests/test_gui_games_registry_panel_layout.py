@@ -193,14 +193,26 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
             panel._table.textElideMode(),
             Qt.TextElideMode.ElideRight,
         )
-        # Headers: 项目 | 目录状态 | 版本 | 游玩 | 翻译 | 路径
+        # All stable headers exist; optional columns are hidden, path stays last.
         headers = [
             panel._table.horizontalHeaderItem(i).text()
             for i in range(panel._table.columnCount())
         ]
         self.assertEqual(
             headers,
-            ["项目", "目录状态", "版本", "游玩", "翻译", "路径"],
+            [
+                "项目",
+                "目录状态",
+                "版本",
+                "游玩",
+                "翻译",
+                "来源",
+                "翻译进度",
+                "引擎",
+                "最近刷新",
+                "备注摘要",
+                "路径",
+            ],
         )
 
     def test_detail_translation_status_matches_annotated_table_value(self) -> None:

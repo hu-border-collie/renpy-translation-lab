@@ -192,6 +192,7 @@ class GuiGamesRegistryActionsTests(unittest.TestCase):
                 name="Example Renamed",
                 play_status="进行中",
                 translation_status="待润色",
+                source_url="https://example.itch.io/game",
                 notes="校对术语。",
             )
             self.assertTrue(result.ok)
@@ -199,6 +200,23 @@ class GuiGamesRegistryActionsTests(unittest.TestCase):
             self.assertEqual(project["play_status"], "进行中")
             self.assertEqual(project["name"], "Example Renamed")
             self.assertEqual(project["translation_status_source"], "manual")
+            self.assertEqual(
+                project["source_url"],
+                "https://example.itch.io/game",
+            )
+
+            invalid = save_registry_project_fields(
+                workspace,
+                project_id="demo",
+                name="Should Not Persist",
+                play_status="已玩完",
+                translation_status="已完成",
+                notes="无效 URL 不应部分写入。",
+                source_url="ftp://example.com/game",
+            )
+            self.assertFalse(invalid.ok)
+            project = registry.load_registry(workspace / registry.REGISTRY_FILENAME)["projects"][0]
+            self.assertEqual(project["name"], "Example Renamed")
 
     def test_delete_registry_project(self):
         with tempfile.TemporaryDirectory() as tmp:

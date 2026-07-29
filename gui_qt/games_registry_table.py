@@ -20,7 +20,18 @@ from games_registry import (
     TRANSLATION_STATUSES,
 )
 
-ColumnRole = Literal["identity", "enum", "short", "status", "path"]
+ColumnRole = Literal[
+    "identity",
+    "enum",
+    "short",
+    "status",
+    "source",
+    "progress",
+    "engine",
+    "datetime",
+    "text",
+    "path",
+]
 
 
 class _RegistryRowLike(Protocol):
@@ -30,10 +41,17 @@ class _RegistryRowLike(Protocol):
     layout_status: str
     play_status: str
     translation_status: str
+    source_site: str
+    translation_progress: str
+    engine: str
+    last_refresh_at: str
+    notes: str
+
 
 # New preference key (id → px). Legacy key still read for one release.
 REGISTRY_PREF_TABLE_COLUMN_WIDTHS = "table_column_widths"
 REGISTRY_PREF_TABLE_COLUMN_WIDTHS_LEGACY = "table_column_width_fractions"
+REGISTRY_PREF_VISIBLE_COLUMNS = "visible_columns"
 
 _CELL_PAD_PX = 28
 _MIN_ABSOLUTE_PX = 56
@@ -122,6 +140,48 @@ REGISTRY_TABLE_COLUMN_DEFS: tuple[RegistryTableColumn, ...] = (
         min_width_hint=72,
     ),
     RegistryTableColumn(
+        id="source",
+        title="来源",
+        role="source",
+        default_width=100,
+        max_width=180,
+        enum_samples=("itch.io", "Steam"),
+        min_width_hint=72,
+    ),
+    RegistryTableColumn(
+        id="progress",
+        title="翻译进度",
+        role="progress",
+        default_width=150,
+        max_width=240,
+        enum_samples=("100% · 待译 1200",),
+        min_width_hint=96,
+    ),
+    RegistryTableColumn(
+        id="engine",
+        title="引擎",
+        role="engine",
+        default_width=88,
+        max_width=140,
+        min_width_hint=72,
+    ),
+    RegistryTableColumn(
+        id="last_refresh",
+        title="最近刷新",
+        role="datetime",
+        default_width=176,
+        max_width=240,
+        min_width_hint=96,
+    ),
+    RegistryTableColumn(
+        id="notes",
+        title="备注摘要",
+        role="text",
+        default_width=200,
+        max_width=360,
+        min_width_hint=96,
+    ),
+    RegistryTableColumn(
         id="path",
         title="路径",
         role="path",
@@ -130,6 +190,17 @@ REGISTRY_TABLE_COLUMN_DEFS: tuple[RegistryTableColumn, ...] = (
         min_width_hint=96,
     ),
 )
+
+REGISTRY_DEFAULT_VISIBLE_COLUMN_IDS: tuple[str, ...] = (
+    "name",
+    "layout",
+    "version",
+    "play",
+    "translation",
+    "source",
+    "path",
+)
+REGISTRY_REQUIRED_VISIBLE_COLUMN_IDS = frozenset({"name"})
 
 # Backward-compatible header tuple (titles only).
 REGISTRY_TABLE_COLUMNS: tuple[str, ...] = tuple(
@@ -199,9 +270,36 @@ def row_cell_values(row: _RegistryRowLike) -> list[str]:
         "version": row.version,
         "play": row.play_status,
         "translation": row.translation_status,
+        "source": row.source_site,
+        "progress": row.translation_progress,
+        "engine": row.engine,
+        "last_refresh": row.last_refresh_at,
+        "notes": row.notes,
         "path": row.path,
     }
     return [values_by_id[column.id] for column in REGISTRY_TABLE_COLUMN_DEFS]
+
+
+def normalize_visible_column_ids(raw: Any) -> list[str]:
+    """Normalize a preference payload to fixed-order, known column ids."""
+    known = {column.id for column in REGISTRY_TABLE_COLUMN_DEFS}
+    if raw is None:
+        selected = set(REGISTRY_DEFAULT_VISIBLE_COLUMN_IDS)
+    elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        selected = {str(value) for value in raw if str(value) in known}
+    else:
+        selected = set(REGISTRY_DEFAULT_VISIBLE_COLUMN_IDS)
+    selected.update(REGISTRY_REQUIRED_VISIBLE_COLUMN_IDS)
+    return [
+        column.id
+        for column in REGISTRY_TABLE_COLUMN_DEFS
+        if column.id in selected
+    ]
+
+
+def visible_column_ids_for_persist(column_ids: Sequence[str]) -> list[str]:
+    """Persist visible ids in the stable declaration order."""
+    return normalize_visible_column_ids(column_ids)
 
 
 def min_width_for_column(
