@@ -75,6 +75,24 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             ['{"status":"completed"}'],
         )
 
+    def test_workflow_writeback_gate_accepts_json_check_envelope(self):
+        import json
+
+        import cli_contract
+        from gui_qt.app import _workflow_output_updates_writeback
+
+        output = json.dumps(cli_contract.success_envelope("check", status="safe"))
+
+        self.assertTrue(_workflow_output_updates_writeback("check", output))
+        self.assertTrue(
+            _workflow_output_updates_writeback(
+                "check-parent",
+                "Safety status: safe",
+            )
+        )
+        self.assertFalse(
+            _workflow_output_updates_writeback("check", "Safety status: safe")
+        )
     def test_clear_log_view_flushes_pending_buffer(self):
         class FakeLogView:
             def __init__(self):

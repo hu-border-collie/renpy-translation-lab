@@ -451,16 +451,14 @@ class BatchCliContractTests(unittest.TestCase):
                 {"job_state": "JOB_STATE_FAILED"},
                 batch.cli_contract.EXIT_BLOCKED,
             ),
+            (
+                "submit",
+                {"job_state": "JOB_STATE_FAILED"},
+                batch.cli_contract.EXIT_BLOCKED,
+            ),
         )
 
         for command, manifest, expected_exit in cases:
-            (
-                (
-                    "submit",
-                    {"job_state": "JOB_STATE_FAILED"},
-                    batch.cli_contract.EXIT_BLOCKED,
-                ),
-            )
             with self.subTest(command=command):
                 stdout = io.StringIO()
                 manifest["_manifest_path"] = "C:/jobs/demo/manifest.json"

@@ -500,6 +500,22 @@ _SETTINGS_LAZY_ATTR_TO_PAGE: dict[str, str] = {
 }
 
 
+def _workflow_output_updates_writeback(step_key: str, output: str) -> bool:
+    """Return whether a completed workflow step carries a check result."""
+
+    try:
+        envelope = cli_contract.parse_result_envelope(output)
+    except ValueError:
+        envelope = None
+    return bool(
+        (
+            envelope is not None
+            and envelope.get("command") == "check"
+            and envelope.get("status")
+        )
+        or step_key == "check-parent"
+    )
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -12028,10 +12044,7 @@ class MainWindow(QMainWindow):
             if sync_candidates:
                 self._keyword_merge_candidates_path = sync_candidates
 
-        retry_parent = getattr(self._workflow, "retry_parent_manifest_path", "")
-        if "Safety status:" in step_output and (
-            step_key == "check-parent" or not retry_parent
-        ):
+        if _workflow_output_updates_writeback(step_key, step_output):
             self._update_writeback_from_check(step_output, exit_code, manifest_path)
         if self._uses_revision_writeback() and (
             "Preview JSONL:" in step_output or "Preview Markdown:" in step_output
