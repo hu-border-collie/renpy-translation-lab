@@ -76,6 +76,7 @@ from PySide6.QtWidgets import (
     QToolButton,
 )
 from project_version import __version__
+import cli_contract
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
 from .responsive_layout import FlowButtonBar, ResponsiveActionPanel
@@ -112,7 +113,9 @@ from .check_report import (
     recheck_writeback_ready,
     running_writeback_summary,
     stale_writeback_summary,
+    summarize_apply_envelope,
     summarize_apply_output,
+    summarize_check_envelope,
     summarize_check_output,
     summarize_manifest_writeback,
 )
@@ -675,6 +678,7 @@ class MainWindow(QMainWindow):
 
         # Connect runner
         self.runner.line_ready.connect(self._on_cli_line_ready)
+        self.runner.stdout_line_ready.connect(self._on_cli_stdout_line_ready)
         self.runner.finished.connect(self._on_finished)
         self.runner.error.connect(self._on_runner_error)
 
@@ -10983,7 +10987,7 @@ class MainWindow(QMainWindow):
         self._set_task_running(True)
         self.runner.run(
             self.state.get_batch_script_path(),
-            ["apply", manifest_path],
+            ["apply", manifest_path, "--output", "json", "--non-interactive"],
         )
 
     def _on_apply_sync_translation(self) -> None:
@@ -11115,20 +11119,25 @@ class MainWindow(QMainWindow):
 
     # --- Runner callbacks ---
 
+    def _on_cli_stdout_line_ready(self, text: str):
+        if self._active_command in {"translation_workflow", "project_analysis_workflow"}:
+            self._workflow_step_output_lines.append(text)
+        elif self._active_command == "apply":
+            self._apply_output_lines.append(text)
+        elif self._active_command == "recheck":
+            self._recheck_output_lines.append(text)
+
     def _on_cli_line_ready(self, text: str):
         if self._active_command == "doctor":
             self._doctor_output_lines.append(text)
         elif self._active_command in {"translation_workflow", "project_analysis_workflow"}:
-            self._workflow_step_output_lines.append(text)
             self._workflow_progress = update_workflow_progress_from_line(
                 text,
                 self._workflow_progress,
             )
             self._schedule_progress_ui_flush()
-        elif self._active_command == "apply":
-            self._apply_output_lines.append(text)
-        elif self._active_command == "recheck":
-            self._recheck_output_lines.append(text)
+        elif self._active_command in {"apply", "recheck"}:
+            pass
         elif self._active_command == "probe":
             self._probe_output_lines.append(text)
         elif self._active_command == "compare_variants":
@@ -11446,12 +11455,24 @@ class MainWindow(QMainWindow):
                 already_applied = bool(manifest.get("applied_at"))
             except ValueError:
                 pass
-        summary = summarize_check_output(
-            output,
-            exit_code,
-            manifest_path=manifest_path,
-            already_applied=already_applied,
-        )
+        try:
+            envelope = cli_contract.parse_result_envelope(output)
+        except ValueError:
+            envelope = None
+        if envelope is not None:
+            summary = summarize_check_envelope(
+                envelope,
+                exit_code,
+                manifest_path=manifest_path,
+                already_applied=already_applied,
+            )
+        else:
+            summary = summarize_check_output(
+                output,
+                exit_code,
+                manifest_path=manifest_path,
+                already_applied=already_applied,
+            )
         self._set_writeback_summary(summary)
         self._refresh_diagnostics_context()
         if summary.status not in {"idle", "running", "stale"}:
@@ -11528,11 +11549,23 @@ class MainWindow(QMainWindow):
 
         if self._active_command == "apply":
             self._invalidate_manifest_caches(self._writeback_manifest_path or None)
-            summary = summarize_apply_output(
-                "\n".join(self._apply_output_lines),
-                exit_code,
-                manifest_path=self._writeback_manifest_path,
-            )
+            apply_output = "\n".join(self._apply_output_lines)
+            try:
+                envelope = cli_contract.parse_result_envelope(apply_output)
+            except ValueError:
+                envelope = None
+            if envelope is not None:
+                summary = summarize_apply_envelope(
+                    envelope,
+                    exit_code,
+                    manifest_path=self._writeback_manifest_path,
+                )
+            else:
+                summary = summarize_apply_output(
+                    apply_output,
+                    exit_code,
+                    manifest_path=self._writeback_manifest_path,
+                )
             self._set_writeback_summary(summary)
             self._refresh_diagnostics_context()
             if exit_code == 0:

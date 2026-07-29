@@ -1,8 +1,10 @@
 """User-facing summaries for GUI check/apply commands."""
+
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 
 from .summary_helpers import extend_facts_with_notices
 from .user_copy import format_manifest_path_fact, safety_level_label
@@ -78,6 +80,45 @@ def _format_check_finding(finding: str) -> str:
     if finding.startswith("[block] "):
         return f"[{safety_level_label('block')}] {finding[8:]}"
     return finding
+
+
+def summarize_check_envelope(
+    envelope: Mapping[str, object],
+    exit_code: int,
+    *,
+    manifest_path: str = "",
+    already_applied: bool = False,
+) -> WritebackSummary:
+    """Build the GUI check summary from the shared CLI result envelope."""
+
+    if not envelope.get("ok"):
+        error = envelope.get("error")
+        message = error.get("message") if isinstance(error, Mapping) else ""
+        summary = summarize_check_output("", exit_code or 1, manifest_path=manifest_path)
+        if isinstance(message, str) and message.strip():
+            return replace(summary, message=message.strip())
+        return summary
+
+    result = envelope.get("result")
+    check = result.get("check") if isinstance(result, Mapping) else None
+    check_summary = dict(check) if isinstance(check, Mapping) else {}
+    check_summary.setdefault("safety_level", str(envelope.get("status") or ""))
+    manifest: dict[str, object] = {
+        "_manifest_path": manifest_path,
+        "last_check_summary": check_summary,
+    }
+    artifacts = envelope.get("artifacts")
+    if isinstance(artifacts, Mapping):
+        report_path = artifacts.get("check_report")
+        if isinstance(report_path, str) and report_path:
+            manifest["last_check_report_path"] = report_path
+    if already_applied:
+        manifest["applied_at"] = "structured_result"
+
+    summary = summarize_manifest_writeback(manifest)
+    if summary is not None:
+        return summary
+    return summarize_check_output("", exit_code, manifest_path=manifest_path)
 
 
 def summarize_check_output(
@@ -181,6 +222,40 @@ def summarize_check_output(
         can_apply=False,
         manifest_path=manifest_path,
     )
+
+
+def summarize_apply_envelope(
+    envelope: Mapping[str, object],
+    exit_code: int,
+    *,
+    manifest_path: str = "",
+) -> WritebackSummary:
+    """Build the GUI apply summary from the shared CLI result envelope."""
+
+    if not envelope.get("ok"):
+        error = envelope.get("error")
+        message = error.get("message") if isinstance(error, Mapping) else ""
+        summary = summarize_apply_output("", exit_code or 1, manifest_path=manifest_path)
+        if isinstance(message, str) and message.strip():
+            return replace(summary, message=message.strip())
+        return summary
+
+    result = envelope.get("result")
+    apply = result.get("apply") if isinstance(result, Mapping) else None
+    apply_summary = dict(apply) if isinstance(apply, Mapping) else {}
+    manifest: dict[str, object] = {
+        "_manifest_path": manifest_path,
+        "applied_at": "structured_result",
+        "apply_summary": apply_summary,
+    }
+    next_manifest = apply_summary.get("next_split_manifest")
+    if isinstance(next_manifest, str) and next_manifest:
+        manifest["next_split_manifest_path"] = next_manifest
+
+    summary = summarize_manifest_writeback(manifest)
+    if summary is not None:
+        return replace(summary, heading="翻译写回完成")
+    return summarize_apply_output("", exit_code, manifest_path=manifest_path)
 
 
 def summarize_apply_output(
@@ -304,9 +379,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
             reasons = safety_reasons.get(level)
             if isinstance(reasons, dict):
                 for name, count in sorted(reasons.items()):
-                    findings.append(
-                        f"[{safety_level_label(level)}] {name}: {count}"
-                    )
+                    findings.append(f"[{safety_level_label(level)}] {name}: {count}")
 
     if safety_text == "safe":
         return WritebackSummary(
@@ -362,10 +435,7 @@ def idle_writeback_summary_for_work_mode(mode) -> WritebackSummary:
     spec = work_mode_spec(mode)
     if not spec.supports_translation_writeback:
         if spec.mode == WorkMode.SYNC_TRANSLATION:
-            message = (
-                "同步翻译默认只生成差异预览；"
-                "确认预览后才会通过同步任务页写回。"
-            )
+            message = "同步翻译默认只生成差异预览；确认预览后才会通过同步任务页写回。"
         elif spec.mode == WorkMode.KEYWORD_EXTRACTION:
             message = "关键词模式只生成报告，不会修改游戏脚本。"
         elif spec.mode == WorkMode.REVISION:
@@ -375,8 +445,7 @@ def idle_writeback_summary_for_work_mode(mode) -> WritebackSummary:
             )
         elif spec.mode == WorkMode.SYNC_REVISION:
             message = (
-                "同步订正默认只出预览报告；请先在左侧「订正」生成预览，"
-                "再在结果区点击「写回订正」。"
+                "同步订正默认只出预览报告；请先在左侧「订正」生成预览，再在结果区点击「写回订正」。"
             )
         elif spec.mode == WorkMode.FINAL_REVIEW:
             message = (
@@ -427,7 +496,7 @@ def recheck_writeback_ready(
 
 
 def build_recheck_cli_args(manifest_path: str) -> list[str]:
-    return ["check", manifest_path]
+    return ["check", manifest_path, "--output", "json", "--non-interactive"]
 
 
 def running_writeback_summary(

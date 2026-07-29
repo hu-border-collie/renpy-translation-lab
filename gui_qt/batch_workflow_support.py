@@ -1,4 +1,5 @@
 """Shared Batch workflow helpers used by GUI and CLI argument planning."""
+
 from __future__ import annotations
 
 import json
@@ -62,6 +63,12 @@ def plan_unsubmitted_workflow_steps(manifest_path: str) -> list[str]:
     return ["submit", "status"]
 
 
+def machine_output_args(args: list[str]) -> list[str]:
+    """Request the shared non-interactive JSON result contract."""
+
+    return [*args, "--output", "json", "--non-interactive"]
+
+
 def build_submit_cli_args(
     manifest_path: str,
     submit_max_cost: float | None = None,
@@ -75,7 +82,7 @@ def build_submit_cli_args(
         args.append("--resume")
     if submit_max_cost is not None and submit_max_cost > 0:
         args.extend(["--max-cost", _format_max_cost(submit_max_cost)])
-    return args
+    return machine_output_args(args)
 
 
 def build_recover_submit_cli_args(manifest_path: str) -> list[str]:
@@ -184,6 +191,4 @@ def uncertain_submit_failure_message(output: str) -> str:
             "检测到输入文件已上传但尚未创建批量任务。"
             "请使用带 --resume 的 submit 继续创建任务，或使用 --force 重新开始。"
         )
-    return (
-        "提交被未完成状态拦截。请先恢复或确认上次提交，避免重复创建付费任务。"
-    )
+    return "提交被未完成状态拦截。请先恢复或确认上次提交，避免重复创建付费任务。"

@@ -1,7 +1,7 @@
 """GUI workflows for split batch package operations."""
 from __future__ import annotations
 
-from .batch_workflow_support import build_submit_cli_args
+from .batch_workflow_support import build_submit_cli_args, machine_output_args
 from .split_batch import SplitManifestEntry
 from .translation_workflow import WorkflowStep, WorkflowUpdate
 from .user_copy import format_manifest_path_fact
@@ -74,7 +74,7 @@ class SplitBatchQueueWorkflow:
         if self.action == "submit":
             args = build_submit_cli_args(self._current_path, self.submit_max_cost)
         else:
-            args = [self.action, self._current_path]
+            args = machine_output_args([self.action, self._current_path])
         return WorkflowStep(
             key=self.action,
             args=args,

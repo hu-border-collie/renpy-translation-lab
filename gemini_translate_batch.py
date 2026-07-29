@@ -11700,6 +11700,7 @@ def build_machine_success_envelope(command, value, args):
         status = str(check_summary.get('safety_level') or 'unknown')
     elif command == 'apply':
         result['apply'] = dict(manifest.get('apply_summary') or {})
+        result['apply']['next_split_manifest'] = manifest.get('next_split_manifest_path', '')
         status = 'applied' if manifest.get('applied_at') else 'completed'
 
     return cli_contract.success_envelope(

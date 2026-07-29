@@ -12,7 +12,6 @@ from collections.abc import Mapping, Sequence
 from os import PathLike
 from typing import Any, TextIO
 
-
 CLI_SCHEMA_VERSION = 1
 _MISSING = object()
 
@@ -22,6 +21,40 @@ EXIT_NEEDS_ACTION = 3
 EXIT_BLOCKED = 4
 EXIT_INVALID_STATE = 5
 EXIT_RETRYABLE = 6
+
+
+def parse_result_envelope(text: str) -> dict[str, Any]:
+    """Parse and validate one versioned CLI result envelope."""
+
+    try:
+        document = json.loads(text)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("CLI output is not a valid JSON result envelope.") from exc
+    if not isinstance(document, Mapping):
+        raise ValueError("CLI result envelope must be a JSON object.")
+    if document.get("schema_version") != CLI_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported CLI result schema version: {document.get('schema_version')!r}."
+        )
+    if not isinstance(document.get("command"), str) or not document["command"]:
+        raise ValueError("CLI result envelope is missing command.")
+    if not isinstance(document.get("ok"), bool):
+        raise ValueError("CLI result envelope is missing boolean ok.")
+    if not isinstance(document.get("status"), str):
+        raise ValueError("CLI result envelope is missing status.")
+    for field in ("result", "artifacts"):
+        if not isinstance(document.get(field), Mapping):
+            raise ValueError(f"CLI result envelope field {field!r} must be an object.")
+    if not isinstance(document.get("warnings"), list):
+        raise ValueError("CLI result envelope field 'warnings' must be an array.")
+    error = document.get("error")
+    if document["ok"]:
+        if error is not None:
+            raise ValueError("Successful CLI result envelope must not contain an error.")
+    elif not isinstance(error, Mapping):
+        raise ValueError("Failed CLI result envelope must contain an error object.")
+    return dict(document)
+
 
 class MachineContractError(SystemExit):
     """Structured refusal raised by opt-in machine invocation guards."""
@@ -42,7 +75,6 @@ class MachineContractError(SystemExit):
         self.semantic_exit_code = int(semantic_exit_code)
         self.retryable = bool(retryable)
         self.details = dict(details or {})
-
 
 
 def classify_error(message: str, *, exception_type: str = "") -> dict[str, Any]:

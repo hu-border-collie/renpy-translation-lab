@@ -41,7 +41,13 @@ class GuiRevisionWorkflowTests(unittest.TestCase):
         self.assertEqual(update.status, "running")
         self.assertEqual(
             workflow.current_step().args,
-            ["submit", "C:\\Games\\Example\\work\\logs\\batch_jobs\\rev1\\manifest.json"],
+            [
+                "submit",
+                "C:\\Games\\Example\\work\\logs\\batch_jobs\\rev1\\manifest.json",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
         )
 
     def test_build_without_source_lines_finishes_without_submitting(self):
@@ -77,7 +83,10 @@ class GuiRevisionWorkflowTests(unittest.TestCase):
             {"job_name": ""},
         )
 
-        self.assertEqual(workflow.current_step().args, ["submit", "C:\\package\\manifest.json"])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["submit", "C:\\package\\manifest.json", "--output", "json", "--non-interactive"],
+        )
 
     def test_resume_submitted_manifest_starts_from_status(self):
         workflow = RevisionBatchWorkflow.resume_manifest(
@@ -85,7 +94,10 @@ class GuiRevisionWorkflowTests(unittest.TestCase):
             {"job_name": "batches/example"},
         )
 
-        self.assertEqual(workflow.current_step().args, ["status", "C:\\package\\manifest.json"])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["status", "C:\\package\\manifest.json", "--output", "json", "--non-interactive"],
+        )
 
     def test_resume_succeeded_manifest_starts_from_download_and_preview(self):
         manifest_path = r"C:\package\manifest.json"
@@ -94,7 +106,10 @@ class GuiRevisionWorkflowTests(unittest.TestCase):
             {"job_name": "batches/example", "job_state": "JOB_STATE_SUCCEEDED"},
         )
 
-        self.assertEqual(workflow.current_step().args, ["download", manifest_path])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["download", manifest_path, "--output", "json", "--non-interactive"],
+        )
         workflow.complete_current_step(0, "Saved results to: " + r"C:\package\results.jsonl" + "\n")
         self.assertEqual(workflow.current_step().args, ["preview-revisions", manifest_path])
 
@@ -103,11 +118,18 @@ class GuiRevisionWorkflowTests(unittest.TestCase):
 
         status_update = workflow.complete_current_step(0, "State: JOB_STATE_SUCCEEDED\n")
         self.assertTrue(status_update.should_continue)
-        self.assertEqual(workflow.current_step().args, ["download", "C:\\package\\manifest.json"])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["download", "C:\\package\\manifest.json", "--output", "json", "--non-interactive"],
+        )
 
-        download_update = workflow.complete_current_step(0, "Saved results to: C:\\package\\results.jsonl\n")
+        download_update = workflow.complete_current_step(
+            0, "Saved results to: C:\\package\\results.jsonl\n"
+        )
         self.assertTrue(download_update.should_continue)
-        self.assertEqual(workflow.current_step().args, ["preview-revisions", "C:\\package\\manifest.json"])
+        self.assertEqual(
+            workflow.current_step().args, ["preview-revisions", "C:\\package\\manifest.json"]
+        )
 
         preview_update = workflow.complete_current_step(0, PREVIEW_OUTPUT)
         self.assertEqual(preview_update.status, "done")

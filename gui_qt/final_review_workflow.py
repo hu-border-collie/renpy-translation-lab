@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Sequence
 
-from .batch_workflow_support import build_submit_cli_args
+from .batch_workflow_support import build_submit_cli_args, machine_output_args
 from .revision_report import summarize_revision_preview_output
 from .translation_workflow import (
     TERMINAL_FAILURE_STATES, WorkflowStep, WorkflowUpdate, extract_job_state,
@@ -142,6 +142,8 @@ class FinalReviewWorkflow:
             for finding_id in self.finding_ids:
                 args.extend(["--finding-id", finding_id])
             return args
+        if key in {"status", "download"}:
+            return machine_output_args([key, self.manifest_path])
         return [key, self.manifest_path]
 
     def _facts(self, extra=None):

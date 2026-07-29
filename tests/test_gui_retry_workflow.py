@@ -31,7 +31,10 @@ class GuiRetryWorkflowTests(unittest.TestCase):
         )
 
         self.assertEqual(workflow.restore_latest_manifest_path, PARENT_PATH)
-        self.assertEqual(workflow.current_step().args, ["submit", RETRY_PATH])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["submit", RETRY_PATH, "--output", "json", "--non-interactive"],
+        )
 
     def test_create_retry_followup_workflow_passes_submit_max_cost(self):
         workflow = create_retry_followup_workflow(
@@ -43,7 +46,7 @@ class GuiRetryWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             workflow.current_step().args,
-            ["submit", RETRY_PATH, "--max-cost", "4.5"],
+            ["submit", RETRY_PATH, "--max-cost", "4.5", "--output", "json", "--non-interactive"],
         )
 
     def test_create_retry_followup_workflow_passes_submit_max_cost(self):
@@ -56,7 +59,7 @@ class GuiRetryWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             workflow.current_step().args,
-            ["submit", RETRY_PATH, "--max-cost", "4.5"],
+            ["submit", RETRY_PATH, "--max-cost", "4.5", "--output", "json", "--non-interactive"],
         )
 
     def test_describe_retry_followup_button_for_merge_step(self):
@@ -121,7 +124,7 @@ class GuiRetryWorkflowTests(unittest.TestCase):
 
         self.assertIsNotNone(step)
         self.assertEqual(step.key, "status")
-        self.assertEqual(step.args, ["status", RETRY_PATH])
+        self.assertEqual(step.args, ["status", RETRY_PATH, "--output", "json", "--non-interactive"])
 
 
 if __name__ == "__main__":
