@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -172,6 +173,110 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(payload["status"], "JOB_STATE_SUCCEEDED")
         self.assertEqual(payload["artifacts"]["output_file"], str(output_path))
 
+
+    def test_output_file_preflight_failure_is_structured_before_dispatch(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            blocking_file = Path(tmp) / "not-a-directory"
+            blocking_file.write_text("occupied", encoding="utf-8")
+            output_path = blocking_file / "status.json"
+            with (
+                mock.patch.object(batch, "dispatch_command") as dispatch,
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = batch.main(
+                    [
+                        "status",
+                        "manifest.json",
+                        "--output",
+                        "json",
+                        "--strict-exit-codes",
+                        "--output-file",
+                        str(output_path),
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_INVALID_STATE)
+        self.assertFalse(payload["error"]["details"]["workflow_started"])
+        self.assertEqual(payload["error"]["code"], "OUTPUT_FILE_WRITE_FAILED")
+        self.assertFalse(payload["error"]["details"]["command_completed"])
+        self.assertEqual(
+            payload["error"]["details"]["output_file"],
+            os.path.abspath(str(output_path)),
+        )
+        self.assertNotIn("Traceback", stderr.getvalue())
+        dispatch.assert_not_called()
+
+    def test_output_file_write_race_reports_completed_command_on_stdout(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "job_state": "JOB_STATE_SUCCEEDED",
+        }
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "_preflight_output_file"),
+            mock.patch.object(batch, "dispatch_command", return_value=manifest),
+            mock.patch.object(
+                batch,
+                "atomic_write",
+                side_effect=PermissionError("target became read-only"),
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main(
+                [
+                    "status",
+                    "manifest.json",
+                    "--output",
+                    "json",
+                    "--strict-exit-codes",
+                    "--output-file",
+                    "status.json",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        details = payload["error"]["details"]
+        self.assertTrue(details["workflow_started"])
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_INVALID_STATE)
+        self.assertEqual(payload["error"]["code"], "OUTPUT_FILE_WRITE_FAILED")
+        self.assertTrue(details["command_completed"])
+        self.assertTrue(details["original_ok"])
+        self.assertEqual(details["original_status"], "JOB_STATE_SUCCEEDED")
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_discovery_output_file_failure_returns_nonzero_and_json_stdout(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "_preflight_output_file"),
+            mock.patch.object(
+                batch,
+                "atomic_write",
+                side_effect=PermissionError("target became read-only"),
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main(
+                ["capabilities", "--output-file", "capabilities.json"]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(payload["error"]["code"], "OUTPUT_FILE_WRITE_FAILED")
+        self.assertTrue(payload["error"]["details"]["command_completed"])
+        self.assertTrue(payload["error"]["details"]["workflow_started"])
+        self.assertNotIn("Traceback", stderr.getvalue())
+
     def test_non_interactive_requires_explicit_manifest_target(self):
         for command in sorted(batch.EXPLICIT_TARGET_COMMANDS):
             with self.subTest(command=command):
@@ -277,6 +382,95 @@ class BatchCliContractTests(unittest.TestCase):
         )
         self.assertNotIn("Traceback", stderr.getvalue())
 
+
+    def test_core_preconditions_raise_typed_contract_errors(self):
+        with self.assertRaises(batch.cli_contract.MachineContractError) as path_error:
+            batch._canonical_manifest_dir("relative/tl", "tl_dir")
+        self.assertEqual(path_error.exception.code_name, "INVALID_MANIFEST_PATH")
+
+        with (
+            mock.patch.object(
+                batch,
+                "manifest_project_identity",
+                return_value={
+                    "tl_dir": "C:/different/tl",
+                    "base_dir": "",
+                    "source": "manifest",
+                },
+            ),
+            mock.patch.object(batch.legacy, "TL_DIR", "C:/active/tl"),
+            self.assertRaises(batch.cli_contract.MachineContractError) as project_error,
+        ):
+            batch.require_manifest_project_match({}, "apply")
+        self.assertEqual(
+            project_error.exception.code_name,
+            "MANIFEST_PROJECT_MISMATCH",
+        )
+        self.assertEqual(
+            project_error.exception.semantic_exit_code,
+            batch.cli_contract.EXIT_INVALID_STATE,
+        )
+
+        decode_error = json.JSONDecodeError("invalid", "{", 0)
+        with (
+            mock.patch.object(batch, "load_json_file", return_value={}),
+            mock.patch.object(
+                batch.batch_cost_estimate,
+                "attach_cost_estimate_to_manifest",
+                side_effect=decode_error,
+            ),
+            self.assertRaises(batch.cli_contract.MachineContractError) as jsonl_error,
+        ):
+            batch.ensure_manifest_cost_estimate({"input_jsonl_path": "input.jsonl"})
+        self.assertEqual(jsonl_error.exception.code_name, "INVALID_BATCH_INPUT_JSON")
+
+        with (
+            mock.patch.object(
+                batch,
+                "write_apply_failure_report",
+                return_value="C:/jobs/demo/apply_failure_report.json",
+            ),
+            mock.patch.object(batch, "save_manifest"),
+            self.assertRaises(batch.cli_contract.MachineContractError) as apply_error,
+        ):
+            batch.fail_apply_preflight(
+                {},
+                "unsafe_check_status",
+                "Last check is not safe.",
+            )
+        self.assertEqual(apply_error.exception.code_name, "UNSAFE_CHECK_STATUS")
+        self.assertEqual(
+            apply_error.exception.semantic_exit_code,
+            batch.cli_contract.EXIT_BLOCKED,
+        )
+
+    def test_typed_core_error_bypasses_message_classifier_in_machine_mode(self):
+        stdout = io.StringIO()
+
+        def dispatch(_parser, _args):
+            return batch._canonical_manifest_dir("relative/tl", "tl_dir")
+
+        with (
+            mock.patch.object(batch, "dispatch_command", side_effect=dispatch),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                [
+                    "status",
+                    "manifest.json",
+                    "--output",
+                    "json",
+                    "--strict-exit-codes",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_INVALID_STATE)
+        self.assertEqual(payload["error"]["code"], "INVALID_MANIFEST_PATH")
+        self.assertEqual(
+            payload["error"]["suggested_action"],
+            "rebuild_or_repair_manifest",
+        )
     def test_machine_result_builder_covers_manifest_workflow(self):
         args = SimpleNamespace(target="")
         base_manifest = {

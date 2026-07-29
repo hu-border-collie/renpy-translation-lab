@@ -54,6 +54,7 @@ python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json -
 
 机器发现使用 `capabilities` 与 `schema <command>`；两者在加载项目配置前直接输出 JSON。`capabilities.commands` 已提供完整命令索引，因此不另设重复的 `commands`。单命令 schema 从当前 argparse action 动态生成，包含参数类型、required、repeatable、choices、默认值和帮助文本，避免文档与实际 parser 漂移。
 核心 JSON 命令可用 `--compact` 压缩序列化、用 `--fields status result.check.safety_level` 按点路径保留必要字段，或用 `--output-file <path>` 将最终文档原子写入文件并保持 stdout 为空。三者只接受显式 `--output json`；裁剪不影响业务状态和严格退出码，文件结果会在未被投影掉时记录 `artifacts.output_file` 绝对路径。空路径或连续点等非法字段路径会在 workflow 执行前返回 `INVALID_FIELD_PATH` 和退出码 `2`。
+输出文件会在 workflow 前进行可写性探测。若创建或原子替换失败，stderr 保留诊断，stdout 回退为未投影的 `OUTPUT_FILE_WRITE_FAILED` envelope；严格模式退出 `5`，兼容模式退出 `1`。必须同时读取 `error.details.workflow_started` 和 `error.details.command_completed`：分别区分 workflow 未启动、已启动但以错误结束、以及已成功完成后仅结果文件落盘失败；后两种状态都应按原命令可能已产生业务副作用处理。
 `capabilities / schema` 也支持这三个选项；它们原生输出 JSON，因此无需 `--output json`。
 
 
