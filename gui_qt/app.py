@@ -261,6 +261,7 @@ from litellm_provider_config import (
     catalog_source_label,
     installed_litellm_version,
     provider_display_label,
+    resolve_provider_id,
     sort_provider_ids,
     version_key,
     ProviderCredentialStoreError,
@@ -378,6 +379,7 @@ _BATCH_STAGE_RESULT = 2  # 写回 / 结果
 
 _LOG_FLUSH_INTERVAL_MS = 80
 _LAYOUT_SYNC_DEBOUNCE_MS = 32
+_LITELLM_MODEL_SELECTION_SAVE_DEBOUNCE_MS = 400
 _UI_PROGRESS_FLUSH_INTERVAL_MS = 100
 _CONTEXT_STATUS_CACHE_TTL_S = 2.0
 
@@ -617,6 +619,15 @@ class MainWindow(QMainWindow):
         self._font_install_worker: FontInstallWorker | None = None
         self._updating_litellm_provider = False
         self._applied_litellm_provider = ""
+        self._pending_litellm_model_selection: tuple[str, str] | None = None
+        self._litellm_model_selection_save_timer = QTimer(self)
+        self._litellm_model_selection_save_timer.setSingleShot(True)
+        self._litellm_model_selection_save_timer.setInterval(
+            _LITELLM_MODEL_SELECTION_SAVE_DEBOUNCE_MS
+        )
+        self._litellm_model_selection_save_timer.timeout.connect(
+            self._flush_litellm_model_selection_save
+        )
         self._litellm_saved_key_status: dict[str, str] = {}
         # _games_registry_panel is intentionally NOT set here so attribute access
         # triggers __getattr__ lazy materialization of 设置 · 项目列表.
@@ -6580,7 +6591,7 @@ class MainWindow(QMainWindow):
             data = str(combo.itemData(index) or "").strip().lower()
             if data:
                 return data
-        return combo.currentText().strip().lower()
+        return resolve_provider_id(combo.currentText())
 
     def _current_litellm_provider(self) -> str:
         model_provider = provider_from_model(self._litellm_model_text())
@@ -6686,6 +6697,39 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 "LiteLLM 选择已更新，但用户目录缓存写入失败。",
                 6000,
+            )
+
+    def _schedule_litellm_model_selection_save(self, provider: str, model: str) -> None:
+        provider = str(provider or "").strip().lower()
+        model = str(model or "").strip()
+        if not provider or not model:
+            self._cancel_litellm_model_selection_save()
+            return
+        self._pending_litellm_model_selection = (provider, model)
+        timer = getattr(self, "_litellm_model_selection_save_timer", None)
+        if timer is None:
+            self._flush_litellm_model_selection_save()
+            return
+        timer.start()
+
+    def _cancel_litellm_model_selection_save(self) -> None:
+        timer = getattr(self, "_litellm_model_selection_save_timer", None)
+        if timer is not None:
+            timer.stop()
+        self._pending_litellm_model_selection = None
+
+    def _flush_litellm_model_selection_save(self) -> None:
+        timer = getattr(self, "_litellm_model_selection_save_timer", None)
+        if timer is not None:
+            timer.stop()
+        pending = getattr(self, "_pending_litellm_model_selection", None)
+        self._pending_litellm_model_selection = None
+        if not pending:
+            return
+        provider, model = pending
+        if provider and model:
+            self._save_litellm_cache(
+                lambda p=provider, m=model: self._litellm_cache.select_model(p, m)
             )
 
     def _restore_litellm_cached_selection(self) -> None:
@@ -6797,34 +6841,56 @@ class MainWindow(QMainWindow):
 
     def _on_litellm_model_changed(self, _text: str) -> None:
         model = self._litellm_model_text()
-        provider = provider_from_model(model)
+        model_provider = provider_from_model(model)
         provider_combo = self._settings_widget("litellm_provider_combo")
-        if provider and provider_combo is not None and not getattr(self, "_updating_litellm_provider", False):
-            if provider != self._litellm_provider_combo_value():
+        updating = getattr(self, "_updating_litellm_provider", False)
+        if model_provider and provider_combo is not None and not updating:
+            previous_applied = self._applied_litellm_provider
+            if model_provider != self._litellm_provider_combo_value():
                 api_key_edit = self._settings_widget("litellm_api_key_edit")
                 if api_key_edit is not None:
                     api_key_edit.clear()
-            index = self._ensure_litellm_provider_item(provider)
+            index = self._ensure_litellm_provider_item(model_provider)
             if index != provider_combo.currentIndex():
                 provider_combo.blockSignals(True)
                 provider_combo.setCurrentIndex(index)
                 provider_combo.blockSignals(False)
-            self._applied_litellm_provider = provider
+            self._applied_litellm_provider = model_provider
             if not self._loading_config_to_ui:
                 self._save_litellm_cache(
-                    lambda: self._litellm_cache.select_provider(provider)
+                    lambda p=model_provider: self._litellm_cache.select_provider(p)
                 )
-        provider = provider or self._litellm_provider_combo_value()
+            if model_provider != previous_applied:
+                # Same side effects as provider combo switch: reload that
+                # provider's cached catalog and re-gate credential controls,
+                # while keeping the typed model as the selection.
+                self._updating_litellm_provider = True
+                try:
+                    snapshot = self._litellm_cache.models(model_provider)
+                    self._set_litellm_models(
+                        model_provider,
+                        snapshot.values,
+                        selected=model,
+                    )
+                finally:
+                    self._updating_litellm_provider = False
+                self._refresh_litellm_catalog_status()
+                # _set_litellm_models re-enters this handler for save + gating.
+                return
+
+        provider = model_provider or self._litellm_provider_combo_value()
         if provider and model and not self._loading_config_to_ui:
-            self._save_litellm_cache(
-                lambda: self._litellm_cache.select_model(provider, model)
-            )
-        self._refresh_litellm_credential_status()
+            self._schedule_litellm_model_selection_save(provider, model)
+        else:
+            self._cancel_litellm_model_selection_save()
+        # Re-run backend gating so “测试连接” tracks model text changes.
+        self._on_sync_backend_changed(-1)
 
     def _on_clear_litellm_provider(self) -> None:
         combo = self._settings_widget("litellm_provider_combo")
         if combo is None:
             return
+        self._cancel_litellm_model_selection_save()
         combo.blockSignals(True)
         combo.setCurrentIndex(-1)
         if combo.isEditable():
@@ -6838,13 +6904,14 @@ class MainWindow(QMainWindow):
         provider = self._litellm_provider_combo_value()
         if provider == self._applied_litellm_provider:
             return
+        self._cancel_litellm_model_selection_save()
         self._applied_litellm_provider = provider
         api_key_edit = self._settings_widget("litellm_api_key_edit")
         if api_key_edit is not None:
             api_key_edit.clear()
         if not self._loading_config_to_ui:
             self._save_litellm_cache(
-                lambda: self._litellm_cache.select_provider(provider)
+                lambda p=provider: self._litellm_cache.select_provider(p)
             )
         self._updating_litellm_provider = True
         try:
@@ -6857,7 +6924,6 @@ class MainWindow(QMainWindow):
         finally:
             self._updating_litellm_provider = False
         self._refresh_litellm_catalog_status()
-        self._refresh_litellm_credential_status()
         self._on_sync_backend_changed(-1)
 
     def _refresh_litellm_version_label(self) -> None:
@@ -6975,10 +7041,11 @@ class MainWindow(QMainWindow):
         )
         self._populate_litellm_providers(values, selected=current)
         self._refresh_litellm_catalog_status()
-        self.statusBar().showMessage(
-            f"已加载 {len(values)} 个 LiteLLM 供应商；未自动选择。",
-            8000,
-        )
+        if current:
+            status = f"已加载 {len(values)} 个 LiteLLM 供应商；已保留当前选择。"
+        else:
+            status = f"已加载 {len(values)} 个 LiteLLM 供应商；未自动选择。"
+        self.statusBar().showMessage(status, 8000)
 
     def _on_refresh_litellm_models(self) -> None:
         if self._litellm_catalog_worker is not None:
@@ -12454,6 +12521,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "未选择项目", "请先选择游戏的 work 目录。")
             return False
         self._ensure_settings_pages_for_config()
+        # Persist any debounced LiteLLM model selection before reading widgets.
+        self._flush_litellm_model_selection_save()
 
         try:
             config = self.state.load_translator_config()

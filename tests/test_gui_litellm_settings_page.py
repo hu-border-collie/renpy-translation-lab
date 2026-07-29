@@ -142,6 +142,72 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window.litellm_model_combo.setEditText("gpt-custom")
         self.assertEqual(self.window._litellm_model_text(), "openai/gpt-custom")
 
+    def test_model_selection_enables_test_connection_button(self):
+        litellm_index = self.window.sync_backend_combo.findData("litellm")
+        self.window.sync_backend_combo.setCurrentIndex(litellm_index)
+        self._load_provider_choices()
+        self.window.litellm_provider_combo.setCurrentIndex(
+            self.window.litellm_provider_combo.findData("openai")
+        )
+        self.window.litellm_model_combo.setEditText("")
+        self.window._on_sync_backend_changed(-1)
+        self.assertFalse(self.window.litellm_test_connection_btn.isEnabled())
+
+        self.window.litellm_model_combo.setEditText("openai/gpt-test")
+        self.assertTrue(self.window.litellm_test_connection_btn.isEnabled())
+
+        self.window.litellm_model_combo.setEditText("")
+        self.assertFalse(self.window.litellm_test_connection_btn.isEnabled())
+
+    def test_model_prefix_switch_reloads_cached_models_and_gates_credentials(self):
+        litellm_index = self.window.sync_backend_combo.findData("litellm")
+        self.window.sync_backend_combo.setCurrentIndex(litellm_index)
+        self.cache.update_models(
+            "openai",
+            ["openai/gpt-a", "openai/gpt-b"],
+            source="online",
+        )
+        self.cache.update_models(
+            "ollama",
+            ["ollama/llama3", "ollama/mistral"],
+            source="ollama",
+        )
+        self.window._populate_litellm_providers(
+            ("openai", "ollama"),
+            selected="",
+        )
+        self.window.litellm_provider_combo.setCurrentIndex(
+            self.window.litellm_provider_combo.findData("openai")
+        )
+        self.window.litellm_api_key_edit.setText("unsaved-openai-key")
+        self.assertTrue(self.window.litellm_api_key_edit.isEnabled())
+        openai_models = {
+            self.window.litellm_model_combo.itemText(index)
+            for index in range(self.window.litellm_model_combo.count())
+        }
+        self.assertEqual(openai_models, {"openai/gpt-a", "openai/gpt-b"})
+
+        self.window.litellm_model_combo.setEditText("ollama/llama3")
+
+        self.assertEqual(self.window._current_litellm_provider(), "ollama")
+        self.assertEqual(self.window.litellm_api_key_edit.text(), "")
+        self.assertFalse(self.window.litellm_api_key_edit.isEnabled())
+        model_items = {
+            self.window.litellm_model_combo.itemText(index)
+            for index in range(self.window.litellm_model_combo.count())
+        }
+        self.assertEqual(model_items, {"ollama/llama3", "ollama/mistral"})
+        self.assertEqual(self.window.litellm_model_combo.currentText(), "ollama/llama3")
+        self.assertTrue(self.window.litellm_test_connection_btn.isEnabled())
+
+    def test_display_label_free_text_resolves_to_provider_id(self):
+        self.window._populate_litellm_providers(("openai", "ollama"), selected="")
+        self.window.litellm_provider_combo.setCurrentIndex(-1)
+        self.window.litellm_provider_combo.setEditText("Ollama（本地）")
+        self.assertEqual(self.window._litellm_provider_combo_value(), "ollama")
+        self.window.litellm_provider_combo.setEditText("Google Gemini")
+        self.assertEqual(self.window._litellm_provider_combo_value(), "gemini")
+
     def test_switching_provider_does_not_relabel_bare_model_as_new_provider(self):
         self._load_provider_choices()
         openai_index = self.window.litellm_provider_combo.findData("openai")

@@ -37,6 +37,10 @@ _PROVIDER_LABELS = dict(SUPPORTED_PROVIDERS) | {
     "azure": "Azure OpenAI",
     "vertex_ai": "Google Vertex AI",
 }
+_LABEL_TO_PROVIDER_ID = {
+    str(label).strip().casefold(): provider
+    for provider, label in _PROVIDER_LABELS.items()
+}
 DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     "openai": ("openai/gpt-5",),
     "anthropic": ("anthropic/claude-sonnet-4-5-20250929",),
@@ -163,6 +167,24 @@ def provider_display_label(provider: str) -> str:
     """Return a friendly label without restricting dynamic provider ids."""
     provider = str(provider or "").strip().lower()
     return _PROVIDER_LABELS.get(provider, provider)
+
+
+def resolve_provider_id(value: str) -> str:
+    """Map free-typed provider input to a LiteLLM provider id when possible.
+
+    Accepts known ids, known display labels (e.g. ``Ollama（本地）`` → ``ollama``),
+    and otherwise returns the lowercased free-text id for custom providers.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if lowered in _PROVIDER_LABELS or lowered in _COMMON_PROVIDER_INDEX:
+        return lowered
+    mapped = _LABEL_TO_PROVIDER_ID.get(text.casefold())
+    if mapped:
+        return mapped
+    return lowered
 
 
 def sort_provider_ids(providers: object) -> tuple[str, ...]:
@@ -448,8 +470,6 @@ def catalog_source_label(source: str) -> str:
     token = str(source or "").strip().lower()
     if token == "online":
         return "目录来源：LiteLLM 官方在线目录。"
-    if token == "local":
-        return "目录来源：本机 LiteLLM 随包目录（联网失败，可能过时）。"
     endpoint = NATIVE_CATALOG_ENDPOINTS.get(token)
     if endpoint is not None:
         if token == "ollama":
