@@ -52,14 +52,13 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual(json.loads(stream.getvalue()), envelope)
         self.assertTrue(stream.getvalue().endswith("\n"))
 
-
     def test_error_classification_exposes_stable_machine_actions(self):
         stale = cli_contract.classify_error(
             "Manifest or results changed after the last check.",
             exception_type="SystemExit",
         )
         retryable = cli_contract.classify_error(
-            "Service unavailable due to rate limit.",
+            "429 RESOURCE_EXHAUSTED",
             exception_type="RuntimeError",
         )
 
@@ -69,6 +68,32 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual(retryable["code"], "REMOTE_RETRYABLE")
         self.assertTrue(retryable["retryable"])
         self.assertEqual(retryable["exit_code"], cli_contract.EXIT_RETRYABLE)
+
+        for message in (
+            "Manifest has no valid check summary. Run check before apply.",
+            "Manifest check summary was produced by an older check contract. "
+            "Run check again before apply.",
+        ):
+            with self.subTest(message=message):
+                preflight = cli_contract.classify_error(
+                    message,
+                    exception_type="SystemExit",
+                )
+                self.assertEqual(preflight["code"], "STALE_STATE")
+                self.assertEqual(
+                    preflight["suggested_action"],
+                    "run_check_again",
+                )
+                self.assertEqual(
+                    preflight["exit_code"],
+                    cli_contract.EXIT_INVALID_STATE,
+                )
+
+        quotation = cli_contract.classify_error(
+            "quotation ready",
+            exception_type="RuntimeError",
+        )
+        self.assertEqual(quotation["code"], "INTERNAL_ERROR")
 
     def test_strict_exit_code_maps_successful_workflow_states(self):
         warn = cli_contract.success_envelope("check", status="warn")

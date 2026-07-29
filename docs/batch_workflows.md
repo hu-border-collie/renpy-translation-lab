@@ -32,15 +32,15 @@
 python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json --output json
 ```
 
-JSON 模式下 stdout 只包含结果文档，原有 banner、进度和诊断文本进入 stderr。`result` 提供业务摘要，`artifacts` 提供 manifest / results / 报告路径，`status` 表示 job state 或 `safe / warn / block` 等业务状态。文本模式和默认退出码保持兼容；仍须根据 `status` 判断是否可以继续写回。
+JSON 模式下 stdout 只包含结果文档，原有 banner、进度和诊断文本进入 stderr。`result` 提供业务摘要，`artifacts` 提供 manifest / results / 报告路径，`status` 表示 job state 或 `safe / warn / block` 等业务状态。文本模式、默认退出码以及非严格 JSON 的既有 `COMMAND_REFUSED / INTERNAL_ERROR` 分类保持兼容；仍须根据 `status` 判断是否可以继续写回。
 
-Agent 可追加 `--strict-exit-codes`（必须与 `--output json` 同时使用），启用稳定的语义退出码：`0` 成功/继续轮询，`2` 用法错误，`3` 需要处理（例如 `warn`），`4` 被安全门禁阻止或任务终止失败，`5` 输入/配置/状态失效，`6` 远端临时错误、可稍后重试。例如：
+Agent 可追加 `--strict-exit-codes`（必须与 `--output json` 同时使用），启用稳定的语义退出码：`0` 成功/继续轮询，`1` 未分类内部错误，`2` 用法错误，`3` 需要处理（例如 `warn`），`4` 被安全门禁阻止或任务终止失败，`5` 输入/配置/状态失效，`6` 远端临时错误、可稍后重试。例如：
 
 ```powershell
 python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json --output json --strict-exit-codes
 ```
 
-严格模式下也不能只看退出码：必须同时读取 envelope 的 `ok`、`status` 和 `error`。job pending/running 是成功查询，退出 `0`；`check` 只有 `safe` 才退出 `0` 并允许进入 `apply`。错误时优先使用稳定的 `error.code`、`retryable`、`suggested_action` 与 `details.semantic_exit_code`，不要解析自然语言 `message`。
+严格模式下也不能只看退出码：必须同时读取 envelope 的 `ok`、`status` 和 `error`。job pending/running 是成功查询，退出 `0`；`check` 只有 `safe` 才退出 `0` 并允许进入 `apply`。错误时优先使用稳定的 `error.code`、`retryable`、`suggested_action` 与权威的 `details.semantic_exit_code`，不要解析自然语言 `message`。
 
 结构化输出当前覆盖 `doctor / build / submit / status / download / check / apply`；其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
 

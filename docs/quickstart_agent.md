@@ -58,13 +58,14 @@ JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning �
 | 退出码 | 含义 | 常见场景 |
 |---:|---|---|
 | `0` | 命令成功，可继续或继续轮询 | `safe`、job pending/running、无待处理工作 |
+| `1` | 未分类的内部错误，默认不可重试 | 意外异常或未知 SDK 错误 |
 | `2` | 命令行用法错误 | 参数缺失、严格模式未配合 JSON 输出 |
 | `3` | 命令完成，但需要 Agent 处理 | `check` 返回 `warn` |
 | `4` | 被门禁阻止或进入终止失败状态 | `block`、doctor blocked、job failed/cancelled |
 | `5` | 输入、配置或状态已失效 | stale check、manifest/results 漂移、前置产物缺失 |
 | `6` | 远端临时错误，可稍后重试 | rate limit、quota、timeout、service unavailable |
 
-错误 envelope 的 `error.code` 当前可能为 `STALE_STATE`、`PRECONDITION_FAILED`、`COMMAND_BLOCKED`、`REMOTE_RETRYABLE`、`COMMAND_REFUSED` 或 `INTERNAL_ERROR`。同时读取 `retryable`、`suggested_action` 和 `details.semantic_exit_code`，不要解析 `message` 文本。
+严格模式的错误 envelope 可能使用 `STALE_STATE`、`PRECONDITION_FAILED`、`COMMAND_BLOCKED`、`REMOTE_RETRYABLE`、`COMMAND_REFUSED` 或 `INTERNAL_ERROR`。同时读取 `retryable`、`suggested_action` 和权威的 `details.semantic_exit_code`，不要解析 `message` 文本。未启用严格模式时保持 schema v1 的兼容行为：拒绝类错误仍为 `COMMAND_REFUSED`，意外异常仍为 `INTERNAL_ERROR`，且不承诺 `semantic_exit_code`。
 
 没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式只承诺覆盖上面的七个核心命令；其他子命令以各自 `--help` 和落盘产物为准。
 

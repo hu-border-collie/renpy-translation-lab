@@ -26,22 +26,35 @@ EXIT_RETRYABLE = 6
 def classify_error(message: str, *, exception_type: str = "") -> dict[str, Any]:
     """Classify existing CLI failures without changing their human-readable text."""
 
-    normalized = str(message or "").strip().lower()
+    normalized = f"{exception_type} {message or ''}".strip().lower()
     stale_markers = (
         "changed after the last check",
         "stale check",
         "check fingerprint",
         "source snapshot",
         "manifest or results changed",
+        "has no valid check summary",
+        "older check contract",
     )
     retryable_markers = (
+        "429",
         "rate limit",
         "resource exhausted",
-        "quota",
+        "resource_exhausted",
+        "resourceexhausted",
+        "quota exceeded",
+        "503",
         "timed out",
         "timeout",
+        "connecttimeout",
+        "readtimeout",
+        "connecterror",
+        "readerror",
+        "remoteprotocolerror",
+        "unexpected_eof_while_reading",
         "temporarily unavailable",
         "service unavailable",
+        "unavailable",
     )
     precondition_markers = (
         "not succeeded yet",

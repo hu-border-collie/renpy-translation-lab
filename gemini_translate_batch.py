@@ -11643,44 +11643,62 @@ def run_machine_command(parser, args):
     except SystemExit as exc:
         _write_machine_diagnostics(diagnostics)
         message = _system_exit_message(exc)
-        classification = cli_contract.classify_error(
-            message,
-            exception_type='SystemExit',
-        )
-        envelope = cli_contract.error_envelope(
-            command,
-            code=classification['code'],
-            message=message,
-            retryable=classification['retryable'],
-            suggested_action=classification['suggested_action'],
-            details={
-                'exit_code': exc.code if isinstance(exc.code, int) else 1,
-                'semantic_exit_code': classification['exit_code'],
-            },
-        )
+        legacy_exit_code = exc.code if isinstance(exc.code, int) and exc.code else 1
+        if args.strict_exit_codes:
+            classification = cli_contract.classify_error(
+                message,
+                exception_type='SystemExit',
+            )
+            envelope = cli_contract.error_envelope(
+                command,
+                code=classification['code'],
+                message=message,
+                retryable=classification['retryable'],
+                suggested_action=classification['suggested_action'],
+                details={
+                    'exit_code': legacy_exit_code,
+                    'semantic_exit_code': classification['exit_code'],
+                },
+            )
+        else:
+            envelope = cli_contract.error_envelope(
+                command,
+                code='COMMAND_REFUSED',
+                message=message,
+                details={'exit_code': legacy_exit_code},
+            )
         cli_contract.write_json_envelope(envelope, sys.stdout)
         if args.strict_exit_codes:
             return cli_contract.strict_exit_code(envelope)
-        return exc.code if isinstance(exc.code, int) and exc.code else 1
+        return legacy_exit_code
     except Exception as exc:
         _write_machine_diagnostics(diagnostics)
         traceback.print_exc(file=sys.stderr)
         message = str(exc) or exc.__class__.__name__
-        classification = cli_contract.classify_error(
-            message,
-            exception_type=exc.__class__.__name__,
-        )
-        envelope = cli_contract.error_envelope(
-            command,
-            code=classification['code'],
-            message=message,
-            retryable=classification['retryable'],
-            suggested_action=classification['suggested_action'],
-            details={
-                'exception_type': exc.__class__.__name__,
-                'semantic_exit_code': classification['exit_code'],
-            },
-        )
+        exception_type = exc.__class__.__name__
+        if args.strict_exit_codes:
+            classification = cli_contract.classify_error(
+                message,
+                exception_type=exception_type,
+            )
+            envelope = cli_contract.error_envelope(
+                command,
+                code=classification['code'],
+                message=message,
+                retryable=classification['retryable'],
+                suggested_action=classification['suggested_action'],
+                details={
+                    'exception_type': exception_type,
+                    'semantic_exit_code': classification['exit_code'],
+                },
+            )
+        else:
+            envelope = cli_contract.error_envelope(
+                command,
+                code='INTERNAL_ERROR',
+                message=message,
+                details={'exception_type': exception_type},
+            )
         cli_contract.write_json_envelope(envelope, sys.stdout)
         if args.strict_exit_codes:
             return cli_contract.strict_exit_code(envelope)
