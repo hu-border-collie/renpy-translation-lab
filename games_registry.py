@@ -1347,7 +1347,7 @@ def plan_workspace_setup(path: Path | str) -> WorkspaceSetupPlan:
         try:
             content = md_path.read_text(encoding="utf-8-sig")
             games_md_row_count = len(parse_games_md_table(content))
-        except (OSError, UnicodeError) as exc:
+        except (OSError, UnicodeError, ValueError) as exc:
             games_md_parse_ok = False
             notes.append(f"读取 GAMES.md 失败：{exc}")
 
@@ -2359,12 +2359,16 @@ def main(argv: list[str] | None = None) -> int:
         if not source_md.is_file():
             print(f"GAMES.md not found: {source_md}", file=sys.stderr)
             return 1
-        registry = import_from_games_md(
-            md_path=source_md,
-            registry_path=registry_path,
-            workspace_root=workspace,
-            merge=getattr(args, "merge", False),
-        )
+        try:
+            registry = import_from_games_md(
+                md_path=source_md,
+                registry_path=registry_path,
+                workspace_root=workspace,
+                merge=getattr(args, "merge", False),
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
         print(f"Imported {len(registry.get('projects', []))} projects -> {registry_path}")
         return 0
 

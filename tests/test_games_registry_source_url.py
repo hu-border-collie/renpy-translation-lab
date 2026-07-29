@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -215,6 +216,83 @@ class GamesRegistrySourceUrlTests(unittest.TestCase):
         )
         registry.update_project_manual_fields(payload, "demo", source_url="")
         self.assertEqual(payload["projects"][0]["source_url"], "")
+
+    def test_workspace_plan_handles_invalid_source_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            invalid_md = SOURCE_MD.replace(
+                "[itch.io](<https://studio.itch.io/alpha>)",
+                "ftp://example.com/alpha",
+            )
+            (workspace / registry.GAMES_MD_FILENAME).write_text(
+                invalid_md,
+                encoding="utf-8",
+            )
+
+            plan = registry.plan_workspace_setup(workspace)
+
+            self.assertFalse(plan.ok)
+            self.assertEqual(plan.scene, registry.WorkspaceScene.GAMES_MD_ONLY)
+            self.assertFalse(plan.games_md_parse_ok)
+            self.assertEqual(plan.games_md_row_count, 0)
+            self.assertTrue(
+                any("GAMES.md 第 3 行" in note for note in plan.notes),
+                plan.notes,
+            )
+
+    def test_workspace_apply_replans_invalid_source_without_raising(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            md_path = workspace / registry.GAMES_MD_FILENAME
+            md_path.write_text(SOURCE_MD, encoding="utf-8")
+            plan = registry.plan_workspace_setup(workspace)
+            self.assertTrue(plan.ok)
+
+            md_path.write_text(
+                SOURCE_MD.replace(
+                    "[itch.io](<https://studio.itch.io/alpha>)",
+                    "ftp://example.com/alpha",
+                ),
+                encoding="utf-8",
+            )
+            result = registry.apply_workspace_setup(
+                plan,
+                registry.options_from_plan(
+                    plan,
+                    persist_workspace_root=False,
+                ),
+            )
+
+            self.assertFalse(result.ok)
+            self.assertIn("GAMES.md", result.message)
+            self.assertFalse((workspace / registry.REGISTRY_FILENAME).exists())
+
+    def test_cli_import_md_reports_invalid_source_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            invalid_md = SOURCE_MD.replace(
+                "[itch.io](<https://studio.itch.io/alpha>)",
+                "ftp://example.com/alpha",
+            )
+            (workspace / registry.GAMES_MD_FILENAME).write_text(
+                invalid_md,
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+
+            with mock.patch("sys.stderr", stderr):
+                code = registry.main(
+                    [
+                        "--workspace",
+                        str(workspace),
+                        "import-md",
+                    ]
+                )
+
+            self.assertEqual(code, 1)
+            self.assertIn("GAMES.md 第 3 行", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
+            self.assertFalse((workspace / registry.REGISTRY_FILENAME).exists())
 
 
 if __name__ == "__main__":
