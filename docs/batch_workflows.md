@@ -42,6 +42,14 @@ python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json -
 
 严格模式下也不能只看退出码：必须同时读取 envelope 的 `ok`、`status` 和 `error`。job pending/running 是成功查询，退出 `0`；`check` 只有 `safe` 才退出 `0` 并允许进入 `apply`。错误时优先使用稳定的 `error.code`、`retryable`、`suggested_action` 与权威的 `details.semantic_exit_code`，不要解析自然语言 `message`。
 
+
+需要确定性调用时追加 `--non-interactive`。该选项保证核心命令不等待 stdin，并让 `submit / status / download / check / apply` 必须显式接收 manifest 或 package target；因此不会读取 latest manifest，`submit` 也不会隐式 build。缺少 target 时 JSON envelope 返回 `EXPLICIT_TARGET_REQUIRED`，配合 `--strict-exit-codes` 退出 `5`。
+
+```powershell
+python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json --output json --non-interactive --strict-exit-codes
+```
+
+只需关闭 target 回退时可单独使用 `--require-explicit-target`。默认模式保持现有 latest-manifest 和 submit-build 行为；`doctor / build` 不消费 manifest，不受显式 target 要求影响。
 结构化输出当前覆盖 `doctor / build / submit / status / download / check / apply`；其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
 
 - `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出。
