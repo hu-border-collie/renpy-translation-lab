@@ -283,15 +283,23 @@ def extract_actual_cost(
         parsed = _nonnegative_float(usage.get(key))
         if parsed is not None:
             currency = usage.get("cost_currency") or usage.get("currency")
-            return parsed, str(currency).strip() or None, f"usage.{key}"
+            return parsed, str(currency or "").strip() or None, f"usage.{key}"
 
     payload = response_payload if isinstance(response_payload, Mapping) else {}
     hidden = payload.get("_hidden_params")
     if isinstance(hidden, Mapping):
         parsed = _nonnegative_float(hidden.get("response_cost"))
         if parsed is not None:
-            currency = hidden.get("response_cost_currency") or hidden.get("currency") or "USD"
-            return parsed, str(currency).strip() or None, "_hidden_params.response_cost"
+            currency = (
+                hidden.get("response_cost_currency")
+                or hidden.get("currency")
+                or "USD"
+            )
+            return (
+                parsed,
+                str(currency or "").strip() or None,
+                "_hidden_params.response_cost",
+            )
     return None, None, None
 
 
@@ -465,7 +473,14 @@ class UsageLedger:
             raise UsageLedgerError(f"Could not read usage ledger {self.path}: {exc}") from exc
         if not isinstance(payload, dict):
             raise UsageLedgerError(f"Usage ledger root must be an object: {self.path}")
-        if int(payload.get("schema_version") or 0) != SCHEMA_VERSION:
+        try:
+            schema_version = int(payload.get("schema_version") or 0)
+        except (TypeError, ValueError) as exc:
+            raise UsageLedgerError(
+                f"Unsupported usage ledger schema_version in {self.path}: "
+                f"{payload.get('schema_version')!r}"
+            ) from exc
+        if schema_version != SCHEMA_VERSION:
             raise UsageLedgerError(
                 f"Unsupported usage ledger schema_version in {self.path}: "
                 f"{payload.get('schema_version')!r}"

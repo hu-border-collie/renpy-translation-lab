@@ -568,7 +568,8 @@ def run_variant_for_chunk(
                         'variant': variant_name,
                     },
                 )
-            except (OSError, ValueError, model_usage_ledger.UsageLedgerError) as exc:
+            except Exception as exc:
+                # Accounting must not turn a successful variant into a failure.
                 usage_context.setdefault('errors', []).append(str(exc))
         translations, parse_error = extract_translation_map(
             response.get('response_text') or '',

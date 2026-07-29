@@ -574,14 +574,18 @@ def run_mapreduce_drafts(
         stage_usage["output_tokens"] += output_tokens
         stage_usage["total_tokens"] += total_tokens
         if usage_recorder is not None:
-            usage_recorder(
-                {
-                    "stage": stage,
-                    "artifact_id": current_request["artifact_id"],
-                    "result": result,
-                    "usage_metadata": metadata,
-                }
-            )
+            try:
+                usage_recorder(
+                    {
+                        "stage": stage,
+                        "artifact_id": current_request["artifact_id"],
+                        "result": result,
+                        "usage_metadata": metadata,
+                    }
+                )
+            except Exception:
+                # Accounting must never abort generation after tokens were spent.
+                pass
         return result
 
     def _emit_progress(stage: str, completed: int, total: int, action: str) -> None:

@@ -197,6 +197,65 @@ class ModelUsageLedgerTests(unittest.TestCase):
             self.assertEqual(record["actual_cost_source"], "_hidden_params.response_cost")
             self.assertEqual(record["stage"], "sync_keyword")
 
+    def test_usage_response_cost_without_currency_stays_unknown_currency(self):
+        with tempfile.TemporaryDirectory() as game_root, tempfile.TemporaryDirectory() as package:
+            result_path = self._write_jsonl(
+                package,
+                [
+                    {
+                        "key": "kw-cost-only",
+                        "provider": "litellm",
+                        "model": "openai/test-model",
+                        "execution_mode": "sync",
+                        "usage_metadata": {
+                            "prompt_tokens": 4,
+                            "completion_tokens": 2,
+                            "total_tokens": 6,
+                            "response_cost": 0.42,
+                        },
+                        "response": {"id": "chatcmpl-cost-only"},
+                    }
+                ],
+            )
+            manifest = self._manifest(
+                game_root,
+                result_path,
+                mode="keyword_extraction",
+                execution="sync",
+                provider="litellm",
+                model="openai/test-model",
+            )
+
+            usage.import_manifest_results(manifest, result_path=result_path)
+            record = usage.UsageLedger(game_root).load()["records"][0]
+            report = usage.query_usage(game_root)
+
+            self.assertEqual(record["actual_cost"], 0.42)
+            self.assertIsNone(record["actual_cost_currency"])
+            self.assertEqual(record["actual_cost_source"], "usage.response_cost")
+            # Missing currency buckets under "unknown", never the literal "None".
+            self.assertEqual(
+                report["totals"]["actual_cost"]["values"],
+                {"unknown": 0.42},
+            )
+            self.assertNotIn("None", report["totals"]["actual_cost"]["values"])
+
+    def test_non_numeric_schema_version_raises_usage_ledger_error(self):
+        with tempfile.TemporaryDirectory() as game_root:
+            ledger = usage.UsageLedger(game_root)
+            os.makedirs(os.path.dirname(ledger.path), exist_ok=True)
+            with open(ledger.path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "schema_version": "x",
+                        "project": ledger.project,
+                        "records": [],
+                    },
+                    handle,
+                )
+            with self.assertRaises(usage.UsageLedgerError):
+                ledger.load()
+
     def test_missing_usage_stays_unknown_instead_of_zero(self):
         with tempfile.TemporaryDirectory() as game_root:
             usage.record_generation_usage(

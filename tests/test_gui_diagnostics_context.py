@@ -232,6 +232,8 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertNotIn("写回翻译（仅可写回）", by_label)
         self.assertIn(parent_path, by_label["合并补译结果"])
         self.assertIn(retry_path, by_label["合并补译结果"])
+        self.assertIn("usage-import", by_label["导入当前结果用量"])
+        self.assertIn("usage-report", by_label["查看项目模型用量"])
 
     def test_revision_manifest_commands_use_revision_apply_flow(self):
         manifest_path = r"C:\logs\batch_jobs\rev1\manifest.json"
@@ -249,6 +251,8 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertNotIn("写回翻译（仅可写回）", by_label)
         self.assertIn("preview-revisions", by_label["预览订正结果"])
         self.assertIn("apply-revisions", by_label["写回订正（预览确认后）"])
+        self.assertIn("usage-import", by_label["导入当前结果用量"])
+        self.assertIn("usage-report", by_label["查看项目模型用量"])
 
     def test_local_final_review_candidates_omit_cloud_submit(self):
         commands = build_cli_commands(
@@ -292,6 +296,8 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertNotIn("检查翻译结果", by_label)
         self.assertNotIn("写回翻译（仅可写回）", by_label)
         self.assertIn("export-keywords", by_label["导出关键词报告"])
+        self.assertIn("usage-import", by_label["导入当前结果用量"])
+        self.assertIn("usage-report", by_label["查看项目模型用量"])
         self.assertIn(manifest_path, by_label["导出关键词报告"])
 
     def test_keyword_manifest_with_export_includes_merge_glossary_commands(self):
@@ -324,7 +330,8 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
             logs_dir=r"C:\logs\batch_jobs",
         )
         self.assertEqual(context.status, idle_diagnostics_context().status)
-        self.assertEqual(context.commands, [])
+        command_labels = [command.label for command in context.commands]
+        self.assertEqual(command_labels, ["查看项目模型用量"])
 
     def test_build_diagnostics_context_idle_when_latest_path_suppressed(self):
         context = build_diagnostics_context(

@@ -6314,6 +6314,7 @@ class MainWindow(QMainWindow):
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
             submit_max_cost=self._submit_max_cost_from_config(),
+            game_root=str(self.state.get_game_root() or ""),
         )
         merged_context = DiagnosticsContext(
             status=str(merge_summary["status"]),
@@ -10577,6 +10578,7 @@ class MainWindow(QMainWindow):
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
             submit_max_cost=self._submit_max_cost_from_config(),
+            game_root=str(self.state.get_game_root() or ""),
         )
         self._set_diagnostics_context(
             probe_summary_to_diagnostics_context(
@@ -10631,6 +10633,7 @@ class MainWindow(QMainWindow):
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
             submit_max_cost=self._submit_max_cost_from_config(),
+            game_root=str(self.state.get_game_root() or ""),
         )
         self._set_diagnostics_context(
             ab_experiment_summary_to_diagnostics_context(
@@ -10680,6 +10683,7 @@ class MainWindow(QMainWindow):
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
             submit_max_cost=self._submit_max_cost_from_config(),
+            game_root=str(self.state.get_game_root() or ""),
         )
         self._set_diagnostics_context(
             split_summary_to_diagnostics_context(
@@ -10898,6 +10902,7 @@ class MainWindow(QMainWindow):
             logs_dir=str(self.state.get_logs_dir()),
             python_exe=sys.executable,
             submit_max_cost=self._submit_max_cost_from_config(),
+            game_root=str(self.state.get_game_root() or ""),
         )
         self._set_diagnostics_context(
             repair_summary_to_diagnostics_context(
@@ -11651,6 +11656,7 @@ class MainWindow(QMainWindow):
                 logs_dir=str(self.state.get_logs_dir()),
                 python_exe=sys.executable,
                 submit_max_cost=self._submit_max_cost_from_config(),
+                game_root=str(self.state.get_game_root() or ""),
             )
             self._set_diagnostics_context(
                 probe_summary_to_diagnostics_context(probe_summary, base_context)
@@ -11682,6 +11688,7 @@ class MainWindow(QMainWindow):
                 logs_dir=str(self.state.get_logs_dir()),
                 python_exe=sys.executable,
                 submit_max_cost=self._submit_max_cost_from_config(),
+                game_root=str(self.state.get_game_root() or ""),
             )
             self._set_diagnostics_context(
                 ab_experiment_summary_to_diagnostics_context(ab_summary, base_context)
@@ -11723,6 +11730,7 @@ class MainWindow(QMainWindow):
                 logs_dir=str(self.state.get_logs_dir()),
                 python_exe=sys.executable,
                 submit_max_cost=self._submit_max_cost_from_config(),
+                game_root=str(self.state.get_game_root() or ""),
             )
             self._set_diagnostics_context(
                 split_summary_to_diagnostics_context(split_summary, base_context)
@@ -11772,6 +11780,7 @@ class MainWindow(QMainWindow):
                 logs_dir=str(self.state.get_logs_dir()),
                 python_exe=sys.executable,
                 submit_max_cost=self._submit_max_cost_from_config(),
+                game_root=str(self.state.get_game_root() or ""),
             )
             self._set_diagnostics_context(
                 repair_summary_to_diagnostics_context(parsed, base_context)

@@ -307,6 +307,26 @@ def build_cli_commands(
             ),
         ),
     ]
+    # Keep usage commands ahead of mode-specific early returns so revision /
+    # keyword / retry packages expose the same import/report actions.
+    commands.extend(
+        [
+            DiagnosticsCommand(
+                label="导入当前结果用量",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["usage-import", manifest_path],
+                ),
+            ),
+            DiagnosticsCommand(
+                label="查看项目模型用量",
+                command=format_cli_command(
+                    python_exe, batch_script_path, ["usage-report"]
+                ),
+            ),
+        ]
+    )
 
     mode = manifest.get("mode")
     mode_text = mode.strip() if isinstance(mode, str) else ""
@@ -574,25 +594,6 @@ def build_cli_commands(
         )
     )
 
-    commands.extend(
-        [
-            DiagnosticsCommand(
-                label="导入当前结果用量",
-                command=format_cli_command(
-                    python_exe,
-                    batch_script_path,
-                    ["usage-import", manifest_path],
-                ),
-            ),
-            DiagnosticsCommand(
-                label="查看项目模型用量",
-                command=format_cli_command(
-                    python_exe, batch_script_path, ["usage-report"]
-                ),
-            ),
-        ]
-    )
-
     return commands
 
 
@@ -858,7 +859,7 @@ def idle_diagnostics_context(
         message="开始任务后，这里会显示任务记录、翻译包、云端任务和可复制命令。",
         facts=_project_usage_facts(game_root),
         paths=[],
-        commands=[],
+        commands=_usage_report_command(batch_script_path, python_exe),
         manifest_json_preview="",
     )
 
@@ -918,7 +919,10 @@ def build_diagnostics_context(
                 status="warning",
                 heading="无法读取任务记录",
                 message="找到了任务记录路径，但内容未能加载。请查看下方原始日志。",
-                facts=[format_manifest_path_fact(manifest_path)] + _project_usage_facts(game_root),
+                facts=[
+                    format_manifest_path_fact(manifest_path),
+                    *_project_usage_facts(game_root),
+                ],
                 paths=[],
                 commands=[],
                 manifest_json_preview="",
