@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -90,6 +91,29 @@ class BatchCliContractTests(unittest.TestCase):
             },
         )
         self.assertNotIn(": ", stdout.getvalue())
+
+    def test_invalid_field_path_returns_structured_usage_error(self):
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = batch.main(
+                [
+                    "status",
+                    "manifest.json",
+                    "--output",
+                    "json",
+                    "--fields",
+                    "result..job_state",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload["error"]["code"], "INVALID_FIELD_PATH")
+        self.assertEqual(
+            payload["error"]["details"]["semantic_exit_code"],
+            batch.cli_contract.EXIT_USAGE,
+        )
 
     def test_field_projection_does_not_change_strict_exit_code(self):
         manifest = {
@@ -216,6 +240,43 @@ class BatchCliContractTests(unittest.TestCase):
             batch.cli_contract.EXIT_INVALID_STATE,
         )
 
+    def test_invalid_manifest_json_returns_invalid_state_error(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "manifest.json"
+            manifest_path.write_text("{", encoding="utf-8")
+            with (
+                mock.patch.object(batch, "initialize_batch_logging"),
+                mock.patch.object(batch.legacy, "load_config"),
+                mock.patch.object(batch.legacy, "load_translator_settings"),
+                mock.patch.object(batch.legacy, "load_glossary"),
+                mock.patch.object(batch, "load_batch_settings"),
+                mock.patch.object(batch, "print_banner"),
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = batch.main(
+                    [
+                        "status",
+                        str(manifest_path),
+                        "--output",
+                        "json",
+                        "--non-interactive",
+                        "--strict-exit-codes",
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_INVALID_STATE)
+        self.assertEqual(payload["error"]["code"], "INVALID_MANIFEST_JSON")
+        self.assertEqual(
+            payload["error"]["suggested_action"],
+            "rebuild_or_repair_manifest",
+        )
+        self.assertNotIn("Traceback", stderr.getvalue())
+
     def test_machine_result_builder_covers_manifest_workflow(self):
         args = SimpleNamespace(target="")
         base_manifest = {
@@ -304,6 +365,45 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertNotIn("banner", stdout.getvalue())
         self.assertIn("banner", stderr.getvalue())
         self.assertIn("doctor text", stderr.getvalue())
+
+    def test_machine_mode_routes_prepare_child_stdout_away_from_json(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as child_diagnostics:
+            def dispatch(_parser, _args):
+                self.assertTrue(batch.cli_contract.machine_output_active())
+                print("python progress")
+                ok = batch.legacy._run_prepare_command(
+                    [sys.executable, "-c", "print('child stdout')"],
+                    cwd=str(Path.cwd()),
+                    step_name="contract smoke",
+                )
+                self.assertTrue(ok)
+                return {}
+
+            with (
+                mock.patch.object(batch, "dispatch_command", side_effect=dispatch),
+                mock.patch.object(
+                    batch.legacy,
+                    "_machine_subprocess_diagnostic_stream",
+                    return_value=child_diagnostics,
+                ),
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = batch.main(["doctor", "--output", "json", "--compact"])
+
+            child_diagnostics.flush()
+            child_diagnostics.seek(0)
+            child_output = child_diagnostics.read()
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["command"], "doctor")
+        self.assertNotIn("child stdout", stdout.getvalue())
+        self.assertIn("child stdout", child_output)
+        self.assertIn("python progress", stderr.getvalue())
 
     def test_check_json_exposes_safety_and_artifacts(self):
         manifest = {

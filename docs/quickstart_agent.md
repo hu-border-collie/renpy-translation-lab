@@ -30,7 +30,7 @@ python gemini_translate_batch.py check <manifest> --output json
 python gemini_translate_batch.py apply <manifest> --output json
 ```
 
-JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning 和原有文本摘要会写入 stderr，完整 Batch 控制台日志仍会落盘。成功结果使用版本化 envelope：
+JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning、prepare 子进程输出和原有文本摘要会实时写入 stderr，完整 Batch 控制台日志仍会落盘。成功结果使用版本化 envelope：
 
 ```json
 {
@@ -65,7 +65,7 @@ JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning �
 | `5` | 输入、配置或状态已失效 | stale check、manifest/results 漂移、前置产物缺失 |
 | `6` | 远端临时错误，可稍后重试 | rate limit、quota、timeout、service unavailable |
 
-严格模式的错误 envelope 可能使用 `STALE_STATE`、`PRECONDITION_FAILED`、`COMMAND_BLOCKED`、`REMOTE_RETRYABLE`、`COMMAND_REFUSED` 或 `INTERNAL_ERROR`。同时读取 `retryable`、`suggested_action` 和权威的 `details.semantic_exit_code`，不要解析 `message` 文本。未启用严格模式时保持 schema v1 的兼容行为：拒绝类错误仍为 `COMMAND_REFUSED`，意外异常仍为 `INTERNAL_ERROR`，且不承诺 `semantic_exit_code`。
+严格模式的错误 envelope 可能使用 `STALE_STATE`、`PRECONDITION_FAILED`、`COMMAND_BLOCKED`、`REMOTE_RETRYABLE`、`COMMAND_REFUSED` 或 `INTERNAL_ERROR`。Manifest 读取还会使用 `INVALID_MANIFEST_JSON`、`INVALID_MANIFEST_ENCODING`、`INVALID_MANIFEST_SHAPE` 或 `MANIFEST_UNREADABLE`；这些错误在严格模式下退出 `5`。同时读取 `retryable`、`suggested_action` 和权威的 `details.semantic_exit_code`，不要解析 `message` 文本。未启用严格模式时保持 schema v1 的兼容退出行为。
 
 
 ## 严格非交互与显式 manifest
@@ -100,6 +100,7 @@ python gemini_translate_batch.py status <manifest> --output json --output-file .
 - `--compact` 移除缩进和多余空格，但仍输出一个以换行结尾的合法 JSON 文档；
 - `--fields` 使用点路径投影结果，保留嵌套结构；可一次传入多个路径、用逗号分隔，或重复传入该选项；
 - 请求的可选路径不存在时会被省略，命令不会因此失败；列表不支持按下标继续投影，应选择整个列表字段；
+- 空路径、连续点等非法字段路径会在 workflow 执行前返回 `error.code=INVALID_FIELD_PATH` 和退出码 `2`；
 - `--output-file` 将最终 JSON 原子写入指定路径，并保持 stdout 为空；父目录会按需创建；
 - 文件中的 `artifacts.output_file` 记录绝对输出路径，除非 `--fields` 主动将它裁掉；
 - 三个选项都必须显式配合 `--output json`，不会改变文本模式。
