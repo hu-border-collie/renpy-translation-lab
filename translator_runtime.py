@@ -4146,7 +4146,13 @@ def normalize_result_items(payload):
     )
 
 
-def call_gemini_sdk(prompt, items, usage_run_id=''):
+def call_gemini_sdk(
+    prompt,
+    items,
+    usage_run_id='',
+    usage_buffer=None,
+    usage_operation_id='',
+):
     """Calls the explicitly configured synchronous backend."""
     model_name = get_current_model()
     generation_config = {
@@ -4182,8 +4188,7 @@ def call_gemini_sdk(prompt, items, usage_run_id=''):
     if usage_run_id and BASE_DIR:
         item_ids = [str(item.get('id') or '') for item in items]
         try:
-            project_id = model_usage_ledger.project_identity(BASE_DIR)['project_id']
-            model_usage_ledger.record_generation_usage(
+            record = model_usage_ledger.build_usage_record(
                 game_root=BASE_DIR,
                 task_mode='translation',
                 stage='sync_translation',
@@ -4191,7 +4196,7 @@ def call_gemini_sdk(prompt, items, usage_run_id=''):
                 model=result.model,
                 usage_metadata=result.usage_metadata,
                 response_payload=result.response_payload,
-                operation_id=f'sync-translation-{project_id[:20]}',
+                operation_id=usage_operation_id or usage_run_id,
                 run_id=usage_run_id,
                 execution_mode=result.execution_mode,
                 source_key='|'.join(item_ids),
@@ -4200,6 +4205,10 @@ def call_gemini_sdk(prompt, items, usage_run_id=''):
                     'item_ids': item_ids,
                 },
             )
+            if usage_buffer is not None:
+                usage_buffer.append(record)
+            else:
+                model_usage_ledger.UsageLedger(BASE_DIR).add_records([record])
         except (OSError, ValueError, model_usage_ledger.UsageLedgerError) as exc:
             print(
                 f'Warning: Model usage ledger record failed: {exc}',
@@ -4220,7 +4229,13 @@ def call_gemini_sdk(prompt, items, usage_run_id=''):
     detail = f" ({'; '.join(diagnostics)})" if diagnostics else ""
     raise ValueError(f"Invalid response from API. Missing structured text{detail}.")
 
-def process_batch(batch, replacements, usage_run_id=''):
+def process_batch(
+    batch,
+    replacements,
+    usage_run_id='',
+    usage_buffer=None,
+    usage_operation_id='',
+):
     glossary_hits = retrieve_sync_glossary_hits(batch) if SYNC_RAG_ENABLED else []
     history_hits, rag_stats = retrieve_sync_history_hits(batch) if SYNC_RAG_ENABLED else ([], {})
     story_hits = retrieve_sync_story_hits(batch) if SYNC_STORY_MEMORY_ENABLED else None
@@ -4234,7 +4249,13 @@ def process_batch(batch, replacements, usage_run_id=''):
     )
 
     # Call API (SDK handles connection details)
-    results = call_gemini_sdk(prompt, batch, usage_run_id=usage_run_id)
+    results = call_gemini_sdk(
+        prompt,
+        batch,
+        usage_run_id=usage_run_id,
+        usage_buffer=usage_buffer,
+        usage_operation_id=usage_operation_id,
+    )
 
     if not isinstance(results, list):
         raise RuntimeError(f"API returned {type(results)} instead of list")
@@ -4277,7 +4298,14 @@ def process_batch(batch, replacements, usage_run_id=''):
     return valid_progress_entries
 
 
-def process_batch_with_retry(batch, replacements, retry_depth=0, usage_run_id=''):
+def process_batch_with_retry(
+    batch,
+    replacements,
+    retry_depth=0,
+    usage_run_id='',
+    usage_buffer=None,
+    usage_operation_id='',
+):
     if retry_depth >= 5:
         log_failure(batch, "Max retry depth reached")
         return []
@@ -4289,7 +4317,13 @@ def process_batch_with_retry(batch, replacements, retry_depth=0, usage_run_id=''
             # Respect rate limits
             time.sleep(get_random_delay())
 
-            return process_batch(batch, replacements, usage_run_id=usage_run_id)
+            return process_batch(
+                batch,
+                replacements,
+                usage_run_id=usage_run_id,
+                usage_buffer=usage_buffer,
+                usage_operation_id=usage_operation_id,
+            )
 
         except Exception as e:
             error_str = str(e)
@@ -4342,10 +4376,14 @@ def process_batch_with_retry(batch, replacements, retry_depth=0, usage_run_id=''
         r1 = process_batch_with_retry(
             batch[:mid], replacements, retry_depth + 1,
             usage_run_id=usage_run_id,
+            usage_buffer=usage_buffer,
+            usage_operation_id=usage_operation_id,
         )
         r2 = process_batch_with_retry(
             batch[mid:], replacements, retry_depth + 1,
             usage_run_id=usage_run_id,
+            usage_buffer=usage_buffer,
+            usage_operation_id=usage_operation_id,
         )
         return r1 + r2
 
@@ -4895,6 +4933,9 @@ def run_translation(*, prepare=False):
     print(f"Sync backend: {SYNC_BACKEND}")
     print(f"Models: {MODELS}")
     usage_run_id = model_usage_ledger.new_run_id('sync-translation')
+    # One preview invocation is one operation; do not collapse all runs by project_id.
+    usage_operation_id = usage_run_id
+    usage_buffer: list = []
     if SYNC_BACKEND == "gemini":
         print(f"Gemini API Keys Loaded: {len(API_KEYS)}")
     else:
@@ -4905,113 +4946,131 @@ def run_translation(*, prepare=False):
     print(f"Progress log: {PROGRESS_LOG}")
     print("=" * 60)
 
-    if prepare:
-        run_prepare_steps()
-    elif PREP_ENABLED:
-        print("Prepare step skipped in preview mode; use --prepare explicitly if needed.")
-    if not os.path.isdir(TL_DIR):
-        print("WARNING: TL_DIR does not exist in preview mode.")
+    try:
+        if prepare:
+            run_prepare_steps()
+        elif PREP_ENABLED:
+            print("Prepare step skipped in preview mode; use --prepare explicitly if needed.")
+        if not os.path.isdir(TL_DIR):
+            print("WARNING: TL_DIR does not exist in preview mode.")
 
-    files_to_process = []
-    for root, _, files in os.walk(TL_DIR):
-        for filename in files:
-            if not filename.endswith(".rpy"):
-                continue
-            file_path = os.path.join(root, filename)
-            relative_path = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
-            if INCLUDE_FILES or INCLUDE_PREFIXES:
-                allowed = bool(INCLUDE_FILES and relative_path in INCLUDE_FILES)
-                if not allowed and INCLUDE_PREFIXES:
-                    allowed = any(relative_path.startswith(prefix) for prefix in INCLUDE_PREFIXES)
-                if not allowed:
+        files_to_process = []
+        for root, _, files in os.walk(TL_DIR):
+            for filename in files:
+                if not filename.endswith(".rpy"):
                     continue
-            files_to_process.append(file_path)
-    files_to_process.sort(key=lambda value: os.path.normcase(os.path.abspath(value)))
-    print(f"Found {len(files_to_process)} files.")
+                file_path = os.path.join(root, filename)
+                relative_path = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
+                if INCLUDE_FILES or INCLUDE_PREFIXES:
+                    allowed = bool(INCLUDE_FILES and relative_path in INCLUDE_FILES)
+                    if not allowed and INCLUDE_PREFIXES:
+                        allowed = any(relative_path.startswith(prefix) for prefix in INCLUDE_PREFIXES)
+                    if not allowed:
+                        continue
+                files_to_process.append(file_path)
+        files_to_process.sort(key=lambda value: os.path.normcase(os.path.abspath(value)))
+        print(f"Found {len(files_to_process)} files.")
 
-    global_progress = _upgrade_legacy_progress_keys(load_progress(), files_to_process)
-    preview_files = []
-    for file_path in files_to_process:
-        filename = os.path.basename(file_path)
-        progress_key = _progress_key_for_path(file_path)
-        print(f"\nProcessing: {filename}")
-        source_sha256 = file_sha256(file_path)
-        with open(file_path, "r", encoding="utf-8-sig") as handle:
-            lines = handle.readlines()
+        global_progress = _upgrade_legacy_progress_keys(load_progress(), files_to_process)
+        preview_files = []
+        for file_path in files_to_process:
+            filename = os.path.basename(file_path)
+            progress_key = _progress_key_for_path(file_path)
+            print(f"\nProcessing: {filename}")
+            source_sha256 = file_sha256(file_path)
+            with open(file_path, "r", encoding="utf-8-sig") as handle:
+                lines = handle.readlines()
 
-        completed_entries = set(_normalize_progress_entries(global_progress.get(progress_key, [])))
-        tasks = []
-        for task in collect_tasks(lines):
-            if is_non_translatable(task["text"]):
-                continue
-            progress_entry = task.get("progress_entry") or _progress_entry_for_task(task)
-            if progress_entry in completed_entries or _progress_line_entry(task["line"]) in completed_entries:
-                if not FORCE_RETRANSLATE_ENGLISH or not is_english_like(task["text"]):
+            completed_entries = set(_normalize_progress_entries(global_progress.get(progress_key, [])))
+            tasks = []
+            for task in collect_tasks(lines):
+                if is_non_translatable(task["text"]):
                     continue
-            task["id"] = translation_core.build_identity_v2(
-                progress_key,
-                task.get("block_name", "_global"),
-                task.get("block_index", 0),
-                task.get("source_for_id") or task["text"],
-                block_occurrence=task.get("block_occurrence", 1),
-            )
-            task["progress_entry"] = _progress_entry_for_task(task)
-            task["file_rel_path"] = progress_key
-            tasks.append(task)
+                progress_entry = task.get("progress_entry") or _progress_entry_for_task(task)
+                if progress_entry in completed_entries or _progress_line_entry(task["line"]) in completed_entries:
+                    if not FORCE_RETRANSLATE_ENGLISH or not is_english_like(task["text"]):
+                        continue
+                task["id"] = translation_core.build_identity_v2(
+                    progress_key,
+                    task.get("block_name", "_global"),
+                    task.get("block_index", 0),
+                    task.get("source_for_id") or task["text"],
+                    block_occurrence=task.get("block_occurrence", 1),
+                )
+                task["progress_entry"] = _progress_entry_for_task(task)
+                task["file_rel_path"] = progress_key
+                tasks.append(task)
 
-        if not tasks:
-            print("  No new lines to translate.")
-            continue
-        print(f"  Found {len(tasks)} lines to translate.")
+            if not tasks:
+                print("  No new lines to translate.")
+                continue
+            print(f"  Found {len(tasks)} lines to translate.")
 
-        replacements = {}
-        successful_entries = []
-        batch = []
-        current_batch_chars = 0
-        for task in tasks:
-            task_len = len(task["text"])
-            if batch and (
-                len(batch) >= MAX_ITEMS or current_batch_chars + task_len > MAX_CHARS
-            ):
+            replacements = {}
+            successful_entries = []
+            batch = []
+            current_batch_chars = 0
+            for task in tasks:
+                task_len = len(task["text"])
+                if batch and (
+                    len(batch) >= MAX_ITEMS or current_batch_chars + task_len > MAX_CHARS
+                ):
+                    successful_entries.extend(process_batch_with_retry(
+                        batch,
+                        replacements,
+                        usage_run_id=usage_run_id,
+                        usage_buffer=usage_buffer,
+                        usage_operation_id=usage_operation_id,
+                    ))
+                    batch = []
+                    current_batch_chars = 0
+                batch.append(task)
+                current_batch_chars += task_len
+            if batch:
                 successful_entries.extend(process_batch_with_retry(
-                    batch, replacements, usage_run_id=usage_run_id,
+                    batch,
+                    replacements,
+                    usage_run_id=usage_run_id,
+                    usage_buffer=usage_buffer,
+                    usage_operation_id=usage_operation_id,
                 ))
-                batch = []
-                current_batch_chars = 0
-            batch.append(task)
-            current_batch_chars += task_len
-        if batch:
-            successful_entries.extend(process_batch_with_retry(
-                batch, replacements, usage_run_id=usage_run_id,
-            ))
 
-        if replacements:
-            normalized_entries = _normalize_progress_entries(successful_entries)
-            preview_lines = render_replacement_lines(lines, replacements)
-            preview_files.append(
-                {
-                    "relative_path": progress_key,
-                    "source_text": "".join(lines),
-                    "source_sha256": source_sha256,
-                    "preview_text": "".join(preview_lines),
-                    "progress_entries": normalized_entries,
-                    "translated_items": len(normalized_entries),
-                }
-            )
-        print(f"  Previewed {filename}.")
+            if replacements:
+                normalized_entries = _normalize_progress_entries(successful_entries)
+                preview_lines = render_replacement_lines(lines, replacements)
+                preview_files.append(
+                    {
+                        "relative_path": progress_key,
+                        "source_text": "".join(lines),
+                        "source_sha256": source_sha256,
+                        "preview_text": "".join(preview_lines),
+                        "progress_entries": normalized_entries,
+                        "translated_items": len(normalized_entries),
+                    }
+                )
+            print(f"  Previewed {filename}.")
 
-    manifest_path, manifest = sync_translation_preview.create_sync_preview(
-        log_dir=LOG_DIR,
-        project_root=BASE_DIR,
-        tl_dir=TL_DIR,
-        files=preview_files,
-    )
-    report_path = os.path.join(os.path.dirname(manifest_path), "preview.diff")
-    summary = manifest.get("summary") or {}
-    print(f"Sync preview manifest: {manifest_path}")
-    print(f"Sync preview report: {report_path}")
-    print(f"Preview files: {int(summary.get('files_changed') or 0)}")
-    print(f"Preview translations: {int(summary.get('translated_items') or 0)}")
-    print("Preview status: safe")
-    print("No project scripts were modified. Review the diff, then run with --apply MANIFEST.")
-    return manifest_path
+        manifest_path, manifest = sync_translation_preview.create_sync_preview(
+            log_dir=LOG_DIR,
+            project_root=BASE_DIR,
+            tl_dir=TL_DIR,
+            files=preview_files,
+        )
+        report_path = os.path.join(os.path.dirname(manifest_path), "preview.diff")
+        summary = manifest.get("summary") or {}
+        print(f"Sync preview manifest: {manifest_path}")
+        print(f"Sync preview report: {report_path}")
+        print(f"Preview files: {int(summary.get('files_changed') or 0)}")
+        print(f"Preview translations: {int(summary.get('translated_items') or 0)}")
+        print("Preview status: safe")
+        print("No project scripts were modified. Review the diff, then run with --apply MANIFEST.")
+        return manifest_path
+    finally:
+        if usage_buffer and BASE_DIR:
+            try:
+                model_usage_ledger.UsageLedger(BASE_DIR).add_records(usage_buffer)
+            except (OSError, ValueError, model_usage_ledger.UsageLedgerError) as exc:
+                print(
+                    f'Warning: Model usage ledger flush failed: {exc}',
+                    flush=True,
+                )

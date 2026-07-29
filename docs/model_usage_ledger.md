@@ -12,11 +12,13 @@
 <game_root>/translation_usage/usage_ledger.json
 ```
 
-文件中的 `project.game_root` 是规范化绝对路径，`project.project_id` 是该路径的 SHA-256 identity。读取和写入都会核对 identity，不允许把两个游戏项目的记录混入同一文件。写入使用同目录临时文件和原子替换；GUI 只读取该公共账本，不维护第二份统计状态。
+文件中的 `project.game_root` 是规范化绝对路径，`project.project_id` 是该路径的 SHA-256 identity。读取和写入都会核对 identity，不允许把两个游戏项目的记录混入同一文件。写入使用同目录文件锁序列化 load/merge/write，再经 `atomic_io` 临时文件与原子替换落盘；GUI 只读取该公共账本，不维护第二份统计状态。
+
+当前实现仍是单个 JSON 数组，没有 prune/archive。对中小规模项目足够，但不要把它当作最终存储形态；超大账本时写入与查询成本会随记录数增长。
 
 账本包含逐响应记录，主要字段为：
 
-- `operation_id` / `run_id` / `manifest_id`
+- `operation_id` / `run_id` / `manifest_id`（同步预览的 `operation_id` 与当次 `run_id` 对齐，按 run 区分，不按 project 折叠）
 - `task_mode`：`translation`、`revision`、`keyword`、`repair`、`analysis`
 - `stage`：例如 `batch_translation`、`sync_revision`、`compare_variants`、`label`、`route`、`brief`
 - `provider` / `model` / `thinking_level` / `execution_mode`
@@ -34,7 +36,7 @@
 |---|---|---|
 | Gemini Batch | `download` 得到或复用完整 `results.jsonl` 后 | 只读取本地结果，不重新调用 API |
 | 同步关键词 / 订正 | 同步 `results.jsonl` 原子落盘后 | Gemini 与 LiteLLM 使用同一导入器 |
-| 普通同步翻译 | 每个成功响应返回后 | 即使后续 JSON 解析或译文校验失败，已发生的调用仍会记录 |
+| 普通同步翻译 | 预览 run 内内存缓冲，结束时一次写入 | 成功响应先入缓冲；`finally` 统一 flush，因此中途校验失败仍会保留已发生的调用 |
 | repair / probe / A/B | 每个成功响应返回后 | 分别归入 `repair` 或 `analysis` 阶段 |
 | Project Analysis | label、route、brief 成功响应后 | map-reduce 通过 stage-aware recorder 复用同一核心接口 |
 

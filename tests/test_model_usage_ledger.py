@@ -3,7 +3,10 @@ import io
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 import gemini_translate_batch as batch
@@ -217,6 +220,45 @@ class ModelUsageLedgerTests(unittest.TestCase):
             self.assertEqual(report["totals"]["total_tokens_unknown_records"], 1)
             self.assertEqual(report["totals"]["estimated_cost"]["values"], {})
             self.assertEqual(report["totals"]["actual_cost"]["values"], {})
+
+    def test_concurrent_writers_keep_both_records(self):
+        with tempfile.TemporaryDirectory() as game_root:
+            barrier = threading.Barrier(2)
+            original_load = usage.UsageLedger.load
+
+            def slow_load(ledger):
+                payload = original_load(ledger)
+                time.sleep(0.05)
+                return payload
+
+            def write_record(index):
+                barrier.wait()
+                return usage.record_generation_usage(
+                    game_root=game_root,
+                    task_mode="translation",
+                    stage="sync_translation",
+                    provider="gemini",
+                    model="gemini-test",
+                    usage_metadata={"totalTokenCount": index + 1},
+                    response_payload={"responseId": f"concurrent-{index}"},
+                    operation_id="concurrent-operation",
+                    run_id="concurrent-run",
+                    source_key=f"record-{index}",
+                )
+
+            with (
+                mock.patch.object(usage.UsageLedger, "load", slow_load),
+                ThreadPoolExecutor(max_workers=2) as executor,
+            ):
+                results = list(executor.map(write_record, range(2)))
+
+            report = usage.query_usage(game_root)
+            ledger = usage.UsageLedger(game_root)
+
+            self.assertEqual(sum(row["inserted_records"] for row in results), 2)
+            self.assertEqual(report["totals"]["records"], 2)
+            self.assertEqual(report["totals"]["total_tokens"], 3)
+            self.assertFalse(os.path.exists(ledger.lock_path))
 
     def test_project_identity_prevents_cross_root_mixing(self):
         with tempfile.TemporaryDirectory() as first_root, tempfile.TemporaryDirectory() as second_root:
@@ -627,6 +669,84 @@ class ModelUsageLedgerTests(unittest.TestCase):
 
             self.assertTrue(any("累计 1 次调用" in fact for fact in context.facts))
             self.assertTrue(any("12 token" in fact for fact in context.facts))
+
+    def test_gui_diagnostics_surfaces_corrupt_ledger(self):
+        with tempfile.TemporaryDirectory() as game_root:
+            ledger_path = usage.usage_ledger_path(game_root)
+            os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
+            with open(ledger_path, "w", encoding="utf-8") as handle:
+                handle.write("{not-json")
+
+            context = build_diagnostics_context(
+                latest_manifest_path=None,
+                manifest=None,
+                batch_script_path="gemini_translate_batch.py",
+                logs_dir="logs",
+                game_root=game_root,
+            )
+
+            self.assertTrue(
+                any("模型用量账本读取失败" in fact for fact in context.facts)
+            )
+
+    def test_sync_path_buffers_records_until_flush(self):
+        import translator_runtime as runtime
+        from sync_model_backend import SyncGenerationResult, SYNC_EXECUTION_MODE
+
+        with tempfile.TemporaryDirectory() as game_root:
+            previous_base = runtime.BASE_DIR
+            previous_backend = runtime.SYNC_BACKEND
+            runtime.BASE_DIR = game_root
+            runtime.SYNC_BACKEND = "litellm"
+            usage_buffer = []
+            fake_result = SyncGenerationResult(
+                provider="litellm",
+                model="provider/model",
+                execution_mode=SYNC_EXECUTION_MODE,
+                response_payload={"id": "buffered-1"},
+                response_text='[{"id":"a","translation":"你好"}]',
+                finish_reason="stop",
+                usage_metadata={"totalTokenCount": 7},
+            )
+            fake_backend = mock.Mock()
+            fake_backend.generate.return_value = fake_result
+            try:
+                with mock.patch(
+                    "litellm_sync_backend.LiteLLMSyncBackend",
+                    return_value=fake_backend,
+                ), mock.patch.object(
+                    runtime, "get_current_model", return_value="provider/model"
+                ):
+                    runtime.call_gemini_sdk(
+                        "prompt",
+                        [{"id": "a", "text": "Hello"}],
+                        usage_run_id="sync-run-1",
+                        usage_buffer=usage_buffer,
+                        usage_operation_id="sync-run-1",
+                    )
+                self.assertEqual(len(usage_buffer), 1)
+                self.assertFalse(os.path.exists(usage.usage_ledger_path(game_root)))
+
+                usage.UsageLedger(game_root).add_records(usage_buffer)
+                report = usage.query_usage(game_root)
+                self.assertEqual(report["totals"]["records"], 1)
+                self.assertEqual(report["totals"]["total_tokens"], 7)
+                self.assertEqual(
+                    usage.UsageLedger(game_root).load()["records"][0]["operation_id"],
+                    "sync-run-1",
+                )
+            finally:
+                runtime.BASE_DIR = previous_base
+                runtime.SYNC_BACKEND = previous_backend
+
+    def test_import_best_effort_does_not_swallow_system_exit(self):
+        with self.assertRaises(SystemExit):
+            with mock.patch.object(
+                batch,
+                "import_manifest_usage",
+                side_effect=SystemExit("contract failure"),
+            ):
+                batch.import_manifest_usage_best_effort({"_manifest_path": "x"})
 
 
 if __name__ == "__main__":

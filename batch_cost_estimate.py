@@ -112,6 +112,49 @@ def resolve_model_pricing(model_name, pricing_config):
     return best_rates
 
 
+def _coerce_nonnegative_int(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def estimate_usage_cost(
+    model_name,
+    *,
+    prompt_tokens,
+    output_tokens,
+    pricing_config,
+):
+    """Estimate one recorded response from normalized actual token counts.
+
+    Returns ``None`` when pricing or a token counter required by a non-zero
+    rate is unknown. This keeps unknown usage distinct from a real zero cost.
+    """
+    model_rates = resolve_model_pricing(model_name, pricing_config)
+    if not isinstance(model_rates, dict):
+        return None
+    input_rate = _coerce_positive_float(model_rates.get('input_per_million'), 0.0)
+    output_rate = _coerce_positive_float(model_rates.get('output_per_million'), 0.0)
+    if not input_rate and not output_rate:
+        return None
+
+    input_count = _coerce_nonnegative_int(prompt_tokens)
+    output_count = _coerce_nonnegative_int(output_tokens)
+    if input_rate and input_count is None:
+        return None
+    if output_rate and output_count is None:
+        return None
+    estimate = (
+        (float(input_count or 0) * input_rate)
+        + (float(output_count or 0) * output_rate)
+    ) / 1_000_000
+    return round(estimate, 8)
+
+
 def iter_request_text_parts(request_payload):
     request = request_payload.get('request') if isinstance(request_payload, dict) else None
     if not isinstance(request, dict):

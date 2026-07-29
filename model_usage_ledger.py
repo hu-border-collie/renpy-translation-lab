@@ -8,11 +8,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+
+import atomic_io
+import batch_cost_estimate
 
 SCHEMA_VERSION = 1
 USAGE_DIRECTORY_NAME = "translation_usage"
@@ -293,57 +295,6 @@ def extract_actual_cost(
     return None, None, None
 
 
-def resolve_model_pricing(
-    model: str,
-    pricing_config: Mapping[str, Any] | None,
-) -> Mapping[str, Any] | None:
-    config = dict(pricing_config or {})
-    models = config.get("models")
-    if not isinstance(models, Mapping):
-        return None
-    normalized = str(model or "").strip()
-    rates = models.get(normalized)
-    if isinstance(rates, Mapping):
-        return rates
-    best = ""
-    best_rates = None
-    for candidate, candidate_rates in models.items():
-        if (
-            isinstance(candidate, str)
-            and normalized.startswith(candidate)
-            and len(candidate) > len(best)
-            and isinstance(candidate_rates, Mapping)
-        ):
-            best = candidate
-            best_rates = candidate_rates
-    return best_rates
-
-
-def estimate_cost_from_usage(
-    normalized_usage: Mapping[str, Any],
-    model_rates: Mapping[str, Any] | None,
-) -> float | None:
-    rates = dict(model_rates or {})
-    input_rate = _nonnegative_float(rates.get("input_per_million"))
-    output_rate = _nonnegative_float(rates.get("output_per_million"))
-    if input_rate is None and output_rate is None:
-        return None
-    if not (input_rate or output_rate):
-        return None
-
-    prompt = _nonnegative_int(normalized_usage.get("prompt_tokens"))
-    output = _nonnegative_int(normalized_usage.get("billable_output_tokens"))
-    if input_rate and prompt is None:
-        return None
-    if output_rate and output is None:
-        return None
-    estimate = (
-        (float(prompt or 0) * float(input_rate or 0.0))
-        + (float(output or 0) * float(output_rate or 0.0))
-    ) / 1_000_000
-    return round(estimate, 8)
-
-
 def _dedupe_key(
     *,
     project_id: str,
@@ -410,16 +361,25 @@ def build_usage_record(
         usage_metadata=raw_usage,
     )
 
-    rates = resolve_model_pricing(model_name, pricing_config)
+    pricing = dict(pricing_config or {})
     computed_estimate = (
         _nonnegative_float(estimated_cost)
         if estimated_cost is not None
-        else estimate_cost_from_usage(normalized, rates)
+        else batch_cost_estimate.estimate_usage_cost(
+            model_name,
+            prompt_tokens=normalized["prompt_tokens"],
+            output_tokens=normalized["billable_output_tokens"],
+            pricing_config=pricing,
+        )
     )
+    estimate_basis = None
+    if computed_estimate is not None:
+        estimate_basis = (
+            "caller_supplied" if estimated_cost is not None else "configured_pricing"
+        )
     actual_cost, actual_currency, actual_source = extract_actual_cost(
         raw_usage, response_payload
     )
-    pricing = dict(pricing_config or {})
     estimate_currency = (
         str(estimated_cost_currency or pricing.get("currency") or "").strip() or None
     )
@@ -447,9 +407,7 @@ def build_usage_record(
         "provider_usage": raw_usage,
         "estimated_cost": computed_estimate,
         "estimated_cost_currency": estimate_currency if computed_estimate is not None else None,
-        "estimated_cost_basis": (
-            "configured_pricing" if computed_estimate is not None else None
-        ),
+        "estimated_cost_basis": estimate_basis,
         "actual_cost": actual_cost,
         "actual_cost_currency": actual_currency if actual_cost is not None else None,
         "actual_cost_source": actual_source,
@@ -485,6 +443,7 @@ class UsageLedger:
                 "Usage ledger path must stay inside the selected game_root"
             )
         self.path = candidate_path
+        self.lock_path = f"{candidate_path}.lock"
 
     def _empty_payload(self) -> dict[str, Any]:
         now = utc_now_iso()
@@ -527,34 +486,32 @@ class UsageLedger:
         game_root = self.project["game_root"]
         if not os.path.isdir(game_root):
             raise UsageLedgerError(f"game_root does not exist: {game_root}")
-        parent = os.path.dirname(self.path)
-        os.makedirs(parent, exist_ok=True)
-        tmp_path = ""
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=parent,
-                prefix=f".{USAGE_LEDGER_FILENAME}.",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                tmp_path = handle.name
-                json.dump(payload, handle, ensure_ascii=False, indent=2)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(tmp_path, self.path)
+            atomic_io.atomic_write_json(
+                self.path,
+                payload,
+                ensure_ascii=False,
+                indent=2,
+            )
         except OSError as exc:
             raise UsageLedgerError(f"Could not write usage ledger {self.path}: {exc}") from exc
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
 
     def add_records(self, records: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+        game_root = self.project["game_root"]
+        if not os.path.isdir(game_root):
+            raise UsageLedgerError(f"game_root does not exist: {game_root}")
+        try:
+            with atomic_io.exclusive_file_lock(self.lock_path):
+                return self._add_records_unlocked(records)
+        except OSError as exc:
+            raise UsageLedgerError(
+                f"Could not lock usage ledger {self.path}: {exc}"
+            ) from exc
+
+    def _add_records_unlocked(
+        self,
+        records: Iterable[Mapping[str, Any]],
+    ) -> dict[str, Any]:
         payload = self.load()
         stored = list(payload.get("records") or [])
         existing = {

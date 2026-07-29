@@ -20,6 +20,8 @@ from .batch_workflow_support import (
     load_uncertain_submit_facts_from_manifest,
 )
 from .user_copy import (
+    USAGE_LEDGER_COPY,
+    format_notice_fact,
     format_usage_ledger_facts,
     format_job_fact,
     format_job_state_fact,
@@ -825,7 +827,7 @@ def _project_usage_facts(game_root: str | None) -> list[str]:
     try:
         return format_usage_ledger_facts(model_usage_ledger.query_usage(game_root))
     except (OSError, ValueError, model_usage_ledger.UsageLedgerError):
-        return []
+        return [format_notice_fact(USAGE_LEDGER_COPY["load_error"])]
 
 
 def _usage_report_command(

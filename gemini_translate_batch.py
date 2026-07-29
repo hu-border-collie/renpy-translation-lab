@@ -5570,7 +5570,6 @@ def import_manifest_usage_best_effort(manifest, result_path=None):
     except (
         OSError,
         ValueError,
-        SystemExit,
         model_usage_ledger.UsageLedgerError,
     ) as exc:
         print(f'Warning: Model usage ledger import failed: {exc}')

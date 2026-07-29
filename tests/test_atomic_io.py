@@ -19,6 +19,16 @@ class AtomicIoHelperTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding='utf-8'), 'new\n')
             self.assertEqual(list(Path(tmp).glob('*.tmp')), [])
 
+    def test_exclusive_file_lock_serializes_and_releases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = Path(tmp) / 'demo.lock'
+            with atomic_io.exclusive_file_lock(lock_path, timeout=1.0):
+                self.assertTrue(lock_path.is_file())
+                with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
+                    with atomic_io.exclusive_file_lock(lock_path, timeout=0.05):
+                        pass
+            self.assertFalse(lock_path.exists())
+
     def test_atomic_write_preserves_original_when_replace_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'data.json'

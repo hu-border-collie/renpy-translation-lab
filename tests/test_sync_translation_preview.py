@@ -100,7 +100,7 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                 "prefix": "",
             }
 
-            def translate_batch(batch, replacements, usage_run_id=""):
+            def translate_batch(batch, replacements, usage_run_id="", **_kwargs):
                 replacements.setdefault(0, []).append((4, 11, "你好", "", '"'))
                 return [batch[0]["progress_entry"]]
 

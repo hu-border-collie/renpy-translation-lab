@@ -42,6 +42,7 @@ CONTEXT_LIBRARY_COPY = {
 
 USAGE_LEDGER_COPY = {
     "empty": "模型用量：当前项目暂无实际响应记录",
+    "load_error": "模型用量账本读取失败，统计暂不可用",
     "total": "模型用量",
     "recent": "最近一次运行",
     "estimated_cost": "估算成本（非 provider 账单）",

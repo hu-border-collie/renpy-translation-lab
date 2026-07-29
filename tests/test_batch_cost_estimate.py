@@ -50,6 +50,42 @@ class BatchCostEstimateTests(unittest.TestCase):
         self.assertTrue(batch_cost_estimate.cost_estimate_exceeds_max(estimate, 10))
         self.assertFalse(batch_cost_estimate.cost_estimate_exceeds_max(estimate, 12.5))
 
+    def test_estimate_usage_cost_reuses_shared_pricing(self):
+        pricing = {
+            'currency': 'USD',
+            'models': {
+                'gemini-test': {
+                    'input_per_million': 1.0,
+                    'output_per_million': 2.0,
+                }
+            },
+        }
+        self.assertEqual(
+            batch_cost_estimate.estimate_usage_cost(
+                'gemini-test',
+                prompt_tokens=1_000_000,
+                output_tokens=500_000,
+                pricing_config=pricing,
+            ),
+            2.0,
+        )
+        self.assertIsNone(
+            batch_cost_estimate.estimate_usage_cost(
+                'unknown-model',
+                prompt_tokens=10,
+                output_tokens=5,
+                pricing_config=pricing,
+            )
+        )
+        self.assertIsNone(
+            batch_cost_estimate.estimate_usage_cost(
+                'gemini-test',
+                prompt_tokens=None,
+                output_tokens=5,
+                pricing_config=pricing,
+            )
+        )
+
     def test_estimate_final_review_uses_unit_or_request_count(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             jsonl_path = os.path.join(tmp_dir, 'requests.jsonl')
