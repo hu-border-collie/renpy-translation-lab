@@ -10248,6 +10248,14 @@ def add_machine_output_argument(command_parser):
         default='text',
         help='Output human-readable text (default) or one machine-readable JSON document.',
     )
+    command_parser.add_argument(
+        '--strict-exit-codes',
+        action='store_true',
+        help=(
+            'With --output json, return semantic exit codes for needs-action, '
+            'blocked, invalid-state, and retryable outcomes.'
+        ),
+    )
     return command_parser
 
 
@@ -11634,32 +11642,54 @@ def run_machine_command(parser, args):
             envelope = build_machine_success_envelope(command, value, args)
     except SystemExit as exc:
         _write_machine_diagnostics(diagnostics)
-        cli_contract.write_json_envelope(
-            cli_contract.error_envelope(
-                command,
-                code='COMMAND_REFUSED',
-                message=_system_exit_message(exc),
-                details={'exit_code': exc.code if isinstance(exc.code, int) else 1},
-            ),
-            sys.stdout,
+        message = _system_exit_message(exc)
+        classification = cli_contract.classify_error(
+            message,
+            exception_type='SystemExit',
         )
+        envelope = cli_contract.error_envelope(
+            command,
+            code=classification['code'],
+            message=message,
+            retryable=classification['retryable'],
+            suggested_action=classification['suggested_action'],
+            details={
+                'exit_code': exc.code if isinstance(exc.code, int) else 1,
+                'semantic_exit_code': classification['exit_code'],
+            },
+        )
+        cli_contract.write_json_envelope(envelope, sys.stdout)
+        if args.strict_exit_codes:
+            return cli_contract.strict_exit_code(envelope)
         return exc.code if isinstance(exc.code, int) and exc.code else 1
     except Exception as exc:
         _write_machine_diagnostics(diagnostics)
         traceback.print_exc(file=sys.stderr)
-        cli_contract.write_json_envelope(
-            cli_contract.error_envelope(
-                command,
-                code='INTERNAL_ERROR',
-                message=str(exc) or exc.__class__.__name__,
-                details={'exception_type': exc.__class__.__name__},
-            ),
-            sys.stdout,
+        message = str(exc) or exc.__class__.__name__
+        classification = cli_contract.classify_error(
+            message,
+            exception_type=exc.__class__.__name__,
         )
+        envelope = cli_contract.error_envelope(
+            command,
+            code=classification['code'],
+            message=message,
+            retryable=classification['retryable'],
+            suggested_action=classification['suggested_action'],
+            details={
+                'exception_type': exc.__class__.__name__,
+                'semantic_exit_code': classification['exit_code'],
+            },
+        )
+        cli_contract.write_json_envelope(envelope, sys.stdout)
+        if args.strict_exit_codes:
+            return cli_contract.strict_exit_code(envelope)
         return 1
 
     _write_machine_diagnostics(diagnostics)
     cli_contract.write_json_envelope(envelope, sys.stdout)
+    if args.strict_exit_codes:
+        return cli_contract.strict_exit_code(envelope)
     return 0
 
 
@@ -11667,6 +11697,8 @@ def main(argv=None):
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     output = getattr(args, 'output', 'text')
+    if getattr(args, 'strict_exit_codes', False) and output != 'json':
+        parser.error('--strict-exit-codes requires --output json')
     if output == 'json':
         if args.command not in MACHINE_OUTPUT_COMMANDS:
             cli_contract.write_json_envelope(

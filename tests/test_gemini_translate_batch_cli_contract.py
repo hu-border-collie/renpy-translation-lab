@@ -17,6 +17,12 @@ class BatchCliContractTests(unittest.TestCase):
                 args = parser.parse_args([command, "--output", "json"])
                 self.assertEqual(args.command, command)
                 self.assertEqual(args.output, "json")
+                self.assertFalse(args.strict_exit_codes)
+                strict_args = parser.parse_args(
+                    [command, "--output", "json", "--strict-exit-codes"]
+                )
+                self.assertTrue(strict_args.strict_exit_codes)
+
 
     def test_machine_result_builder_covers_manifest_workflow(self):
         args = SimpleNamespace(target="")
@@ -165,9 +171,83 @@ class BatchCliContractTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 1)
         self.assertFalse(payload["ok"])
-        self.assertEqual(payload["error"]["code"], "COMMAND_REFUSED")
+        self.assertEqual(payload["error"]["code"], "STALE_STATE")
         self.assertIn("changed after the last check", payload["error"]["message"])
 
+    def test_strict_check_exit_code_reports_needs_action(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "last_check_summary": {"safety_level": "warn"},
+        }
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "initialize_batch_logging"),
+            mock.patch.object(batch.legacy, "load_config"),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(batch, "check_results", return_value=manifest),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                [
+                    "check",
+                    "manifest.json",
+                    "--output",
+                    "json",
+                    "--strict-exit-codes",
+                ]
+            )
+
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_NEEDS_ACTION)
+        self.assertEqual(json.loads(stdout.getvalue())["status"], "warn")
+
+    def test_strict_system_exit_uses_stale_state_code(self):
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "initialize_batch_logging"),
+            mock.patch.object(batch.legacy, "load_config"),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(
+                batch,
+                "check_results",
+                side_effect=SystemExit("Manifest or results changed after the last check."),
+            ),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                [
+                    "check",
+                    "manifest.json",
+                    "--output",
+                    "json",
+                    "--strict-exit-codes",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_INVALID_STATE)
+        self.assertEqual(payload["error"]["code"], "STALE_STATE")
+        self.assertEqual(
+            payload["error"]["suggested_action"],
+            "run_check_again",
+        )
+
+    def test_strict_exit_codes_requires_json_output(self):
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as raised:
+                batch.main(["doctor", "--strict-exit-codes"])
+
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("requires --output json", stderr.getvalue())
     def test_text_mode_preserves_human_stdout(self):
         stdout = io.StringIO()
 

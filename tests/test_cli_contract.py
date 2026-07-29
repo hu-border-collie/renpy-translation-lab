@@ -53,5 +53,55 @@ class CliContractTests(unittest.TestCase):
         self.assertTrue(stream.getvalue().endswith("\n"))
 
 
+    def test_error_classification_exposes_stable_machine_actions(self):
+        stale = cli_contract.classify_error(
+            "Manifest or results changed after the last check.",
+            exception_type="SystemExit",
+        )
+        retryable = cli_contract.classify_error(
+            "Service unavailable due to rate limit.",
+            exception_type="RuntimeError",
+        )
+
+        self.assertEqual(stale["code"], "STALE_STATE")
+        self.assertEqual(stale["suggested_action"], "run_check_again")
+        self.assertEqual(stale["exit_code"], cli_contract.EXIT_INVALID_STATE)
+        self.assertEqual(retryable["code"], "REMOTE_RETRYABLE")
+        self.assertTrue(retryable["retryable"])
+        self.assertEqual(retryable["exit_code"], cli_contract.EXIT_RETRYABLE)
+
+    def test_strict_exit_code_maps_successful_workflow_states(self):
+        warn = cli_contract.success_envelope("check", status="warn")
+        blocked = cli_contract.success_envelope("doctor", status="blocked")
+        pending = cli_contract.success_envelope(
+            "status",
+            status="JOB_STATE_PENDING",
+        )
+
+        self.assertEqual(
+            cli_contract.strict_exit_code(warn),
+            cli_contract.EXIT_NEEDS_ACTION,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(blocked),
+            cli_contract.EXIT_BLOCKED,
+        )
+        self.assertEqual(cli_contract.strict_exit_code(pending), 0)
+        unknown = cli_contract.success_envelope("check", status="unknown")
+        unclassified_error = cli_contract.error_envelope(
+            "apply",
+            code="COMMAND_REFUSED",
+            message="stopped",
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(unknown),
+            cli_contract.EXIT_INVALID_STATE,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(unclassified_error),
+            cli_contract.EXIT_BLOCKED,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
