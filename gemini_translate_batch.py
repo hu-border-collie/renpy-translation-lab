@@ -34,6 +34,7 @@ import batch_cost_estimate
 import batch_non_chinese_rules
 import batch_submit_recovery
 import cli_contract
+import cli_discovery
 import doctor_recommendations as doctor_rec
 import keyword_glossary_merge
 import prompt_context
@@ -11014,6 +11015,20 @@ def build_arg_parser():
     repair_parser.add_argument('--context-before', type=int, default=2, help='How many prior nearby entries to include as context.')
     repair_parser.add_argument('--context-after', type=int, default=2, help='How many following nearby entries to include as context.')
     repair_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
+    subparsers.add_parser(
+        'capabilities',
+        help='Print machine-readable CLI capabilities and the command index.',
+    )
+    schema_parser = subparsers.add_parser(
+        'schema',
+        help='Print the machine-readable argparse schema for one command.',
+    )
+    schema_parser.add_argument(
+        'schema_command',
+        choices=sorted(subparsers.choices),
+        help='Command whose current argparse schema should be returned.',
+    )
+
 
     return parser
 
@@ -11041,6 +11056,22 @@ def dispatch_command(parser, args):
     if command is None:
         parser.print_help()
         return
+    if command == 'capabilities':
+        payload = cli_discovery.capabilities(
+            parser,
+            cli_version=__version__,
+            machine_output_commands=MACHINE_OUTPUT_COMMANDS,
+            explicit_target_commands=EXPLICIT_TARGET_COMMANDS,
+            result_schema_version=cli_contract.CLI_SCHEMA_VERSION,
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return payload
+
+    if command == 'schema':
+        payload = cli_discovery.command_schema(parser, args.schema_command)
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return payload
+
 
     if command in MACHINE_OUTPUT_COMMANDS:
         validate_machine_invocation(args)
