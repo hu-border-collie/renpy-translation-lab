@@ -71,7 +71,8 @@ WORKSPACE_SKIP_DIR_NAMES = frozenset(
         "__pycache__",
     }
 )
-ADASTRA_UNIVERSE_DIR = "Game_Adastra_Universe"
+# Markers that identify an organized workspace game tree (ingest / series layout).
+WORKSPACE_LAYOUT_MARKERS = ("original", "work", "build")
 
 GAMES_MD_HEADER = """# 游戏状态总表
 
@@ -85,8 +86,8 @@ GAMES_MD_HEADER = """# 游戏状态总表
 
 本表只记录已经纳入整理结构的项目：
 
-- 顶层 `Game_*` 项目。
-- `Game_Adastra_Universe/` 下已经拆分整理的三部作品。
+- 顶层 `Game_*` 单作项目。
+- 系列容器 `Game_*` 下已整理的子作品（子目录含 `original` / `work` / `build` 之一）。
 
 暂不记录顶层压缩包、刚解压但尚未纳入 `Game_*` 结构的目录、工具链、SDK、课程 demo 或日志目录。
 
@@ -95,7 +96,7 @@ GAMES_MD_HEADER = """# 游戏状态总表
 - 游玩状态：`未玩` / `进行中` / `已玩完` / `弃置` / `待确认`
 - 翻译状态：`未开始` / `待提取` / `待反编译` / `待翻译` / `翻译中` / `待润色` / `已完成` / `待确认`
 - 当前版本：优先取 `build_info.json`（含 Ren'Py 常见的 `game/cache/build_info.json`）或 `options.rpy` 的 `config.version`。`script_version.txt` 是 Ren'Py 引擎版本，不作为游戏版本。
-- 术语提取：`glossary.json` / `macro_setting.md` / `extracted_keywords/` / 系列 `shared/` 术语表 / 对话提取批次，均记入备注。
+- 术语提取：`glossary.json` / `macro_setting.md` / `extracted_keywords/` / 系列共用术语表 / 对话提取批次，均记入备注。
 
 ## 项目状态
 
@@ -300,8 +301,52 @@ def source_site_name(raw: object) -> str:
     return hostname
 
 
+def has_workspace_layout_markers(path: Path) -> bool:
+    """True when *path* has at least one of original/ / work/ / build/."""
+    if not path.is_dir():
+        return False
+    return any((path / marker).is_dir() for marker in WORKSPACE_LAYOUT_MARKERS)
+
+
+def iter_series_member_dirs(container: Path) -> list[Path]:
+    """Immediate child dirs under *container* that look like organized games."""
+    if not container.is_dir():
+        return []
+    members: list[Path] = []
+    for child in sorted(container.iterdir(), key=lambda item: item.name.lower()):
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        if has_workspace_layout_markers(child):
+            members.append(child)
+    return members
+
+
+def is_series_container_dir(path: Path) -> bool:
+    """True for a top-level Game_* that holds nested titles, not one game itself.
+
+    Rule (name-agnostic):
+    - the directory itself does **not** have original/work/build markers, and
+    - at least one direct child **does**.
+
+    Resource-only siblings (glossary, notes) under the same container are ignored
+    because they lack layout markers. If the Game_* root itself has markers, it
+    is treated as a single project even when it also has subfolders.
+    """
+    if not path.is_dir():
+        return False
+    if has_workspace_layout_markers(path):
+        return False
+    return bool(iter_series_member_dirs(path))
+
+
 def iter_workspace_project_paths(workspace_root: Path) -> list[str]:
-    """Return relative paths for workspace folders that look like game projects."""
+    """Return relative paths for workspace folders that look like game projects.
+
+    - Ordinary ``Game_*`` roots are registered as one project each.
+    - A ``Game_*`` root that is a series container (no layout markers of its own,
+      but children with original/work/build) contributes nested paths
+      ``Game_Series/Title`` instead of the container itself.
+    """
     paths: list[str] = []
     if not workspace_root.is_dir():
         return paths
@@ -309,14 +354,13 @@ def iter_workspace_project_paths(workspace_root: Path) -> list[str]:
     for child in sorted(workspace_root.iterdir(), key=lambda item: item.name.lower()):
         if not child.is_dir() or child.name in WORKSPACE_SKIP_DIR_NAMES:
             continue
-        if child.name.startswith("Game_") and child.name != ADASTRA_UNIVERSE_DIR:
+        if not child.name.startswith("Game_"):
+            continue
+        if is_series_container_dir(child):
+            for member in iter_series_member_dirs(child):
+                paths.append(f"{child.name}/{member.name}")
+        else:
             paths.append(child.name)
-
-    adastra_root = workspace_root / ADASTRA_UNIVERSE_DIR
-    if adastra_root.is_dir():
-        for child in sorted(adastra_root.iterdir(), key=lambda item: item.name.lower()):
-            if child.is_dir() and not child.name.startswith("."):
-                paths.append(f"{ADASTRA_UNIVERSE_DIR}/{child.name}")
     return paths
 
 
@@ -1906,6 +1950,96 @@ def update_project_manual_fields(
     return project
 
 
+# Batch metadata must survive scan refresh (record-batch writes these into auto).
+_AUTO_PRESERVE_ON_REFRESH = frozenset(
+    {
+        "last_batch_id",
+        "last_batch_manifest",
+        "last_batch_at",
+        "last_batch_summary",
+    }
+)
+# Not user-visible content: wall-clock stamp and which scan mode last ran.
+# (lite→deep would otherwise always look "changed" solely because refresh_mode flips.)
+_AUTO_IGNORE_IN_REFRESH_COMPARE = frozenset({"last_refresh_at", "refresh_mode"})
+
+
+def snapshot_project_refresh_state(project: dict[str, Any] | None) -> str:
+    """Stable fingerprint of fields refresh is allowed to change (excl. timestamps)."""
+    if not isinstance(project, dict):
+        return ""
+    auto = project.get("auto") if isinstance(project.get("auto"), dict) else {}
+    auto_filtered = {
+        key: value
+        for key, value in auto.items()
+        if key not in _AUTO_IGNORE_IN_REFRESH_COMPARE
+    }
+    payload = {
+        "version": project.get("version"),
+        "version_source": project.get("version_source"),
+        "layout_status": project.get("layout_status"),
+        "translation_status": project.get("translation_status"),
+        "translation_status_source": project.get("translation_status_source"),
+        "engine": project.get("engine"),
+        "in_renpy_pipeline": project.get("in_renpy_pipeline"),
+        "auto": auto_filtered,
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def format_refresh_result_message(
+    *,
+    mode: str,
+    refreshed_count: int,
+    changed_count: int,
+    cancelled: bool = False,
+    total: int | None = None,
+    project_name: str | None = None,
+) -> str:
+    """User-facing refresh outcome: distinguish real status updates from no-ops."""
+    label = "深度" if mode == REFRESH_MODE_DEEP else "快速"
+    if cancelled:
+        total_text = total if total is not None else refreshed_count
+        base = f"{label}刷新已停止；已完成 {refreshed_count}/{total_text} 个项目"
+        if changed_count > 0:
+            return f"{base}；其中 {changed_count} 个有状态更新。"
+        return f"{base}。"
+    if project_name is not None:
+        if changed_count > 0:
+            return f"已{label}刷新项目 {project_name}；状态有更新。"
+        return f"已{label}刷新项目 {project_name}；与上次相比没有新增变更。"
+    if changed_count <= 0:
+        return f"已{label}刷新全部 {refreshed_count} 个项目；与上次相比没有新增变更。"
+    return (
+        f"已{label}刷新全部 {refreshed_count} 个项目；"
+        f"其中 {changed_count} 个状态有更新。"
+    )
+
+
+def _preserve_auto_fields_across_refresh(
+    previous_auto: dict[str, Any] | None,
+    new_auto: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep batch metadata across scan refresh.
+
+    ``scan_project_auto`` builds a fresh ``auto`` dict; without this merge,
+    ``record-batch`` fields would be wiped on every refresh. Non-empty values
+    from *previous_auto* for keys in ``_AUTO_PRESERVE_ON_REFRESH`` overwrite the
+    corresponding entries in *new_auto*. Missing keys, ``None``, and empty
+    strings in the previous snapshot are ignored so a blank previous value
+    cannot erase a newly written field.
+    """
+    if not isinstance(previous_auto, dict):
+        return new_auto
+    for key in _AUTO_PRESERVE_ON_REFRESH:
+        if key not in previous_auto:
+            continue
+        value = previous_auto.get(key)
+        if value not in (None, ""):
+            new_auto[key] = value
+    return new_auto
+
+
 def refresh_project(
     registry: dict[str, Any],
     project_id: str,
@@ -1918,8 +2052,9 @@ def refresh_project(
         return None
 
     deep = mode == REFRESH_MODE_DEEP
+    previous_auto = project.get("auto") if isinstance(project.get("auto"), dict) else {}
     auto = scan_project_auto(workspace_root, project, deep=deep)
-    project["auto"] = auto
+    project["auto"] = _preserve_auto_fields_across_refresh(previous_auto, auto)
 
     current_version = str(project.get("version") or "").strip()
     version_is_placeholder = current_version in {"", "待确认"}
@@ -1949,7 +2084,12 @@ def refresh_all(
     mode: str = REFRESH_MODE_LITE,
     on_progress: ProgressCallback | None = None,
     should_cancel: CancelCheck | None = None,
-) -> tuple[int, bool]:
+) -> tuple[int, bool, int]:
+    """Refresh every project.
+
+    Returns ``(completed_count, cancelled, changed_count)`` where *changed_count*
+    is how many projects had a real status/auto delta (excluding refresh time).
+    """
     projects = [
         project
         for project in registry.get("projects", [])
@@ -1957,18 +2097,33 @@ def refresh_all(
     ]
     total = len(projects)
     count = 0
+    changed_count = 0
     mode_label = "深度" if mode == REFRESH_MODE_DEEP else "快速"
     for index, project in enumerate(projects, start=1):
         if should_cancel and should_cancel():
-            registry["update_summary"] = f"{mode_label}刷新已停止；已完成 {count}/{total} 个项目"
-            return count, True
+            registry["update_summary"] = format_refresh_result_message(
+                mode=mode,
+                refreshed_count=count,
+                changed_count=changed_count,
+                cancelled=True,
+                total=total,
+            )
+            return count, True, changed_count
         project_id = str(project["id"])
         if on_progress is not None:
             on_progress(index, total, str(project.get("name") or project_id))
+        before = snapshot_project_refresh_state(project)
         refresh_project(registry, project_id, workspace_root=workspace_root, mode=mode)
+        after = snapshot_project_refresh_state(find_project(registry, project_id))
+        if before != after:
+            changed_count += 1
         count += 1
-    registry["update_summary"] = f"已{mode_label}刷新 {count} 个项目自动状态"
-    return count, False
+    registry["update_summary"] = format_refresh_result_message(
+        mode=mode,
+        refreshed_count=count,
+        changed_count=changed_count,
+    )
+    return count, False, changed_count
 
 
 def render_translation_status(project: dict[str, Any]) -> str:
@@ -2432,17 +2587,26 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[{current}/{total}] {name}", flush=True)
 
         if args.all:
-            count, _cancelled = refresh_all(
+            count, _cancelled, changed_count = refresh_all(
                 registry,
                 workspace_root=workspace,
                 mode=mode,
                 on_progress=_cli_progress,
             )
             save_registry(registry_path, registry)
-            print(f"Refreshed {count} projects ({mode}) -> {registry_path}")
+            print(
+                format_refresh_result_message(
+                    mode=mode,
+                    refreshed_count=count,
+                    changed_count=changed_count,
+                )
+            )
+            print(f"-> {registry_path}")
         else:
             if mode == REFRESH_MODE_DEEP:
                 _cli_progress(1, 1, args.project_id)
+            existing = find_project(registry, args.project_id)
+            before = snapshot_project_refresh_state(existing)
             project = refresh_project(
                 registry,
                 args.project_id,
@@ -2453,7 +2617,19 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Unknown project id: {args.project_id}", file=sys.stderr)
                 return 1
             save_registry(registry_path, registry)
-            print(f"Refreshed project {args.project_id} ({mode}) -> {registry_path}")
+            changed_count = (
+                0 if before == snapshot_project_refresh_state(project) else 1
+            )
+            name = str(project.get("name") or args.project_id)
+            print(
+                format_refresh_result_message(
+                    mode=mode,
+                    refreshed_count=1,
+                    changed_count=changed_count,
+                    project_name=name,
+                )
+            )
+            print(f"-> {registry_path}")
         return 0
 
     if args.command == "render-md":

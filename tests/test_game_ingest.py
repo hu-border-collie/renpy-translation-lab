@@ -24,13 +24,13 @@ def _write_min_renpy_install(root: Path, *, title: str = "Demo") -> None:
 
 class GameIngestNamingTests(unittest.TestCase):
     def test_suggest_game_name_from_zip_stem(self):
-        path = Path("Glory Hounds-6.7.zip")
+        path = Path("Sample Title-1.0.zip")
         name = game_ingest.suggest_game_name(path)
         self.assertTrue(name)
         self.assertNotIn(".zip", name.lower())
 
     def test_game_name_to_folder_latin_words(self):
-        self.assertEqual(game_ingest.game_name_to_folder("Glory Hounds"), "Game_GloryHounds")
+        self.assertEqual(game_ingest.game_name_to_folder("Sample Title"), "Game_SampleTitle")
         self.assertEqual(game_ingest.game_name_to_folder("Custom Title"), "Game_CustomTitle")
 
     def test_game_name_to_folder_strips_existing_prefix(self):

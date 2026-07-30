@@ -242,13 +242,63 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
                 dialog._refresh_current_project()
                 start_mock.assert_called_once()
             with mock.patch(
-                "gui_qt.games_registry_panel.prompt_render_games_md_after_refresh",
-                return_value=RegistryActionResult(True, "已跳过 GAMES.md 同步。"),
-            ):
+                "gui_qt.games_registry_panel.report_registry_refresh_completion",
+                return_value=RegistryActionResult(
+                    True,
+                    "已快速刷新项目 Example；状态有更新。 已跳过 GAMES.md 同步。",
+                    status_changed=True,
+                ),
+            ) as report_mock:
                 dialog._on_refresh_completed(
-                    RegistryActionResult(True, "已快速刷新项目 Example。")
+                    RegistryActionResult(
+                        True,
+                        "已快速刷新项目 Example；状态有更新。",
+                        status_changed=True,
+                    )
                 )
+                report_mock.assert_called_once()
+                self.assertTrue(report_mock.call_args.kwargs.get("status_changed"))
             self.assertIn("已快速刷新项目 Example", dialog._status_label.text())
+
+            with mock.patch(
+                "gui_qt.games_registry_panel.report_registry_refresh_completion",
+                return_value=RegistryActionResult(
+                    True,
+                    "已快速刷新项目 Example；与上次相比没有新增变更。",
+                    status_changed=False,
+                ),
+            ) as report_mock:
+                dialog._on_refresh_completed(
+                    RegistryActionResult(
+                        True,
+                        "已快速刷新项目 Example；与上次相比没有新增变更。",
+                        status_changed=False,
+                    )
+                )
+                report_mock.assert_called_once()
+                self.assertFalse(report_mock.call_args.kwargs.get("status_changed"))
+            self.assertIn("没有新增变更", dialog._status_label.text())
+
+            with mock.patch(
+                "gui_qt.games_registry_panel.report_registry_refresh_completion",
+                return_value=RegistryActionResult(
+                    False,
+                    "已快速刷新项目 Example；状态有更新。 同步 GAMES.md 失败：disk full",
+                    status_changed=True,
+                ),
+            ), mock.patch(
+                "gui_qt.games_registry_panel.message_box_warning",
+            ) as warn_mock:
+                dialog._on_refresh_completed(
+                    RegistryActionResult(
+                        True,
+                        "已快速刷新项目 Example；状态有更新。",
+                        status_changed=True,
+                    )
+                )
+            warn_mock.assert_called_once()
+            self.assertEqual(warn_mock.call_args.args[1], "同步失败")
+            self.assertIn("同步 GAMES.md 失败", dialog._status_label.text())
 
     def test_refresh_keeps_table_enabled_for_scrolling(self):
         with tempfile.TemporaryDirectory() as tmp:

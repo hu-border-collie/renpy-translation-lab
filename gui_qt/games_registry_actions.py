@@ -19,6 +19,8 @@ from games_registry import (
     default_games_md_path,
     discover_new_project_paths,
     empty_registry,
+    find_project,
+    format_refresh_result_message,
     import_from_games_md,
     load_registry,
     merge_discovered_projects,
@@ -30,6 +32,7 @@ from games_registry import (
     remove_project,
     save_registry,
     set_registry_preference,
+    snapshot_project_refresh_state,
     update_project_manual_fields,
     write_games_md,
 )
@@ -51,6 +54,9 @@ class RegistryActionResult:
     workspace_root: str = ""
     project_count: int = 0
     created_registry: bool = False
+    # Refresh-only: False when auto/status fingerprint matches the previous run.
+    # Callers should skip "sync GAMES.md?" when this is False.
+    status_changed: bool = True
 
 
 def _registry_file(workspace_root: Path) -> Path:
@@ -126,7 +132,7 @@ def refresh_registry_projects(
     label = _mode_label(mode)
 
     if refresh_everything:
-        count, cancelled = refresh_all(
+        count, cancelled, changed_count = refresh_all(
             data,
             workspace_root=workspace_root,
             mode=mode,
@@ -134,28 +140,37 @@ def refresh_registry_projects(
             should_cancel=should_cancel,
         )
         save_registry(registry_path, data)
+        message = str(data.get("update_summary") or "").strip() or format_refresh_result_message(
+            mode=mode,
+            refreshed_count=count,
+            changed_count=changed_count,
+            cancelled=cancelled,
+        )
         if cancelled:
             return RegistryActionResult(
                 False,
-                f"已停止{label}刷新，已完成 {count} 个项目。",
+                message,
                 cancelled=True,
+                status_changed=changed_count > 0,
             )
-        return RegistryActionResult(True, f"已{label}刷新全部 {count} 个项目。")
+        return RegistryActionResult(
+            True,
+            message,
+            status_changed=changed_count > 0,
+        )
 
     if not project_id:
         return RegistryActionResult(False, "未指定要刷新的项目。")
 
+    existing = find_project(data, project_id)
     if on_progress is not None:
-        project = next(
-            (item for item in data.get("projects", []) if item.get("id") == project_id),
-            None,
-        )
-        name = str((project or {}).get("name") or project_id)
+        name = str((existing or {}).get("name") or project_id)
         on_progress(1, 1, name)
 
     if should_cancel and should_cancel():
         return RegistryActionResult(False, "刷新已取消。", cancelled=True)
 
+    before = snapshot_project_refresh_state(existing)
     project = refresh_project(
         data,
         project_id,
@@ -166,16 +181,26 @@ def refresh_registry_projects(
         return RegistryActionResult(False, f"未找到项目：{project_id}")
     save_registry(registry_path, data)
 
+    name = str(project.get("name") or project_id)
+    changed_count = 0 if before == snapshot_project_refresh_state(project) else 1
     if should_cancel and should_cancel():
-        name = str(project.get("name") or project_id)
         return RegistryActionResult(
             False,
             f"已停止{label}刷新；项目 {name} 的结果已保存。",
             cancelled=True,
+            status_changed=changed_count > 0,
         )
 
-    name = str(project.get("name") or project_id)
-    return RegistryActionResult(True, f"已{label}刷新项目 {name}。")
+    return RegistryActionResult(
+        True,
+        format_refresh_result_message(
+            mode=mode,
+            refreshed_count=1,
+            changed_count=changed_count,
+            project_name=name,
+        ),
+        status_changed=changed_count > 0,
+    )
 
 
 def import_registry_from_games_md(
@@ -434,6 +459,51 @@ def prompt_render_games_md_after_refresh(
         parent,
         workspace_root,
         reason=f"{refresh_message}\n\n刷新结果已写入 games_registry.json。",
+    )
+
+
+def report_registry_refresh_completion(
+    parent: "QWidget | None",
+    workspace_root: Path,
+    *,
+    refresh_message: str,
+    status_changed: bool,
+) -> RegistryActionResult:
+    """Always show a refresh completion dialog; offer GAMES.md sync only if needed."""
+    from .widget_helpers import message_box_information, message_box_question
+
+    message = (refresh_message or "").strip() or "刷新已完成。"
+    if not status_changed:
+        message_box_information(
+            parent,
+            "刷新完成",
+            f"{message}\n\n总表自动状态与上次一致，无需同步 GAMES.md。",
+        )
+        return RegistryActionResult(True, message, status_changed=False)
+
+    reply = message_box_question(
+        parent,
+        "刷新完成",
+        f"{message}\n\n"
+        "结果已写入 games_registry.json。是否同步更新 GAMES.md？\n\n"
+        "说明：games_registry.json 是真源；同步会用 JSON 覆盖 GAMES.md 的表格区。",
+        yes_text="同步 GAMES.md",
+        no_text="完成",
+        default="yes",
+    )
+    if reply != "yes":
+        return RegistryActionResult(
+            True,
+            f"{message} 已跳过 GAMES.md 同步。".strip(),
+            status_changed=True,
+        )
+    render_result = render_registry_games_md(workspace_root)
+    combined = f"{message} {render_result.message}".strip()
+    return RegistryActionResult(
+        render_result.ok,
+        combined,
+        rendered_games_md=render_result.rendered_games_md,
+        status_changed=True,
     )
 
 

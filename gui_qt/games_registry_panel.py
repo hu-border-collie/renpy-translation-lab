@@ -55,6 +55,7 @@ from .games_registry_actions import (
     discover_registry_projects,
     import_registry_from_games_md,
     prompt_render_games_md_after_refresh,
+    report_registry_refresh_completion,
     render_registry_games_md,
     save_registry_dialog_preference,
     save_registry_project_fields,
@@ -1781,13 +1782,16 @@ class GamesRegistryPanel(QWidget):
         if self._workspace_root is None:
             self._status_label.setText(message)
             return
-        render_result = prompt_render_games_md_after_refresh(
+        report = report_registry_refresh_completion(
             self,
             self._workspace_root,
-            message,
+            refresh_message=message,
+            status_changed=result.status_changed,
         )
-        if render_result.message:
-            message = f"{message} {render_result.message}".strip()
+        if report.message:
+            message = report.message
+        if not report.ok:
+            message_box_warning(self, "同步失败", message)
         self._status_label.setText(message)
 
     def _on_row_activated(self, row_index: int, _column: int) -> None:
