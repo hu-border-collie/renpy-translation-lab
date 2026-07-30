@@ -34,8 +34,8 @@ class GamesRegistryTests(unittest.TestCase):
 
     def test_slugify_project_id_handles_nested_paths(self):
         self.assertEqual(
-            registry.slugify_project_id("Game_Adastra_Universe/Adastra", "Adastra"),
-            "game_adastra_universe_adastra",
+            registry.slugify_project_id("Game_SeriesPack/TitleA", "TitleA"),
+            "game_seriespack_titlea",
         )
 
     def test_import_from_games_md_writes_registry(self):
@@ -372,7 +372,7 @@ class GamesRegistryTests(unittest.TestCase):
                 return registry["projects"][0]
 
             with mock.patch.object(registry, "refresh_project", side_effect=fake_refresh):
-                count, cancelled = registry.refresh_all(
+                count, cancelled, changed_count = registry.refresh_all(
                     payload,
                     workspace_root=workspace,
                     should_cancel=lambda: len(calls) >= 1,
@@ -380,6 +380,7 @@ class GamesRegistryTests(unittest.TestCase):
 
             self.assertEqual(count, 1)
             self.assertTrue(cancelled)
+            self.assertEqual(changed_count, 0)
 
     def test_refresh_project_updates_auto_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -422,20 +423,130 @@ class GamesRegistryTests(unittest.TestCase):
                 {"待翻译", "待润色", "未开始", "待提取"},
             )
 
+    def test_refresh_preserves_batch_meta_and_reports_no_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project_root = workspace / "Game_Example"
+            tl_dir = project_root / "work" / "game" / "tl" / "schinese"
+            tl_dir.mkdir(parents=True)
+            (tl_dir / "common.rpy").write_text(
+                '# line\n    new "hello"\n',
+                encoding="utf-8",
+            )
+            (project_root / "original" / "game").mkdir(parents=True)
+            payload = {
+                "workspace_root": workspace.as_posix(),
+                "projects": [
+                    {
+                        "id": "game_example",
+                        "name": "Example",
+                        "path": "Game_Example",
+                        "engine": "renpy",
+                        "in_renpy_pipeline": True,
+                        "translation_status_source": "scan",
+                        "translation_status": "",
+                        "auto": {
+                            "last_batch_id": "job_001",
+                            "last_batch_summary": "写回 2 文件",
+                        },
+                    }
+                ],
+            }
+            registry.refresh_project(payload, "game_example", workspace_root=workspace)
+            first = payload["projects"][0]
+            self.assertEqual(first["auto"]["last_batch_id"], "job_001")
+            self.assertEqual(first["auto"]["last_batch_summary"], "写回 2 文件")
+            before = registry.snapshot_project_refresh_state(first)
+            first_stamp = first["auto"]["last_refresh_at"]
+
+            registry.refresh_project(payload, "game_example", workspace_root=workspace)
+            second = payload["projects"][0]
+            self.assertEqual(second["auto"]["last_batch_id"], "job_001")
+            self.assertEqual(before, registry.snapshot_project_refresh_state(second))
+            # Timestamp always rewrites; may share the same second on fast machines.
+            self.assertTrue(second["auto"]["last_refresh_at"])
+            self.assertTrue(first_stamp)
+
+            count, cancelled, changed = registry.refresh_all(
+                payload,
+                workspace_root=workspace,
+            )
+            self.assertEqual((count, cancelled, changed), (1, False, 0))
+            self.assertIn("没有新增变更", payload["update_summary"])
+
+    def test_format_refresh_result_message_variants(self):
+        self.assertIn(
+            "没有新增变更",
+            registry.format_refresh_result_message(
+                mode=registry.REFRESH_MODE_LITE,
+                refreshed_count=3,
+                changed_count=0,
+            ),
+        )
+        self.assertIn(
+            "其中 2 个状态有更新",
+            registry.format_refresh_result_message(
+                mode=registry.REFRESH_MODE_DEEP,
+                refreshed_count=5,
+                changed_count=2,
+            ),
+        )
+        self.assertIn(
+            "没有新增变更",
+            registry.format_refresh_result_message(
+                mode=registry.REFRESH_MODE_LITE,
+                refreshed_count=1,
+                changed_count=0,
+                project_name="Example",
+            ),
+        )
+
     def test_iter_workspace_project_paths_finds_game_dirs(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             (workspace / "Game_Alpha").mkdir()
             (workspace / "Game_Beta").mkdir()
             (workspace / "renpy-translation-lab").mkdir()
-            adastra = workspace / "Game_Adastra_Universe" / "Adastra"
-            adastra.mkdir(parents=True)
+            # Single project that happens to have layout markers at root.
+            leaf = workspace / "Game_Leaf"
+            leaf.mkdir()
+            (leaf / "work").mkdir()
+            # Series container: no markers at root; members + resource-only siblings.
+            series = workspace / "Game_SeriesPack"
+            title_a = series / "TitleA"
+            title_a.mkdir(parents=True)
+            (title_a / "original").mkdir()
+            title_b = series / "TitleB"
+            title_b.mkdir(parents=True)
+            (title_b / "build").mkdir()
+            shared = series / "shared"
+            shared.mkdir()
+            (shared / "TERMS.md").write_text("# terms\n", encoding="utf-8")
+            bare = series / "notes_only"
+            bare.mkdir()
+            # Non-series Game_* that only has resource subdirs stays a single path.
+            alone = workspace / "Game_OnlyNotes"
+            alone.mkdir()
+            (alone / "docs").mkdir()
 
             paths = registry.iter_workspace_project_paths(workspace)
             self.assertEqual(
                 paths,
-                ["Game_Alpha", "Game_Beta", "Game_Adastra_Universe/Adastra"],
+                [
+                    "Game_Alpha",
+                    "Game_Beta",
+                    "Game_Leaf",
+                    "Game_OnlyNotes",
+                    "Game_SeriesPack/TitleA",
+                    "Game_SeriesPack/TitleB",
+                ],
             )
+            self.assertNotIn("Game_SeriesPack", paths)
+            self.assertNotIn("Game_SeriesPack/shared", paths)
+            self.assertNotIn("Game_SeriesPack/notes_only", paths)
+            self.assertTrue(registry.is_series_container_dir(series))
+            self.assertFalse(registry.is_series_container_dir(leaf))
+            self.assertFalse(registry.is_series_container_dir(alone))
 
     def test_merge_discovered_projects_adds_new_game_dirs(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -117,6 +117,10 @@ python games_registry.py ingest --source game.zip --name "Glory Hounds"
 
 # 快速刷新全部项目（默认：扫磁盘 + TL 行数，不跑 doctor）
 python games_registry.py refresh --all
+# 完成后会对比刷新前后状态（忽略仅更新的 last_refresh_at）。
+# GUI 总会弹出「刷新完成」汇报：
+# 无实质变化 → 仅说明没有新增变更，不提供同步 GAMES.md；
+# 有变化 → 汇报更新数量，并询问是否同步 GAMES.md。
 
 # 深度刷新单个项目（含 doctor，较慢）
 python games_registry.py refresh --project game_example --deep
@@ -264,7 +268,7 @@ python -m pytest tests/test_game_ingest.py tests/test_games_registry.py tests/te
 
 - 停止刷新只能在**项目之间**生效，无法打断单个项目正在进行的 doctor
 - 快速刷新对 layout 的判断是启发式的，不如深度模式准确
-- 「扫描新项目」只识别顶层 `Game_*` 与 `Game_Adastra_Universe/` 下已整理子目录；**未整理**的目录 / 压缩包请用「导入游戏…」或 `ingest`，不会被 discover 自动登记
+- 「扫描新项目」识别顶层 `Game_*`。若某个 `Game_*` 自身没有 `original` / `work` / `build`，但其直接子目录中有，则视为**系列容器**：只登记这些已整理子作品（路径形如 `Game_Series/Title`），不登记容器本身，也不登记无布局标记的资源子目录（术语表、备注等）。**未整理**的目录 / 压缩包请用「导入游戏…」或 `ingest`，不会被 discover 自动登记
 - `ingest` v1 仅支持目录与 `.zip`（复制、不移动）；不自动 bootstrap-work；目标 `Game_*` 已存在时需换游戏名称
 - 未勾选「打开时自动扫描」时，不会自动写入新发现的项目；需在「维护」中手动点「扫描新项目」或运行 `discover`
 - GUI 可改显示名称，但**不能**通过对话框变更项目路径（`path`）或移动磁盘目录

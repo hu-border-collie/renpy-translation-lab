@@ -88,10 +88,7 @@ def game_name_to_folder(game_name: str) -> str:
         return ""
     if slug in registry.WORKSPACE_SKIP_DIR_NAMES:
         return ""
-    folder = f"Game_{slug}"
-    if folder == registry.ADASTRA_UNIVERSE_DIR:
-        return ""
-    return folder
+    return f"Game_{slug}"
 
 
 def validate_game_name(game_name: str) -> str:

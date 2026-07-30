@@ -18,6 +18,7 @@ from gui_qt.games_registry_actions import (
     record_apply_batch_for_game_root,
     refresh_registry_projects,
     render_registry_games_md,
+    report_registry_refresh_completion,
     save_registry_dialog_preference,
     save_registry_project_fields,
 )
@@ -242,6 +243,50 @@ class GuiGamesRegistryActionsTests(unittest.TestCase):
             self.assertTrue(result.ok)
             data = registry.load_registry(workspace / registry.REGISTRY_FILENAME)
             self.assertTrue(data["preferences"]["auto_discover_on_open"])
+
+    def test_report_registry_refresh_completion_no_change_shows_info_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            self._write_registry(workspace, [])
+            with mock.patch(
+                "gui_qt.widget_helpers.message_box_information",
+            ) as info_mock, mock.patch(
+                "gui_qt.widget_helpers.message_box_question",
+            ) as question_mock:
+                result = report_registry_refresh_completion(
+                    None,
+                    workspace,
+                    refresh_message="已快速刷新全部 3 个项目；与上次相比没有新增变更。",
+                    status_changed=False,
+                )
+            self.assertTrue(result.ok)
+            self.assertFalse(result.status_changed)
+            self.assertIn("没有新增变更", result.message)
+            info_mock.assert_called_once()
+            self.assertEqual(info_mock.call_args.args[1], "刷新完成")
+            question_mock.assert_not_called()
+
+    def test_report_registry_refresh_completion_changed_offers_sync(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            self._write_registry(
+                workspace,
+                [{"id": "demo", "name": "Example", "path": "Game_Example"}],
+            )
+            with mock.patch(
+                "gui_qt.widget_helpers.message_box_question",
+                return_value="no",
+            ) as question_mock:
+                result = report_registry_refresh_completion(
+                    None,
+                    workspace,
+                    refresh_message="已快速刷新全部 1 个项目；其中 1 个状态有更新。",
+                    status_changed=True,
+                )
+            question_mock.assert_called_once()
+            self.assertEqual(question_mock.call_args.args[1], "刷新完成")
+            self.assertTrue(result.ok)
+            self.assertIn("跳过", result.message)
 
     def test_ingest_registry_project(self):
         with tempfile.TemporaryDirectory() as tmp:
