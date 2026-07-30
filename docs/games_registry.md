@@ -112,8 +112,8 @@ python games_registry.py discover
 
 # 从游戏目录或 .zip 复制整理为 Game_*/original/work/build 并登记
 python games_registry.py ingest --source path\to\game_or.zip
-python games_registry.py ingest --source game.zip --name "Glory Hounds"
-# → 磁盘目录 Game_GloryHounds，总表显示名 “Glory Hounds”；不移动源、不自动 bootstrap-work
+python games_registry.py ingest --source game.zip --name "Sample Title"
+# → 磁盘目录 Game_SampleTitle，总表显示名 “Sample Title”；不移动源、不自动 bootstrap-work
 
 # 快速刷新全部项目（默认：扫磁盘 + TL 行数，不跑 doctor）
 python games_registry.py refresh --all

@@ -33,14 +33,14 @@ class GuiGameIngestDialogTests(unittest.TestCase):
 
             dialog = GameIngestDialog(None, workspace_root=workspace)
             dialog._set_source(real_src)
-            dialog._name_edit.setText("Glory Hounds")
+            dialog._name_edit.setText("Sample Title")
             self._app.processEvents()
-            self.assertEqual(dialog._folder_preview.text(), "Game_GloryHounds")
+            self.assertEqual(dialog._folder_preview.text(), "Game_SampleTitle")
             # 将创建到 = workspace destination (native path), not the source path.
-            expected_dest = str(workspace.resolve() / "Game_GloryHounds")
+            expected_dest = str(workspace.resolve() / "Game_SampleTitle")
             self.assertEqual(dialog._path_preview.text(), expected_dest)
             self.assertTrue(
-                dialog._path_preview.text().endswith("Game_GloryHounds")
+                dialog._path_preview.text().endswith("Game_SampleTitle")
             )
             # Must not clip to bare drive letter only (the screenshot bug: "C:").
             self.assertNotEqual(dialog._path_preview.text().rstrip("/\\"), "C:")

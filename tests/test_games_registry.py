@@ -18,10 +18,10 @@ SAMPLE_MD = """# 游戏状态总表
 
 | 项目 | 路径 | 当前版本 | 目录状态 | 游玩状态 | 翻译状态 | 备注 / 下一步 |
 |---|---|---|---|---|---|---|
-| Glory Hounds | `Game_GloryHounds` | 6.7 | 已整理 | 待确认 | 已完成（6.7 增量） | 术语已提取。 |
-| Stranded | `Game_Stranded` | 0.4.0 | 已建 work | 待确认 | 未开始 | work 为空。 |
-| Stranded | `Game_Stranded` | 0.4.0 | duplicate | 待确认 | 未开始 | 应被去重。 |
-| Lookouts | `Game_Lookouts` | 1.3 | Unity 包 | 待确认 | 待确认 | 非 Ren'Py。 |
+| Example Pack | `Game_ExamplePack` | 6.7 | 已整理 | 待确认 | 已完成（6.7 增量） | 术语已提取。 |
+| Sample Title | `Game_SampleTitle` | 0.4.0 | 已建 work | 待确认 | 未开始 | work 为空。 |
+| Sample Title | `Game_SampleTitle` | 0.4.0 | duplicate | 待确认 | 未开始 | 应被去重。 |
+| Other Title | `Game_OtherTitle` | 1.3 | Unity 包 | 待确认 | 待确认 | 非 Ren'Py。 |
 """
 
 
@@ -30,7 +30,7 @@ class GamesRegistryTests(unittest.TestCase):
         projects = registry.parse_games_md_table(SAMPLE_MD)
         paths = [project["path"] for project in projects]
         self.assertEqual(len(projects), 3)
-        self.assertEqual(paths.count("Game_Stranded"), 1)
+        self.assertEqual(paths.count("Game_SampleTitle"), 1)
 
     def test_slugify_project_id_handles_nested_paths(self):
         self.assertEqual(
@@ -54,7 +54,7 @@ class GamesRegistryTests(unittest.TestCase):
             self.assertEqual(len(data["projects"]), 3)
             self.assertTrue(registry_path.is_file())
             loaded = registry.load_registry(registry_path)
-            self.assertEqual(loaded["projects"][0]["id"], "game_gloryhounds")
+            self.assertEqual(loaded["projects"][0]["id"], "game_examplepack")
 
     def test_normalize_translation_status_maps_unknown_to_default(self):
         self.assertEqual(registry.normalize_translation_status("  乱写状态  "), "待确认")
@@ -721,9 +721,9 @@ class GamesRegistryTests(unittest.TestCase):
                 {
                     "projects": [
                         {
-                            "id": "game_gloryhounds",
+                            "id": "game_examplepack",
                             "name": "Old Name",
-                            "path": "Game_GloryHounds",
+                            "path": "Game_ExamplePack",
                             "notes": "保留",
                             "auto": {"last_refresh_at": "2026-01-01T00:00:00+00:00"},
                         }
@@ -738,8 +738,8 @@ class GamesRegistryTests(unittest.TestCase):
                 merge=True,
             )
             by_path = {project["path"]: project for project in data["projects"]}
-            self.assertEqual(by_path["Game_GloryHounds"]["name"], "Glory Hounds")
-            self.assertEqual(by_path["Game_GloryHounds"]["auto"]["last_refresh_at"], "2026-01-01T00:00:00+00:00")
+            self.assertEqual(by_path["Game_ExamplePack"]["name"], "Example Pack")
+            self.assertEqual(by_path["Game_ExamplePack"]["auto"]["last_refresh_at"], "2026-01-01T00:00:00+00:00")
 
     def test_remove_project_and_manual_name_update(self):
         payload = {
@@ -1027,7 +1027,7 @@ class GamesRegistryTests(unittest.TestCase):
             self.assertEqual(by_path["Game_Keep"]["auto"]["marker"], 1)
             self.assertIn("Game_New", by_path)
             # SAMPLE_MD paths also merged
-            self.assertIn("Game_GloryHounds", by_path)
+            self.assertIn("Game_ExamplePack", by_path)
 
     def test_corrupt_registry_refuses_apply_and_preserves_file(self):
         with tempfile.TemporaryDirectory() as tmp:
