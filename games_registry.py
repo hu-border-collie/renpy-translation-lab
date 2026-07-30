@@ -1959,8 +1959,9 @@ _AUTO_PRESERVE_ON_REFRESH = frozenset(
         "last_batch_summary",
     }
 )
-# Wall-clock stamp only; always rewritten and not a user-visible status change.
-_AUTO_IGNORE_IN_REFRESH_COMPARE = frozenset({"last_refresh_at"})
+# Not user-visible content: wall-clock stamp and which scan mode last ran.
+# (lite→deep would otherwise always look "changed" solely because refresh_mode flips.)
+_AUTO_IGNORE_IN_REFRESH_COMPARE = frozenset({"last_refresh_at", "refresh_mode"})
 
 
 def snapshot_project_refresh_state(project: dict[str, Any] | None) -> str:
@@ -2019,6 +2020,15 @@ def _preserve_auto_fields_across_refresh(
     previous_auto: dict[str, Any] | None,
     new_auto: dict[str, Any],
 ) -> dict[str, Any]:
+    """Keep batch metadata across scan refresh.
+
+    ``scan_project_auto`` builds a fresh ``auto`` dict; without this merge,
+    ``record-batch`` fields would be wiped on every refresh. Non-empty values
+    from *previous_auto* for keys in ``_AUTO_PRESERVE_ON_REFRESH`` overwrite the
+    corresponding entries in *new_auto*. Missing keys, ``None``, and empty
+    strings in the previous snapshot are ignored so a blank previous value
+    cannot erase a newly written field.
+    """
     if not isinstance(previous_auto, dict):
         return new_auto
     for key in _AUTO_PRESERVE_ON_REFRESH:

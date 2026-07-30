@@ -1790,6 +1790,8 @@ class GamesRegistryPanel(QWidget):
         )
         if report.message:
             message = report.message
+        if not report.ok:
+            message_box_warning(self, "同步失败", message)
         self._status_label.setText(message)
 
     def _on_row_activated(self, row_index: int, _column: int) -> None:

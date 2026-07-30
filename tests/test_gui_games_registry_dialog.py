@@ -279,6 +279,27 @@ class GuiGamesRegistryDialogTests(unittest.TestCase):
                 self.assertFalse(report_mock.call_args.kwargs.get("status_changed"))
             self.assertIn("没有新增变更", dialog._status_label.text())
 
+            with mock.patch(
+                "gui_qt.games_registry_panel.report_registry_refresh_completion",
+                return_value=RegistryActionResult(
+                    False,
+                    "已快速刷新项目 Example；状态有更新。 同步 GAMES.md 失败：disk full",
+                    status_changed=True,
+                ),
+            ), mock.patch(
+                "gui_qt.games_registry_panel.message_box_warning",
+            ) as warn_mock:
+                dialog._on_refresh_completed(
+                    RegistryActionResult(
+                        True,
+                        "已快速刷新项目 Example；状态有更新。",
+                        status_changed=True,
+                    )
+                )
+            warn_mock.assert_called_once()
+            self.assertEqual(warn_mock.call_args.args[1], "同步失败")
+            self.assertIn("同步 GAMES.md 失败", dialog._status_label.text())
+
     def test_refresh_keeps_table_enabled_for_scrolling(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

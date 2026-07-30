@@ -501,6 +501,95 @@ class GamesRegistryTests(unittest.TestCase):
             ),
         )
 
+    def test_snapshot_ignores_refresh_mode_and_timestamp(self):
+        project = {
+            "version": "1.0",
+            "version_source": "build_info",
+            "layout_status": "ready",
+            "translation_status": "待翻译",
+            "translation_status_source": "scan",
+            "engine": "renpy",
+            "in_renpy_pipeline": True,
+            "auto": {
+                "tl_rpy_files": 3,
+                "pending_tasks": 10,
+                "refresh_mode": registry.REFRESH_MODE_LITE,
+                "last_refresh_at": "2026-07-30T00:00:00+00:00",
+                "doctor_layout": "ready",
+                "doctor_mode": "existing_tl_only",
+            },
+        }
+        before = registry.snapshot_project_refresh_state(project)
+        project["auto"]["refresh_mode"] = registry.REFRESH_MODE_DEEP
+        project["auto"]["last_refresh_at"] = "2026-07-30T01:00:00+00:00"
+        after = registry.snapshot_project_refresh_state(project)
+        self.assertEqual(before, after)
+        project["auto"]["pending_tasks"] = 11
+        self.assertNotEqual(before, registry.snapshot_project_refresh_state(project))
+
+    def test_lite_then_deep_refresh_no_false_change_when_doctor_matches(self):
+        """Alternating scan modes must not report a change solely for refresh_mode."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project_root = workspace / "Game_Example"
+            tl_dir = project_root / "work" / "game" / "tl" / "schinese"
+            tl_dir.mkdir(parents=True)
+            (tl_dir / "common.rpy").write_text(
+                '# line\n    new "hello"\n',
+                encoding="utf-8",
+            )
+            (project_root / "original" / "game").mkdir(parents=True)
+            payload = {
+                "workspace_root": workspace.as_posix(),
+                "projects": [
+                    {
+                        "id": "game_example",
+                        "name": "Example",
+                        "path": "Game_Example",
+                        "engine": "renpy",
+                        "in_renpy_pipeline": True,
+                        # Keep derivation source stable so only mode/stamp would flip.
+                        "translation_status_source": "manual",
+                        "translation_status": "待翻译",
+                    }
+                ],
+            }
+            registry.refresh_project(
+                payload,
+                "game_example",
+                workspace_root=workspace,
+                mode=registry.REFRESH_MODE_LITE,
+            )
+            auto = payload["projects"][0]["auto"]
+            layout = str(auto.get("doctor_layout") or "")
+            mode = str(auto.get("doctor_mode") or "")
+            before = registry.snapshot_project_refresh_state(payload["projects"][0])
+
+            with mock.patch.object(
+                registry,
+                "_doctor_layout_snapshot",
+                return_value=(layout, mode),
+            ):
+                registry.refresh_project(
+                    payload,
+                    "game_example",
+                    workspace_root=workspace,
+                    mode=registry.REFRESH_MODE_DEEP,
+                )
+            after = registry.snapshot_project_refresh_state(payload["projects"][0])
+            self.assertEqual(before, after)
+            self.assertEqual(
+                payload["projects"][0]["auto"]["refresh_mode"],
+                registry.REFRESH_MODE_DEEP,
+            )
+
+            count, cancelled, changed = registry.refresh_all(
+                payload,
+                workspace_root=workspace,
+                mode=registry.REFRESH_MODE_LITE,
+            )
+            self.assertEqual((count, cancelled, changed), (1, False, 0))
+
     def test_iter_workspace_project_paths_finds_game_dirs(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
