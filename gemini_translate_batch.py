@@ -3164,15 +3164,20 @@ def create_batch_package(display_name_override='', skip_prepare=False):
     package_name = f'{timestamp}_{guess_project_slug()}'
     package_dir = os.path.join(BATCH_JOBS_DIR, package_name)
     os.makedirs(package_dir, exist_ok=True)
+    coverage_export_warnings = []
     coverage_snapshot = getattr(file_jobs, 'coverage_snapshot', None)
     if coverage_snapshot is not None:
-        export_coverage_package(
-            os.path.join(package_dir, 'coverage'),
-            coverage_snapshot.project,
-            coverage_snapshot.inventory,
-            coverage_snapshot.report,
-            review_policy=coverage_snapshot.review_policy,
-        )
+        try:
+            export_coverage_package(
+                os.path.join(package_dir, 'coverage'),
+                coverage_snapshot.project,
+                coverage_snapshot.inventory,
+                coverage_snapshot.report,
+                review_policy=coverage_snapshot.review_policy,
+            )
+        except (OSError, ValueError) as exc:
+            # Coverage is read-only P1 evidence; do not abort package creation.
+            coverage_export_warnings.append(f'Coverage export skipped: {exc}')
 
     display_name = display_name_override.strip() if display_name_override else ''
     if not display_name:
@@ -3184,6 +3189,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
             handle.write(json.dumps(build_batch_request(chunk), ensure_ascii=False) + '\n')
 
     build_warnings = get_batch_risk_warnings()
+    build_warnings.extend(coverage_export_warnings)
 
     manifest = {
         'version': 2,

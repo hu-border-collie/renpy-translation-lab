@@ -462,6 +462,7 @@ def validate_coverage_report_freshness(
         ("engine", project.engine),
         ("adapter_version", project.adapter_version),
         ("adapter_behavior_digest", adapter_behavior_digest),
+        ("localization_mode", project.localization_mode.value),
         ("source_fingerprint", project.source_fingerprint),
         (
             "project_snapshot_fingerprint",
@@ -806,6 +807,16 @@ def validate_review_record(
     )
     normalized_record = dict(record)
     normalized_record.pop("display_message", None)
+    # Display messages are for humans only and must not affect provenance digests.
+    normalized_record["findings"] = [
+        {
+            key: value
+            for key, value in dict(finding).items()
+            if key != "display_message"
+        }
+        for finding in findings
+        if isinstance(finding, Mapping)
+    ]
     coverage_review_digest = digest_json(normalized_record)
     return ReviewValidation(
         effective_status=effective_status,

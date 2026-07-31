@@ -663,6 +663,233 @@ translate schinese start:
             },
         )
 
+    def test_freshness_marks_localization_mode_mismatch_stale(self):
+        root, tl_dir = self.make_project(
+            {"script.rpy": 'translate schinese start:\n    "Hello there."\n'}
+        )
+        snapshot = build_translation_snapshot(
+            RenPyAdapter(legacy_module=runtime),
+            self.request(root, tl_dir),
+        )
+        payload = snapshot.report.to_dict()
+        payload["localization_mode"] = "source_extraction"
+        freshness = validate_coverage_report_freshness(
+            payload,
+            snapshot.project,
+            adapter_behavior_digest=snapshot.report.adapter_behavior_digest,
+        )
+        self.assertEqual(freshness.effective_status, "stale")
+        self.assertIn("localization_mode", freshness.stale_reasons)
+
+    def test_review_digest_ignores_nested_finding_display_message(self):
+        root, tl_dir = self.make_project(
+            {"script.rpy": 'translate schinese start:\n    "Hello there."\n'}
+        )
+        snapshot = build_translation_snapshot(
+            RenPyAdapter(legacy_module=runtime),
+            self.request(root, tl_dir),
+        )
+        template = build_review_template(snapshot.report)
+        base = copy.deepcopy(template)
+        base["reviewer"] = {
+            "type": "agent",
+            "id": "coverage-agent",
+            "tool": "offline-test",
+            "model": "",
+            "session": "test-session",
+        }
+        base["status"] = "agent_reviewed"
+        base["confirmed_at"] = "2026-07-30T00:00:00Z"
+        base["findings"] = [
+            {
+                "code": "review.false_positive",
+                "candidate_id": snapshot.inventory.candidates[0].candidate_id,
+                "resolved": True,
+                "display_message": "first wording",
+            }
+        ]
+        first = validate_review_record(base, snapshot.report, snapshot.inventory)
+        second_record = copy.deepcopy(base)
+        second_record["findings"][0]["display_message"] = "different wording"
+        second = validate_review_record(
+            second_record,
+            snapshot.report,
+            snapshot.inventory,
+        )
+        self.assertEqual(first.coverage_review_digest, second.coverage_review_digest)
+
+    def test_unpaired_source_marker_preserves_prior_reason_codes(self):
+        source = """translate schinese start:
+    # "Dangling source"
+    old "Old without new"
+"""
+        root, tl_dir = self.make_project({"script.rpy": source})
+        snapshot = build_translation_snapshot(
+            RenPyAdapter(legacy_module=runtime),
+            self.request(root, tl_dir),
+        )
+        unpaired = [
+            candidate
+            for candidate in snapshot.inventory.candidates
+            if "renpy.source_marker_unpaired" in candidate.reason_codes
+        ]
+        self.assertTrue(unpaired)
+        for candidate in unpaired:
+            self.assertEqual(
+                len(candidate.reason_codes),
+                len(set(candidate.reason_codes)),
+            )
+            # Mutation path must keep earlier classification reasons when present.
+            if candidate.structure_kind == "old_source_marker":
+                self.assertIn("renpy.source_marker_unpaired", candidate.reason_codes)
+                self.assertGreaterEqual(len(candidate.reason_codes), 1)
+
+    def test_progress_key_upgrade_normalizes_windows_separators(self):
+        progress = {
+            r"nested\script.rpy": ["id:1"],
+            "top.rpy": ["id:2"],
+        }
+        upgraded = runtime._upgrade_legacy_progress_keys(
+            progress,
+            [
+                str(Path("nested") / "script.rpy"),
+                "top.rpy",
+            ],
+        )
+        self.assertIn("nested/script.rpy", upgraded)
+        self.assertEqual(upgraded["nested/script.rpy"], ["id:1"])
+        self.assertEqual(upgraded["top.rpy"], ["id:2"])
+        self.assertNotIn(r"nested\script.rpy", upgraded)
+
+    def test_sync_preview_export_failure_does_not_block_manifest(self):
+        root, tl_dir = self.make_project(
+            {
+                "script.rpy": (
+                    'translate schinese start:\n'
+                    '    # "Hello"\n'
+                    '    "Hello"\n'
+                )
+            }
+        )
+
+        def translate_batch(batch, replacements, usage_run_id="", **_kwargs):
+            task = batch[0]
+            replacements.setdefault(task["line"], []).append(
+                (task["start"], task["end"], "你好", task.get("prefix") or "", task["quote"])
+            )
+            return [task.get("progress_entry") or f"id:{task['line']}"]
+
+        with (
+            mock.patch.object(runtime, "BASE_DIR", str(root)),
+            mock.patch.object(runtime, "TL_DIR", str(tl_dir)),
+            mock.patch.object(runtime, "LOG_DIR", str(root / "logs")),
+            mock.patch.object(runtime, "SYNC_BACKEND", "litellm"),
+            mock.patch.object(runtime, "PREP_ENABLED", False),
+            mock.patch.object(runtime, "INCLUDE_FILES", set()),
+            mock.patch.object(runtime, "INCLUDE_PREFIXES", set()),
+            mock.patch.object(runtime, "load_config"),
+            mock.patch.object(runtime, "load_translator_settings"),
+            mock.patch.object(runtime, "load_glossary"),
+            mock.patch.object(runtime, "load_progress", return_value={}),
+            mock.patch.object(runtime, "process_batch_with_retry", side_effect=translate_batch),
+            mock.patch.object(
+                runtime,
+                "export_coverage_package",
+                side_effect=ValueError("stale report for test"),
+            ),
+        ):
+            manifest_path = runtime.run_translation()
+
+        self.assertTrue(Path(manifest_path).is_file())
+        self.assertFalse((Path(manifest_path).parent / "coverage").exists())
+
+    def test_batch_package_export_failure_still_writes_manifest(self):
+        import gemini_translate_batch as batch
+
+        root, tl_dir = self.make_project(
+            {
+                "script.rpy": (
+                    'translate schinese start:\n'
+                    '    # "Hello there."\n'
+                    '    "Hello there."\n'
+                )
+            }
+        )
+        jobs_dir = root / "logs" / "batch_jobs"
+        with (
+            mock.patch.object(batch.legacy, "BASE_DIR", str(root)),
+            mock.patch.object(batch.legacy, "TL_DIR", str(tl_dir)),
+            mock.patch.object(batch.legacy, "INCLUDE_FILES", set()),
+            mock.patch.object(batch.legacy, "INCLUDE_PREFIXES", set()),
+            mock.patch.object(batch, "BATCH_JOBS_DIR", str(jobs_dir)),
+            mock.patch.object(
+                batch,
+                "LATEST_MANIFEST_FILE",
+                str(jobs_dir / "latest_manifest.txt"),
+            ),
+            mock.patch.object(batch, "RAG_ENABLED", False),
+            mock.patch.object(batch, "SOURCE_INDEX_ENABLED", False),
+            mock.patch.object(batch, "STORY_MEMORY_ENABLED", False),
+            mock.patch.object(
+                batch,
+                "export_coverage_package",
+                side_effect=ValueError("stale report for test"),
+            ),
+        ):
+            manifest_path = batch.create_batch_package(skip_prepare=True)
+
+        self.assertIsNotNone(manifest_path)
+        manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        self.assertEqual(manifest["manifest_version"], 2)
+        self.assertTrue(
+            any("Coverage export skipped" in item for item in manifest.get("build_warnings") or [])
+        )
+        self.assertTrue((Path(manifest_path).parent / "requests.jsonl").is_file())
+
+    def test_sync_preview_preserves_utf8_bom_in_source_and_preview_text(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        tl_dir = root / "game" / "tl" / "schinese"
+        tl_dir.mkdir(parents=True)
+        target = tl_dir / "script.rpy"
+        body = 'translate schinese start:\n    # "Hello"\n    "Hello"\n'
+        target.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+
+        def translate_batch(batch, replacements, usage_run_id="", **_kwargs):
+            task = batch[0]
+            replacements.setdefault(task["line"], []).append(
+                (task["start"], task["end"], "你好", task.get("prefix") or "", task["quote"])
+            )
+            return [task.get("progress_entry") or f"id:{task['line']}"]
+
+        with (
+            mock.patch.object(runtime, "BASE_DIR", str(root)),
+            mock.patch.object(runtime, "TL_DIR", str(tl_dir)),
+            mock.patch.object(runtime, "LOG_DIR", str(root / "logs")),
+            mock.patch.object(runtime, "SYNC_BACKEND", "litellm"),
+            mock.patch.object(runtime, "PREP_ENABLED", False),
+            mock.patch.object(runtime, "INCLUDE_FILES", set()),
+            mock.patch.object(runtime, "INCLUDE_PREFIXES", set()),
+            mock.patch.object(runtime, "load_config"),
+            mock.patch.object(runtime, "load_translator_settings"),
+            mock.patch.object(runtime, "load_glossary"),
+            mock.patch.object(runtime, "load_progress", return_value={}),
+            mock.patch.object(runtime, "process_batch_with_retry", side_effect=translate_batch),
+            mock.patch.object(runtime, "export_coverage_package"),
+        ):
+            manifest_path = runtime.run_translation()
+
+        package = Path(manifest_path).parent
+        source_snapshot = next((package / "source").rglob("*.rpy"))
+        preview_snapshot = next((package / "preview").rglob("*.rpy"))
+        self.assertTrue(source_snapshot.read_bytes().startswith(b"\xef\xbb\xbf"))
+        self.assertTrue(preview_snapshot.read_bytes().startswith(b"\xef\xbb\xbf"))
+        manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        self.assertEqual(
+            manifest["files"][0]["source_sha256"],
+            hashlib.sha256(target.read_bytes()).hexdigest(),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

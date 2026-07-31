@@ -3593,12 +3593,30 @@ def _upgrade_legacy_progress_keys(progress, file_paths):
     if not isinstance(progress, dict):
         return {}
 
+    # Normalize separators / relative forms first so adapter file_rel_path keys
+    # (always forward-slash) match stored progress keys from Windows paths.
+    original_items = list(progress.items())
+    progress.clear()
+    separator_migrated = False
+    for key, value in original_items:
+        if not isinstance(key, str):
+            continue
+        norm_key = _normalize_rel_path(key) or key
+        if norm_key != key:
+            separator_migrated = True
+        if norm_key in progress:
+            merged_entries = set(_normalize_progress_entries(progress[norm_key]))
+            merged_entries.update(_normalize_progress_entries(value))
+            progress[norm_key] = sorted(merged_entries)
+        else:
+            progress[norm_key] = value
+
     basename_map = {}
     for file_path in file_paths:
         basename = os.path.basename(file_path)
         basename_map.setdefault(basename, []).append(_progress_key_for_path(file_path))
 
-    migrated = False
+    migrated = separator_migrated
     for basename, rel_paths in basename_map.items():
         legacy_lines = progress.get(basename)
         if legacy_lines is None:
@@ -3613,6 +3631,9 @@ def _upgrade_legacy_progress_keys(progress, file_paths):
             continue
 
         progress_key = unique_rel_paths[0]
+        if progress_key == basename:
+            # Basename already is the canonical key for a top-level TL file.
+            continue
         merged_entries = set(_normalize_progress_entries(progress.get(progress_key, [])))
         merged_entries.update(_normalize_progress_entries(legacy_lines))
         progress[progress_key] = sorted(merged_entries)
@@ -5037,12 +5058,21 @@ def run_translation(*, prepare=False):
             if replacements:
                 normalized_entries = _normalize_progress_entries(successful_entries)
                 preview_lines = render_replacement_lines(lines, replacements)
+                source_text = "".join(lines)
+                preview_text = "".join(preview_lines)
+                # Preserve a leading UTF-8 BOM so source_sha256 (raw bytes) and
+                # apply writeback stay consistent with the on-disk file.
+                if document.content.startswith(b"\xef\xbb\xbf"):
+                    if not source_text.startswith("\ufeff"):
+                        source_text = "\ufeff" + source_text
+                    if not preview_text.startswith("\ufeff"):
+                        preview_text = "\ufeff" + preview_text
                 preview_files.append(
                     {
                         "relative_path": progress_key,
-                        "source_text": "".join(lines),
+                        "source_text": source_text,
                         "source_sha256": document.sha256,
-                        "preview_text": "".join(preview_lines),
+                        "preview_text": preview_text,
                         "progress_entries": normalized_entries,
                         "translated_items": len(normalized_entries),
                     }
@@ -5055,13 +5085,17 @@ def run_translation(*, prepare=False):
             tl_dir=TL_DIR,
             files=preview_files,
         )
-        export_coverage_package(
-            os.path.join(os.path.dirname(manifest_path), "coverage"),
-            adapter_snapshot.project,
-            adapter_snapshot.inventory,
-            adapter_snapshot.report,
-            review_policy=adapter_snapshot.review_policy,
-        )
+        try:
+            export_coverage_package(
+                os.path.join(os.path.dirname(manifest_path), "coverage"),
+                adapter_snapshot.project,
+                adapter_snapshot.inventory,
+                adapter_snapshot.report,
+                review_policy=adapter_snapshot.review_policy,
+            )
+        except (OSError, ValueError) as exc:
+            # Coverage is read-only P1 evidence; export failure must not block preview.
+            print(f"WARNING: Coverage export skipped: {exc}")
         report_path = os.path.join(os.path.dirname(manifest_path), "preview.diff")
         summary = manifest.get("summary") or {}
         print(f"Sync preview manifest: {manifest_path}")

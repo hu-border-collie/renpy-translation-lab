@@ -730,7 +730,13 @@ class RenPyAdapter:
                             and candidate.structure_kind == "old_source_marker"
                         ):
                             candidate.classification = "parse_error"
-                            candidate.reason_codes = ("renpy.source_marker_unpaired",)
+                            merged_reasons: list[str] = []
+                            for code in tuple(candidate.reason_codes or ()) + (
+                                "renpy.source_marker_unpaired",
+                            ):
+                                if code and code not in merged_reasons:
+                                    merged_reasons.append(code)
+                            candidate.reason_codes = tuple(merged_reasons)
                             candidate.translation_scope = "unknown"
                             candidate.analysis_scope = "unknown"
                             break
