@@ -335,17 +335,36 @@ class EngineAdapter(Protocol):
         project: ProjectDiscovery,
         occurrences: Sequence[Occurrence],
         live_sources: Sequence[SourceDocument],
-    ) -> RelocationResult: ...
+    ) -> RelocationResult:
+        """Relocate occurrences against live sources (P2).
+
+        P1 implementations must fail closed with ``NotImplementedError``
+        rather than returning empty success results.
+        """
+        ...
 
     def validate_translation(
         self,
         occurrence: Occurrence,
         translated_text: str,
-    ) -> ValidationResult: ...
+    ) -> ValidationResult:
+        """Validate translated text for engine format rules (P2).
+
+        P1 implementations must fail closed with ``NotImplementedError``
+        rather than returning empty success results.
+        """
+        ...
 
     def build_writeback_plan(
         self,
         project: ProjectDiscovery,
         validated: Sequence[ValidatedTranslation],
         live_sources: Sequence[SourceDocument],
-    ) -> WritebackPlan: ...
+    ) -> WritebackPlan:
+        """Build a declarative writeback plan (P2).
+
+        P1 implementations must fail closed with ``NotImplementedError``
+        rather than returning empty success results. Adapters never receive
+        arbitrary file-write authority.
+        """
+        ...

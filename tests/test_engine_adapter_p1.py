@@ -26,6 +26,7 @@ from engine_adapters.coverage import (
     build_review_template,
     export_coverage_package,
     load_review_record,
+    review_input_digest,
     validate_coverage_report_freshness,
     validate_review_record,
 )
@@ -439,6 +440,38 @@ translate schinese start:
         )
         self.assertEqual(old_review_against_new.effective_status, "stale")
         self.assertFalse(old_review_against_new.policy_satisfied)
+
+        # human_required rejects agent_reviewed even when digests match.
+        human_required = copy.deepcopy(review)
+        human_required["review_policy"] = "human_required"
+        human_required["review_input_digest"] = review_input_digest(
+            first.report,
+            review_policy="human_required",
+            sampling_plan=human_required.get("sampling_plan"),
+        )
+        human_policy = validate_review_record(
+            human_required,
+            first.report,
+            first.inventory,
+        )
+        self.assertEqual(human_policy.effective_status, "agent_reviewed")
+        self.assertFalse(human_policy.policy_satisfied)
+
+        package_dir = root / "coverage_export_guard"
+        with self.assertRaisesRegex(ValueError, "does not match candidate inventory"):
+            export_coverage_package(
+                package_dir / "mismatch",
+                first.project,
+                first.inventory,
+                replace(first.report, inventory_digest="not-the-live-inventory"),
+            )
+        with self.assertRaisesRegex(ValueError, "Coverage report is stale"):
+            export_coverage_package(
+                package_dir / "stale",
+                first.project,
+                first.inventory,
+                replace(first.report, adapter_version="0.0.0-stale"),
+            )
 
     def test_source_change_during_scan_blocks_automatic_report(self):
         root, tl_dir = self.make_project(
