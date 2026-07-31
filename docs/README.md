@@ -15,6 +15,7 @@
 | 手动使用完整 CLI 工作流 | 根目录 `README.md` → [安装与本地配置](setup.md) → [Batch 工作流与安全检查](batch_workflows.md) |
 | 多游戏工作区总表 | [工作区项目总表](games_registry.md) |
 | 理解环境检查建议 | [环境检查智能建议机制](doctor_recommendations.md) · [状态矩阵](doctor_states_matrix.md) |
+| 理解 Ren'Py 扫描边界与 coverage 产物 | [Ren'Py Engine Adapter 与覆盖审计](engine_adapter.md) |
 | 启用 RAG / 原文索引 / 剧情记忆 | [上下文系统](context_systems.md) · [setup.md](setup.md) 中的项目级开关 |
 | 角色关系 / 语义分析 | [关系与语义分析](relation_analysis.md) · [`relation_analyzer/README.md`](../relation_analyzer/README.md) |
 | 项目边界与安全 | [项目说明](project_notes.md) |
@@ -41,6 +42,7 @@
 ### 现行：Batch、上下文与检查
 
 - [Batch 工作流与安全检查](batch_workflows.md)：`build → apply`、订正、最终审校 campaign、关键词、identity v2、A/B、golden corpus。
+- [Ren'Py Engine Adapter 与覆盖审计](engine_adapter.md)：P1 扫描边界、candidate / occurrence、coverage/review 产物与只读安全范围。
 - [实际模型用量账本](model_usage_ledger.md)：按当前项目、任务、阶段、provider 与模型归集 Batch / 同步实际调用，并说明离线补录、成本和未知值语义。
 - [上下文系统](context_systems.md)：RAG、原文索引、Story Memory、store 路径与 benchmark。
 - [环境检查智能建议机制](doctor_recommendations.md)：建议等级、必需/可选并列、workflow_state。

@@ -1,8 +1,9 @@
 # Engine Adapter P0：Ren'Py 当前调用链与合同设计
 
-> 状态：#265 / #285 的 P0 设计记录。本文记录当前 `main` 的真实行为，并定义
-> P1-P2 的目标合同；仓库当前仍**没有**生产用 `EngineAdapter`。P0 不改变 CLI、
-> GUI、manifest、配置、输出文案或写回行为。
+> 状态：#265 / #285 的 P0 设计基线；#265 P1 已按本文合同实现只读
+> `RenPyAdapter`、coverage/review 产物，并迁移 sync 与普通 Batch translation
+> build 的扫描入口。P2 的 relocation / validation / writeback plan 尚未实现。
+> 当前实现说明见 [Ren'Py Engine Adapter 与覆盖审计](../engine_adapter.md)。
 
 ## 1. 范围与硬性边界
 
@@ -598,6 +599,7 @@ code 与中文/英文 message 分离。新增 code 只能 additive；改变 code
 - localization mode 与 catalog provenance/freshness；
 - source fingerprint、inventory digest、classification rules digest、
   extraction overrides digest；
+- automated audit reason codes 与 source-changed-during-scan 证据；
 - files scanned、candidate count、六类 classification counts；
 - translation/analysis scope counts；
 - coverage status、reason counts、coverage digest、generated_at。
@@ -702,6 +704,10 @@ coverage_digest = sha256(canonical {
   localization_mode,
   source_fingerprint,
   catalog_digest_and_provenance,
+  audit {
+    reason_codes,
+    source_changed_during_scan
+  },
   candidate_schema_version,
   coverage_schema_version,
   inventory_digest,

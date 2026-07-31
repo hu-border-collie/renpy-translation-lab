@@ -38,6 +38,9 @@ import batch_submit_recovery
 import cli_contract
 import cli_discovery
 import doctor_recommendations as doctor_rec
+from engine_adapters.contracts import ProjectDiscoveryRequest
+from engine_adapters.coverage import export_coverage_package
+from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
 import keyword_glossary_merge
 import model_usage_ledger
 import prompt_context
@@ -2753,6 +2756,14 @@ def collect_files_to_process():
     return files_to_process
 
 
+class TranslationFileJobs(list):
+    """Legacy-compatible job list carrying its read-only coverage snapshot."""
+
+    def __init__(self, values=(), *, coverage_snapshot=None):
+        super().__init__(values)
+        self.coverage_snapshot = coverage_snapshot
+
+
 def collect_pending_file_jobs(*, include_complete_files=False):
     """Collect per-file pending translation tasks.
 
@@ -2760,30 +2771,27 @@ def collect_pending_file_jobs(*, include_complete_files=False):
     Pass ``include_complete_files=True`` for doctor progress so fully-translated
     files still contribute to ``translated_count``.
     """
-    jobs = []
+    adapter_snapshot = build_translation_snapshot(
+        RenPyAdapter(legacy_module=legacy),
+        ProjectDiscoveryRequest(
+            project_root=legacy.BASE_DIR,
+            localization_root=legacy.TL_DIR,
+            target_language=legacy.PREP_LANGUAGE,
+            include_files=tuple(sorted(legacy.INCLUDE_FILES)),
+            include_prefixes=tuple(sorted(legacy.INCLUDE_PREFIXES)),
+        ),
+    )
+    jobs = TranslationFileJobs(coverage_snapshot=adapter_snapshot)
 
-    for rel_path, file_path in collect_files_to_process():
-        with open(file_path, 'r', encoding='utf-8-sig') as handle:
-            lines = handle.readlines()
-
-        raw_tasks, progress = legacy.collect_tasks_with_progress(lines)
-        pending = []
-
-        for task in raw_tasks:
-            if legacy.is_non_translatable(task['text']):
-                continue
-            current = dict(task)
-            current['file_rel_path'] = rel_path
-            current['file_path'] = file_path
-            current['id'] = translation_core.build_identity_v2(
-                rel_path,
-                current.get('block_name', '_global'),
-                current.get('block_index', 0),
-                current.get('source_for_id') or current['text'],
-                block_occurrence=current.get('block_occurrence', 1),
-            )
-            pending.append(current)
-
+    for document in adapter_snapshot.project.source_documents:
+        rel_path = document.file_rel_path
+        file_path = document.file_path
+        pending = [
+            dict(task)
+            for task in adapter_snapshot.pending_tasks_by_file.get(rel_path, ())
+            if not legacy.is_non_translatable(task['text'])
+        ]
+        progress = adapter_snapshot.progress_by_file.get(rel_path, {})
         translated_count = int(progress.get('translated_count') or 0)
         if pending or (include_complete_files and translated_count):
             jobs.append(
@@ -3156,6 +3164,15 @@ def create_batch_package(display_name_override='', skip_prepare=False):
     package_name = f'{timestamp}_{guess_project_slug()}'
     package_dir = os.path.join(BATCH_JOBS_DIR, package_name)
     os.makedirs(package_dir, exist_ok=True)
+    coverage_snapshot = getattr(file_jobs, 'coverage_snapshot', None)
+    if coverage_snapshot is not None:
+        export_coverage_package(
+            os.path.join(package_dir, 'coverage'),
+            coverage_snapshot.project,
+            coverage_snapshot.inventory,
+            coverage_snapshot.report,
+            review_policy=coverage_snapshot.review_policy,
+        )
 
     display_name = display_name_override.strip() if display_name_override else ''
     if not display_name:

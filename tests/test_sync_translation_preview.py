@@ -125,6 +125,16 @@ class SyncTranslationPreviewTests(unittest.TestCase):
             manifest = preview.load_sync_preview(manifest_path)
             proposed = Path(manifest_path).parent / manifest["files"][0]["preview_path"]
             self.assertEqual(proposed.read_text(encoding="utf-8"), '    "你好"\n')
+            coverage_dir = Path(manifest_path).parent / "coverage"
+            self.assertEqual(
+                {path.name for path in coverage_dir.iterdir()},
+                {
+                    "coverage_candidates.jsonl",
+                    "coverage_report.json",
+                    "coverage_review.md",
+                    "coverage_review_template.json",
+                },
+            )
 
     def test_apply_revalidates_then_writes_and_marks_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
