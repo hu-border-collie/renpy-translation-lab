@@ -88,21 +88,22 @@ class SyncTranslationPreviewTests(unittest.TestCase):
             tl_dir = root / "game" / "tl" / "schinese"
             tl_dir.mkdir(parents=True)
             target = tl_dir / "script.rpy"
+            # Adapter scan drives pending tasks; keep a simple string unit.
             source = '    "Hello"\n'
             target.write_text(source, encoding="utf-8")
 
-            task = {
-                "line": 0,
-                "start": 4,
-                "end": 11,
-                "text": "Hello",
-                "quote": '"',
-                "prefix": "",
-            }
-
             def translate_batch(batch, replacements, usage_run_id="", **_kwargs):
-                replacements.setdefault(0, []).append((4, 11, "你好", "", '"'))
-                return [batch[0]["progress_entry"]]
+                task = batch[0]
+                replacements.setdefault(task["line"], []).append(
+                    (
+                        task["start"],
+                        task["end"],
+                        "你好",
+                        task.get("prefix") or "",
+                        task["quote"],
+                    )
+                )
+                return [task.get("progress_entry") or f"id:{task['line']}"]
 
             with (
                 mock.patch.object(runtime, "BASE_DIR", str(root)),
@@ -116,7 +117,6 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                 mock.patch.object(runtime, "load_translator_settings"),
                 mock.patch.object(runtime, "load_glossary"),
                 mock.patch.object(runtime, "load_progress", return_value={}),
-                mock.patch.object(runtime, "collect_tasks", return_value=[task]),
                 mock.patch.object(runtime, "process_batch_with_retry", side_effect=translate_batch),
             ):
                 manifest_path = runtime.run_translation()
@@ -125,6 +125,16 @@ class SyncTranslationPreviewTests(unittest.TestCase):
             manifest = preview.load_sync_preview(manifest_path)
             proposed = Path(manifest_path).parent / manifest["files"][0]["preview_path"]
             self.assertEqual(proposed.read_text(encoding="utf-8"), '    "你好"\n')
+            coverage_dir = Path(manifest_path).parent / "coverage"
+            self.assertEqual(
+                {path.name for path in coverage_dir.iterdir()},
+                {
+                    "coverage_candidates.jsonl",
+                    "coverage_report.json",
+                    "coverage_review.md",
+                    "coverage_review_template.json",
+                },
+            )
 
     def test_apply_revalidates_then_writes_and_marks_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:

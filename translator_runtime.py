@@ -32,8 +32,11 @@ def locked_runtime_state():
     with _runtime_state_lock:
         yield
 
-from atomic_io import atomic_write_json, atomic_write_lines, file_sha256
+from atomic_io import atomic_write_json, atomic_write_lines
 import cli_contract
+from engine_adapters.contracts import ProjectDiscoveryRequest
+from engine_adapters.coverage import export_coverage_package
+from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
 from gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
@@ -3590,12 +3593,30 @@ def _upgrade_legacy_progress_keys(progress, file_paths):
     if not isinstance(progress, dict):
         return {}
 
+    # Normalize separators / relative forms first so adapter file_rel_path keys
+    # (always forward-slash) match stored progress keys from Windows paths.
+    original_items = list(progress.items())
+    progress.clear()
+    separator_migrated = False
+    for key, value in original_items:
+        if not isinstance(key, str):
+            continue
+        norm_key = _normalize_rel_path(key) or key
+        if norm_key != key:
+            separator_migrated = True
+        if norm_key in progress:
+            merged_entries = set(_normalize_progress_entries(progress[norm_key]))
+            merged_entries.update(_normalize_progress_entries(value))
+            progress[norm_key] = sorted(merged_entries)
+        else:
+            progress[norm_key] = value
+
     basename_map = {}
     for file_path in file_paths:
         basename = os.path.basename(file_path)
         basename_map.setdefault(basename, []).append(_progress_key_for_path(file_path))
 
-    migrated = False
+    migrated = separator_migrated
     for basename, rel_paths in basename_map.items():
         legacy_lines = progress.get(basename)
         if legacy_lines is None:
@@ -3610,6 +3631,9 @@ def _upgrade_legacy_progress_keys(progress, file_paths):
             continue
 
         progress_key = unique_rel_paths[0]
+        if progress_key == basename:
+            # Basename already is the canonical key for a top-level TL file.
+            continue
         merged_entries = set(_normalize_progress_entries(progress.get(progress_key, [])))
         merged_entries.update(_normalize_progress_entries(legacy_lines))
         progress[progress_key] = sorted(merged_entries)
@@ -4954,49 +4978,44 @@ def run_translation(*, prepare=False):
         if not os.path.isdir(TL_DIR):
             print("WARNING: TL_DIR does not exist in preview mode.")
 
-        files_to_process = []
-        for root, _, files in os.walk(TL_DIR):
-            for filename in files:
-                if not filename.endswith(".rpy"):
-                    continue
-                file_path = os.path.join(root, filename)
-                relative_path = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
-                if INCLUDE_FILES or INCLUDE_PREFIXES:
-                    allowed = bool(INCLUDE_FILES and relative_path in INCLUDE_FILES)
-                    if not allowed and INCLUDE_PREFIXES:
-                        allowed = any(relative_path.startswith(prefix) for prefix in INCLUDE_PREFIXES)
-                    if not allowed:
-                        continue
-                files_to_process.append(file_path)
-        files_to_process.sort(key=lambda value: os.path.normcase(os.path.abspath(value)))
+        adapter_snapshot = build_translation_snapshot(
+            RenPyAdapter(legacy_module=sys.modules[__name__]),
+            ProjectDiscoveryRequest(
+                project_root=BASE_DIR,
+                localization_root=TL_DIR,
+                target_language=PREP_LANGUAGE,
+                include_files=tuple(sorted(INCLUDE_FILES)),
+                include_prefixes=tuple(sorted(INCLUDE_PREFIXES)),
+            ),
+        )
+        source_documents = adapter_snapshot.project.source_documents
+        files_to_process = [
+            document.file_path
+            for document in source_documents
+        ]
         print(f"Found {len(files_to_process)} files.")
 
         global_progress = _upgrade_legacy_progress_keys(load_progress(), files_to_process)
         preview_files = []
-        for file_path in files_to_process:
+        for document in source_documents:
+            file_path = document.file_path
             filename = os.path.basename(file_path)
-            progress_key = _progress_key_for_path(file_path)
+            progress_key = document.file_rel_path
             print(f"\nProcessing: {filename}")
-            source_sha256 = file_sha256(file_path)
-            with open(file_path, "r", encoding="utf-8-sig") as handle:
-                lines = handle.readlines()
 
             completed_entries = set(_normalize_progress_entries(global_progress.get(progress_key, [])))
             tasks = []
-            for task in collect_tasks(lines):
+            for raw_task in adapter_snapshot.pending_tasks_by_file.get(
+                progress_key,
+                (),
+            ):
+                task = dict(raw_task)
                 if is_non_translatable(task["text"]):
                     continue
                 progress_entry = task.get("progress_entry") or _progress_entry_for_task(task)
                 if progress_entry in completed_entries or _progress_line_entry(task["line"]) in completed_entries:
                     if not FORCE_RETRANSLATE_ENGLISH or not is_english_like(task["text"]):
                         continue
-                task["id"] = translation_core.build_identity_v2(
-                    progress_key,
-                    task.get("block_name", "_global"),
-                    task.get("block_index", 0),
-                    task.get("source_for_id") or task["text"],
-                    block_occurrence=task.get("block_occurrence", 1),
-                )
                 task["progress_entry"] = _progress_entry_for_task(task)
                 task["file_rel_path"] = progress_key
                 tasks.append(task)
@@ -5004,6 +5023,7 @@ def run_translation(*, prepare=False):
             if not tasks:
                 print("  No new lines to translate.")
                 continue
+            lines = document.lines()
             print(f"  Found {len(tasks)} lines to translate.")
 
             replacements = {}
@@ -5038,12 +5058,21 @@ def run_translation(*, prepare=False):
             if replacements:
                 normalized_entries = _normalize_progress_entries(successful_entries)
                 preview_lines = render_replacement_lines(lines, replacements)
+                source_text = "".join(lines)
+                preview_text = "".join(preview_lines)
+                # Preserve a leading UTF-8 BOM so source_sha256 (raw bytes) and
+                # apply writeback stay consistent with the on-disk file.
+                if document.content.startswith(b"\xef\xbb\xbf"):
+                    if not source_text.startswith("\ufeff"):
+                        source_text = "\ufeff" + source_text
+                    if not preview_text.startswith("\ufeff"):
+                        preview_text = "\ufeff" + preview_text
                 preview_files.append(
                     {
                         "relative_path": progress_key,
-                        "source_text": "".join(lines),
-                        "source_sha256": source_sha256,
-                        "preview_text": "".join(preview_lines),
+                        "source_text": source_text,
+                        "source_sha256": document.sha256,
+                        "preview_text": preview_text,
                         "progress_entries": normalized_entries,
                         "translated_items": len(normalized_entries),
                     }
@@ -5056,6 +5085,17 @@ def run_translation(*, prepare=False):
             tl_dir=TL_DIR,
             files=preview_files,
         )
+        try:
+            export_coverage_package(
+                os.path.join(os.path.dirname(manifest_path), "coverage"),
+                adapter_snapshot.project,
+                adapter_snapshot.inventory,
+                adapter_snapshot.report,
+                review_policy=adapter_snapshot.review_policy,
+            )
+        except (OSError, ValueError) as exc:
+            # Coverage is read-only P1 evidence; export failure must not block preview.
+            print(f"WARNING: Coverage export skipped: {exc}")
         report_path = os.path.join(os.path.dirname(manifest_path), "preview.diff")
         summary = manifest.get("summary") or {}
         print(f"Sync preview manifest: {manifest_path}")

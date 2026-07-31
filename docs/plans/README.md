@@ -13,5 +13,6 @@
 ## 当前设计
 
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](engine_adapter_contract.md)：
-  #265 / #285 的调用链审计、adapter/coverage schema 与阶段接入边界；P0 不代表
-  adapter 已进入生产调用链。
+  #265 / #285 的调用链审计、adapter/coverage schema 与阶段接入边界。P1 的只读
+  adapter 与 translation build 扫描迁移已经落地；本文继续作为 P2 以后合同基线。
+  当前实现说明见 [Ren'Py Engine Adapter 与覆盖审计](../engine_adapter.md)。
