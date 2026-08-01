@@ -21,7 +21,7 @@ v2 或终端文案合同。
 
 P2 的 `relocate_occurrences()` 先按 identity v2，再在同一 localization 文件内按
 source/context evidence 做唯一重定位；content evidence 还需达到最低结构分
-（`CONTENT_EVIDENCE_MIN_SCORE`，默认 150，排除仅“同文件+同原文”的弱匹配），
+（`CONTENT_EVIDENCE_MIN_SCORE`，默认 140，排除仅“同文件+同原文”的 125 分弱匹配），
 同分并列时仍返回 `common.locator.unresolved`。`validate_translation()`
 输出版本化 `ValidationResult`，`build_writeback_plan()` 只产生
 `text_span_replace` 操作。公共消费者会在 check 和 apply 的二次源重读后再次校验

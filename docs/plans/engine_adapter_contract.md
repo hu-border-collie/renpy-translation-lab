@@ -342,9 +342,9 @@ P0/P1 不向现有 manifest v1/v2 序列化 occurrence 信封，因此 manifest 
   缩小重定位候选，但不能只凭 hint 跳过 identity/source 校验。
 
 identity v2 未命中时，Ren'Py content-evidence fallback 仅在同一 `file_rel_path`
-内打分；最高分必须唯一且达到 `CONTENT_EVIDENCE_MIN_SCORE`（当前 150，排除仅
-“同文件+同原文”的弱匹配 125）。同分并列或低于最低分均返回
-`common.locator.unresolved`，不得 fail-open 写回。
+内打分；最高分必须唯一且达到 `CONTENT_EVIDENCE_MIN_SCORE`（当前 140，排除仅
+“同文件+同原文”的弱匹配 125；典型 stale-block 唯一回落约 140+）。同分并列或
+低于最低分均返回 `common.locator.unresolved`，不得 fail-open 写回。
 
 `source_marker_kind` 为 `comment`、`old_new` 或 `direct_source`。公共层只做 JSON
 schema/version/size 检查，把 locator 原样交回同一 engine adapter；不得读取或校验

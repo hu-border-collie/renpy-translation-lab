@@ -58,8 +58,9 @@ from .writeback import source_snapshot_fingerprint
 ADAPTER_VERSION = "1.1.0"
 LOCATOR_SCHEMA_VERSION = 1
 # Same-file + same-source alone scores 125. Content-evidence matches must also
-# share at least one structural signal (speaker / block / marker / fingerprint).
-CONTENT_EVIDENCE_MIN_SCORE = 150
+# clear this floor so bare unique-string hits without structural signals fail closed.
+# Typical unique stale-block fallback scores 140+ (shared block_occurrence / speaker).
+CONTENT_EVIDENCE_MIN_SCORE = 140
 
 
 @dataclass(frozen=True)
