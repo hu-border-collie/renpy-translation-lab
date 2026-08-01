@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import time
@@ -95,6 +96,7 @@ class _CancellableNetworkWorker(QThread):
         """Ask the worker to stop; close any in-flight HTTP response if possible."""
         self._cancel = True
         self.requestInterruption()
+        self._cancel_active_async_task()
         response = self._active_response
         if response is None:
             return
@@ -102,6 +104,9 @@ class _CancellableNetworkWorker(QThread):
             response.close()
         except Exception:
             pass
+
+    def _cancel_active_async_task(self) -> None:
+        """Hook for workers whose request runs in an asyncio event loop."""
 
     def is_cancelled(self) -> bool:
         return bool(self._cancel or self.isInterruptionRequested())
@@ -345,27 +350,53 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
         super().__init__(parent)
         self.model = model
         self.api_key = api_key
+        self._async_loop: asyncio.AbstractEventLoop | None = None
+        self._async_task: asyncio.Task | None = None
+
+    def _cancel_active_async_task(self) -> None:
+        loop = self._async_loop
+        task = self._async_task
+        if loop is None or task is None or task.done():
+            return
+        try:
+            loop.call_soon_threadsafe(task.cancel)
+        except RuntimeError:
+            # The event loop may be closing at the same time as the GUI cancel.
+            pass
+
+    async def _generate_async(self):
+        self._ensure_not_cancelled()
+        self._emit_progress("正在发起最小连接测试请求…")
+        return await LiteLLMSyncBackend(api_key=self.api_key or None).generate_async(
+            SyncGenerationRequest(
+                model=self.model,
+                contents="Reply with OK.",
+                config={
+                    "max_output_tokens": 8,
+                    "temperature": 0,
+                    "timeout": CONNECTION_TEST_TIMEOUT_SECONDS,
+                },
+            )
+        )
 
     def run(self) -> None:
+        if self.is_cancelled():
+            self.completed.emit(False, f"{CANCELLED_MESSAGE_PREFIX}连接测试。")
+            return
+        loop = asyncio.new_event_loop()
+        self._async_loop = loop
+        asyncio.set_event_loop(loop)
+        task = loop.create_task(self._generate_async())
+        self._async_task = task
         try:
-            self._ensure_not_cancelled()
-            self._emit_progress("正在发起最小连接测试请求…")
-            result = LiteLLMSyncBackend(api_key=self.api_key or None).generate(
-                SyncGenerationRequest(
-                    model=self.model,
-                    contents="Reply with OK.",
-                    config={
-                        "max_output_tokens": 8,
-                        "temperature": 0,
-                        "timeout": CONNECTION_TEST_TIMEOUT_SECONDS,
-                    },
-                )
-            )
+            result = loop.run_until_complete(task)
             if self.is_cancelled():
                 self.completed.emit(False, f"{CANCELLED_MESSAGE_PREFIX}连接测试。")
                 return
             text = result.response_text.strip()
             self.completed.emit(True, f"连接成功。模型返回：{text[:80] or '（空响应）'}")
+        except asyncio.CancelledError:
+            self.completed.emit(False, f"{CANCELLED_MESSAGE_PREFIX}连接测试。")
         except OperationCancelled:
             self.completed.emit(False, f"{CANCELLED_MESSAGE_PREFIX}连接测试。")
         except Exception as exc:
@@ -373,3 +404,20 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
                 self.completed.emit(False, f"{CANCELLED_MESSAGE_PREFIX}连接测试。")
             else:
                 self.completed.emit(False, _connection_error_message(exc))
+        finally:
+            self._async_task = None
+            self._async_loop = None
+            try:
+                pending = asyncio.all_tasks(loop)
+                for pending_task in pending:
+                    pending_task.cancel()
+                if pending:
+                    loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:
+                pass
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()

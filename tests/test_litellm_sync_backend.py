@@ -1,3 +1,4 @@
+import asyncio
 import builtins
 import unittest
 from unittest import mock
@@ -47,6 +48,27 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         self.assertEqual(result.execution_mode, "sync")
         self.assertEqual(result.finish_reason, "stop")
         self.assertEqual(result.usage_metadata["prompt_tokens"], 8)
+
+    def test_async_success_uses_acompletion(self):
+        calls = []
+
+        async def completion(**kwargs):
+            calls.append(kwargs)
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+        backend = LiteLLMSyncBackend(async_completion=completion)
+        result = asyncio.run(
+            backend.generate_async(
+                SyncGenerationRequest(
+                    "openai/test",
+                    "hello",
+                    {"timeout": 7},
+                )
+            )
+        )
+
+        self.assertEqual(calls[0]["timeout"], 7)
+        self.assertEqual(result.response_text, "OK")
 
     def test_preserves_provider_reported_cost_from_hidden_params(self):
         class Response:

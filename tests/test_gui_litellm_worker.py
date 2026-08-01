@@ -1,10 +1,13 @@
+import asyncio
 import io
 import json
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
 try:
+    from PySide6.QtCore import Qt
     from gui_qt.litellm_worker import (
         BudgetExhausted,
         CANCELLED_MESSAGE_PREFIX,
@@ -32,7 +35,9 @@ else:
 class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
     def test_connection_test_passes_a_bounded_timeout(self):
         backend = mock.Mock()
-        backend.generate.return_value = SimpleNamespace(response_text="OK")
+        backend.generate_async = mock.AsyncMock(
+            return_value=SimpleNamespace(response_text="OK")
+        )
         completed = []
         worker = LiteLLMConnectionTestWorker("openai/test", "typed-secret")
         worker.completed.connect(lambda success, message: completed.append((success, message)))
@@ -43,7 +48,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         ):
             worker.run()
 
-        request = backend.generate.call_args.args[0]
+        request = backend.generate_async.call_args.args[0]
         self.assertEqual(
             request.config["timeout"],
             CONNECTION_TEST_TIMEOUT_SECONDS,
@@ -52,7 +57,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
 
     def test_connection_error_never_includes_provider_exception_text(self):
         backend = mock.Mock()
-        backend.generate.side_effect = LiteLLMBackendError(
+        backend.generate_async.side_effect = LiteLLMBackendError(
             "provider echoed stored-secret",
             category="authentication",
         )
@@ -84,7 +89,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         ):
             worker.run()
 
-        backend.generate.assert_not_called()
+        backend.generate_async.assert_not_called()
         self.assertEqual(len(completed), 1)
         self.assertFalse(completed[0][0])
         self.assertTrue(is_cancelled_message(completed[0][1]))
@@ -92,7 +97,9 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
 
     def test_connection_test_cancel_after_generate_discards_success(self):
         backend = mock.Mock()
-        backend.generate.return_value = SimpleNamespace(response_text="OK")
+        backend.generate_async = mock.AsyncMock(
+            return_value=SimpleNamespace(response_text="OK")
+        )
         completed = []
         worker = LiteLLMConnectionTestWorker("openai/test")
         worker.completed.connect(lambda success, message: completed.append((success, message)))
@@ -101,7 +108,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
             worker.request_cancel()
             return SimpleNamespace(response_text="OK")
 
-        backend.generate.side_effect = generate_and_cancel
+        backend.generate_async.side_effect = generate_and_cancel
         with mock.patch(
             "gui_qt.litellm_worker.LiteLLMSyncBackend",
             return_value=backend,
@@ -112,6 +119,43 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         self.assertFalse(completed[0][0])
         self.assertTrue(is_cancelled_message(completed[0][1]))
 
+
+    def test_connection_test_cancel_during_async_request_cancels_task(self):
+        started = threading.Event()
+        cancelled = threading.Event()
+        backend = mock.Mock()
+
+        async def generate_async(request):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        backend.generate_async = generate_async
+        completed = []
+        worker = LiteLLMConnectionTestWorker("openai/test")
+        worker.completed.connect(
+            lambda success, message: completed.append((success, message)),
+            Qt.ConnectionType.DirectConnection,
+        )
+
+        with mock.patch(
+            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            return_value=backend,
+        ):
+            thread = threading.Thread(target=worker.run)
+            thread.start()
+            self.assertTrue(started.wait(2))
+            worker.request_cancel()
+            thread.join(2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual(len(completed), 1)
+        self.assertFalse(completed[0][0])
+        self.assertTrue(is_cancelled_message(completed[0][1]))
 
     def test_model_catalog_prefers_provider_native_catalog(self):
         payload = {"data": [{"id": "gpt-current"}, {"id": "text-embedding-3-small"}]}

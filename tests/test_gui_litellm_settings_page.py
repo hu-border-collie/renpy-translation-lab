@@ -33,7 +33,14 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.window.close()
+        # Tests intentionally leave some settings dirty; avoid opening the
+        # interactive unsaved-config prompt during headless teardown.
+        with mock.patch.object(
+            cls.window,
+            "_confirm_unsaved_config_before_close",
+            return_value=True,
+        ):
+            cls.window.close()
         cls.window.deleteLater()
         cls._app.processEvents()
         cls._temp_dir.cleanup()
@@ -426,6 +433,13 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertIn("custom_vendor", ids)
         self.assertIn("mistral", ids)
         self.assertIn("deepseek", ids)
+
+    def test_keys_page_free_typed_provider_uses_current_text(self):
+        combo = self.window.litellm_keys_provider_combo
+        combo.setCurrentIndex(combo.findData("openai"))
+        combo.setEditText("custom_vendor")
+
+        self.assertEqual(self.window._litellm_keys_page_provider(), "custom_vendor")
 
     def test_empty_litellm_model_cannot_be_saved(self):
         self.window.sync_backend_combo.setCurrentIndex(

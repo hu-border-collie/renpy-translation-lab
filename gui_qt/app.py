@@ -6950,12 +6950,12 @@ class MainWindow(QMainWindow):
         combo = self._settings_widget("litellm_keys_provider_combo")
         if combo is None:
             return ""
-        data = combo.currentData()
-        provider = str(data or "").strip().lower()
-        if provider:
-            return provider
-        if combo.isEditable():
-            return resolve_provider_id(combo.lineEdit().text()) or ""
+        index = combo.currentIndex()
+        if index >= 0 and combo.currentText() == combo.itemText(index):
+            data = combo.itemData(index)
+            provider = str(data or "").strip().lower()
+            if provider:
+                return provider
         return resolve_provider_id(combo.currentText()) or ""
 
     def _populate_litellm_keys_provider_combo(self, *, selected: str = "") -> None:

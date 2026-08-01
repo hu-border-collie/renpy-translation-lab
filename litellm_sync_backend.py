@@ -123,8 +123,10 @@ class LiteLLMSyncBackend:
         self,
         completion: Optional[Callable[..., Any]] = None,
         api_key: Optional[str] = None,
+        async_completion: Optional[Callable[..., Any]] = None,
     ) -> None:
         self._completion = completion
+        self._async_completion = async_completion
         self._api_key = str(api_key or "").strip()
 
     def _resolve_completion(self) -> Callable[..., Any]:
@@ -186,6 +188,86 @@ class LiteLLMSyncBackend:
                 kwargs["response_format"] = {"type": "json_object"}
         try:
             response = self._resolve_completion()(**kwargs)
+        except LiteLLMBackendError:
+            raise
+        except Exception as exc:
+            raise LiteLLMBackendError(
+                f"LiteLLM request failed: {exc}", category=_error_category(exc)
+            ) from exc
+        payload = _serialize_response(response)
+        choices = payload.get("choices") or []
+        choice = choices[0] if choices and isinstance(choices[0], Mapping) else {}
+        message = choice.get("message") or {}
+        text = message.get("content") if isinstance(message, Mapping) else ""
+        usage = payload.get("usage") or {}
+        return SyncGenerationResult(
+            provider=self.provider,
+            model=request.model,
+            execution_mode=SYNC_EXECUTION_MODE,
+            response_payload=payload,
+            response_text=str(text or ""),
+            finish_reason=str(choice.get("finish_reason") or ""),
+            usage_metadata=dict(usage) if isinstance(usage, Mapping) else {},
+        )
+
+    def _resolve_async_completion(self) -> Callable[..., Any]:
+        if self._async_completion is not None:
+            return self._async_completion
+        try:
+            from litellm import acompletion
+        except ImportError as exc:
+            raise LiteLLMUnavailableError(
+                "LiteLLM async completion is unavailable. "
+                "Install the optional dependency or use Gemini Batch."
+            ) from exc
+        self._async_completion = acompletion
+        return acompletion
+
+    async def generate_async(self, request: SyncGenerationRequest) -> SyncGenerationResult:
+        """Run a LiteLLM request through its async API so task cancellation reaches I/O."""
+        config = dict(request.config)
+        if config.get("safety_settings"):
+            raise LiteLLMCapabilityError(
+                "LiteLLM does not share Gemini safety_settings semantics; "
+                "remove that setting or use Gemini."
+            )
+        kwargs: Dict[str, Any] = {
+            "model": request.model,
+            "messages": _messages(request.contents, config),
+        }
+        api_key = self._api_key
+        if not api_key:
+            try:
+                from litellm_provider_config import load_provider_api_key
+
+                api_key = load_provider_api_key(provider_from_model(request.model))
+            except Exception:
+                # keyring is optional; LiteLLM can still use environment variables.
+                api_key = ""
+        if api_key:
+            kwargs["api_key"] = api_key
+        if "timeout" in config:
+            kwargs["timeout"] = config["timeout"]
+        if "temperature" in config:
+            kwargs["temperature"] = config["temperature"]
+        if "max_output_tokens" in config:
+            kwargs["max_tokens"] = config["max_output_tokens"]
+        schema = config.get("response_json_schema")
+        if schema:
+            provider = provider_from_model(request.model)
+            if provider in {"openai", "azure"}:
+                kwargs["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "translation_response",
+                        "schema": schema,
+                        "strict": True,
+                    },
+                }
+            else:
+                kwargs["response_format"] = {"type": "json_object"}
+        try:
+            response = await self._resolve_async_completion()(**kwargs)
         except LiteLLMBackendError:
             raise
         except Exception as exc:
