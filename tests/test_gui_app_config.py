@@ -1705,6 +1705,98 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(error_label.text, "")
         self.assertEqual(status_bar.messages[-1][0], "已恢复推荐值，保存后生效。")
 
+    def test_close_event_prompts_when_settings_are_dirty(self):
+        class FakeEvent:
+            def __init__(self):
+                self.ignored = False
+                self.accepted = False
+
+            def ignore(self):
+                self.ignored = True
+
+            def accept(self):
+                self.accepted = True
+
+        self.window._cancel_sdk_install_worker = mock.Mock()
+        self.window._confirm_unsaved_config_before_close = mock.Mock(return_value=False)
+        event = FakeEvent()
+        # Avoid QMainWindow.closeEvent on an incomplete __new__ instance.
+        with mock.patch("PySide6.QtWidgets.QMainWindow.closeEvent"):
+            self.window.closeEvent(event)
+        self.assertTrue(event.ignored)
+        self.window._cancel_sdk_install_worker.assert_not_called()
+
+        event = FakeEvent()
+        self.window._confirm_unsaved_config_before_close = mock.Mock(return_value=True)
+        with mock.patch("PySide6.QtWidgets.QMainWindow.closeEvent") as super_close:
+            self.window.closeEvent(event)
+        self.assertFalse(event.ignored)
+        self.window._cancel_sdk_install_worker.assert_called_once()
+        super_close.assert_called_once()
+
+    def test_confirm_close_save_discard_and_cancel_paths(self):
+        self.window._config_tab_has_unsaved_changes = mock.Mock(return_value=False)
+        self.assertTrue(self.window._confirm_unsaved_config_before_close())
+
+        self.window._config_tab_has_unsaved_changes = mock.Mock(return_value=True)
+        self.window._on_save_config = mock.Mock(return_value=True)
+
+        class FakeMessage:
+            def __init__(self, *, choice: str):
+                self.choice = choice
+                self.buttons: list[object] = []
+
+            def setIcon(self, *_a, **_k):
+                return None
+
+            def setWindowTitle(self, *_a, **_k):
+                return None
+
+            def setText(self, *_a, **_k):
+                return None
+
+            def setInformativeText(self, *_a, **_k):
+                return None
+
+            def addButton(self, text, _role):
+                # Return a unique object so ``clicked is save_btn`` matches production.
+                token = object()
+                self.buttons.append((text, token))
+                return token
+
+            def setDefaultButton(self, *_a, **_k):
+                return None
+
+            def exec(self):
+                return None
+
+            def clickedButton(self):
+                for text, token in self.buttons:
+                    if text == self.choice:
+                        return token
+                return None
+
+        with mock.patch(
+            "gui_qt.app.QMessageBox",
+            side_effect=lambda *_a, **_k: FakeMessage(choice="保存并退出"),
+        ):
+            self.assertTrue(self.window._confirm_unsaved_config_before_close())
+        self.window._on_save_config.assert_called_once()
+
+        self.window._on_save_config.reset_mock()
+        with mock.patch(
+            "gui_qt.app.QMessageBox",
+            side_effect=lambda *_a, **_k: FakeMessage(choice="不保存退出"),
+        ):
+            self.assertTrue(self.window._confirm_unsaved_config_before_close())
+        self.window._on_save_config.assert_not_called()
+
+        with mock.patch(
+            "gui_qt.app.QMessageBox",
+            side_effect=lambda *_a, **_k: FakeMessage(choice="取消"),
+        ):
+            self.assertFalse(self.window._confirm_unsaved_config_before_close())
+
     def test_download_recommended_fonts_starts_background_worker(self):
         class FakeWidget:
             def __init__(self):

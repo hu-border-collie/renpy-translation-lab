@@ -4037,6 +4037,11 @@ class MainWindow(QMainWindow):
             download_btn.setEnabled(True)
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        # Same unsaved-settings gate as leaving the Settings tab: closing the
+        # window must not silently drop translator_config edits.
+        if not self._confirm_unsaved_config_before_close():
+            event.ignore()
+            return
         self._cancel_sdk_install_worker(wait_ms=5000)
         super().closeEvent(event)
 
@@ -9889,6 +9894,32 @@ class MainWindow(QMainWindow):
 
         if clicked is save_btn:
             return self._on_save_config()
+        if clicked is discard_btn:
+            return True
+        return False
+
+    def _confirm_unsaved_config_before_close(self) -> bool:
+        """Return True if the window may close (saved, discarded, or clean)."""
+        if not self._config_tab_has_unsaved_changes():
+            return True
+
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Icon.Warning)
+        message.setWindowTitle("设置尚未保存")
+        message.setText("设置页有未保存的更改。")
+        message.setInformativeText(
+            "直接关闭窗口会丢失尚未写入 translator_config.json 的修改。"
+            "可先保存、放弃更改后退出，或取消以继续编辑。"
+        )
+        save_btn = message.addButton("保存并退出", QMessageBox.ButtonRole.AcceptRole)
+        discard_btn = message.addButton("不保存退出", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = message.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        message.setDefaultButton(save_btn)
+        message.exec()
+        clicked = message.clickedButton()
+
+        if clicked is save_btn:
+            return bool(self._on_save_config())
         if clicked is discard_btn:
             return True
         return False
