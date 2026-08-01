@@ -10,6 +10,11 @@ from .contracts import (
     OCCURRENCE_SCHEMA_VERSION,
     VALIDATION_SCHEMA_VERSION,
     WRITEBACK_PLAN_SCHEMA_VERSION,
+    RelocationResult,
+    ValidatedTranslation,
+    ValidationResult,
+    WritebackOperation,
+    WritebackPlan,
     Candidate,
     CandidateInventory,
     EngineAdapter,
@@ -33,6 +38,12 @@ from .coverage import (
     validate_coverage_report_freshness,
     validate_review_record,
 )
+from .writeback import (
+    WritebackPlanError,
+    render_writeback_plan,
+    source_snapshot_fingerprint,
+    validate_writeback_plan,
+)
 from .renpy import (
     ADAPTER_VERSION as RENPY_ADAPTER_VERSION,
     RenPyAdapter,
@@ -51,6 +62,11 @@ __all__ = [
     "RENPY_ADAPTER_VERSION",
     "VALIDATION_SCHEMA_VERSION",
     "WRITEBACK_PLAN_SCHEMA_VERSION",
+    "RelocationResult",
+    "ValidatedTranslation",
+    "ValidationResult",
+    "WritebackOperation",
+    "WritebackPlan",
     "Candidate",
     "CandidateInventory",
     "CoverageFreshness",
@@ -72,6 +88,10 @@ __all__ = [
     "build_translation_snapshot",
     "export_coverage_package",
     "load_review_record",
+    "WritebackPlanError",
+    "render_writeback_plan",
+    "source_snapshot_fingerprint",
+    "validate_writeback_plan",
     "validate_coverage_report_freshness",
     "validate_review_record",
 ]

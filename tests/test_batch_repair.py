@@ -1610,6 +1610,148 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(manifest['apply_summary']['applied_lines'], 2)
         self.assertEqual(manifest['apply_summary']['recoverable_items'], 2)
         self.assertEqual(manifest['apply_summary']['skipped_items'], 0)
+    def test_apply_results_excludes_progress_only_files_from_adapter_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'tl'
+            package_dir = root / 'package'
+            tl_dir.mkdir()
+            package_dir.mkdir()
+            first_file = tl_dir / 'first.rpy'
+            second_file = tl_dir / 'second.rpy'
+            first_line = '    e "Hello"\n'
+            second_line = '    e "World"\n'
+            first_start = first_line.index('"Hello"')
+            second_start = second_line.index('"World"')
+            first_file.write_text(first_line, encoding='utf-8')
+            second_file.write_text(second_line, encoding='utf-8')
+            result_path = package_dir / 'results.jsonl'
+            manifest_path = package_dir / 'manifest.json'
+            result_rows = (
+                {
+                    'key': 'chunk-first',
+                    'response': {
+                        'candidates': [
+                            {
+                                'content': {
+                                    'parts': [
+                                        {
+                                            'text': json.dumps(
+                                                [
+                                                    {
+                                                        'id': f'first.rpy:0:{first_start}',
+                                                        'translation': '你好',
+                                                    }
+                                                ],
+                                                ensure_ascii=False,
+                                            )
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                },
+                {
+                    'key': 'chunk-second',
+                    'response': {
+                        'candidates': [
+                            {
+                                'content': {
+                                    'parts': [
+                                        {
+                                            'text': json.dumps(
+                                                [
+                                                    {
+                                                        'id': f'second.rpy:0:{second_start}',
+                                                        'translation': '世界',
+                                                    }
+                                                ],
+                                                ensure_ascii=False,
+                                            )
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                },
+            )
+            result_path.write_text(
+                ''.join(
+                    json.dumps(row, ensure_ascii=False) + '\n'
+                    for row in result_rows
+                ),
+                encoding='utf-8',
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        'execution': 'sync',
+                        'files': {
+                            'first.rpy': {'path': str(first_file)},
+                            'second.rpy': {'path': str(second_file)},
+                        },
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'chunk-first',
+                                'file_rel_path': 'first.rpy',
+                                'items': [
+                                    {
+                                        'id': f'first.rpy:0:{first_start}',
+                                        'line': 0,
+                                        'start': first_start,
+                                        'end': first_start + len('"Hello"'),
+                                        'text': 'Hello',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    }
+                                ],
+                            },
+                            {
+                                'key': 'chunk-second',
+                                'file_rel_path': 'second.rpy',
+                                'items': [
+                                    {
+                                        'id': f'second.rpy:0:{second_start}',
+                                        'line': 0,
+                                        'start': second_start,
+                                        'end': second_start + len('"World"'),
+                                        'text': 'World',
+                                        'prefix': '',
+                                        'quote': '"',
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod, 'update_progress') as update_progress,
+            ):
+                batch_mod.check_results(str(manifest_path))
+                first_file.write_text('    e "你好"\n', encoding='utf-8')
+                manifest = batch_mod.apply_results(str(manifest_path))
+
+            self.assertEqual(first_file.read_text(encoding='utf-8'), '    e "你好"\n')
+            self.assertEqual(second_file.read_text(encoding='utf-8'), '    e "世界"\n')
+
+        update_progress.assert_has_calls(
+            [
+                mock.call('first.rpy', [0]),
+                mock.call('second.rpy', [0]),
+            ],
+            any_order=True,
+        )
+        self.assertEqual(manifest['apply_summary']['applied_files'], 2)
+        self.assertEqual(manifest['apply_summary']['applied_lines'], 2)
+
 
     def test_apply_results_revalidates_snapshot_before_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1788,6 +1930,111 @@ class BatchRepairRegressionTests(unittest.TestCase):
 
         self.assertEqual(unchanged_script, line)
         append_failures.assert_not_called()
+    def test_apply_results_force_refuses_adapter_block_before_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_dir = root / 'package'
+            package_dir.mkdir()
+            target_file = root / 'script.rpy'
+            original_line = '    e "Hello"\n'
+            target_file.write_text(original_line, encoding='utf-8')
+            start = original_line.index('"Hello"')
+            replacements = {
+                0: [
+                    (
+                        start,
+                        start + len('"Hello"'),
+                        '你好',
+                        '',
+                        '"',
+                        'Hello',
+                        'item-1',
+                        'chunk-1',
+                    )
+                ]
+            }
+            manifest = {
+                'applied_at': '2026-05-12T12:00:00',
+                '_package_dir': str(package_dir),
+                '_manifest_path': str(package_dir / 'manifest.json'),
+                'execution': 'sync',
+                'files': {'script.rpy': {'path': str(target_file)}},
+            }
+            summary = {'reason_counts': {}, 'valid_items': 1, 'failure_items': 0}
+            failures = []
+
+            def block_adapter_plan(
+                _manifest,
+                _replacements_by_file,
+                live_summary,
+                failure_entries,
+                live_sources=None,
+            ):
+                del live_sources
+                batch_mod.bump_counter(
+                    live_summary['reason_counts'],
+                    'adapter_writeback_block',
+                )
+                live_summary['adapter_writeback_status'] = 'block'
+                failure_entries.append({'reason_code': 'adapter_writeback_block'})
+                return None, None
+
+            def attach_block(_manifest, live_summary):
+                live_summary['safety_level'] = batch_mod.CHECK_SAFETY_BLOCK
+                return live_summary
+
+            with (
+                mock.patch.object(batch_mod, 'load_manifest', return_value=manifest),
+                mock.patch.object(batch_mod, 'require_manifest_mode'),
+                mock.patch.object(batch_mod, 'require_manifest_project_match'),
+                mock.patch.object(batch_mod, 'recover_atomic_write_transaction'),
+                mock.patch.object(batch_mod, 'require_safe_check_for_apply'),
+                mock.patch.object(
+                    batch_mod,
+                    'collect_result_actions',
+                    return_value=(
+                        {'script.rpy': replacements},
+                        {'script.rpy': {0}},
+                        failures,
+                        summary,
+                    ),
+                ),
+                mock.patch.object(
+                    batch_mod,
+                    'resolve_manifest_file_path',
+                    return_value=str(target_file),
+                ),
+                mock.patch.object(
+                    batch_mod,
+                    'validate_replacements_for_lines',
+                    return_value=(replacements, {0}, [], 0, 0),
+                ),
+                mock.patch.object(
+                    batch_mod,
+                    '_validate_adapter_writeback_plan',
+                    side_effect=block_adapter_plan,
+                ),
+                mock.patch.object(
+                    batch_mod,
+                    'attach_check_contract',
+                    side_effect=attach_block,
+                ),
+                mock.patch.object(batch_mod, 'append_failure_entries'),
+                mock.patch.object(
+                    batch_mod,
+                    'write_apply_failure_report',
+                    return_value=str(package_dir / 'apply_failure_report.json'),
+                ),
+                mock.patch.object(batch_mod, 'save_manifest'),
+                mock.patch.object(batch_mod, 'atomic_write_many_lines') as atomic_write,
+                mock.patch.object(batch_mod, 'update_progress') as update_progress,
+            ):
+                with self.assertRaisesRegex(SystemExit, 'not safe'):
+                    batch_mod.apply_results('manifest.json', force=True)
+
+            self.assertEqual(target_file.read_text(encoding='utf-8'), original_line)
+            atomic_write.assert_not_called()
+            update_progress.assert_not_called()
 
     def test_apply_results_rejects_warn_check_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -34,9 +34,13 @@ def locked_runtime_state():
 
 from atomic_io import atomic_write_json, atomic_write_lines
 import cli_contract
-from engine_adapters.contracts import ProjectDiscoveryRequest
+from engine_adapters.contracts import ProjectDiscoveryRequest, ValidatedTranslation
 from engine_adapters.coverage import export_coverage_package
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
+from engine_adapters.writeback import (
+    WritebackPlanError,
+    render_writeback_plan,
+)
 from gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
@@ -3645,6 +3649,121 @@ def _upgrade_legacy_progress_keys(progress, file_paths):
     return progress
 
 
+def build_sync_adapter_writeback_plan(adapter, snapshot, file_rel_path, tasks, replacements):
+    """Validate replacements and return a plan with its exact source tuple."""
+
+    occurrences = tuple(
+        occurrence
+        for occurrence in snapshot.occurrences
+        if occurrence.unit.file_rel_path == file_rel_path
+    )
+    occurrences_by_unit_id = {
+        occurrence.unit.id: occurrence
+        for occurrence in occurrences
+        if occurrence.unit.id
+    }
+    tasks_by_span = {
+        (
+            int(task.get('line') or 0),
+            int(task.get('start') or 0),
+            int(task.get('end') or 0),
+        ): task
+        for task in tasks
+    }
+    validated = []
+    used_occurrence_ids = set()
+
+    for line, line_replacements in replacements.items():
+        for replacement in line_replacements:
+            start, end, translated, _prefix, _quote = replacement[:5]
+            task = tasks_by_span.get((int(line), int(start), int(end)))
+            occurrence = None
+            if task is not None:
+                occurrence = occurrences_by_unit_id.get(str(task.get('id') or ''))
+            if occurrence is None:
+                candidates = [
+                    candidate
+                    for candidate in occurrences
+                    if candidate.unit.line == int(line)
+                    and candidate.unit.start == int(start)
+                    and candidate.unit.end == int(end)
+                    and (
+                        not task
+                        or not task.get('text')
+                        or candidate.unit.text == task.get('text')
+                        or candidate.unit.source_text == task.get('text')
+                    )
+                ]
+                if len(candidates) == 1:
+                    occurrence = candidates[0]
+                elif len(candidates) > 1:
+                    raise WritebackPlanError(
+                        'common.locator.unresolved',
+                        f'Ambiguous sync occurrence at {file_rel_path}:{line}:{start}-{end}.',
+                    )
+            if occurrence is None:
+                raise WritebackPlanError(
+                    'common.locator.unresolved',
+                    f'Sync occurrence could not be resolved at {file_rel_path}:{line}:{start}-{end}.',
+                )
+            if occurrence.occurrence_id in used_occurrence_ids:
+                raise WritebackPlanError(
+                    'common.writeback.span_overlap',
+                    f'Duplicate sync occurrence at {file_rel_path}:{line}:{start}-{end}.',
+                )
+            used_occurrence_ids.add(occurrence.occurrence_id)
+            validation = adapter.validate_translation(
+                occurrence,
+                str(translated or ''),
+            )
+            if validation.status != 'pass':
+                codes = ','.join(validation.reason_codes) or 'adapter.validation.block'
+                raise WritebackPlanError(
+                    'adapter.validation.block',
+                    f'Adapter validation blocked {file_rel_path}:{line}: {codes}.',
+                )
+            validated.append(
+                ValidatedTranslation(
+                    occurrence=occurrence,
+                    translated_text=str(translated or ''),
+                    validation=validation,
+                )
+            )
+
+    live_sources = tuple(
+        document
+        for document in snapshot.project.source_documents
+        if document.file_rel_path == file_rel_path
+    )
+    plan = adapter.build_writeback_plan(
+        snapshot.project,
+        tuple(validated),
+        live_sources,
+    )
+    return plan, live_sources
+
+
+def build_sync_adapter_preview(adapter, snapshot, file_rel_path, tasks, replacements):
+    """Build and render one sync preview file without aborting sibling files."""
+
+    try:
+        plan, live_sources = build_sync_adapter_writeback_plan(
+            adapter,
+            snapshot,
+            file_rel_path,
+            tasks,
+            replacements,
+        )
+        rendered = render_writeback_plan(plan, live_sources)
+    except (KeyError, ValueError) as exc:
+        return None, None, {
+            "relative_path": file_rel_path,
+            "reason_code": getattr(exc, "reason_code", "adapter.writeback.block"),
+            "message": str(exc),
+        }
+    return plan, rendered, None
+
+
 def render_replacement_lines(lines, replacements):
     """Return replacement output without modifying the caller's source lines."""
     rendered = list(lines)
@@ -4259,6 +4378,7 @@ def process_batch(
     usage_run_id='',
     usage_buffer=None,
     usage_operation_id='',
+    translation_validator=None,
 ):
     glossary_hits = retrieve_sync_glossary_hits(batch) if SYNC_RAG_ENABLED else []
     history_hits, rag_stats = retrieve_sync_history_hits(batch) if SYNC_RAG_ENABLED else ([], {})
@@ -4299,7 +4419,10 @@ def process_batch(
 
         translated = item.get("translation", "")
         memory_translation = apply_normalization(translated) if USE_TRANSLATION_MEMORY else translated
-        valid, msg = validate_translation(entry["text"], translated)
+        if translation_validator is None:
+            valid, msg = validate_translation(entry["text"], translated)
+        else:
+            valid, msg = translation_validator(entry, translated)
 
         if not valid:
             print(f"  Warning: Validation failed for {entry['id']}: {msg}")
@@ -4329,6 +4452,7 @@ def process_batch_with_retry(
     usage_run_id='',
     usage_buffer=None,
     usage_operation_id='',
+    translation_validator=None,
 ):
     if retry_depth >= 5:
         log_failure(batch, "Max retry depth reached")
@@ -4344,6 +4468,7 @@ def process_batch_with_retry(
             return process_batch(
                 batch,
                 replacements,
+                translation_validator=translation_validator,
                 usage_run_id=usage_run_id,
                 usage_buffer=usage_buffer,
                 usage_operation_id=usage_operation_id,
@@ -4402,12 +4527,14 @@ def process_batch_with_retry(
             usage_run_id=usage_run_id,
             usage_buffer=usage_buffer,
             usage_operation_id=usage_operation_id,
+            translation_validator=translation_validator,
         )
         r2 = process_batch_with_retry(
             batch[mid:], replacements, retry_depth + 1,
             usage_run_id=usage_run_id,
             usage_buffer=usage_buffer,
             usage_operation_id=usage_operation_id,
+            translation_validator=translation_validator,
         )
         return r1 + r2
 
@@ -4978,8 +5105,9 @@ def run_translation(*, prepare=False):
         if not os.path.isdir(TL_DIR):
             print("WARNING: TL_DIR does not exist in preview mode.")
 
+        adapter = RenPyAdapter(legacy_module=sys.modules[__name__])
         adapter_snapshot = build_translation_snapshot(
-            RenPyAdapter(legacy_module=sys.modules[__name__]),
+            adapter,
             ProjectDiscoveryRequest(
                 project_root=BASE_DIR,
                 localization_root=TL_DIR,
@@ -4989,6 +5117,22 @@ def run_translation(*, prepare=False):
             ),
         )
         source_documents = adapter_snapshot.project.source_documents
+        occurrences_by_unit_id = {
+            occurrence.unit.id: occurrence
+            for occurrence in adapter_snapshot.occurrences
+            if occurrence.unit.id
+        }
+
+        def validate_sync_translation(entry, translated):
+            occurrence = occurrences_by_unit_id.get(str(entry.get("id") or ""))
+            if occurrence is None:
+                return False, "common.locator.unresolved"
+            validation = adapter.validate_translation(occurrence, translated)
+            if validation.status == "pass":
+                return True, "OK"
+            reason = ", ".join(validation.reason_codes) or "adapter.validation.block"
+            return False, reason
+
         files_to_process = [
             document.file_path
             for document in source_documents
@@ -4997,6 +5141,7 @@ def run_translation(*, prepare=False):
 
         global_progress = _upgrade_legacy_progress_keys(load_progress(), files_to_process)
         preview_files = []
+        preview_failures = []
         for document in source_documents:
             file_path = document.file_path
             filename = os.path.basename(file_path)
@@ -5039,6 +5184,7 @@ def run_translation(*, prepare=False):
                         batch,
                         replacements,
                         usage_run_id=usage_run_id,
+                        translation_validator=validate_sync_translation,
                         usage_buffer=usage_buffer,
                         usage_operation_id=usage_operation_id,
                     ))
@@ -5051,13 +5197,25 @@ def run_translation(*, prepare=False):
                     batch,
                     replacements,
                     usage_run_id=usage_run_id,
+                    translation_validator=validate_sync_translation,
                     usage_buffer=usage_buffer,
                     usage_operation_id=usage_operation_id,
                 ))
 
-            if replacements:
+            if any(replacements.values()):
                 normalized_entries = _normalize_progress_entries(successful_entries)
-                preview_lines = render_replacement_lines(lines, replacements)
+                adapter_plan, rendered_by_file, preview_failure = build_sync_adapter_preview(
+                    adapter,
+                    adapter_snapshot,
+                    progress_key,
+                    tasks,
+                    replacements,
+                )
+                if preview_failure is not None:
+                    preview_failures.append(preview_failure)
+                    print(f"  Warning: Preview skipped for {filename}: {preview_failure['message']}")
+                    continue
+                preview_lines = rendered_by_file[progress_key]
                 source_text = "".join(lines)
                 preview_text = "".join(preview_lines)
                 # Preserve a leading UTF-8 BOM so source_sha256 (raw bytes) and
@@ -5075,6 +5233,7 @@ def run_translation(*, prepare=False):
                         "preview_text": preview_text,
                         "progress_entries": normalized_entries,
                         "translated_items": len(normalized_entries),
+                        "writeback_plan": adapter_plan.to_dict(),
                     }
                 )
             print(f"  Previewed {filename}.")
@@ -5084,6 +5243,7 @@ def run_translation(*, prepare=False):
             project_root=BASE_DIR,
             tl_dir=TL_DIR,
             files=preview_files,
+            failures=preview_failures,
         )
         try:
             export_coverage_package(
@@ -5102,7 +5262,11 @@ def run_translation(*, prepare=False):
         print(f"Sync preview report: {report_path}")
         print(f"Preview files: {int(summary.get('files_changed') or 0)}")
         print(f"Preview translations: {int(summary.get('translated_items') or 0)}")
-        print("Preview status: safe")
+        if preview_failures:
+            print(f"Preview failures: {len(preview_failures)}")
+            print("Preview status: partial")
+        else:
+            print("Preview status: safe")
         print("No project scripts were modified. Review the diff, then run with --apply MANIFEST.")
         return manifest_path
     finally:

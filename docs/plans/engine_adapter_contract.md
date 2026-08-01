@@ -2,7 +2,8 @@
 
 > 状态：#265 / #285 的 P0 设计基线；#265 P1 已按本文合同实现只读
 > `RenPyAdapter`、coverage/review 产物，并迁移 sync 与普通 Batch translation
-> build 的扫描入口。P2 的 relocation / validation / writeback plan 尚未实现。
+> build 的扫描入口；#265 P2 已实现 Ren'Py relocation、validation、声明式
+> writeback plan 及 sync/Batch/revision 的公共 plan 消费。
 > 当前实现说明见 [Ren'Py Engine Adapter 与覆盖审计](../engine_adapter.md)。
 
 ## 1. 范围与硬性边界
@@ -70,8 +71,8 @@ pair collector 就宣称 revision/repair 已统一。
 | scan | sync：`run_translation() -> collect_tasks() -> collect_tasks_with_progress()`；Batch build：`create_batch_package() -> collect_pending_file_jobs() -> collect_tasks_with_progress()`。 | tokenizer/AST heuristic 识别字符串；translation file 中保护 `old`、keyword argument、Character display name 与 voice 行。宽泛解析异常当前会跳过。 |
 | build | sync：task -> `process_batch_with_retry() -> process_batch()`；Batch：file jobs -> `build_chunks()` -> `translation_core.units_from_items()` -> request JSONL + manifest v2。 | prompt/result 是公共语义；文件、block、source marker、speaker、span 是 Ren'Py 语义。Batch manifest 仍为 `manifest_version=2`、`core_schema_version=2`。 |
 | relocate | `collect_result_actions()` / `collect_revision_actions()` 调用 `relocate_v2_chunk_items()`；后者按文件调用 `scan_all_translation_units()` 并用 item `id` 更新 `line/start/end`。 | 仅 manifest v2 使用 identity relocation。v1 保持旧定位与后续 source validation 行为。sync preview 不做 item relocation，而以 whole-file snapshot/hash 拒绝漂移。 |
-| validate | sync：`process_batch() -> validate_translation()`；Batch：`collect_result_actions() -> validate_translation()`，随后 `validate_result_replacements()` / `validate_replacements_for_lines()` 校验 live token 与 expected source。 | `validate_translation()` 当前混合公共规则（空译文、保留词、目标语言 heuristic）和 Ren'Py 规则（tag/field/percent token）。source snapshot、项目匹配和路径约束属于公共安全层。 |
-| render | sync preview 与 Batch/revision apply 都调用 `translator_runtime.render_replacement_lines()`；它经 `quote_with()` 保留 prefix/quote 并转义字符串。 | 当前 renderer 是 Ren'Py 字符串字面量语义。`commit_replacements()` 和 Batch apply 再交给 `atomic_io` 写入。 |
+| validate | sync：`process_batch()` 后由 `RenPyAdapter.validate_translation()` 重检；Batch/revision：collect 的 source validation 后构建 adapter `ValidationResult`。 | adapter 输出稳定 reason codes；公共 plan consumer 继续负责 source snapshot、项目匹配、路径约束和 check safety。 |
+| render | sync preview、Batch apply、revision apply 都先构建 adapter `WritebackPlan`，再由 `engine_adapters.writeback.render_writeback_plan()` 在内存中拼接最终 fragment。 | adapter 负责 Ren'Py prefix/quote/escape；common 不二次渲染，最后仍由现有 `atomic_write_many_lines()` 写入。 |
 | check | `check_results() -> require_manifest_project_match() -> collect_result_actions(validate_sources=True) -> attach_check_contract()`。 | `CHECK_CONTRACT_VERSION=2`；fingerprint 绑定 manifest target shape、结果文件、项目 identity 和设置；reason codes 聚合为 `safe/warn/block`。 |
 | apply | `apply_results()` 先恢复 transaction、要求最近一次 `safe` check，再重新收集结果、重新读取源文件和二次 source validation；之后 render 全部目标文件并用 `atomic_write_many_lines()` 事务写入。 | `--force` 只放宽“已经 apply”防重 guard，不绕过 stale check、project/source validation 或 `block`。 |
 | sync apply | `apply_sync_translation_preview() -> sync_translation_preview.apply_sync_preview()`；先验证 project/TL identity、manifest/report/artifact fingerprint 和每个源文件 hash，再一次性原子写入。 | sync 没有 Batch check 命令，但 preview manifest 自带独立、不可变的 source/proposed snapshot 合同。 |
@@ -125,7 +126,7 @@ adapter 可以在 P1 继续提供现有 `progress_entry` 兼容值，但 progres
 
 | 路径 | 当前扫描 / 消费方式 | P0 判断 |
 |---|---|---|
-| revision | `collect_revision_file_jobs() -> collect_translation_entries_from_lines()`；后者再用 `build_identity_v2_by_span() -> scan_all_translation_units(mode=revision)` 绑定 identity v2。preview/apply 继续走 source validation、Ren'Py renderer 和原子写回。 | 已译 occurrence 提取与 translation pending 扫描相邻但不同；P1 不抢先迁移，P2 与 relocation/validation/writeback plan 一起收敛。 |
+| revision | `collect_revision_file_jobs() -> collect_translation_entries_from_lines()`；后者再用 `build_identity_v2_by_span() -> scan_all_translation_units(mode=revision)` 绑定 identity v2。preview/apply 继续走 source validation、adapter plan 和原子写回。 | 已译 occurrence 提取与 translation pending 扫描仍相邻但不同；P2 只收敛 relocation/validation/writeback，不把 keyword/Project Analysis 扩进本阶段。 |
 | keyword | `collect_keyword_file_jobs() -> collect_repair_entries_from_lines()`，同时合并 source/translation pair 与 `legacy.collect_tasks()`。输出 glossary candidates，不写 `.rpy`。 | P1 保持原状；以后消费 candidate inventory 的“可分析文本投影”，不能把关键词任务等同翻译覆盖。 |
 | Project Analysis | `project_analysis_generate.build_structure_drafts()` 调用 `project_analysis_routes.discover_script_files()` 扫 source `.rpy` 且跳过 `tl/`，再调用 `project_analysis_routes.build_route_graph()` 解析 label/jump/call/menu；content fingerprint 与 lineage 存在自己的 store。 | 保留独立剧情结构 parser。后续只把 fresh coverage digest/review status 作为 publish upstream gate；不把全部 UI 文本注入分析 prompt。 |
 | Final Review | `create_final_review_package()` 以 `collect_pending_file_jobs()` 判断 pending，以 `collect_revision_file_jobs()` 取得已译 pairs；`evaluate_readiness()` 当前主要依赖 pending=0 与 review items>0，snapshot/context digest 冻结翻译与上下文。 | P1 保持原状；后续把 coverage dependency 加进 readiness 与 snapshot/upstream digest，不能只凭已识别 pending=0 宣称完成。 |
@@ -139,7 +140,7 @@ adapter 可以在 P1 继续提供现有 `progress_entry` 兼容值，但 progres
 | `TranslationUnit`、`ModelResult`、prompt、response normalization | `translation_core.py` | 继续作为唯一翻译核心模型；不得创建 engine-specific 第二套 unit。 |
 | adapter protocol、engine-neutral envelope/schema | 建议新增 `engine_adapters/contracts.py`（P1） | 可以依赖 `translation_core`；`translation_core` 不反向依赖 adapter，避免循环。 |
 | candidate/report/review、digest、freshness、review policy | 建议新增 `engine_adapters/coverage.py`（P1） | 公共层生成并校验 artifacts；adapter 只提供候选和分类证据。 |
-| project / manifest identity、check fingerprint、最近一次 safe check | common/workflow 层；P2 可从 Batch 中提取共享 helper | adapter 不得决定是否允许 apply。 |
+| project / manifest identity、check fingerprint、最近一次 safe check | common/workflow 层；P2 通过 adapter plan gate 接入现有 Batch/sync/revision 门禁 | adapter 不得决定是否允许 apply。 |
 | target path containment、source snapshot re-read、plan 越界/重叠检查 | common writeback safety 层 | adapter locator 对公共层保持 opaque；writeback operation 必须另带公共层可校验的相对 target。 |
 | atomic transaction、recovery、failure report、apply state | `atomic_io.py` 与 workflow 层 | adapter 不获得 writer、file handle、callback 或任意路径写权限。 |
 | progress、CLI/GUI orchestration、model/provider、RAG/Source Index 回灌 | 现有 workflow/common 模块 | 都是 adapter 的 consumer，不属于引擎解析合同。 |
@@ -340,6 +341,11 @@ P0/P1 不向现有 manifest v1/v2 序列化 occurrence 信封，因此 manifest 
 - 三者都只是 adapter-private relocation hint，不是公共业务坐标。adapter 可以用它们
   缩小重定位候选，但不能只凭 hint 跳过 identity/source 校验。
 
+identity v2 未命中时，Ren'Py content-evidence fallback 仅在同一 `file_rel_path`
+内打分；最高分必须唯一且达到 `CONTENT_EVIDENCE_MIN_SCORE`（当前 140，排除仅
+“同文件+同原文”的弱匹配 125；典型 stale-block 唯一回落约 140+）。同分并列或
+低于最低分均返回 `common.locator.unresolved`，不得 fail-open 写回。
+
 `source_marker_kind` 为 `comment`、`old_new` 或 `direct_source`。公共层只做 JSON
 schema/version/size 检查，把 locator 原样交回同一 engine adapter；不得读取或校验
 Ren'Py hint 字段作业务判断。
@@ -446,6 +452,11 @@ v1 只允许 common 层实现并注册的 operation kinds。Ren'Py 首个 kind �
 - common 层拒绝重叠 span、重复 operation、未知 root/kind 和路径逃逸；
 - common 层在第一笔写入前再次读取全部文件并复核；
 - 全部通过后才生成 rendered files 并交给 `atomic_write_many_lines()`。
+
+- `expected_fragment_sha256` 是 common consumer 对 live raw span 的校验；
+- `expected_text_digest` 绑定 adapter 已解码的源文本与 operation/plan payload，
+  但 common 层保持 engine-neutral，不重新解析 Ren'Py 字符串 literal；adapter
+  构建 plan 时必须从同一已验证 occurrence 生成该 digest。
 
 `apply --force` 不得跳过 plan freshness、source snapshot、coverage gate、`block`
 validation 或公共安全检查。
@@ -757,9 +768,9 @@ AND unresolved_findings == 0
 
 | 路径 | P1 首阶段 | 后续边界 |
 |---|---|---|
-| sync translation preview build | 经 `RenPyAdapter` 的 discover/inventory/audit/extract 取得与当前完全等价的 units；保持 CLI/GUI/preview artifact 不变。新 coverage artifacts 只读，不启用 gate。 | P2 用 adapter validation/writeback plan，但 sync project/source/atomic apply 仍由 common 层执行。 |
+| sync translation preview build | 经 `RenPyAdapter` 的 discover/inventory/audit/extract 取得与当前完全等价的 units；保持 CLI/GUI/preview artifact 不变。 | P2 preview manifest 保存单文件 plan；apply 在首笔写入前用 source artifact 重建并重检 plan，project/source/atomic apply 仍由 common 层执行。 |
 | Batch translation build | 与 sync 共用同一 adapter extraction；legacy item/manifest v2 shape、chunk/prompt/RAG 行为不变。 | P2 check 消费 adapter validation/plan；最近一次 safe check、fingerprint 与 apply re-read 保持公共层。 |
-| revision | P1 保持 `collect_revision_file_jobs()` 原状，避免把已译 pair/writeback 迁移偷带进扫描阶段。 | P2 与 relocation、validation、render/writeback plan 一次收敛；preview/apply 安全语义不得分叉。 |
+| revision | 保持 `collect_revision_file_jobs()` 的 pair 扫描边界，不把 Project Analysis/keyword 迁移偷带进来。 | P2 preview/apply 均在 source revalidation 后消费 adapter plan；不安全时拒绝写回。 |
 | keyword | P1 保持现有 repair-entry scan 与输出。 | adapter inventory 稳定后再消费 analysis projection；仍只输出 glossary candidates。 |
 | Project Analysis | P1 保持独立 route parser 和现有 publish 行为，不消费全部 occurrence。 | 后续将 fresh coverage/review digest 加入 publish gate 与 lineage upstream dependency；只消费 analysis projection digest。 |
 | Final Review | P1 保持当前 pending/revision scan、readiness 和 snapshot shape。 | 后续 readiness 必须验证 coverage gate；coverage/review digest 纳入 snapshot/upstream dependency。 |

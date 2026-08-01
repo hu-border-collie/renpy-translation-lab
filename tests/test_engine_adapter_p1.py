@@ -36,6 +36,7 @@ from engine_adapters.renpy import (
 )
 import translation_core
 import translator_runtime as runtime
+import sync_translation_preview as preview
 
 
 class TestRenPyAdapterP1(unittest.TestCase):
@@ -60,7 +61,7 @@ class TestRenPyAdapterP1(unittest.TestCase):
             **kwargs,
         )
 
-    def test_protocol_and_capabilities_are_read_only_in_p1(self):
+    def test_protocol_and_capabilities_expose_p2_contract(self):
         adapter = RenPyAdapter(legacy_module=runtime)
         self.assertIsInstance(adapter, EngineAdapter)
         capabilities = adapter.capabilities()
@@ -68,16 +69,12 @@ class TestRenPyAdapterP1(unittest.TestCase):
         self.assertEqual(capabilities.selected_localization_mode.value, "hybrid")
         self.assertTrue(capabilities.source_inventory)
         self.assertTrue(capabilities.native_catalog)
-        self.assertFalse(capabilities.relocation)
-        self.assertEqual(capabilities.declarative_writeback, ())
+        self.assertTrue(capabilities.relocation)
+        self.assertEqual(capabilities.declarative_writeback, ("text_span_replace",))
         self.assertTrue(capabilities.native_catalog_required_for_writeback)
+        self.assertEqual(capabilities.adapter_version, "1.1.0")
+        self.assertNotEqual(adapter.behavior_digest(), "")
 
-        with self.assertRaises(NotImplementedError):
-            adapter.relocate_occurrences(None, (), ())
-        with self.assertRaises(NotImplementedError):
-            adapter.validate_translation(None, "译文")
-        with self.assertRaises(NotImplementedError):
-            adapter.build_writeback_plan(None, (), ())
 
     def test_adapter_matches_legacy_units_ids_speakers_sources_and_spans(self):
         lines = [
@@ -879,13 +876,13 @@ translate schinese start:
         )
         self.assertTrue((Path(manifest_path).parent / "requests.jsonl").is_file())
 
-    def test_sync_preview_preserves_utf8_bom_in_source_and_preview_text(self):
+    def test_sync_preview_preserves_utf8_bom_and_crlf_through_apply(self):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
         tl_dir = root / "game" / "tl" / "schinese"
         tl_dir.mkdir(parents=True)
         target = tl_dir / "script.rpy"
-        body = 'translate schinese start:\n    # "Hello"\n    "Hello"\n'
+        body = 'translate schinese start:\r\n    # "Hello"\r\n    "Hello"\r\n'
         target.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
 
         def translate_batch(batch, replacements, usage_run_id="", **_kwargs):
@@ -921,6 +918,17 @@ translate schinese start:
         self.assertEqual(
             manifest["files"][0]["source_sha256"],
             hashlib.sha256(target.read_bytes()).hexdigest(),
+        )
+        self.assertIn("writeback_plan", manifest["files"][0])
+
+        preview.apply_sync_preview(
+            manifest_path,
+            active_project_root=root,
+            active_tl_dir=tl_dir,
+        )
+        self.assertEqual(
+            target.read_bytes(),
+            b"\xef\xbb\xbf" + body.replace('    "Hello"', '    "你好"').encode("utf-8"),
         )
 
 

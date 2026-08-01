@@ -34,6 +34,27 @@ class GuiSyncTranslationWorkflowTests(unittest.TestCase):
         self.assertEqual(workflow.manifest_path, "C:/run/manifest.json")
         self.assertIsNone(workflow.current_step())
 
+
+    def test_partial_preview_warns_but_keeps_manifest_applyable(self):
+        workflow = SyncTranslationWorkflow.start_new()
+        output = (
+            "Found 2 files.\nProcessing: a.rpy\n"
+            "  Found 1 lines to translate.\n"
+            "  Translated 1/1 items. (Received 8 chars of translation)\n"
+            "  Previewed a.rpy.\n"
+            "Sync preview manifest: C:/run/manifest.json\n"
+            "Sync preview report: C:/run/preview.diff\n"
+            "Preview files: 1\n"
+            "Preview translations: 1\n"
+            "Preview failures: 1\n"
+            "Preview status: partial\n"
+        )
+
+        update = workflow.complete_current_step(0, output)
+
+        self.assertEqual(update.status, "warning")
+        self.assertEqual(workflow.manifest_path, "C:/run/manifest.json")
+        self.assertIsNone(workflow.current_step())
     def test_apply_workflow_uses_explicit_manifest(self):
         workflow = SyncTranslationWorkflow.apply_existing("C:/run/manifest.json")
 

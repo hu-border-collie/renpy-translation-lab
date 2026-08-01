@@ -1361,6 +1361,46 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(successful, ['task:0:1'])
         self.assertEqual(replacements, {0: [(1, 8, '\u4f60\u597d', '', '"')]})
 
+    def test_process_batch_uses_injected_adapter_validator(self):
+        batch = [
+            {
+                'id': 'file:0:1',
+                'text': 'Hello',
+                'line': 0,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:0:1',
+            },
+            {
+                'id': 'file:0:10',
+                'text': 'World',
+                'line': 0,
+                'start': 10,
+                'end': 17,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:0:10',
+            },
+        ]
+        validator = mock.Mock(
+            side_effect=lambda entry, _translated: (
+                entry['id'] == 'file:0:10',
+                'adapter.validation.block',
+            )
+        )
+        replacements = {}
+        with mock.patch.object(runtime, 'call_gemini_sdk', return_value=[
+            {'id': 'file:0:1', 'translation': '你好'},
+            {'id': 'file:0:10', 'translation': '世界'},
+        ]):
+            successful = runtime.process_batch(
+                batch, replacements, translation_validator=validator
+            )
+        self.assertEqual(successful, ['task:0:10'])
+        self.assertEqual(validator.call_count, 2)
+
     def test_process_batch_stores_normalized_text_for_sync_rag(self):
         old_normalize_map = runtime.NORMALIZE_TRANSLATION_MAP
         old_use_memory = runtime.USE_TRANSLATION_MEMORY

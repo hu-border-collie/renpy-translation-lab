@@ -5,6 +5,7 @@ import unittest
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import translation_core
@@ -382,6 +383,176 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         action_tuple = replacements[file_rel_path][6][0]
         self.assertEqual(action_tuple[2], "你好世界")
 
+    def test_adapter_plan_preserves_batch_non_chinese_policy_allowance(self):
+        file_rel_path = "screens_patronlistitem.rpy"
+        file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
+        lines = ['    "Alpha, Beta, Gamma"\n']
+        Path(file_path).write_text("".join(lines), encoding="utf-8")
+        scanned = runtime.scan_all_translation_units(lines, file_rel_path)
+        item_id, (line, start, end, source_text) = next(iter(scanned.items()))
+        translated_text = "Alpha， Beta， Gamma"  # noqa: RUF001
+        manifest = {
+            "version": 2,
+            "manifest_version": 2,
+            "core_schema_version": 2,
+            "mode": batch_mod.MANIFEST_MODE_TRANSLATION,
+            "base_dir": self.tmp_dir,
+            "tl_dir": batch_mod.legacy.TL_DIR,
+            "result_jsonl_path": os.path.join(self.tmp_dir, "results.jsonl"),
+            "files": {file_rel_path: {"path": file_path, "task_count": 1}},
+            "chunks": [
+                {
+                    "key": "chunk_0",
+                    "file_rel_path": file_rel_path,
+                    "items": [
+                        {
+                            "id": item_id,
+                            "text": source_text,
+                            "line": line,
+                            "line_number": line + 1,
+                            "start": start,
+                            "end": end,
+                            "prefix": "",
+                            "quote": '"',
+                        }
+                    ],
+                }
+            ],
+            "_manifest_path": os.path.join(self.tmp_dir, "manifest.json"),
+            "_package_dir": self.tmp_dir,
+        }
+        result = {
+            "key": "chunk_0",
+            "response": {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": json.dumps(
+                                        [{"id": item_id, "translation": translated_text}]
+                                    )
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        }
+        Path(manifest["result_jsonl_path"]).write_text(
+            json.dumps(result, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+        replacements, _translated, failures, summary = batch_mod.collect_result_actions(
+            manifest,
+            validate_sources=True,
+        )
+        plan, _snapshot = batch_mod._validate_adapter_writeback_plan(
+            manifest,
+            replacements,
+            summary,
+            failures,
+        )
+
+        self.assertEqual(failures, [])
+        self.assertEqual(summary["valid_items"], 1)
+        self.assertEqual(summary["adapter_writeback_status"], "pass")
+        self.assertIsNotNone(plan)
+        self.assertEqual(
+            plan.operations[0].replacement_fragment,
+            '"Alpha， Beta， Gamma"',  # noqa: RUF001
+        )
+
+    def test_find_adapter_occurrence_binds_identity_to_validated_span(self):
+        first = SimpleNamespace(
+            unit=SimpleNamespace(
+                id="identity-match",
+                file_rel_path="script.rpy",
+                line=0,
+                start=4,
+                end=10,
+                text="Same",
+                source_text="Same",
+                current_translation="",
+            )
+        )
+        positioned = SimpleNamespace(
+            unit=SimpleNamespace(
+                id="position-match",
+                file_rel_path="script.rpy",
+                line=1,
+                start=4,
+                end=10,
+                text="Same",
+                source_text="Same",
+                current_translation="",
+            )
+        )
+
+        matched = batch_mod._find_adapter_occurrence(
+            (first, positioned),
+            "script.rpy",
+            1,
+            4,
+            10,
+            "Same",
+            "identity-match",
+        )
+
+        self.assertIs(matched, positioned)
+
+    def test_adapter_plan_blocks_missing_rendered_target(self):
+        plan = SimpleNamespace(plan_digest="plan", operations=(SimpleNamespace(),))
+        snapshot = SimpleNamespace(
+            project=SimpleNamespace(source_documents=()),
+        )
+        summary = {"reason_counts": {}, "valid_items": 1}
+        failures = []
+
+        with (
+            mock.patch.object(
+                batch_mod,
+                "_build_adapter_writeback_plan",
+                return_value=(plan, snapshot),
+            ),
+            mock.patch.object(batch_mod, "render_writeback_plan", return_value={}),
+        ):
+            result_plan, result_snapshot = batch_mod._validate_adapter_writeback_plan(
+                {"_package_dir": self.tmp_dir},
+                {"script.rpy": {0: [(0, 1, "译文", "", '"')]}},
+                summary,
+                failures,
+            )
+
+        self.assertIsNone(result_plan)
+        self.assertIsNone(result_snapshot)
+        self.assertEqual(summary["adapter_writeback_status"], "block")
+        self.assertEqual(
+            failures[0]["adapter_reason_code"],
+            "common.writeback.target_missing",
+        )
+
+    def test_adapter_plan_does_not_swallow_system_exit(self):
+        summary = {"reason_counts": {}, "valid_items": 1}
+        failures = []
+
+        with (
+            mock.patch.object(
+                batch_mod,
+                "_build_adapter_writeback_plan",
+                side_effect=SystemExit("project mismatch"),
+            ),
+            self.assertRaisesRegex(SystemExit, "project mismatch"),
+        ):
+            batch_mod._validate_adapter_writeback_plan(
+                {"_package_dir": self.tmp_dir},
+                {"script.rpy": {0: [(0, 1, "译文", "", '"')]}},
+                summary,
+                failures,
+            )
+
+
     def test_collect_result_actions_relocates_missing_v2_response_items(self):
         file_rel_path = "script.rpy"
         file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
@@ -473,7 +644,7 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         missing = [failure for failure in failures if failure.get("id") == id2][0]
         self.assertEqual(missing["line"], 8)
 
-    def test_collect_result_actions_blocks_missing_v2_relocation(self):
+    def test_collect_result_actions_uses_unique_content_fallback_for_stale_v2_identity(self):
         file_rel_path = "script.rpy"
         file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -545,13 +716,130 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
             validate_sources=True,
         )
 
-        self.assertEqual(replacements, {})
-        self.assertEqual(summary["reason_counts"]["v2_relocation_missing"], 1)
-        self.assertEqual(len(failures), 1)
-        self.assertEqual(failures[0]["id"], missing_id)
-        self.assertEqual(failures[0]["reason_code"], "v2_relocation_missing")
+        self.assertIn(2, replacements[file_rel_path])
+        self.assertEqual(len(replacements[file_rel_path][2]), 1)
+        self.assertEqual(replacements[file_rel_path][2][0][2], "同一文本")
+        self.assertEqual(failures, [])
+        self.assertNotIn("v2_relocation_missing", summary["reason_counts"])
         safety = batch_mod.summarize_check_safety(summary)
-        self.assertEqual(safety["level"], batch_mod.CHECK_SAFETY_BLOCK)
+        self.assertEqual(safety["level"], batch_mod.CHECK_SAFETY_SAFE)
+
+    def test_collect_result_actions_blocks_ambiguous_same_score_content_evidence(self):
+        """Two equal-score content candidates must fail closed through collect/check."""
+        file_rel_path = "script.rpy"
+        file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        current_lines = [
+            "translate schinese first:\n",
+            "    # \"Same text\"\n",
+            "    \"Same text\"\n",
+            "translate schinese second:\n",
+            "    # \"Same text\"\n",
+            "    \"Same text\"\n",
+        ]
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.writelines(current_lines)
+
+        stale_id = translation_core.build_identity_v2(
+            file_rel_path, "stale_block", 99, "Same text"
+        )
+        result_path = os.path.join(self.tmp_dir, "ambiguous_relocation_results.jsonl")
+        manifest = {
+            "version": 2,
+            "manifest_version": 2,
+            "core_schema_version": 2,
+            "mode": batch_mod.MANIFEST_MODE_TRANSLATION,
+            "input_jsonl_path": os.path.join(self.tmp_dir, "requests.jsonl"),
+            "result_jsonl_path": result_path,
+            "settings": {},
+            "files": {
+                file_rel_path: {
+                    "path": file_path,
+                    "task_count": 1,
+                }
+            },
+            "chunks": [
+                {
+                    "key": "chunk_0",
+                    "file_rel_path": file_rel_path,
+                    "chunk_index": 1,
+                    "items": [
+                        {
+                            "id": stale_id,
+                            "text": "Same text",
+                            "line": 2,
+                            "start": 4,
+                            "end": 15,
+                            "quote": "\"",
+                        }
+                    ],
+                }
+            ],
+            "_manifest_path": os.path.join(self.tmp_dir, "manifest.json"),
+            "_package_dir": self.tmp_dir,
+        }
+
+        response_text = json.dumps(
+            [{"id": stale_id, "translation": "同一文本"}],
+            ensure_ascii=False,
+        )
+        with open(result_path, "w", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "key": "chunk_0",
+                        "response": {
+                            "candidates": [
+                                {
+                                    "content": {
+                                        "parts": [{"text": response_text}]
+                                    }
+                                }
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+        replacements, _, failures, summary = batch_mod.collect_result_actions(
+            manifest,
+            validate_sources=True,
+        )
+
+        self.assertEqual(replacements.get(file_rel_path, {}), {})
+        self.assertEqual(summary["reason_counts"].get("v2_relocation_missing"), 1)
+        self.assertTrue(
+            any(failure.get("reason_code") == "v2_relocation_missing" for failure in failures)
+        )
+        safety = batch_mod.summarize_check_safety(summary)
+        self.assertNotEqual(safety["level"], batch_mod.CHECK_SAFETY_SAFE)
+
+        original_text = Path(file_path).read_text(encoding="utf-8")
+        with (
+            mock.patch.object(batch_mod, "load_manifest", return_value=manifest),
+            mock.patch.object(batch_mod, "require_manifest_mode"),
+            mock.patch.object(batch_mod, "require_manifest_project_match"),
+            mock.patch.object(batch_mod, "recover_atomic_write_transaction"),
+            mock.patch.object(batch_mod, "require_safe_check_for_apply"),
+            mock.patch.object(batch_mod, "append_failure_entries"),
+            mock.patch.object(
+                batch_mod,
+                "write_apply_failure_report",
+                return_value=os.path.join(self.tmp_dir, "apply_failure_report.json"),
+            ),
+            mock.patch.object(batch_mod, "save_manifest"),
+            mock.patch.object(batch_mod, "atomic_write_many_lines") as atomic_write,
+            mock.patch.object(batch_mod, "update_progress") as update_progress,
+        ):
+            with self.assertRaises(SystemExit):
+                batch_mod.apply_results(manifest["_manifest_path"], force=True)
+
+        self.assertEqual(Path(file_path).read_text(encoding="utf-8"), original_text)
+        atomic_write.assert_not_called()
+        update_progress.assert_not_called()
 
     def test_collect_revision_actions_uses_v2_identity_after_line_drift(self):
         file_rel_path = "script.rpy"

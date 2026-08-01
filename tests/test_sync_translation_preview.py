@@ -49,6 +49,72 @@ class SyncTranslationPreviewTests(unittest.TestCase):
             self.assertIn('-    "Hello 1"', report)
             self.assertIn('+    "你好 1"', report)
 
+    def test_load_accepts_legacy_preview_without_failures_field(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _tl_dir, manifest_path, manifest = self._create_preview(root)
+            manifest.pop("failures")
+            manifest["preview_fingerprint"] = preview._fingerprint(manifest)
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            loaded = preview.load_sync_preview(manifest_path)
+
+            self.assertNotIn("failures", loaded)
+
+
+    def test_create_preview_records_partial_adapter_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / "game" / "tl" / "schinese"
+            tl_dir.mkdir(parents=True)
+
+            manifest_path, manifest = preview.create_sync_preview(
+                log_dir=root / "logs",
+                project_root=root,
+                tl_dir=tl_dir,
+                files=(),
+                failures=(
+                    {
+                        "relative_path": "broken.rpy",
+                        "reason_code": "common.locator.unresolved",
+                        "message": "ambiguous occurrence",
+                    },
+                ),
+            )
+
+            self.assertTrue(Path(manifest_path).is_file())
+            self.assertEqual(manifest["summary"]["failure_files"], 1)
+            self.assertEqual(
+                manifest["summary"]["adapter_writeback_status"],
+                "partial",
+            )
+            self.assertEqual(
+                manifest["failures"][0]["reason_code"],
+                "common.locator.unresolved",
+            )
+
+            persisted = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+            persisted["failures"][0]["message"] = "edited audit detail"
+            Path(manifest_path).write_text(
+                json.dumps(persisted, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "manifest changed"):
+                preview.load_sync_preview(manifest_path)
+
+    def test_build_sync_adapter_preview_isolates_plan_failure(self):
+        error = runtime.WritebackPlanError("common.locator.unresolved", "ambiguous")
+        with mock.patch.object(runtime, "build_sync_adapter_writeback_plan", side_effect=error):
+            plan, rendered, failure = runtime.build_sync_adapter_preview(
+                object(), object(), "broken.rpy", (), {0: [(0, 1, "你好", "", '"')]}
+            )
+        self.assertIsNone(plan)
+        self.assertIsNone(rendered)
+        self.assertEqual(failure["reason_code"], "common.locator.unresolved")
+
     def test_sync_validation_rejects_changed_tags_and_placeholders(self):
         valid, message = runtime.validate_translation(
             "Hello [player] {i}%s{/i}",
