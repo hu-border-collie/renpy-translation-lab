@@ -102,7 +102,7 @@ class GuiControlLayoutAuditTests(unittest.TestCase):
         _process(self._app, 8)
 
     def tearDown(self) -> None:
-        self.window.close()
+        gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
 
     def _assert_visible_controls_healthy(self, *, context: str) -> None:

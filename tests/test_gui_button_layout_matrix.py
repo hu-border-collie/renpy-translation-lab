@@ -67,7 +67,7 @@ class GuiButtonLayoutMatrixTests(unittest.TestCase):
         self.window._reflow_button_bars()
 
     def tearDown(self) -> None:
-        self.window.close()
+        gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
 
     def _assert_no_button_overlap(self, *, width: int, height: int) -> None:

@@ -42,7 +42,7 @@ class GuiSettingsLayoutTests(unittest.TestCase):
         _process(self._app)
 
     def tearDown(self) -> None:
-        self.window.close()
+        gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
 
     def test_all_sections_share_the_same_bounded_content_body(self) -> None:

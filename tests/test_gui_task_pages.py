@@ -74,7 +74,7 @@ class GuiTaskPageTests(unittest.TestCase):
         self.window = MainWindow()
 
     def tearDown(self) -> None:
-        self.window.close()
+        gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
 
     def test_sync_page_shows_warning_and_start_label(self) -> None:

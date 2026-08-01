@@ -39,7 +39,7 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.window = MainWindow()
 
     def tearDown(self) -> None:
-        self.window.close()
+        gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
 
     def _route_item(self, route: str):

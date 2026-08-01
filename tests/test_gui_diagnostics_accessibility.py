@@ -53,7 +53,7 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
         self.window = MainWindow()
 
     def tearDown(self) -> None:
-        self.window.close()
+        gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
 
     def test_diagnostics_uses_one_flat_responsive_toolbar(self) -> None:
