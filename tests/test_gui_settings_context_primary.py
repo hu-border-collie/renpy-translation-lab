@@ -96,7 +96,7 @@ class GuiContextPrimaryUiTests(unittest.TestCase):
         self.window._ensure_settings_pages_for_config()
 
     def tearDown(self) -> None:
-        self.window.close()
+        gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
 
     def test_primary_widgets_only_on_context_page(self) -> None:

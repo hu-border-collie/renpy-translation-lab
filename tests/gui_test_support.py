@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import unittest
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Any, TypeVar
+from unittest import mock
 
 _T = TypeVar("_T", bound=type)
 
@@ -33,3 +34,13 @@ def skip_unless_gui(
     if import_error is not None:
         message = f"{message}: {import_error}"
     return unittest.skipIf(unavailable, message)  # type: ignore[return-value]
+
+
+def close_main_window(window: Any) -> None:
+    """Close a MainWindow in tests without opening an interactive prompt."""
+    with mock.patch.object(
+        window,
+        "_confirm_unsaved_config_before_close",
+        return_value=True,
+    ):
+        window.close()

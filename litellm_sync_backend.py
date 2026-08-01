@@ -123,8 +123,10 @@ class LiteLLMSyncBackend:
         self,
         completion: Optional[Callable[..., Any]] = None,
         api_key: Optional[str] = None,
+        async_completion: Optional[Callable[..., Any]] = None,
     ) -> None:
         self._completion = completion
+        self._async_completion = async_completion
         self._api_key = str(api_key or "").strip()
 
     def _resolve_completion(self) -> Callable[..., Any]:
@@ -141,6 +143,44 @@ class LiteLLMSyncBackend:
         return completion
 
     def generate(self, request: SyncGenerationRequest) -> SyncGenerationResult:
+        kwargs = self._build_request_kwargs(request)
+        try:
+            response = self._resolve_completion()(**kwargs)
+        except LiteLLMBackendError:
+            raise
+        except Exception as exc:
+            raise LiteLLMBackendError(
+                f"LiteLLM request failed: {exc}", category=_error_category(exc)
+            ) from exc
+        return self._build_result(request, response)
+
+    def _resolve_async_completion(self) -> Callable[..., Any]:
+        if self._async_completion is not None:
+            return self._async_completion
+        try:
+            from litellm import acompletion
+        except ImportError as exc:
+            raise LiteLLMUnavailableError(
+                "LiteLLM async completion is unavailable. "
+                "Install the optional dependency or use Gemini Batch."
+            ) from exc
+        self._async_completion = acompletion
+        return acompletion
+
+    async def generate_async(self, request: SyncGenerationRequest) -> SyncGenerationResult:
+        """Run a LiteLLM request through its async API so task cancellation reaches I/O."""
+        kwargs = self._build_request_kwargs(request)
+        try:
+            response = await self._resolve_async_completion()(**kwargs)
+        except LiteLLMBackendError:
+            raise
+        except Exception as exc:
+            raise LiteLLMBackendError(
+                f"LiteLLM request failed: {exc}", category=_error_category(exc)
+            ) from exc
+        return self._build_result(request, response)
+
+    def _build_request_kwargs(self, request: SyncGenerationRequest) -> Dict[str, Any]:
         config = dict(request.config)
         if config.get("safety_settings"):
             raise LiteLLMCapabilityError(
@@ -184,14 +224,11 @@ class LiteLLMSyncBackend:
                 }
             else:
                 kwargs["response_format"] = {"type": "json_object"}
-        try:
-            response = self._resolve_completion()(**kwargs)
-        except LiteLLMBackendError:
-            raise
-        except Exception as exc:
-            raise LiteLLMBackendError(
-                f"LiteLLM request failed: {exc}", category=_error_category(exc)
-            ) from exc
+        return kwargs
+
+    def _build_result(
+        self, request: SyncGenerationRequest, response: Any
+    ) -> SyncGenerationResult:
         payload = _serialize_response(response)
         choices = payload.get("choices") or []
         choice = choices[0] if choices and isinstance(choices[0], Mapping) else {}

@@ -1,3 +1,4 @@
+import asyncio
 import builtins
 import unittest
 from unittest import mock
@@ -47,6 +48,44 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         self.assertEqual(result.execution_mode, "sync")
         self.assertEqual(result.finish_reason, "stop")
         self.assertEqual(result.usage_metadata["prompt_tokens"], 8)
+
+    def test_async_success_uses_acompletion(self):
+        calls = []
+
+        async def completion(**kwargs):
+            calls.append(kwargs)
+            return {
+                "choices": [{
+                    "message": {"content": "OK"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"total_tokens": 3},
+            }
+
+        backend = LiteLLMSyncBackend(async_completion=completion)
+        result = asyncio.run(
+            backend.generate_async(
+                SyncGenerationRequest(
+                    "openai/test",
+                    "hello",
+                    {
+                        "timeout": 7,
+                        "temperature": 0.3,
+                        "max_output_tokens": 42,
+                        "response_json_schema": {"type": "object"},
+                    },
+                )
+            )
+        )
+
+        self.assertEqual(calls[0]["messages"], [{"role": "user", "content": "hello"}])
+        self.assertEqual(calls[0]["timeout"], 7)
+        self.assertEqual(calls[0]["temperature"], 0.3)
+        self.assertEqual(calls[0]["max_tokens"], 42)
+        self.assertEqual(calls[0]["response_format"]["type"], "json_schema")
+        self.assertEqual(result.response_text, "OK")
+        self.assertEqual(result.finish_reason, "stop")
+        self.assertEqual(result.usage_metadata["total_tokens"], 3)
 
     def test_preserves_provider_reported_cost_from_hidden_params(self):
         class Response:

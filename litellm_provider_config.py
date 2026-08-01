@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from importlib import metadata
+import json
 import re
 from typing import Any, Literal
 
@@ -209,6 +210,35 @@ def sort_provider_ids(providers: object) -> tuple[str, ...]:
     )
 
 
+def credential_provider_candidates(
+    *extra_groups: object,
+    include_ollama: bool = False,
+) -> tuple[str, ...]:
+    """Providers shown when managing LiteLLM keys.
+
+    Always includes the built-in common set (optionally without Ollama), then any
+    extra ids (e.g. online catalog cache, current selection).
+    """
+    providers: set[str] = {
+        provider
+        for provider in _COMMON_PROVIDER_ORDER
+        if include_ollama or provider != "ollama"
+    }
+    for group in extra_groups:
+        if isinstance(group, (str, bytes, bytearray)) or not isinstance(
+            group, Collection
+        ):
+            continue
+        for raw in group:
+            provider = str(raw or "").strip().lower()
+            if not provider:
+                continue
+            if provider == "ollama" and not include_ollama:
+                continue
+            providers.add(provider)
+    return sort_provider_ids(providers)
+
+
 def _keyring(keyring_module: Any = None) -> Any:
     if keyring_module is not None:
         return keyring_module
@@ -221,47 +251,164 @@ def _keyring(keyring_module: Any = None) -> Any:
     return keyring
 
 
-def load_provider_api_key(provider: str, keyring_module: Any = None) -> str:
+@dataclass(frozen=True)
+class ProviderApiKeyStore:
+    """OS keyring payload for one LiteLLM provider (multi-key + active index)."""
+
+    keys: tuple[str, ...] = ()
+    active_index: int = 0
+
+    def normalized(self) -> "ProviderApiKeyStore":
+        cleaned = tuple(str(key).strip() for key in self.keys if str(key).strip())
+        if not cleaned:
+            return ProviderApiKeyStore()
+        index = int(self.active_index)
+        if index < 0 or index >= len(cleaned):
+            index = 0
+        return ProviderApiKeyStore(keys=cleaned, active_index=index)
+
+    def active_key(self) -> str:
+        store = self.normalized()
+        if not store.keys:
+            return ""
+        return store.keys[store.active_index]
+
+
+def _encode_provider_key_store(store: ProviderApiKeyStore) -> str:
+    normalized = store.normalized()
+    if not normalized.keys:
+        return ""
+    # Single-key legacy plaintext keeps older readers working until next multi-key save.
+    if len(normalized.keys) == 1 and normalized.active_index == 0:
+        return normalized.keys[0]
+    payload = {
+        "version": 1,
+        "keys": list(normalized.keys),
+        "active_index": normalized.active_index,
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _decode_provider_key_store(raw: str | None) -> ProviderApiKeyStore:
+    text = str(raw or "").strip()
+    if not text:
+        return ProviderApiKeyStore()
+    if text.startswith("{"):
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            # Treat as a single opaque secret that happens to start with '{'.
+            return ProviderApiKeyStore(keys=(text,), active_index=0)
+        if not isinstance(payload, dict):
+            return ProviderApiKeyStore(keys=(text,), active_index=0)
+        keys_raw = payload.get("keys", [])
+        if not isinstance(keys_raw, list):
+            # Unrecognized object shape: keep the raw secret opaque.
+            return ProviderApiKeyStore(keys=(text,), active_index=0)
+        keys = tuple(str(item).strip() for item in keys_raw if str(item).strip())
+        if not keys:
+            return ProviderApiKeyStore(keys=(text,), active_index=0)
+        try:
+            active_index = int(payload.get("active_index", 0) or 0)
+        except (TypeError, ValueError):
+            active_index = 0
+        return ProviderApiKeyStore(keys=keys, active_index=active_index).normalized()
+    return ProviderApiKeyStore(keys=(text,), active_index=0)
+
+
+def load_provider_key_store(
+    provider: str,
+    keyring_module: Any = None,
+) -> ProviderApiKeyStore:
+    """Load all saved API keys for *provider* from the OS credential store."""
     provider = str(provider or "").strip().lower()
     if not provider or provider == "ollama":
-        return ""
+        return ProviderApiKeyStore()
     try:
         value = _keyring(keyring_module).get_password(KEYRING_SERVICE, provider)
     except Exception as exc:
         if isinstance(exc, ProviderCredentialStoreError):
             raise
         raise ProviderCredentialStoreError("无法读取系统凭据管理器。") from exc
-    return value.strip() if isinstance(value, str) else ""
+    return _decode_provider_key_store(value if isinstance(value, str) else "")
 
 
-def store_provider_api_key(provider: str, api_key: str, keyring_module: Any = None) -> None:
+def store_provider_key_store(
+    provider: str,
+    store: ProviderApiKeyStore | Mapping[str, object] | Collection[str],
+    keyring_module: Any = None,
+    *,
+    active_index: int | None = None,
+) -> ProviderApiKeyStore:
+    """Replace the saved key list for *provider* (empty list deletes the entry)."""
     provider = str(provider or "").strip().lower()
-    api_key = str(api_key or "").strip()
     if not provider or provider == "ollama":
         raise ValueError("该 provider 不需要保存 API Key。")
-    if not api_key:
-        raise ValueError("API Key 不能为空。")
+
+    if isinstance(store, ProviderApiKeyStore):
+        payload = store
+    elif isinstance(store, Mapping):
+        keys_raw = store.get("keys", ())
+        keys = tuple(str(item).strip() for item in keys_raw if str(item).strip())  # type: ignore[union-attr]
+        try:
+            idx = int(store.get("active_index", 0) or 0)
+        except (TypeError, ValueError):
+            idx = 0
+        payload = ProviderApiKeyStore(keys=keys, active_index=idx)
+    else:
+        keys = tuple(str(item).strip() for item in store if str(item).strip())
+        payload = ProviderApiKeyStore(keys=keys)
+    # Explicit keyword wins for every input type (store / mapping / collection).
+    if active_index is not None:
+        payload = ProviderApiKeyStore(keys=payload.keys, active_index=int(active_index))
+    payload = payload.normalized()
+
+    ring = _keyring(keyring_module)
     try:
-        _keyring(keyring_module).set_password(KEYRING_SERVICE, provider, api_key)
+        existing = ring.get_password(KEYRING_SERVICE, provider)
+        if not payload.keys:
+            if existing:
+                ring.delete_password(KEYRING_SERVICE, provider)
+            return ProviderApiKeyStore()
+        ring.set_password(KEYRING_SERVICE, provider, _encode_provider_key_store(payload))
     except Exception as exc:
         if isinstance(exc, ProviderCredentialStoreError):
             raise
         raise ProviderCredentialStoreError("无法写入系统凭据管理器。") from exc
+    return payload
+
+
+def load_provider_api_keys(provider: str, keyring_module: Any = None) -> tuple[str, ...]:
+    """Return all saved keys for *provider* (order preserved)."""
+    return load_provider_key_store(provider, keyring_module).keys
+
+
+def load_provider_api_key(provider: str, keyring_module: Any = None) -> str:
+    """Return the active saved key for *provider* (empty when none)."""
+    return load_provider_key_store(provider, keyring_module).active_key()
+
+
+def store_provider_api_key(provider: str, api_key: str, keyring_module: Any = None) -> None:
+    """Replace *provider* credentials with a single active key (legacy helper)."""
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        raise ValueError("API Key 不能为空。")
+    store_provider_key_store(
+        provider,
+        ProviderApiKeyStore(keys=(api_key,), active_index=0),
+        keyring_module,
+    )
 
 
 def delete_provider_api_key(provider: str, keyring_module: Any = None) -> bool:
+    """Delete every saved key for *provider*. Returns True when something was removed."""
     provider = str(provider or "").strip().lower()
     if not provider or provider == "ollama":
         return False
-    store = _keyring(keyring_module)
-    try:
-        if not store.get_password(KEYRING_SERVICE, provider):
-            return False
-        store.delete_password(KEYRING_SERVICE, provider)
-    except Exception as exc:
-        if isinstance(exc, ProviderCredentialStoreError):
-            raise
-        raise ProviderCredentialStoreError("无法删除系统凭据管理器中的密钥。") from exc
+    existing = load_provider_key_store(provider, keyring_module)
+    if not existing.keys:
+        return False
+    store_provider_key_store(provider, ProviderApiKeyStore(), keyring_module)
     return True
 
 

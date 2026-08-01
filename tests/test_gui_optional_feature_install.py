@@ -71,7 +71,7 @@ class GuiOptionalFeatureInstallTests(unittest.TestCase):
     def tearDown(self) -> None:
         OptionalFeatureInstallController._active_feature_id = None
         OptionalFeatureInstallController._active_controller = None
-        self.window.close()
+        gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
 
     def test_extensions_page_owns_relation_analyzer_card(self) -> None:

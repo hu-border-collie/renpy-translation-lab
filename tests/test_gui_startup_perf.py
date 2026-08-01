@@ -35,7 +35,7 @@ class GuiStartupPerfTests(unittest.TestCase):
     def tearDown(self) -> None:
         window = getattr(self, "window", None)
         if window is not None:
-            window.close()
+            gui_test_support.close_main_window(window)
             window.deleteLater()
             self._app.processEvents()
 

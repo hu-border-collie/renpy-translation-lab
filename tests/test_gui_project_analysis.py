@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from tests import gui_test_support
 
 import project_analysis as pa
 from gui_qt.check_report import idle_writeback_summary_for_work_mode
@@ -263,7 +264,7 @@ class ProjectAnalysisAppGlueTests(unittest.TestCase):
         self.window = MainWindow()
 
     def tearDown(self):
-        self.window.close()
+        gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
 
     def test_keyword_summary_choice_handles_yes_no_and_cancel(self):
