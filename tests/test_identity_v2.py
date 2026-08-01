@@ -724,6 +724,123 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         safety = batch_mod.summarize_check_safety(summary)
         self.assertEqual(safety["level"], batch_mod.CHECK_SAFETY_SAFE)
 
+    def test_collect_result_actions_blocks_ambiguous_same_score_content_evidence(self):
+        """Two equal-score content candidates must fail closed through collect/check."""
+        file_rel_path = "script.rpy"
+        file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        current_lines = [
+            "translate schinese first:\n",
+            "    # \"Same text\"\n",
+            "    \"Same text\"\n",
+            "translate schinese second:\n",
+            "    # \"Same text\"\n",
+            "    \"Same text\"\n",
+        ]
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.writelines(current_lines)
+
+        stale_id = translation_core.build_identity_v2(
+            file_rel_path, "stale_block", 99, "Same text"
+        )
+        result_path = os.path.join(self.tmp_dir, "ambiguous_relocation_results.jsonl")
+        manifest = {
+            "version": 2,
+            "manifest_version": 2,
+            "core_schema_version": 2,
+            "mode": batch_mod.MANIFEST_MODE_TRANSLATION,
+            "input_jsonl_path": os.path.join(self.tmp_dir, "requests.jsonl"),
+            "result_jsonl_path": result_path,
+            "settings": {},
+            "files": {
+                file_rel_path: {
+                    "path": file_path,
+                    "task_count": 1,
+                }
+            },
+            "chunks": [
+                {
+                    "key": "chunk_0",
+                    "file_rel_path": file_rel_path,
+                    "chunk_index": 1,
+                    "items": [
+                        {
+                            "id": stale_id,
+                            "text": "Same text",
+                            "line": 2,
+                            "start": 4,
+                            "end": 15,
+                            "quote": "\"",
+                        }
+                    ],
+                }
+            ],
+            "_manifest_path": os.path.join(self.tmp_dir, "manifest.json"),
+            "_package_dir": self.tmp_dir,
+        }
+
+        response_text = json.dumps(
+            [{"id": stale_id, "translation": "同一文本"}],
+            ensure_ascii=False,
+        )
+        with open(result_path, "w", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "key": "chunk_0",
+                        "response": {
+                            "candidates": [
+                                {
+                                    "content": {
+                                        "parts": [{"text": response_text}]
+                                    }
+                                }
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+        replacements, _, failures, summary = batch_mod.collect_result_actions(
+            manifest,
+            validate_sources=True,
+        )
+
+        self.assertEqual(replacements.get(file_rel_path, {}), {})
+        self.assertEqual(summary["reason_counts"].get("v2_relocation_missing"), 1)
+        self.assertTrue(
+            any(failure.get("reason_code") == "v2_relocation_missing" for failure in failures)
+        )
+        safety = batch_mod.summarize_check_safety(summary)
+        self.assertNotEqual(safety["level"], batch_mod.CHECK_SAFETY_SAFE)
+
+        original_text = Path(file_path).read_text(encoding="utf-8")
+        with (
+            mock.patch.object(batch_mod, "load_manifest", return_value=manifest),
+            mock.patch.object(batch_mod, "require_manifest_mode"),
+            mock.patch.object(batch_mod, "require_manifest_project_match"),
+            mock.patch.object(batch_mod, "recover_atomic_write_transaction"),
+            mock.patch.object(batch_mod, "require_safe_check_for_apply"),
+            mock.patch.object(batch_mod, "append_failure_entries"),
+            mock.patch.object(
+                batch_mod,
+                "write_apply_failure_report",
+                return_value=os.path.join(self.tmp_dir, "apply_failure_report.json"),
+            ),
+            mock.patch.object(batch_mod, "save_manifest"),
+            mock.patch.object(batch_mod, "atomic_write_many_lines") as atomic_write,
+            mock.patch.object(batch_mod, "update_progress") as update_progress,
+        ):
+            with self.assertRaises(SystemExit):
+                batch_mod.apply_results(manifest["_manifest_path"], force=True)
+
+        self.assertEqual(Path(file_path).read_text(encoding="utf-8"), original_text)
+        atomic_write.assert_not_called()
+        update_progress.assert_not_called()
+
     def test_collect_revision_actions_uses_v2_identity_after_line_drift(self):
         file_rel_path = "script.rpy"
         file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)

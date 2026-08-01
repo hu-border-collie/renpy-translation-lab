@@ -57,6 +57,9 @@ from .writeback import source_snapshot_fingerprint
 
 ADAPTER_VERSION = "1.1.0"
 LOCATOR_SCHEMA_VERSION = 1
+# Same-file + same-source alone scores 125. Content-evidence matches must also
+# share at least one structural signal (speaker / block / marker / fingerprint).
+CONTENT_EVIDENCE_MIN_SCORE = 150
 
 
 @dataclass(frozen=True)
@@ -1456,13 +1459,27 @@ class RenPyAdapter:
                         scored.append((candidate_score, candidate))
                 scored.sort(key=lambda item: item[0], reverse=True)
                 if scored and (len(scored) == 1 or scored[0][0] > scored[1][0]):
-                    score, match = scored[0]
+                    top_score, top_match = scored[0]
+                    if top_score >= CONTENT_EVIDENCE_MIN_SCORE:
+                        score, match = top_score, top_match
+                    else:
+                        diagnostics.append(
+                            {
+                                "occurrence_id": original.occurrence_id,
+                                "reason_code": "common.locator.unresolved",
+                                "status": "weak_content_evidence",
+                                "score": top_score,
+                                "min_score": CONTENT_EVIDENCE_MIN_SCORE,
+                                "candidate_count": len(scored),
+                            }
+                        )
                 elif scored:
                     diagnostics.append(
                         {
                             "occurrence_id": original.occurrence_id,
                             "reason_code": "common.locator.unresolved",
                             "status": "ambiguous",
+                            "score": scored[0][0],
                             "candidate_count": len(scored),
                         }
                     )

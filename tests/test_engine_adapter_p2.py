@@ -149,6 +149,55 @@ class TestRenPyAdapterP2(unittest.TestCase):
         self.assertEqual(result.occurrences, ())
         self.assertEqual(result.unresolved_occurrence_ids, (original.occurrence_id,))
 
+    def test_relocation_rejects_weak_unique_content_evidence(self):
+        """Same-file + same-source alone (score 125) must not relocate."""
+        source = (
+            'translate schinese chapter:\n'
+            '    # e "Same text"\n'
+            '    e "Same text"\n'
+        )
+        _root, _tl_dir, adapter, snapshot = self.snapshot(source)
+        original = self.occurrence_for(snapshot, "Same text")
+        weak = replace(
+            original,
+            content_fingerprint="not-a-real-fingerprint",
+            locator=OpaqueLocator(
+                engine="renpy",
+                locator_schema_version=1,
+                locator={
+                    "file_rel_path": "script.rpy",
+                    "translate_block": "gone",
+                    "block_occurrence": 99,
+                    "ordinal": 99,
+                    "line_hint": 1,
+                    "start_col_hint": 0,
+                    "end_col_hint": 0,
+                    "source_marker_kind": "other",
+                    "candidate_ordinal": 99,
+                },
+            ),
+            unit=replace(
+                original.unit,
+                id="script.rpy:gone:99:deadbeef",
+                speaker_id="z",
+                speaker_name="Z",
+            ),
+        )
+
+        result = adapter.relocate_occurrences(
+            snapshot.project,
+            (weak,),
+            snapshot.project.source_documents,
+        )
+
+        self.assertEqual(result.occurrences, ())
+        self.assertEqual(result.unresolved_occurrence_ids, (weak.occurrence_id,))
+        self.assertEqual(result.diagnostics[0]["status"], "weak_content_evidence")
+        self.assertLess(
+            result.diagnostics[0]["score"],
+            result.diagnostics[0]["min_score"],
+        )
+
     def test_relocation_reports_source_change_as_unresolved(self):
         source = (
             'translate schinese chapter:\n'
