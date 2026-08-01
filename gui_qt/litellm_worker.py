@@ -86,6 +86,7 @@ class _CancellableNetworkWorker(QThread):
         self._cancel = False
         self._active_response: Any = None
         self._deadline: float | None = None
+        self._budget_seconds = float(CATALOG_TOTAL_BUDGET_SECONDS)
         # Network I/O already yields the GIL; keep workers low-priority so the
         # settings form stays snappy while a catalog request is in flight.
         self.setPriority(QThread.Priority.LowPriority)
@@ -110,7 +111,8 @@ class _CancellableNetworkWorker(QThread):
             raise OperationCancelled()
 
     def _start_budget(self, total_seconds: float) -> None:
-        self._deadline = time.monotonic() + max(0.0, float(total_seconds))
+        self._budget_seconds = max(0.0, float(total_seconds))
+        self._deadline = time.monotonic() + self._budget_seconds
 
     def _remaining_timeout(self, *, cap: float | None = None) -> float:
         """Return urlopen timeout for the next hop within the shared budget."""
@@ -120,7 +122,7 @@ class _CancellableNetworkWorker(QThread):
         remaining = self._deadline - time.monotonic()
         if remaining < MIN_REQUEST_TIMEOUT_SECONDS:
             raise BudgetExhausted(
-                f"联网加载总时限（约 {CATALOG_TOTAL_BUDGET_SECONDS:g} 秒）已用尽"
+                f"联网加载总时限（约 {self._budget_seconds:g} 秒）已用尽"  # noqa: RUF001
             )
         return min(per_request, remaining)
 

@@ -6916,9 +6916,10 @@ class MainWindow(QMainWindow):
         try:
             store = load_provider_key_store(provider)
         except ProviderCredentialStoreError as exc:
-            message = str(exc)
-            self._litellm_saved_key_status[provider] = message
-            return message
+            # Transient failure: never cache it, or a stale error would persist
+            # after the credential store recovers.
+            self._litellm_saved_key_status.pop(provider, None)
+            return str(exc)
         endpoint = native_catalog_endpoint(provider)
         needs_official_key = bool(endpoint is not None and endpoint.require_key)
         if store.keys:

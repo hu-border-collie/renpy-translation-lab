@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from litellm_provider_config import (
     KEYRING_SERVICE,
     ProviderApiKeyStore,
+    _decode_provider_key_store,
     catalog_source_label,
     delete_provider_api_key,
     load_provider_api_key,
@@ -81,6 +82,26 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
         store_provider_key_store("deepseek", ProviderApiKeyStore(), keyring)
         self.assertEqual(load_provider_api_keys("deepseek", keyring), ())
         self.assertNotIn((KEYRING_SERVICE, "deepseek"), keyring.values)
+
+    def test_decode_unrecognized_json_object_keeps_opaque_secret(self):
+        opaque = '{"token":"still-a-secret","not":"our-schema"}'
+        store = _decode_provider_key_store(opaque)
+        self.assertEqual(store.keys, (opaque,))
+        self.assertEqual(store.active_key(), opaque)
+
+        empty_keys = '{"version":1,"keys":[],"active_index":0}'
+        store = _decode_provider_key_store(empty_keys)
+        self.assertEqual(store.keys, (empty_keys,))
+
+    def test_store_provider_key_store_active_index_overrides_mapping(self):
+        keyring = _FakeKeyring()
+        store_provider_key_store(
+            "openai",
+            {"keys": ["a", "b"], "active_index": 0},
+            keyring,
+            active_index=1,
+        )
+        self.assertEqual(load_provider_api_key("openai", keyring), "b")
 
     def test_ollama_does_not_use_keyring(self):
         keyring = _FakeKeyring()

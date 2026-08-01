@@ -303,8 +303,11 @@ def _decode_provider_key_store(raw: str | None) -> ProviderApiKeyStore:
             return ProviderApiKeyStore(keys=(text,), active_index=0)
         keys_raw = payload.get("keys", [])
         if not isinstance(keys_raw, list):
-            return ProviderApiKeyStore()
+            # Unrecognized object shape: keep the raw secret opaque.
+            return ProviderApiKeyStore(keys=(text,), active_index=0)
         keys = tuple(str(item).strip() for item in keys_raw if str(item).strip())
+        if not keys:
+            return ProviderApiKeyStore(keys=(text,), active_index=0)
         try:
             active_index = int(payload.get("active_index", 0) or 0)
         except (TypeError, ValueError):
@@ -354,11 +357,9 @@ def store_provider_key_store(
         payload = ProviderApiKeyStore(keys=keys, active_index=idx)
     else:
         keys = tuple(str(item).strip() for item in store if str(item).strip())
-        payload = ProviderApiKeyStore(
-            keys=keys,
-            active_index=0 if active_index is None else int(active_index),
-        )
-    if active_index is not None and not isinstance(store, Mapping):
+        payload = ProviderApiKeyStore(keys=keys)
+    # Explicit keyword wins for every input type (store / mapping / collection).
+    if active_index is not None:
         payload = ProviderApiKeyStore(keys=payload.keys, active_index=int(active_index))
     payload = payload.normalized()
 

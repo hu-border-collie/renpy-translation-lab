@@ -6,6 +6,7 @@ from unittest import mock
 
 try:
     from gui_qt.litellm_worker import (
+        BudgetExhausted,
         CANCELLED_MESSAGE_PREFIX,
         CATALOG_TIMEOUT_SECONDS,
         CATALOG_TOTAL_BUDGET_SECONDS,
@@ -432,8 +433,28 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 1)
         self.assertEqual(completed[0][0], ())
         self.assertIn("总时限", completed[0][2])
+        self.assertIn(f"{CATALOG_TOTAL_BUDGET_SECONDS:g}", completed[0][2])
         self.assertTrue(any("官方模型列表" in item for item in progress))
         self.assertFalse(any("改用 LiteLLM 子集" in item for item in progress))
+
+    def test_budget_exhausted_message_uses_started_budget_seconds(self):
+        import time
+
+        provider_worker = LiteLLMProviderCatalogWorker()
+        provider_worker._start_budget(CATALOG_TIMEOUT_SECONDS)
+        provider_worker._deadline = time.monotonic() - 1.0
+        with self.assertRaises(BudgetExhausted) as ctx:
+            provider_worker._remaining_timeout()
+        message = str(ctx.exception)
+        self.assertIn(f"{CATALOG_TIMEOUT_SECONDS:g}", message)
+        self.assertNotIn(f"{CATALOG_TOTAL_BUDGET_SECONDS:g}", message)
+
+        model_worker = LiteLLMModelCatalogWorker("openai", api_key="sk-test")
+        model_worker._start_budget(CATALOG_TOTAL_BUDGET_SECONDS)
+        model_worker._deadline = time.monotonic() - 1.0
+        with self.assertRaises(BudgetExhausted) as ctx_model:
+            model_worker._remaining_timeout()
+        self.assertIn(f"{CATALOG_TOTAL_BUDGET_SECONDS:g}", str(ctx_model.exception))
 
     def test_version_worker_reads_latest_stable_version_from_pypi(self):
         payload = {
