@@ -220,7 +220,7 @@ class TestRenPyAdapterP2(unittest.TestCase):
         self.assertEqual(context.exception.reason_code, "common.writeback.source_snapshot_mismatch")
 
     def test_common_plan_consumer_rejects_path_escape(self):
-        root, tl_dir, adapter, snapshot = self.snapshot('e "Hello {player}!"\n')
+        _root, _tl_dir, adapter, snapshot = self.snapshot('e "Hello {player}!"\n')
         occurrence = self.occurrence_for(snapshot, "Hello {player}!")
         validation = adapter.validate_translation(occurrence, "你好 {player}!")
         plan = adapter.build_writeback_plan(
