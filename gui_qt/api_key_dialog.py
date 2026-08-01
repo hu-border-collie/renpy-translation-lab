@@ -18,8 +18,14 @@ from PySide6.QtWidgets import (
 from .api_key_helpers import commit_pending_key, mask_api_key
 
 
+_DEFAULT_INTRO = (
+    "密钥仅保存在本地配置文件中，不会上传或代理。"
+    "可添加多个 Key；删除选中项后点击「保存」生效。"
+)
+
+
 class ApiKeyDialog(QDialog):
-    """Manage keys stored in api_keys.json without using QInputDialog."""
+    """Manage a list of API keys (Gemini file store or LiteLLM keyring)."""
 
     def __init__(
         self,
@@ -27,26 +33,36 @@ class ApiKeyDialog(QDialog):
         *,
         keys: list[str],
         env_key_count: int = 0,
+        title: str = "管理 API Key",
+        intro: str = _DEFAULT_INTRO,
+        active_index: int = 0,
+        support_active_key: bool = False,
     ):
         super().__init__(parent)
         self.setObjectName("api_key_dialog")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setWindowTitle("管理 API Key")
+        self.setWindowTitle(str(title or "管理 API Key"))
         self.setModal(True)
         self.resize(480, 420)
         self._keys = [key for key in keys if isinstance(key, str)]
+        self._support_active_key = bool(support_active_key)
+        try:
+            self._active_index = int(active_index)
+        except (TypeError, ValueError):
+            self._active_index = 0
+        if self._keys:
+            self._active_index = max(0, min(self._active_index, len(self._keys) - 1))
+        else:
+            self._active_index = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        intro = QLabel(
-            "密钥仅保存在本地配置文件中，不会上传或代理。"
-            "可添加多个 Key；删除选中项后点击「保存」生效。"
-        )
-        intro.setWordWrap(True)
-        intro.setObjectName("config_hint_label")
-        layout.addWidget(intro)
+        intro_label = QLabel(str(intro or _DEFAULT_INTRO))
+        intro_label.setWordWrap(True)
+        intro_label.setObjectName("config_hint_label")
+        layout.addWidget(intro_label)
 
         layout.addWidget(QLabel("已保存的 Key："))
 
@@ -60,6 +76,11 @@ class ApiKeyDialog(QDialog):
         self.remove_btn.setObjectName("secondary_btn")
         self.remove_btn.clicked.connect(self._on_remove_selected)
         list_actions.addWidget(self.remove_btn)
+        self.set_active_btn = QPushButton("设为当前使用")
+        self.set_active_btn.setObjectName("secondary_btn")
+        self.set_active_btn.clicked.connect(self._on_set_active_selected)
+        self.set_active_btn.setVisible(self._support_active_key)
+        list_actions.addWidget(self.set_active_btn)
         list_actions.addStretch()
         layout.addLayout(list_actions)
 
@@ -126,6 +147,11 @@ class ApiKeyDialog(QDialog):
     def result_keys(self) -> list[str]:
         return list(self._keys)
 
+    def result_active_index(self) -> int:
+        if not self._keys:
+            return 0
+        return max(0, min(int(self._active_index), len(self._keys) - 1))
+
     def _on_accept(self) -> None:
         pending = self.new_key_edit.text().strip()
         updated_keys, error = commit_pending_key(self._keys, pending)
@@ -140,6 +166,8 @@ class ApiKeyDialog(QDialog):
         if pending:
             self._keys = updated_keys
             self.new_key_edit.clear()
+            if self._support_active_key and len(self._keys) == 1:
+                self._active_index = 0
             self._refresh_key_list()
 
         self.accept()
@@ -149,11 +177,19 @@ class ApiKeyDialog(QDialog):
         if not self._keys:
             self.key_list.addItem("（尚未保存任何 Key）")
             self.remove_btn.setEnabled(False)
+            self.set_active_btn.setEnabled(False)
             return
 
         self.remove_btn.setEnabled(True)
+        self.set_active_btn.setEnabled(self._support_active_key)
+        active = self.result_active_index()
         for index, key in enumerate(self._keys, start=1):
-            self.key_list.addItem(f"{index}. {mask_api_key(key)}")
+            label = f"{index}. {mask_api_key(key)}"
+            if self._support_active_key and index - 1 == active:
+                label = f"{label}（当前使用）"
+            self.key_list.addItem(label)
+        if 0 <= active < len(self._keys):
+            self.key_list.setCurrentRow(active)
 
     def _on_toggle_visibility(self, checked: bool) -> None:
         self.new_key_edit.setEchoMode(
@@ -174,6 +210,8 @@ class ApiKeyDialog(QDialog):
 
         self._keys = updated_keys
         self.new_key_edit.clear()
+        if self._support_active_key and len(self._keys) == 1:
+            self._active_index = 0
         self._refresh_key_list()
         self.key_list.setCurrentRow(self.key_list.count() - 1)
 
@@ -187,6 +225,26 @@ class ApiKeyDialog(QDialog):
             return
 
         self._keys.pop(row)
+        if not self._keys:
+            self._active_index = 0
+        elif self._active_index >= len(self._keys):
+            self._active_index = len(self._keys) - 1
+        elif row < self._active_index:
+            self._active_index -= 1
         self._refresh_key_list()
         if self._keys:
             self.key_list.setCurrentRow(min(row, self.key_list.count() - 1))
+
+    def _on_set_active_selected(self) -> None:
+        if not self._support_active_key or not self._keys:
+            return
+        row = self.key_list.currentRow()
+        if row < 0 or row >= len(self._keys):
+            QMessageBox.information(
+                self,
+                "请选择 Key",
+                "请先在列表中选中要设为当前使用的 Key。",
+            )
+            return
+        self._active_index = row
+        self._refresh_key_list()

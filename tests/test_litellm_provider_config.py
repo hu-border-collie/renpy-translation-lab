@@ -3,9 +3,12 @@ from types import SimpleNamespace
 
 from litellm_provider_config import (
     KEYRING_SERVICE,
+    ProviderApiKeyStore,
     catalog_source_label,
     delete_provider_api_key,
     load_provider_api_key,
+    load_provider_api_keys,
+    load_provider_key_store,
     latest_compatible_litellm_version,
     models_for_provider,
     models_from_ollama_payload,
@@ -16,10 +19,12 @@ from litellm_provider_config import (
     providers_from_remote_catalog,
     resolve_provider_id,
     sort_provider_ids,
+    store_provider_api_key,
+    store_provider_key_store,
+    credential_provider_candidates,
     version_key,
     provider_from_model,
     python_requirement_allows,
-    store_provider_api_key,
 )
 
 
@@ -51,10 +56,51 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
         self.assertEqual(load_provider_api_key("openai", keyring), "")
         self.assertFalse(delete_provider_api_key("openai", keyring))
 
+    def test_multi_key_store_preserves_active_index_and_legacy_plaintext(self):
+        keyring = _FakeKeyring()
+        # Legacy single plaintext secret remains readable.
+        keyring.set_password(KEYRING_SERVICE, "deepseek", "legacy-key")
+        self.assertEqual(load_provider_api_key("deepseek", keyring), "legacy-key")
+        self.assertEqual(load_provider_api_keys("deepseek", keyring), ("legacy-key",))
+
+        store_provider_key_store(
+            "deepseek",
+            ("key-one", "key-two", "key-three"),
+            keyring,
+            active_index=1,
+        )
+        store = load_provider_key_store("deepseek", keyring)
+        self.assertEqual(store.keys, ("key-one", "key-two", "key-three"))
+        self.assertEqual(store.active_index, 1)
+        self.assertEqual(store.active_key(), "key-two")
+        self.assertEqual(load_provider_api_key("deepseek", keyring), "key-two")
+        encoded = keyring.values[(KEYRING_SERVICE, "deepseek")]
+        self.assertIn('"version":1', encoded)
+        self.assertIn("key-two", encoded)
+
+        store_provider_key_store("deepseek", ProviderApiKeyStore(), keyring)
+        self.assertEqual(load_provider_api_keys("deepseek", keyring), ())
+        self.assertNotIn((KEYRING_SERVICE, "deepseek"), keyring.values)
+
     def test_ollama_does_not_use_keyring(self):
         keyring = _FakeKeyring()
         self.assertEqual(load_provider_api_key("ollama", keyring), "")
         self.assertFalse(delete_provider_api_key("ollama", keyring))
+
+    def test_credential_provider_candidates_merge_common_and_extra(self):
+        providers = credential_provider_candidates(
+            ("zzz_custom", "deepseek", "openai"),
+            include_ollama=False,
+        )
+        self.assertIn("openai", providers)
+        self.assertIn("anthropic", providers)
+        self.assertIn("gemini", providers)
+        self.assertIn("azure", providers)
+        self.assertIn("vertex_ai", providers)
+        self.assertIn("zzz_custom", providers)
+        self.assertNotIn("ollama", providers)
+        # Common ids stay ahead of free-form extras.
+        self.assertLess(providers.index("openai"), providers.index("zzz_custom"))
 
     def test_catalog_filters_non_text_models_and_adds_provider_prefix(self):
         fake_litellm = SimpleNamespace(

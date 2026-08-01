@@ -45,7 +45,6 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window._litellm_cache = self.cache
         self.window._populate_litellm_providers((), selected="")
         self.window._set_litellm_models("", ())
-        self.window.litellm_api_key_edit.clear()
         self.window._litellm_saved_key_status.clear()
         self.window._refresh_litellm_catalog_status()
         self.window._on_sync_backend_changed(-1)
@@ -63,7 +62,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertEqual(self.window.litellm_model_combo.count(), 0)
         self.assertEqual(self.window.litellm_model_combo.currentText(), "")
         self.assertFalse(self.window.litellm_refresh_models_btn.isEnabled())
-        self.assertFalse(self.window.litellm_api_key_edit.isEnabled())
+        self.assertFalse(self.window.litellm_manage_keys_btn.isEnabled())
 
     def test_litellm_has_independent_settings_page(self):
         self.assertIn("litellm", self.window._settings_nav_rows)
@@ -90,10 +89,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             provider_completer.completionMode(),
             QCompleter.CompletionMode.PopupCompletion,
         )
-        self.assertEqual(
-            self.window.litellm_api_key_edit.echoMode(),
-            QLineEdit.EchoMode.Password,
-        )
+        self.assertEqual(self.window.litellm_manage_keys_btn.text(), "管理密钥…")
         self.assertEqual(self.window.litellm_refresh_models_btn.text(), "联网加载模型")
         self.assertEqual(
             self.window.litellm_refresh_providers_btn.text(), "联网加载供应商"
@@ -127,15 +123,12 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
 
 
     def test_typed_model_prefix_takes_priority_for_credentials(self):
-
         self._load_provider_choices()
         self.window.litellm_provider_combo.setCurrentIndex(
             self.window.litellm_provider_combo.findData("openai")
         )
-        self.window.litellm_api_key_edit.setText("unsaved-openai-key")
         self.window.litellm_model_combo.setEditText("azure/my-deployment")
         self.assertEqual(self.window._current_litellm_provider(), "azure")
-        self.assertEqual(self.window.litellm_api_key_edit.text(), "")
         self.window.litellm_provider_combo.setCurrentIndex(
             self.window.litellm_provider_combo.findData("openai")
         )
@@ -179,8 +172,8 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window.litellm_provider_combo.setCurrentIndex(
             self.window.litellm_provider_combo.findData("openai")
         )
-        self.window.litellm_api_key_edit.setText("unsaved-openai-key")
-        self.assertTrue(self.window.litellm_api_key_edit.isEnabled())
+        self.window._on_sync_backend_changed(-1)
+        self.assertTrue(self.window.litellm_manage_keys_btn.isEnabled())
         openai_models = {
             self.window.litellm_model_combo.itemText(index)
             for index in range(self.window.litellm_model_combo.count())
@@ -190,8 +183,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window.litellm_model_combo.setEditText("ollama/llama3")
 
         self.assertEqual(self.window._current_litellm_provider(), "ollama")
-        self.assertEqual(self.window.litellm_api_key_edit.text(), "")
-        self.assertFalse(self.window.litellm_api_key_edit.isEnabled())
+        self.assertFalse(self.window.litellm_manage_keys_btn.isEnabled())
         model_items = {
             self.window.litellm_model_combo.itemText(index)
             for index in range(self.window.litellm_model_combo.count())
@@ -222,30 +214,26 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
 
             self.window.litellm_provider_combo.setCurrentIndex(openai_index)
 
-    def test_unchanged_provider_focus_out_preserves_unsaved_fields(self):
+    def test_unchanged_provider_focus_out_preserves_model_text(self):
         self._load_provider_choices()
-        self.window.litellm_api_key_edit.setText("unsaved-key")
         self.window.litellm_model_combo.setEditText("gpt-custom")
 
         self.window._on_litellm_provider_changed()
 
-        self.assertEqual(self.window.litellm_api_key_edit.text(), "unsaved-key")
         self.assertEqual(self.window.litellm_model_combo.currentText(), "gpt-custom")
 
-    def test_cancel_provider_discards_typed_key_but_does_not_delete_credential(self):
+    def test_cancel_provider_clears_selection_without_touching_keyring(self):
         self._load_provider_choices()
         self.window.litellm_provider_combo.setCurrentIndex(
             self.window.litellm_provider_combo.findData("openai")
         )
-        self.window.litellm_api_key_edit.setText("unsaved-secret")
-        with mock.patch("gui_qt.app.delete_provider_api_key") as delete_key:
+        with mock.patch("gui_qt.app.store_provider_key_store") as store_keys:
             self.window._on_clear_litellm_provider()
 
         self.assertEqual(self.window._current_litellm_provider(), "")
         self.assertEqual(self.window.litellm_model_combo.currentText(), "")
-        self.assertEqual(self.window.litellm_api_key_edit.text(), "")
         self.assertEqual(self.cache.selected_provider, "")
-        delete_key.assert_not_called()
+        store_keys.assert_not_called()
 
     def test_catalog_refresh_preserves_custom_model(self):
         self._load_provider_choices()
@@ -306,9 +294,18 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         )
 
     def test_saved_credential_is_reported_as_environment_override(self):
+        from litellm_provider_config import ProviderApiKeyStore
+
         self._load_provider_choices()
+        store = ProviderApiKeyStore(
+            keys=("sk-test-secret-value", "sk-second-zzzz"),
+            active_index=0,
+        )
         with (
-            mock.patch("gui_qt.app.load_provider_api_key", return_value="saved") as load_key,
+            mock.patch(
+                "gui_qt.app.load_provider_key_store",
+                return_value=store,
+            ) as load_store,
             mock.patch.dict("gui_qt.app.os.environ", {"OPENAI_API_KEY": "env"}, clear=True),
         ):
             self.window.litellm_provider_combo.setCurrentIndex(
@@ -319,19 +316,116 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             self.window._refresh_litellm_credential_status()
             self.window._refresh_litellm_credential_status()
         status = self.window.litellm_credential_status_label.text()
-        self.assertIn("系统凭据管理器中已保存密钥", status)
+        self.assertIn("已保存 2 把密钥", status)
+        self.assertIn("********alue", status)
+        self.assertIn("********zzzz", status)
+        self.assertNotIn("sk-test-secret-value", status)
         self.assertIn("OPENAI_API_KEY", status)
-        load_key.assert_called_once_with("openai")
+        load_store.assert_called_once_with("openai")
 
-    def test_gemini_key_page_does_not_contain_litellm_controls(self):
+    def test_manage_keys_opens_dialog_and_saves_multi_key_store(self):
+        from litellm_provider_config import ProviderApiKeyStore
+        from PySide6.QtWidgets import QDialog
+
+        self._load_provider_choices()
+        self.window.litellm_provider_combo.setCurrentIndex(
+            self.window.litellm_provider_combo.findData("openai")
+        )
+        dialog = mock.Mock()
+        dialog.exec.return_value = QDialog.DialogCode.Accepted
+        dialog.result_keys.return_value = ["key-a", "key-b"]
+        dialog.result_active_index.return_value = 1
+        with (
+            mock.patch(
+                "gui_qt.app.load_provider_key_store",
+                return_value=ProviderApiKeyStore(keys=("old",), active_index=0),
+            ),
+            mock.patch("gui_qt.app.ApiKeyDialog", return_value=dialog) as dialog_cls,
+            mock.patch("gui_qt.app.store_provider_key_store") as store_keys,
+        ):
+            self.window._on_manage_litellm_keys()
+        dialog_cls.assert_called_once()
+        self.assertTrue(dialog_cls.call_args.kwargs.get("support_active_key"))
+        store_keys.assert_called_once()
+        self.assertEqual(store_keys.call_args.args[0], "openai")
+        self.assertEqual(store_keys.call_args.args[1], ["key-a", "key-b"])
+        self.assertEqual(store_keys.call_args.kwargs.get("active_index"), 1)
+
+    def test_missing_key_prompts_before_model_catalog_load(self):
+        from PySide6.QtWidgets import QMessageBox
+
+        self.window._populate_litellm_providers(("deepseek",), selected="deepseek")
+        self.window.sync_backend_combo.setCurrentIndex(
+            self.window.sync_backend_combo.findData("litellm")
+        )
+        self.window._on_sync_backend_changed(-1)
+        self.assertEqual(self.window._current_litellm_provider(), "deepseek")
+        with (
+            mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
+            mock.patch("gui_qt.app.QMessageBox.question") as question,
+            mock.patch("gui_qt.app.LiteLLMModelCatalogWorker") as worker_cls,
+        ):
+            question.return_value = QMessageBox.StandardButton.No
+            self.window._on_refresh_litellm_models()
+            worker_cls.assert_not_called()
+            question.assert_called_once()
+            self.assertIn("API Key", question.call_args.args[1])
+
+            question.reset_mock()
+            worker_cls.reset_mock()
+            question.return_value = QMessageBox.StandardButton.Yes
+            worker = mock.Mock()
+            worker_cls.return_value = worker
+            self.window._on_refresh_litellm_models()
+            worker_cls.assert_called_once()
+            self.assertEqual(worker_cls.call_args.args[0], "deepseek")
+            self.assertEqual(worker_cls.call_args.kwargs.get("api_key"), "")
+            worker.start.assert_called_once()
+
+    def test_missing_key_shows_catalog_tip_for_official_providers(self):
+        self.window._populate_litellm_providers(("deepseek",), selected="deepseek")
+        self.assertEqual(self.window._litellm_provider_combo_value(), "deepseek")
+        with mock.patch("gui_qt.app.load_provider_api_key", return_value=""):
+            self.window._refresh_litellm_catalog_status()
+        text = self.window.litellm_catalog_status_label.text()
+        self.assertIn("官方列表需先保存 API Key", text)
+        self.assertIn("DeepSeek", text)
+
+    def test_keys_page_hosts_gemini_and_litellm_provider_sections(self):
         row = self.window._settings_nav_rows["api_keys"]
         page = self.window.settings_stack.widget(row)
         titles = {group.title() for group in page.findChildren(QGroupBox)}
-        self.assertEqual(titles, {"Gemini API Key"})
+        self.assertEqual(titles, {"Gemini API Key", "LiteLLM Provider 密钥"})
+        self.assertEqual(self.window.api_btn.text(), "管理 Gemini API Key")
+        self.assertEqual(self.window.litellm_keys_manage_btn.text(), "管理 Provider Key")
+        self.assertTrue(self.window.litellm_keys_provider_combo.isEditable())
+        ids = {
+            self.window.litellm_keys_provider_combo.itemData(index)
+            for index in range(self.window.litellm_keys_provider_combo.count())
+        }
+        self.assertIn("openai", ids)
+        self.assertIn("gemini", ids)
+        self.assertIn("azure", ids)
+        self.assertIn("vertex_ai", ids)
+        self.assertNotIn("ollama", ids)
         self.assertNotIn(
             self.window.install_litellm_btn,
             page.findChildren(type(self.window.install_litellm_btn)),
         )
+
+    def test_keys_page_provider_list_includes_online_catalog_cache(self):
+        self.cache.update_providers(
+            ("custom_vendor", "openai", "mistral"),
+            source="online",
+        )
+        self.window._populate_litellm_keys_provider_combo()
+        ids = {
+            self.window.litellm_keys_provider_combo.itemData(index)
+            for index in range(self.window.litellm_keys_provider_combo.count())
+        }
+        self.assertIn("custom_vendor", ids)
+        self.assertIn("mistral", ids)
+        self.assertIn("deepseek", ids)
 
     def test_empty_litellm_model_cannot_be_saved(self):
         self.window.sync_backend_combo.setCurrentIndex(

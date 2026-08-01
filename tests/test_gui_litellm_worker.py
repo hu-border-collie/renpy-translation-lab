@@ -6,11 +6,15 @@ from unittest import mock
 
 try:
     from gui_qt.litellm_worker import (
+        CANCELLED_MESSAGE_PREFIX,
+        CATALOG_TIMEOUT_SECONDS,
+        CATALOG_TOTAL_BUDGET_SECONDS,
         CONNECTION_TEST_TIMEOUT_SECONDS,
         LiteLLMConnectionTestWorker,
         LiteLLMModelCatalogWorker,
         LiteLLMProviderCatalogWorker,
         LiteLLMVersionWorker,
+        is_cancelled_message,
     )
     from litellm_sync_backend import LiteLLMBackendError
 except ImportError as exc:
@@ -65,6 +69,47 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         self.assertIn("authentication", completed[0][1])
         self.assertNotIn("stored-secret", completed[0][1])
         self.assertNotIn("provider echoed", completed[0][1])
+
+    def test_connection_test_cancel_before_generate_emits_cancelled(self):
+        backend = mock.Mock()
+        completed = []
+        worker = LiteLLMConnectionTestWorker("openai/test")
+        worker.completed.connect(lambda success, message: completed.append((success, message)))
+        worker.request_cancel()
+
+        with mock.patch(
+            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            return_value=backend,
+        ):
+            worker.run()
+
+        backend.generate.assert_not_called()
+        self.assertEqual(len(completed), 1)
+        self.assertFalse(completed[0][0])
+        self.assertTrue(is_cancelled_message(completed[0][1]))
+        self.assertTrue(completed[0][1].startswith(CANCELLED_MESSAGE_PREFIX))
+
+    def test_connection_test_cancel_after_generate_discards_success(self):
+        backend = mock.Mock()
+        backend.generate.return_value = SimpleNamespace(response_text="OK")
+        completed = []
+        worker = LiteLLMConnectionTestWorker("openai/test")
+        worker.completed.connect(lambda success, message: completed.append((success, message)))
+
+        def generate_and_cancel(request):
+            worker.request_cancel()
+            return SimpleNamespace(response_text="OK")
+
+        backend.generate.side_effect = generate_and_cancel
+        with mock.patch(
+            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            return_value=backend,
+        ):
+            worker.run()
+
+        self.assertEqual(len(completed), 1)
+        self.assertFalse(completed[0][0])
+        self.assertTrue(is_cancelled_message(completed[0][1]))
 
 
     def test_model_catalog_prefers_provider_native_catalog(self):
@@ -276,6 +321,119 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         self.assertEqual(completed[0][0], ())
         self.assertEqual(completed[0][1], "")
         self.assertIn("联网加载供应商失败", completed[0][2])
+
+    def test_provider_catalog_cancel_before_fetch_emits_cancelled(self):
+        completed = []
+        worker = LiteLLMProviderCatalogWorker()
+        worker.completed.connect(
+            lambda providers, source, error: completed.append(
+                (providers, source, error)
+            )
+        )
+        worker.request_cancel()
+        with mock.patch("gui_qt.litellm_worker.urlopen") as urlopen:
+            worker.run()
+        urlopen.assert_not_called()
+        self.assertEqual(completed[0][0], ())
+        self.assertEqual(completed[0][1], "")
+        self.assertTrue(is_cancelled_message(completed[0][2]))
+
+    def test_model_catalog_cancel_skips_fallback_after_native_failure(self):
+        completed = []
+        worker = LiteLLMModelCatalogWorker("openai", api_key="sk-test")
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+
+        def fail_then_would_fallback(request, timeout=0):
+            worker.request_cancel()
+            raise OSError("native down")
+
+        with mock.patch(
+            "gui_qt.litellm_worker.urlopen",
+            side_effect=fail_then_would_fallback,
+        ) as urlopen:
+            worker.run()
+
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertEqual(completed[0][0], ())
+        self.assertTrue(is_cancelled_message(completed[0][2]))
+
+    def test_model_catalog_request_cancel_closes_active_response(self):
+        worker = LiteLLMModelCatalogWorker("openai", api_key="sk-test")
+        response = mock.MagicMock()
+        worker._active_response = response
+        worker.request_cancel()
+        self.assertTrue(worker.is_cancelled())
+        response.close.assert_called_once()
+
+    def test_model_catalog_emits_progress_then_falls_back_within_budget(self):
+        import time
+
+        litellm_payload = {
+            "openai/gpt-subset": {"litellm_provider": "openai", "mode": "chat"},
+        }
+        litellm_response = mock.MagicMock()
+        litellm_response.__enter__.return_value = io.BytesIO(
+            json.dumps(litellm_payload).encode("utf-8")
+        )
+        completed = []
+        progress = []
+        timeouts = []
+        worker = LiteLLMModelCatalogWorker("openai", api_key="sk-test")
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+        worker.progress.connect(progress.append)
+
+        def fake_urlopen(request, timeout=0):
+            timeouts.append(float(timeout))
+            url = getattr(request, "full_url", str(request))
+            if "api.openai.com" in url:
+                # Simulate the first hop consuming most of the shared budget.
+                worker._deadline = time.monotonic() + (
+                    CATALOG_TOTAL_BUDGET_SECONDS - 18.0
+                )
+                raise OSError("openai down")
+            return litellm_response
+
+        with mock.patch("gui_qt.litellm_worker.urlopen", side_effect=fake_urlopen):
+            worker.run()
+
+        self.assertEqual(completed[0][0], ("openai/gpt-subset",))
+        self.assertEqual(completed[0][1], "online")
+        self.assertIn("官方列表失败", completed[0][2])
+        self.assertTrue(any("官方模型列表" in item for item in progress))
+        self.assertTrue(any("改用 LiteLLM 子集" in item for item in progress))
+        self.assertEqual(len(timeouts), 2)
+        self.assertLessEqual(timeouts[0], CATALOG_TIMEOUT_SECONDS)
+        # Fallback hop must use remaining budget (~17s), not a fresh full cap.
+        self.assertLess(timeouts[1], CATALOG_TIMEOUT_SECONDS)
+        self.assertGreater(timeouts[1], 10.0)
+        self.assertAlmostEqual(timeouts[1], CATALOG_TOTAL_BUDGET_SECONDS - 18.0, delta=1.0)
+
+    def test_model_catalog_skips_fallback_when_budget_already_exhausted(self):
+        completed = []
+        progress = []
+        worker = LiteLLMModelCatalogWorker("openai", api_key="sk-test")
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+        worker.progress.connect(progress.append)
+
+        def slow_then_fail(request, timeout=0):
+            # Consume the whole shared budget inside the first hop.
+            worker._deadline = worker._deadline - CATALOG_TOTAL_BUDGET_SECONDS
+            raise OSError("native timed out")
+
+        with mock.patch("gui_qt.litellm_worker.urlopen", side_effect=slow_then_fail) as urlopen:
+            worker.run()
+
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertEqual(completed[0][0], ())
+        self.assertIn("总时限", completed[0][2])
+        self.assertTrue(any("官方模型列表" in item for item in progress))
+        self.assertFalse(any("改用 LiteLLM 子集" in item for item in progress))
 
     def test_version_worker_reads_latest_stable_version_from_pypi(self):
         payload = {
