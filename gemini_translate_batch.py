@@ -1610,6 +1610,33 @@ def allow_non_chinese_batch_translation(manifest, chunk, original, translated, i
         known_terms=collect_chunk_known_terms(chunk),
     )
 
+
+def _adapter_target_language_policy_allows(
+    manifest,
+    chunk,
+    item,
+    original,
+    translated,
+    reason='',
+    reason_codes=(),
+):
+    """Allow only the legacy target-language failure through Batch policy."""
+
+    normalized_codes = {
+        str(code or '').strip()
+        for code in reason_codes or ()
+        if str(code or '').strip()
+    }
+    target_language_only = (
+        normalized_codes == {'common.target_language.missing'}
+        if normalized_codes
+        else reason == 'No Chinese characters'
+    )
+    return target_language_only and allow_non_chinese_batch_translation(
+        manifest, chunk or {}, original, translated, item=item
+    )
+
+
 def compact_text(text):
     return re.sub(r'\s+', ' ', text or '').strip()
 
@@ -6456,6 +6483,10 @@ def _build_adapter_writeback_plan(manifest, replacements_by_file, live_sources=N
     validated = []
     used_occurrence_ids = set()
     occurrences = tuple(snapshot.occurrences)
+    chunks_by_key = {
+        str(chunk.get('key') or ''): chunk
+        for chunk in manifest.get('chunks', [])
+    }
     if live_sources is not None:
         authoritative_sources = tuple(
             sorted(live_sources, key=lambda document: document.file_rel_path)
@@ -6476,7 +6507,7 @@ def _build_adapter_writeback_plan(manifest, replacements_by_file, live_sources=N
         replacements_by_line = replacements_by_file.get(file_key) or {}
         for line, replacements in replacements_by_line.items():
             for replacement in replacements:
-                start, end, translated, _prefix, _quote, expected_text, item_id, _chunk_key = (
+                start, end, translated, _prefix, _quote, expected_text, item_id, chunk_key = (
                     unpack_replacement_for_validation(replacement)
                 )
                 occurrence = _find_adapter_occurrence(
@@ -6499,11 +6530,47 @@ def _build_adapter_writeback_plan(manifest, replacements_by_file, live_sources=N
                     str(translated or ''),
                 )
                 if validation.status != 'pass':
-                    codes = ','.join(validation.reason_codes) or 'adapter.validation.block'
-                    raise WritebackPlanError(
-                        'adapter.validation.block',
-                        f'Adapter validation blocked {file_key}:{line}: {codes}.',
+                    policy_chunk = chunks_by_key.get(str(chunk_key or ''))
+                    if (
+                        policy_chunk is None
+                        or policy_chunk.get('file_rel_path') != file_key
+                    ):
+                        policy_chunk = next(
+                            (
+                                chunk
+                                for chunk in manifest.get('chunks', [])
+                                if chunk.get('file_rel_path') == file_key
+                            ),
+                            {'file_rel_path': file_key, 'items': []},
+                        )
+                    policy_item = next(
+                        (
+                            candidate
+                            for candidate in policy_chunk.get('items', [])
+                            if str(candidate.get('id') or '') == str(item_id or '')
+                        ),
+                        None,
                     )
+                    original_text = (
+                        occurrence.unit.source_text
+                        if manifest_mode(manifest) == MANIFEST_MODE_REVISION
+                        else occurrence.unit.text
+                    )
+                    if _adapter_target_language_policy_allows(
+                        manifest,
+                        policy_chunk,
+                        policy_item,
+                        original_text,
+                        str(translated or ''),
+                        reason_codes=validation.reason_codes,
+                    ):
+                        validation = replace(validation, status='pass')
+                    else:
+                        codes = ','.join(validation.reason_codes) or 'adapter.validation.block'
+                        raise WritebackPlanError(
+                            'adapter.validation.block',
+                            f'Adapter validation blocked {file_key}:{line}: {codes}.',
+                        )
                 validated.append(
                     ValidatedTranslation(
                         occurrence=occurrence,
@@ -7011,12 +7078,14 @@ def collect_revision_actions(manifest, validate_sources=False):
                         revised_translation,
                     )
                 )
-                if not valid and reason == 'No Chinese characters' and allow_non_chinese_batch_translation(
+                if not valid and _adapter_target_language_policy_allows(
                     manifest,
                     chunk,
+                    target_item,
                     source_text,
                     revised_translation,
-                    item=target_item,
+                    reason=reason,
+                    reason_codes=adapter_reason_codes,
                 ):
                     valid = True
                     reason = 'OK'
@@ -7490,12 +7559,14 @@ def collect_result_actions(manifest, validate_sources=False):
                         result_item['translation'],
                     )
                 )
-                if not valid and reason == 'No Chinese characters' and allow_non_chinese_batch_translation(
+                if not valid and _adapter_target_language_policy_allows(
                     manifest,
                     chunk,
+                    target_item,
                     target_unit.text,
                     result_item['translation'],
-                    item=target_item,
+                    reason=reason,
+                    reason_codes=adapter_reason_codes,
                 ):
                     valid = True
                     reason = 'OK'

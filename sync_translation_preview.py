@@ -301,7 +301,7 @@ def prepare_sync_preview_apply(
         preview_sha = str(entry.get("preview_sha256") or "")
         if current_sha not in {source_sha, preview_sha}:
             raise ValueError(f"Source changed after sync preview: {relative_path}")
-        preview_text = preview_path.read_text(encoding="utf-8")
+        preview_text = preview_path.read_bytes().decode("utf-8")
         writeback_plan_payload = entry.get("writeback_plan")
         if writeback_plan_payload is not None:
             from engine_adapters.contracts import SourceDocument

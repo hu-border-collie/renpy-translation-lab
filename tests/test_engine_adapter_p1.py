@@ -876,13 +876,13 @@ translate schinese start:
         )
         self.assertTrue((Path(manifest_path).parent / "requests.jsonl").is_file())
 
-    def test_sync_preview_preserves_utf8_bom_in_source_and_preview_text(self):
+    def test_sync_preview_preserves_utf8_bom_and_crlf_through_apply(self):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
         tl_dir = root / "game" / "tl" / "schinese"
         tl_dir.mkdir(parents=True)
         target = tl_dir / "script.rpy"
-        body = 'translate schinese start:\n    # "Hello"\n    "Hello"\n'
+        body = 'translate schinese start:\r\n    # "Hello"\r\n    "Hello"\r\n'
         target.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
 
         def translate_batch(batch, replacements, usage_run_id="", **_kwargs):
@@ -926,7 +926,10 @@ translate schinese start:
             active_project_root=root,
             active_tl_dir=tl_dir,
         )
-        self.assertEqual(target.read_text(encoding="utf-8-sig"), body.replace('    "Hello"', '    "你好"'))
+        self.assertEqual(
+            target.read_bytes(),
+            b"\xef\xbb\xbf" + body.replace('    "Hello"', '    "你好"').encode("utf-8"),
+        )
 
 
 if __name__ == "__main__":

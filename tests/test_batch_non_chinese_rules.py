@@ -83,6 +83,37 @@ class BatchNonChineseRulesTests(unittest.TestCase):
             )
         )
 
+    def test_adapter_policy_allows_only_target_language_failure(self):
+        manifest = {
+            'non_chinese_rules': copy.deepcopy(
+                batch_non_chinese_rules.DEFAULT_NON_CHINESE_RULES
+            ),
+        }
+        chunk = {'file_rel_path': 'screens_patronlistitem.rpy'}
+        self.assertTrue(
+            batch_mod._adapter_target_language_policy_allows(
+                manifest,
+                chunk,
+                None,
+                'Alpha, Beta, Gamma',
+                'Alpha， Beta， Gamma',
+                reason_codes=('common.target_language.missing',),
+            )
+        )
+        self.assertFalse(
+            batch_mod._adapter_target_language_policy_allows(
+                manifest,
+                chunk,
+                None,
+                'Alpha {player}',
+                'Alpha',
+                reason_codes=(
+                    'common.target_language.missing',
+                    'renpy.tag.changed',
+                ),
+            )
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

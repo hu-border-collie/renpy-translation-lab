@@ -382,6 +382,84 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         action_tuple = replacements[file_rel_path][6][0]
         self.assertEqual(action_tuple[2], "你好世界")
 
+    def test_adapter_plan_preserves_batch_non_chinese_policy_allowance(self):
+        file_rel_path = "screens_patronlistitem.rpy"
+        file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
+        lines = ['    "Alpha, Beta, Gamma"\n']
+        Path(file_path).write_text("".join(lines), encoding="utf-8")
+        scanned = runtime.scan_all_translation_units(lines, file_rel_path)
+        item_id, (line, start, end, source_text) = next(iter(scanned.items()))
+        translated_text = "Alpha， Beta， Gamma"
+        manifest = {
+            "version": 2,
+            "manifest_version": 2,
+            "core_schema_version": 2,
+            "mode": batch_mod.MANIFEST_MODE_TRANSLATION,
+            "base_dir": self.tmp_dir,
+            "tl_dir": batch_mod.legacy.TL_DIR,
+            "result_jsonl_path": os.path.join(self.tmp_dir, "results.jsonl"),
+            "files": {file_rel_path: {"path": file_path, "task_count": 1}},
+            "chunks": [
+                {
+                    "key": "chunk_0",
+                    "file_rel_path": file_rel_path,
+                    "items": [
+                        {
+                            "id": item_id,
+                            "text": source_text,
+                            "line": line,
+                            "line_number": line + 1,
+                            "start": start,
+                            "end": end,
+                            "prefix": "",
+                            "quote": '"',
+                        }
+                    ],
+                }
+            ],
+            "_manifest_path": os.path.join(self.tmp_dir, "manifest.json"),
+            "_package_dir": self.tmp_dir,
+        }
+        result = {
+            "key": "chunk_0",
+            "response": {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": json.dumps(
+                                        [{"id": item_id, "translation": translated_text}]
+                                    )
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        }
+        Path(manifest["result_jsonl_path"]).write_text(
+            json.dumps(result, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+        replacements, _translated, failures, summary = batch_mod.collect_result_actions(
+            manifest,
+            validate_sources=True,
+        )
+        plan, _snapshot = batch_mod._validate_adapter_writeback_plan(
+            manifest,
+            replacements,
+            summary,
+            failures,
+        )
+
+        self.assertEqual(failures, [])
+        self.assertEqual(summary["valid_items"], 1)
+        self.assertEqual(summary["adapter_writeback_status"], "pass")
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.operations[0].replacement_fragment, '"Alpha， Beta， Gamma"')
+
     def test_collect_result_actions_relocates_missing_v2_response_items(self):
         file_rel_path = "script.rpy"
         file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
