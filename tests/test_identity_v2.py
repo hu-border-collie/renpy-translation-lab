@@ -389,7 +389,7 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         Path(file_path).write_text("".join(lines), encoding="utf-8")
         scanned = runtime.scan_all_translation_units(lines, file_rel_path)
         item_id, (line, start, end, source_text) = next(iter(scanned.items()))
-        translated_text = "Alpha， Beta， Gamma"
+        translated_text = "Alpha， Beta， Gamma"  # noqa: RUF001
         manifest = {
             "version": 2,
             "manifest_version": 2,
@@ -458,7 +458,10 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         self.assertEqual(summary["valid_items"], 1)
         self.assertEqual(summary["adapter_writeback_status"], "pass")
         self.assertIsNotNone(plan)
-        self.assertEqual(plan.operations[0].replacement_fragment, '"Alpha， Beta， Gamma"')
+        self.assertEqual(
+            plan.operations[0].replacement_fragment,
+            '"Alpha， Beta， Gamma"',  # noqa: RUF001
+        )
 
     def test_collect_result_actions_relocates_missing_v2_response_items(self):
         file_rel_path = "script.rpy"
