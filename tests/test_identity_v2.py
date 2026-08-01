@@ -546,6 +546,8 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         )
 
         self.assertIn(2, replacements[file_rel_path])
+        self.assertEqual(len(replacements[file_rel_path][2]), 1)
+        self.assertEqual(replacements[file_rel_path][2][0][2], "同一文本")
         self.assertEqual(failures, [])
         self.assertNotIn("v2_relocation_missing", summary["reason_counts"])
         safety = batch_mod.summarize_check_safety(summary)

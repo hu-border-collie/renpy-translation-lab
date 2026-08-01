@@ -48,6 +48,7 @@ class SyncTranslationPreviewTests(unittest.TestCase):
             report = (manifest_path.parent / "preview.diff").read_text(encoding="utf-8")
             self.assertIn('-    "Hello 1"', report)
             self.assertIn('+    "你好 1"', report)
+
     def test_load_accepts_legacy_preview_without_failures_field(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
