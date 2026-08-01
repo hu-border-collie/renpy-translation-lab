@@ -1,9 +1,8 @@
 """Versioned, engine-neutral contracts for localization adapters.
 
-P1 introduces read-only discovery, inventory, audit, and extraction.  The
-validation, relocation, and writeback data classes are defined here so future
-stages extend one protocol, but no P1 implementation is allowed to write game
-files.
+P1 introduced read-only discovery, inventory, audit, and extraction.  P2 adds
+relocation, engine validation, and declarative writeback plans while keeping
+all project/manifest checks and actual file writes in common workflow code.
 """
 
 from __future__ import annotations
@@ -105,6 +104,8 @@ class ProjectDiscovery:
     source_documents: tuple[SourceDocument, ...]
     localization_mode: LocalizationMode
     catalog_provenance: Mapping[str, Any] = field(default_factory=dict)
+    coverage_digest: str = ""
+    coverage_review_digest: str = ""
 
     def document_by_path(self) -> dict[str, SourceDocument]:
         return {document.file_rel_path: document for document in self.source_documents}
@@ -247,6 +248,13 @@ class RelocationResult:
     unresolved_occurrence_ids: tuple[str, ...] = ()
     diagnostics: tuple[Mapping[str, Any], ...] = ()
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "occurrences": [occurrence.to_dict() for occurrence in self.occurrences],
+            "unresolved_occurrence_ids": list(self.unresolved_occurrence_ids),
+            "diagnostics": [dict(item) for item in self.diagnostics],
+        }
+
 
 @dataclass(frozen=True)
 class ValidationResult:
@@ -259,6 +267,19 @@ class ValidationResult:
     translation_digest: str
     normalized_translation: str | None = None
     validation_schema_version: int = VALIDATION_SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "validation_schema_version": self.validation_schema_version,
+            "occurrence_id": self.occurrence_id,
+            "engine": self.engine,
+            "status": self.status,
+            "reason_codes": list(self.reason_codes),
+            "diagnostics": [dict(item) for item in self.diagnostics],
+            "source_constraints_digest": self.source_constraints_digest,
+            "translation_digest": self.translation_digest,
+            "normalized_translation": self.normalized_translation,
+        }
 
 
 @dataclass(frozen=True)
@@ -284,6 +305,23 @@ class WritebackOperation:
     replacement_fragment: str
     validation_digest: str
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "operation_id": self.operation_id,
+            "kind": self.kind,
+            "occurrence_id": self.occurrence_id,
+            "target_root": self.target_root,
+            "target_rel_path": self.target_rel_path,
+            "expected_file_sha256": self.expected_file_sha256,
+            "line": self.line,
+            "start_col": self.start_col,
+            "end_col": self.end_col,
+            "expected_fragment_sha256": self.expected_fragment_sha256,
+            "expected_text_digest": self.expected_text_digest,
+            "replacement_fragment": self.replacement_fragment,
+            "validation_digest": self.validation_digest,
+        }
+
 
 @dataclass(frozen=True)
 class WritebackPlan:
@@ -296,6 +334,19 @@ class WritebackPlan:
     operations: tuple[WritebackOperation, ...]
     plan_digest: str
     writeback_plan_schema_version: int = WRITEBACK_PLAN_SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "writeback_plan_schema_version": self.writeback_plan_schema_version,
+            "engine": self.engine,
+            "adapter_version": self.adapter_version,
+            "project_identity_digest": self.project_identity_digest,
+            "source_snapshot_fingerprint": self.source_snapshot_fingerprint,
+            "coverage_digest": self.coverage_digest,
+            "coverage_review_digest": self.coverage_review_digest,
+            "operations": [operation.to_dict() for operation in self.operations],
+            "plan_digest": self.plan_digest,
+        }
 
 
 @runtime_checkable
@@ -338,8 +389,8 @@ class EngineAdapter(Protocol):
     ) -> RelocationResult:
         """Relocate occurrences against live sources (P2).
 
-        P1 implementations must fail closed with ``NotImplementedError``
-        rather than returning empty success results.
+        Unsupported adapters must fail closed rather than returning an empty
+        success result.
         """
         ...
 
@@ -350,8 +401,7 @@ class EngineAdapter(Protocol):
     ) -> ValidationResult:
         """Validate translated text for engine format rules (P2).
 
-        P1 implementations must fail closed with ``NotImplementedError``
-        rather than returning empty success results.
+        Unsupported adapters must fail closed rather than returning a pass.
         """
         ...
 
@@ -363,8 +413,7 @@ class EngineAdapter(Protocol):
     ) -> WritebackPlan:
         """Build a declarative writeback plan (P2).
 
-        P1 implementations must fail closed with ``NotImplementedError``
-        rather than returning empty success results. Adapters never receive
+        Unsupported adapters must fail closed. Adapters never receive
         arbitrary file-write authority.
         """
         ...

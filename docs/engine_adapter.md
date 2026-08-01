@@ -2,10 +2,11 @@
 
 文档地图：[docs/README.md](README.md)
 
-当前已交付 #265 的 P1：同步翻译预览与普通 Batch translation build 通过同一个
-`RenPyAdapter` 发现 `.rpy`、构建候选清单并提取 `TranslationUnit`。这一阶段是只读
-扫描迁移，不改变现有命令、配置、manifest v1/v2、identity v2、终端文案或
-`check -> apply` 写回合同。
+当前已交付 #265 的 P1 与 P2：同步翻译预览、普通 Batch translation build，以及
+revision preview/apply 通过 `RenPyAdapter` 的 relocation、validation 和声明式
+writeback plan；公共层重新校验 plan 后，仍由既有 workflow 执行 check→apply、路径
+约束、事务恢复和 atomic write。P2 不改变现有命令、配置、manifest v1/v2、identity
+v2 或终端文案合同。
 
 ## 当前边界
 
@@ -14,12 +15,17 @@
 | `engine_adapters/contracts.py` | engine-neutral protocol、capability、candidate、occurrence、validation / writeback 的版本化信封 |
 | `engine_adapters/renpy.py` | Ren'Py 项目发现、`.rpy` inventory、分类、source marker、speaker、translate block / occurrence / ordinal、只读 occurrence 提取 |
 | `engine_adapters/coverage.py` | 独立校验 inventory invariant、生成稳定 digest、导出 coverage/review package、导入并校验人工或 Agent review |
+| `engine_adapters/writeback.py` | 公共 plan schema、source snapshot、相对路径、文件 hash、span、重叠和 plan digest 校验；只在内存中渲染，不持有 writer |
 | `translation_core.py` | 唯一的 `TranslationUnit` / `ModelResult` 核心模型；adapter 不创建第二套翻译单元 |
-| sync / Batch workflow | 模型调用、prompt、progress、manifest、preview/check/apply、RAG / Source Index 回灌 |
+| sync / Batch / revision workflow | 模型调用、prompt、progress、manifest、preview/check/apply、RAG / Source Index 回灌；atomic writer 仍在 workflow/common 层 |
 
-P1 的 `relocate_occurrences()`、`validate_translation()` 与
-`build_writeback_plan()` 明确 fail closed；Ren'Py 重定位、格式校验和声明式写回属于
-P2。revision、keyword、Project Analysis 与 Final Review 的扫描入口在 P1 保持原状。
+P2 的 `relocate_occurrences()` 先按 identity v2，再按 source/context evidence 做唯一
+重定位；无法唯一定位时返回 `common.locator.unresolved`。`validate_translation()`
+输出版本化 `ValidationResult`，`build_writeback_plan()` 只产生
+`text_span_replace` 操作。公共消费者会在 check 和 apply 的二次源重读后再次校验
+source snapshot、文件 hash、半开 span、非重叠、相对路径和 plan digest；adapter 没有
+文件写入权限。keyword、Project Analysis 与 Final Review 的独立扫描入口不在本阶段
+扩大范围。
 
 ## 扫描与等价性
 

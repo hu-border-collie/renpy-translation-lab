@@ -81,6 +81,54 @@ def _fingerprint(manifest: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _deserialize_writeback_plan(payload: Any):
+    from engine_adapters.contracts import WritebackOperation, WritebackPlan
+
+    if not isinstance(payload, dict):
+        raise ValueError("Sync preview writeback plan must be an object.")
+    raw_operations = payload.get("operations")
+    if not isinstance(raw_operations, list):
+        raise ValueError("Sync preview writeback plan operations must be a list.")
+    operations = []
+    operation_fields = (
+        "operation_id",
+        "kind",
+        "occurrence_id",
+        "target_root",
+        "target_rel_path",
+        "expected_file_sha256",
+        "line",
+        "start_col",
+        "end_col",
+        "expected_fragment_sha256",
+        "expected_text_digest",
+        "replacement_fragment",
+        "validation_digest",
+    )
+    try:
+        for raw_operation in raw_operations:
+            if not isinstance(raw_operation, dict):
+                raise ValueError("Sync preview writeback operation must be an object.")
+            values = {field: raw_operation[field] for field in operation_fields}
+            values["line"] = int(values["line"])
+            values["start_col"] = int(values["start_col"])
+            values["end_col"] = int(values["end_col"])
+            operations.append(WritebackOperation(**values))
+        return WritebackPlan(
+            engine=str(payload["engine"]),
+            adapter_version=str(payload["adapter_version"]),
+            project_identity_digest=str(payload["project_identity_digest"]),
+            source_snapshot_fingerprint=str(payload["source_snapshot_fingerprint"]),
+            coverage_digest=str(payload.get("coverage_digest") or ""),
+            coverage_review_digest=str(payload.get("coverage_review_digest") or ""),
+            operations=tuple(operations),
+            plan_digest=str(payload["plan_digest"]),
+            writeback_plan_schema_version=int(payload["writeback_plan_schema_version"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid sync preview writeback plan: {exc}") from exc
+
+
 def create_sync_preview(
     *,
     log_dir: str | os.PathLike[str],
@@ -130,6 +178,8 @@ def create_sync_preview(
                 "translated_items": translated_items,
             }
         )
+        if raw.get("writeback_plan") is not None:
+            entries[-1]["writeback_plan"] = raw.get("writeback_plan")
         report_lines.extend(
             difflib.unified_diff(
                 source_text.splitlines(keepends=True),
@@ -229,6 +279,28 @@ def prepare_sync_preview_apply(
         if current_sha not in {source_sha, preview_sha}:
             raise ValueError(f"Source changed after sync preview: {relative_path}")
         preview_text = preview_path.read_text(encoding="utf-8")
+        writeback_plan_payload = entry.get("writeback_plan")
+        if writeback_plan_payload is not None:
+            from engine_adapters.contracts import SourceDocument
+            from engine_adapters.writeback import render_writeback_plan
+
+            source_content = source_snapshot.read_bytes()
+            source_document = SourceDocument(
+                file_rel_path=relative_path,
+                file_path=str(target),
+                size=len(source_content),
+                sha256=hashlib.sha256(source_content).hexdigest(),
+                content=source_content,
+            )
+            plan = _deserialize_writeback_plan(writeback_plan_payload)
+            rendered_by_file = render_writeback_plan(plan, (source_document,))
+            rendered_text = "".join(rendered_by_file.get(relative_path, ()))
+            if source_content.startswith(b"\xef\xbb\xbf") and not rendered_text.startswith("\ufeff"):
+                rendered_text = "\ufeff" + rendered_text
+            if rendered_text != preview_text:
+                raise ValueError(
+                    f"Sync preview writeback plan does not match proposed file: {relative_path}"
+                )
         prepared.append(
             {
                 "entry": entry,

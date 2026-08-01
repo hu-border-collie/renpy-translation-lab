@@ -10,7 +10,8 @@ the legacy scanners' broad exception handlers become coverage claims.
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
 import hashlib
 import io
 import os
@@ -25,6 +26,8 @@ import translation_core
 from .contracts import (
     CONTENT_FINGERPRINT_SCHEMA_VERSION,
     ENGINE_ADAPTER_PROTOCOL_VERSION,
+    VALIDATION_SCHEMA_VERSION,
+    WRITEBACK_PLAN_SCHEMA_VERSION,
     Candidate,
     CandidateInventory,
     CoverageReportDraft,
@@ -39,6 +42,7 @@ from .contracts import (
     SourceDocument,
     ValidatedTranslation,
     ValidationResult,
+    WritebackOperation,
     WritebackPlan,
 )
 from .coverage import (
@@ -50,7 +54,7 @@ from .coverage import (
 )
 
 
-ADAPTER_VERSION = "1.0.0"
+ADAPTER_VERSION = "1.1.0"
 LOCATOR_SCHEMA_VERSION = 1
 
 
@@ -127,10 +131,11 @@ def _normalize_fingerprint_text(value: str) -> str:
 
 
 class RenPyAdapter:
-    """P1 Ren'Py adapter.
+    """P2 Ren'Py adapter with read-only relocation and writeback planning.
 
     The adapter can read only the project/localization roots supplied to
-    :meth:`discover_project`.  P2 protocol methods intentionally fail closed.
+    :meth:`discover_project`.  It returns declarative data only; common
+    workflow code retains project, manifest, and atomic write authority.
     """
 
     protocol_version = ENGINE_ADAPTER_PROTOCOL_VERSION
@@ -158,8 +163,8 @@ class RenPyAdapter:
             selected_localization_mode=LocalizationMode.HYBRID,
             source_inventory=True,
             native_catalog=True,
-            relocation=False,
-            declarative_writeback=(),
+            relocation=True,
+            declarative_writeback=("text_span_replace",),
             native_catalog_required_for_writeback=True,
         )
 
@@ -175,7 +180,11 @@ class RenPyAdapter:
                     "collect_tasks_with_progress",
                     "scan_all_translation_units",
                 ],
-                "p1_writeback": False,
+                "p2_relocation": True,
+                "p2_validation": True,
+                "p2_writeback_plan": True,
+                "validation_schema_version": VALIDATION_SCHEMA_VERSION,
+                "writeback_plan_schema_version": WRITEBACK_PLAN_SCHEMA_VERSION,
             }
         )
 
@@ -1248,20 +1257,351 @@ class RenPyAdapter:
             )
         return tuple(occurrences)
 
+    @staticmethod
+    def _source_snapshot_fingerprint(source_documents: Sequence[SourceDocument]) -> str:
+        return digest_json([
+            document.manifest_entry()
+            for document in sorted(source_documents, key=lambda item: item.file_rel_path)
+        ])
+
+    @classmethod
+    def _project_with_live_sources(
+        cls,
+        project: ProjectDiscovery,
+        live_sources: Sequence[SourceDocument],
+    ) -> ProjectDiscovery:
+        documents = tuple(sorted(live_sources, key=lambda item: item.file_rel_path))
+        source_fingerprint = cls._source_snapshot_fingerprint(documents)
+        project_snapshot_fingerprint = digest_json(
+            {
+                "engine": project.engine,
+                "localization_mode": project.localization_mode.value,
+                "target_language": project.target_language,
+                "source_fingerprint": source_fingerprint,
+            }
+        )
+        return replace(
+            project,
+            source_documents=documents,
+            source_fingerprint=source_fingerprint,
+            project_snapshot_fingerprint=project_snapshot_fingerprint,
+        )
+
+    @staticmethod
+    def _content_fingerprint(document: SourceDocument, unit: translation_core.TranslationUnit) -> str:
+        lines = document.lines()
+        before = lines[unit.line - 1].strip() if unit.line > 0 else ""
+        after = lines[unit.line + 1].strip() if unit.line + 1 < len(lines) else ""
+        return digest_json(
+            {
+                "schema_version": CONTENT_FINGERPRINT_SCHEMA_VERSION,
+                "source": _normalize_fingerprint_text(unit.source_text),
+                "speaker_id": _normalize_fingerprint_text(unit.speaker_id),
+                "speaker_name": _normalize_fingerprint_text(unit.speaker_name),
+                "before": _normalize_fingerprint_text(before),
+                "after": _normalize_fingerprint_text(after),
+            }
+        )
+
+    @staticmethod
+    def _token_counters(legacy: ModuleType, text: str) -> dict[str, Counter[str]]:
+        return {
+            "tag": Counter(legacy.RENPY_TAG_RE.findall(text or "")),
+            "field": Counter(legacy.RENPY_FIELD_RE.findall(text or "")),
+            "percent": Counter(legacy.PERCENT_FORMAT_TOKEN_RE.findall(text or "")),
+        }
+
+    @staticmethod
+    def _counter_payload(counter: Counter[str]) -> dict[str, int]:
+        return {key: counter[key] for key in sorted(counter)}
+
+    @staticmethod
+    def _render_literal(
+        legacy: ModuleType,
+        translated_text: str,
+        prefix: str,
+        quote: str,
+    ) -> str:
+        normalized = translated_text
+        if getattr(legacy, "USE_TRANSLATION_MEMORY", False):
+            normalized = legacy.apply_normalization(normalized)
+        quote = str(quote or '"')
+        quote_char = quote[0]
+        escapes = getattr(
+            legacy,
+            "SPECIAL_ESCAPES",
+            (
+                ("\\\\", "\\\\\\\\"),
+                ('"', '\\"'),
+                ("\\a", "\\\\a"),
+                ("\\b", "\\\\b"),
+                ("\\f", "\\\\f"),
+                ("\\n", "\\\\n"),
+                ("\\r", "\\\\r"),
+                ("\\t", "\\\\t"),
+                ("\\v", "\\\\v"),
+            ),
+        )
+        escaped = str(normalized)
+        for old, new in escapes:
+            if old == quote_char:
+                continue
+            escaped = escaped.replace(old, new)
+        escaped = escaped.replace(quote_char, "\\" + quote_char)
+        return f"{prefix or ''}{quote}{escaped}{quote}"
+
+    @staticmethod
+    def _literal_at_span(line: str, start: int, end: int) -> tuple[str, str] | None:
+        try:
+            tokens = tokenize.generate_tokens(io.StringIO(line).readline)
+            for token in tokens:
+                if token.type != tokenize.STRING:
+                    continue
+                if token.start[1] != start or token.end[1] != end:
+                    continue
+                value = ast.literal_eval(token.string)
+                if isinstance(value, str):
+                    return value, token.string
+        except (IndentationError, SyntaxError, tokenize.TokenError, ValueError):
+            return None
+        return None
+
+    @staticmethod
+    def _relocation_score(original: Occurrence, candidate: Occurrence) -> int | None:
+        original_unit = original.unit
+        candidate_unit = candidate.unit
+        if _normalize_fingerprint_text(original_unit.source_text) != _normalize_fingerprint_text(
+            candidate_unit.source_text
+        ):
+            return None
+        score = 100
+        original_locator = original.locator.locator
+        candidate_locator = candidate.locator.locator
+        if original_unit.file_rel_path == candidate_unit.file_rel_path:
+            score += 25
+        if original_unit.speaker_id == candidate_unit.speaker_id:
+            score += 15
+        if original_unit.speaker_name == candidate_unit.speaker_name:
+            score += 5
+        if original_locator.get("translate_block") == candidate_locator.get("translate_block"):
+            score += 15
+        if original_locator.get("block_occurrence") == candidate_locator.get("block_occurrence"):
+            score += 10
+        if original_locator.get("source_marker_kind") == candidate_locator.get("source_marker_kind"):
+            score += 5
+        if original_locator.get("ordinal") == candidate_locator.get("ordinal"):
+            score += 5
+        if original.content_fingerprint == candidate.content_fingerprint:
+            score += 25
+        return score
+
+    def _validation_reason_codes(
+        self,
+        legacy: ModuleType,
+        source_text: str,
+        translated_text: str,
+        message: str,
+    ) -> tuple[tuple[str, ...], tuple[Mapping[str, Any], ...]]:
+        reason_codes: list[str] = []
+        diagnostics: list[Mapping[str, Any]] = []
+        if not str(translated_text or "").strip():
+            reason_codes.append("common.translation.empty")
+        missing_terms = getattr(legacy, "missing_preserved_terms", lambda *_: [])(
+            source_text, translated_text
+        )
+        if missing_terms:
+            reason_codes.append("common.preserve_term.missing")
+            diagnostics.append({"code": "common.preserve_term.missing", "terms": list(missing_terms)})
+
+        source_tokens = self._token_counters(legacy, source_text)
+        translated_tokens = self._token_counters(legacy, translated_text)
+        token_codes = {
+            "tag": "renpy.tag.changed",
+            "field": "renpy.field.changed",
+            "percent": "renpy.percent_token.changed",
+        }
+        for kind, code in token_codes.items():
+            missing = source_tokens[kind] - translated_tokens[kind]
+            added = translated_tokens[kind] - source_tokens[kind]
+            if missing or added:
+                reason_codes.append(code)
+                if kind == "tag":
+                    if missing:
+                        reason_codes.append("renpy.placeholder.missing")
+                    if added:
+                        reason_codes.append("renpy.placeholder.added")
+                diagnostics.append(
+                    {
+                        "code": code,
+                        "kind": kind,
+                        "missing": self._counter_payload(missing),
+                        "added": self._counter_payload(added),
+                    }
+                )
+        if message == "No Chinese characters":
+            reason_codes.append("common.target_language.missing")
+        if not reason_codes and message and message != "OK":
+            reason_codes.append("renpy.string_literal.unrenderable")
+        if message and message != "OK":
+            diagnostics.append({"message": message})
+        return tuple(dict.fromkeys(reason_codes)), tuple(diagnostics)
+
     def relocate_occurrences(
         self,
         project: ProjectDiscovery,
         occurrences: Sequence[Occurrence],
         live_sources: Sequence[SourceDocument],
     ) -> RelocationResult:
-        raise NotImplementedError("Ren'Py occurrence relocation is intentionally deferred to P2.")
+        if project.engine != self.engine:
+            raise ValueError(f"RenPyAdapter cannot relocate engine={project.engine!r}.")
+        live_project = self._project_with_live_sources(project, live_sources)
+        live_inventory = self.inventory_candidates(live_project, InventoryPolicy())
+        approved_ids = [
+            candidate.candidate_id
+            for candidate in live_inventory.candidates
+            if candidate.classification in {"translatable", "already_translated"}
+        ]
+        live_occurrences = tuple(
+            self.extract_occurrences(live_project, live_inventory, approved_ids)
+        )
+        live_by_unit_id: dict[str, list[Occurrence]] = {}
+        for candidate in live_occurrences:
+            live_by_unit_id.setdefault(candidate.unit.id, []).append(candidate)
+
+        relocated: list[Occurrence] = []
+        unresolved: list[str] = []
+        diagnostics: list[Mapping[str, Any]] = []
+        used_live_ids: set[str] = set()
+        for original in occurrences:
+            if original.engine != self.engine:
+                raise ValueError(f"RenPyAdapter cannot relocate engine={original.engine!r}.")
+            exact_candidates = [
+                candidate
+                for candidate in live_by_unit_id.get(original.unit.id, [])
+                if candidate.occurrence_id not in used_live_ids
+            ]
+            match = exact_candidates[0] if len(exact_candidates) == 1 else None
+            match_kind = "identity_v2" if match is not None else "content_evidence"
+            score = None
+            if match is None:
+                scored = []
+                for candidate in live_occurrences:
+                    if candidate.occurrence_id in used_live_ids:
+                        continue
+                    candidate_score = self._relocation_score(original, candidate)
+                    if candidate_score is not None:
+                        scored.append((candidate_score, candidate))
+                scored.sort(key=lambda item: item[0], reverse=True)
+                if scored and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+                    score, match = scored[0]
+                elif scored:
+                    diagnostics.append(
+                        {
+                            "occurrence_id": original.occurrence_id,
+                            "reason_code": "common.locator.unresolved",
+                            "status": "ambiguous",
+                            "candidate_count": len(scored),
+                        }
+                    )
+            if match is None:
+                unresolved.append(original.occurrence_id)
+                if not any(item.get("occurrence_id") == original.occurrence_id for item in diagnostics):
+                    diagnostics.append(
+                        {
+                            "occurrence_id": original.occurrence_id,
+                            "reason_code": "common.locator.unresolved",
+                            "status": "missing",
+                        }
+                    )
+                continue
+            used_live_ids.add(match.occurrence_id)
+            updated_unit = replace(match.unit, id=original.unit.id, mode=original.unit.mode)
+            relocated_occurrence_id = "occ1:" + digest_json(
+                {
+                    "engine": self.engine,
+                    "project_snapshot_fingerprint": live_project.project_snapshot_fingerprint,
+                    "locator": match.locator.to_dict(),
+                }
+            )
+            relocated.append(
+                replace(
+                    match,
+                    occurrence_id=relocated_occurrence_id,
+                    project_snapshot_fingerprint=live_project.project_snapshot_fingerprint,
+                    unit=updated_unit,
+                )
+            )
+            diagnostics.append(
+                {
+                    "occurrence_id": original.occurrence_id,
+                    "status": "relocated",
+                    "match": match_kind,
+                    "score": score,
+                    "live_occurrence_id": relocated_occurrence_id,
+                    "file_rel_path": updated_unit.file_rel_path,
+                    "line": updated_unit.line,
+                }
+            )
+        return RelocationResult(
+            occurrences=tuple(relocated),
+            unresolved_occurrence_ids=tuple(unresolved),
+            diagnostics=tuple(diagnostics),
+        )
 
     def validate_translation(
         self,
         occurrence: Occurrence,
         translated_text: str,
     ) -> ValidationResult:
-        raise NotImplementedError("Ren'Py engine validation is intentionally deferred to P2.")
+        if occurrence.engine != self.engine:
+            raise ValueError(f"RenPyAdapter cannot validate engine={occurrence.engine!r}.")
+        legacy = self._legacy()
+        source_text = occurrence.unit.source_text
+        translated_text = str(translated_text or "")
+        try:
+            valid, message = legacy.validate_translation(source_text, translated_text)
+        except Exception as exc:
+            valid, message = False, f"Validation failed: {type(exc).__name__}: {exc}"
+        reason_codes, diagnostics = self._validation_reason_codes(
+            legacy, source_text, translated_text, str(message or "")
+        )
+        if valid:
+            try:
+                self._render_literal(
+                    legacy, translated_text, occurrence.unit.prefix, occurrence.unit.quote
+                )
+            except Exception as exc:
+                valid = False
+                reason_codes = tuple(dict.fromkeys((*reason_codes, "renpy.string_literal.unrenderable")))
+                diagnostics = (*diagnostics, {"code": "renpy.string_literal.unrenderable", "message": str(exc)})
+        normalized = translated_text
+        if getattr(legacy, "USE_TRANSLATION_MEMORY", False):
+            normalized = legacy.apply_normalization(translated_text)
+        source_constraints_digest = digest_json(
+            {
+                "source": source_text,
+                "tokens": {
+                    kind: self._counter_payload(counter)
+                    for kind, counter in self._token_counters(legacy, source_text).items()
+                },
+            }
+        )
+        translation_digest = digest_json(
+            {
+                "validation_schema_version": VALIDATION_SCHEMA_VERSION,
+                "translation": normalized,
+            }
+        )
+        return ValidationResult(
+            occurrence_id=occurrence.occurrence_id,
+            engine=self.engine,
+            status="pass" if valid else "block",
+            reason_codes=tuple(reason_codes),
+            diagnostics=tuple(diagnostics),
+            source_constraints_digest=source_constraints_digest,
+            translation_digest=translation_digest,
+            normalized_translation=normalized if normalized != translated_text else None,
+        )
 
     def build_writeback_plan(
         self,
@@ -1269,7 +1609,112 @@ class RenPyAdapter:
         validated: Sequence[ValidatedTranslation],
         live_sources: Sequence[SourceDocument],
     ) -> WritebackPlan:
-        raise NotImplementedError("Ren'Py declarative writeback is intentionally deferred to P2.")
+        if project.engine != self.engine:
+            raise ValueError(f"RenPyAdapter cannot build a plan for engine={project.engine!r}.")
+        documents = {document.file_rel_path: document for document in live_sources}
+        source_snapshot_fingerprint = self._source_snapshot_fingerprint(live_sources)
+        operations: list[WritebackOperation] = []
+        spans: list[tuple[str, int, int, int]] = []
+        legacy = self._legacy()
+        for item in validated:
+            occurrence = item.occurrence
+            if occurrence.engine != self.engine:
+                raise ValueError(f"Unsupported occurrence engine: {occurrence.engine!r}")
+            if item.validation.status != "pass":
+                raise ValueError(
+                    "Cannot build writeback plan for non-pass validation: "
+                    + ",".join(item.validation.reason_codes)
+                )
+            unit = occurrence.unit
+            rel_path = _normalize_rel_path(unit.file_rel_path)
+            document = documents.get(rel_path)
+            if document is None:
+                raise ValueError(f"Writeback source document missing: {rel_path}")
+            lines = document.lines()
+            if unit.line < 0 or unit.line >= len(lines):
+                raise ValueError(f"Writeback source line missing: {rel_path}:{unit.line}")
+            if unit.start < 0 or unit.end > len(lines[unit.line]) or unit.start >= unit.end:
+                raise ValueError(f"Writeback span invalid: {rel_path}:{unit.line}:{unit.start}-{unit.end}")
+            raw_fragment = lines[unit.line][unit.start:unit.end]
+            literal = self._literal_at_span(lines[unit.line], unit.start, unit.end)
+            if literal is None or literal[0] != unit.text:
+                raise ValueError(f"Writeback span/source mismatch: {rel_path}:{unit.line}")
+            span = (rel_path, unit.line, unit.start, unit.end)
+            if any(
+                existing[0] == rel_path
+                and existing[1] == unit.line
+                and max(existing[2], unit.start) < min(existing[3], unit.end)
+                for existing in spans
+            ):
+                raise ValueError(f"Overlapping writeback span: {rel_path}:{unit.line}")
+            spans.append(span)
+            replacement_fragment = self._render_literal(
+                legacy, item.translated_text, unit.prefix, unit.quote
+            )
+            operation_payload = {
+                "kind": "text_span_replace",
+                "occurrence_id": occurrence.occurrence_id,
+                "target_root": "localization_catalog",
+                "target_rel_path": rel_path,
+                "expected_file_sha256": document.sha256,
+                "line": unit.line,
+                "start_col": unit.start,
+                "end_col": unit.end,
+                "expected_fragment_sha256": _sha256_bytes(raw_fragment.encode("utf-8")),
+                "expected_text_digest": _sha256_bytes(unit.text.encode("utf-8")),
+                "replacement_fragment": replacement_fragment,
+                "validation_digest": digest_json(item.validation.to_dict()),
+            }
+            operations.append(
+                WritebackOperation(
+                    operation_id="op1:" + digest_json(operation_payload),
+                    **operation_payload,
+                )
+            )
+        operations.sort(
+            key=lambda operation: (
+                operation.target_rel_path,
+                operation.line,
+                operation.start_col,
+                operation.operation_id,
+            )
+        )
+        project_identity_digest = digest_json(
+            {
+                "engine": project.engine,
+                "target_language": project.target_language,
+                "localization_mode": project.localization_mode.value,
+                "localization_root": os.path.realpath(project.localization_root),
+            }
+        )
+        coverage_digest = str(
+            project.coverage_digest or project.catalog_provenance.get("coverage_digest") or ""
+        )
+        coverage_review_digest = str(
+            project.coverage_review_digest
+            or project.catalog_provenance.get("coverage_review_digest")
+            or ""
+        )
+        plan_payload = {
+            "writeback_plan_schema_version": WRITEBACK_PLAN_SCHEMA_VERSION,
+            "engine": self.engine,
+            "adapter_version": self.adapter_version,
+            "project_identity_digest": project_identity_digest,
+            "source_snapshot_fingerprint": source_snapshot_fingerprint,
+            "coverage_digest": coverage_digest,
+            "coverage_review_digest": coverage_review_digest,
+            "operations": [operation.to_dict() for operation in operations],
+        }
+        return WritebackPlan(
+            engine=self.engine,
+            adapter_version=self.adapter_version,
+            project_identity_digest=project_identity_digest,
+            source_snapshot_fingerprint=source_snapshot_fingerprint,
+            coverage_digest=coverage_digest,
+            coverage_review_digest=coverage_review_digest,
+            operations=tuple(operations),
+            plan_digest=digest_json(plan_payload),
+        )
 
 
 def build_translation_snapshot(
@@ -1288,6 +1733,7 @@ def build_translation_snapshot(
         draft,
         adapter_behavior_digest=adapter.behavior_digest(),
     )
+    project = replace(project, coverage_digest=report.coverage_digest)
     approved_ids = [
         candidate.candidate_id
         for candidate in inventory.candidates
