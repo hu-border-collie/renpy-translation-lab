@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import ntpath
-from typing import Mapping, Sequence
+from typing import Mapping, NoReturn, Sequence
 
 from .contracts import (
     WRITEBACK_PLAN_SCHEMA_VERSION,
@@ -73,7 +73,7 @@ def _operation_payload(operation: WritebackOperation) -> dict:
     return payload
 
 
-def _fail(reason_code: str, message: str) -> None:
+def _fail(reason_code: str, message: str) -> NoReturn:
     raise WritebackPlanError(reason_code, message)
 
 

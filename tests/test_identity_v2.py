@@ -473,7 +473,7 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         missing = [failure for failure in failures if failure.get("id") == id2][0]
         self.assertEqual(missing["line"], 8)
 
-    def test_collect_result_actions_blocks_missing_v2_relocation(self):
+    def test_collect_result_actions_uses_unique_content_fallback_for_stale_v2_identity(self):
         file_rel_path = "script.rpy"
         file_path = os.path.join(batch_mod.legacy.TL_DIR, file_rel_path)
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -545,13 +545,11 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
             validate_sources=True,
         )
 
-        self.assertEqual(replacements, {})
-        self.assertEqual(summary["reason_counts"]["v2_relocation_missing"], 1)
-        self.assertEqual(len(failures), 1)
-        self.assertEqual(failures[0]["id"], missing_id)
-        self.assertEqual(failures[0]["reason_code"], "v2_relocation_missing")
+        self.assertIn(2, replacements[file_rel_path])
+        self.assertEqual(failures, [])
+        self.assertNotIn("v2_relocation_missing", summary["reason_counts"])
         safety = batch_mod.summarize_check_safety(summary)
-        self.assertEqual(safety["level"], batch_mod.CHECK_SAFETY_BLOCK)
+        self.assertEqual(safety["level"], batch_mod.CHECK_SAFETY_SAFE)
 
     def test_collect_revision_actions_uses_v2_identity_after_line_drift(self):
         file_rel_path = "script.rpy"

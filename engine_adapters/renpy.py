@@ -52,6 +52,7 @@ from .coverage import (
     classification_rules_digest,
     digest_json,
 )
+from .writeback import source_snapshot_fingerprint
 
 
 ADAPTER_VERSION = "1.1.0"
@@ -1224,19 +1225,9 @@ class RenPyAdapter:
 
             unit = candidate.unit
             document = documents.get(unit.file_rel_path)
-            lines = document.lines() if document is not None else []
-            before = lines[unit.line - 1].strip() if unit.line > 0 else ""
-            after = lines[unit.line + 1].strip() if unit.line + 1 < len(lines) else ""
-            content_fingerprint = digest_json(
-                {
-                    "schema_version": CONTENT_FINGERPRINT_SCHEMA_VERSION,
-                    "source": _normalize_fingerprint_text(unit.source_text),
-                    "speaker_id": _normalize_fingerprint_text(unit.speaker_id),
-                    "speaker_name": _normalize_fingerprint_text(unit.speaker_name),
-                    "before": _normalize_fingerprint_text(before),
-                    "after": _normalize_fingerprint_text(after),
-                }
-            )
+            if document is None:
+                raise ValueError(f"Candidate source document is missing: {unit.file_rel_path}")
+            content_fingerprint = self._content_fingerprint(document, unit)
             occurrence_id = "occ1:" + digest_json(
                 {
                     "engine": self.engine,
@@ -1257,13 +1248,6 @@ class RenPyAdapter:
             )
         return tuple(occurrences)
 
-    @staticmethod
-    def _source_snapshot_fingerprint(source_documents: Sequence[SourceDocument]) -> str:
-        return digest_json([
-            document.manifest_entry()
-            for document in sorted(source_documents, key=lambda item: item.file_rel_path)
-        ])
-
     @classmethod
     def _project_with_live_sources(
         cls,
@@ -1271,7 +1255,7 @@ class RenPyAdapter:
         live_sources: Sequence[SourceDocument],
     ) -> ProjectDiscovery:
         documents = tuple(sorted(live_sources, key=lambda item: item.file_rel_path))
-        source_fingerprint = cls._source_snapshot_fingerprint(documents)
+        source_fingerprint = source_snapshot_fingerprint(documents)
         project_snapshot_fingerprint = digest_json(
             {
                 "engine": project.engine,
@@ -1325,30 +1309,7 @@ class RenPyAdapter:
         normalized = translated_text
         if getattr(legacy, "USE_TRANSLATION_MEMORY", False):
             normalized = legacy.apply_normalization(normalized)
-        quote = str(quote or '"')
-        quote_char = quote[0]
-        escapes = getattr(
-            legacy,
-            "SPECIAL_ESCAPES",
-            (
-                ("\\\\", "\\\\\\\\"),
-                ('"', '\\"'),
-                ("\\a", "\\\\a"),
-                ("\\b", "\\\\b"),
-                ("\\f", "\\\\f"),
-                ("\\n", "\\\\n"),
-                ("\\r", "\\\\r"),
-                ("\\t", "\\\\t"),
-                ("\\v", "\\\\v"),
-            ),
-        )
-        escaped = str(normalized)
-        for old, new in escapes:
-            if old == quote_char:
-                continue
-            escaped = escaped.replace(old, new)
-        escaped = escaped.replace(quote_char, "\\" + quote_char)
-        return f"{prefix or ''}{quote}{escaped}{quote}"
+        return legacy.quote_with(normalized, str(quote or '"'), prefix=prefix or "")
 
     @staticmethod
     def _literal_at_span(line: str, start: int, end: int) -> tuple[str, str] | None:
@@ -1612,7 +1573,7 @@ class RenPyAdapter:
         if project.engine != self.engine:
             raise ValueError(f"RenPyAdapter cannot build a plan for engine={project.engine!r}.")
         documents = {document.file_rel_path: document for document in live_sources}
-        source_snapshot_fingerprint = self._source_snapshot_fingerprint(live_sources)
+        live_source_fingerprint = source_snapshot_fingerprint(live_sources)
         operations: list[WritebackOperation] = []
         spans: list[tuple[str, int, int, int]] = []
         legacy = self._legacy()
@@ -1700,7 +1661,7 @@ class RenPyAdapter:
             "engine": self.engine,
             "adapter_version": self.adapter_version,
             "project_identity_digest": project_identity_digest,
-            "source_snapshot_fingerprint": source_snapshot_fingerprint,
+            "source_snapshot_fingerprint": live_source_fingerprint,
             "coverage_digest": coverage_digest,
             "coverage_review_digest": coverage_review_digest,
             "operations": [operation.to_dict() for operation in operations],
@@ -1709,7 +1670,7 @@ class RenPyAdapter:
             engine=self.engine,
             adapter_version=self.adapter_version,
             project_identity_digest=project_identity_digest,
-            source_snapshot_fingerprint=source_snapshot_fingerprint,
+            source_snapshot_fingerprint=live_source_fingerprint,
             coverage_digest=coverage_digest,
             coverage_review_digest=coverage_review_digest,
             operations=tuple(operations),

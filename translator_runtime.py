@@ -3742,6 +3742,32 @@ def build_sync_adapter_writeback_plan(adapter, snapshot, file_rel_path, tasks, r
     )
 
 
+def build_sync_adapter_preview(adapter, snapshot, file_rel_path, tasks, replacements):
+    """Build and render one sync preview file without aborting sibling files."""
+
+    try:
+        plan = build_sync_adapter_writeback_plan(
+            adapter,
+            snapshot,
+            file_rel_path,
+            tasks,
+            replacements,
+        )
+        live_sources = tuple(
+            document
+            for document in snapshot.project.source_documents
+            if document.file_rel_path == file_rel_path
+        )
+        rendered = render_writeback_plan(plan, live_sources)
+    except (KeyError, ValueError) as exc:
+        return None, None, {
+            "relative_path": file_rel_path,
+            "reason_code": getattr(exc, "reason_code", "adapter.writeback.block"),
+            "message": str(exc),
+        }
+    return plan, rendered, None
+
+
 def render_replacement_lines(lines, replacements):
     """Return replacement output without modifying the caller's source lines."""
     rendered = list(lines)
@@ -4356,6 +4382,7 @@ def process_batch(
     usage_run_id='',
     usage_buffer=None,
     usage_operation_id='',
+    translation_validator=None,
 ):
     glossary_hits = retrieve_sync_glossary_hits(batch) if SYNC_RAG_ENABLED else []
     history_hits, rag_stats = retrieve_sync_history_hits(batch) if SYNC_RAG_ENABLED else ([], {})
@@ -4396,7 +4423,10 @@ def process_batch(
 
         translated = item.get("translation", "")
         memory_translation = apply_normalization(translated) if USE_TRANSLATION_MEMORY else translated
-        valid, msg = validate_translation(entry["text"], translated)
+        if translation_validator is None:
+            valid, msg = validate_translation(entry["text"], translated)
+        else:
+            valid, msg = translation_validator(entry, translated)
 
         if not valid:
             print(f"  Warning: Validation failed for {entry['id']}: {msg}")
@@ -4426,6 +4456,7 @@ def process_batch_with_retry(
     usage_run_id='',
     usage_buffer=None,
     usage_operation_id='',
+    translation_validator=None,
 ):
     if retry_depth >= 5:
         log_failure(batch, "Max retry depth reached")
@@ -4441,6 +4472,7 @@ def process_batch_with_retry(
             return process_batch(
                 batch,
                 replacements,
+                translation_validator=translation_validator,
                 usage_run_id=usage_run_id,
                 usage_buffer=usage_buffer,
                 usage_operation_id=usage_operation_id,
@@ -4499,12 +4531,14 @@ def process_batch_with_retry(
             usage_run_id=usage_run_id,
             usage_buffer=usage_buffer,
             usage_operation_id=usage_operation_id,
+            translation_validator=translation_validator,
         )
         r2 = process_batch_with_retry(
             batch[mid:], replacements, retry_depth + 1,
             usage_run_id=usage_run_id,
             usage_buffer=usage_buffer,
             usage_operation_id=usage_operation_id,
+            translation_validator=translation_validator,
         )
         return r1 + r2
 
@@ -5087,6 +5121,22 @@ def run_translation(*, prepare=False):
             ),
         )
         source_documents = adapter_snapshot.project.source_documents
+        occurrences_by_unit_id = {
+            occurrence.unit.id: occurrence
+            for occurrence in adapter_snapshot.occurrences
+            if occurrence.unit.id
+        }
+
+        def validate_sync_translation(entry, translated):
+            occurrence = occurrences_by_unit_id.get(str(entry.get("id") or ""))
+            if occurrence is None:
+                return False, "common.locator.unresolved"
+            validation = adapter.validate_translation(occurrence, translated)
+            if validation.status == "pass":
+                return True, "OK"
+            reason = ", ".join(validation.reason_codes) or "adapter.validation.block"
+            return False, reason
+
         files_to_process = [
             document.file_path
             for document in source_documents
@@ -5095,6 +5145,7 @@ def run_translation(*, prepare=False):
 
         global_progress = _upgrade_legacy_progress_keys(load_progress(), files_to_process)
         preview_files = []
+        preview_failures = []
         for document in source_documents:
             file_path = document.file_path
             filename = os.path.basename(file_path)
@@ -5137,6 +5188,7 @@ def run_translation(*, prepare=False):
                         batch,
                         replacements,
                         usage_run_id=usage_run_id,
+                        translation_validator=validate_sync_translation,
                         usage_buffer=usage_buffer,
                         usage_operation_id=usage_operation_id,
                     ))
@@ -5149,28 +5201,24 @@ def run_translation(*, prepare=False):
                     batch,
                     replacements,
                     usage_run_id=usage_run_id,
+                    translation_validator=validate_sync_translation,
                     usage_buffer=usage_buffer,
                     usage_operation_id=usage_operation_id,
                 ))
 
-            if replacements:
+            if any(replacements.values()):
                 normalized_entries = _normalize_progress_entries(successful_entries)
-                adapter_plan = build_sync_adapter_writeback_plan(
+                adapter_plan, rendered_by_file, preview_failure = build_sync_adapter_preview(
                     adapter,
                     adapter_snapshot,
                     progress_key,
                     tasks,
                     replacements,
                 )
-                live_sources = tuple(
-                    document
-                    for document in adapter_snapshot.project.source_documents
-                    if document.file_rel_path == progress_key
-                )
-                rendered_by_file = render_writeback_plan(
-                    adapter_plan,
-                    live_sources,
-                )
+                if preview_failure is not None:
+                    preview_failures.append(preview_failure)
+                    print(f"  Warning: Preview skipped for {filename}: {preview_failure['message']}")
+                    continue
                 preview_lines = rendered_by_file[progress_key]
                 source_text = "".join(lines)
                 preview_text = "".join(preview_lines)
@@ -5199,6 +5247,7 @@ def run_translation(*, prepare=False):
             project_root=BASE_DIR,
             tl_dir=TL_DIR,
             files=preview_files,
+            failures=preview_failures,
         )
         try:
             export_coverage_package(
@@ -5217,7 +5266,11 @@ def run_translation(*, prepare=False):
         print(f"Sync preview report: {report_path}")
         print(f"Preview files: {int(summary.get('files_changed') or 0)}")
         print(f"Preview translations: {int(summary.get('translated_items') or 0)}")
-        print("Preview status: safe")
+        if preview_failures:
+            print(f"Preview failures: {len(preview_failures)}")
+            print("Preview status: partial")
+        else:
+            print("Preview status: safe")
         print("No project scripts were modified. Review the diff, then run with --apply MANIFEST.")
         return manifest_path
     finally:

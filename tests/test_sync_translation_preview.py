@@ -49,6 +49,47 @@ class SyncTranslationPreviewTests(unittest.TestCase):
             self.assertIn('-    "Hello 1"', report)
             self.assertIn('+    "你好 1"', report)
 
+    def test_create_preview_records_partial_adapter_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / "game" / "tl" / "schinese"
+            tl_dir.mkdir(parents=True)
+
+            manifest_path, manifest = preview.create_sync_preview(
+                log_dir=root / "logs",
+                project_root=root,
+                tl_dir=tl_dir,
+                files=(),
+                failures=(
+                    {
+                        "relative_path": "broken.rpy",
+                        "reason_code": "common.locator.unresolved",
+                        "message": "ambiguous occurrence",
+                    },
+                ),
+            )
+
+            self.assertTrue(Path(manifest_path).is_file())
+            self.assertEqual(manifest["summary"]["failure_files"], 1)
+            self.assertEqual(
+                manifest["summary"]["adapter_writeback_status"],
+                "partial",
+            )
+            self.assertEqual(
+                manifest["failures"][0]["reason_code"],
+                "common.locator.unresolved",
+            )
+
+    def test_build_sync_adapter_preview_isolates_plan_failure(self):
+        error = runtime.WritebackPlanError("common.locator.unresolved", "ambiguous")
+        with mock.patch.object(runtime, "build_sync_adapter_writeback_plan", side_effect=error):
+            plan, rendered, failure = runtime.build_sync_adapter_preview(
+                object(), object(), "broken.rpy", (), {0: [(0, 1, "你好", "", '"')]}
+            )
+        self.assertIsNone(plan)
+        self.assertIsNone(rendered)
+        self.assertEqual(failure["reason_code"], "common.locator.unresolved")
+
     def test_sync_validation_rejects_changed_tags_and_placeholders(self):
         valid, message = runtime.validate_translation(
             "Hello [player] {i}%s{/i}",

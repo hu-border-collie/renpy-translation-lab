@@ -133,7 +133,7 @@ class TestEngineAdapterP0Characterization(unittest.TestCase):
         self.assertEqual(original_map[second_id][0], 5)
         self.assertEqual(drifted_map[second_id][0], 9)
 
-    def test_v2_relocation_updates_live_span_and_reports_missing_identity(self):
+    def test_v2_relocation_uses_adapter_content_fallback_and_reports_missing_identity(self):
         file_rel_path = "chapter.rpy"
         live_lines = [
             "\n",
@@ -144,7 +144,7 @@ class TestEngineAdapterP0Characterization(unittest.TestCase):
             '    e "Hello there"\n',
         ]
         item_id = translation_core.build_identity_v2(
-            file_rel_path, "chapter", 1, "Hello there"
+            file_rel_path, "stale-chapter", 99, "Hello there"
         )
         item = {
             "id": item_id,

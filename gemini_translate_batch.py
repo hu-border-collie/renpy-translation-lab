@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import tokenize
+from dataclasses import replace
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -39,7 +40,10 @@ import cli_contract
 import cli_discovery
 import doctor_recommendations as doctor_rec
 from engine_adapters.contracts import (
+    Occurrence,
+    OpaqueLocator,
     ProjectDiscoveryRequest,
+    SourceDocument,
     ValidatedTranslation,
 )
 from engine_adapters.coverage import export_coverage_package
@@ -47,6 +51,7 @@ from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
 from engine_adapters.writeback import (
     WritebackPlanError,
     render_writeback_plan,
+    source_snapshot_fingerprint,
 )
 import keyword_glossary_merge
 import model_usage_ledger
@@ -6385,6 +6390,17 @@ def _adapter_request_for_manifest(manifest, file_keys):
     )
 
 
+def _source_document_from_path(file_key, file_path):
+    content = Path(file_path).read_bytes()
+    return SourceDocument(
+        file_rel_path=str(file_key),
+        file_path=str(file_path),
+        size=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+        content=content,
+    )
+
+
 def _find_adapter_occurrence(occurrences, file_key, line, start, end, expected_text, item_id):
     if item_id:
         by_id = [
@@ -6423,7 +6439,7 @@ def _find_adapter_occurrence(occurrences, file_key, line, start, end, expected_t
     )
 
 
-def _build_adapter_writeback_plan(manifest, replacements_by_file):
+def _build_adapter_writeback_plan(manifest, replacements_by_file, live_sources=None):
     file_keys = tuple(
         sorted(
             file_key
@@ -6440,6 +6456,21 @@ def _build_adapter_writeback_plan(manifest, replacements_by_file):
     validated = []
     used_occurrence_ids = set()
     occurrences = tuple(snapshot.occurrences)
+    if live_sources is not None:
+        authoritative_sources = tuple(
+            sorted(live_sources, key=lambda document: document.file_rel_path)
+        )
+        if source_snapshot_fingerprint(authoritative_sources) != source_snapshot_fingerprint(
+            snapshot.project.source_documents
+        ):
+            raise WritebackPlanError(
+                'common.writeback.source_snapshot_mismatch',
+                'Live source changed between apply validation and adapter discovery.',
+            )
+        snapshot = replace(
+            snapshot,
+            project=replace(snapshot.project, source_documents=authoritative_sources),
+        )
 
     for file_key in file_keys:
         replacements_by_line = replacements_by_file.get(file_key) or {}
@@ -6494,6 +6525,7 @@ def _validate_adapter_writeback_plan(
     replacements_by_file,
     summary,
     failure_entries,
+    live_sources=None,
 ):
     if not any(
         any(replacements_by_line.values())
@@ -6506,6 +6538,7 @@ def _validate_adapter_writeback_plan(
         plan, snapshot = _build_adapter_writeback_plan(
             manifest,
             replacements_by_file,
+            live_sources=live_sources,
         )
         render_writeback_plan(plan, snapshot.project.source_documents)
     except (Exception, SystemExit) as exc:
@@ -6594,36 +6627,95 @@ def is_v2_manifest(manifest):
     return manifest.get('manifest_version', 1) == 2 or manifest.get('version', 1) == 2
 
 
+def _manifest_occurrence(project, chunk, item, mode, item_index):
+    file_key = str(chunk.get('file_rel_path') or '')
+    unit = translation_core.unit_from_manifest_item(item, mode=mode, chunk=chunk)
+    block_name = str(item.get('block_name') or '_global')
+    block_occurrence = int(item.get('block_occurrence') or 1)
+    ordinal = int(item.get('block_index') or item.get('ordinal') or 0)
+    item_id = str(item.get('id') or '')
+    identity_prefix = file_key.replace('\\', '/') + ':'
+    if item_id.startswith(identity_prefix):
+        try:
+            block_token, ordinal_text, _source_hash = item_id[len(identity_prefix):].rsplit(':', 2)
+            if '#' in block_token:
+                parsed_block, parsed_occurrence = block_token.rsplit('#', 1)
+                block_name = parsed_block or block_name
+                block_occurrence = max(1, int(parsed_occurrence))
+            else:
+                block_name = block_token or block_name
+            ordinal = int(ordinal_text)
+        except (TypeError, ValueError):
+            pass
+    locator = OpaqueLocator(
+        engine='renpy',
+        locator_schema_version=1,
+        locator={
+            'file_rel_path': file_key,
+            'translate_block': block_name,
+            'block_occurrence': block_occurrence,
+            'ordinal': ordinal,
+            'line_hint': int(item.get('line_number') or int(item.get('line') or 0) + 1),
+            'start_col_hint': int(item.get('start') or 0),
+            'end_col_hint': int(item.get('end') or 0),
+            'source_marker_kind': str(item.get('source_marker_kind') or 'direct_source'),
+            'candidate_ordinal': int(item.get('candidate_ordinal') or item_index + 1),
+        },
+    )
+    return Occurrence(
+        occurrence_id=f'manifest:{file_key}:{item_id or item_index}',
+        engine='renpy',
+        project_snapshot_fingerprint=project.project_snapshot_fingerprint,
+        content_fingerprint=str(item.get('content_fingerprint') or ''),
+        candidate_id=f'manifest:{item_id or item_index}',
+        locator=locator,
+        unit=unit,
+    )
+
+
 def relocate_v2_chunk_items(manifest, chunk, scanned_units_by_file, mode):
     if not is_v2_manifest(manifest):
         return []
     file_key = chunk['file_rel_path']
     if file_key not in scanned_units_by_file:
-        file_path = manifest.get('files', {}).get(file_key, {}).get('path')
-        if not file_path or not os.path.exists(file_path):
-            file_path = os.path.join(legacy.TL_DIR, file_key)
-        file_lines = []
-        if os.path.exists(file_path):
-            with open(file_path, 'r', encoding='utf-8-sig') as f:
-                file_lines = f.readlines()
-        scanned_units_by_file[file_key] = legacy.scan_all_translation_units(
-            file_lines,
-            file_key,
-            mode=mode,
-        )
+        adapter = RenPyAdapter(legacy_module=legacy)
+        project = adapter.discover_project(_adapter_request_for_manifest(manifest, (file_key,)))
+        scanned_units_by_file[file_key] = {
+            'adapter': adapter,
+            'project': project,
+        }
 
-    scanned_map = scanned_units_by_file.get(file_key, {})
+    context = scanned_units_by_file[file_key]
+    adapter = context['adapter']
+    project = context['project']
+    items = list(chunk.get('items') or [])
+    originals = tuple(
+        _manifest_occurrence(project, chunk, item, mode, item_index)
+        for item_index, item in enumerate(items)
+    )
+    relocation = adapter.relocate_occurrences(
+        project,
+        originals,
+        project.source_documents,
+    )
+    relocated_by_id = {
+        occurrence.unit.id: occurrence
+        for occurrence in relocation.occurrences
+    }
     missing_items = []
-    for item in chunk.get('items') or []:
-        scanned = scanned_map.get(item.get('id'))
-        if not scanned:
+    context['relocated_by_id'] = relocated_by_id
+    for item in items:
+        relocated = relocated_by_id.get(str(item.get('id') or ''))
+        if relocated is None:
             missing_items.append(item)
             continue
-        scanned_line, scanned_start, scanned_end, _scanned_source = scanned
-        item['line'] = scanned_line
-        item['line_number'] = scanned_line + 1
-        item['start'] = scanned_start
-        item['end'] = scanned_end
+        unit = relocated.unit
+        item['line'] = unit.line
+        item['line_number'] = unit.line + 1
+        item['start'] = unit.start
+        item['end'] = unit.end
+        item['prefix'] = unit.prefix
+        item['quote'] = unit.quote
     return missing_items
 
 
@@ -6636,17 +6728,41 @@ def record_v2_relocation_failures(manifest, chunk, missing_items, summary, failu
         item_id = str(item.get('id') or '')
         if item_id:
             missing_ids.add(item_id)
-        failure_entries.append(make_failure_entry(
-            manifest,
-            'V2 relocation missing for result item',
-            file_rel_path=chunk.get('file_rel_path', ''),
-            item_id=item_id,
-            line=item.get('line'),
-            text=item.get('source', item.get('text', '')),
-            key=key or chunk.get('key', ''),
-            reason_code='v2_relocation_missing',
-        ))
+        failure_entries.append(
+            make_failure_entry(
+                manifest,
+                'V2 relocation missing for result item',
+                file_rel_path=chunk.get('file_rel_path', ''),
+                item_id=item_id,
+                line=item.get('line'),
+                text=item.get('source', item.get('text', '')),
+                key=key or chunk.get('key', ''),
+                reason_code='v2_relocation_missing',
+            )
+        )
     return missing_ids
+
+
+def validate_batch_item_translation(
+    scanned_units_by_file,
+    file_key,
+    item,
+    source_text,
+    translated_text,
+):
+    """Validate a relocated v2 item through its engine adapter."""
+
+    context = scanned_units_by_file.get(file_key) or {}
+    occurrence = (context.get('relocated_by_id') or {}).get(str(item.get('id') or ''))
+    adapter = context.get('adapter')
+    if occurrence is None or adapter is None:
+        valid, reason = legacy.validate_translation(source_text, translated_text)
+        return valid, reason, (), ()
+    validation = adapter.validate_translation(occurrence, translated_text)
+    if validation.status == 'pass':
+        return True, 'OK', validation.reason_codes, validation.diagnostics
+    reason = ', '.join(validation.reason_codes) or 'adapter.validation.block'
+    return False, reason, validation.reason_codes, validation.diagnostics
 
 
 def translated_text_variants(translated):
@@ -6886,7 +7002,15 @@ def collect_revision_actions(manifest, validate_sources=False):
                     continue
 
                 source_text = target_unit.source_text
-                valid, reason = legacy.validate_translation(source_text, revised_translation)
+                valid, reason, adapter_reason_codes, adapter_diagnostics = (
+                    validate_batch_item_translation(
+                        scanned_units_by_file,
+                        chunk['file_rel_path'],
+                        target_item,
+                        source_text,
+                        revised_translation,
+                    )
+                )
                 if not valid and reason == 'No Chinese characters' and allow_non_chinese_batch_translation(
                     manifest,
                     chunk,
@@ -6907,6 +7031,8 @@ def collect_revision_actions(manifest, validate_sources=False):
                         text=source_text,
                         key=key,
                         translation=revised_translation,
+                        adapter_reason_codes=list(adapter_reason_codes),
+                        adapter_diagnostics=list(adapter_diagnostics),
                         finish_reason=finish_reason,
                         usage_metadata=usage_metadata,
                     ))
@@ -7355,7 +7481,15 @@ def collect_result_actions(manifest, validate_sources=False):
                     mode=translation_core.MODE_TRANSLATION,
                     chunk=chunk,
                 )
-                valid, reason = legacy.validate_translation(target_unit.text, result_item['translation'])
+                valid, reason, adapter_reason_codes, adapter_diagnostics = (
+                    validate_batch_item_translation(
+                        scanned_units_by_file,
+                        chunk['file_rel_path'],
+                        target_item,
+                        target_unit.text,
+                        result_item['translation'],
+                    )
+                )
                 if not valid and reason == 'No Chinese characters' and allow_non_chinese_batch_translation(
                     manifest,
                     chunk,
@@ -7378,6 +7512,8 @@ def collect_result_actions(manifest, validate_sources=False):
                             'text': target_unit.text,
                             'error': f'Validation failed: {reason}',
                             'translation': result_item['translation'],
+                            'adapter_reason_codes': list(adapter_reason_codes),
+                            'adapter_diagnostics': list(adapter_diagnostics),
                             'finish_reason': finish_reason,
                             'usage_metadata': usage_metadata,
                         }
@@ -7706,6 +7842,7 @@ def apply_results(target=None, force=False):
     revalidated_file_paths = {}
     revalidated_file_lines = {}
     rag_jobs = []
+    revalidated_source_documents = {}
     file_keys = set(replacements_by_file) | set(translated_lines_by_file)
     for file_key in file_keys:
         replacements = replacements_by_file.get(file_key, {})
@@ -7713,8 +7850,8 @@ def apply_results(target=None, force=False):
         if not file_info:
             continue
         file_path = resolve_manifest_file_path(manifest, file_key, file_info)
-        with open(file_path, 'r', encoding='utf-8-sig') as handle:
-            lines = handle.readlines()
+        source_document = _source_document_from_path(file_key, file_path)
+        lines = source_document.lines()
         replacements, line_numbers_set, revalidation_failures, revalidated_skipped, revalidated_mismatches = validate_replacements_for_lines(
             manifest,
             file_key,
@@ -7735,12 +7872,18 @@ def apply_results(target=None, force=False):
         revalidated_line_numbers_by_file[file_key] = set(line_numbers_set)
         revalidated_file_paths[file_key] = file_path
         revalidated_file_lines[file_key] = lines
+        revalidated_source_documents[file_key] = source_document
 
     adapter_plan, adapter_snapshot = _validate_adapter_writeback_plan(
         manifest,
         revalidated_replacements_by_file,
         summary,
         failure_entries,
+        live_sources=tuple(
+            revalidated_source_documents[file_key]
+            for file_key in revalidated_replacements_by_file
+            if file_key in revalidated_source_documents
+        ),
     )
     attach_check_contract(manifest, summary)
     if summary.get('safety_level') != CHECK_SAFETY_SAFE:
@@ -7855,13 +7998,14 @@ def apply_revisions(target=None, force=False):
     revalidated_replacements_by_file = {}
     revalidated_file_paths = {}
     revision_updates = []
+    revalidated_source_documents = {}
     for file_key, replacements in replacements_by_file.items():
         file_info = manifest['files'].get(file_key)
         if not file_info:
             continue
         file_path = resolve_manifest_file_path(manifest, file_key, file_info)
-        with open(file_path, 'r', encoding='utf-8-sig') as handle:
-            lines = handle.readlines()
+        source_document = _source_document_from_path(file_key, file_path)
+        lines = source_document.lines()
         replacements, line_numbers_set, revalidation_failures, revalidated_skipped, revalidated_mismatches = validate_replacements_for_lines(
             manifest,
             file_key,
@@ -7880,6 +8024,7 @@ def apply_revisions(target=None, force=False):
         if replacements:
             revalidated_replacements_by_file[file_key] = replacements
             revalidated_file_paths[file_key] = file_path
+            revalidated_source_documents[file_key] = source_document
         line_numbers = sorted(line_numbers_set)
         revision_updates.append((file_key, line_numbers, file_path))
 
@@ -7888,6 +8033,11 @@ def apply_revisions(target=None, force=False):
         revalidated_replacements_by_file,
         summary,
         failure_entries,
+        live_sources=tuple(
+            revalidated_source_documents[file_key]
+            for file_key in revalidated_replacements_by_file
+            if file_key in revalidated_source_documents
+        ),
     )
     if summary.get('adapter_writeback_status') == 'block':
         summary['pending_files'] = 0
@@ -12792,3 +12942,5 @@ def main(argv=None):
 
 if __name__ == '__main__':
     raise SystemExit(main())
+    Occurrence,
+    OpaqueLocator,

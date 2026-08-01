@@ -9,7 +9,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from engine_adapters.contracts import ProjectDiscoveryRequest, ValidatedTranslation
+from engine_adapters.contracts import (
+    OpaqueLocator,
+    ProjectDiscoveryRequest,
+    ValidatedTranslation,
+)
 from engine_adapters.coverage import digest_json
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
 from engine_adapters.writeback import WritebackPlanError, render_writeback_plan
@@ -85,6 +89,44 @@ class TestRenPyAdapterP2(unittest.TestCase):
             any(item.get("match") == "content_evidence" for item in result.diagnostics)
         )
 
+    def test_relocation_rejects_ambiguous_content_fallback(self):
+        source = (
+            'translate schinese first:\n'
+            '    # e "Same text"\n'
+            '    e "Same text"\n'
+            'translate schinese second:\n'
+            '    # e "Same text"\n'
+            '    e "Same text"\n'
+        )
+        _root, _tl_dir, adapter, snapshot = self.snapshot(source)
+        original = self.occurrence_for(snapshot, "Same text")
+        stale = replace(
+            original,
+            content_fingerprint="",
+            locator=OpaqueLocator(
+                engine="renpy",
+                locator_schema_version=1,
+                locator={
+                    "file_rel_path": "script.rpy",
+                    "translate_block": "stale",
+                    "block_occurrence": 1,
+                    "ordinal": 99,
+                    "line_hint": 1,
+                    "start_col_hint": 0,
+                    "end_col_hint": 0,
+                    "source_marker_kind": "direct_source",
+                    "candidate_ordinal": 99,
+                },
+            ),
+            unit=replace(original.unit, id="script.rpy:stale:99:deadbeef"),
+        )
+        result = adapter.relocate_occurrences(
+            snapshot.project, (stale,), snapshot.project.source_documents
+        )
+        self.assertEqual(result.occurrences, ())
+        self.assertEqual(result.unresolved_occurrence_ids, (stale.occurrence_id,))
+        self.assertEqual(result.diagnostics[0]["status"], "ambiguous")
+
     def test_relocation_reports_source_change_as_unresolved(self):
         source = (
             'translate schinese chapter:\n'
@@ -129,7 +171,7 @@ class TestRenPyAdapterP2(unittest.TestCase):
 
     def test_writeback_plan_is_declarative_and_uses_live_source_hashes(self):
         source = 'e "Hello {player}!"\n'
-        root, tl_dir, adapter, snapshot = self.snapshot(source)
+        _root, tl_dir, adapter, snapshot = self.snapshot(source)
         occurrence = self.occurrence_for(snapshot, "Hello {player}!")
         validation = adapter.validate_translation(occurrence, "你好 {player}!")
         self.assertEqual(validation.status, "pass")
@@ -154,8 +196,10 @@ class TestRenPyAdapterP2(unittest.TestCase):
         self.assertEqual((tl_dir / "script.rpy").read_text(encoding="utf-8"), source)
 
     def test_common_plan_consumer_rechecks_snapshot_and_only_renders_memory_lines(self):
-        source = 'e "Hello {player}!"\n'
+        source = 'e "Hello {player}!"\r\n'
         root, tl_dir, adapter, snapshot = self.snapshot(source)
+        (tl_dir / "script.rpy").write_bytes(source.encode("utf-8"))
+        snapshot = build_translation_snapshot(adapter, self.request(root, tl_dir))
         occurrence = self.occurrence_for(snapshot, "Hello {player}!")
         validation = adapter.validate_translation(occurrence, "你好 {player}!")
         plan = adapter.build_writeback_plan(
@@ -167,7 +211,7 @@ class TestRenPyAdapterP2(unittest.TestCase):
         rendered = render_writeback_plan(plan, snapshot.project.source_documents)
 
         self.assertEqual(rendered["script.rpy"], ['e "你好 {player}!"\r\n'])
-        self.assertEqual((tl_dir / "script.rpy").read_text(encoding="utf-8"), source)
+        self.assertEqual((tl_dir / "script.rpy").read_bytes(), source.encode("utf-8"))
 
         (tl_dir / "script.rpy").write_text('e "Changed {player}!"\n', encoding="utf-8")
         live = adapter.discover_project(self.request(root, tl_dir))

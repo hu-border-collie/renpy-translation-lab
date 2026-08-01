@@ -135,10 +135,19 @@ def create_sync_preview(
     project_root: str | os.PathLike[str],
     tl_dir: str | os.PathLike[str],
     files: Iterable[dict[str, Any]],
+    failures: Iterable[dict[str, Any]] = (),
 ) -> tuple[str, dict[str, Any]]:
     """Persist source/proposed snapshots, a unified diff, and a bound manifest."""
     created = datetime.now(timezone.utc)
     run_name = created.strftime("%Y%m%dT%H%M%S.%fZ")
+    failure_entries = [
+        {
+            "relative_path": str(item.get("relative_path") or ""),
+            "reason_code": str(item.get("reason_code") or "adapter.writeback.block"),
+            "message": str(item.get("message") or ""),
+        }
+        for item in failures
+    ]
     package_dir = Path(log_dir) / "sync_runs" / run_name
     package_dir.mkdir(parents=True, exist_ok=False)
 
@@ -206,8 +215,11 @@ def create_sync_preview(
         "summary": {
             "files_changed": len(entries),
             "translated_items": total_items,
+            "failure_files": len(failure_entries),
+            "adapter_writeback_status": "partial" if failure_entries else "pass",
         },
         "files": entries,
+        "failures": failure_entries,
     }
     manifest["preview_fingerprint"] = _fingerprint(manifest)
     manifest_path = package_dir / "manifest.json"
