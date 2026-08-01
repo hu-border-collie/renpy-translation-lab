@@ -97,10 +97,10 @@ def summarize_sync_translation_output(
         lines_to_translate > 0 and translated_count < lines_to_translate
     )
     if preview_status_partial:
-        message = f"部分文件未通过写回计划校验，其余安全预览已生成。{message}"
+        message = f"部分文件未通过写回计划校验，其余安全预览已生成。{message}"  # noqa: RUF001
     if translation_is_partial:
         message = (
-            f"部分完成（已翻译 {translated_count}/{lines_to_translate} 行）。{message}"
+            f"部分完成（已翻译 {translated_count}/{lines_to_translate} 行）。{message}"  # noqa: RUF001
         )
     if preview_status_partial or translation_is_partial:
         return WorkflowUpdate(
