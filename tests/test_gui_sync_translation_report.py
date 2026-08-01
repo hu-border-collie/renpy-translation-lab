@@ -89,6 +89,27 @@ class GuiSyncTranslationReportTests(unittest.TestCase):
         self.assertEqual(update.status, "warning")
         self.assertIn("部分完成", update.message)
 
+    def test_summarize_partial_adapter_preview_warns_and_remains_applyable(self):
+        update = summarize_sync_translation_output(
+            "Found 2 files.\n"
+            "Processing: first.rpy\n"
+            "  Found 1 lines to translate.\n"
+            "  Translated 1/1 items. (Received 8 chars of translation)\n"
+            "  Previewed first.rpy.\n"
+            "Sync preview manifest: logs/sync_runs/demo/manifest.json\n"
+            "Sync preview report: logs/sync_runs/demo/preview.diff\n"
+            "Preview files: 1\n"
+            "Preview translations: 1\n"
+            "Preview failures: 1\n"
+            "Preview status: partial\n",
+            0,
+        )
+
+        self.assertEqual(update.status, "warning")
+        self.assertIn("部分完成", update.heading)
+        self.assertIn("其余安全预览", update.message)
+        self.assertTrue(any("预览失败文件" in fact for fact in update.facts))
+
 
 if __name__ == "__main__":
     unittest.main()

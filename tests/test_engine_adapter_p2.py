@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -127,6 +128,27 @@ class TestRenPyAdapterP2(unittest.TestCase):
         self.assertEqual(result.unresolved_occurrence_ids, (stale.occurrence_id,))
         self.assertEqual(result.diagnostics[0]["status"], "ambiguous")
 
+    def test_relocation_rejects_unique_content_fallback_in_another_file(self):
+        source = (
+            'translate schinese chapter:\n'
+            '    # e "Same text"\n'
+            '    e "Same text"\n'
+        )
+        root, tl_dir, adapter, snapshot = self.snapshot(source)
+        original = self.occurrence_for(snapshot, "Same text")
+        (tl_dir / "script.rpy").write_text('e "Changed"\n', encoding="utf-8")
+        (tl_dir / "moved.rpy").write_text(source, encoding="utf-8")
+        live = adapter.discover_project(self.request(root, tl_dir))
+
+        result = adapter.relocate_occurrences(
+            snapshot.project,
+            (original,),
+            live.source_documents,
+        )
+
+        self.assertEqual(result.occurrences, ())
+        self.assertEqual(result.unresolved_occurrence_ids, (original.occurrence_id,))
+
     def test_relocation_reports_source_change_as_unresolved(self):
         source = (
             'translate schinese chapter:\n'
@@ -190,6 +212,10 @@ class TestRenPyAdapterP2(unittest.TestCase):
         self.assertEqual(operation.target_rel_path, "script.rpy")
         self.assertNotIn("\\", operation.target_rel_path)
         self.assertEqual(operation.expected_file_sha256, snapshot.project.source_documents[0].sha256)
+        self.assertEqual(
+            operation.expected_text_digest,
+            hashlib.sha256("Hello {player}!".encode("utf-8")).hexdigest(),
+        )
         self.assertEqual(operation.replacement_fragment, '\"你好 {player}!\"')
         self.assertNotIn(str(tl_dir), json.dumps(plan.to_dict(), ensure_ascii=False))
         self.assertTrue(plan.plan_digest)
@@ -219,6 +245,47 @@ class TestRenPyAdapterP2(unittest.TestCase):
             render_writeback_plan(plan, live.source_documents)
         self.assertEqual(context.exception.reason_code, "common.writeback.source_snapshot_mismatch")
 
+
+    def test_common_plan_consumer_rejects_tampered_plan_digest(self):
+        _root, _tl_dir, adapter, snapshot = self.snapshot('e "Hello"\n')
+        occurrence = self.occurrence_for(snapshot, "Hello")
+        validation = adapter.validate_translation(occurrence, "你好")
+        plan = adapter.build_writeback_plan(
+            snapshot.project,
+            (ValidatedTranslation(occurrence, "你好", validation),),
+            snapshot.project.source_documents,
+        )
+
+        with self.assertRaises(WritebackPlanError) as context:
+            render_writeback_plan(
+                replace(plan, plan_digest="0" * 64),
+                snapshot.project.source_documents,
+            )
+
+        self.assertEqual(context.exception.reason_code, "common.writeback.plan_digest_mismatch")
+
+    def test_common_plan_consumer_rejects_tampered_operation_id(self):
+        _root, _tl_dir, adapter, snapshot = self.snapshot('e "Hello"\n')
+        occurrence = self.occurrence_for(snapshot, "Hello")
+        validation = adapter.validate_translation(occurrence, "你好")
+        plan = adapter.build_writeback_plan(
+            snapshot.project,
+            (ValidatedTranslation(occurrence, "你好", validation),),
+            snapshot.project.source_documents,
+        )
+        tampered_operation = replace(
+            plan.operations[0],
+            expected_text_digest="0" * 64,
+        )
+        tampered_plan = replace(plan, operations=(tampered_operation,))
+        plan_payload = tampered_plan.to_dict()
+        plan_payload.pop("plan_digest")
+        tampered_plan = replace(tampered_plan, plan_digest=digest_json(plan_payload))
+
+        with self.assertRaises(WritebackPlanError) as context:
+            render_writeback_plan(tampered_plan, snapshot.project.source_documents)
+
+        self.assertEqual(context.exception.reason_code, "common.writeback.plan_digest_mismatch")
     def test_common_plan_consumer_rejects_path_escape(self):
         _root, _tl_dir, adapter, snapshot = self.snapshot('e "Hello {player}!"\n')
         occurrence = self.occurrence_for(snapshot, "Hello {player}!")

@@ -78,7 +78,11 @@ def summarize_sync_translation_output(
             facts=facts,
         )
 
-    if "Sync preview manifest:" not in output or "Preview status: safe" not in output:
+    preview_status_safe = "Preview status: safe" in output
+    preview_status_partial = "Preview status: partial" in output
+    if "Sync preview manifest:" not in output or not (
+        preview_status_safe or preview_status_partial
+    ):
         return WorkflowUpdate(
             status="failed",
             heading="同步翻译预览未完成",
@@ -89,10 +93,16 @@ def summarize_sync_translation_output(
     message = "同步翻译预览已生成；项目脚本尚未修改。请检查 diff 后再确认写回。"
     if files_done:
         message = f"已处理 {files_done} 个文件。{message}"
-    if lines_to_translate > 0 and translated_count < lines_to_translate:
+    translation_is_partial = (
+        lines_to_translate > 0 and translated_count < lines_to_translate
+    )
+    if preview_status_partial:
+        message = f"部分文件未通过写回计划校验，其余安全预览已生成。{message}"
+    if translation_is_partial:
         message = (
             f"部分完成（已翻译 {translated_count}/{lines_to_translate} 行）。{message}"
         )
+    if preview_status_partial or translation_is_partial:
         return WorkflowUpdate(
             status="warning",
             heading="同步翻译预览部分完成",
@@ -127,11 +137,12 @@ def _collect_facts(output: str) -> list[str]:
         (r"^Progress log: (.+)$", "进度日志"),
         (r"^Sync preview manifest: (.+)$", "预览清单"),
         (r"^Sync preview report: (.+)$", "差异报告"),
+        (r"^Preview failures: (\d+)$", "预览失败文件"),
         (r"^Applied files: (\d+)$", "已写回文件"),
     ):
         match = re.search(pattern, output, re.MULTILINE)
         if match:
-            if label in {"待处理文件", "已写回文件"}:
+            if label in {"待处理文件", "预览失败文件", "已写回文件"}:
                 facts.append(f"{label}：{match.group(1)} 个")
             else:
                 facts.append(f"{label}：{match.group(1).strip()}")

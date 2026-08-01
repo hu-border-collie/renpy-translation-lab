@@ -1331,6 +1331,8 @@ class RenPyAdapter:
     def _relocation_score(original: Occurrence, candidate: Occurrence) -> int | None:
         original_unit = original.unit
         candidate_unit = candidate.unit
+        if original_unit.file_rel_path != candidate_unit.file_rel_path:
+            return None
         if _normalize_fingerprint_text(original_unit.source_text) != _normalize_fingerprint_text(
             candidate_unit.source_text
         ):

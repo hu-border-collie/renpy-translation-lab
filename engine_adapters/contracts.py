@@ -291,6 +291,13 @@ class ValidatedTranslation:
 
 @dataclass(frozen=True)
 class WritebackOperation:
+    """Declarative replacement emitted by an engine adapter.
+
+    ``expected_fragment_sha256`` is the common consumer's live raw-span guard.
+    ``expected_text_digest`` binds the adapter-decoded source text into the
+    operation and plan digests; the engine-neutral consumer deliberately does
+    not decode engine-specific literals a second time.
+    """
     operation_id: str
     kind: str
     occurrence_id: str

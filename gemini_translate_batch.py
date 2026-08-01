@@ -6428,41 +6428,95 @@ def _source_document_from_path(file_key, file_path):
     )
 
 
+def _adapter_render_key(file_key):
+    try:
+        normalized = normalize_safe_rel_path(
+            str(file_key),
+            f'adapter writeback file key {file_key}',
+        )
+    except SystemExit as exc:
+        raise WritebackPlanError(
+            'common.writeback.path_escape',
+            str(exc),
+        ) from exc
+    return normalized.replace('\\', '/')
+
+
+def _normalize_adapter_rendered_files(rendered_by_file):
+    normalized = {}
+    for file_key, rendered_lines in rendered_by_file.items():
+        normalized_key = _adapter_render_key(file_key)
+        if normalized_key in normalized:
+            raise WritebackPlanError(
+                'common.writeback.plan_invalid',
+                f'Duplicate rendered adapter target: {normalized_key}.',
+            )
+        normalized[normalized_key] = rendered_lines
+    return normalized
+
+
+def _require_adapter_render_targets(replacements_by_file, rendered_by_file):
+    expected = {
+        _adapter_render_key(file_key)
+        for file_key, replacements_by_line in replacements_by_file.items()
+        if any(replacements_by_line.values())
+    }
+    actual = set(rendered_by_file)
+    if actual == expected:
+        return
+    missing = ', '.join(sorted(expected - actual)) or 'none'
+    unexpected = ', '.join(sorted(actual - expected)) or 'none'
+    raise WritebackPlanError(
+        'common.writeback.target_missing',
+        'Adapter rendered targets do not match validated replacements '
+        f'(missing: {missing}; unexpected: {unexpected}).',
+    )
+
+
 def _find_adapter_occurrence(occurrences, file_key, line, start, end, expected_text, item_id):
+    normalized_file_key = _adapter_render_key(file_key)
+
+    def matches_validated_replacement(occurrence):
+        unit = occurrence.unit
+        return (
+            unit.file_rel_path == normalized_file_key
+            and unit.line == line
+            and unit.start == start
+            and unit.end == end
+            and expected_text
+            in {
+                unit.text,
+                unit.source_text,
+                unit.current_translation,
+            }
+        )
+
     if item_id:
         by_id = [
             occurrence
             for occurrence in occurrences
             if occurrence.unit.id == item_id
-            and occurrence.unit.file_rel_path == file_key
+            and occurrence.unit.file_rel_path == normalized_file_key
         ]
-        if len(by_id) == 1:
+        if len(by_id) == 1 and matches_validated_replacement(by_id[0]):
             return by_id[0]
 
     positioned = [
         occurrence
         for occurrence in occurrences
-        if occurrence.unit.file_rel_path == file_key
-        and occurrence.unit.line == line
-        and occurrence.unit.start == start
-        and occurrence.unit.end == end
-        and expected_text
-        in {
-            occurrence.unit.text,
-            occurrence.unit.source_text,
-            occurrence.unit.current_translation,
-        }
+        if matches_validated_replacement(occurrence)
     ]
     if len(positioned) == 1:
         return positioned[0]
     if len(positioned) > 1:
         raise WritebackPlanError(
             'common.locator.unresolved',
-            f'Ambiguous adapter occurrence at {file_key}:{line}:{start}-{end}.',
+            f'Ambiguous adapter occurrence at {normalized_file_key}:{line}:{start}-{end}.',
         )
     raise WritebackPlanError(
         'common.locator.unresolved',
-        f'Adapter occurrence could not be resolved at {file_key}:{line}:{start}-{end}.',
+        'Adapter occurrence could not be resolved at '
+        f'{normalized_file_key}:{line}:{start}-{end}.',
     )
 
 
@@ -6607,8 +6661,11 @@ def _validate_adapter_writeback_plan(
             replacements_by_file,
             live_sources=live_sources,
         )
-        render_writeback_plan(plan, snapshot.project.source_documents)
-    except (Exception, SystemExit) as exc:
+        rendered_by_file = _normalize_adapter_rendered_files(
+            render_writeback_plan(plan, snapshot.project.source_documents)
+        )
+        _require_adapter_render_targets(replacements_by_file, rendered_by_file)
+    except (ValueError, OSError) as exc:
         reason_code = getattr(exc, 'reason_code', '') or 'adapter_writeback_block'
         bump_counter(summary['reason_counts'], 'adapter_writeback_block')
         failure_entries.append(
@@ -7971,18 +8028,23 @@ def apply_results(target=None, force=False):
 
     writeback_files = []
     if adapter_plan is not None and adapter_snapshot is not None:
-        rendered_by_file = render_writeback_plan(
-            adapter_plan,
-            adapter_snapshot.project.source_documents,
+        rendered_by_file = _normalize_adapter_rendered_files(
+            render_writeback_plan(
+                adapter_plan,
+                adapter_snapshot.project.source_documents,
+            )
+        )
+        _require_adapter_render_targets(
+            revalidated_replacements_by_file,
+            rendered_by_file,
         )
         for file_key in revalidated_replacements_by_file:
             if not revalidated_replacements_by_file[file_key]:
                 continue
-            rendered_lines = rendered_by_file.get(file_key)
-            if rendered_lines is not None:
-                writeback_files.append(
-                    (revalidated_file_paths[file_key], rendered_lines)
-                )
+            rendered_lines = rendered_by_file[_adapter_render_key(file_key)]
+            writeback_files.append(
+                (revalidated_file_paths[file_key], rendered_lines)
+            )
     if writeback_files:
         atomic_write_many_lines(
             writeback_files,
@@ -8119,14 +8181,19 @@ def apply_revisions(target=None, force=False):
 
     writeback_files = []
     if adapter_plan is not None and adapter_snapshot is not None:
-        rendered_by_file = render_writeback_plan(
-            adapter_plan,
-            adapter_snapshot.project.source_documents,
+        rendered_by_file = _normalize_adapter_rendered_files(
+            render_writeback_plan(
+                adapter_plan,
+                adapter_snapshot.project.source_documents,
+            )
+        )
+        _require_adapter_render_targets(
+            revalidated_replacements_by_file,
+            rendered_by_file,
         )
         for file_key in revalidated_replacements_by_file:
-            rendered_lines = rendered_by_file.get(file_key)
-            if rendered_lines is not None:
-                writeback_files.append((revalidated_file_paths[file_key], rendered_lines))
+            rendered_lines = rendered_by_file[_adapter_render_key(file_key)]
+            writeback_files.append((revalidated_file_paths[file_key], rendered_lines))
 
     if writeback_files:
         atomic_write_many_lines(

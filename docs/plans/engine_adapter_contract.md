@@ -448,6 +448,11 @@ v1 只允许 common 层实现并注册的 operation kinds。Ren'Py 首个 kind �
 - common 层在第一笔写入前再次读取全部文件并复核；
 - 全部通过后才生成 rendered files 并交给 `atomic_write_many_lines()`。
 
+- `expected_fragment_sha256` 是 common consumer 对 live raw span 的校验；
+- `expected_text_digest` 绑定 adapter 已解码的源文本与 operation/plan payload，
+  但 common 层保持 engine-neutral，不重新解析 Ren'Py 字符串 literal；adapter
+  构建 plan 时必须从同一已验证 occurrence 生成该 digest。
+
 `apply --force` 不得跳过 plan freshness、source snapshot、coverage gate、`block`
 validation 或公共安全检查。
 

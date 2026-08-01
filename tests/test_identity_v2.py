@@ -5,6 +5,7 @@ import unittest
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import translation_core
@@ -462,6 +463,95 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
             plan.operations[0].replacement_fragment,
             '"Alpha， Beta， Gamma"',  # noqa: RUF001
         )
+
+    def test_find_adapter_occurrence_binds_identity_to_validated_span(self):
+        first = SimpleNamespace(
+            unit=SimpleNamespace(
+                id="identity-match",
+                file_rel_path="script.rpy",
+                line=0,
+                start=4,
+                end=10,
+                text="Same",
+                source_text="Same",
+                current_translation="",
+            )
+        )
+        positioned = SimpleNamespace(
+            unit=SimpleNamespace(
+                id="position-match",
+                file_rel_path="script.rpy",
+                line=1,
+                start=4,
+                end=10,
+                text="Same",
+                source_text="Same",
+                current_translation="",
+            )
+        )
+
+        matched = batch_mod._find_adapter_occurrence(
+            (first, positioned),
+            "script.rpy",
+            1,
+            4,
+            10,
+            "Same",
+            "identity-match",
+        )
+
+        self.assertIs(matched, positioned)
+
+    def test_adapter_plan_blocks_missing_rendered_target(self):
+        plan = SimpleNamespace(plan_digest="plan", operations=(SimpleNamespace(),))
+        snapshot = SimpleNamespace(
+            project=SimpleNamespace(source_documents=()),
+        )
+        summary = {"reason_counts": {}, "valid_items": 1}
+        failures = []
+
+        with (
+            mock.patch.object(
+                batch_mod,
+                "_build_adapter_writeback_plan",
+                return_value=(plan, snapshot),
+            ),
+            mock.patch.object(batch_mod, "render_writeback_plan", return_value={}),
+        ):
+            result_plan, result_snapshot = batch_mod._validate_adapter_writeback_plan(
+                {"_package_dir": self.tmp_dir},
+                {"script.rpy": {0: [(0, 1, "译文", "", '"')]}},
+                summary,
+                failures,
+            )
+
+        self.assertIsNone(result_plan)
+        self.assertIsNone(result_snapshot)
+        self.assertEqual(summary["adapter_writeback_status"], "block")
+        self.assertEqual(
+            failures[0]["adapter_reason_code"],
+            "common.writeback.target_missing",
+        )
+
+    def test_adapter_plan_does_not_swallow_system_exit(self):
+        summary = {"reason_counts": {}, "valid_items": 1}
+        failures = []
+
+        with (
+            mock.patch.object(
+                batch_mod,
+                "_build_adapter_writeback_plan",
+                side_effect=SystemExit("project mismatch"),
+            ),
+            self.assertRaisesRegex(SystemExit, "project mismatch"),
+        ):
+            batch_mod._validate_adapter_writeback_plan(
+                {"_package_dir": self.tmp_dir},
+                {"script.rpy": {0: [(0, 1, "译文", "", '"')]}},
+                summary,
+                failures,
+            )
+
 
     def test_collect_result_actions_relocates_missing_v2_response_items(self):
         file_rel_path = "script.rpy"
