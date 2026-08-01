@@ -3650,7 +3650,7 @@ def _upgrade_legacy_progress_keys(progress, file_paths):
 
 
 def build_sync_adapter_writeback_plan(adapter, snapshot, file_rel_path, tasks, replacements):
-    """Validate sync replacements through the adapter and build a declarative plan."""
+    """Validate replacements and return a plan with its exact source tuple."""
 
     occurrences = tuple(
         occurrence
@@ -3735,28 +3735,24 @@ def build_sync_adapter_writeback_plan(adapter, snapshot, file_rel_path, tasks, r
         for document in snapshot.project.source_documents
         if document.file_rel_path == file_rel_path
     )
-    return adapter.build_writeback_plan(
+    plan = adapter.build_writeback_plan(
         snapshot.project,
         tuple(validated),
         live_sources,
     )
+    return plan, live_sources
 
 
 def build_sync_adapter_preview(adapter, snapshot, file_rel_path, tasks, replacements):
     """Build and render one sync preview file without aborting sibling files."""
 
     try:
-        plan = build_sync_adapter_writeback_plan(
+        plan, live_sources = build_sync_adapter_writeback_plan(
             adapter,
             snapshot,
             file_rel_path,
             tasks,
             replacements,
-        )
-        live_sources = tuple(
-            document
-            for document in snapshot.project.source_documents
-            if document.file_rel_path == file_rel_path
         )
         rendered = render_writeback_plan(plan, live_sources)
     except (KeyError, ValueError) as exc:

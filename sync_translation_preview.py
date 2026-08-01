@@ -58,7 +58,7 @@ def _artifact_path(package_dir: Path, value: Any) -> Path:
 
 
 def _fingerprint_payload(manifest: dict[str, Any]) -> dict[str, Any]:
-    return {
+    payload = {
         "schema": manifest.get("schema"),
         "version": manifest.get("version"),
         "created_at": manifest.get("created_at"),
@@ -69,6 +69,9 @@ def _fingerprint_payload(manifest: dict[str, Any]) -> dict[str, Any]:
         "summary": manifest.get("summary"),
         "files": manifest.get("files"),
     }
+    if "failures" in manifest:
+        payload["failures"] = manifest.get("failures")
+    return payload
 
 
 def _fingerprint(manifest: dict[str, Any]) -> str:
@@ -82,6 +85,14 @@ def _fingerprint(manifest: dict[str, Any]) -> str:
 
 
 def _deserialize_writeback_plan(payload: Any):
+    """Reconstruct a validated writeback plan from persisted manifest JSON.
+
+    The payload must contain every plan and operation field consumed by
+    ``render_writeback_plan``, with numeric line and column coordinates. Shape
+    and coercion failures are normalized to ``ValueError`` so preview apply can
+    reject malformed or edited manifests through one public failure mode.
+    """
+
     from engine_adapters.contracts import WritebackOperation, WritebackPlan
 
     if not isinstance(payload, dict):

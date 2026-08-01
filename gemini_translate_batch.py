@@ -7840,7 +7840,6 @@ def apply_results(target=None, force=False):
     revalidated_replacements_by_file = {}
     revalidated_line_numbers_by_file = {}
     revalidated_file_paths = {}
-    revalidated_file_lines = {}
     rag_jobs = []
     revalidated_source_documents = {}
     file_keys = set(replacements_by_file) | set(translated_lines_by_file)
@@ -7868,11 +7867,11 @@ def apply_results(target=None, force=False):
             summary['failure_items'] = len(failure_entries)
         if not replacements and not line_numbers_set:
             continue
-        revalidated_replacements_by_file[file_key] = replacements
+        if replacements:
+            revalidated_replacements_by_file[file_key] = replacements
+            revalidated_source_documents[file_key] = source_document
         revalidated_line_numbers_by_file[file_key] = set(line_numbers_set)
         revalidated_file_paths[file_key] = file_path
-        revalidated_file_lines[file_key] = lines
-        revalidated_source_documents[file_key] = source_document
 
     adapter_plan, adapter_snapshot = _validate_adapter_writeback_plan(
         manifest,
@@ -7920,10 +7919,9 @@ def apply_results(target=None, force=False):
             encoding='utf-8',
         )
 
-    for file_key, replacements in revalidated_replacements_by_file.items():
+    for file_key, line_numbers_set in revalidated_line_numbers_by_file.items():
         file_path = revalidated_file_paths[file_key]
-        lines = revalidated_file_lines[file_key]
-        line_numbers = sorted(revalidated_line_numbers_by_file[file_key])
+        line_numbers = sorted(line_numbers_set)
         update_progress(file_key, line_numbers)
         applied_files += 1
         applied_lines += len(line_numbers)
@@ -12942,5 +12940,3 @@ def main(argv=None):
 
 if __name__ == '__main__':
     raise SystemExit(main())
-    Occurrence,
-    OpaqueLocator,

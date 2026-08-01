@@ -48,6 +48,21 @@ class SyncTranslationPreviewTests(unittest.TestCase):
             report = (manifest_path.parent / "preview.diff").read_text(encoding="utf-8")
             self.assertIn('-    "Hello 1"', report)
             self.assertIn('+    "你好 1"', report)
+    def test_load_accepts_legacy_preview_without_failures_field(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _tl_dir, manifest_path, manifest = self._create_preview(root)
+            manifest.pop("failures")
+            manifest["preview_fingerprint"] = preview._fingerprint(manifest)
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            loaded = preview.load_sync_preview(manifest_path)
+
+            self.assertNotIn("failures", loaded)
+
 
     def test_create_preview_records_partial_adapter_failures(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -79,6 +94,15 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                 manifest["failures"][0]["reason_code"],
                 "common.locator.unresolved",
             )
+
+            persisted = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+            persisted["failures"][0]["message"] = "edited audit detail"
+            Path(manifest_path).write_text(
+                json.dumps(persisted, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "manifest changed"):
+                preview.load_sync_preview(manifest_path)
 
     def test_build_sync_adapter_preview_isolates_plan_failure(self):
         error = runtime.WritebackPlanError("common.locator.unresolved", "ambiguous")
