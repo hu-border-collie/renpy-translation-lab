@@ -55,37 +55,51 @@ class ProjectAssetPathsTests(unittest.TestCase):
             self.assertFalse(paths_match_project(resolved, tool_dir / "glossary.json"))
 
     def test_absolute_glossary_is_preserved(self):
-        shared = "C:/Shared/team-glossary.json"
-        resolved = resolve_glossary_path(
-            shared,
-            game_root="C:/Games/Example/work",
-            tool_dir="C:/Tools/renpy-translation-lab",
-        )
-        self.assertTrue(paths_match_project(resolved, shared))
+        with tempfile.TemporaryDirectory() as tmp:
+            shared = str(Path(tmp) / "shared" / "team-glossary.json")
+            work_dir = str(Path(tmp) / "Game" / "work")
+            tool_dir = str(Path(tmp) / "tool")
+            Path(shared).parent.mkdir(parents=True)
+            Path(work_dir).mkdir(parents=True)
+            Path(tool_dir).mkdir(parents=True)
+
+            resolved = resolve_glossary_path(
+                shared,
+                game_root=work_dir,
+                tool_dir=tool_dir,
+            )
+            self.assertTrue(paths_match_project(resolved, shared))
 
     def test_normalize_relative_project_assets_keeps_absolute_custom_paths(self):
-        work_dir = "C:/Games/Example/work"
-        config = {
-            "game_root": work_dir,
-            "glossary_file": "glossary.json",
-            "batch": {
-                "model": "gemini-test",
-                "macro_setting_file": "C:/Shared/style.md",
-            },
-        }
+        with tempfile.TemporaryDirectory() as tmp:
+            work_dir = str(Path(tmp) / "Game" / "work")
+            shared_macro = str(Path(tmp) / "shared" / "style.md")
+            Path(work_dir).mkdir(parents=True)
+            Path(shared_macro).parent.mkdir(parents=True)
+            config = {
+                "game_root": work_dir,
+                "glossary_file": "glossary.json",
+                "batch": {
+                    "model": "gemini-test",
+                    "macro_setting_file": shared_macro,
+                },
+            }
 
-        normalize_relative_project_assets_in_config(config, work_dir)
+            normalize_relative_project_assets_in_config(config, work_dir)
 
-        self.assertTrue(
-            paths_match_project(
-                config["glossary_file"],
-                expected_project_asset_paths(work_dir)["glossary_file"],
+            self.assertTrue(
+                paths_match_project(
+                    config["glossary_file"],
+                    expected_project_asset_paths(work_dir)["glossary_file"],
+                )
             )
-        )
-        self.assertTrue(
-            paths_match_project(config["batch"]["macro_setting_file"], "C:/Shared/style.md")
-        )
-        self.assertEqual(config["batch"]["model"], "gemini-test")
+            self.assertTrue(
+                paths_match_project(
+                    config["batch"]["macro_setting_file"],
+                    shared_macro,
+                )
+            )
+            self.assertEqual(config["batch"]["model"], "gemini-test")
 
     def test_sync_project_asset_paths_in_config(self):
         work_dir = "C:/Games/Example/work"
