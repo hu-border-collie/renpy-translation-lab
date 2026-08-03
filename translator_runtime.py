@@ -1653,14 +1653,19 @@ def load_translator_settings(*, persist_corrected_game_root: bool = True):
 
     load_context_storage_settings(config)
 
+    from project_asset_paths import resolve_glossary_path
+
     glossary_file = config.get("glossary_file")
     if glossary_file is None:
         glossary_file = config.get("glossary_path")
-    if glossary_file is not None:
-        resolved_glossary = _resolve_preferred_path(TOOL_DIR, BASE_DIR, glossary_file)
-        GLOSSARY_FILE = resolved_glossary or DEFAULT_GLOSSARY_FILE
-    else:
-        GLOSSARY_FILE = DEFAULT_GLOSSARY_FILE
+    # Prefer current work over the tool directory for relative/bare names so
+    # "glossary.json" cannot silently resolve to the install-tree default.
+    resolved_glossary = resolve_glossary_path(
+        glossary_file,
+        game_root=BASE_DIR,
+        tool_dir=TOOL_DIR,
+    )
+    GLOSSARY_FILE = resolved_glossary or DEFAULT_GLOSSARY_FILE
 
     tl_subdir = config.get("tl_subdir")
     try:

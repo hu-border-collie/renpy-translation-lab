@@ -10,8 +10,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Iterable
 
-from project_asset_paths import canonical_abs_path, expected_project_asset_paths
-
 GLOSSARY_SECTION_PRESERVE = 'preserve_terms'
 GLOSSARY_SECTION_NON_TRANSLATABLE = 'non_translatable_exact'
 GLOSSARY_SECTION_NORMALIZE = 'normalize_map'
@@ -463,20 +461,14 @@ def resolve_glossary_path_from_config(
     game_root: str = '',
     tool_root: str = '',
 ) -> str:
+    from project_asset_paths import resolve_glossary_path
+
     glossary_configured = config.get('glossary_file') or config.get('glossary_path') or ''
-    if isinstance(glossary_configured, str) and glossary_configured.strip():
-        configured = glossary_configured.strip()
-        if os.path.isabs(configured):
-            return canonical_abs_path(configured)
-        base_dir = game_root or tool_root
-        if base_dir:
-            return canonical_abs_path(os.path.join(base_dir, configured))
-        return canonical_abs_path(configured)
-    if game_root:
-        return expected_project_asset_paths(game_root)['glossary_file']
-    if tool_root:
-        return os.path.join(canonical_abs_path(tool_root), 'glossary.json')
-    return ''
+    return resolve_glossary_path(
+        glossary_configured if isinstance(glossary_configured, str) else '',
+        game_root=game_root,
+        tool_dir=tool_root,
+    )
 
 
 def resolve_macro_setting_path_from_config(
@@ -485,21 +477,17 @@ def resolve_macro_setting_path_from_config(
     game_root: str = '',
     tool_root: str = '',
 ) -> str:
+    from project_asset_paths import resolve_macro_setting_path
+
     batch = config.get('batch')
     if not isinstance(batch, dict):
         batch = {}
     macro_configured = batch.get('macro_setting_file') or ''
-    if isinstance(macro_configured, str) and macro_configured.strip():
-        configured = macro_configured.strip()
-        if os.path.isabs(configured):
-            return canonical_abs_path(configured)
-        base_dir = game_root or tool_root
-        if base_dir:
-            return canonical_abs_path(os.path.join(base_dir, configured))
-        return canonical_abs_path(configured)
-    if game_root:
-        return expected_project_asset_paths(game_root)['macro_setting_file']
-    return ''
+    return resolve_macro_setting_path(
+        macro_configured if isinstance(macro_configured, str) else '',
+        game_root=game_root,
+        tool_dir=tool_root,
+    )
 
 
 def load_macro_setting_text(macro_path: str) -> str:

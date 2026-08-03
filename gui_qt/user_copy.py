@@ -451,11 +451,17 @@ def translate_doctor_warning(warning: str) -> str:
     if text.startswith("RAG store contains legacy ID format keys."):
         return "记忆库含有旧版键格式，下次写回时会自动迁移。"
     if text.startswith("glossary_file does not match current project;"):
-        return "术语表路径仍指向其他项目，切换项目后应自动同步到当前 work 目录。"
+        return (
+            "术语表路径仍指向其他位置，与当前 work 不一致。"
+            "请用「切换项目」同步到当前项目，或在设置中改为当前 work 下的 glossary.json。"
+        )
     if text.startswith("glossary.json not found for current project"):
         return "当前项目缺少 glossary.json，批量翻译将使用默认保留词。"
     if text.startswith("macro_setting_file does not match current project;"):
-        return "风格设定路径仍指向其他项目，切换项目后应自动同步到当前 work 目录。"
+        return (
+            "风格设定路径仍指向其他位置，与当前 work 不一致。"
+            "请用「切换项目」同步到当前项目，或在设置中改为当前 work 下的 macro_setting.md。"
+        )
     if text.startswith("macro_setting.md not found for current project"):
         return "当前项目缺少 macro_setting.md，批量翻译将缺少项目口吻与风格指引。"
     if text.startswith("Translation conflict for "):

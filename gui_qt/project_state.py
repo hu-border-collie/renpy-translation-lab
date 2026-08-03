@@ -21,7 +21,10 @@ from .manifest_lite import (
     read_manifest_index_fields,
     read_manifest_lite,
 )
-from project_asset_paths import sync_project_asset_paths_in_config
+from project_asset_paths import (
+    normalize_relative_project_assets_in_config,
+    sync_project_asset_paths_in_config,
+)
 
 from .path_utils import canonical_abs_path, resolve_effective_game_root
 
@@ -567,5 +570,16 @@ class ProjectState:
             return {}
 
     def save_translator_config(self, config: dict[str, Any]) -> None:
-        """Write config while trying to preserve structure."""
+        """Write config while trying to preserve structure.
+
+        Relative glossary/macro paths are rewritten under the current
+        ``game_root`` so a settings save cannot reintroduce tool-directory
+        drift for bare names like ``glossary.json``.
+        """
+        if isinstance(config, dict):
+            game_root = str(config.get("game_root") or "").strip()
+            if not game_root and self._game_root is not None:
+                game_root = str(self._game_root)
+            if game_root:
+                normalize_relative_project_assets_in_config(config, game_root)
         self._write_json_object(self.config_path, config)

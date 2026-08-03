@@ -44,7 +44,7 @@ GUI 文案入口名称（须与界面一致）：
 - 布局：当前路径、work 目录、original/game 是否存在。
 - 模板：TL 目录、翻译文件、Ren'Py SDK、自定义模板命令是否可用。
 - 工作量：待译条目数、待译文件数、翻译块和原文注释数量。
-- 翻译阶段：是否已有旧译、是否属于全新初译或增量补译。
+- 翻译阶段：是否已有**中文**旧译（`translated_task_count`，不是模板里的 `old_lines`）、是否属于全新初译或增量补译。
 - 上下文系统：RAG、原文索引是否启用，store 是否存在，记录或片段是否完整。
 - 项目分析：按当前项目解析是否启用，再检查产物是否缺失/过期、生成模型与 API Key 是否可用。
 - 项目资产：术语表和风格设定是否存在、路径是否匹配当前项目。
@@ -168,6 +168,7 @@ if source_index_needs_bootstrap:
     recommend("bootstrap_source_index", severity="required", priority=80)
 if rag_needs_bootstrap:
     recommend("bootstrap_rag", severity="required", priority=70)
+# has_existing_translations = translated_task_count > 0（已有中文译文，非 old 模板行）
 elif has_existing_translations and pending_count >= 150 and not rag_enabled:
     recommend("enable_rag_for_consistency", severity="optional", priority=30)
 if new_project and not source_index_enabled:

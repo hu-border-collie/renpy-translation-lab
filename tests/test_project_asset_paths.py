@@ -9,7 +9,10 @@ import gemini_translate_batch as batch_mod
 from project_asset_paths import (
     canonical_abs_path,
     expected_project_asset_paths,
+    normalize_relative_project_assets_in_config,
     paths_match_project,
+    resolve_glossary_path,
+    resolve_macro_setting_path,
     sync_project_asset_paths_in_config,
 )
 
@@ -28,6 +31,61 @@ class ProjectAssetPathsTests(unittest.TestCase):
             self.assertTrue(
                 paths_match_project(resolved, expected),
             )
+
+    def test_relative_glossary_prefers_game_root_even_if_tool_file_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tool_dir = Path(tmp) / "tool"
+            work_dir = Path(tmp) / "Game" / "work"
+            tool_dir.mkdir(parents=True)
+            work_dir.mkdir(parents=True)
+            (tool_dir / "glossary.json").write_text('{"from":"tool"}', encoding="utf-8")
+
+            resolved = resolve_glossary_path(
+                "glossary.json",
+                game_root=work_dir,
+                tool_dir=tool_dir,
+            )
+
+            self.assertTrue(
+                paths_match_project(
+                    resolved,
+                    expected_project_asset_paths(work_dir)["glossary_file"],
+                )
+            )
+            self.assertFalse(paths_match_project(resolved, tool_dir / "glossary.json"))
+
+    def test_absolute_glossary_is_preserved(self):
+        shared = "C:/Shared/team-glossary.json"
+        resolved = resolve_glossary_path(
+            shared,
+            game_root="C:/Games/Example/work",
+            tool_dir="C:/Tools/renpy-translation-lab",
+        )
+        self.assertTrue(paths_match_project(resolved, shared))
+
+    def test_normalize_relative_project_assets_keeps_absolute_custom_paths(self):
+        work_dir = "C:/Games/Example/work"
+        config = {
+            "game_root": work_dir,
+            "glossary_file": "glossary.json",
+            "batch": {
+                "model": "gemini-test",
+                "macro_setting_file": "C:/Shared/style.md",
+            },
+        }
+
+        normalize_relative_project_assets_in_config(config, work_dir)
+
+        self.assertTrue(
+            paths_match_project(
+                config["glossary_file"],
+                expected_project_asset_paths(work_dir)["glossary_file"],
+            )
+        )
+        self.assertTrue(
+            paths_match_project(config["batch"]["macro_setting_file"], "C:/Shared/style.md")
+        )
+        self.assertEqual(config["batch"]["model"], "gemini-test")
 
     def test_sync_project_asset_paths_in_config(self):
         work_dir = "C:/Games/Example/work"
@@ -51,6 +109,46 @@ class ProjectAssetPathsTests(unittest.TestCase):
             expected_project_asset_paths(work_dir)["macro_setting_file"],
         )
         self.assertEqual(synced["batch"]["model"], "gemini-test")
+
+    def test_doctor_relative_glossary_matches_project_when_tool_has_same_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tool_dir = Path(tmp) / "tool"
+            work_dir = Path(tmp) / "Game" / "work"
+            tool_dir.mkdir(parents=True)
+            work_dir.mkdir(parents=True)
+            (tool_dir / "glossary.json").write_text("{}", encoding="utf-8")
+            config_path = tool_dir / "translator_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "game_root": str(work_dir),
+                        "glossary_file": "glossary.json",
+                        "batch": {"macro_setting_file": "macro_setting.md"},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, "BASE_DIR", str(work_dir)),
+                mock.patch.object(batch_mod.legacy, "TOOL_DIR", str(tool_dir)),
+                mock.patch.object(batch_mod.legacy, "TRANSLATOR_CONFIG", str(config_path)),
+            ):
+                assets = batch_mod.collect_doctor_project_assets_status(str(work_dir))
+
+            self.assertTrue(assets["glossary_matches_project"])
+            self.assertTrue(assets["macro_matches_project"])
+            self.assertTrue(
+                paths_match_project(
+                    assets["glossary_file"],
+                    expected_project_asset_paths(work_dir)["glossary_file"],
+                )
+            )
+            warnings = batch_mod.collect_doctor_project_assets_warnings(assets)
+            self.assertFalse(
+                any("does not match current project" in warning for warning in warnings)
+            )
 
     def test_collect_doctor_project_assets_warnings_for_missing_files(self):
         work_dir = "C:/Games/Example/work"

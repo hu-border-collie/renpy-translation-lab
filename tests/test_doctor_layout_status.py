@@ -259,6 +259,7 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             layout_status="ready",
         )
         report["pending_task_count"] = 240
+        report["translated_task_count"] = 11800
         report["counts"] = {
             "rpy_files": 20,
             "translate_blocks": 12000,
@@ -303,6 +304,7 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             layout_status="ready",
         )
         report["pending_task_count"] = 240
+        report["translated_task_count"] = 11800
         report["counts"] = {
             "rpy_files": 20,
             "translate_blocks": 12000,
@@ -342,6 +344,7 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             layout_status="ready",
         )
         report["pending_task_count"] = 45
+        report["translated_task_count"] = 119900
         report["counts"] = {
             "rpy_files": 48,
             "translate_blocks": 120000,
@@ -400,12 +403,52 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             layout_status="ready",
         )
         report["pending_task_count"] = 240
+        report["translated_task_count"] = 0
         report["counts"] = {
             "rpy_files": 20,
             "translate_blocks": 240,
             "old_lines": 0,
         }
 
+        self.assertEqual(
+            batch_mod.collect_doctor_workflow_state(report),
+            doctor_rec.START_PENDING_BATCH,
+        )
+
+    def test_blank_template_old_lines_do_not_count_as_existing_translations(self):
+        """Template old/new pairs alone must not trigger RAG or incremental workflow."""
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=22,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 21416
+        report["translated_task_count"] = 0
+        report["counts"] = {
+            "rpy_files": 22,
+            "translate_blocks": 21015,
+            "string_sections": 16,
+            "old_lines": 571,
+            "new_lines": 571,
+            "commented_original_lines": 21015,
+        }
+        report["context_status"] = {
+            "rag": {"enabled": False},
+            "source_index": {
+                "enabled": True,
+                "store_exists": True,
+                "source_segments": 1000,
+                "expected_segments": 1000,
+            },
+        }
+
+        self.assertFalse(batch_mod._doctor_has_existing_translations(report))
+        recommendations = batch_mod.collect_doctor_recommendations(report)
+        self.assertEqual(recommendations, [])
+        self.assertNotIn(
+            doctor_rec.ENABLE_RAG_FOR_CONSISTENCY,
+            doctor_rec.doctor_recommendation_codes(recommendations),
+        )
         self.assertEqual(
             batch_mod.collect_doctor_workflow_state(report),
             doctor_rec.START_PENDING_BATCH,
@@ -418,6 +461,7 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             layout_status="ready",
         )
         report["pending_task_count"] = 240
+        report["translated_task_count"] = 11800
         report["counts"] = {
             "rpy_files": 20,
             "translate_blocks": 12000,
@@ -449,6 +493,7 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             layout_status="ready",
         )
         report["pending_task_count"] = 240
+        report["translated_task_count"] = 11800
         report["counts"] = {
             "rpy_files": 20,
             "translate_blocks": 12000,
@@ -487,6 +532,7 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             layout_status="ready",
         )
         report["pending_task_count"] = 240
+        report["translated_task_count"] = 11800
         report["counts"] = {
             "rpy_files": 20,
             "translate_blocks": 12000,
@@ -537,6 +583,7 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             # ready incremental (no recs)
             {
                 "pending_task_count": 240,
+                "translated_task_count": 11800,
                 "counts": {
                     "rpy_files": 20,
                     "translate_blocks": 12000,
