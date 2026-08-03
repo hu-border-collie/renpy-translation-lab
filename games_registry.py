@@ -5,7 +5,7 @@ The registry file (``games_registry.json``) lives at the RenPy workspace root.
 
 Commands::
 
-    python games_registry.py setup --workspace path/to/workspace
+    python games_registry.py --workspace path/to/workspace setup
     python games_registry.py import-md
     python games_registry.py discover
     python games_registry.py ingest --source path/to/game_or.zip

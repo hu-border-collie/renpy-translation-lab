@@ -1138,5 +1138,13 @@ class GamesRegistryTests(unittest.TestCase):
             self.assertFalse(config_path.exists())
 
 
+    def test_global_workspace_flag_precedes_subcommand(self):
+        parser = registry.build_arg_parser()
+        args = parser.parse_args(["--workspace", "C:/ws", "setup", "--dry-run"])
+        self.assertEqual(args.command, "setup")
+        self.assertEqual(Path(args.workspace), Path("C:/ws"))
+        self.assertTrue(args.dry_run)
+
+
 if __name__ == "__main__":
     unittest.main()

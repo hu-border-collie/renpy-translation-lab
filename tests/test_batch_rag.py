@@ -887,9 +887,10 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertNotIn('Dialogue translation blocks do not include source comments', ' '.join(report['warnings']))
 
     def test_doctor_command_does_not_require_api_keys(self):
+        load_settings = mock.Mock()
         with (
             mock.patch.object(batch_mod, 'initialize_batch_logging') as logging_mock,
-            mock.patch.object(batch_mod.legacy, 'load_translator_settings'),
+            mock.patch.object(batch_mod.legacy, 'load_translator_settings', load_settings),
             mock.patch.object(batch_mod.legacy, 'load_glossary'),
             mock.patch.object(batch_mod, 'load_batch_settings'),
             mock.patch.object(batch_mod, 'print_banner'),
@@ -901,6 +902,39 @@ class BatchRagRegressionTests(unittest.TestCase):
 
         load_config_mock.assert_not_called()
         logging_mock.assert_not_called()
+        load_settings.assert_called_once_with(persist_corrected_game_root=False)
+
+    def test_doctor_command_does_not_persist_corrected_game_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            (project / 'original' / 'game').mkdir(parents=True)
+            (project / 'work' / 'game' / 'tl' / 'schinese').mkdir(parents=True)
+            (project / 'work' / 'game' / 'script.rpy').write_text('label start:\n    return\n', encoding='utf-8')
+            config_path = root / 'translator_config.json'
+            config_path.write_text(
+                json.dumps({'game_root': str(project), 'tl_subdir': 'game/tl/schinese'}, ensure_ascii=False, indent=2)
+                + '\n',
+                encoding='utf-8',
+            )
+            before = config_path.read_bytes()
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'TRANSLATOR_CONFIG', str(config_path)),
+                mock.patch.object(batch_mod.legacy, 'persist_game_root') as persist_mock,
+                mock.patch.object(batch_mod, 'print_banner'),
+                mock.patch.object(batch_mod, 'print_doctor_report'),
+            ):
+                exit_code = batch_mod.main(['doctor'])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(config_path.read_bytes(), before)
+            persist_mock.assert_not_called()
+
+    def test_main_without_command_exits_usage(self):
+        with self.assertRaises(SystemExit) as raised:
+            batch_mod.main([])
+        self.assertEqual(raised.exception.code, 2)
 
     def test_doctor_report_explains_custom_template_command_errors(self):
         with tempfile.TemporaryDirectory() as tmp:

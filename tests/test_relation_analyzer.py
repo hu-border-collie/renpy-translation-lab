@@ -1,4 +1,6 @@
 import csv
+import subprocess
+import sys
 import json
 import tempfile
 import unittest
@@ -576,6 +578,23 @@ class RelationAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(embeddings.shape, (1, 2))
         self.assertEqual(embeddings.tolist(), [[3.0, 4.0]])
+
+
+    def test_module_cli_help_entrypoint(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "relation_analyzer.cli", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("usage:", result.stdout.lower())
+        self.assertNotIn("RuntimeWarning", result.stderr)
+
+    def test_package_init_does_not_import_cli_main(self):
+        import relation_analyzer
+
+        self.assertFalse(hasattr(relation_analyzer, "main"))
 
 
 if __name__ == '__main__':
