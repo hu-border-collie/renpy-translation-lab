@@ -2804,12 +2804,22 @@ class TranslationFileJobs(list):
         self.coverage_snapshot = coverage_snapshot
 
 
-def collect_pending_file_jobs(*, include_complete_files=False):
+def collect_pending_file_jobs(
+    *,
+    include_complete_files=False,
+    include_occurrences=True,
+    include_task_payloads=True,
+):
     """Collect per-file pending translation tasks.
 
     By default only files with at least one pending task are returned (batch build).
     Pass ``include_complete_files=True`` for doctor progress so fully-translated
     files still contribute to ``translated_count``.
+
+    Progress-only callers (environment check) should pass
+    ``include_occurrences=False`` and usually ``include_task_payloads=False``:
+    pending/translated counts stay identical to the full build path, but the
+    expensive occurrence extraction and large task list copies are skipped.
     """
     adapter_snapshot = build_translation_snapshot(
         RenPyAdapter(legacy_module=legacy),
@@ -2820,25 +2830,39 @@ def collect_pending_file_jobs(*, include_complete_files=False):
             include_files=tuple(sorted(legacy.INCLUDE_FILES)),
             include_prefixes=tuple(sorted(legacy.INCLUDE_PREFIXES)),
         ),
+        include_occurrences=include_occurrences,
+        include_task_payloads=include_task_payloads,
     )
     jobs = TranslationFileJobs(coverage_snapshot=adapter_snapshot)
 
     for document in adapter_snapshot.project.source_documents:
         rel_path = document.file_rel_path
         file_path = document.file_path
-        pending = [
-            dict(task)
-            for task in adapter_snapshot.pending_tasks_by_file.get(rel_path, ())
-            if not legacy.is_non_translatable(task['text'])
-        ]
+        if include_task_payloads:
+            pending = [
+                dict(task)
+                for task in adapter_snapshot.pending_tasks_by_file.get(rel_path, ())
+                if not legacy.is_non_translatable(task['text'])
+            ]
+            task_count = len(pending)
+        else:
+            task_count = sum(
+                1
+                for candidate in adapter_snapshot.inventory.candidates
+                if candidate.classification == "translatable"
+                and candidate.legacy_item is not None
+                and str(candidate.locator.locator.get("file_rel_path") or "") == rel_path
+                and not legacy.is_non_translatable(candidate.legacy_item["text"])
+            )
+            pending = []
         progress = adapter_snapshot.progress_by_file.get(rel_path, {})
         translated_count = int(progress.get('translated_count') or 0)
-        if pending or (include_complete_files and translated_count):
+        if task_count or (include_complete_files and translated_count):
             jobs.append(
                 {
                     'file_rel_path': rel_path,
                     'file_path': file_path,
-                    'task_count': len(pending),
+                    'task_count': task_count,
                     'translated_count': translated_count,
                     'tasks': pending,
                 }
@@ -2865,6 +2889,21 @@ def summarize_translation_progress(file_jobs):
         'total_task_count': pending_task_count + translated_task_count,
         'pending_file_count': pending_file_count,
     }
+
+
+def collect_doctor_translation_progress():
+    """Doctor-only progress summary: same counts as full pending jobs, cheaper path.
+
+    Uses the same inventory/classification and ``is_non_translatable`` filter as
+    :func:`collect_pending_file_jobs`, but skips occurrence extraction and does
+    not materialize per-task payloads.
+    """
+    file_jobs = collect_pending_file_jobs(
+        include_complete_files=True,
+        include_occurrences=False,
+        include_task_payloads=False,
+    )
+    return summarize_translation_progress(file_jobs)
 
 
 def format_context_block(lines, empty_label):
@@ -10160,14 +10199,22 @@ def _doctor_rag_needs_bootstrap(rag):
 
 
 def _doctor_has_existing_translations(report):
-    counts = report.get('counts') or {}
-    if int(counts.get('old_lines') or 0) > 0:
-        return True
+    """True when the project already has real Chinese translation progress.
 
-    translate_blocks = int(counts.get('translate_blocks') or 0)
-    pending = _doctor_pending_task_count(report)
-    if translate_blocks > 0 and pending > 0 and pending < translate_blocks:
-        return True
+    Blank Ren'Py templates still contain ``old``/``new`` string pairs, so
+    ``old_lines`` alone must not count as historical translations. That signal
+    is used for RAG tips and incremental vs first-pass workflow state; both
+    require actual translated targets (Han characters), not template structure.
+    """
+    # Full doctor reports always include this field (0 when nothing is translated).
+    if 'translated_task_count' in report:
+        return int(report.get('translated_task_count') or 0) > 0
+
+    # Hand-built / older report shapes without an explicit Chinese progress
+    # field: do not guess from counts. Template structure (old_lines) is
+    # unreliable, and ``pending < translate_blocks`` also holds when many rows
+    # are filtered as non-translatable, so a wrong signal would suggest RAG /
+    # incremental state for a first-pass project. Treat as first-pass.
     return False
 
 
@@ -10577,37 +10624,43 @@ def collect_glossary_story_graph_conflicts(glossary_path='', story_graph_path=''
 
 
 def collect_doctor_project_assets_status(base_dir):
-    from project_asset_paths import expected_project_asset_paths, paths_match_project
+    from project_asset_paths import (
+        expected_project_asset_paths,
+        paths_match_project,
+        resolve_configured_glossary_value,
+        resolve_glossary_path,
+        resolve_macro_setting_path,
+    )
 
     config = _read_translator_config_object()
     expected = expected_project_asset_paths(base_dir)
 
-    glossary_configured = config.get('glossary_file') or config.get('glossary_path') or ''
+    glossary_configured = resolve_configured_glossary_value(config)
     batch = config.get('batch') if isinstance(config.get('batch'), dict) else {}
     macro_configured = batch.get('macro_setting_file') or ''
 
-    glossary_resolved = (
-        legacy._resolve_preferred_path(legacy.TOOL_DIR, base_dir, glossary_configured)
-        if glossary_configured
-        else expected['glossary_file']
-    )
-    macro_resolved = (
-        legacy._resolve_preferred_path(base_dir, base_dir, macro_configured)
-        if macro_configured
-        else expected['macro_setting_file']
-    )
+    glossary_resolved = resolve_glossary_path(
+        glossary_configured,
+        game_root=base_dir,
+        tool_dir=legacy.TOOL_DIR,
+    ) or expected['glossary_file']
+    macro_resolved = resolve_macro_setting_path(
+        macro_configured,
+        game_root=base_dir,
+        tool_dir=legacy.TOOL_DIR,
+    ) or expected['macro_setting_file']
 
     return {
-        'glossary_file': glossary_resolved or expected['glossary_file'],
-        'glossary_exists': os.path.isfile(glossary_resolved or expected['glossary_file']),
+        'glossary_file': glossary_resolved,
+        'glossary_exists': os.path.isfile(glossary_resolved),
         'glossary_matches_project': paths_match_project(
-            glossary_resolved or glossary_configured,
+            glossary_resolved,
             expected['glossary_file'],
         ),
-        'macro_setting_file': macro_resolved or expected['macro_setting_file'],
-        'macro_exists': os.path.isfile(macro_resolved or expected['macro_setting_file']),
+        'macro_setting_file': macro_resolved,
+        'macro_exists': os.path.isfile(macro_resolved),
         'macro_matches_project': paths_match_project(
-            macro_resolved or macro_configured,
+            macro_resolved,
             expected['macro_setting_file'],
         ),
         'expected_glossary_file': expected['glossary_file'],
@@ -10792,10 +10845,11 @@ def collect_doctor_report():
     translated_task_count = 0
     total_task_count = 0
     # Avoid walking a TL tree that may sit outside the project root.
+    # Progress counts use the same inventory filter as batch build, without the
+    # occurrence-extraction work that build/writeback needs.
     if has_tl_files and not tl_path_invalid:
         try:
-            file_jobs = collect_pending_file_jobs(include_complete_files=True)
-            progress = summarize_translation_progress(file_jobs)
+            progress = collect_doctor_translation_progress()
             pending_file_count = progress['pending_file_count']
             pending_task_count = progress['pending_task_count']
             translated_task_count = progress['translated_task_count']

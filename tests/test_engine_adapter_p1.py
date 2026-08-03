@@ -653,6 +653,68 @@ translate schinese start:
             list(jobs.coverage_snapshot.pending_tasks_by_file["script.rpy"]),
         )
 
+    def test_progress_only_snapshot_matches_full_pending_counts(self):
+        """Doctor path skips occurrences but must keep pending/translated totals."""
+        import gemini_translate_batch as batch
+
+        root, tl_dir = self.make_project(
+            {
+                "script.rpy": (
+                    "translate schinese start:\n"
+                    '    # "Hello there."\n'
+                    '    "Hello there."\n'
+                    '    # "Already done."\n'
+                    '    "已经完成。"\n'
+                ),
+                "common.rpy": (
+                    "translate schinese strings:\n"
+                    '    old "Save"\n'
+                    '    new "Save"\n'
+                ),
+            }
+        )
+        with (
+            mock.patch.object(batch.legacy, "BASE_DIR", str(root)),
+            mock.patch.object(batch.legacy, "TL_DIR", str(tl_dir)),
+            mock.patch.object(batch.legacy, "INCLUDE_FILES", set()),
+            mock.patch.object(batch.legacy, "INCLUDE_PREFIXES", set()),
+        ):
+            full_jobs = batch.collect_pending_file_jobs(include_complete_files=True)
+            full = batch.summarize_translation_progress(full_jobs)
+            doctor = batch.collect_doctor_translation_progress()
+            light_jobs = batch.collect_pending_file_jobs(
+                include_complete_files=True,
+                include_occurrences=False,
+                include_task_payloads=False,
+            )
+
+        self.assertEqual(doctor, full)
+        self.assertEqual(batch.summarize_translation_progress(light_jobs), full)
+        self.assertEqual(light_jobs.coverage_snapshot.occurrences, ())
+        self.assertEqual(light_jobs.coverage_snapshot.pending_tasks_by_file, {})
+        self.assertTrue(full_jobs.coverage_snapshot.occurrences)
+        self.assertTrue(full_jobs.coverage_snapshot.pending_tasks_by_file)
+        # Progress-only jobs omit task payloads but keep the same task_count.
+        self.assertEqual(
+            sorted((job["file_rel_path"], job["task_count"], job["translated_count"]) for job in light_jobs),
+            sorted((job["file_rel_path"], job["task_count"], job["translated_count"]) for job in full_jobs),
+        )
+        self.assertTrue(all(job["tasks"] == [] for job in light_jobs))
+
+    def test_source_document_lines_are_cached(self):
+        from engine_adapters.contracts import SourceDocument
+
+        document = SourceDocument(
+            file_rel_path="script.rpy",
+            file_path="script.rpy",
+            size=4,
+            sha256="x",
+            content=b"a\nb\n",
+        )
+        self.assertIs(document.lines(), document.lines())
+        self.assertIsInstance(document.lines(), tuple)
+        self.assertIs(document.text(), document.text())
+
     def test_batch_package_exports_coverage_without_changing_manifest_v2(self):
         import gemini_translate_batch as batch
 

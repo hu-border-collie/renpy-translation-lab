@@ -726,7 +726,8 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "glossary_file",
         ("glossary_file",),
         "术语表路径",
-        "glossary.json 路径；留空时使用默认术语表路径。",
+        "glossary.json 路径。相对路径（如 glossary.json）相对当前 work；"
+        "切换项目时会同步到当前 work。留空则使用当前 work 下的 glossary.json。",
         "str",
         "glossary.json",
         "项目与资源",
@@ -914,7 +915,8 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "batch_macro_setting_file",
         ("batch", "macro_setting_file"),
         "风格设定文件",
-        "macro_setting.md 路径；通常位于当前 work 目录。",
+        "macro_setting.md 路径。相对路径相对当前 work；切换项目时会同步到当前 work。"
+        "留空则使用当前 work 下的 macro_setting.md。",
         "str",
         "macro_setting.md",
         "术语与风格",

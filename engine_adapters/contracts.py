@@ -77,12 +77,28 @@ class SourceDocument:
     size: int
     sha256: str
     content: bytes = field(repr=False, compare=False)
+    # Lazy decode/split caches. Frozen dataclass still allows object.__setattr__.
+    # Lines are cached as an immutable tuple so callers cannot mutate shared state.
+    _text_cache: str | None = field(default=None, init=False, repr=False, compare=False)
+    _lines_cache: tuple[str, ...] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def text(self) -> str:
-        return self.content.decode("utf-8-sig")
+        cached = self._text_cache
+        if cached is not None:
+            return cached
+        decoded = self.content.decode("utf-8-sig")
+        object.__setattr__(self, "_text_cache", decoded)
+        return decoded
 
-    def lines(self) -> list[str]:
-        return self.text().splitlines(keepends=True)
+    def lines(self) -> tuple[str, ...]:
+        cached = self._lines_cache
+        if cached is not None:
+            return cached
+        split = tuple(self.text().splitlines(keepends=True))
+        object.__setattr__(self, "_lines_cache", split)
+        return split
 
     def manifest_entry(self) -> dict[str, Any]:
         return {
