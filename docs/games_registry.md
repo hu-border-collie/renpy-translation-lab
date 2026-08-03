@@ -22,7 +22,7 @@ Registry 回答的是：「工作区里有哪些项目？各自路径、版本�
 工作区根目录**必须显式指定**，不会默认使用工具安装目录的上一级：
 
 - GUI：**设置 → 项目列表 → 创建 / 接入工作区…**（预览后初始化或接入 `games_registry.json`，成功后再写入 `translator_config.json` 的 `workspace_root`）
-- CLI：`python games_registry.py setup --workspace <path>`（可用 `--dry-run` 只预览）；其它子命令使用 `--workspace <path>`，或先在 `translator_config.json` 中设置 `workspace_root`
+- CLI：`python games_registry.py --workspace <path> setup`（可用 `--dry-run` 只预览）；其它子命令同样把全局 `--workspace` 放在子命令前，或先在 `translator_config.json` 中设置 `workspace_root`
 - 未设置时：项目列表为空状态；CLI 的 registry 命令以退出码 2 报错
 - SDK、API 密钥与工具日志**不是**工作区必需文件；接入工作区不会自动下载 SDK，也不会运行项目级 prepare。GUI 向导第二步可**可选**查找 / 浏览 / 下载推荐 SDK，或跳过
 
@@ -97,8 +97,8 @@ Markdown 与 JSON 一致，请再执行「同步 GAMES.md」。
 
 ```powershell
 # 创建或接入工作区（推荐首次使用；--dry-run 只预览）
-python games_registry.py setup --workspace path\to\RenPy_Workspace --dry-run
-python games_registry.py setup --workspace path\to\RenPy_Workspace
+python games_registry.py --workspace path\to\RenPy_Workspace setup --dry-run
+python games_registry.py --workspace path\to\RenPy_Workspace setup
 # 可选：--import-md / --no-import-md、--discover / --no-discover、--render-md、--create-directory
 
 # 从现有 GAMES.md 初始化 / 合并导入（首次迁移时常用）

@@ -209,12 +209,13 @@ def generate_locks(uv_command: str, *, upgrade: bool = False) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--check",
         action="store_true",
         help="verify committed source and lock hashes without network access",
     )
-    parser.add_argument(
+    mode.add_argument(
         "--upgrade",
         action="store_true",
         help="allow transitive upgrades while regenerating all locks",

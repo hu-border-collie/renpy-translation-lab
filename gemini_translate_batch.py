@@ -11263,7 +11263,7 @@ def build_arg_parser():
         description='Batch translator for Ren\'Py tl files using Gemini Batch API.'
     )
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
-    subparsers = parser.add_subparsers(dest='command')
+    subparsers = parser.add_subparsers(dest='command', required=True)
 
     doctor_parser = subparsers.add_parser('doctor', help='Inspect prepare, SDK, and TL template compatibility without writing files.')
     add_machine_output_argument(doctor_parser)
@@ -12103,7 +12103,8 @@ def dispatch_command(parser, args):
         validate_machine_invocation(args)
 
     if command == 'doctor':
-        legacy.load_translator_settings()
+        # doctor is read-only: never persist auto-corrected game_root.
+        legacy.load_translator_settings(persist_corrected_game_root=False)
         legacy.load_glossary()
         load_batch_settings()
         print_banner()

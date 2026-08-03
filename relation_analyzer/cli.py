@@ -94,3 +94,7 @@ def main():
         analyze_and_plot(vectors, char_texts, output_path, active_portraits)
     else:
         raise SystemExit('❌ 提取到的有效角色少于 2 个，无法计算关系。')
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -131,5 +131,11 @@ class DependencyLockTests(unittest.TestCase):
         self.assertNotIn("py311-linux-gui.txt", workflow)
 
 
+    def test_check_and_upgrade_are_mutually_exclusive(self):
+        with self.assertRaises(SystemExit) as raised:
+            locks.build_parser().parse_args(["--check", "--upgrade"])
+        self.assertEqual(raised.exception.code, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
