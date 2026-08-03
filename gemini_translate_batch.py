@@ -13068,7 +13068,6 @@ def _collect_output_file_protected_paths(args):
         'summary_jsonl',
         'summary_markdown',
         'variants_file',
-        'glossary',
     ):
         value = getattr(args, attr, None)
         if not isinstance(value, str) or not value.strip():
@@ -13078,6 +13077,15 @@ def _collect_output_file_protected_paths(args):
         add_path(abs_path)
         if os.path.isdir(abs_path):
             add_path(os.path.join(abs_path, 'manifest.json'))
+
+    # merge-keywords-to-glossary falls back to the active glossary file.
+    glossary_value = getattr(args, 'glossary', None)
+    if isinstance(glossary_value, str) and glossary_value.strip():
+        add_path(os.path.abspath(glossary_value.strip()))
+    elif str(getattr(args, 'command', '') or '') == 'merge-keywords-to-glossary':
+        default_glossary = getattr(legacy, 'GLOSSARY_FILE', '') or ''
+        if default_glossary:
+            add_path(os.path.abspath(default_glossary))
 
     for manifest_path in _candidate_manifest_paths_from_args(args):
         add_path(manifest_path)

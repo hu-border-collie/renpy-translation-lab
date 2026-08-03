@@ -1093,8 +1093,8 @@ class BatchCliContractTests(unittest.TestCase):
                 json.dumps({"result_jsonl_path": "results.jsonl"}, ensure_ascii=False),
                 encoding="utf-8",
             )
-            # Build a same-path alias that still normalizes to results.jsonl.
-            conflict_path = package / "." / "results.jsonl"
+            # Keep a raw alias so pathlib cannot collapse it before CLI normalization.
+            conflict_path = f"{package}{os.sep}.{os.sep}results.jsonl"
             with (
                 mock.patch.object(batch, "dispatch_command") as dispatch,
                 contextlib.redirect_stdout(stdout),
@@ -1106,7 +1106,7 @@ class BatchCliContractTests(unittest.TestCase):
                         "--output",
                         "json",
                         "--output-file",
-                        str(conflict_path),
+                        conflict_path,
                     ]
                 )
 
@@ -1119,30 +1119,64 @@ class BatchCliContractTests(unittest.TestCase):
         )
         dispatch.assert_not_called()
 
-    def test_output_file_conflict_in_text_mode_exits_nonzero(self):
+    def test_output_file_conflict_without_output_json_uses_discovery_json_path(self):
+        # Discovery commands allow --output-file without --output json and still
+        # emit a structured conflict envelope on stdout.
+        stdout = io.StringIO()
+
         with tempfile.TemporaryDirectory() as tmp:
             package = Path(tmp)
             manifest_path = package / "manifest.json"
+            latest_path = package / "latest.txt"
             manifest_path.write_text("{}", encoding="utf-8")
-            args = SimpleNamespace(
-                command="status",
-                target=str(manifest_path),
-                parent="",
-                retry="",
-                report="",
-                jsonl="",
-                markdown="",
-                summary_jsonl="",
-                summary_markdown="",
-                variants_file="",
-                glossary="",
-                output_file=str(manifest_path),
-            )
-            with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
-                batch._preflight_output_file(args)
+            latest_path.write_text(str(manifest_path), encoding="utf-8")
+            with (
+                mock.patch.object(batch, "LATEST_MANIFEST_FILE", str(latest_path)),
+                mock.patch.object(batch, "dispatch_command") as dispatch,
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = batch.main(
+                    [
+                        "capabilities",
+                        "--output-file",
+                        str(manifest_path),
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload["error"]["code"], "OUTPUT_FILE_PATH_CONFLICT")
+        self.assertFalse(payload["error"]["details"]["workflow_started"])
+        dispatch.assert_not_called()
+
+    def test_default_glossary_is_protected_for_merge_keywords(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            glossary_path = package / "glossary.json"
+            glossary_path.write_text("{}", encoding="utf-8")
+            with mock.patch.object(batch.legacy, "GLOSSARY_FILE", str(glossary_path)):
+                args = SimpleNamespace(
+                    command="merge-keywords-to-glossary",
+                    target="candidates.jsonl",
+                    parent="",
+                    retry="",
+                    report="",
+                    jsonl="",
+                    markdown="",
+                    summary_jsonl="",
+                    summary_markdown="",
+                    variants_file="",
+                    glossary="",
+                    output_file=str(glossary_path),
+                )
+                with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
+                    batch._preflight_output_file(args)
 
         self.assertEqual(raised.exception.code_name, "OUTPUT_FILE_PATH_CONFLICT")
-        self.assertIn("collides with a task input", str(raised.exception))
+        self.assertEqual(
+            batch._normalized_abs_path(raised.exception.details["conflict_path"]),
+            batch._normalized_abs_path(str(glossary_path)),
+        )
 
     def test_independent_output_file_still_allowed(self):
         manifest = {
