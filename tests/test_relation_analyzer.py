@@ -585,11 +585,15 @@ class RelationAnalyzerTests(unittest.TestCase):
             [sys.executable, "-m", "relation_analyzer.cli", "--help"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
         self.assertEqual(result.returncode, 0)
-        self.assertIn("usage:", result.stdout.lower())
-        self.assertNotIn("RuntimeWarning", result.stderr)
+        self.assertIn("usage:", stdout.lower())
+        self.assertNotIn("RuntimeWarning", stderr)
 
     def test_package_init_does_not_import_cli_main(self):
         import relation_analyzer
