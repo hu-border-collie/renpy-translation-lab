@@ -17,8 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      RENPY_VERSION: "8.5.2"
-      RENPY_ARCHIVE_SHA256: "cf9ed145e5b32521a4b2caddb4cd3073c64259ac51e1f7aab94a8a8ff72b55c4"
+      RENPY_VERSION: "8.5.3"
+      RENPY_ARCHIVE_SHA256: "eb0a9be7f0fb13632fe25ceade9a8bed5a1b4d6b6e83bd19eeeb29e1a1bb4a45"
 
     steps:
       - name: Check out repository
