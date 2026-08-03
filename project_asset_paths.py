@@ -42,6 +42,8 @@ def resolve_project_asset_path(
     to a same-named file under the tool install directory.
 
     Absolute paths are kept as-is so a deliberately shared glossary still works.
+    With no base at all, a relative value is canonicalized against the process
+    CWD (matching the legacy resolver) instead of being returned raw.
     """
     text = str(configured or "").strip()
     root = canonical_abs_path(game_root) if game_root else ""
@@ -60,7 +62,7 @@ def resolve_project_asset_path(
             return canonical_abs_path(os.path.join(tool, text))
         return os.path.join(tool, default_name)
 
-    return text
+    return canonical_abs_path(text) if text else ""
 
 
 def resolve_glossary_path(
@@ -120,6 +122,9 @@ def normalize_relative_project_assets_in_config(
     Unlike :func:`sync_project_asset_paths_in_config`, this does not force
     absolute custom paths back onto the default work filenames. It only stops
     bare names like ``glossary.json`` from drifting to the tool directory.
+    Empty/missing entries are left untouched: read-time resolution homes them
+    under the current work root, so moving a work directory never leaves a
+    stale absolute path behind.
     """
     if not isinstance(config, dict):
         config = {}
@@ -128,15 +133,11 @@ def normalize_relative_project_assets_in_config(
     if not root:
         return config
 
-    expected = expected_project_asset_paths(root)
-
     glossary_configured = config.get("glossary_file")
     if glossary_configured is None:
         glossary_configured = config.get("glossary_path")
     glossary_text = str(glossary_configured or "").strip()
-    if not glossary_text:
-        config["glossary_file"] = expected["glossary_file"]
-    elif not os.path.isabs(glossary_text):
+    if glossary_text and not os.path.isabs(glossary_text):
         config["glossary_file"] = resolve_glossary_path(
             glossary_text, game_root=root
         )
@@ -146,9 +147,7 @@ def normalize_relative_project_assets_in_config(
         batch = {}
         config["batch"] = batch
     macro_text = str(batch.get("macro_setting_file") or "").strip()
-    if not macro_text:
-        batch["macro_setting_file"] = expected["macro_setting_file"]
-    elif not os.path.isabs(macro_text):
+    if macro_text and not os.path.isabs(macro_text):
         batch["macro_setting_file"] = resolve_macro_setting_path(
             macro_text, game_root=root
         )

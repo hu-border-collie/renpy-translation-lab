@@ -710,6 +710,7 @@ translate schinese start:
             content=b"a\nb\n",
         )
         self.assertIs(document.lines(), document.lines())
+        self.assertIsInstance(document.lines(), tuple)
         self.assertIs(document.text(), document.text())
 
     def test_batch_package_exports_coverage_without_changing_manifest_v2(self):

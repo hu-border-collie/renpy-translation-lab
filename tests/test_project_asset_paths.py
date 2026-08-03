@@ -101,6 +101,23 @@ class ProjectAssetPathsTests(unittest.TestCase):
             )
             self.assertEqual(config["batch"]["model"], "gemini-test")
 
+    def test_normalize_relative_project_assets_leaves_empty_entries_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work_dir = str(Path(tmp) / "Game" / "work")
+            Path(work_dir).mkdir(parents=True)
+            config = {"game_root": work_dir}
+
+            normalize_relative_project_assets_in_config(config, work_dir)
+
+            self.assertNotIn("glossary_file", config)
+            self.assertEqual(config["batch"], {})
+
+    def test_resolve_glossary_path_without_bases_canonicalizes_relative_value(self):
+        resolved = resolve_glossary_path("glossary.json")
+
+        self.assertTrue(os.path.isabs(resolved))
+        self.assertEqual(resolved, canonical_abs_path("glossary.json"))
+
     def test_sync_project_asset_paths_in_config(self):
         work_dir = "C:/Games/Example/work"
         config = {

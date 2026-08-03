@@ -78,8 +78,9 @@ class SourceDocument:
     sha256: str
     content: bytes = field(repr=False, compare=False)
     # Lazy decode/split caches. Frozen dataclass still allows object.__setattr__.
+    # Lines are cached as an immutable tuple so callers cannot mutate shared state.
     _text_cache: str | None = field(default=None, init=False, repr=False, compare=False)
-    _lines_cache: list[str] | None = field(
+    _lines_cache: tuple[str, ...] | None = field(
         default=None, init=False, repr=False, compare=False
     )
 
@@ -91,11 +92,11 @@ class SourceDocument:
         object.__setattr__(self, "_text_cache", decoded)
         return decoded
 
-    def lines(self) -> list[str]:
+    def lines(self) -> tuple[str, ...]:
         cached = self._lines_cache
         if cached is not None:
             return cached
-        split = self.text().splitlines(keepends=True)
+        split = tuple(self.text().splitlines(keepends=True))
         object.__setattr__(self, "_lines_cache", split)
         return split
 

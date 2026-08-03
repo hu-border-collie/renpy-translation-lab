@@ -454,6 +454,27 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             doctor_rec.START_PENDING_BATCH,
         )
 
+    def test_report_without_progress_field_never_guesses_existing_translations(self):
+        """Legacy reports must not infer translations from block/pending deltas."""
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=20,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 80
+        report["counts"] = {
+            "rpy_files": 20,
+            "translate_blocks": 100,
+            "old_lines": 20,
+            "new_lines": 20,
+        }
+
+        self.assertFalse(batch_mod._doctor_has_existing_translations(report))
+        self.assertEqual(
+            batch_mod.collect_doctor_workflow_state(report),
+            doctor_rec.START_PENDING_BATCH,
+        )
+
     def test_existing_translations_without_rag_recommends_enable_rag(self):
         report = _layout_report(
             base_dir="C:/Games/Example/work",

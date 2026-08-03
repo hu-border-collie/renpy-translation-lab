@@ -10208,13 +10208,10 @@ def _doctor_has_existing_translations(report):
         return int(report.get('translated_task_count') or 0) > 0
 
     # Hand-built / older report shapes without an explicit Chinese progress
-    # field: treat dialogue already partially complete as existing progress.
-    # Do not use old_lines (template structure only).
-    counts = report.get('counts') or {}
-    translate_blocks = int(counts.get('translate_blocks') or 0)
-    pending = _doctor_pending_task_count(report)
-    if translate_blocks > 0 and pending > 0 and pending < translate_blocks:
-        return True
+    # field: do not guess from counts. Template structure (old_lines) is
+    # unreliable, and ``pending < translate_blocks`` also holds when many rows
+    # are filtered as non-translatable, so a wrong signal would suggest RAG /
+    # incremental state for a first-pass project. Treat as first-pass.
     return False
 
 
