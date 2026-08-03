@@ -79,6 +79,21 @@ def resolve_glossary_path(
     )
 
 
+def resolve_configured_glossary_value(config: dict[str, Any] | None) -> str:
+    """Return the configured glossary value, primary key with legacy fallback.
+
+    ``glossary_file`` is the primary key; the legacy ``glossary_path`` is used
+    when the primary value is missing or empty (an explicitly empty value means
+    "use the default"), matching settings-page semantics across all consumers.
+    """
+    if not isinstance(config, dict):
+        return ""
+    value = config.get("glossary_file")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        value = config.get("glossary_path")
+    return value if isinstance(value, str) else ""
+
+
 def resolve_macro_setting_path(
     configured: str | os.PathLike[str] | None,
     *,
@@ -133,10 +148,7 @@ def normalize_relative_project_assets_in_config(
     if not root:
         return config
 
-    glossary_configured = config.get("glossary_file")
-    if glossary_configured is None:
-        glossary_configured = config.get("glossary_path")
-    glossary_text = str(glossary_configured or "").strip()
+    glossary_text = resolve_configured_glossary_value(config)
     if glossary_text and not os.path.isabs(glossary_text):
         config["glossary_file"] = resolve_glossary_path(
             glossary_text, game_root=root

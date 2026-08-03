@@ -2831,25 +2831,28 @@ def collect_pending_file_jobs(
             include_prefixes=tuple(sorted(legacy.INCLUDE_PREFIXES)),
         ),
         include_occurrences=include_occurrences,
+        include_task_payloads=include_task_payloads,
     )
     jobs = TranslationFileJobs(coverage_snapshot=adapter_snapshot)
 
     for document in adapter_snapshot.project.source_documents:
         rel_path = document.file_rel_path
         file_path = document.file_path
-        raw_pending = adapter_snapshot.pending_tasks_by_file.get(rel_path, ())
         if include_task_payloads:
             pending = [
                 dict(task)
-                for task in raw_pending
+                for task in adapter_snapshot.pending_tasks_by_file.get(rel_path, ())
                 if not legacy.is_non_translatable(task['text'])
             ]
             task_count = len(pending)
         else:
             task_count = sum(
                 1
-                for task in raw_pending
-                if not legacy.is_non_translatable(task['text'])
+                for candidate in adapter_snapshot.inventory.candidates
+                if candidate.classification == "translatable"
+                and candidate.legacy_item is not None
+                and str(candidate.locator.locator.get("file_rel_path") or "") == rel_path
+                and not legacy.is_non_translatable(candidate.legacy_item["text"])
             )
             pending = []
         progress = adapter_snapshot.progress_by_file.get(rel_path, {})
@@ -10624,6 +10627,7 @@ def collect_doctor_project_assets_status(base_dir):
     from project_asset_paths import (
         expected_project_asset_paths,
         paths_match_project,
+        resolve_configured_glossary_value,
         resolve_glossary_path,
         resolve_macro_setting_path,
     )
@@ -10631,7 +10635,7 @@ def collect_doctor_project_assets_status(base_dir):
     config = _read_translator_config_object()
     expected = expected_project_asset_paths(base_dir)
 
-    glossary_configured = config.get('glossary_file') or config.get('glossary_path') or ''
+    glossary_configured = resolve_configured_glossary_value(config)
     batch = config.get('batch') if isinstance(config.get('batch'), dict) else {}
     macro_configured = batch.get('macro_setting_file') or ''
 

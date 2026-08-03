@@ -691,7 +691,9 @@ translate schinese start:
         self.assertEqual(doctor, full)
         self.assertEqual(batch.summarize_translation_progress(light_jobs), full)
         self.assertEqual(light_jobs.coverage_snapshot.occurrences, ())
+        self.assertEqual(light_jobs.coverage_snapshot.pending_tasks_by_file, {})
         self.assertTrue(full_jobs.coverage_snapshot.occurrences)
+        self.assertTrue(full_jobs.coverage_snapshot.pending_tasks_by_file)
         # Progress-only jobs omit task payloads but keep the same task_count.
         self.assertEqual(
             sorted((job["file_rel_path"], job["task_count"], job["translated_count"]) for job in light_jobs),

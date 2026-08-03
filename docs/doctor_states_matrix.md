@@ -39,7 +39,7 @@
 | **`commented_original_lines`** | 统计对话翻译块内部，以 `#` 开头的原文备份注释行。 | 作为重配对、RAG 或订正的上下文对照基准线。 |
 | **`old_lines`** / **`new_lines`** | 匹配界面字符串块中的 `old "..."` / `new "..."` 数量。 | 界面文本原文/译文行数（如果不等，会触发“行数不一致”的格式警报）。**空白模板也会有 `old` 行，不能当作已有中文译文。** |
 | **`translated_task_count`** | `summarize_translation_progress()`：目标行中已含汉字的任务数。 | 真实中文译文进度；`0` 表示尚未产生可检索的历史译文。 |
-| **`has_existing_translations`** | 派生：优先 `translated_task_count > 0`；报告缺少该字段时，回退为 `translate_blocks > 0 and 0 < pending < translate_blocks`。**不使用 `old_lines`。** | 判定当前项目是“全新初译”还是“已有旧译（增量补译）”；仅后者才适合建议启用 RAG。 |
+| **`has_existing_translations`** | 派生：优先 `translated_task_count > 0`；报告缺少该字段时按全新初译处理（`False`），不再用 `translate_blocks`/`pending`/`old_lines` 推断。 | 判定当前项目是“全新初译”还是“已有旧译（增量补译）”；仅后者才适合建议启用 RAG。 |
 | **`pending_task_count`** | `collect_pending_file_jobs()` 提取出的所有待翻译任务数。 | 过滤掉纯数字、纯标点、URL 等无效翻译后，剩余需提交翻译的行数。 |
 | **`pending_is_minor`** | 派生：`pending < 50` 或 `pending / baseline < 0.01` | 剩余翻译量是否已经微乎其微（对应项目基本译完）。 |
 

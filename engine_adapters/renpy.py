@@ -1704,6 +1704,7 @@ def build_translation_snapshot(
     policy: InventoryPolicy | None = None,
     *,
     include_occurrences: bool = True,
+    include_task_payloads: bool = True,
 ) -> RenPyTranslationSnapshot:
     """Run the P1 read-only pipeline once for sync or Batch translation build.
 
@@ -1711,6 +1712,11 @@ def build_translation_snapshot(
     Progress-only callers (environment check pending/translated counts) may set
     it to False: pending tasks and per-file progress still come from inventory,
     but occurrence extraction is skipped.
+
+    ``include_task_payloads`` controls whether per-task payload dictionaries are
+    materialized into ``pending_tasks_by_file``. Progress-only callers may set
+    it to False to avoid copying every pending task; counts can be derived from
+    the candidate inventory instead.
     """
     inventory_policy = policy or InventoryPolicy()
     project = adapter.discover_project(request)
@@ -1743,13 +1749,16 @@ def build_translation_snapshot(
     else:
         occurrences = ()
 
-    pending_tasks: dict[str, list[Mapping[str, Any]]] = {
-        document.file_rel_path: [] for document in project.source_documents
-    }
-    for candidate in inventory.candidates:
-        if candidate.classification == "translatable" and candidate.legacy_item is not None:
-            rel_path = str(candidate.locator.locator.get("file_rel_path") or "")
-            pending_tasks.setdefault(rel_path, []).append(dict(candidate.legacy_item))
+    if include_task_payloads:
+        pending_tasks: dict[str, list[Mapping[str, Any]]] = {
+            document.file_rel_path: [] for document in project.source_documents
+        }
+        for candidate in inventory.candidates:
+            if candidate.classification == "translatable" and candidate.legacy_item is not None:
+                rel_path = str(candidate.locator.locator.get("file_rel_path") or "")
+                pending_tasks.setdefault(rel_path, []).append(dict(candidate.legacy_item))
+    else:
+        pending_tasks = {}
     progress_by_file = {
         str(entry.get("file_rel_path") or ""): {
             "translated_count": int(entry.get("translated_count") or 0)

@@ -11,6 +11,7 @@ from project_asset_paths import (
     expected_project_asset_paths,
     normalize_relative_project_assets_in_config,
     paths_match_project,
+    resolve_configured_glossary_value,
     resolve_glossary_path,
     resolve_macro_setting_path,
     sync_project_asset_paths_in_config,
@@ -18,6 +19,26 @@ from project_asset_paths import (
 
 
 class ProjectAssetPathsTests(unittest.TestCase):
+    def test_resolve_configured_glossary_value_falls_back_when_primary_empty(self):
+        self.assertEqual(
+            resolve_configured_glossary_value(
+                {"glossary_file": "", "glossary_path": "legacy.json"}
+            ),
+            "legacy.json",
+        )
+        self.assertEqual(
+            resolve_configured_glossary_value({"glossary_path": "legacy.json"}),
+            "legacy.json",
+        )
+        self.assertEqual(
+            resolve_configured_glossary_value(
+                {"glossary_file": "primary.json", "glossary_path": "legacy.json"}
+            ),
+            "primary.json",
+        )
+        self.assertEqual(resolve_configured_glossary_value({}), "")
+        self.assertEqual(resolve_configured_glossary_value(None), "")
+
     def test_canonical_abs_path_resolves_relative_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             nested = Path(tmp) / "Game" / "work"

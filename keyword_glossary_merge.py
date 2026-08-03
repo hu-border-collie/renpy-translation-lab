@@ -461,11 +461,14 @@ def resolve_glossary_path_from_config(
     game_root: str = '',
     tool_root: str = '',
 ) -> str:
-    from project_asset_paths import resolve_glossary_path
+    from project_asset_paths import (
+        resolve_configured_glossary_value,
+        resolve_glossary_path,
+    )
 
-    glossary_configured = config.get('glossary_file') or config.get('glossary_path') or ''
+    glossary_configured = resolve_configured_glossary_value(config)
     return resolve_glossary_path(
-        glossary_configured if isinstance(glossary_configured, str) else '',
+        glossary_configured,
         game_root=game_root,
         tool_dir=tool_root,
     )

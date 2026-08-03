@@ -1653,11 +1653,12 @@ def load_translator_settings(*, persist_corrected_game_root: bool = True):
 
     load_context_storage_settings(config)
 
-    from project_asset_paths import resolve_glossary_path
+    from project_asset_paths import (
+        resolve_configured_glossary_value,
+        resolve_glossary_path,
+    )
 
-    glossary_file = config.get("glossary_file")
-    if glossary_file is None:
-        glossary_file = config.get("glossary_path")
+    glossary_file = resolve_configured_glossary_value(config)
     # Prefer current work over the tool directory for relative/bare names so
     # "glossary.json" cannot silently resolve to the install-tree default.
     resolved_glossary = resolve_glossary_path(

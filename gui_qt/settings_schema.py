@@ -915,7 +915,8 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "batch_macro_setting_file",
         ("batch", "macro_setting_file"),
         "风格设定文件",
-        "macro_setting.md 路径。相对路径相对当前 work；切换项目时会同步到当前 work。",
+        "macro_setting.md 路径。相对路径相对当前 work；切换项目时会同步到当前 work。"
+        "留空则使用当前 work 下的 macro_setting.md。",
         "str",
         "macro_setting.md",
         "术语与风格",
