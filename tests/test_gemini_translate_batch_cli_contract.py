@@ -1071,12 +1071,12 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "OUTPUT_FILE_PATH_CONFLICT")
         self.assertFalse(payload["error"]["details"]["workflow_started"])
         self.assertEqual(
-            payload["error"]["details"]["output_file"],
-            os.path.abspath(str(manifest_path)),
+            batch._normalized_abs_path(payload["error"]["details"]["output_file"]),
+            batch._normalized_abs_path(str(manifest_path)),
         )
         self.assertEqual(
-            payload["error"]["details"]["conflict_path"],
-            os.path.abspath(str(manifest_path)),
+            batch._normalized_abs_path(payload["error"]["details"]["conflict_path"]),
+            batch._normalized_abs_path(str(manifest_path)),
         )
         self.assertNotIn("Traceback", stderr.getvalue())
         dispatch.assert_not_called()
@@ -1114,8 +1114,8 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
         self.assertEqual(payload["error"]["code"], "OUTPUT_FILE_PATH_CONFLICT")
         self.assertEqual(
-            os.path.normcase(payload["error"]["details"]["conflict_path"]),
-            os.path.normcase(os.path.abspath(str(results_path))),
+            batch._normalized_abs_path(payload["error"]["details"]["conflict_path"]),
+            batch._normalized_abs_path(str(results_path)),
         )
         dispatch.assert_not_called()
 
