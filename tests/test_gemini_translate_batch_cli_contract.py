@@ -905,6 +905,315 @@ class BatchCliContractTests(unittest.TestCase):
                 self.assertEqual(raised.exception.code, 2)
                 self.assertIn("requires --output json", stderr.getvalue())
 
+
+    def test_offline_batch_commands_skip_api_key_requirement(self):
+        for command in sorted(batch.OFFLINE_BATCH_COMMANDS):
+            with self.subTest(command=command):
+                load_config = mock.Mock()
+                with (
+                    mock.patch.object(batch, "initialize_batch_logging"),
+                    mock.patch.object(batch.legacy, "load_config", load_config),
+                    mock.patch.object(batch.legacy, "load_translator_settings"),
+                    mock.patch.object(batch.legacy, "load_glossary"),
+                    mock.patch.object(batch, "load_batch_settings"),
+                    mock.patch.object(batch, "print_banner"),
+                    mock.patch.object(
+                        batch,
+                        "dispatch_command",
+                        wraps=batch.dispatch_command,
+                    ),
+                ):
+                    # Patch the actual offline command handlers after the load gate.
+                    handler_patches = []
+                    if command == "check":
+                        handler_patches.append(
+                            mock.patch.object(batch, "check_results", return_value={"ok": True})
+                        )
+                    elif command == "apply":
+                        handler_patches.append(
+                            mock.patch.object(batch, "apply_results", return_value={"ok": True})
+                        )
+                    elif command == "estimate-cost":
+                        handler_patches.extend(
+                            [
+                                mock.patch.object(
+                                    batch,
+                                    "load_manifest",
+                                    return_value={"_manifest_path": "manifest.json"},
+                                ),
+                                mock.patch.object(
+                                    batch,
+                                    "ensure_manifest_cost_estimate",
+                                    return_value={"total": 1},
+                                ),
+                                mock.patch.object(
+                                    batch.batch_cost_estimate,
+                                    "format_cost_estimate_lines",
+                                    return_value=["cost"],
+                                ),
+                            ]
+                        )
+                    elif command == "preview-revisions":
+                        handler_patches.append(
+                            mock.patch.object(batch, "preview_revisions", return_value={"ok": True})
+                        )
+                    elif command == "apply-revisions":
+                        handler_patches.append(
+                            mock.patch.object(batch, "apply_revisions", return_value={"ok": True})
+                        )
+                    elif command == "split":
+                        handler_patches.append(
+                            mock.patch.object(batch, "split_manifest", return_value=None)
+                        )
+                    elif command == "build-retry":
+                        handler_patches.append(
+                            mock.patch.object(batch, "build_retry_package", return_value=None)
+                        )
+                    elif command == "merge-retry":
+                        handler_patches.append(
+                            mock.patch.object(batch, "merge_retry_results", return_value=None)
+                        )
+                    elif command == "export-keywords":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch, "export_keyword_candidates", return_value=None
+                            )
+                        )
+                    elif command == "merge-keywords-to-glossary":
+                        handler_patches.extend(
+                            [
+                                mock.patch.object(
+                                    batch.keyword_glossary_merge,
+                                    "resolve_keyword_candidates_path",
+                                    return_value="candidates.jsonl",
+                                ),
+                                mock.patch.object(
+                                    batch.keyword_glossary_merge,
+                                    "merge_keywords_to_glossary",
+                                    return_value=None,
+                                ),
+                                mock.patch.object(
+                                    batch.legacy,
+                                    "GLOSSARY_FILE",
+                                    "glossary.json",
+                                ),
+                            ]
+                        )
+
+                    with contextlib.ExitStack() as stack:
+                        for patcher in handler_patches:
+                            stack.enter_context(patcher)
+                        if command == "merge-retry":
+                            argv = ["merge-retry", "parent.json", "retry.json"]
+                        elif command == "merge-keywords-to-glossary":
+                            argv = ["merge-keywords-to-glossary", "candidates.jsonl", "--yes"]
+                        else:
+                            argv = [command, "manifest.json"]
+                        exit_code = batch.main(argv)
+
+                self.assertEqual(exit_code, 0)
+                load_config.assert_called_once_with(require_api_key=False)
+
+    def test_remote_batch_commands_still_require_api_key(self):
+        load_config = mock.Mock()
+        with (
+            mock.patch.object(batch, "initialize_batch_logging"),
+            mock.patch.object(batch.legacy, "load_config", load_config),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(batch, "show_status", return_value={"job_state": "JOB_STATE_PENDING"}),
+        ):
+            exit_code = batch.main(["status", "manifest.json"])
+
+        self.assertEqual(exit_code, 0)
+        load_config.assert_called_once_with(require_api_key=True)
+
+    def test_output_file_conflict_with_manifest_is_rejected_before_dispatch(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            manifest_path = package / "manifest.json"
+            results_path = package / "results.jsonl"
+            results_path.write_text("{}" + "\n", encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "result_jsonl_path": "results.jsonl",
+                        "input_jsonl_path": "input.jsonl",
+                        "files": {},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(batch, "dispatch_command") as dispatch,
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = batch.main(
+                    [
+                        "status",
+                        str(manifest_path),
+                        "--output",
+                        "json",
+                        "--output-file",
+                        str(manifest_path),
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload["error"]["code"], "OUTPUT_FILE_PATH_CONFLICT")
+        self.assertFalse(payload["error"]["details"]["workflow_started"])
+        self.assertEqual(
+            batch._normalized_abs_path(payload["error"]["details"]["output_file"]),
+            batch._normalized_abs_path(str(manifest_path)),
+        )
+        self.assertEqual(
+            batch._normalized_abs_path(payload["error"]["details"]["conflict_path"]),
+            batch._normalized_abs_path(str(manifest_path)),
+        )
+        self.assertNotIn("Traceback", stderr.getvalue())
+        dispatch.assert_not_called()
+
+    def test_output_file_conflict_with_results_uses_normalized_paths(self):
+        stdout = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            manifest_path = package / "manifest.json"
+            results_path = package / "results.jsonl"
+            results_path.write_text("{}" + "\n", encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps({"result_jsonl_path": "results.jsonl"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            # Keep a raw alias so pathlib cannot collapse it before CLI normalization.
+            conflict_path = f"{package}{os.sep}.{os.sep}results.jsonl"
+            with (
+                mock.patch.object(batch, "dispatch_command") as dispatch,
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = batch.main(
+                    [
+                        "check",
+                        str(manifest_path),
+                        "--output",
+                        "json",
+                        "--output-file",
+                        conflict_path,
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload["error"]["code"], "OUTPUT_FILE_PATH_CONFLICT")
+        self.assertEqual(
+            batch._normalized_abs_path(payload["error"]["details"]["conflict_path"]),
+            batch._normalized_abs_path(str(results_path)),
+        )
+        dispatch.assert_not_called()
+
+    def test_output_file_conflict_without_output_json_uses_discovery_json_path(self):
+        # Discovery commands allow --output-file without --output json and still
+        # emit a structured conflict envelope on stdout.
+        stdout = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            manifest_path = package / "manifest.json"
+            latest_path = package / "latest.txt"
+            manifest_path.write_text("{}", encoding="utf-8")
+            latest_path.write_text(str(manifest_path), encoding="utf-8")
+            with (
+                mock.patch.object(batch, "LATEST_MANIFEST_FILE", str(latest_path)),
+                mock.patch.object(batch, "dispatch_command") as dispatch,
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = batch.main(
+                    [
+                        "capabilities",
+                        "--output-file",
+                        str(manifest_path),
+                    ]
+                )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload["error"]["code"], "OUTPUT_FILE_PATH_CONFLICT")
+        self.assertFalse(payload["error"]["details"]["workflow_started"])
+        dispatch.assert_not_called()
+
+    def test_default_glossary_is_protected_for_merge_keywords(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            glossary_path = package / "glossary.json"
+            glossary_path.write_text("{}", encoding="utf-8")
+            with mock.patch.object(batch.legacy, "GLOSSARY_FILE", str(glossary_path)):
+                args = SimpleNamespace(
+                    command="merge-keywords-to-glossary",
+                    target="candidates.jsonl",
+                    parent="",
+                    retry="",
+                    report="",
+                    jsonl="",
+                    markdown="",
+                    summary_jsonl="",
+                    summary_markdown="",
+                    variants_file="",
+                    glossary="",
+                    output_file=str(glossary_path),
+                )
+                with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
+                    batch._preflight_output_file(args)
+
+        self.assertEqual(raised.exception.code_name, "OUTPUT_FILE_PATH_CONFLICT")
+        self.assertEqual(
+            batch._normalized_abs_path(raised.exception.details["conflict_path"]),
+            batch._normalized_abs_path(str(glossary_path)),
+        )
+
+    def test_independent_output_file_still_allowed(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "job_state": "JOB_STATE_SUCCEEDED",
+        }
+        stdout = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            manifest_path = package / "manifest.json"
+            report_path = package / "status-report.json"
+            manifest_path.write_text(
+                json.dumps({"result_jsonl_path": "results.jsonl"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(batch, "dispatch_command", return_value=manifest),
+                contextlib.redirect_stdout(stdout),
+            ):
+                exit_code = batch.main(
+                    [
+                        "status",
+                        str(manifest_path),
+                        "--output",
+                        "json",
+                        "--output-file",
+                        str(report_path),
+                    ]
+                )
+
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(payload["status"], "JOB_STATE_SUCCEEDED")
+
     def test_text_mode_preserves_human_stdout(self):
         stdout = io.StringIO()
 

@@ -98,6 +98,21 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
     }
 )
 EXPLICIT_TARGET_COMMANDS = frozenset({'submit', 'status', 'download', 'check', 'apply'})
+# Local-only batch commands must not be blocked by API-key preflight.
+OFFLINE_BATCH_COMMANDS = frozenset(
+    {
+        'check',
+        'apply',
+        'estimate-cost',
+        'preview-revisions',
+        'apply-revisions',
+        'split',
+        'build-retry',
+        'merge-retry',
+        'export-keywords',
+        'merge-keywords-to-glossary',
+    }
+)
 
 
 class DualLogger(object):
@@ -12458,7 +12473,8 @@ def dispatch_command(parser, args):
         except model_usage_ledger.UsageLedgerError as exc:
             raise SystemExit(f'Model usage ledger error: {exc}') from exc
 
-    legacy.load_config()
+    require_api_key = command not in OFFLINE_BATCH_COMMANDS
+    legacy.load_config(require_api_key=require_api_key)
     legacy.load_translator_settings()
     legacy.load_glossary()
     load_batch_settings()
@@ -12909,8 +12925,193 @@ def _write_machine_document(
     return document
 
 
+def _candidate_manifest_paths_from_args(args):
+    """Collect explicit or implied manifest paths for --output-file conflict checks."""
+
+    candidates = []
+    seen = set()
+
+    def add_candidate(value):
+        if not isinstance(value, str) or not value.strip():
+            return
+        raw = value.strip()
+        abs_path = os.path.abspath(raw)
+        if os.path.isdir(abs_path):
+            abs_path = os.path.join(abs_path, 'manifest.json')
+        key = _normalized_abs_path(abs_path)
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(abs_path)
+
+    for attr in ('target', 'parent', 'retry'):
+        add_candidate(getattr(args, attr, None))
+
+    if not candidates and os.path.isfile(LATEST_MANIFEST_FILE):
+        try:
+            with open(LATEST_MANIFEST_FILE, 'r', encoding='utf-8') as handle:
+                latest = handle.read().strip()
+        except OSError:
+            latest = ''
+        add_candidate(latest)
+
+    return candidates
+
+
+def _collect_manifest_protected_paths(manifest_path):
+    """Return task inputs and writeback targets associated with one manifest."""
+
+    protected = [manifest_path]
+    package_dir = os.path.dirname(manifest_path)
+    try:
+        with open(manifest_path, 'r', encoding='utf-8') as handle:
+            manifest = json.load(handle)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return protected
+    if not isinstance(manifest, dict):
+        return protected
+
+    manifest = dict(manifest)
+    manifest['_manifest_path'] = manifest_path
+    manifest['_package_dir'] = package_dir
+
+    def add_path(value):
+        if not isinstance(value, str) or not value.strip():
+            return
+        raw = value.strip()
+        try:
+            if os.path.isabs(raw):
+                protected.append(_canonical_abs_path(raw))
+            else:
+                protected.append(
+                    resolve_path_under_dir(package_dir, raw, 'protected output path')
+                )
+        except SystemExit:
+            protected.append(os.path.abspath(os.path.join(package_dir, raw)))
+
+    try:
+        result_path = resolve_manifest_result_path(manifest)
+    except SystemExit:
+        result_path = os.path.join(package_dir, 'results.jsonl')
+    protected.append(result_path)
+    protected.append(f'{result_path}.sha256')
+
+    for key in (
+        'input_jsonl_path',
+        'last_check_report_path',
+        'last_status_snapshot_path',
+        'last_apply_failure_report_path',
+        'next_split_manifest_path',
+        'last_retry_manifest_path',
+    ):
+        add_path(manifest.get(key))
+
+    values = manifest.get('retry_children')
+    if isinstance(values, list):
+        for item in values:
+            add_path(item)
+
+    last_preview = manifest.get('last_revision_preview')
+    if isinstance(last_preview, dict):
+        add_path(last_preview.get('jsonl_path'))
+        add_path(last_preview.get('markdown_path'))
+
+    files = manifest.get('files')
+    if isinstance(files, dict):
+        for file_key, file_info in files.items():
+            path_value = ''
+            if isinstance(file_info, dict):
+                path_value = file_info.get('path') or ''
+            if isinstance(path_value, str) and path_value.strip() and os.path.isabs(path_value):
+                add_path(path_value)
+                continue
+            try:
+                protected.append(
+                    resolve_manifest_file_path(
+                        manifest,
+                        file_key,
+                        file_info if isinstance(file_info, dict) else {},
+                    )
+                )
+            except (SystemExit, cli_contract.MachineContractError, OSError, TypeError, ValueError):
+                continue
+
+    return protected
+
+
+def _collect_output_file_protected_paths(args):
+    """Collect paths that --output-file must never overwrite."""
+
+    protected = []
+    seen = set()
+
+    def add_path(value):
+        if not isinstance(value, str) or not value.strip():
+            return
+        try:
+            canonical = _canonical_abs_path(value)
+            key = _normalized_abs_path(canonical)
+        except (OSError, TypeError, ValueError):
+            return
+        if key in seen:
+            return
+        seen.add(key)
+        protected.append(canonical)
+
+    for attr in (
+        'target',
+        'parent',
+        'retry',
+        'report',
+        'jsonl',
+        'markdown',
+        'summary_jsonl',
+        'summary_markdown',
+        'variants_file',
+    ):
+        value = getattr(args, attr, None)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        raw = value.strip()
+        abs_path = os.path.abspath(raw)
+        add_path(abs_path)
+        if os.path.isdir(abs_path):
+            add_path(os.path.join(abs_path, 'manifest.json'))
+
+    # merge-keywords-to-glossary falls back to the active glossary file.
+    glossary_value = getattr(args, 'glossary', None)
+    if isinstance(glossary_value, str) and glossary_value.strip():
+        add_path(os.path.abspath(glossary_value.strip()))
+    elif str(getattr(args, 'command', '') or '') == 'merge-keywords-to-glossary':
+        default_glossary = getattr(legacy, 'GLOSSARY_FILE', '') or ''
+        if default_glossary:
+            add_path(os.path.abspath(default_glossary))
+
+    for manifest_path in _candidate_manifest_paths_from_args(args):
+        add_path(manifest_path)
+        if os.path.isfile(manifest_path):
+            for path in _collect_manifest_protected_paths(manifest_path):
+                add_path(path)
+
+    return protected
+
+
+def _find_output_file_path_conflict(args, output_target):
+    """Return conflict details when --output-file collides with a task path."""
+
+    output_key = _normalized_abs_path(output_target)
+    for protected in _collect_output_file_protected_paths(args):
+        if _normalized_abs_path(protected) == output_key:
+            return {
+                'output_file': _canonical_abs_path(output_target),
+                'conflict_path': protected,
+                'command': str(getattr(args, 'command', '') or ''),
+            }
+    return None
+
+
 def _preflight_output_file(args):
-    """Verify that an output target is writable before workflow side effects."""
+    """Verify that an output target is safe and writable before workflow side effects."""
 
     output_file = str(getattr(args, 'output_file', '') or '').strip()
     if not output_file:
@@ -12918,6 +13119,19 @@ def _preflight_output_file(args):
     target = os.path.abspath(output_file)
     if os.path.isdir(target):
         raise IsADirectoryError(f'Output path is a directory: {target}')
+    conflict = _find_output_file_path_conflict(args, target)
+    if conflict:
+        raise cli_contract.MachineContractError(
+            (
+                f'--output-file collides with a task input or writeback path: '
+                f'{conflict["output_file"]} == {conflict["conflict_path"]}. '
+                'Choose an independent report path.'
+            ),
+            code_name='OUTPUT_FILE_PATH_CONFLICT',
+            suggested_action='choose_independent_output_file',
+            details=conflict,
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+        )
     directory = os.path.dirname(target) or os.curdir
     os.makedirs(directory, exist_ok=True)
     fd, probe_path = tempfile.mkstemp(
@@ -13114,6 +13328,39 @@ def main(argv=None):
     if getattr(args, 'output_file', ''):
         try:
             _preflight_output_file(args)
+        except cli_contract.MachineContractError as exc:
+            # Never write the error envelope to the conflicting --output-file path.
+            safe_args = copy.copy(args)
+            safe_args.output_file = ''
+            if output == 'json' or args.command in {'capabilities', 'schema'}:
+                envelope = cli_contract.error_envelope(
+                    str(args.command or ''),
+                    code=exc.code_name,
+                    message=str(exc),
+                    retryable=exc.retryable,
+                    suggested_action=exc.suggested_action,
+                    details={
+                        **dict(exc.details),
+                        'command_completed': False,
+                        'workflow_started': False,
+                        'semantic_exit_code': exc.semantic_exit_code,
+                    },
+                )
+                _write_machine_document(
+                    envelope,
+                    safe_args,
+                    record_output_artifact=False,
+                    command_completed=False,
+                    workflow_started=False,
+                )
+                if getattr(args, 'strict_exit_codes', False):
+                    return exc.semantic_exit_code
+                return (
+                    cli_contract.EXIT_USAGE
+                    if exc.semantic_exit_code == cli_contract.EXIT_USAGE
+                    else 1
+                )
+            raise SystemExit(str(exc)) from exc
         except (OSError, ValueError) as exc:
             _write_output_file_failure(
                 args,
