@@ -924,6 +924,7 @@ class BatchRagRegressionTests(unittest.TestCase):
                 mock.patch.object(batch_mod.legacy, 'persist_game_root') as persist_mock,
                 mock.patch.object(batch_mod, 'print_banner'),
                 mock.patch.object(batch_mod, 'print_doctor_report'),
+                runtime.runtime_config_scope(),
             ):
                 exit_code = batch_mod.main(['doctor'])
 

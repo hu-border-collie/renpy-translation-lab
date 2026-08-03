@@ -841,13 +841,17 @@ translate schinese start:
             r"nested\script.rpy": ["id:1"],
             "top.rpy": ["id:2"],
         }
-        upgraded = runtime._upgrade_legacy_progress_keys(
-            progress,
-            [
-                str(Path("nested") / "script.rpy"),
-                "top.rpy",
-            ],
-        )
+        with (
+            mock.patch.object(runtime, "TL_DIR", ""),
+            mock.patch.object(runtime, "save_progress"),
+        ):
+            upgraded = runtime._upgrade_legacy_progress_keys(
+                progress,
+                [
+                    "nested/script.rpy",
+                    "top.rpy",
+                ],
+            )
         self.assertIn("nested/script.rpy", upgraded)
         self.assertEqual(upgraded["nested/script.rpy"], ["id:1"])
         self.assertEqual(upgraded["top.rpy"], ["id:2"])

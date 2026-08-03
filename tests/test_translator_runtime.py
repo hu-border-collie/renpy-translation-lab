@@ -54,18 +54,24 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             else:
                 sys.modules.pop(module_name, None)
 
-    def test_batch_cli_without_command_prints_help_without_submit(self):
+    def test_batch_cli_without_command_exits_usage_without_submit(self):
         output = io.StringIO()
+        err = io.StringIO()
 
         with (
             mock.patch('sys.stdout', output),
+            mock.patch('sys.stderr', err),
             mock.patch.object(batch_mod, 'initialize_batch_logging') as logging_mock,
             mock.patch.object(batch_mod.legacy, 'load_config') as load_config_mock,
             mock.patch.object(batch_mod, 'submit_manifest') as submit_mock,
         ):
-            batch_mod.main([])
+            with self.assertRaises(SystemExit) as raised:
+                batch_mod.main([])
 
-        self.assertIn('usage:', output.getvalue())
+        self.assertEqual(raised.exception.code, 2)
+        combined = output.getvalue() + err.getvalue()
+        self.assertIn('usage:', combined)
+        self.assertIn('required: command', combined)
         logging_mock.assert_not_called()
         load_config_mock.assert_not_called()
         submit_mock.assert_not_called()
