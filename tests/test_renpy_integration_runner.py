@@ -87,7 +87,7 @@ class RenPyIntegrationRunnerTests(unittest.TestCase):
             integration.REPO_ROOT / ".github" / "workflows" / "renpy-integration.yml"
         ).read_text(encoding="utf-8")
 
-        self.assertIn('RENPY_VERSION: "8.5.2"', workflow)
+        self.assertIn('RENPY_VERSION: "8.5.3"', workflow)
         version_reference = chr(36) + "{RENPY_VERSION}"
         self.assertIn(
             f"https://www.renpy.org/dl/{version_reference}/"
@@ -95,7 +95,7 @@ class RenPyIntegrationRunnerTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
-            "cf9ed145e5b32521a4b2caddb4cd3073c64259ac51e1f7aab94a8a8ff72b55c4",
+            "eb0a9be7f0fb13632fe25ceade9a8bed5a1b4d6b6e83bd19eeeb29e1a1bb4a45",
             workflow,
         )
         self.assertIn("schedule:", workflow)
