@@ -2904,6 +2904,8 @@ class RevisionApplyPreviewContractTests(unittest.TestCase):
                 self.assertNotIn('revision_apply_state', manifest)
                 self.assertNotIn('revision_apply_blocked_reason', manifest)
                 self.assertNotIn('revision_apply_message', manifest)
+                self.assertNotIn('revision_apply_summary', manifest)
+                self.assertNotIn('last_revision_apply_summary', manifest)
                 self.assertEqual(manifest['last_revision_preview']['summary']['valid_items'], 1)
 
                 applied = batch_mod.apply_revisions(str(manifest_path))
@@ -2925,6 +2927,7 @@ class RevisionApplyPreviewContractTests(unittest.TestCase):
                 manifest = self._load_manifest(manifest_path)
                 self.assertNotIn('revision_applied_at', manifest)
                 self.assertNotIn('revision_apply_state', manifest)
+                self.assertNotIn('revision_apply_summary', manifest)
                 history = manifest.get('revision_apply_history') or []
                 self.assertEqual(len(history), 1)
                 self.assertEqual(history[0]['applied_at'], first_applied_at)

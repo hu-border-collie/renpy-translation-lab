@@ -7564,7 +7564,7 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
     }
     # A fresh preview invalidates any prior blocked/no_op/partial terminal state:
     # the user may have fixed the blocker and expects the writeback gate to reopen.
-    # revision_applied_at / revision_apply_summary are preserved as historical facts.
+    # A prior real writeback is preserved in revision_apply_history.
     for stale_key in (
         'revision_apply_state',
         'revision_apply_checked_at',
@@ -7581,9 +7581,9 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
             }
         )
         manifest['revision_apply_history'] = history
-        manifest.pop('revision_applied_at', None)
-        manifest.pop('revision_apply_summary', None)
-        manifest.pop('last_revision_apply_summary', None)
+    manifest.pop('revision_applied_at', None)
+    manifest.pop('revision_apply_summary', None)
+    manifest.pop('last_revision_apply_summary', None)
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     if manifest.get('final_review_source'):
         import final_review as fr
@@ -8323,7 +8323,10 @@ def apply_revisions(target=None, force=False):
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_REVISION, 'apply-revisions')
     if manifest.get('revision_applied_at') and not force:
-        raise SystemExit('Revision manifest was already applied. Re-run apply-revisions with --force to bypass this guard; source validation still applies.')
+        raise SystemExit(
+            'Revision manifest was already applied. Run preview-revisions again to '
+            'refresh the writeback gate; --force does not bypass source snapshot checks.'
+        )
 
     require_manifest_project_match(manifest, 'apply-revisions')
     _require_valid_revision_preview(manifest)
@@ -12107,7 +12110,10 @@ def build_arg_parser():
     revision_apply_parser.add_argument(
         '--force',
         action='store_true',
-        help='Bypass the revision_applied_at guard; source validation still applies.',
+        help=(
+            'Bypass the revision_applied_at guard without refreshing preview; '
+            'preview and source snapshot validation still apply.'
+        ),
     )
 
     sync_keyword_parser = subparsers.add_parser(
@@ -12181,7 +12187,10 @@ def build_arg_parser():
     sync_revision_parser.add_argument(
         '--force',
         action='store_true',
-        help='When used with --apply, bypass the revision_applied_at guard; source validation still applies.',
+        help=(
+            'When used with --apply, bypass the revision_applied_at guard without '
+            'refreshing preview; preview and source snapshot validation still apply.'
+        ),
     )
     sync_revision_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
 
