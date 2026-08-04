@@ -18,12 +18,16 @@ permissions:
 
 jobs:
   review:
+    # Manual /review is restricted to trusted repo actors on open PRs only.
+    # Public comment spam must not burn DeepSeek quota.
     if: >
       github.event.sender.type != 'Bot' &&
       (
         github.event_name != 'issue_comment' ||
         (
           github.event.issue.pull_request &&
+          github.event.issue.state == 'open' &&
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
           startsWith(github.event.comment.body, '/review')
         )
       )
