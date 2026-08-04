@@ -682,6 +682,8 @@ class RevisionGoldenCorpusTests(unittest.TestCase):
                 applied_manifest = batch_mod.apply_revisions(str(manifest_path))
                 progress = json.loads(Path(batch_mod.PROGRESS_LOG).read_text(encoding='utf-8'))
 
+                self.assertEqual(applied_manifest['revision_apply_state'], 'applied')
+                self.assertIn('revision_applied_at', applied_manifest)
                 preview_apply_snapshot = {
                     'last_revision_preview_summary': self._stable_revision_summary(
                         preview_manifest['last_revision_preview']['summary']
@@ -752,6 +754,8 @@ class RevisionGoldenCorpusTests(unittest.TestCase):
                 self.assertEqual(applied_manifest['revision_apply_summary']['skipped_items'], 1)
                 self.assertEqual(applied_manifest['revision_apply_summary']['source_mismatch_items'], 1)
                 self.assertEqual(applied_manifest['revision_apply_summary']['failure_count'], 1)
+                self.assertEqual(applied_manifest['revision_apply_state'], 'partial')
+                self.assertIn('revision_applied_at', applied_manifest)
             finally:
                 self._restore_batch_environment(old_values)
 

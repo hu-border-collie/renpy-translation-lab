@@ -126,10 +126,68 @@ class FinalReviewRevisionHandoffTests(unittest.TestCase):
 
         applied = batch.apply_revisions(manifest["_manifest_path"])
         self.assertEqual(applied["revision_apply_summary"]["applied_lines"], 1)
+        self.assertEqual(applied["revision_apply_state"], "applied")
+        self.assertIn("revision_applied_at", applied)
         finding = fr.load_campaign_package(campaign)["findings"][0]
         self.assertEqual(finding["revision_state"], fr.REVISION_STATE_APPLIED)
         text = next(self.tl_dir.rglob("*.rpy")).read_text(encoding="utf-8")
         self.assertIn("虚空之门", text)
+
+    def test_unchanged_selection_reports_no_op_without_marking_finding_applied(self):
+        campaign, finding_id = self._campaign()
+        package = fr.load_campaign_package(campaign)
+        finding = next(
+            row
+            for row in package["findings"]
+            if str(row.get("finding_id") or "") == finding_id
+        )
+        finding["suggested_revision"] = finding["current_translation"]
+        paths = package["paths"]
+        manifest = dict(package["manifest"])
+        manifest["summary"] = {**dict(manifest.get("summary") or {}), "finding_count": 1}
+        fr.write_campaign_package(
+            paths["package_dir"],
+            manifest=manifest,
+            snapshot=package["snapshot"],
+            units=package["units"],
+            findings=[finding],
+        )
+
+        revision_manifest = handoff.create_revision_package(batch, campaign, [finding_id])
+        applied = batch.apply_revisions(revision_manifest["_manifest_path"])
+
+        self.assertEqual(applied["revision_apply_state"], "no_op")
+        self.assertNotIn("revision_applied_at", applied)
+        finding = fr.load_campaign_package(campaign)["findings"][0]
+        self.assertEqual(finding["revision_state"], fr.REVISION_STATE_PREVIEWED)
+
+    def test_blocked_apply_keeps_finding_previewed(self):
+        campaign, finding_id = self._campaign()
+        manifest = handoff.create_revision_package(batch, campaign, [finding_id])
+        result_path = Path(manifest["_package_dir"]) / manifest["result_jsonl_path"]
+        result_path.write_text(
+            result_path.read_text(encoding="utf-8").rstrip() + '\n{"replaced": true}\n',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(SystemExit, "result JSONL changed since preview"):
+            batch.apply_revisions(manifest["_manifest_path"])
+        finding = fr.load_campaign_package(campaign)["findings"][0]
+        self.assertEqual(finding["revision_state"], fr.REVISION_STATE_PREVIEWED)
+
+    def test_repreview_after_applied_keeps_finding_applied(self):
+        campaign, finding_id = self._campaign()
+        manifest = handoff.create_revision_package(batch, campaign, [finding_id])
+        applied = batch.apply_revisions(manifest["_manifest_path"])
+        self.assertEqual(applied["revision_apply_state"], "applied")
+
+        refreshed = batch.preview_revisions(manifest["_manifest_path"])
+        finding = fr.load_campaign_package(campaign)["findings"][0]
+        self.assertEqual(finding["revision_state"], fr.REVISION_STATE_APPLIED)
+
+        no_op = batch.apply_revisions(refreshed["_manifest_path"])
+        self.assertEqual(no_op["revision_apply_state"], "no_op")
+        finding = fr.load_campaign_package(campaign)["findings"][0]
+        self.assertEqual(finding["revision_state"], fr.REVISION_STATE_APPLIED)
 
     def test_stale_translation_refuses_candidate_creation(self):
         campaign, finding_id = self._campaign()

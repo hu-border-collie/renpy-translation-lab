@@ -102,9 +102,66 @@ def summarize_revision_writeback_from_preview_output(
 def summarize_revision_writeback_from_manifest(
     manifest: dict[str, object],
 ) -> WritebackSummary | None:
+    """Derive the writeback summary from a revision manifest.
+
+    Priority: an explicit ``revision_apply_state`` (blocked/no_op/partial)
+    reflects the latest apply outcome; otherwise ``revision_applied_at`` means
+    the task was written back; otherwise a valid ``last_revision_preview`` with
+    recoverable items enables apply. Any terminal state disables apply, and a
+    missing preview returns ``None`` so the caller can show the idle state.
+    """
     manifest_path = manifest.get("_manifest_path")
     if not isinstance(manifest_path, str) or not manifest_path.strip():
         manifest_path = ""
+
+    apply_state = manifest.get("revision_apply_state")
+    if apply_state in ("blocked", "no_op", "partial"):
+        facts: list[str] = []
+        if manifest_path:
+            facts.append(format_manifest_path_fact(manifest_path))
+        apply_summary = manifest.get("revision_apply_summary")
+        if isinstance(apply_summary, dict):
+            applied_files = apply_summary.get("applied_files")
+            applied_lines = apply_summary.get("applied_lines")
+            if isinstance(applied_files, int) and isinstance(applied_lines, int):
+                facts.append(f"已写回 {applied_files} 个文件，{applied_lines} 处译文行")
+            unchanged_items = apply_summary.get("unchanged_items")
+            if isinstance(unchanged_items, int) and unchanged_items > 0:
+                facts.append(f"无需修改项：{unchanged_items}")
+        if apply_state == "no_op":
+            return WritebackSummary(
+                status="idle",
+                heading="当前没有可写回订正",
+                message="最近一次订正预览有效，但没有需要写回的内容（no-op）。",
+                facts=facts,
+                findings=[],
+                can_apply=False,
+                manifest_path=manifest_path,
+            )
+        if apply_state == "partial":
+            return WritebackSummary(
+                status="applied",
+                heading="订正部分写回",
+                message="部分订正已写回，其余条目被跳过或失败；请查看失败日志后重新生成订正任务。",
+                facts=facts,
+                findings=[],
+                can_apply=False,
+                manifest_path=manifest_path,
+            )
+        reason = manifest.get("revision_apply_blocked_reason") or ""
+        detail = manifest.get("revision_apply_message") or ""
+        message = "订正写回被阻止，请查看诊断日志后重新预览。"
+        if reason:
+            message = f"订正写回被阻止（{reason}）；请查看诊断日志后重新预览。"
+        return WritebackSummary(
+            status="failed",
+            heading="订正写回被阻止",
+            message=message,
+            facts=facts + ([detail] if detail else []),
+            findings=[],
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
 
     if manifest.get("revision_applied_at"):
         apply_summary = manifest.get("revision_apply_summary")

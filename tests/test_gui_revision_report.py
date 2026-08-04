@@ -19,9 +19,34 @@ Preview Markdown: C:\\package\\revision_preview.md
 
 APPLY_OUTPUT = """
 Recoverable revision items: 2
+Revision apply state: applied
 Applied files: 1
 Applied lines: 2
 Failures logged: 0
+"""
+
+APPLY_PARTIAL_OUTPUT = """
+Recoverable revision items: 2
+Revision apply state: partial
+Applied files: 1
+Applied lines: 1
+Failures logged: 1
+"""
+
+APPLY_NOOP_OUTPUT = """
+Recoverable revision items: 0
+Revision apply state: no_op
+Applied files: 0
+Applied lines: 0
+Failures logged: 0
+"""
+
+APPLY_BLOCKED_OUTPUT = """
+Recoverable revision items: 0
+Revision apply state: blocked
+Applied files: 0
+Applied lines: 0
+Failures logged: 1
 """
 
 SYNC_OUTPUT = """
@@ -44,6 +69,11 @@ class GuiRevisionReportTests(unittest.TestCase):
         self.assertEqual(parsed["pending_lines"], 2)
         self.assertEqual(parsed["preview_jsonl"], "C:\\package\\revision_preview.jsonl")
         self.assertEqual(parsed["preview_markdown"], "C:\\package\\revision_preview.md")
+
+    def test_parse_revision_summary_extracts_apply_state(self):
+        parsed = parse_revision_summary(APPLY_PARTIAL_OUTPUT)
+
+        self.assertEqual(parsed["apply_state"], "partial")
 
     def test_summarize_preview_success_marks_done(self):
         update = summarize_revision_preview_output(PREVIEW_OUTPUT, 0)
@@ -97,6 +127,51 @@ class GuiRevisionReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "applied")
         self.assertFalse(summary.can_apply)
         self.assertIn("已写回 1 个文件", "\n".join(summary.facts))
+
+    def test_summarize_apply_output_partial(self):
+        summary = summarize_revision_apply_output(
+            APPLY_PARTIAL_OUTPUT,
+            0,
+            manifest_path="C:\\package\\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "applied")
+        self.assertIn("订正部分写回", summary.heading)
+        self.assertFalse(summary.can_apply)
+
+    def test_summarize_apply_output_no_op(self):
+        summary = summarize_revision_apply_output(
+            APPLY_NOOP_OUTPUT,
+            0,
+            manifest_path="C:\\package\\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "idle")
+        self.assertIn("no-op", summary.message)
+        self.assertFalse(summary.can_apply)
+
+    def test_summarize_apply_output_blocked(self):
+        summary = summarize_revision_apply_output(
+            APPLY_BLOCKED_OUTPUT,
+            0,
+            manifest_path="C:\\package\\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "failed")
+        self.assertIn("订正写回被阻止", summary.heading)
+        self.assertFalse(summary.can_apply)
+
+    def test_summarize_apply_output_blocked_on_nonzero_exit(self):
+        summary = summarize_revision_apply_output(
+            APPLY_BLOCKED_OUTPUT + "\nRevision apply reason: results_changed\n",
+            1,
+            manifest_path="C:\\package\\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "failed")
+        self.assertEqual(summary.heading, "订正写回被阻止")
+        self.assertIn("results_changed", "\n".join(summary.facts))
+        self.assertFalse(summary.can_apply)
 
 
 if __name__ == "__main__":

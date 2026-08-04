@@ -21,6 +21,19 @@ def _parse_line_value(output: str, prefix: str) -> str:
 
 
 def parse_revision_summary(output: str) -> dict[str, object]:
+    """Parse CLI revision summary text into stable keys.
+
+    Recognized count fields map to ``expected_chunks``, ``result_rows``,
+    ``processed_chunks``, ``expected_items``, ``parsed_items``,
+    ``candidate_items``, ``valid_items``, ``unchanged_items``,
+    ``pending_files``, ``pending_lines``, ``skipped_items``,
+    ``source_mismatch_items``, ``failure_items``, ``applied_files``,
+    ``applied_lines`` and ``failures_logged``. Preview/apply paths and the
+    ``Revision apply state`` / ``Revision apply reason`` lines are returned as
+    ``preview_jsonl`` / ``preview_markdown`` / ``apply_state`` /
+    ``apply_reason``. Missing fields are simply absent from the returned dict;
+    callers must not assume a count exists.
+    """
     parsed: dict[str, object] = {
         "findings": [],
     }
@@ -52,6 +65,13 @@ def parse_revision_summary(output: str) -> dict[str, object]:
     preview_markdown = _parse_line_value(output, "Preview Markdown:")
     if preview_markdown:
         parsed["preview_markdown"] = preview_markdown
+
+    apply_state = _parse_line_value(output, "Revision apply state:")
+    if apply_state:
+        parsed["apply_state"] = apply_state
+    apply_reason = _parse_line_value(output, "Revision apply reason:")
+    if apply_reason:
+        parsed["apply_reason"] = apply_reason
 
     current_section = ""
     for raw_line in output.splitlines():
@@ -191,6 +211,32 @@ def summarize_revision_apply_output(
     *,
     manifest_path: str = "",
 ) -> WritebackSummary:
+    """Summarize an apply-revisions run for the writeback page.
+
+    ``blocked`` parsed from output takes precedence over ``exit_code`` so an
+    all-items-blocked run (which exits 0 with ``Revision apply state: blocked``)
+    and a preview-contract refusal (non-zero exit with the same state line) both
+    render as blocked. ``no_op`` renders as idle, ``partial`` renders as applied
+    with a partial heading, and a clean run renders as applied; every terminal
+    state disables further apply.
+    """
+    parsed = parse_revision_summary(output)
+    if parsed.get("apply_state") == "blocked":
+        facts: list[str] = []
+        if manifest_path:
+            facts.append(format_manifest_path_fact(manifest_path))
+        reason = _parse_line_value(output, "Revision apply reason:")
+        if reason:
+            facts.append(f"阻断原因：{reason}")
+        return WritebackSummary(
+            status="failed",
+            heading="订正写回被阻止",
+            message="存在阻断项，没有发生写回；请查看诊断日志后重新预览。",
+            facts=facts,
+            findings=[],
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
     if exit_code != 0:
         return WritebackSummary(
             status="failed",
@@ -202,7 +248,6 @@ def summarize_revision_apply_output(
             manifest_path=manifest_path,
         )
 
-    parsed = parse_revision_summary(output)
     facts: list[str] = []
     if manifest_path:
         facts.append(format_manifest_path_fact(manifest_path))
@@ -221,6 +266,38 @@ def summarize_revision_apply_output(
         for finding in parsed.get("findings", [])
         if isinstance(finding, str) and finding.strip()
     ]
+
+    apply_state = parsed.get("apply_state")
+    if apply_state == "no_op":
+        return WritebackSummary(
+            status="idle",
+            heading="没有需要写回的订正",
+            message="订正写回已检查，但没有需要修改的内容（no-op）。",
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+    if apply_state == "blocked":
+        return WritebackSummary(
+            status="failed",
+            heading="订正写回被阻止",
+            message="存在阻断项，没有发生写回；请查看诊断日志后重新预览。",
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+    if apply_state == "partial":
+        return WritebackSummary(
+            status="applied",
+            heading="订正部分写回",
+            message="部分订正已写回，其余条目被跳过或失败；请查看失败日志后重新生成订正任务。",
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
 
     return WritebackSummary(
         status="applied",

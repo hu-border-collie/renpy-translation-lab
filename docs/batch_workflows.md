@@ -107,7 +107,20 @@ python gemini_translate_batch.py sync-revisions --limit 3
 python gemini_translate_batch.py sync-revisions --apply
 ```
 
-`build-revisions` 会复用 include 过滤、glossary、macro setting、可选 RAG / Story Memory，把已有原文和当前译文送入 Batch。`preview-revisions` 导出 `revision_preview.jsonl` 和 `revision_preview.md`，`apply-revisions` 会在写回前重新校验当前文件中的旧译文快照。
+`build-revisions` 会复用 include 过滤、glossary、macro setting、可选 RAG / Story Memory，把已有原文和当前译文送入 Batch。`preview-revisions` 导出 `revision_preview.jsonl` 和 `revision_preview.md`，并把合同绑定写回 manifest：结果文件 SHA-256、manifest / 项目身份指纹、涉及源文件的快照指纹、preview schema 版本与生成时间。`apply-revisions` 必须找到有效且匹配的 preview 才允许写回；`--force` 只能绕过「已写回」守卫，不能绕过 preview 缺失、结果被替换、项目变化或源文件快照变化。
+
+`apply-revisions` 的终态写在 manifest 的 `revision_apply_state`，固定区分：
+
+- `applied`：全部可写回项已成功写回；
+- `no_op`：有效 preview 没有需要修改的内容（不写 `revision_applied_at`）；
+- `blocked`：没有发生写回且存在阻断（preview 缺失/过期、适配器写回计划不安全，或全部条目被跳过/源不匹配/校验失败，不写 `revision_applied_at`）；
+- `partial`：部分写回、部分跳过/失败（仅真实写回的行计入 applied）。
+
+`revision_applied_at` 只在 `applied` / `partial` 时写入；`no_op` / `blocked` 不会把 final-review finding 错误标记为已应用。
+
+重新运行 `preview-revisions` 会清空旧的 apply 终态（blocked/no_op/partial）并重新打开写回闸门；若此前已真实写回过，旧写回记录会移到 `revision_apply_history`，`revision_applied_at` 不再拦截新的 preview/apply 流程。
+
+阻断的退出语义：preview 校验类阻断（preview 缺失、结果/项目/源快照变化）与 `adapter_writeback_block` 以非零退出码结束；有效 preview 下全部条目被跳过/源不匹配/校验失败时的 `blocked` 以零退出码结束，但 machine envelope 的 `status=blocked` 且 manifest 写有 `revision_apply_blocked_reason`。依赖退出码的自动化应解析 `revision_apply_state` / `status`，不要仅凭零退出码判定写回成功。
 
 当前 `safe / warn / block` 强制闸门只覆盖普通 translation manifest 的 `check/apply`；订正写回仍走 `preview-revisions -> apply-revisions` 的独立快照校验。
 
