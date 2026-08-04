@@ -103,6 +103,63 @@ class GuiRevisionWritebackReportTests(unittest.TestCase):
 
         self.assertIsNone(summary)
 
+    def test_manifest_blocked_apply_reports_blocked(self):
+        summary = summarize_revision_writeback_from_manifest(
+            {
+                "_manifest_path": "C:\\package\\manifest.json",
+                "revision_apply_state": "blocked",
+                "revision_apply_blocked_reason": "results_changed",
+                "revision_apply_message": "result JSONL changed since preview.",
+                "revision_apply_summary": {
+                    "applied_files": 0,
+                    "applied_lines": 0,
+                },
+            }
+        )
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.status, "failed")
+        self.assertEqual(summary.heading, "订正写回被阻止")
+        self.assertIn("results_changed", summary.message)
+        self.assertFalse(summary.can_apply)
+
+    def test_manifest_no_op_apply_reports_idle(self):
+        summary = summarize_revision_writeback_from_manifest(
+            {
+                "_manifest_path": "C:\\package\\manifest.json",
+                "revision_apply_state": "no_op",
+                "revision_apply_summary": {
+                    "applied_files": 0,
+                    "applied_lines": 0,
+                    "unchanged_items": 3,
+                },
+            }
+        )
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.status, "idle")
+        self.assertIn("no-op", summary.message)
+        self.assertFalse(summary.can_apply)
+        self.assertIn("无需修改项：3", "\n".join(summary.facts))
+
+    def test_manifest_partial_apply_reports_partial(self):
+        summary = summarize_revision_writeback_from_manifest(
+            {
+                "_manifest_path": "C:\\package\\manifest.json",
+                "revision_apply_state": "partial",
+                "revision_apply_summary": {
+                    "applied_files": 1,
+                    "applied_lines": 1,
+                },
+            }
+        )
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.status, "applied")
+        self.assertEqual(summary.heading, "订正部分写回")
+        self.assertFalse(summary.can_apply)
+        self.assertIn("已写回 1 个文件", "\n".join(summary.facts))
+
 
 if __name__ == "__main__":
     unittest.main()

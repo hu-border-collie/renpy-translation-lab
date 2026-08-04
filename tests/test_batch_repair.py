@@ -1166,6 +1166,8 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 json.dumps(
                     {
                         'mode': batch_mod.MANIFEST_MODE_REVISION,
+                        'base_dir': str(package_dir),
+                        'tl_dir': str(package_dir),
                         'input_jsonl_path': str(package_dir / 'requests.jsonl'),
                         'result_jsonl_path': str(result_path),
                         'chunks': [],
@@ -2621,6 +2623,230 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertIn('STORY MEMORY', prompt)
         self.assertIn('Void Gate -> 虚空门', prompt)
         self.assertEqual(summary['chunks_with_story_hits'], 1)
+
+
+class RevisionApplyPreviewContractTests(unittest.TestCase):
+    """Issue #294: apply must bind to a valid preview and report true outcome."""
+
+    def _make_package(
+        self,
+        root,
+        *,
+        current_new='虚空门',
+        revised='虚空之门',
+        should_update=True,
+    ):
+        tl_dir = root / 'tl'
+        package_dir = root / 'package'
+        tl_dir.mkdir()
+        package_dir.mkdir()
+        target_file = tl_dir / 'script.rpy'
+        new_line = f'    new "{current_new}"\n'
+        start = new_line.index(f'"{current_new}"')
+        end = start + len(current_new) + 2
+        target_file.write_text(
+            'translate schinese start:\n'
+            '    old "Void Gate"\n'
+            + new_line,
+            encoding='utf-8',
+        )
+        result_path = package_dir / 'results.jsonl'
+        manifest_path = package_dir / 'manifest.json'
+        item_id = f'script.rpy:2:{start}:revision:0'
+        response_text = json.dumps(
+            [
+                {
+                    'id': item_id,
+                    'should_update': should_update,
+                    'revised_translation': revised,
+                    'reason': '统一术语',
+                }
+            ],
+            ensure_ascii=False,
+        )
+        result_path.write_text(
+            json.dumps(
+                {
+                    'key': 'rv-1',
+                    'response': {
+                        'candidates': [
+                            {'content': {'parts': [{'text': response_text}]}}
+                        ]
+                    },
+                },
+                ensure_ascii=False,
+            )
+            + '\n',
+            encoding='utf-8',
+        )
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    'mode': batch_mod.MANIFEST_MODE_REVISION,
+                    'files': {'script.rpy': {'path': str(target_file)}},
+                    'result_jsonl_path': str(result_path),
+                    'chunks': [
+                        {
+                            'key': 'rv-1',
+                            'file_rel_path': 'script.rpy',
+                            'items': [
+                                {
+                                    'id': item_id,
+                                    'line': 2,
+                                    'line_number': 3,
+                                    'start': start,
+                                    'end': end,
+                                    'text': 'Void Gate',
+                                    'source': 'Void Gate',
+                                    'current_translation': current_new,
+                                    'prefix': '',
+                                    'quote': '"',
+                                }
+                            ],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding='utf-8',
+        )
+        return manifest_path, target_file, result_path
+
+    def _load_manifest(self, manifest_path):
+        return json.loads(Path(manifest_path).read_text(encoding='utf-8'))
+
+    def test_apply_without_preview_blocks_and_keeps_manifest_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path, target_file, _ = self._make_package(root)
+            original = target_file.read_text(encoding='utf-8')
+            tl_dir = target_file.parent
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                with self.assertRaisesRegex(SystemExit, 'run preview-revisions'):
+                    batch_mod.apply_revisions(str(manifest_path))
+
+            manifest = self._load_manifest(manifest_path)
+            self.assertEqual(manifest['revision_apply_state'], 'blocked')
+            self.assertEqual(manifest['revision_apply_blocked_reason'], 'missing_preview')
+            self.assertNotIn('revision_applied_at', manifest)
+            self.assertEqual(target_file.read_text(encoding='utf-8'), original)
+
+    def test_apply_rejects_replaced_results_since_preview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path, target_file, result_path = self._make_package(root)
+            original = target_file.read_text(encoding='utf-8')
+            tl_dir = target_file.parent
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                batch_mod.preview_revisions(str(manifest_path))
+                result_path.write_text(
+                    result_path.read_text(encoding='utf-8').rstrip()
+                    + '\n{"replacement": true}\n',
+                    encoding='utf-8',
+                )
+                with self.assertRaisesRegex(SystemExit, 'result JSONL changed since preview'):
+                    batch_mod.apply_revisions(str(manifest_path))
+
+            manifest = self._load_manifest(manifest_path)
+            self.assertEqual(manifest['revision_apply_state'], 'blocked')
+            self.assertEqual(manifest['revision_apply_blocked_reason'], 'results_changed')
+            self.assertNotIn('revision_applied_at', manifest)
+            self.assertEqual(target_file.read_text(encoding='utf-8'), original)
+
+    def test_apply_rejects_source_changed_since_preview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path, target_file, _ = self._make_package(root)
+            tl_dir = target_file.parent
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                batch_mod.preview_revisions(str(manifest_path))
+                target_file.write_text(
+                    target_file.read_text(encoding='utf-8').replace('虚空门', '星门'),
+                    encoding='utf-8',
+                )
+                changed = target_file.read_text(encoding='utf-8')
+                with self.assertRaisesRegex(SystemExit, 'source files changed since preview'):
+                    batch_mod.apply_revisions(str(manifest_path))
+
+            manifest = self._load_manifest(manifest_path)
+            self.assertEqual(manifest['revision_apply_state'], 'blocked')
+            self.assertEqual(manifest['revision_apply_blocked_reason'], 'source_changed')
+            self.assertNotIn('revision_applied_at', manifest)
+            self.assertEqual(target_file.read_text(encoding='utf-8'), changed)
+
+    def test_apply_rejects_manifest_changed_since_preview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path, target_file, _ = self._make_package(root)
+            original = target_file.read_text(encoding='utf-8')
+            tl_dir = target_file.parent
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                batch_mod.preview_revisions(str(manifest_path))
+                manifest = self._load_manifest(manifest_path)
+                manifest['summary'] = {'item_count': 999}
+                manifest_path.write_text(
+                    json.dumps(manifest, ensure_ascii=False, indent=2),
+                    encoding='utf-8',
+                )
+                with self.assertRaisesRegex(SystemExit, 'manifest changed since preview'):
+                    batch_mod.apply_revisions(str(manifest_path))
+
+            manifest = self._load_manifest(manifest_path)
+            self.assertEqual(manifest['revision_apply_state'], 'blocked')
+            self.assertEqual(manifest['revision_apply_blocked_reason'], 'manifest_changed')
+            self.assertNotIn('revision_applied_at', manifest)
+            self.assertEqual(target_file.read_text(encoding='utf-8'), original)
+
+    def test_apply_rejects_project_identity_changed_since_preview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path, target_file, _ = self._make_package(root)
+            original = target_file.read_text(encoding='utf-8')
+            tl_dir = target_file.parent
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                batch_mod.preview_revisions(str(manifest_path))
+                manifest = self._load_manifest(manifest_path)
+                manifest['last_revision_preview']['project_identity']['tl_dir'] = (
+                    str(root / 'other' / 'tl')
+                )
+                manifest_path.write_text(
+                    json.dumps(manifest, ensure_ascii=False, indent=2),
+                    encoding='utf-8',
+                )
+                with self.assertRaisesRegex(SystemExit, 'project identity changed since preview'):
+                    batch_mod.apply_revisions(str(manifest_path))
+
+            manifest = self._load_manifest(manifest_path)
+            self.assertEqual(manifest['revision_apply_state'], 'blocked')
+            self.assertEqual(manifest['revision_apply_blocked_reason'], 'project_changed')
+            self.assertNotIn('revision_applied_at', manifest)
+            self.assertEqual(target_file.read_text(encoding='utf-8'), original)
+
+    def test_apply_unchanged_only_reports_no_op_without_applied_timestamp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path, target_file, _ = self._make_package(
+                root,
+                revised='虚空门',
+                should_update=True,
+            )
+            original = target_file.read_text(encoding='utf-8')
+            tl_dir = target_file.parent
+            with (
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod, 'update_progress') as update_progress,
+            ):
+                batch_mod.preview_revisions(str(manifest_path))
+                manifest = batch_mod.apply_revisions(str(manifest_path))
+
+            self.assertEqual(manifest['revision_apply_state'], 'no_op')
+            self.assertNotIn('revision_applied_at', manifest)
+            self.assertEqual(manifest['revision_apply_summary']['applied_files'], 0)
+            self.assertEqual(manifest['revision_apply_summary']['applied_lines'], 0)
+            self.assertEqual(manifest['revision_apply_summary']['unchanged_items'], 1)
+            update_progress.assert_not_called()
+            self.assertEqual(target_file.read_text(encoding='utf-8'), original)
 
 
 

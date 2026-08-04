@@ -114,6 +114,9 @@ OFFLINE_BATCH_COMMANDS = frozenset(
     }
 )
 
+REVISION_PREVIEW_CONTRACT_VERSION = 1
+REVISION_APPLY_STATES = frozenset({'applied', 'no_op', 'blocked', 'partial'})
+
 
 class DualLogger(object):
     def __init__(self, filename):
@@ -7363,6 +7366,138 @@ def validate_revision_output_paths(manifest, jsonl_path, markdown_path):
             raise SystemExit(f'Revision preview output would overwrite reserved package file: {output_path}')
 
 
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for block in iter(lambda: handle.read(65536), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _revision_manifest_identity(manifest):
+    """Stable fingerprint of the revision manifest content bound by preview."""
+    keys = (
+        'mode', 'manifest_version', 'version', 'core_schema_version', 'display_name',
+        'job_name', 'created_at', 'execution', 'batch_model', 'model',
+        'base_dir', 'tl_dir', 'target_language', 'language',
+        'summary', 'files', 'chunks', 'final_review_source',
+    )
+    payload = {key: manifest.get(key) for key in keys}
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
+    ).hexdigest()
+
+
+def _revision_source_snapshots(manifest):
+    """Per-file SHA-256 of every source file named by the manifest.
+
+    Missing files are recorded as ``None`` so a file appearing or disappearing
+    between preview and apply is detected as a snapshot change.
+    """
+    snapshots = {}
+    for file_key, file_info in (manifest.get('files') or {}).items():
+        try:
+            file_path = resolve_manifest_file_path(manifest, file_key, file_info)
+        except SystemExit:
+            snapshots[str(file_key)] = None
+            continue
+        snapshots[str(file_key)] = (
+            _sha256_file(file_path) if os.path.isfile(file_path) else None
+        )
+    return snapshots
+
+
+def _mark_revision_apply_blocked(manifest, reason, message):
+    """Persist a blocked apply outcome before refusing the command."""
+    now = datetime.now().isoformat(timespec='seconds')
+    manifest['revision_apply_state'] = 'blocked'
+    manifest['revision_apply_checked_at'] = now
+    manifest['revision_apply_blocked_reason'] = reason
+    manifest['revision_apply_message'] = message
+    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    raise SystemExit(f'Revision apply refused: {message}')
+
+
+def _require_valid_revision_preview(manifest):
+    """Require a valid, matching preview before any revision writeback.
+
+    ``--force`` deliberately does not bypass preview staleness, project identity
+    or source snapshot checks: it only bypasses the already-applied guard.
+    """
+    preview = manifest.get('last_revision_preview')
+    if (
+        not isinstance(preview, dict)
+        or preview.get('schema_version') != REVISION_PREVIEW_CONTRACT_VERSION
+    ):
+        _mark_revision_apply_blocked(
+            manifest,
+            'missing_preview',
+            'run preview-revisions before apply-revisions.',
+        )
+
+    result_path = resolve_manifest_result_path(manifest)
+    if not os.path.isfile(result_path):
+        _mark_revision_apply_blocked(
+            manifest,
+            'results_missing',
+            'result JSONL no longer exists; run preview-revisions again.',
+        )
+    if _sha256_file(result_path) != preview.get('results_sha256'):
+        _mark_revision_apply_blocked(
+            manifest,
+            'results_changed',
+            'result JSONL changed since preview; run preview-revisions again.',
+        )
+    if _revision_manifest_identity(manifest) != preview.get('manifest_identity'):
+        _mark_revision_apply_blocked(
+            manifest,
+            'manifest_changed',
+            'manifest changed since preview; run preview-revisions again.',
+        )
+
+    try:
+        current_project = manifest_project_identity(manifest)
+    except Exception as exc:
+        _mark_revision_apply_blocked(
+            manifest,
+            'project_unknown',
+            f'cannot resolve project identity: {exc}',
+        )
+    current_identity = {
+        'base_dir': _normalized_abs_path(str(current_project.get('base_dir') or '')),
+        'tl_dir': _normalized_abs_path(str(current_project.get('tl_dir') or '')),
+        'source': str(current_project.get('source') or ''),
+    }
+    expected_project = preview.get('project_identity')
+    if not isinstance(expected_project, dict):
+        _mark_revision_apply_blocked(
+            manifest,
+            'project_changed',
+            'project identity changed since preview; run preview-revisions again.',
+        )
+    expected_identity = {
+        'base_dir': _normalized_abs_path(str(expected_project.get('base_dir') or '')),
+        'tl_dir': _normalized_abs_path(str(expected_project.get('tl_dir') or '')),
+        'source': str(expected_project.get('source') or ''),
+    }
+    if current_identity != expected_identity:
+        _mark_revision_apply_blocked(
+            manifest,
+            'project_changed',
+            'project identity changed since preview; run preview-revisions again.',
+        )
+
+    current_snapshots = _revision_source_snapshots(manifest)
+    expected_snapshots = preview.get('source_snapshots')
+    if not isinstance(expected_snapshots, dict) or current_snapshots != expected_snapshots:
+        _mark_revision_apply_blocked(
+            manifest,
+            'source_changed',
+            'source files changed since preview; run preview-revisions again.',
+        )
+    return preview
+
+
 def write_revision_markdown(path, entries, summary):
     lines = [
         '# Revision Preview',
@@ -7411,10 +7546,18 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
             handle.write(json.dumps(entry, ensure_ascii=False) + '\n')
     write_revision_markdown(markdown_path, preview_entries, summary)
 
-    manifest['last_revision_preview_at'] = datetime.now().isoformat(timespec='seconds')
+    now = datetime.now().isoformat(timespec='seconds')
+    manifest['last_revision_preview_at'] = now
     manifest['last_revision_preview'] = {
+        'schema_version': REVISION_PREVIEW_CONTRACT_VERSION,
+        'generated_at': now,
         'jsonl_path': jsonl_path,
         'markdown_path': markdown_path,
+        'results_path': _canonical_abs_path(resolve_manifest_result_path(manifest)),
+        'results_sha256': _sha256_file(resolve_manifest_result_path(manifest)),
+        'manifest_identity': _revision_manifest_identity(manifest),
+        'project_identity': manifest_project_identity(manifest),
+        'source_snapshots': _revision_source_snapshots(manifest),
         'summary': summary,
     }
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
@@ -8159,6 +8302,7 @@ def apply_revisions(target=None, force=False):
         raise SystemExit('Revision manifest was already applied. Re-run apply-revisions with --force to bypass this guard; source validation still applies.')
 
     require_manifest_project_match(manifest, 'apply-revisions')
+    _require_valid_revision_preview(manifest)
     if manifest.get('final_review_source'):
         import final_review as fr
         import final_review_revision
@@ -8175,14 +8319,8 @@ def apply_revisions(target=None, force=False):
         validate_sources=True,
     )
 
-    applied_files = 0
-    applied_lines = 0
-    final_pending_files = 0
-    final_pending_lines = 0
-    rag_jobs = []
     revalidated_replacements_by_file = {}
     revalidated_file_paths = {}
-    revision_updates = []
     revalidated_source_documents = {}
     for file_key, replacements in replacements_by_file.items():
         file_info = manifest['files'].get(file_key)
@@ -8210,8 +8348,6 @@ def apply_revisions(target=None, force=False):
             revalidated_replacements_by_file[file_key] = replacements
             revalidated_file_paths[file_key] = file_path
             revalidated_source_documents[file_key] = source_document
-        line_numbers = sorted(line_numbers_set)
-        revision_updates.append((file_key, line_numbers, file_path))
 
     adapter_plan, adapter_snapshot = _validate_adapter_writeback_plan(
         manifest,
@@ -8228,9 +8364,11 @@ def apply_revisions(target=None, force=False):
         summary['pending_files'] = 0
         summary['pending_lines'] = 0
         append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
-        raise SystemExit(
+        _mark_revision_apply_blocked(
+            manifest,
+            'adapter_writeback_block',
             'Revision apply refused because the adapter writeback plan is not safe. '
-            'No files were written.'
+            'No files were written.',
         )
 
     writeback_files = []
@@ -8256,59 +8394,90 @@ def apply_revisions(target=None, force=False):
             encoding='utf-8',
         )
 
-    for file_key, line_numbers, file_path in revision_updates:
+    applied_files = len(writeback_files)
+    applied_lines = sum(
+        len(replacements_by_line)
+        for replacements_by_line in revalidated_replacements_by_file.values()
+    )
+    rag_jobs = []
+    for file_key, replacements_by_line in revalidated_replacements_by_file.items():
+        line_numbers = sorted(replacements_by_line.keys())
         update_progress(file_key, line_numbers)
-        applied_files += 1
-        applied_lines += len(line_numbers)
-        final_pending_files += 1
-        final_pending_lines += len(line_numbers)
         if line_numbers:
-            rag_jobs.append({'file_rel_path': file_key, 'file_path': file_path})
+            rag_jobs.append(
+                {
+                    'file_rel_path': file_key,
+                    'file_path': revalidated_file_paths[file_key],
+                }
+            )
 
-    summary['pending_files'] = final_pending_files
-    summary['pending_lines'] = final_pending_lines
+    summary['pending_files'] = len(revalidated_replacements_by_file)
+    summary['pending_lines'] = applied_lines
     append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
 
     rag_apply_summary = {}
     if RAG_ENABLED and rag_jobs:
         rag_apply_summary = sync_rag_store_for_jobs(rag_jobs, quality_state='revision_applied')
 
-    manifest['revision_applied_at'] = datetime.now().isoformat(timespec='seconds')
+    has_blocking_outcome = (
+        summary.get('skipped_items', 0) > 0
+        or summary.get('source_mismatch_items', 0) > 0
+        or len(failure_entries) > 0
+    )
+    if applied_lines == 0 and has_blocking_outcome:
+        apply_state = 'blocked'
+    elif applied_lines == 0:
+        apply_state = 'no_op'
+    elif has_blocking_outcome:
+        apply_state = 'partial'
+    else:
+        apply_state = 'applied'
+
+    now = datetime.now().isoformat(timespec='seconds')
+    manifest['revision_apply_state'] = apply_state
+    manifest['revision_apply_checked_at'] = now
     manifest['revision_apply_summary'] = {
+        'state': apply_state,
         'applied_files': applied_files,
         'applied_lines': applied_lines,
         'candidate_items': summary.get('candidate_valid_items', summary['valid_items']),
         'recoverable_items': summary['valid_items'],
         'unchanged_items': summary.get('unchanged_items', 0),
+        'already_applied_items': summary.get('already_applied_items', 0),
         'skipped_items': summary.get('skipped_items', 0),
         'source_mismatch_items': summary.get('source_mismatch_items', 0),
         'failure_count': len(failure_entries),
         'rag': rag_apply_summary,
     }
     manifest['last_revision_apply_summary'] = summary
+    if apply_state in ('applied', 'partial'):
+        manifest['revision_applied_at'] = now
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     if manifest.get('final_review_source'):
         import final_review as fr
         import final_review_revision
 
-        applied_lines_by_file = {
-            file_key: set(line_numbers)
-            for file_key, line_numbers, _file_path in revision_updates
-        }
-        applied_item_ids = {
-            str(item.get('id') or '')
-            for chunk in manifest.get('chunks', [])
-            for item in chunk.get('items', [])
-            if item.get('line')
-            in applied_lines_by_file.get(chunk.get('file_rel_path'), set())
-        }
-        final_review_revision.sync_linked_findings(
-            manifest,
-            fr.REVISION_STATE_APPLIED,
-            identity_ids=applied_item_ids,
-        )
+        if apply_state in ('applied', 'partial'):
+            applied_lines_by_file = {
+                file_key: set(replacements_by_line.keys())
+                for file_key, replacements_by_line
+                in revalidated_replacements_by_file.items()
+            }
+            applied_item_ids = {
+                str(item.get('id') or '')
+                for chunk in manifest.get('chunks', [])
+                for item in chunk.get('items', [])
+                if item.get('line')
+                in applied_lines_by_file.get(chunk.get('file_rel_path'), set())
+            }
+            final_review_revision.sync_linked_findings(
+                manifest,
+                fr.REVISION_STATE_APPLIED,
+                identity_ids=applied_item_ids,
+            )
 
     print_revision_summary(summary)
+    print(f'Revision apply state: {apply_state}')
     print(f'Applied files: {applied_files}')
     print(f'Applied lines: {applied_lines}')
     print(f'Failures logged: {len(failure_entries)}')

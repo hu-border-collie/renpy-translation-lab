@@ -59,11 +59,13 @@
     }
   ],
   "revision_apply_summary": {
+    "state": "applied",
     "applied_files": 1,
     "applied_lines": 2,
     "candidate_items": 2,
     "recoverable_items": 2,
     "unchanged_items": 1,
+    "already_applied_items": 0,
     "skipped_items": 0,
     "source_mismatch_items": 0,
     "failure_count": 0,

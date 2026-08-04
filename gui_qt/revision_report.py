@@ -53,6 +53,10 @@ def parse_revision_summary(output: str) -> dict[str, object]:
     if preview_markdown:
         parsed["preview_markdown"] = preview_markdown
 
+    apply_state = _parse_line_value(output, "Revision apply state:")
+    if apply_state:
+        parsed["apply_state"] = apply_state
+
     current_section = ""
     for raw_line in output.splitlines():
         line = raw_line.strip()
@@ -221,6 +225,38 @@ def summarize_revision_apply_output(
         for finding in parsed.get("findings", [])
         if isinstance(finding, str) and finding.strip()
     ]
+
+    apply_state = parsed.get("apply_state")
+    if apply_state == "no_op":
+        return WritebackSummary(
+            status="idle",
+            heading="没有需要写回的订正",
+            message="订正写回已检查，但没有需要修改的内容（no-op）。",
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+    if apply_state == "blocked":
+        return WritebackSummary(
+            status="failed",
+            heading="订正写回被阻止",
+            message="存在阻断项，没有发生写回；请查看诊断日志后重新预览。",
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+    if apply_state == "partial":
+        return WritebackSummary(
+            status="applied",
+            heading="订正部分写回",
+            message="部分订正已写回，其余条目被跳过或失败；请查看失败日志后重新生成订正任务。",
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
 
     return WritebackSummary(
         status="applied",
