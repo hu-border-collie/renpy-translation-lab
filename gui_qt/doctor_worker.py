@@ -34,7 +34,9 @@ def run_doctor_check(config: RuntimeConfig | None = None) -> DoctorWorkerResult:
     When ``config`` is provided it is applied for the duration of the check and
     the previous process-global runtime state is restored afterwards. When
     omitted, translator settings are reloaded from disk under the same scoped
-    restore semantics (issue #216 phase 2).
+    restore semantics (issue #216 phase 2). Doctor is read-only: the reload
+    never persists an auto-corrected ``game_root`` back to
+    ``translator_config.json``.
     """
     try:
         import gemini_translate_batch as batch_mod
@@ -46,6 +48,7 @@ def run_doctor_check(config: RuntimeConfig | None = None) -> DoctorWorkerResult:
         with legacy.runtime_config_scope(
             config,
             reload_translator_settings=config is None,
+            persist_corrected_game_root=False,
         ):
             legacy.load_glossary()
             batch_mod.load_batch_settings()

@@ -169,6 +169,67 @@ class GuiDoctorWorkerTests(unittest.TestCase):
             worker.run()
         inproc_mock.assert_called_once_with(cfg)
 
+    def test_run_doctor_check_reloads_without_persisting_game_root(self):
+        with mock.patch(
+            "gemini_translate_batch.collect_doctor_report",
+            return_value={"mode": "ready"},
+        ), mock.patch(
+            "gemini_translate_batch.load_batch_settings",
+        ), mock.patch(
+            "gemini_translate_batch.print_doctor_report",
+        ), mock.patch(
+            "translator_runtime.load_translator_settings",
+        ) as load_settings, mock.patch(
+            "translator_runtime.load_glossary",
+        ):
+            result = run_doctor_check()
+        self.assertTrue(result.ok)
+        load_settings.assert_called_once_with(persist_corrected_game_root=False)
+
+    def test_run_doctor_check_keeps_config_bytes_unchanged(self):
+        import json
+        import tempfile
+        from pathlib import Path as P
+
+        import translator_runtime as runtime
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root_dir = P(tmp)
+            project = root_dir / "Game_Example"
+            (project / "original" / "game").mkdir(parents=True)
+            work = project / "work"
+            (work / "game" / "tl" / "schinese").mkdir(parents=True)
+            (work / "game" / "script.rpy").write_text(
+                "label start:\n    return\n", encoding="utf-8"
+            )
+            config_path = root_dir / "translator_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {"game_root": str(project), "tl_subdir": "game/tl/schinese"},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before = config_path.read_bytes()
+
+            with (
+                mock.patch.object(runtime, "TRANSLATOR_CONFIG", str(config_path)),
+                mock.patch.object(runtime, "persist_game_root") as persist_mock,
+                mock.patch(
+                    "gemini_translate_batch.collect_doctor_report",
+                    return_value={"mode": "ready", "counts": {}},
+                ),
+                mock.patch("gemini_translate_batch.load_batch_settings"),
+                mock.patch("gemini_translate_batch.print_doctor_report"),
+                mock.patch("translator_runtime.load_glossary"),
+            ):
+                result = run_doctor_check()
+
+            self.assertTrue(result.ok)
+            self.assertEqual(config_path.read_bytes(), before)
+            persist_mock.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

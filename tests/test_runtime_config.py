@@ -382,6 +382,20 @@ class RuntimeConfigScopeTests(unittest.TestCase):
         finally:
             _restore_sensitive_runtime(snapshot)
 
+    def test_scope_reload_translator_settings_forwards_persist_flag(self):
+        with mock.patch.object(
+            runtime, "load_translator_settings"
+        ) as load_settings, mock.patch.object(
+            runtime, "snapshot_runtime_config", return_value=runtime.default_runtime_config()
+        ), mock.patch.object(
+            runtime, "apply_runtime_config"
+        ):
+            with runtime.runtime_config_scope(
+                reload_translator_settings=True,
+                persist_corrected_game_root=False,
+            ):
+                pass
+        load_settings.assert_called_once_with(persist_corrected_game_root=False)
 
 if __name__ == "__main__":
     unittest.main()

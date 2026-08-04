@@ -595,6 +595,22 @@ class RelationAnalyzerTests(unittest.TestCase):
         self.assertIn("usage:", stdout.lower())
         self.assertNotIn("RuntimeWarning", stderr)
 
+    def test_package_module_help_entrypoint(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "relation_analyzer", "--help"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("usage:", stdout.lower())
+        self.assertNotIn("RuntimeWarning", stderr)
+        self.assertNotIn("No module named relation_analyzer.__main__", stderr)
+
     def test_package_init_does_not_import_cli_main(self):
         import relation_analyzer
 
