@@ -1,0 +1,40 @@
+name: PR Agent Review
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+      - synchronize
+  issue_comment:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  review:
+    if: ${{ github.event.sender.type != 'Bot' }}
+    runs-on: ubuntu-latest
+    name: Review pull request with DeepSeek V4 Flash
+
+    steps:
+      - name: Run PR-Agent
+        uses: the-pr-agent/pr-agent@v0.41.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # DeepSeek native provider via LiteLLM.
+          # Secret: Settings > Secrets and variables > Actions > DEEPSEEK_KEY
+          # Get a key from https://platform.deepseek.com/api_keys
+          DEEPSEEK.KEY: ${{ secrets.DEEPSEEK_KEY }}
+
+          # Only auto-review for now; describe/improve stay off to reduce noise.
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "false"
+
+          # Re-review when new commits land on the PR.
+          github_action_config.handle_push_trigger: "true"
+          github_action_config.push_commands: '["/review"]'
