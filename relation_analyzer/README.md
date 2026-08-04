@@ -20,7 +20,9 @@
 
 ## 使用说明
 
-对外入口仍然是仓库根目录下的 `extract_relations.py`。常见用法：
+对外入口仍然是仓库根目录下的 `extract_relations.py`；内部包也支持
+`python -m relation_analyzer` / `python -m relation_analyzer.cli` 作为等价入口。
+常见用法：
 - 不传 `--characters` 时，会自动选择出场最多的说话人
 - `--mode relation` 会输出人物关系热力图、网络图和 `*_relations.csv`
 - `--mode semantic` 会输出语义相似度热力图和网络图

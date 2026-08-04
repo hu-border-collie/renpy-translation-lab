@@ -10166,12 +10166,15 @@ class MainWindow(QMainWindow):
             return
         self._on_bootstrap_work()
 
-    def _snapshot_runtime_config_for_job(self):
+    def _snapshot_runtime_config_for_job(self, *, persist_corrected_game_root: bool = True):
         """Build a frozen RuntimeConfig for an in-process background job.
 
         Reloads translator settings under the runtime lock so the snapshot
         matches the current project on disk, then returns an independent copy.
         Returns None if runtime cannot be imported (worker will reload itself).
+
+        Readonly jobs such as doctor must pass ``persist_corrected_game_root=False``
+        so auto-corrected ``game_root`` never rewrites translator_config.json.
         """
         try:
             import translator_runtime as legacy
@@ -10179,7 +10182,9 @@ class MainWindow(QMainWindow):
             return None
         try:
             with legacy.locked_runtime_state():
-                legacy.load_translator_settings()
+                legacy.load_translator_settings(
+                    persist_corrected_game_root=persist_corrected_game_root
+                )
                 return legacy.snapshot_runtime_config()
         except SystemExit:
             # Hard config errors surface again inside the worker with user-facing text.
@@ -10214,7 +10219,7 @@ class MainWindow(QMainWindow):
         # Snapshot current process runtime for this job so a later project switch
         # (or disk reload) cannot mutate globals mid-doctor. The worker restores
         # prior globals after the check (issue #216 phase 2).
-        doctor_config = self._snapshot_runtime_config_for_job()
+        doctor_config = self._snapshot_runtime_config_for_job(persist_corrected_game_root=False)
         self._doctor_worker = DoctorWorker(config=doctor_config, parent=self)
         self._doctor_worker.completed.connect(self._on_doctor_completed)
         self._doctor_worker.start()

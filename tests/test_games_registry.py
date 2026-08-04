@@ -1146,5 +1146,14 @@ class GamesRegistryTests(unittest.TestCase):
         self.assertTrue(args.dry_run)
 
 
+class GamesRegistryDocsTests(unittest.TestCase):
+    def test_setup_doc_uses_workspace_before_subcommand(self):
+        setup_md = (Path(__file__).resolve().parents[1] / "docs" / "setup.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("python games_registry.py --workspace <path> setup", setup_md)
+        self.assertNotIn("python games_registry.py setup --workspace", setup_md)
+
+
 if __name__ == "__main__":
     unittest.main()

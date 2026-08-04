@@ -1439,6 +1439,7 @@ def runtime_config_scope(
     *,
     reload_translator_settings: bool = False,
     reload_runtime_config: bool = False,
+    persist_corrected_game_root: bool = True,
     require_api_key: bool = False,
 ):
     """Temporarily publish a job-scoped RuntimeConfig, then restore the previous one.
@@ -1454,6 +1455,9 @@ def runtime_config_scope(
             settings from ``translator_config.json`` (and leave API keys as-is).
         reload_runtime_config: When ``config`` is omitted, call
             :func:`load_runtime_config` for a full defaults-first rebuild.
+        persist_corrected_game_root: Forwarded to
+            :func:`load_translator_settings` when reloading project settings.
+            Readonly hosts such as doctor should pass ``False``.
         require_api_key: Forwarded to :func:`load_runtime_config` when reloading.
     """
     if reload_translator_settings and reload_runtime_config:
@@ -1469,7 +1473,9 @@ def runtime_config_scope(
             elif reload_runtime_config:
                 load_runtime_config(require_api_key=require_api_key)
             elif reload_translator_settings:
-                load_translator_settings()
+                load_translator_settings(
+                    persist_corrected_game_root=persist_corrected_game_root
+                )
             yield snapshot_runtime_config()
         finally:
             apply_runtime_config(previous)
