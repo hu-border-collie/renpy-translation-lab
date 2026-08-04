@@ -172,6 +172,42 @@
       ],
       "reason": "Transitive via optional LiteLLM lock only. Upgrade with litellm profile in a dedicated dependency PR.",
       "review_by": "2026-08-20"
+    },
+    {
+      "id": "GHSA-g6cj-pr64-35w5",
+      "package": "cryptography",
+      "fix_versions": [
+        "50.0.0"
+      ],
+      "reason": "Transitive cryptography pin currently locked at 49.0.0 across CLI/GUI/LiteLLM profiles. Upgrade requires regenerating hashed locks in a dedicated dependency PR; not introduced by PR-Agent enablement.",
+      "review_by": "2026-08-25"
+    },
+    {
+      "id": "GHSA-mq44-7p77-q5h7",
+      "package": "aiohttp",
+      "fix_versions": [
+        "3.14.2"
+      ],
+      "reason": "Transitive via optional LiteLLM lock only (aiohttp==3.13.5). Upgrade with litellm profile in a dedicated dependency PR.",
+      "review_by": "2026-08-25"
+    },
+    {
+      "id": "GHSA-mfx4-hv73-q22v",
+      "package": "aiohttp",
+      "fix_versions": [
+        "3.14.2"
+      ],
+      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as GHSA-mq44-7p77-q5h7.",
+      "review_by": "2026-08-25"
+    },
+    {
+      "id": "GHSA-cq5v-8q36-5273",
+      "package": "aiohttp",
+      "fix_versions": [
+        "3.14.3"
+      ],
+      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as GHSA-mq44-7p77-q5h7.",
+      "review_by": "2026-08-25"
     }
   ]
 }

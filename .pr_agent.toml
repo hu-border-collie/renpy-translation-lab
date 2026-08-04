@@ -1,0 +1,66 @@
+# PR-Agent configuration for renpy-translation-lab.
+# Docs:
+# - https://github.com/The-PR-Agent/pr-agent/blob/main/docs/docs/installation/github.md
+# - https://github.com/The-PR-Agent/pr-agent/blob/main/docs/docs/usage-guide/changing_a_model.md
+# - https://api-docs.deepseek.com/
+#
+# Important: PR-Agent loads this file from the repository default branch
+# (or CONFIG.CONFIG_BRANCH / PR_AGENT_CONFIG_BRANCH). Feature-branch-only
+# copies are not applied until merged. Workflow env in
+# .github/workflows/pr-agent.yml therefore duplicates the critical model
+# knobs so first-time enablement PRs can still run DeepSeek.
+
+[config]
+# DeepSeek official model IDs: deepseek-v4-flash / deepseek-v4-pro
+# PR-Agent LiteLLM provider prefix: deepseek/
+model = "deepseek/deepseek-v4-flash"
+fallback_models = ["deepseek/deepseek-v4-flash"]
+
+# Keep review-only mode least-privileged: no contents:write needed.
+restricted_mode = true
+
+response_language = "zh-CN"
+repo_context_files = ["AGENTS.md"]
+repo_context_from_default_branch = true
+
+# PR-Agent caps prompt size via max_model_tokens even when the model supports 1M.
+# 32000 is the upstream default and is a good first budget for review noise/cost.
+max_model_tokens = 32000
+ai_timeout = 180
+verbosity_level = 1
+
+[pr_reviewer]
+num_max_findings = 5
+require_score_review = false
+require_tests_review = true
+require_estimate_effort_to_review = true
+require_can_be_split_review = false
+require_security_review = true
+require_estimate_contribution_time_cost = false
+require_todo_scan = false
+require_ticket_analysis_review = true
+publish_output_no_suggestions = true
+persistent_comment = true
+final_update_message = true
+extra_instructions = """
+你在审查 renpy-translation-lab。优先找真实回归和合约破坏，不要给空泛风格建议。
+
+重点检查：
+1. CLI / GUI / 配置 / 文案 / 测试是否同步；不要只改 CLI 漏 GUI，或只改 GUI 另写一套翻译语义。
+2. 不得绕过 Batch check -> apply 合约；apply --force 也不能绕过 stale check、源快照校验或 block。
+3. 配置结构变更是否同步 translator_config.example.json、runtime reader、gui_qt/settings_schema.py、GUI 设置页和文档。
+4. doctor 规则变更是否同步 report/user copy、docs/doctor_recommendations.md、状态矩阵和测试。
+5. Windows 路径兼容、编码、日志路径、权限错误处理。
+6. 不要引入 API Key、本地配置、私有游戏脚本、Batch 结果或 logs/ 到仓库。
+7. 直接依赖只能改 requirements-*.txt 权威输入，不要手改 requirements-lock/。
+8. 若改了公共 API、配置解析或写回安全逻辑，检查是否有必要 docstring 和对应测试。
+
+输出要求：
+- 使用中文。
+- 只报告高价值问题；没有把握的猜测不要写。
+- 每个 finding 说清楚风险、证据位置、建议修复方向。
+- 明确区分 blocker 与 nit。
+"""
+
+[github_action_config]
+# Workflow env still owns auto_review / push trigger so Action-only knobs stay explicit.
