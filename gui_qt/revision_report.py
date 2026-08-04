@@ -21,6 +21,19 @@ def _parse_line_value(output: str, prefix: str) -> str:
 
 
 def parse_revision_summary(output: str) -> dict[str, object]:
+    """Parse CLI revision summary text into stable keys.
+
+    Recognized count fields map to ``expected_chunks``, ``result_rows``,
+    ``processed_chunks``, ``expected_items``, ``parsed_items``,
+    ``candidate_items``, ``valid_items``, ``unchanged_items``,
+    ``pending_files``, ``pending_lines``, ``skipped_items``,
+    ``source_mismatch_items``, ``failure_items``, ``applied_files``,
+    ``applied_lines`` and ``failures_logged``. Preview/apply paths and the
+    ``Revision apply state`` / ``Revision apply reason`` lines are returned as
+    ``preview_jsonl`` / ``preview_markdown`` / ``apply_state`` /
+    ``apply_reason``. Missing fields are simply absent from the returned dict;
+    callers must not assume a count exists.
+    """
     parsed: dict[str, object] = {
         "findings": [],
     }
@@ -198,6 +211,15 @@ def summarize_revision_apply_output(
     *,
     manifest_path: str = "",
 ) -> WritebackSummary:
+    """Summarize an apply-revisions run for the writeback page.
+
+    ``blocked`` parsed from output takes precedence over ``exit_code`` so an
+    all-items-blocked run (which exits 0 with ``Revision apply state: blocked``)
+    and a preview-contract refusal (non-zero exit with the same state line) both
+    render as blocked. ``no_op`` renders as idle, ``partial`` renders as applied
+    with a partial heading, and a clean run renders as applied; every terminal
+    state disables further apply.
+    """
     parsed = parse_revision_summary(output)
     if parsed.get("apply_state") == "blocked":
         facts: list[str] = []

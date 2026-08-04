@@ -102,6 +102,14 @@ def summarize_revision_writeback_from_preview_output(
 def summarize_revision_writeback_from_manifest(
     manifest: dict[str, object],
 ) -> WritebackSummary | None:
+    """Derive the writeback summary from a revision manifest.
+
+    Priority: an explicit ``revision_apply_state`` (blocked/no_op/partial)
+    reflects the latest apply outcome; otherwise ``revision_applied_at`` means
+    the task was written back; otherwise a valid ``last_revision_preview`` with
+    recoverable items enables apply. Any terminal state disables apply, and a
+    missing preview returns ``None`` so the caller can show the idle state.
+    """
     manifest_path = manifest.get("_manifest_path")
     if not isinstance(manifest_path, str) or not manifest_path.strip():
         manifest_path = ""

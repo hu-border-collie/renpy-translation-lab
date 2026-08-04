@@ -296,7 +296,7 @@ python gemini_translate_batch.py preview-revisions <manifest>
 订正写回与普通翻译写回**分离**：
 
 - 普通 `check -> apply` 的「可写回 / 需处理 / 禁止写回」闸门**不覆盖**订正任务记录。
-- 订正写回走独立流程：`preview-revisions -> apply-revisions`，apply 必须绑定有效 preview（结果文件、项目身份与源文件快照一致），写回前还会重新校验当前文件中的旧译文快照。
+- 订正写回走独立流程：`preview-revisions -> apply-revisions`，apply 必须绑定有效 preview（同一 manifest/目标、结果文件 SHA-256、项目身份与源文件快照一致；缺失源文件也会使校验失败）。`--force` 只能绕过“已经写回过”保护，不能绕过 preview、结果、身份或快照校验。写回前还会重新校验当前文件中的旧译文快照。
 - 写回结果区分 `applied` / `partial` / `no_op` / `blocked`：只有真实写回时才显示“已写回”；无改动、全部阻断或部分失败不会被误报成完成，也不会错误把 final-review finding 标记为已应用。
 - GUI 在订正页结果区、预览显示有可写回项且记录尚未写回过时，才启用「写回订正」；已写回过的记录不会再次启用。
 - **不要在唯一原项目上直接整批写回**；请先在副本或备份上验证预览报告（`revision_preview.jsonl` / `revision_preview.md`）。

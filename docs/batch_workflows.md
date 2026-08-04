@@ -113,14 +113,14 @@ python gemini_translate_batch.py sync-revisions --apply
 
 - `applied`：全部可写回项已成功写回；
 - `no_op`：有效 preview 没有需要修改的内容（不写 `revision_applied_at`）；
-- `blocked`：没有发生写回且存在阻断（preview 缺失/过期或全部源快照不匹配，不写 `revision_applied_at`）；
+- `blocked`：没有发生写回且存在阻断（preview 缺失/过期、适配器写回计划不安全，或全部条目被跳过/源不匹配/校验失败，不写 `revision_applied_at`）；
 - `partial`：部分写回、部分跳过/失败（仅真实写回的行计入 applied）。
 
 `revision_applied_at` 只在 `applied` / `partial` 时写入；`no_op` / `blocked` 不会把 final-review finding 错误标记为已应用。
 
 重新运行 `preview-revisions` 会清空旧的 apply 终态（blocked/no_op/partial）并重新打开写回闸门；若此前已真实写回过，旧写回记录会移到 `revision_apply_history`，`revision_applied_at` 不再拦截新的 preview/apply 流程。
 
-阻断的退出语义：preview 校验类阻断（preview 缺失、结果/项目/源快照变化）以非零退出码结束；有效 preview 下全部条目被跳过/源不匹配/校验失败时的 `blocked` 以零退出码结束，但 machine envelope 的 `status=blocked` 且 manifest 写有 `revision_apply_blocked_reason`。依赖退出码的自动化应解析 `revision_apply_state` / `status`，不要仅凭零退出码判定写回成功。
+阻断的退出语义：preview 校验类阻断（preview 缺失、结果/项目/源快照变化）与 `adapter_writeback_block` 以非零退出码结束；有效 preview 下全部条目被跳过/源不匹配/校验失败时的 `blocked` 以零退出码结束，但 machine envelope 的 `status=blocked` 且 manifest 写有 `revision_apply_blocked_reason`。依赖退出码的自动化应解析 `revision_apply_state` / `status`，不要仅凭零退出码判定写回成功。
 
 当前 `safe / warn / block` 强制闸门只覆盖普通 translation manifest 的 `check/apply`；订正写回仍走 `preview-revisions -> apply-revisions` 的独立快照校验。
 

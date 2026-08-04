@@ -545,6 +545,13 @@ class BatchCliContractTests(unittest.TestCase):
             "all_items_blocked",
         )
 
+    def test_apply_revisions_is_registered_for_machine_output(self):
+        self.assertIn("apply-revisions", batch.MACHINE_OUTPUT_COMMANDS)
+        args = batch.build_arg_parser().parse_args(
+            ["apply-revisions", "C:/jobs/demo/manifest.json", "--output", "json"]
+        )
+        self.assertEqual(args.output, "json")
+
     def test_build_without_pending_work_does_not_load_latest_manifest(self):
         args = SimpleNamespace(target="")
 

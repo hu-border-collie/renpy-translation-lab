@@ -95,6 +95,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'download',
         'check',
         'apply',
+        'apply-revisions',
     }
 )
 EXPLICIT_TARGET_COMMANDS = frozenset({'submit', 'status', 'download', 'check', 'apply'})
@@ -8396,8 +8397,7 @@ def apply_revisions(target=None, force=False):
         _mark_revision_apply_blocked(
             manifest,
             'adapter_writeback_block',
-            'Revision apply refused because the adapter writeback plan is not safe. '
-            'No files were written.',
+            'the adapter writeback plan is not safe. No files were written.',
         )
 
     writeback_files = []
@@ -12117,6 +12117,7 @@ def build_arg_parser():
             'preview and source snapshot validation still apply.'
         ),
     )
+    add_machine_output_argument(revision_apply_parser)
 
     sync_keyword_parser = subparsers.add_parser(
         'sync-keywords',
