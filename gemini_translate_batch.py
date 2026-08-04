@@ -7380,6 +7380,8 @@ def _revision_manifest_identity(manifest):
         'mode', 'manifest_version', 'version', 'core_schema_version', 'display_name',
         'job_name', 'created_at', 'execution', 'batch_model', 'model',
         'base_dir', 'tl_dir', 'target_language', 'language',
+        'input_jsonl_path', 'result_jsonl_path',
+        'settings', 'revision_settings',
         'summary', 'files', 'chunks', 'final_review_source',
     )
     payload = {key: manifest.get(key) for key in keys}

@@ -120,6 +120,8 @@ python gemini_translate_batch.py sync-revisions --apply
 
 重新运行 `preview-revisions` 会清空旧的 apply 终态（blocked/no_op/partial）并重新打开写回闸门；若此前已真实写回过，旧写回记录会移到 `revision_apply_history`，`revision_applied_at` 不再拦截新的 preview/apply 流程。
 
+阻断的退出语义：preview 校验类阻断（preview 缺失、结果/项目/源快照变化）以非零退出码结束；有效 preview 下全部条目被跳过/源不匹配/校验失败时的 `blocked` 以零退出码结束，但 machine envelope 的 `status=blocked` 且 manifest 写有 `revision_apply_blocked_reason`。依赖退出码的自动化应解析 `revision_apply_state` / `status`，不要仅凭零退出码判定写回成功。
+
 当前 `safe / warn / block` 强制闸门只覆盖普通 translation manifest 的 `check/apply`；订正写回仍走 `preview-revisions -> apply-revisions` 的独立快照校验。
 
 `sync-revisions` 复用订正 prompt、schema、RAG / Story Memory 注入、预览报告和写回前源快照校验；默认只预览，传 `--apply` 才调用 `apply-revisions` 写回。
