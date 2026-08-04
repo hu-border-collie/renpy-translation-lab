@@ -2848,6 +2848,43 @@ class RevisionApplyPreviewContractTests(unittest.TestCase):
             update_progress.assert_not_called()
             self.assertEqual(target_file.read_text(encoding='utf-8'), original)
 
+    def test_fresh_preview_clears_stale_apply_terminal_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path, target_file, result_path = self._make_package(root)
+            tl_dir = target_file.parent
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                batch_mod.preview_revisions(str(manifest_path))
+                result_path.write_text(
+                    result_path.read_text(encoding='utf-8').rstrip()
+                    + '\n{"replacement": true}\n',
+                    encoding='utf-8',
+                )
+                with self.assertRaisesRegex(SystemExit, 'result JSONL changed since preview'):
+                    batch_mod.apply_revisions(str(manifest_path))
+                manifest = self._load_manifest(manifest_path)
+                self.assertEqual(manifest['revision_apply_state'], 'blocked')
+                self.assertIn('revision_apply_blocked_reason', manifest)
+
+                result_path.write_text(
+                    '\n'.join(
+                        line
+                        for line in result_path.read_text(encoding='utf-8').splitlines()
+                        if '"replacement": true' not in line
+                    )
+                    + '\n',
+                    encoding='utf-8',
+                )
+                batch_mod.preview_revisions(str(manifest_path))
+                manifest = self._load_manifest(manifest_path)
+                self.assertNotIn('revision_apply_state', manifest)
+                self.assertNotIn('revision_apply_blocked_reason', manifest)
+                self.assertNotIn('revision_apply_message', manifest)
+                self.assertEqual(manifest['last_revision_preview']['summary']['valid_items'], 1)
+
+                applied = batch_mod.apply_revisions(str(manifest_path))
+                self.assertEqual(applied['revision_apply_state'], 'applied')
+
 
 
 if __name__ == '__main__':

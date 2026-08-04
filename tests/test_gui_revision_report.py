@@ -161,6 +161,18 @@ class GuiRevisionReportTests(unittest.TestCase):
         self.assertIn("订正写回被阻止", summary.heading)
         self.assertFalse(summary.can_apply)
 
+    def test_summarize_apply_output_blocked_on_nonzero_exit(self):
+        summary = summarize_revision_apply_output(
+            APPLY_BLOCKED_OUTPUT + "\nRevision apply reason: results_changed\n",
+            1,
+            manifest_path="C:\\package\\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "failed")
+        self.assertEqual(summary.heading, "订正写回被阻止")
+        self.assertIn("results_changed", "\n".join(summary.facts))
+        self.assertFalse(summary.can_apply)
+
 
 if __name__ == "__main__":
     unittest.main()

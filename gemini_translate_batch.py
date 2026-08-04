@@ -7415,6 +7415,8 @@ def _mark_revision_apply_blocked(manifest, reason, message):
     manifest['revision_apply_blocked_reason'] = reason
     manifest['revision_apply_message'] = message
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    print(f'Revision apply state: blocked')
+    print(f'Revision apply reason: {reason}')
     raise SystemExit(f'Revision apply refused: {message}')
 
 
@@ -7560,6 +7562,16 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
         'source_snapshots': _revision_source_snapshots(manifest),
         'summary': summary,
     }
+    # A fresh preview invalidates any prior blocked/no_op/partial terminal state:
+    # the user may have fixed the blocker and expects the writeback gate to reopen.
+    # revision_applied_at / revision_apply_summary are preserved as historical facts.
+    for stale_key in (
+        'revision_apply_state',
+        'revision_apply_checked_at',
+        'revision_apply_blocked_reason',
+        'revision_apply_message',
+    ):
+        manifest.pop(stale_key, None)
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     if manifest.get('final_review_source'):
         import final_review as fr
@@ -8372,6 +8384,7 @@ def apply_revisions(target=None, force=False):
         )
 
     writeback_files = []
+    applied_file_keys = set()
     if adapter_plan is not None and adapter_snapshot is not None:
         rendered_by_file = _normalize_adapter_rendered_files(
             render_writeback_plan(
@@ -8386,6 +8399,7 @@ def apply_revisions(target=None, force=False):
         for file_key in revalidated_replacements_by_file:
             rendered_lines = rendered_by_file[_adapter_render_key(file_key)]
             writeback_files.append((revalidated_file_paths[file_key], rendered_lines))
+            applied_file_keys.add(file_key)
 
     if writeback_files:
         atomic_write_many_lines(
@@ -8394,13 +8408,16 @@ def apply_revisions(target=None, force=False):
             encoding='utf-8',
         )
 
-    applied_files = len(writeback_files)
+    applied_files = len(applied_file_keys)
     applied_lines = sum(
         len(replacements_by_line)
-        for replacements_by_line in revalidated_replacements_by_file.values()
+        for file_key, replacements_by_line in revalidated_replacements_by_file.items()
+        if file_key in applied_file_keys
     )
     rag_jobs = []
     for file_key, replacements_by_line in revalidated_replacements_by_file.items():
+        if file_key not in applied_file_keys:
+            continue
         line_numbers = sorted(replacements_by_line.keys())
         update_progress(file_key, line_numbers)
         if line_numbers:
@@ -8411,7 +8428,7 @@ def apply_revisions(target=None, force=False):
                 }
             )
 
-    summary['pending_files'] = len(revalidated_replacements_by_file)
+    summary['pending_files'] = applied_files
     summary['pending_lines'] = applied_lines
     append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
 
@@ -8462,6 +8479,7 @@ def apply_revisions(target=None, force=False):
                 file_key: set(replacements_by_line.keys())
                 for file_key, replacements_by_line
                 in revalidated_replacements_by_file.items()
+                if file_key in applied_file_keys
             }
             applied_item_ids = {
                 str(item.get('id') or '')

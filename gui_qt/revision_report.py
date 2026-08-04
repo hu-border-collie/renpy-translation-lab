@@ -56,6 +56,9 @@ def parse_revision_summary(output: str) -> dict[str, object]:
     apply_state = _parse_line_value(output, "Revision apply state:")
     if apply_state:
         parsed["apply_state"] = apply_state
+    apply_reason = _parse_line_value(output, "Revision apply reason:")
+    if apply_reason:
+        parsed["apply_reason"] = apply_reason
 
     current_section = ""
     for raw_line in output.splitlines():
@@ -195,6 +198,23 @@ def summarize_revision_apply_output(
     *,
     manifest_path: str = "",
 ) -> WritebackSummary:
+    parsed = parse_revision_summary(output)
+    if parsed.get("apply_state") == "blocked":
+        facts: list[str] = []
+        if manifest_path:
+            facts.append(format_manifest_path_fact(manifest_path))
+        reason = _parse_line_value(output, "Revision apply reason:")
+        if reason:
+            facts.append(f"阻断原因：{reason}")
+        return WritebackSummary(
+            status="failed",
+            heading="订正写回被阻止",
+            message="存在阻断项，没有发生写回；请查看诊断日志后重新预览。",
+            facts=facts,
+            findings=[],
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
     if exit_code != 0:
         return WritebackSummary(
             status="failed",
@@ -206,7 +226,6 @@ def summarize_revision_apply_output(
             manifest_path=manifest_path,
         )
 
-    parsed = parse_revision_summary(output)
     facts: list[str] = []
     if manifest_path:
         facts.append(format_manifest_path_fact(manifest_path))
