@@ -174,6 +174,21 @@ class FinalReviewRevisionHandoffTests(unittest.TestCase):
         finding = fr.load_campaign_package(campaign)["findings"][0]
         self.assertEqual(finding["revision_state"], fr.REVISION_STATE_PREVIEWED)
 
+    def test_repreview_after_applied_keeps_finding_applied(self):
+        campaign, finding_id = self._campaign()
+        manifest = handoff.create_revision_package(batch, campaign, [finding_id])
+        applied = batch.apply_revisions(manifest["_manifest_path"])
+        self.assertEqual(applied["revision_apply_state"], "applied")
+
+        refreshed = batch.preview_revisions(manifest["_manifest_path"])
+        finding = fr.load_campaign_package(campaign)["findings"][0]
+        self.assertEqual(finding["revision_state"], fr.REVISION_STATE_APPLIED)
+
+        no_op = batch.apply_revisions(refreshed["_manifest_path"])
+        self.assertEqual(no_op["revision_apply_state"], "no_op")
+        finding = fr.load_campaign_package(campaign)["findings"][0]
+        self.assertEqual(finding["revision_state"], fr.REVISION_STATE_APPLIED)
+
     def test_stale_translation_refuses_candidate_creation(self):
         campaign, finding_id = self._campaign()
         path = next(self.tl_dir.rglob("*.rpy"))
