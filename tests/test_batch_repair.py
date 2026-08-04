@@ -2635,15 +2635,17 @@ class RevisionApplyPreviewContractTests(unittest.TestCase):
         current_new='虚空门',
         revised='虚空之门',
         should_update=True,
+        file_new=None,
     ):
         tl_dir = root / 'tl'
         package_dir = root / 'package'
         tl_dir.mkdir()
         package_dir.mkdir()
         target_file = tl_dir / 'script.rpy'
-        new_line = f'    new "{current_new}"\n'
-        start = new_line.index(f'"{current_new}"')
-        end = start + len(current_new) + 2
+        file_new = file_new if file_new is not None else current_new
+        new_line = f'    new "{file_new}"\n'
+        start = new_line.index(f'"{file_new}"')
+        end = start + len(file_new) + 2
         target_file.write_text(
             'translate schinese start:\n'
             '    old "Void Gate"\n'
@@ -2823,6 +2825,28 @@ class RevisionApplyPreviewContractTests(unittest.TestCase):
             self.assertNotIn('revision_applied_at', manifest)
             self.assertEqual(target_file.read_text(encoding='utf-8'), original)
 
+    def test_all_mismatch_apply_records_blocked_reason_and_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path, target_file, _ = self._make_package(
+                root,
+                current_new='虚空门',
+                file_new='星门',
+            )
+            tl_dir = target_file.parent
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                batch_mod.preview_revisions(str(manifest_path))
+                manifest = batch_mod.apply_revisions(str(manifest_path))
+
+            self.assertEqual(manifest['revision_apply_state'], 'blocked')
+            self.assertEqual(manifest['revision_apply_blocked_reason'], 'all_items_blocked')
+            self.assertIn(
+                'No revisions could be written back',
+                manifest['revision_apply_message'],
+            )
+            self.assertNotIn('revision_applied_at', manifest)
+            self.assertEqual(manifest['revision_apply_summary']['applied_files'], 0)
+
     def test_apply_unchanged_only_reports_no_op_without_applied_timestamp(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2884,6 +2908,34 @@ class RevisionApplyPreviewContractTests(unittest.TestCase):
 
                 applied = batch_mod.apply_revisions(str(manifest_path))
                 self.assertEqual(applied['revision_apply_state'], 'applied')
+
+    def test_fresh_preview_after_applied_moves_history_and_reopens_apply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path, target_file, _ = self._make_package(root)
+            tl_dir = target_file.parent
+            with mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)):
+                batch_mod.preview_revisions(str(manifest_path))
+                first = batch_mod.apply_revisions(str(manifest_path))
+                self.assertEqual(first['revision_apply_state'], 'applied')
+                self.assertIn('revision_applied_at', first)
+                first_applied_at = first['revision_applied_at']
+
+                batch_mod.preview_revisions(str(manifest_path))
+                manifest = self._load_manifest(manifest_path)
+                self.assertNotIn('revision_applied_at', manifest)
+                self.assertNotIn('revision_apply_state', manifest)
+                history = manifest.get('revision_apply_history') or []
+                self.assertEqual(len(history), 1)
+                self.assertEqual(history[0]['applied_at'], first_applied_at)
+
+                second = batch_mod.apply_revisions(str(manifest_path))
+                # The same revision was already written back; the reopened gate
+                # now reports no_op instead of being blocked by a stale guard.
+                self.assertEqual(second['revision_apply_state'], 'no_op')
+                self.assertNotIn('revision_applied_at', second)
+                manifest = self._load_manifest(manifest_path)
+                self.assertEqual(len(manifest.get('revision_apply_history') or []), 1)
 
 
 

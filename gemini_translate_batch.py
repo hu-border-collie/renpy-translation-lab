@@ -7572,6 +7572,18 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
         'revision_apply_message',
     ):
         manifest.pop(stale_key, None)
+    if manifest.get('revision_applied_at'):
+        history = list(manifest.get('revision_apply_history') or [])
+        history.append(
+            {
+                'applied_at': manifest['revision_applied_at'],
+                'summary': dict(manifest.get('revision_apply_summary') or {}),
+            }
+        )
+        manifest['revision_apply_history'] = history
+        manifest.pop('revision_applied_at', None)
+        manifest.pop('revision_apply_summary', None)
+        manifest.pop('last_revision_apply_summary', None)
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     if manifest.get('final_review_source'):
         import final_review as fr
@@ -8443,6 +8455,11 @@ def apply_revisions(target=None, force=False):
     )
     if applied_lines == 0 and has_blocking_outcome:
         apply_state = 'blocked'
+        manifest['revision_apply_blocked_reason'] = 'all_items_blocked'
+        manifest['revision_apply_message'] = (
+            'No revisions could be written back because every candidate was skipped, '
+            'source-mismatched, or failed validation.'
+        )
     elif applied_lines == 0:
         apply_state = 'no_op'
     elif has_blocking_outcome:
@@ -8496,6 +8513,8 @@ def apply_revisions(target=None, force=False):
 
     print_revision_summary(summary)
     print(f'Revision apply state: {apply_state}')
+    if apply_state == 'blocked':
+        print(f'Revision apply reason: {manifest.get("revision_apply_blocked_reason") or ""}')
     print(f'Applied files: {applied_files}')
     print(f'Applied lines: {applied_lines}')
     print(f'Failures logged: {len(failure_entries)}')
@@ -12962,6 +12981,17 @@ def build_machine_success_envelope(command, value, args):
         result['apply'] = dict(manifest.get('apply_summary') or {})
         result['apply']['next_split_manifest'] = manifest.get('next_split_manifest_path', '')
         status = 'applied' if manifest.get('applied_at') else 'completed'
+    elif command == 'apply-revisions':
+        result['revision_apply'] = dict(manifest.get('revision_apply_summary') or {})
+        result['revision_apply_state'] = manifest.get('revision_apply_state') or ''
+        if manifest.get('revision_apply_blocked_reason'):
+            result['revision_apply_blocked_reason'] = manifest.get(
+                'revision_apply_blocked_reason'
+            )
+        status = str(
+            manifest.get('revision_apply_state')
+            or ('applied' if manifest.get('revision_applied_at') else 'completed')
+        )
 
     return cli_contract.success_envelope(
         command,

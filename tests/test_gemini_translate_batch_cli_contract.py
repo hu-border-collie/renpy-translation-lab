@@ -512,6 +512,39 @@ class BatchCliContractTests(unittest.TestCase):
                         "C:/jobs/part02/manifest.json",
                     )
 
+    def test_machine_result_builder_covers_revision_apply_states(self):
+        args = SimpleNamespace(target="")
+        revision_manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "mode": "revision",
+            "revision_apply_state": "partial",
+            "revision_apply_summary": {"applied_files": 1, "applied_lines": 1},
+        }
+        envelope = batch.build_machine_success_envelope(
+            "apply-revisions",
+            dict(revision_manifest),
+            args,
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "partial")
+        self.assertEqual(envelope["result"]["revision_apply_state"], "partial")
+        self.assertEqual(envelope["result"]["revision_apply"]["applied_files"], 1)
+
+        blocked = dict(revision_manifest)
+        blocked["revision_apply_state"] = "blocked"
+        blocked["revision_apply_blocked_reason"] = "all_items_blocked"
+        envelope = batch.build_machine_success_envelope(
+            "apply-revisions",
+            blocked,
+            args,
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "blocked")
+        self.assertEqual(
+            envelope["result"]["revision_apply_blocked_reason"],
+            "all_items_blocked",
+        )
+
     def test_build_without_pending_work_does_not_load_latest_manifest(self):
         args = SimpleNamespace(target="")
 
