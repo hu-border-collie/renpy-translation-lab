@@ -36,7 +36,8 @@ jobs:
 
     steps:
       - name: Run PR-Agent
-        uses: the-pr-agent/pr-agent@v0.41.1
+        # Pin to the immutable commit for tag v0.41.1.
+        uses: the-pr-agent/pr-agent@743f52d80f3513193dfc7626f778c73478df6d0a # v0.41.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # DeepSeek native provider via LiteLLM.
