@@ -8356,9 +8356,18 @@ class MainWindow(QMainWindow):
                 "revision_page",
             ):
                 page = getattr(self, attr, None)
-                if page is not None and callable(
+                if page is None or not callable(
                     getattr(page, "set_project_ready", None)
                 ):
+                    continue
+                if attr == "batch_translation_page" and not gate_ready:
+                    # Batch results live in the shared status card; keep the
+                    # page visible when a real result exists (#298 review).
+                    raw = self.workflow_status_label.property("status")
+                    status = str(raw) if raw is not None else ""
+                    has_result = bool(status and status not in {"", "idle", "stale"})
+                    page.set_project_ready(has_result)
+                else:
                     page.set_project_ready(gate_ready)
         if running:
             resume_ok = False
@@ -8404,7 +8413,8 @@ class MainWindow(QMainWindow):
                 show_wf_empty = False
             doctor_ready = self._doctor_allows_translate_action()
             if (
-                has_project
+                not running
+                and has_project
                 and doctor_ready
                 and status in {"idle", "stale"}
                 and not resume_ok
@@ -8538,6 +8548,11 @@ class MainWindow(QMainWindow):
 
     def _on_workflow_empty_cta(self) -> None:
         """Route the batch empty CTA: start translation once prep passes."""
+        running = bool(getattr(self, "_task_running", False)) or (
+            hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
+        )
+        if running:
+            return
         if self._doctor_allows_translate_action():
             self._on_start_translation()
         else:

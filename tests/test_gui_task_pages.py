@@ -383,6 +383,37 @@ class GuiTaskPageTests(unittest.TestCase):
         self.window._sync_workbench_empty_states()
         self.assertIs(page.page_stack.currentWidget(), page.content_page)
 
+    def test_batch_gate_keeps_results_when_doctor_regresses(self) -> None:
+        """#298 review: batch results stay visible when doctor state regresses."""
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window._doctor_check_completed = True
+        self.window._set_doctor_summary(
+            DoctorSummary(
+                status="ready",
+                heading="项目检查通过",
+                message="ok",
+                facts=[],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+        self.window._set_workflow_summary(
+            "done",
+            "翻译完成",
+            "结果已下载。",
+            [],
+        )
+        page = self.window.batch_translation_page
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
+        self.window._doctor_check_completed = False
+        self.window._doctor_summary_status = "block"
+        self.window._sync_workbench_empty_states()
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
     def test_batch_page_gate_owns_first_use_cta(self) -> None:
         """#316 review: batch page hides the disabled action stack without a project."""
         self.window._set_work_mode(
@@ -422,7 +453,7 @@ class GuiTaskPageTests(unittest.TestCase):
                 heading="写回可执行",
                 message="检查通过，可以写回。",
                 facts=["files: 3"],
-                findings=[],
+                findings=["[需处理] 有 1 处问题待确认"],
                 can_apply=True,
                 manifest_path="C:/m.json",
             )
@@ -435,6 +466,10 @@ class GuiTaskPageTests(unittest.TestCase):
             self.assertIn("写回可执行", page.status_section.status_badge.text())
             self.assertIn("检查通过", page.status_section.message_label.text())
             self.assertIn("files: 3", page.status_section.facts_label.text())
+            self.assertIn(
+                "需处理",
+                page.status_section.details_label.text(),
+            )
 
     def test_keywords_page_uses_callbacks_and_local_mode_selector(self) -> None:
         page = self.window.keywords_page

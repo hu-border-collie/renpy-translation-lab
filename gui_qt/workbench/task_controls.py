@@ -117,6 +117,15 @@ class TaskStatusSection(QFrame):
         )
         layout.addWidget(self.facts_label)
 
+        self.details_label = QLabel("")
+        self.details_label.setObjectName("task_status_details")
+        self.details_label.setWordWrap(True)
+        self.details_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.details_label.setVisible(False)
+        layout.addWidget(self.details_label)
+
     def set_status(
         self,
         status: str,
@@ -132,6 +141,17 @@ class TaskStatusSection(QFrame):
 
     def reflow(self) -> None:
         """Compatibility with TaskPageLayout.sections bookkeeping."""
+        self.updateGeometry()
+
+    def set_details(self, lines: list[str] | None) -> None:
+        """Render optional issue/notice lines; hidden when empty."""
+        cleaned = [str(x).strip() for x in (lines or []) if str(x).strip()]
+        if not cleaned:
+            self.details_label.setText("")
+            self.details_label.setVisible(False)
+            return
+        self.details_label.setText("\n".join(cleaned))
+        self.details_label.setVisible(True)
         self.updateGeometry()
 
     def set_progress(self, state: object | None) -> None:

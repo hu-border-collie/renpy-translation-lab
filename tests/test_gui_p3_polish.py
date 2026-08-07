@@ -183,6 +183,24 @@ class GuiP3PolishTests(unittest.TestCase):
         self.assertIs(page.page_stack.currentWidget(), page.empty_state)
         self.assertFalse(page.empty_state.isHidden())
 
+    def test_workflow_empty_cta_hidden_while_task_running(self) -> None:
+        """#298 review: probe/split keep status idle; no start CTA while busy."""
+        from gui_qt.work_modes import WorkMode
+
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
+        self.window._workflow = None
+        self.window._writeback_manifest_path = ""
+        self.window._doctor_check_completed = True
+        self.window._doctor_summary_status = "ready"
+        self.window._set_task_running(True)
+        self.window._sync_workbench_empty_states()
+        # The force-show branch must not resurrect the CTA while running.
+        self.assertTrue(self.window.workflow_empty_state.isHidden())
+
     def test_workflow_empty_cta_button_fully_visible(self) -> None:
         """Empty-state CTA must not be clipped by the progress column."""
         from PySide6.QtCore import QPoint, QRect

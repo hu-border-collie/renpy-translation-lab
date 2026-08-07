@@ -164,6 +164,8 @@ class RevisionPage(QFrame):
             getattr(summary, "message", ""),
             list(getattr(summary, "facts", []) or []),
         )
+        self.status_section.set_details(getattr(summary, "findings", None))
+
 
     def workflow_status_snapshot(self) -> tuple[str, str, str, list[str]]:
         """Return (status, heading, message, facts) for session freeze."""
