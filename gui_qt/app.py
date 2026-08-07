@@ -1660,8 +1660,7 @@ class MainWindow(QMainWindow):
             # Task pages keep compact project identity; full prep actions stay
             # on the 项目与环境 route (#298).
             project_bar.setVisible(on_workbench)
-            if hasattr(self, "set_compact"):
-                self.set_compact(not project_route)
+            self._set_project_bar_compact(not project_route)
         tabs.setTabVisible(_BATCH_STAGE_PREPARE, project_route)
         tabs.setTabVisible(_BATCH_STAGE_EXECUTE, batch_route)
         tabs.setTabVisible(_BATCH_STAGE_RESULT, writeback_visible)
@@ -1754,12 +1753,8 @@ class MainWindow(QMainWindow):
         badge.setProperty("status", kind)
         self._repolish_widget(badge)
 
-    def _build_global_project_bar(self, *, compact: bool = False) -> QFrame:
-        """Always-visible project path + switch entries (GUI IA P0b / #159).
-
-        ``compact`` keeps only identity + the switch entry for task pages;
-        project-prep actions (browse/doctor/bootstrap) stay on 项目与环境.
-        """
+    def _build_global_project_bar(self) -> QFrame:
+        """Always-visible project path + switch entries (GUI IA P0b / #159)."""
         bar = QFrame()
         bar.setObjectName("global_project_bar")
         self.global_project_bar = bar
@@ -1817,17 +1812,10 @@ class MainWindow(QMainWindow):
         self.global_project_actions.finish_setup()
         outer.addWidget(self.global_project_actions)
 
-        self._compact = bool(compact)
-        if compact:
-            self.global_browse_project_btn.setVisible(False)
-            self.doctor_btn.setVisible(False)
-            self.bootstrap_work_btn.setVisible(False)
-
         return bar
 
-    def set_compact(self, compact: bool) -> None:
+    def _set_project_bar_compact(self, compact: bool) -> None:
         """Toggle task-page compact mode (identity + switch only)."""
-        self._compact = bool(compact)
         self.global_browse_project_btn.setVisible(not compact)
         self.doctor_btn.setVisible(not compact)
         self.bootstrap_work_btn.setVisible(not compact)
@@ -9214,15 +9202,13 @@ class MainWindow(QMainWindow):
         if page is not None and callable(getattr(page, "set_workflow_progress", None)):
             page.set_workflow_progress(self._workflow_progress)
             state = self._workflow_progress
+            facts = list(self._workflow_progress_base_facts)
             if state is not None:
-                facts = list(self._workflow_progress_base_facts)
                 for fact in state.facts:
                     if fact and fact not in facts:
                         facts.append(fact)
-                if facts:
-                    section = getattr(page, "status_section", None)
-                    if section is not None:
-                        section.facts_label.setText("\n".join(facts))
+            if callable(getattr(page, "set_workflow_facts", None)):
+                page.set_workflow_facts(facts)
             return
 
         state = self._workflow_progress
@@ -9264,6 +9250,56 @@ class MainWindow(QMainWindow):
         ):
             self._apply_bootstrap_progress_ui()
 
+    def _adapt_bootstrap_progress_for_page(self) -> object | None:
+        """Adapt BootstrapProgressState into the generic page progress shape.
+
+        Maps ``total_segments``/``stored_segments`` onto the ``total``/``current``
+        fields TaskStatusSection renders, and carries the formatted label and
+        facts instead of dropping them (#298 review).
+        """
+        from types import SimpleNamespace
+
+        state = self._bootstrap_progress
+        if state is None or not state.visible:
+            return None
+        if self._active_command == "bootstrap_rag":
+            return SimpleNamespace(
+                visible=True,
+                indeterminate=True,
+                total=0,
+                current=0,
+                label="正在处理…",
+                facts=[],
+            )
+        tracker = self._bootstrap_progress_tracker
+        if tracker is not None:
+            tracker.observe(state)
+        facts = format_bootstrap_progress_facts(state)
+        if state.total_segments <= 0 and state.stored_segments <= 0:
+            return SimpleNamespace(
+                visible=True,
+                indeterminate=True,
+                total=0,
+                current=0,
+                label="正在扫描原文…",
+                facts=facts,
+            )
+        total = max(int(state.total_segments), 1)
+        current = min(max(int(state.stored_segments), 0), total)
+        remaining = (
+            tracker.estimate_remaining_seconds(state)
+            if tracker is not None
+            else None
+        )
+        return SimpleNamespace(
+            visible=True,
+            indeterminate=False,
+            total=total,
+            current=current,
+            label=format_bootstrap_progress_bar_label(state, remaining),
+            facts=facts,
+        )
+
     def _apply_bootstrap_progress_ui(self) -> None:
         if not hasattr(self, "workflow_progress_bar"):
             return
@@ -9271,7 +9307,10 @@ class MainWindow(QMainWindow):
         page = self._workflow_status_page()
         if page is not None and callable(getattr(page, "set_bootstrap_progress", None)):
             kind = "rag" if self._active_command == "bootstrap_rag" else "source_index"
-            page.set_bootstrap_progress(self._bootstrap_progress, kind=kind)
+            page.set_bootstrap_progress(
+                self._adapt_bootstrap_progress_for_page(),
+                kind=kind,
+            )
             return
 
         state = self._bootstrap_progress
@@ -12146,6 +12185,9 @@ class MainWindow(QMainWindow):
         self._writeback_manifest_path = summary.manifest_path
         page = self._workflow_status_page()
         if page is not None and callable(getattr(page, "set_writeback_status", None)):
+            # Keep the captured workflow heading aligned with the writeback
+            # message/facts for pages without a separate writeback surface.
+            self._workflow_heading_text = summary.heading
             page.set_writeback_status(summary)
         else:
             self.writeback_status_label.set_status(summary.status, summary.heading)

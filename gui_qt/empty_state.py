@@ -53,10 +53,17 @@ class EmptyStateWidget(QWidget):
         height is stable — avoids QLabel wrap height collapse that paints
         Chinese lines on top of each other).
     action_text:
-        If supplied, a secondary-style ``QPushButton`` is added below the
-        description and :pyattr:`action_clicked` is emitted on click.
+        If supplied, a ``QPushButton`` is added below the description and
+        :pyattr:`action_clicked` is emitted on click.
+    action_style:
+        Visual style for the optional action button: ``"secondary"`` (default)
+        or ``"primary"``. Only meaningful when ``action_text`` is supplied;
+        the primary style is used for the dominant first-use CTA (#316).
     parent:
         Optional parent widget.
+
+    The optional button is also exposed as :pyattr:`action_button`, which is
+    only created when ``action_text`` is supplied.
     """
 
     action_clicked = Signal()

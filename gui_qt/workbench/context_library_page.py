@@ -299,6 +299,9 @@ class ContextLibraryPage(QFrame):
         if state is None or not getattr(state, "visible", False):
             self.bootstrap_status_section.set_progress(None)
             self.bootstrap_status_section.setVisible(False)
+            # Clear the stale snapshot so session freeze cannot persist a
+            # completed/stopped run as still running (#298 review).
+            self.bootstrap_status_section.set_status("", "", "", [])
             return
         self.bootstrap_status_section.setVisible(True)
         heading = "正在预建记忆库" if kind == "rag" else "正在预建原文索引"
@@ -306,12 +309,14 @@ class ContextLibraryPage(QFrame):
             "running",
             heading,
             getattr(state, "label", "") or "",
-            [],
+            list(getattr(state, "facts", []) or []),
         )
         self.bootstrap_status_section.set_progress(state)
 
     def workflow_status_snapshot(self) -> tuple[str, str, str, list[str]]:
         """Return (status, heading, message, facts) for session freeze."""
+        if not self.bootstrap_status_section.isVisible():
+            return "", "", "", []
         badge = self.bootstrap_status_section.status_badge
         status = str(badge.property("status") or "")
         heading = badge.text()

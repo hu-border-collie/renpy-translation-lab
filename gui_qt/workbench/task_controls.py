@@ -213,7 +213,7 @@ class TaskPageLayout:
 
     def __init__(self, page: QWidget, *, spacing: int = 8) -> None:
         self.page = page
-        self.sections: list[TaskControlSection] = []
+        self.sections: list[TaskControlSection | TaskStatusSection] = []
         self.root = QVBoxLayout(page)
         self.root.setContentsMargins(0, 0, 0, 0)
         self.root.setSpacing(spacing)

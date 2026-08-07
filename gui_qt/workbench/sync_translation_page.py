@@ -133,6 +133,10 @@ class SyncTranslationPage(QFrame):
         """Render an optional progress bar inside the page."""
         self.status_section.set_progress(state)
 
+    def set_workflow_facts(self, facts: list[str]) -> None:
+        """Replace the workflow facts shown in the page status section."""
+        self.status_section.facts_label.setText("\n".join(facts))
+
     def set_writeback_status(self, summary: object | None) -> None:
         """Render the writeback result inside the page (sync has no result tab)."""
         if summary is None:

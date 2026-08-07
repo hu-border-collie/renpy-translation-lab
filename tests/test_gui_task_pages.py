@@ -215,6 +215,7 @@ class GuiTaskPageTests(unittest.TestCase):
             # Reset doctor state so the gate is exercised for every mode.
             self.window._doctor_check_completed = False
             self.window._doctor_summary_status = ""
+            self.window._doctor_summary_mode = ""
             self.window._sync_workbench_empty_states()
             page = getattr(self.window, attr)
             self.assertIs(page.page_stack.currentWidget(), page.empty_state)
@@ -348,6 +349,32 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window.apply_revision_btn.isHidden())
         self.assertTrue(self.window.apply_btn.isHidden())
         self.assertFalse(hasattr(self.window, "work_submode_combo"))
+
+    def test_keywords_and_revision_route_writeback_into_page(self) -> None:
+        """#298 review: writeback results render inside keywords/revision pages."""
+        for mode, attr in (
+            (WorkMode.KEYWORD_EXTRACTION, "keywords_page"),
+            (WorkMode.REVISION, "revision_page"),
+        ):
+            self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+            summary = WritebackSummary(
+                status="ready",
+                heading="写回可执行",
+                message="检查通过，可以写回。",
+                facts=["files: 3"],
+                findings=[],
+                can_apply=True,
+                manifest_path="C:/m.json",
+            )
+            self.window._set_writeback_summary(summary)
+            page = getattr(self.window, attr)
+            self.assertEqual(
+                page.status_section.status_badge.property("status"),
+                "ready",
+            )
+            self.assertIn("写回可执行", page.status_section.status_badge.text())
+            self.assertIn("检查通过", page.status_section.message_label.text())
+            self.assertIn("files: 3", page.status_section.facts_label.text())
 
     def test_keywords_page_uses_callbacks_and_local_mode_selector(self) -> None:
         page = self.window.keywords_page
