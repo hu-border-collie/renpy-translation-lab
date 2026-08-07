@@ -44,7 +44,7 @@ CONTEXT_LIBRARY_COPY = {
         "请先在设置 · 上下文启用记忆库、原文索引或项目剧情分析并保存，"
         "然后回到这里开始准备。"
     ),
-    "project_gate_body": "选择项目并运行环境检查后，才能预建记忆库或原文索引。",
+    "project_gate_body": "选择项目并运行环境检查后，才能预建记忆库、原文索引或开始项目分析。",
 }
 
 TASK_PROJECT_GATE_COPY = {
