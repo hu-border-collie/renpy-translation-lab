@@ -167,6 +167,15 @@ python gemini_translate_batch.py project-analysis-unpublish
 - **不**写 `glossary.json`、正式 `story_graph.json` 或 `.rpy`。
 - 最终审校 campaign 只冻结并复用**已发布的全局 brief**；label/route 局部摘要限定在翻译/订正请求内。该边界写入 campaign snapshot 的 `project_analysis.local_context_policy=translation_revision_only`，避免一个局部摘要变化使整个终审 campaign 无差别失效。
 
+### 实战观察（2026-08-05）
+
+在一部约 2.1 万待译行的真实 Ren'Py 项目上，完整跑通了关键词导入 → 结构构建 → LLM 精炼 → 审查发布，并打开“用于翻译”：
+
+- 工程结果：`project_brief` 可成功 publish 且 brief loader 返回 injectable；chunk / label / route 产物齐全，门禁与开关均正常。
+- 内容结果：自动 brief 与多数 label/route 摘要偏“route/menu 目录”，主线章节（start / chapter1–4）常被压成“线性流程，执行完毕后无后续跳转”；支线、H 场景、档案页、探索菜单反而占比较高。
+- 对初译的判断：**链路有用，开箱内容对翻译增益有限。** 它不会替代 glossary / macro，也不应阻塞 Batch 初译。若 brief 经人工改写成世界观/角色关系/章节冲突导向的翻译背景，价值会明显高于纯自动输出。
+- 记录口径：功能“能跑且可注入” ≠ “自动生成就能显著提升译文质量”。
+
 ### 只读 CLI / GUI
 
 ```bash
