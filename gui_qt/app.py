@@ -543,7 +543,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         app = QApplication.instance()
         if app is not None and getattr(app, "_renpy_lab_arrow_filter", None) is None:
-            arrow_filter = ArrowKeyButtonFilter(app)
+            arrow_filter = ArrowKeyButtonFilter(window_type=MainWindow, parent=app)
             app.installEventFilter(arrow_filter)
             app._renpy_lab_arrow_filter = arrow_filter
         self.setWindowTitle("Ren'Py Translation Lab - 图形工作台")

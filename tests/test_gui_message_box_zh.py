@@ -104,6 +104,49 @@ class GuiMessageBoxZhTests(unittest.TestCase):
         self.assertTrue(callable(message_box_warning))
         self.assertTrue(callable(message_box_question))
 
+    def test_message_box_question_maps_clicked_button_to_reply(self) -> None:
+        box = build_question_box(
+            None,
+            "测试",
+            "内容",
+            yes_text="是",
+            no_text="否",
+            cancel_text="取消",
+        )
+        roles = {
+            box.buttonRole(btn): btn
+            for btn in box.buttons()
+        }
+        yes_btn = roles[QMessageBox.ButtonRole.YesRole]
+        no_btn = roles[QMessageBox.ButtonRole.NoRole]
+        cancel_btn = roles[QMessageBox.ButtonRole.RejectRole]
+
+        with mock.patch(
+            "gui_qt.widget_helpers.build_question_box",
+            return_value=box,
+        ):
+            with mock.patch.object(QMessageBox, "exec", lambda self: None):
+                for btn, expected in (
+                    (yes_btn, "yes"),
+                    (no_btn, "no"),
+                    (cancel_btn, "cancel"),
+                ):
+                    with self.subTest(button=btn.text()):
+                        with mock.patch.object(
+                            QMessageBox,
+                            "clickedButton",
+                            lambda self, target=btn: target,
+                        ):
+                            self.assertEqual(
+                                message_box_question(
+                                    None,
+                                    "测试",
+                                    "内容",
+                                    cancel_text="取消",
+                                ),
+                                expected,
+                            )
+
 
 if __name__ == "__main__":
     unittest.main()

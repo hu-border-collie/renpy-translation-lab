@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QTabWidget,
     QToolButton,
+    QWidget,
 )
 
 if TYPE_CHECKING:
@@ -30,11 +31,25 @@ class ArrowKeyButtonFilter(QObject):
     from the user's view. Plain buttons have no arrow-key semantics; swallow
     the keys and let users navigate with Tab. Radio buttons, check boxes,
     spin boxes, tables and scroll bars keep their arrow-key behavior.
+
+    The filter is scoped to the main window: dialog buttons (QMessageBox and
+    friends) keep their arrow-key focus navigation.
     """
+
+    def __init__(self, window_type: type | None = None, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._window_type = window_type
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if (
-            event.type() == QEvent.Type.KeyPress
+            (
+                self._window_type is None
+                or (
+                    isinstance(obj, QWidget)
+                    and isinstance(obj.window(), self._window_type)
+                )
+            )
+            and event.type() == QEvent.Type.KeyPress
             and isinstance(obj, (QPushButton, QToolButton))
             and event.key() in {
                 Qt.Key.Key_Up,

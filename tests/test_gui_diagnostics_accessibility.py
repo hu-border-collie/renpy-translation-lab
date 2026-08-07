@@ -175,7 +175,8 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
         app = QApplication.instance()
         app_filter = getattr(app, "_renpy_lab_arrow_filter", None)
         self.assertIsNotNone(app_filter)
-        button = QPushButton()
+        inside = QPushButton(self.window)
+        outside = QPushButton()
         for key in (
             Qt.Key.Key_Up,
             Qt.Key.Key_Down,
@@ -187,7 +188,9 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
                 key,
                 Qt.KeyboardModifier.NoModifier,
             )
-            self.assertTrue(app_filter.eventFilter(button, event))
+            self.assertTrue(app_filter.eventFilter(inside, event))
+            # Dialog buttons (top-level windows) keep arrow-key navigation.
+            self.assertFalse(app_filter.eventFilter(outside, event))
 
     def test_arrow_keys_keep_focus_on_button(self) -> None:
         app = QApplication.instance()
