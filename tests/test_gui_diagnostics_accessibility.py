@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import unittest
+import warnings
 
 try:
     from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QPushButton
 
     from gui_qt.app import MainWindow
@@ -92,6 +94,52 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
         table = self.window.split_status_table
         self.assertEqual(table.focusPolicy(), Qt.FocusPolicy.StrongFocus)
         self.assertEqual(table.accessibleName(), "拆分包状态表")
+
+    def test_outer_tab_bar_is_excluded_from_focus_chain(self) -> None:
+        # The outer tab bar is hidden (the sidebar switches pages); keeping it
+        # focusable stalls Tab traversal because QTabWidget claims the event
+        # for an invisible tab bar (#299).
+        self.assertEqual(
+            self.window.tab_widget.tabBar().focusPolicy(),
+            Qt.FocusPolicy.NoFocus,
+        )
+
+    def test_tab_chain_advances_beyond_header_log_button(self) -> None:
+        app = QApplication.instance()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            app.setActiveWindow(self.window)
+            self.window.setFocus()
+            self.window.header_log_btn.setFocus()
+        self.assertEqual(app.focusWidget(), self.window.header_log_btn)
+
+        # Tab must reach page content instead of stalling on the log button.
+        for _ in range(2):
+            self.window.focusNextPrevChild(True)
+        self.assertNotEqual(app.focusWidget(), self.window.header_log_btn)
+        self.assertIsNotNone(app.focusWidget())
+
+    def test_header_log_button_activates_with_enter(self) -> None:
+        self.window.tab_widget.setCurrentWidget(self.window._workbench_tab)
+        self.window.header_log_btn.setFocus()
+
+        QTest.keyClick(self.window.header_log_btn, Qt.Key.Key_Enter)
+
+        self.assertEqual(
+            self.window.tab_widget.currentWidget(),
+            self.window._diagnostics_tab,
+        )
+        self.assertTrue(self.window.header_log_btn.isChecked())
+
+    def test_doctor_details_toggle_activates_with_enter(self) -> None:
+        toggle = self.window.doctor_details_toggle
+        toggle.setVisible(True)
+        toggle.setFocus()
+        before = self.window._doctor_details_expanded
+
+        QTest.keyClick(toggle, Qt.Key.Key_Return)
+
+        self.assertNotEqual(self.window._doctor_details_expanded, before)
 
     def test_disabled_button_text_meets_normal_text_contrast(self) -> None:
         for theme, tokens in (("light", LIGHT_TOKENS), ("dark", DARK_TOKENS)):

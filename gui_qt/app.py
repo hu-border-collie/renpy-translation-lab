@@ -38,6 +38,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractButton,
     QCompleter,
     QDialog,
     QMainWindow,
@@ -691,6 +692,11 @@ class MainWindow(QMainWindow):
         self._build_workbench_tab()
         self._build_config_tab()
         self._build_log_tab()
+        # The sidebar replaces tab switching, so the hidden outer tab bar must
+        # not stay in the keyboard focus chain: QTabWidget hands Tab focus to
+        # its tab bar and claims the event, which stalls traversal when the bar
+        # is invisible (#299).
+        self.tab_widget.tabBar().setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tab_widget.tabBar().hide()
         self._populate_shell_nav()
         self._setup_shell_status_bar()
@@ -879,7 +885,20 @@ class MainWindow(QMainWindow):
         self._refresh_manifest_derived_ui(refresh_diagnostics=True)
 
     def eventFilter(self, watched: Any, event: QEvent) -> bool:
-        if watched is self.work_mode_hint_label and event.type() == QEvent.Type.Resize:
+        if (
+            isinstance(watched, QAbstractButton)
+            and watched.focusPolicy() != Qt.FocusPolicy.NoFocus
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() in {Qt.Key.Key_Enter, Qt.Key.Key_Return}
+        ):
+            # Qt buttons activate with Space only; allow Enter/Return for
+            # keyboard users on the main window (#299).
+            watched.click()
+            return True
+        if (
+            getattr(self, "work_mode_hint_label", None) is watched
+            and event.type() == QEvent.Type.Resize
+        ):
             self._sync_work_mode_hint_height()
         split_table = getattr(self, "split_status_table", None)
         if split_table is not None and watched in (split_table, split_table.viewport()):
@@ -1072,6 +1091,7 @@ class MainWindow(QMainWindow):
         self.header_log_btn.setObjectName("header_log_btn")
         self.header_log_btn.setCheckable(True)
         self.header_log_btn.clicked.connect(self._on_header_log_clicked)
+        self.header_log_btn.installEventFilter(self)
         layout.addWidget(
             self.header_log_btn,
             0,
@@ -2002,6 +2022,7 @@ class MainWindow(QMainWindow):
         self.doctor_details_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.doctor_details_toggle.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.doctor_details_toggle.setAccessibleName("更多详情")
+        self.doctor_details_toggle.installEventFilter(self)
         self.doctor_details_toggle.setSizePolicy(
             QSizePolicy.Policy.Fixed,
             QSizePolicy.Policy.Fixed,
