@@ -212,6 +212,22 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
         self.window.keyPressEvent(up)
         self.assertEqual(self.window.shell_nav.currentRow(), initial)
 
+    def test_arrow_keys_skip_shell_section_headers(self) -> None:
+        section_rows = {
+            self.window.shell_nav.row(item)
+            for item in self.window._shell_section_items
+        }
+        self.assertTrue(section_rows)
+        self.window.shell_nav.setCurrentRow(0)
+        down = QKeyEvent(
+            QKeyEvent.Type.KeyPress,
+            Qt.Key.Key_Down,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        for _ in range(30):
+            self.window.keyPressEvent(down)
+            self.assertNotIn(self.window.shell_nav.currentRow(), section_rows)
+
     def test_disabled_button_text_meets_normal_text_contrast(self) -> None:
         for theme, tokens in (("light", LIGHT_TOKENS), ("dark", DARK_TOKENS)):
             with self.subTest(theme=theme, kind="default"):

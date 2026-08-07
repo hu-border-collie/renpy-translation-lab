@@ -954,12 +954,18 @@ class MainWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def _move_shell_nav(self, *, forward: bool) -> None:
-        """Move the shell sidebar selection by one page (wrapping)."""
+        """Move the shell sidebar selection by one page, skipping section headers."""
         rows = self.shell_nav.count()
         if rows <= 0:
             return
         delta = 1 if forward else -1
-        self.shell_nav.setCurrentRow((self.shell_nav.currentRow() + delta) % rows)
+        next_row = self.shell_nav.currentRow()
+        for _ in range(rows):
+            next_row = (next_row + delta) % rows
+            item = self.shell_nav.item(next_row)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole):
+                self.shell_nav.setCurrentRow(next_row)
+                return
 
     def _sync_work_mode_hint_height(self) -> None:
         label = self.work_mode_hint_label
