@@ -12,6 +12,28 @@ from gui_qt.settings_schema import (
 
 
 class GuiSettingsSchemaTests(unittest.TestCase):
+    def test_user_visible_setting_titles_use_chinese_copy(self):
+        for key in (
+            "sync_chunk_size",
+            "batch_chunk_size",
+            "batch_retry_chunk_size",
+            "keyword_chunk_size",
+            "revision_chunk_size",
+            "batch_safety_settings",
+        ):
+            with self.subTest(key=key):
+                field = ADVANCED_SETTING_FIELD_BY_KEY[key]
+                self.assertNotIn("chunk", field.label)
+                self.assertNotIn("Batch", field.label)
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["batch_safety_settings"].label,
+            "安全设置",
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["sync_chunk_size"].label,
+            "同步分块条数",
+        )
+
     def test_project_analysis_save_flags_preserve_saved_values_without_widgets(self):
         flags = resolve_project_analysis_flags_for_save(
             {

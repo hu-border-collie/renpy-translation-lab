@@ -42,12 +42,12 @@ def add_editable_combo_popup_action(combo: QComboBox) -> None:
     combo._popup_action = action
 
 
-def message_box_information(
+def build_information_box(
     parent: "QWidget | None",
     title: str,
     text: str,
-) -> None:
-    """Information box with a Chinese 确定 button (not English OK)."""
+) -> QMessageBox:
+    """Build an information box with a Chinese 确定 button (not English OK)."""
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Information)
     box.setWindowTitle(title)
@@ -55,7 +55,63 @@ def message_box_information(
     box.setText(text)
     ok_btn = box.addButton("确定", QMessageBox.ButtonRole.AcceptRole)
     box.setDefaultButton(ok_btn)
-    box.exec()
+    return box
+
+
+def build_warning_box(
+    parent: "QWidget | None",
+    title: str,
+    text: str,
+) -> QMessageBox:
+    """Build a warning box with a Chinese 确定 button (not English OK)."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle(title)
+    box.setTextFormat(Qt.TextFormat.PlainText)
+    box.setText(text)
+    ok_btn = box.addButton("确定", QMessageBox.ButtonRole.AcceptRole)
+    box.setDefaultButton(ok_btn)
+    return box
+
+
+def build_question_box(
+    parent: "QWidget | None",
+    title: str,
+    text: str,
+    *,
+    yes_text: str = "确定",
+    no_text: str = "取消",
+    cancel_text: str | None = None,
+    default: QuestionReply = "yes",
+    icon: QMessageBox.Icon = QMessageBox.Icon.Question,
+) -> QMessageBox:
+    """Build a question box with explicit Chinese button labels."""
+    box = QMessageBox(parent)
+    box.setIcon(icon)
+    box.setWindowTitle(title)
+    box.setTextFormat(Qt.TextFormat.PlainText)
+    box.setText(text)
+    yes_btn = box.addButton(yes_text, QMessageBox.ButtonRole.YesRole)
+    no_btn = box.addButton(no_text, QMessageBox.ButtonRole.NoRole)
+    cancel_btn = None
+    if cancel_text is not None:
+        cancel_btn = box.addButton(cancel_text, QMessageBox.ButtonRole.RejectRole)
+    if default == "no":
+        box.setDefaultButton(no_btn)
+    elif default == "cancel" and cancel_btn is not None:
+        box.setDefaultButton(cancel_btn)
+    else:
+        box.setDefaultButton(yes_btn)
+    return box
+
+
+def message_box_information(
+    parent: "QWidget | None",
+    title: str,
+    text: str,
+) -> None:
+    """Information box with a Chinese 确定 button (not English OK)."""
+    build_information_box(parent, title, text).exec()
 
 
 def message_box_warning(
@@ -64,14 +120,7 @@ def message_box_warning(
     text: str,
 ) -> None:
     """Warning box with a Chinese 确定 button (not English OK)."""
-    box = QMessageBox(parent)
-    box.setIcon(QMessageBox.Icon.Warning)
-    box.setWindowTitle(title)
-    box.setTextFormat(Qt.TextFormat.PlainText)
-    box.setText(text)
-    ok_btn = box.addButton("确定", QMessageBox.ButtonRole.AcceptRole)
-    box.setDefaultButton(ok_btn)
-    box.exec()
+    build_warning_box(parent, title, text).exec()
 
 
 def message_box_question(
@@ -89,27 +138,21 @@ def message_box_question(
 
     Returns ``\"yes\"``, ``\"no\"``, or ``\"cancel\"`` (when cancel is shown).
     """
-    box = QMessageBox(parent)
-    box.setIcon(icon)
-    box.setWindowTitle(title)
-    box.setTextFormat(Qt.TextFormat.PlainText)
-    box.setText(text)
-    yes_btn = box.addButton(yes_text, QMessageBox.ButtonRole.YesRole)
-    no_btn = box.addButton(no_text, QMessageBox.ButtonRole.NoRole)
-    cancel_btn = None
-    if cancel_text is not None:
-        cancel_btn = box.addButton(cancel_text, QMessageBox.ButtonRole.RejectRole)
-    if default == "no":
-        box.setDefaultButton(no_btn)
-    elif default == "cancel" and cancel_btn is not None:
-        box.setDefaultButton(cancel_btn)
-    else:
-        box.setDefaultButton(yes_btn)
+    box = build_question_box(
+        parent,
+        title,
+        text,
+        yes_text=yes_text,
+        no_text=no_text,
+        cancel_text=cancel_text,
+        default=default,
+        icon=icon,
+    )
     box.exec()
     clicked = box.clickedButton()
-    if clicked is yes_btn:
+    if clicked is not None and box.buttonRole(clicked) == QMessageBox.ButtonRole.YesRole:
         return "yes"
-    if cancel_btn is not None and clicked is cancel_btn:
+    if clicked is not None and box.buttonRole(clicked) == QMessageBox.ButtonRole.RejectRole:
         return "cancel"
     return "no"
 

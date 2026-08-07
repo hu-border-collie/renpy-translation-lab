@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QTableWidget,
@@ -24,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from .keyword_merge_report import format_merge_preview_text
+from .widget_helpers import message_box_information, message_box_question, message_box_warning
 
 
 @dataclass(frozen=True)
@@ -244,7 +244,7 @@ class KeywordMergeDialog(QDialog):
 
     def _on_preview(self) -> None:
         if not self._selected_indices():
-            QMessageBox.information(self, "未选择候选", "请至少勾选一条候选再预览。")
+            message_box_information(self, "未选择候选", "请至少勾选一条候选再预览。")
             return
         summary = self._run_merge(dry_run=True)
         self.preview_view.setPlainText("\n".join(summary.preview_lines[:40]))
@@ -252,7 +252,7 @@ class KeywordMergeDialog(QDialog):
 
     def _on_write(self) -> None:
         if not self._selected_indices():
-            QMessageBox.information(self, "未选择候选", "请至少勾选一条候选再写入。")
+            message_box_information(self, "未选择候选", "请至少勾选一条候选再写入。")
             return
         counts = merge_mod.preview_selected_merge_actions(
             self._rows,
@@ -260,13 +260,13 @@ class KeywordMergeDialog(QDialog):
             overwrite=self.overwrite_check.isChecked(),
         )
         if counts.get("accept", 0) + counts.get("overwrite", 0) <= 0:
-            QMessageBox.warning(
+            message_box_warning(
                 self,
                 "没有可写入项",
                 "当前勾选项均会被跳过（重复、冲突或未启用覆盖）。请调整勾选或启用覆盖。",
             )
             return
-        confirm = QMessageBox.question(
+        confirm = message_box_question(
             self,
             "确认写入 glossary",
             (
@@ -274,8 +274,11 @@ class KeywordMergeDialog(QDialog):
                 f"{counts.get('overwrite', 0)} 条覆盖写入：\n{self._glossary_path}\n\n"
                 "写入前会自动备份 glossary。是否继续？"
             ),
+            yes_text="写入",
+            no_text="取消",
+            default="yes",
         )
-        if confirm != QMessageBox.StandardButton.Yes:
+        if confirm != "yes":
             return
         summary = self._run_merge(dry_run=False)
         self._result = KeywordMergeDialogResult(summary=summary, dry_run=False)

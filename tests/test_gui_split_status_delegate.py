@@ -3,6 +3,7 @@ import unittest
 try:
     from PySide6.QtCore import QEvent, QPointF, Qt
     from PySide6.QtGui import QMouseEvent, QStandardItem, QStandardItemModel
+    from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QStyleOptionViewItem, QTableWidget, QTableWidgetItem
 
     from gui_qt.split_status_delegate import (
@@ -11,6 +12,8 @@ try:
         read_split_action_payload,
     )
     from gui_qt.split_status_table_helpers import split_action_item_payload
+    from gui_qt.app import MainWindow
+    from tests import gui_test_support
 except ImportError as exc:
     SplitStatusActionDelegate = None  # type: ignore[assignment]
     IMPORT_ERROR = exc
@@ -85,6 +88,66 @@ class GuiSplitStatusDelegateTests(unittest.TestCase):
 
         self.assertTrue(handled)
         self.assertEqual(selected, [r"C:\pkg\part02\manifest.json"])
+
+    def test_keyboard_activate_emits_select_requested(self):
+        table = QTableWidget(1, 1)
+        delegate = SplitStatusActionDelegate(table)
+        selected: list[str] = []
+        delegate.select_requested.connect(selected.append)
+
+        item = QTableWidgetItem("")
+        item.setData(
+            SPLIT_ACTION_DATA_ROLE,
+            split_action_item_payload(
+                selectable=True,
+                manifest_path=r"C:\pkg\part02\manifest.json",
+                part_label="part02/03",
+            ),
+        )
+        table.setItem(0, 0, item)
+
+        self.assertTrue(delegate.keyboard_activate(table.model().index(0, 0)))
+        self.assertEqual(selected, [r"C:\pkg\part02\manifest.json"])
+
+    def test_keyboard_activate_ignores_cells_without_action(self):
+        table = QTableWidget(1, 1)
+        delegate = SplitStatusActionDelegate(table)
+        selected: list[str] = []
+        delegate.select_requested.connect(selected.append)
+
+        table.setItem(0, 0, QTableWidgetItem("plain"))
+        self.assertFalse(delegate.keyboard_activate(table.model().index(0, 0)))
+        self.assertEqual(selected, [])
+
+    def test_main_window_routes_enter_key_to_split_select(self):
+        window = MainWindow()
+        try:
+            invoked: list[str] = []
+            window._select_split_manifest = lambda path: invoked.append(path)
+            table = window.split_status_table
+            item = QTableWidgetItem("")
+            item.setData(
+                SPLIT_ACTION_DATA_ROLE,
+                split_action_item_payload(
+                    selectable=True,
+                    manifest_path=r"C:\pkg\part02\manifest.json",
+                    part_label="part02/03",
+                ),
+            )
+            table.setRowCount(1)
+            table.setItem(0, 0, item)
+            table.setCurrentCell(0, 0)
+
+            QTest.keyClick(table, Qt.Key.Key_Return)
+            self.assertEqual(invoked, [r"C:\pkg\part02\manifest.json"])
+
+            invoked.clear()
+            table.setItem(0, 0, QTableWidgetItem("plain"))
+            QTest.keyClick(table, Qt.Key.Key_Space)
+            self.assertEqual(invoked, [])
+        finally:
+            gui_test_support.close_main_window(window)
+            window.deleteLater()
 
 
 if __name__ == "__main__":

@@ -9,13 +9,13 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
-    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from .api_key_helpers import commit_pending_key, mask_api_key
+from .widget_helpers import message_box_information
 
 
 _DEFAULT_INTRO = (
@@ -156,7 +156,7 @@ class ApiKeyDialog(QDialog):
         pending = self.new_key_edit.text().strip()
         updated_keys, error = commit_pending_key(self._keys, pending)
         if error == "duplicate":
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "Key 已存在",
                 "输入框中的 Key 已在列表中。请清空输入框，或先删除列表中的重复项后再保存。",
@@ -200,12 +200,12 @@ class ApiKeyDialog(QDialog):
     def _on_add_key(self) -> None:
         value = self.new_key_edit.text().strip()
         if not value:
-            QMessageBox.information(self, "请输入 Key", "请先粘贴要添加的 API Key。")
+            message_box_information(self, "请输入 Key", "请先粘贴要添加的 API Key。")
             return
 
         updated_keys, error = commit_pending_key(self._keys, value)
         if error == "duplicate":
-            QMessageBox.information(self, "Key 已存在", "这个 Key 已经在列表中。")
+            message_box_information(self, "Key 已存在", "这个 Key 已经在列表中。")
             return
 
         self._keys = updated_keys
@@ -221,7 +221,7 @@ class ApiKeyDialog(QDialog):
 
         row = self.key_list.currentRow()
         if row < 0 or row >= len(self._keys):
-            QMessageBox.information(self, "请选择 Key", "请先在列表中选中要删除的 Key。")
+            message_box_information(self, "请选择 Key", "请先在列表中选中要删除的 Key。")
             return
 
         self._keys.pop(row)
@@ -240,7 +240,7 @@ class ApiKeyDialog(QDialog):
             return
         row = self.key_list.currentRow()
         if row < 0 or row >= len(self._keys):
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "请选择 Key",
                 "请先在列表中选中要设为当前使用的 Key。",

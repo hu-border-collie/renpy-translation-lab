@@ -83,6 +83,16 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
             Qt.FocusPolicy.StrongFocus,
         )
 
+    def test_doctor_details_toggle_accepts_keyboard_focus(self) -> None:
+        toggle = self.window.doctor_details_toggle
+        self.assertEqual(toggle.focusPolicy(), Qt.FocusPolicy.StrongFocus)
+        self.assertEqual(toggle.accessibleName(), "更多详情")
+
+    def test_split_status_table_accepts_keyboard_focus(self) -> None:
+        table = self.window.split_status_table
+        self.assertEqual(table.focusPolicy(), Qt.FocusPolicy.StrongFocus)
+        self.assertEqual(table.accessibleName(), "拆分包状态表")
+
     def test_disabled_button_text_meets_normal_text_contrast(self) -> None:
         for theme, tokens in (("light", LIGHT_TOKENS), ("dark", DARK_TOKENS)):
             with self.subTest(theme=theme, kind="default"):
