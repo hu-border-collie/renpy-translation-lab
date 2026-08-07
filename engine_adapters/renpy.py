@@ -61,6 +61,7 @@ LOCATOR_SCHEMA_VERSION = 1
 # clear this floor so bare unique-string hits without structural signals fail closed.
 # Typical unique stale-block fallback scores 140+ (shared block_occurrence / speaker).
 CONTENT_EVIDENCE_MIN_SCORE = 140
+LIVE_OCCURRENCE_CACHE_LIMIT = 8
 
 
 def _first_comment_literal(raw_text: str) -> str:
@@ -1497,6 +1498,11 @@ class RenPyAdapter:
         live_occurrences = tuple(
             self.extract_occurrences(live_project, live_inventory, approved_ids)
         )
+        if len(self._live_occurrence_cache) >= LIVE_OCCURRENCE_CACHE_LIMIT:
+            # Long-lived adapters keep at most a few project snapshots; when the
+            # cap is reached, drop everything so a fresh scan always wins over
+            # unbounded growth.
+            self._live_occurrence_cache.clear()
         self._live_occurrence_cache[cache_key] = live_occurrences
         return live_project, live_occurrences
 

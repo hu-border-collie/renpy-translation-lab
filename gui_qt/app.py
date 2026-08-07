@@ -962,7 +962,13 @@ class MainWindow(QMainWindow):
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Switch the sidebar page with Up/Down when no control took the key."""
-        if event.key() in {Qt.Key.Key_Up, Qt.Key.Key_Down}:
+        app = QApplication.instance()
+        focus = app.focusWidget() if app is not None else None
+        window_owns_focus = focus is self or focus is None
+        if (
+            window_owns_focus
+            and event.key() in {Qt.Key.Key_Up, Qt.Key.Key_Down}
+        ):
             self._move_shell_nav(forward=event.key() == Qt.Key.Key_Down)
             event.accept()
             return

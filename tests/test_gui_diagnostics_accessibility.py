@@ -204,6 +204,8 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
         ensure.assert_called_once_with(button)
 
     def test_arrow_keys_switch_shell_page_when_unfocused(self) -> None:
+        _activate_window(self.window)
+        self.window.setFocus()
         initial = self.window.shell_nav.currentRow()
         total = self.window.shell_nav.count()
         self.assertGreater(total, 0)
@@ -228,6 +230,8 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
         self.assertEqual(self.window.shell_nav.currentRow(), initial)
 
     def test_arrow_keys_skip_shell_section_headers(self) -> None:
+        _activate_window(self.window)
+        self.window.setFocus()
         section_rows = {
             self.window.shell_nav.row(item)
             for item in self.window._shell_section_items
