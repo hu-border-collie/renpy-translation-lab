@@ -350,6 +350,66 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window.apply_btn.isHidden())
         self.assertFalse(hasattr(self.window, "work_submode_combo"))
 
+    def test_gate_keeps_finished_results_visible(self) -> None:
+        """#298 review: a regressed doctor state must not hide finished results."""
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window._doctor_check_completed = True
+        self.window._set_doctor_summary(
+            DoctorSummary(
+                status="ready",
+                heading="项目检查通过",
+                message="ok",
+                facts=[],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+        self.window._set_workflow_summary(
+            "done",
+            "同步完成",
+            "已写入 3 条译文",
+            ["files: 3"],
+        )
+        page = self.window.sync_translation_page
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
+        # Doctor state regresses (re-check failed): the gate must not hide
+        # the finished result view.
+        self.window._doctor_check_completed = False
+        self.window._doctor_summary_status = "block"
+        self.window._sync_workbench_empty_states()
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
+    def test_batch_page_gate_owns_first_use_cta(self) -> None:
+        """#316 review: batch page hides the disabled action stack without a project."""
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.batch_translation_page
+        self.assertIs(page.page_stack.currentWidget(), page.empty_state)
+        self.assertTrue(page.content_page.isHidden())
+        btn = page.empty_state._action_btn
+        self.assertIsNotNone(btn)
+        assert btn is not None
+        self.assertEqual(btn.objectName(), "primary_btn")
+
+        self.window._doctor_check_completed = True
+        self.window._set_doctor_summary(
+            DoctorSummary(
+                status="ready",
+                heading="项目检查通过",
+                message="ok",
+                facts=[],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
     def test_keywords_and_revision_route_writeback_into_page(self) -> None:
         """#298 review: writeback results render inside keywords/revision pages."""
         for mode, attr in (
@@ -816,17 +876,31 @@ class GuiTaskPageTests(unittest.TestCase):
         page = self.window.context_library_page
         prebuilds: list[str] = []
         opens: list[bool] = []
+        actions: list[str] = []
         page.set_action_callbacks(
             WorkbenchPageActions(
                 prebuild=prebuilds.append,
                 open_settings=lambda: opens.append(True),
+                action=actions.append,
             )
         )
 
+        # No project: the unified doctor gate owns the CTA (#298).
         page.set_context_status(
             rag_enabled=False,
             source_index_enabled=False,
             game_root="",
+            project_analysis_label="未生成",
+        )
+        self.assertIs(page.page_stack.currentWidget(), page.project_gate_state)
+        page.project_gate_state.action_clicked.emit()
+        self.assertEqual(actions, ["open_doctor"])
+
+        # Project selected but nothing enabled: settings empty state.
+        page.set_context_status(
+            rag_enabled=False,
+            source_index_enabled=False,
+            game_root="C:/Games/Example/work",
             project_analysis_label="未生成",
         )
         self.assertIs(page.page_stack.currentWidget(), page.empty_state)

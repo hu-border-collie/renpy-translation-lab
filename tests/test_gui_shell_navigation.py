@@ -436,7 +436,9 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.window._writeback_manifest_path = ""
         self.window._sync_workbench_empty_states()
 
-        empty = self.window.workflow_empty_state
+        page = self.window.batch_translation_page
+        empty = page.empty_state
+        self.assertIs(page.page_stack.currentWidget(), empty)
         self.assertFalse(empty.isHidden())
         btn = empty._action_btn
         self.assertIsNotNone(btn)

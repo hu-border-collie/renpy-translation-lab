@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 
 from ..empty_state import EmptyStateWidget
 from ..user_copy import TASK_PROJECT_GATE_COPY
-from ..work_modes import WorkMode, work_mode_submode_label
+from ..work_modes import WorkMode, work_mode_submode_label, work_mode_spec
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
 from .task_controls import TaskPageLayout
@@ -44,7 +44,7 @@ class RevisionPage(QFrame):
         self.empty_state = EmptyStateWidget(
             "",
             TASK_PROJECT_GATE_COPY["title"],
-            TASK_PROJECT_GATE_COPY["revision"],
+            f"选择项目并运行环境检查后，才能{work_mode_spec(self.supported_modes[0]).start_button_label}。",
             action_text=TASK_PROJECT_GATE_COPY["action"],
             action_style="primary",
         )
@@ -121,10 +121,19 @@ class RevisionPage(QFrame):
         self._actions = actions
 
     def set_project_ready(self, ready: bool) -> None:
-        """Show the environment-check gate until project prep is done."""
+        """Show the environment-check gate until project prep is done.
+
+        Existing task results keep the content view visible: the gate only
+        controls operation availability, never hides finished results (#298).
+        """
         self._project_ready = bool(ready)
+        if self._project_ready:
+            self.page_stack.setCurrentWidget(self.content_page)
+            return
+        status, _heading, _message, _facts = self.workflow_status_snapshot()
+        has_result = bool(status and status not in {"idle", "stale"})
         self.page_stack.setCurrentWidget(
-            self.content_page if self._project_ready else self.empty_state
+            self.content_page if has_result else self.empty_state
         )
 
     def set_workflow_status(
@@ -227,6 +236,8 @@ class RevisionPage(QFrame):
 
     def reset_project(self) -> None:
         self.set_task_running(False)
+        self.status_section.set_status("", "", "", [])
+        self.status_section.set_progress(None)
         final_review = self._active_mode == WorkMode.FINAL_REVIEW
         self.set_controls(
             start_enabled=False,

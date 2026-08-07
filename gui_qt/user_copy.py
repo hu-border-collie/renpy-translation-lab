@@ -44,6 +44,7 @@ CONTEXT_LIBRARY_COPY = {
         "请先在设置 · 上下文启用记忆库、原文索引或项目剧情分析并保存，"
         "然后回到这里开始准备。"
     ),
+    "project_gate_body": "选择项目并运行环境检查后，才能预建记忆库或原文索引。",
 }
 
 TASK_PROJECT_GATE_COPY = {
@@ -51,9 +52,6 @@ TASK_PROJECT_GATE_COPY = {
     "action": "去环境检查",
     "status_section_title": "任务状态",
     "project_hint": "请先选择项目",
-    "sync_translation": "选择项目并运行环境检查后，才能开始同步翻译。",
-    "keywords": "选择项目并运行环境检查后，才能提取关键词。",
-    "revision": "选择项目并运行环境检查后，才能生成订正预览。",
 }
 
 USAGE_LEDGER_COPY = {

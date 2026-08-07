@@ -2527,6 +2527,9 @@ class MainWindow(QMainWindow):
 
     def _on_context_library_action(self, name: str) -> None:
         """Run the Project Analysis lifecycle from the context-library page."""
+        if name == "open_doctor":
+            self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+            return
         if bool(getattr(self, "_task_running", False)):
             return
         runner = getattr(self, "runner", None)
@@ -2777,7 +2780,9 @@ class MainWindow(QMainWindow):
             game_root=str(game_root or ""),
             project_analysis_status=result.status if result is not None else None,
             project_analysis_label=(
-                result.label if result is not None else "正在读取项目摘要状态…"
+                result.label
+                if result is not None
+                else ("" if not game_root else "正在读取项目摘要状态…")
             ),
             project_analysis_enabled=analysis_flags["enabled"],
             project_analysis_inject_enabled=analysis_flags["inject_enabled"],
@@ -8345,6 +8350,7 @@ class MainWindow(QMainWindow):
         if not running:
             gate_ready = self._doctor_allows_translate_action()
             for attr in (
+                "batch_translation_page",
                 "sync_translation_page",
                 "keywords_page",
                 "revision_page",
@@ -8398,8 +8404,9 @@ class MainWindow(QMainWindow):
                 show_wf_empty = False
             if has_project and status in {"idle", "stale"} and not resume_ok and not has_workflow:
                 show_wf_empty = True
+            # No project: the batch page gate owns the doctor CTA (#316).
             if not has_project:
-                show_wf_empty = True
+                show_wf_empty = False
             self.workflow_empty_state.setVisible(show_wf_empty)
             # Empty CTA shares the progress column with summary chrome. Hide the
             # chrome while empty so the action button is not height-crushed.
@@ -8521,6 +8528,9 @@ class MainWindow(QMainWindow):
 
     def _on_batch_translation_page_action(self, action: str) -> None:
         """Route a P5 page-local action to the existing batch coordinator."""
+        if action == "open_doctor":
+            self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+            return
         callbacks = {
             "start": self._on_start_translation,
             "resume": self._on_resume_translation,

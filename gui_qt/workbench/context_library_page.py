@@ -66,6 +66,17 @@ class ContextLibraryPage(QFrame):
         self.empty_state.action_clicked.connect(self._trigger_open_settings)
         self.page_stack.addWidget(self.empty_state)
 
+        self.project_gate_state = EmptyStateWidget(
+            "",
+            TASK_PROJECT_GATE_COPY["title"],
+            CONTEXT_LIBRARY_COPY["project_gate_body"],
+            action_text=TASK_PROJECT_GATE_COPY["action"],
+            action_style="primary",
+        )
+        self.project_gate_state.setObjectName("context_library_project_gate")
+        self.project_gate_state.action_clicked.connect(self._trigger_open_doctor)
+        self.page_stack.addWidget(self.project_gate_state)
+
         self.status_page = QWidget()
         self.status_page.setObjectName("context_library_status_page")
         self.status_layout = TaskPageLayout(self.status_page)
@@ -278,15 +289,19 @@ class ContextLibraryPage(QFrame):
                 "未检测",
                 "未生成",
             }
-        show_status = (
-            rag_enabled
-            or source_index_enabled
-            or project_analysis_enabled
-            or self._project_analysis_present
-        )
-        self.page_stack.setCurrentWidget(
-            self.status_page if show_status else self.empty_state
-        )
+        if not self._has_project:
+            # 无项目时统一展示「去环境检查」门禁，与其它任务页一致 (#298)。
+            self.page_stack.setCurrentWidget(self.project_gate_state)
+        else:
+            show_status = (
+                rag_enabled
+                or source_index_enabled
+                or project_analysis_enabled
+                or self._project_analysis_present
+            )
+            self.page_stack.setCurrentWidget(
+                self.status_page if show_status else self.empty_state
+            )
         self._refresh_action_states()
 
     def set_bootstrap_progress(
@@ -327,6 +342,10 @@ class ContextLibraryPage(QFrame):
             if line.strip()
         ]
         return status, heading, message, facts
+
+    def _trigger_open_doctor(self) -> None:
+        if self._actions.action is not None:
+            self._actions.action("open_doctor")
 
     def set_task_running(self, running: bool, operation: str = "") -> None:
         self._running = running

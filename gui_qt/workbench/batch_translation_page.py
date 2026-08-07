@@ -4,10 +4,18 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from PySide6.QtWidgets import QPushButton, QSizePolicy, QWidget
+from PySide6.QtWidgets import (
+    QPushButton,
+    QSizePolicy,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
+from ..empty_state import EmptyStateWidget
 from ..responsive_layout import FlowButtonBar
-from ..work_modes import WorkMode
+from ..user_copy import TASK_PROJECT_GATE_COPY
+from ..work_modes import WorkMode, work_mode_spec
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
 from .task_controls import TaskControlSection, TaskPageLayout
@@ -47,7 +55,28 @@ class BatchTranslationPage(QWidget):
         self._state = BatchActionState()
         self.buttons: dict[str, QPushButton] = {}
 
-        self.task_layout = TaskPageLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.page_stack = QStackedWidget()
+        self.page_stack.setObjectName("batch_translation_page_stack")
+        outer.addWidget(self.page_stack)
+
+        _gate_spec = work_mode_spec(self.supported_modes[0])
+        self.empty_state = EmptyStateWidget(
+            "",
+            TASK_PROJECT_GATE_COPY["title"],
+            f"选择项目并运行环境检查后，才能{_gate_spec.start_button_label}。",
+            action_text=TASK_PROJECT_GATE_COPY["action"],
+            action_style="primary",
+        )
+        self.empty_state.setObjectName("batch_translation_empty_state")
+        self.empty_state.action_clicked.connect(self._trigger_open_doctor)
+        self.page_stack.addWidget(self.empty_state)
+
+        self.content_page = QWidget()
+        self.content_page.setObjectName("batch_translation_content")
+        self.task_layout = TaskPageLayout(self.content_page)
         self.main_frame = self.task_layout.add_section(
             "翻译任务",
             role="batch_main",
@@ -75,6 +104,9 @@ class BatchTranslationPage(QWidget):
             min_widths={"split_submit": 108},
         )
         self.split_frame.setVisible(False)
+
+        self.page_stack.addWidget(self.content_page)
+        self.page_stack.setCurrentWidget(self.empty_state)
 
 
     def _make_button(self, key: str) -> QPushButton:
@@ -110,6 +142,17 @@ class BatchTranslationPage(QWidget):
 
     def set_action_callbacks(self, actions: WorkbenchPageActions) -> None:
         self._actions = actions
+
+    def set_project_ready(self, ready: bool) -> None:
+        """Show the environment-check gate until project prep is done."""
+        self._project_ready = bool(ready)
+        self.page_stack.setCurrentWidget(
+            self.content_page if self._project_ready else self.empty_state
+        )
+
+    def _trigger_open_doctor(self) -> None:
+        if self._actions.action is not None:
+            self._actions.action("open_doctor")
 
     def activate(self, mode: WorkMode, session: WorkbenchModeSession) -> None:
         if mode not in self.supported_modes:
