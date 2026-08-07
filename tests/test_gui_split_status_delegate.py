@@ -157,6 +157,26 @@ class GuiSplitStatusDelegateTests(unittest.TestCase):
             gui_test_support.close_main_window(window)
             window.deleteLater()
 
+    def test_split_table_arrow_keys_move_current_index_without_selection(self):
+        window = MainWindow()
+        try:
+            table = window.split_status_table
+            table.setRowCount(2)
+            for row in range(2):
+                for column in range(6):
+                    table.setItem(row, column, QTableWidgetItem(f"{row}:{column}"))
+            table.setCurrentCell(0, 0)
+
+            QTest.keyClick(table, Qt.Key.Key_Right)
+            self.assertEqual(table.currentColumn(), 1)
+            QTest.keyClick(table, Qt.Key.Key_Down)
+            self.assertEqual(table.currentRow(), 1)
+            # NoSelection 模式下方向键只移动 current index，不产生选中。
+            self.assertEqual(len(table.selectedIndexes()), 0)
+        finally:
+            gui_test_support.close_main_window(window)
+            window.deleteLater()
+
 
 if __name__ == "__main__":
     unittest.main()
