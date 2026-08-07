@@ -561,6 +561,7 @@ class MainWindow(QMainWindow):
         self._diagnostics_refresh_input_key: tuple[object, ...] | None = None
         self._main_tab_enter_generation = 0
         self._pending_log_lines: list[str] = []
+        self._enter_activate_buttons: set[QAbstractButton] = set()
         self._workflow_progress_dirty = False
         self._log_flush_timer = QTimer(self)
         self._log_flush_timer.setSingleShot(True)
@@ -892,12 +893,13 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched: Any, event: QEvent) -> bool:
         if (
             isinstance(watched, QAbstractButton)
-            and watched.focusPolicy() != Qt.FocusPolicy.NoFocus
+            and watched in self._enter_activate_buttons
             and event.type() == QEvent.Type.KeyPress
             and event.key() in {Qt.Key.Key_Enter, Qt.Key.Key_Return}
         ):
-            # Qt buttons activate with Space only; allow Enter/Return for
-            # keyboard users on the main window (#299).
+            # Qt buttons activate with Space only; allow Enter/Return on the
+            # explicitly opted-in main-window buttons. Dialog buttons are never
+            # registered here, so their default-button semantics are untouched.
             watched.click()
             return True
         if (
@@ -1166,6 +1168,7 @@ class MainWindow(QMainWindow):
         self.header_log_btn.setCheckable(True)
         self.header_log_btn.clicked.connect(self._on_header_log_clicked)
         self.header_log_btn.installEventFilter(self)
+        self._enter_activate_buttons.add(self.header_log_btn)
         layout.addWidget(
             self.header_log_btn,
             0,
@@ -2105,6 +2108,7 @@ class MainWindow(QMainWindow):
         self.doctor_details_toggle.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.doctor_details_toggle.setAccessibleName("更多详情")
         self.doctor_details_toggle.installEventFilter(self)
+        self._enter_activate_buttons.add(self.doctor_details_toggle)
         self.doctor_details_toggle.setSizePolicy(
             QSizePolicy.Policy.Fixed,
             QSizePolicy.Policy.Fixed,

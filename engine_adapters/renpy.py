@@ -1467,22 +1467,22 @@ class RenPyAdapter:
     ) -> tuple[ProjectDiscovery, tuple[Occurrence, ...]]:
         """Return live occurrences for a project, reusing scans per project.
 
-        The cache is keyed by project identity (root, localization root,
-        target language) plus the source fingerprint. The fingerprint covers
-        the full scanned document set and content hashes, and inventory inputs
-        (include/exclude filters, macro/glossary paths) are already materialized
-        into that document set during discovery — so any configuration change
-        that could affect inventory/extract results invalidates the key. The
-        inventory policy is always the default ``InventoryPolicy()``. On a hit
-        the current ``live_project`` is returned together with the cached
-        occurrence data, so callers never reuse another project's
-        ``ProjectDiscovery`` object.
+        The cache is keyed by project identity (root, localization root),
+        the project snapshot fingerprint (engine, localization mode, target
+        language, source fingerprint) and the inventory policy. The snapshot
+        fingerprint covers the full scanned document set and content hashes;
+        include/exclude filters and macro/glossary paths are already
+        materialized into that document set during discovery, so any
+        configuration change that could affect inventory/extract results
+        invalidates the key. On a hit the current ``live_project`` is returned
+        together with the cached occurrence data, so callers never reuse
+        another project's ``ProjectDiscovery`` object.
         """
         cache_key = (
             live_project.project_root,
             live_project.localization_root,
-            live_project.target_language,
-            live_project.source_fingerprint,
+            live_project.project_snapshot_fingerprint,
+            InventoryPolicy().review_policy,
         )
         cached_occurrences = self._live_occurrence_cache.get(cache_key)
         if cached_occurrences is not None:
