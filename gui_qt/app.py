@@ -34,6 +34,7 @@ from PySide6.QtGui import (
     QGuiApplication,
     QKeyEvent,
     QKeySequence,
+    QMouseEvent,
     QPalette,
     QShortcut,
 )
@@ -943,6 +944,17 @@ class MainWindow(QMainWindow):
         keeps Up/Down page switching working right after startup (#299).
         """
         super().showEvent(event)
+        self.setFocus()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Return keyboard focus to the window when clicking inert background.
+
+        Qt keeps the previous focus when the user clicks a label, frame or
+        other non-interactive surface; handing focus back to the window makes
+        the arrow-key page switching work again right after such a click.
+        Interactive controls consume their own clicks and never reach here.
+        """
+        super().mousePressEvent(event)
         self.setFocus()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:

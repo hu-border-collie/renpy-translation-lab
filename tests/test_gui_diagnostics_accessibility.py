@@ -228,6 +228,24 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
             self.window.keyPressEvent(down)
             self.assertNotIn(self.window.shell_nav.currentRow(), section_rows)
 
+    def test_clicking_inert_background_returns_focus_to_window(self) -> None:
+        app = QApplication.instance()
+        self.window.show()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            app.setActiveWindow(self.window)
+            self.window.setFocus()
+            self.window.header_log_btn.setFocus()
+
+        QTest.mouseClick(self.window.header_log_btn, Qt.MouseButton.LeftButton)
+        self.assertEqual(app.focusWidget(), self.window.header_log_btn)
+
+        # A label does not consume clicks; the window takes the focus back so
+        # arrow-key page switching works again.
+        QTest.mouseClick(self.window.shell_breadcrumb_label, Qt.MouseButton.LeftButton)
+        app.processEvents()
+        self.assertEqual(app.focusWidget(), self.window)
+
     def test_disabled_button_text_meets_normal_text_contrast(self) -> None:
         for theme, tokens in (("light", LIGHT_TOKENS), ("dark", DARK_TOKENS)):
             with self.subTest(theme=theme, kind="default"):
