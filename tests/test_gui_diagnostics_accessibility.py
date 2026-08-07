@@ -3,15 +3,21 @@ from __future__ import annotations
 
 import unittest
 import warnings
+from unittest import mock
 
 try:
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QKeyEvent
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea
+    from PySide6.QtWidgets import (
+        QApplication,
+        QPushButton,
+        QScrollArea,
+        QVBoxLayout,
+        QWidget,
+    )
 
     from gui_qt.app import MainWindow
-    from gui_qt.widget_helpers import ArrowKeyButtonFilter
     from gui_qt.responsive_layout import FlowButtonBar
     from gui_qt.theme_tokens import DARK_TOKENS, LIGHT_TOKENS
 except ImportError as exc:
@@ -171,28 +177,7 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
 
         self.assertNotEqual(self.window._doctor_details_expanded, before)
 
-    def test_arrow_key_button_filter_swallows_direction_keys(self) -> None:
-        app = QApplication.instance()
-        app_filter = getattr(app, "_renpy_lab_arrow_filter", None)
-        self.assertIsNotNone(app_filter)
-        inside = QPushButton(self.window)
-        outside = QPushButton()
-        for key in (
-            Qt.Key.Key_Up,
-            Qt.Key.Key_Down,
-            Qt.Key.Key_Left,
-            Qt.Key.Key_Right,
-        ):
-            event = QKeyEvent(
-                QKeyEvent.Type.KeyPress,
-                key,
-                Qt.KeyboardModifier.NoModifier,
-            )
-            self.assertTrue(app_filter.eventFilter(inside, event))
-            # Dialog buttons (top-level windows) keep arrow-key navigation.
-            self.assertFalse(app_filter.eventFilter(outside, event))
-
-    def test_arrow_keys_keep_focus_on_button(self) -> None:
+    def test_arrow_keys_move_focus_between_buttons_and_stay_visible(self) -> None:
         app = QApplication.instance()
         _activate_window(self.window)
         self.window.setFocus()
@@ -200,9 +185,23 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
         self.assertEqual(app.focusWidget(), self.window.header_log_btn)
 
         QTest.keyClick(app.focusWidget(), Qt.Key.Key_Down)
-        QTest.keyClick(app.focusWidget(), Qt.Key.Key_Right)
+        focused = app.focusWidget()
+        self.assertIsNotNone(focused)
+        self.assertNotEqual(focused, self.window.header_log_btn)
+        self.assertTrue(focused.isVisible())
 
-        self.assertEqual(app.focusWidget(), self.window.header_log_btn)
+    def test_focus_change_scrolls_enclosing_scroll_area(self) -> None:
+        outer = QScrollArea()
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        button = QPushButton("深处按钮")
+        layout.addWidget(button)
+        outer.setWidget(content)
+
+        with mock.patch.object(QScrollArea, "ensureWidgetVisible") as ensure:
+            self.window._ensure_focused_widget_visible(None, button)
+
+        ensure.assert_called_once_with(button)
 
     def test_arrow_keys_switch_shell_page_when_unfocused(self) -> None:
         initial = self.window.shell_nav.currentRow()

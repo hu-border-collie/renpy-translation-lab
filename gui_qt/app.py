@@ -321,7 +321,6 @@ from .settings_schema import (
 _SETTINGS_WORKSPACE_MANAGED_KEYS = frozenset({"game_root"})
 from .translation_workflow import WorkflowUpdate
 from .widget_helpers import (
-    ArrowKeyButtonFilter,
     message_box_information,
     message_box_question,
     message_box_warning,
@@ -542,10 +541,8 @@ class MainWindow(QMainWindow):
     ):
         super().__init__()
         app = QApplication.instance()
-        if app is not None and getattr(app, "_renpy_lab_arrow_filter", None) is None:
-            arrow_filter = ArrowKeyButtonFilter(window_type=MainWindow, parent=app)
-            app.installEventFilter(arrow_filter)
-            app._renpy_lab_arrow_filter = arrow_filter
+        if app is not None:
+            app.focusChanged.connect(self._ensure_focused_widget_visible)
         self.setWindowTitle("Ren'Py Translation Lab - 图形工作台")
         self.setMinimumSize(960, 640)
         self.resize(1180, 780)
@@ -978,6 +975,23 @@ class MainWindow(QMainWindow):
             if item is not None and item.data(Qt.ItemDataRole.UserRole):
                 self.shell_nav.setCurrentRow(next_row)
                 return
+
+    def _ensure_focused_widget_visible(self, _old, new) -> None:
+        """Scroll the enclosing scroll area so the focused control stays visible.
+
+        Qt's arrow-key focus navigation between buttons inside a scroll area can
+        move focus to a control scrolled out of the viewport; the focus frame
+        then disappears from the user's view. Scrolling the ancestor scroll area
+        keeps the frame visible while preserving the standard navigation (#299).
+        """
+        if new is None:
+            return
+        parent = new.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QScrollArea) and parent.widget() is not None:
+                parent.ensureWidgetVisible(new)
+                return
+            parent = parent.parentWidget()
 
     def _sync_work_mode_hint_height(self) -> None:
         label = self.work_mode_hint_label
@@ -5245,15 +5259,26 @@ class MainWindow(QMainWindow):
                 action_item.setData(SPLIT_ACTION_DATA_ROLE, action_payload)
                 action_item.setToolTip(f"\u5207\u6362\u5230 {entry.part_label}")
             if show_action_button:
-                self.split_status_table.setCellWidget(
-                    row,
-                    base_column + 5,
-                    self._build_split_select_button(entry),
-                )
+                self._replace_split_select_button(row, base_column + 5, entry)
             else:
                 self.split_status_table.removeCellWidget(row, base_column + 5)
             
             self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
+
+    def _replace_split_select_button(
+        self,
+        row: int,
+        column: int,
+        entry: SplitManifestEntry,
+    ) -> QPushButton:
+        """(Re)build the action button, restoring keyboard focus if it had it."""
+        old = self.split_status_table.cellWidget(row, column)
+        had_focus = old is not None and QApplication.focusWidget() is old
+        btn = self._build_split_select_button(entry)
+        self.split_status_table.setCellWidget(row, column, btn)
+        if had_focus:
+            btn.setFocus()
+        return btn
 
     def _build_split_select_button(self, entry: SplitManifestEntry) -> QPushButton:
         """Build the keyboard-accessible split-status “选择” button."""
@@ -5321,11 +5346,7 @@ class MainWindow(QMainWindow):
         self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
         
         if show_action_button:
-            self.split_status_table.setCellWidget(
-                row,
-                base_column + 5,
-                self._build_split_select_button(entry),
-            )
+            self._replace_split_select_button(row, base_column + 5, entry)
         else:
             self.split_status_table.removeCellWidget(row, base_column + 5)
 
