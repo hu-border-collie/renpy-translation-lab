@@ -1742,6 +1742,9 @@ class MainWindow(QMainWindow):
         # stages + writeback) never crushes buttons into each other on short windows.
         right_scroll = QScrollArea()
         right_scroll.setObjectName("workbench_content_scroll")
+        # Scroll areas must not take Tab focus themselves: an invisible focus
+        # rect between buttons reads as a jumping focus frame (#299).
+        right_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         right_scroll.setWidgetResizable(True)
         right_scroll.setFrameShape(QFrame.Shape.NoFrame)
         right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1996,6 +1999,7 @@ class MainWindow(QMainWindow):
         doctor_summary_layout.addWidget(self.doctor_status_label)
         self.doctor_summary_scroll = QScrollArea()
         self.doctor_summary_scroll.setObjectName("doctor_summary_scroll")
+        self.doctor_summary_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._style_themed_surface(self.doctor_summary_scroll)
         self.doctor_summary_scroll.setWidgetResizable(True)
         self.doctor_summary_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2081,6 +2085,7 @@ class MainWindow(QMainWindow):
         workflow_outer_layout.setSpacing(0)
         self.workflow_scroll = QScrollArea()
         self.workflow_scroll.setObjectName("workflow_summary_scroll")
+        self.workflow_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._style_themed_surface(self.workflow_scroll)
         self.workflow_scroll.setWidgetResizable(True)
         self.workflow_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2191,6 +2196,7 @@ class MainWindow(QMainWindow):
         writeback_layout.addWidget(self.writeback_status_label)
         writeback_scroll = QScrollArea()
         writeback_scroll.setObjectName("writeback_summary_scroll")
+        writeback_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._style_themed_surface(writeback_scroll)
         writeback_scroll.setWidgetResizable(True)
         writeback_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -3030,6 +3036,7 @@ class MainWindow(QMainWindow):
 
     def _settings_page(self, object_name: str) -> tuple[QScrollArea, QVBoxLayout]:
         scroll = QScrollArea()
+        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         scroll.setObjectName(f"{object_name}_scroll")
         self._style_themed_surface(scroll)
         scroll.setWidgetResizable(True)
@@ -4503,6 +4510,7 @@ class MainWindow(QMainWindow):
         context_outer.setContentsMargins(0, 0, 0, 0)
         context_scroll = QScrollArea()
         context_scroll.setObjectName("diagnostics_context_scroll")
+        context_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._style_themed_surface(context_scroll)
         context_scroll.setWidgetResizable(True)
         context_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -4552,6 +4560,7 @@ class MainWindow(QMainWindow):
         commands_outer.setContentsMargins(0, 0, 0, 0)
         commands_scroll = QScrollArea()
         commands_scroll.setObjectName("diagnostics_commands_scroll")
+        commands_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._style_themed_surface(commands_scroll)
         commands_scroll.setWidgetResizable(True)
         commands_scroll.setFrameShape(QFrame.Shape.NoFrame)

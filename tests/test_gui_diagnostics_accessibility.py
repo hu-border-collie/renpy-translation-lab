@@ -7,7 +7,7 @@ import warnings
 try:
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QPushButton
+    from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea
 
     from gui_qt.app import MainWindow
     from gui_qt.responsive_layout import FlowButtonBar
@@ -116,6 +116,21 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
             self.window.workbench_status_tabs.tabBar().focusPolicy(),
             Qt.FocusPolicy.NoFocus,
         )
+
+    def test_scroll_areas_are_excluded_from_focus_chain(self) -> None:
+        # A scroll area has no visible focus frame; Tab stopping on it between
+        # buttons reads as a jumping focus box (#299).
+        for name in (
+            "workbench_content_scroll",
+            "workflow_summary_scroll",
+            "writeback_summary_scroll",
+            "diagnostics_context_scroll",
+            "diagnostics_commands_scroll",
+        ):
+            with self.subTest(scroll=name):
+                scroll = self.window.findChild(QScrollArea, name)
+                self.assertIsNotNone(scroll)
+                self.assertEqual(scroll.focusPolicy(), Qt.FocusPolicy.NoFocus)
 
     def test_header_log_button_activates_with_enter(self) -> None:
         self.window.tab_widget.setCurrentWidget(self.window._workbench_tab)
