@@ -137,6 +137,10 @@ class TaskStatusSection(QFrame):
         self.status_badge.set_status(status, heading)
         self.message_label.setText(message)
         self.facts_label.setText("\n".join(facts or []))
+        # A new snapshot supersedes previous issue details; callers that need
+        # them (e.g. writeback findings) re-apply via set_details.
+        self.details_label.setText("")
+        self.details_label.setVisible(False)
         self.updateGeometry()
 
     def reflow(self) -> None:
