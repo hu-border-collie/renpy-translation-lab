@@ -104,20 +104,18 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
             Qt.FocusPolicy.NoFocus,
         )
 
-    def test_tab_chain_advances_beyond_header_log_button(self) -> None:
-        app = QApplication.instance()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            app.setActiveWindow(self.window)
-            self.window.setFocus()
-            self.window.header_log_btn.setFocus()
-        self.assertEqual(app.focusWidget(), self.window.header_log_btn)
-
-        # Tab must reach page content instead of stalling on the log button.
-        for _ in range(2):
-            self.window.focusNextPrevChild(True)
-        self.assertNotEqual(app.focusWidget(), self.window.header_log_btn)
-        self.assertIsNotNone(app.focusWidget())
+    def test_sidebar_and_stage_tabs_are_excluded_from_focus_chain(self) -> None:
+        # Arrow keys on the sidebar would switch pages and on the stage tab bar
+        # would flip batch stages while the user explores page content; both
+        # navigation rails stay out of the Tab chain (#299).
+        self.assertEqual(
+            self.window.shell_nav.focusPolicy(),
+            Qt.FocusPolicy.NoFocus,
+        )
+        self.assertEqual(
+            self.window.workbench_status_tabs.tabBar().focusPolicy(),
+            Qt.FocusPolicy.NoFocus,
+        )
 
     def test_header_log_button_activates_with_enter(self) -> None:
         self.window.tab_widget.setCurrentWidget(self.window._workbench_tab)

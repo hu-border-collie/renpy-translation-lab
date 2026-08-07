@@ -1040,6 +1040,10 @@ class MainWindow(QMainWindow):
 
         self.shell_nav = QListWidget()
         self.shell_nav.setObjectName("shell_nav")
+        # The sidebar is a mouse/shortcut navigation rail (Ctrl+1..7); keeping
+        # it in the Tab chain makes arrow keys switch pages unexpectedly while
+        # the user is exploring page content (#299).
+        self.shell_nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.shell_nav.setFrameShape(QFrame.Shape.NoFrame)
         self.shell_nav.setSpacing(1)
         self.shell_nav.setHorizontalScrollBarPolicy(
@@ -1953,6 +1957,10 @@ class MainWindow(QMainWindow):
 
         self.workbench_status_tabs = NoWheelTabWidget()
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
+        # Stage tabs switch automatically with the task flow; exclude the bar
+        # from the Tab chain so arrow keys do not flip stages unexpectedly
+        # while the focus is inside the workbench (#299).
+        self.workbench_status_tabs.tabBar().setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.workbench_status_tabs.setDocumentMode(True)
         self.workbench_status_tabs.tabBar().setExpanding(True)
         self.workbench_status_tabs.tabBar().setUsesScrollButtons(False)
