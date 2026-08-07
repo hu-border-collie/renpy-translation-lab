@@ -46,6 +46,16 @@ CONTEXT_LIBRARY_COPY = {
     ),
 }
 
+TASK_PROJECT_GATE_COPY = {
+    "title": "先完成环境检查",
+    "action": "去环境检查",
+    "status_section_title": "任务状态",
+    "project_hint": "请先选择项目",
+    "sync_translation": "选择项目并运行环境检查后，才能开始同步翻译。",
+    "keywords": "选择项目并运行环境检查后，才能提取关键词。",
+    "revision": "选择项目并运行环境检查后，才能生成订正预览。",
+}
+
 USAGE_LEDGER_COPY = {
     "empty": "模型用量：当前项目暂无实际响应记录",
     "load_error": "模型用量账本读取失败，统计暂不可用",

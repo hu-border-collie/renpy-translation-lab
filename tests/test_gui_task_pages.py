@@ -85,6 +85,22 @@ class GuiTaskPageTests(unittest.TestCase):
         page = self.window.sync_translation_page
         self.assertIs(self.window.workbench_stack.currentWidget(), page)
         self.assertFalse(self.window.workbench_stack.isHidden())
+        # Project gate (#298/#316): until doctor passes, the page shows the
+        # environment-check CTA instead of the task controls.
+        self.assertIs(page.page_stack.currentWidget(), page.empty_state)
+        self.assertTrue(page.content_page.isHidden())
+        self.window._doctor_check_completed = True
+        self.window._set_doctor_summary(
+            DoctorSummary(
+                status="ready",
+                heading="项目检查通过",
+                message="可以开始同步翻译。",
+                facts=[],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
         self.assertFalse(page.risk_warning.isHidden())
         self.assertIn("不会修改", page.risk_warning.text())
         self.assertEqual(page.start_btn.text(), "开始同步翻译")
@@ -94,9 +110,8 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(page.apply_btn.isEnabled())
         self.assertTrue(self.window.sync_mode_warning.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
-        self.assertFalse(self.window.workbench_status_card.isHidden())
-        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(1))
-        self.assertFalse(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertTrue(hasattr(page, "status_section"))
         self.assertFalse(hasattr(self.window, "workbench_log_drawer"))
         self.assertTrue(self.window.context_library_panel.isHidden())
         self.assertGreaterEqual(
@@ -183,10 +198,107 @@ class GuiTaskPageTests(unittest.TestCase):
             "处理中…",
             ["files: 2/10"],
         )
-        self.assertFalse(self.window.workbench_status_card.isHidden())
-        self.assertEqual(self.window.workbench_status_tabs.currentIndex(), 1)
-        self.assertIn("正在同步翻译", self.window.workflow_status_label.text())
-        self.assertIn("files: 2/10", self.window.workflow_facts_label.text())
+        # Status lives inside the page, not the shared card (#298).
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertIn("正在同步翻译", page.status_section.status_badge.text())
+        self.assertIn("files: 2/10", page.status_section.facts_label.text())
+
+    def test_task_pages_gate_on_project_prep(self) -> None:
+        """#298/#316: non-batch task pages show the doctor CTA until ready."""
+        cases = (
+            (WorkMode.SYNC_TRANSLATION, "sync_translation_page"),
+            (WorkMode.KEYWORD_EXTRACTION, "keywords_page"),
+            (WorkMode.REVISION, "revision_page"),
+        )
+        for mode, attr in cases:
+            self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+            # Reset doctor state so the gate is exercised for every mode.
+            self.window._doctor_check_completed = False
+            self.window._doctor_summary_status = ""
+            self.window._sync_workbench_empty_states()
+            page = getattr(self.window, attr)
+            self.assertIs(page.page_stack.currentWidget(), page.empty_state)
+            btn = page.empty_state._action_btn
+            self.assertIsNotNone(btn)
+            assert btn is not None
+            self.assertEqual(btn.text(), "去环境检查")
+            self.assertEqual(btn.objectName(), "primary_btn")
+
+            self.window._doctor_check_completed = True
+            self.window._set_doctor_summary(
+                DoctorSummary(
+                    status="ready",
+                    heading="项目检查通过",
+                    message="ok",
+                    facts=[],
+                    findings=[],
+                    mode="existing_tl_only",
+                )
+            )
+            self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
+    def test_task_page_gate_cta_opens_project_prepare(self) -> None:
+        """#316: the gate CTA routes to 项目与环境."""
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.sync_translation_page
+        self.assertIs(page.page_stack.currentWidget(), page.empty_state)
+        # Route switch is synchronous; avoid processEvents so queued layout
+        # timers from earlier windows cannot touch stale widgets.
+        page.empty_state.action_clicked.emit()
+        self.assertEqual(self.window._current_shell_route(), "project_prepare")
+
+    def test_task_empty_state_copy_is_mode_specific(self) -> None:
+        """#315: per-page empty copy instead of shared batch wording."""
+        cases = (
+            (
+                WorkMode.SYNC_TRANSLATION,
+                "sync_translation_empty_state",
+                "同步翻译",
+            ),
+            (
+                WorkMode.KEYWORD_EXTRACTION,
+                "keywords_empty_state",
+                "提取关键词",
+            ),
+            (
+                WorkMode.REVISION,
+                "revision_empty_state",
+                "订正预览",
+            ),
+        )
+        for mode, object_name, keyword in cases:
+            self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+            page = self.window.workbench_stack.currentWidget()
+            self.assertEqual(page.empty_state.objectName(), object_name)
+            self.assertIn("环境检查", page.empty_state._title_label.text())
+            self.assertIn(keyword, page.empty_state._desc_label.text())
+
+    def test_context_rows_do_not_print_unselected_project(self) -> None:
+        """#298: no '项目 未选择项目' copy without a project."""
+        self.window._set_work_mode(
+            WorkMode.BOOTSTRAP_RAG,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.context_library_page
+        page.set_context_status(
+            rag_enabled=True,
+            source_index_enabled=False,
+            game_root="",
+            project_analysis_label="未生成",
+        )
+        self.assertNotIn("未选择项目", page.rag_status_label.text())
+        self.assertIn("请先选择项目", page.rag_status_label.text())
+        page.set_context_status(
+            rag_enabled=True,
+            source_index_enabled=False,
+            game_root="C:/Games/Demo/work",
+            project_analysis_label="未生成",
+        )
+        self.assertIn("C:/Games/Demo/work", page.rag_status_label.text())
+        self.assertNotIn("请先选择项目", page.rag_status_label.text())
 
     def test_batch_hides_sync_warning(self) -> None:
         self.window._set_work_mode(
@@ -229,9 +341,8 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(self.window.workbench_stack.isHidden())
         self.assertTrue(self.window._mode_frame.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
-        self.assertFalse(self.window.workbench_status_card.isHidden())
-        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(1))
-        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertTrue(hasattr(page, "status_section"))
         self.assertTrue(self.window.keyword_merge_writeback_btn.isHidden())
         self.assertTrue(page.merge_btn.isEnabled())
         self.assertTrue(self.window.apply_revision_btn.isHidden())
@@ -343,9 +454,8 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(self.window.workbench_stack.isHidden())
         self.assertTrue(self.window._mode_frame.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
-        self.assertFalse(self.window.workbench_status_card.isHidden())
-        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(1))
-        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertTrue(hasattr(page, "status_section"))
         self.assertTrue(self.window.apply_revision_btn.isHidden())
         self.assertTrue(page.writeback_btn.isEnabled())
         self.assertTrue(self.window.apply_btn.isHidden())
@@ -648,14 +758,14 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(self.window.workbench_stack.isHidden())
         self.assertTrue(self.window._mode_frame.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
-        self.assertFalse(self.window.workbench_status_card.isHidden())
-        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(1))
-        self.assertFalse(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
+        self.assertTrue(self.window.workbench_status_card.isHidden())
         self.assertFalse(hasattr(self.window, "work_submode_combo"))
         self.assertTrue(self.window.translate_btn.isHidden())
-        # Project-level prep actions stay on the hidden project-only bar.
-        self.assertTrue(self.window.global_project_bar.isHidden())
+        # Task routes show the compact identity bar; prep actions stay hidden.
+        self.assertFalse(self.window.global_project_bar.isHidden())
+        self.assertTrue(self.window.doctor_btn.isHidden())
         page = self.window.context_library_page
+        self.assertTrue(hasattr(page, "bootstrap_status_section"))
         self.assertEqual(page.rag_status_row.title_label.text(), "记忆库")
         self.assertEqual(page.source_index_status_row.title_label.text(), "原文索引")
         self.assertEqual(page.project_analysis_status_row.title_label.text(), "项目分析")
@@ -940,7 +1050,8 @@ class GuiTaskPageTests(unittest.TestCase):
         ):
             self.assertNotIn(developer_term, visible_copy)
 
-    def test_global_prep_buttons_visible_on_all_task_pages(self) -> None:
+    def test_global_prep_buttons_visible_only_on_project_route(self) -> None:
+        """#298: task pages keep compact identity; prep actions stay on 项目与环境."""
         for mode in (
             WorkMode.BATCH_TRANSLATION,
             WorkMode.SYNC_TRANSLATION,
@@ -950,8 +1061,14 @@ class GuiTaskPageTests(unittest.TestCase):
         ):
             with self.subTest(mode=mode):
                 self.window._set_work_mode(mode, refresh_manifest_writeback=False)
-                self.assertFalse(self.window.doctor_btn.isHidden())
-                self.assertFalse(self.window.bootstrap_work_btn.isHidden())
+                self.assertFalse(self.window.global_project_bar.isHidden())
+                self.assertTrue(self.window.doctor_btn.isHidden())
+                self.assertTrue(self.window.bootstrap_work_btn.isHidden())
+                self.assertFalse(self.window.global_switch_project_btn.isHidden())
+
+        self.window._activate_shell_route("project_prepare")
+        self.assertFalse(self.window.doctor_btn.isHidden())
+        self.assertFalse(self.window.bootstrap_work_btn.isHidden())
 
     def test_context_bootstrap_buttons_disabled_while_running(self) -> None:
         self.window._set_work_mode(
@@ -1102,12 +1219,16 @@ class GuiTaskPageTests(unittest.TestCase):
             WorkMode.SYNC_TRANSLATION,
             refresh_manifest_writeback=True,
         )
+        page = self.window.sync_translation_page
         self.assertEqual(
-            self.window.workflow_status_label.property("status"),
+            page.status_section.status_badge.property("status"),
             "ready",
         )
-        self.assertIn("已写入 3 条译文", self.window.workflow_message_label.text())
-        self.assertIn("demo", self.window.workflow_facts_label.text())
+        self.assertIn(
+            "已写入 3 条译文",
+            page.status_section.message_label.text(),
+        )
+        self.assertIn("demo", page.status_section.facts_label.text())
 
     def test_keywords_submode_uses_short_labels(self) -> None:
         self.window._set_work_mode(

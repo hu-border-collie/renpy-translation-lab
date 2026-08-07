@@ -12,7 +12,11 @@ from PySide6.QtWidgets import (
 )
 
 from ..empty_state import EmptyStateWidget
-from ..user_copy import CONTEXT_LIBRARY_COPY, PROJECT_ANALYSIS_COPY
+from ..user_copy import (
+    CONTEXT_LIBRARY_COPY,
+    PROJECT_ANALYSIS_COPY,
+    TASK_PROJECT_GATE_COPY,
+)
 from ..work_modes import WorkMode
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
@@ -179,6 +183,11 @@ class ContextLibraryPage(QFrame):
         self.context_actions.add_action(self.stop_btn, min_width=100)
         self.context_actions.finish_setup()
 
+        self.bootstrap_status_section = self.status_layout.add_status_section(
+            "运行进度"
+        )
+        self.bootstrap_status_section.setVisible(False)
+
         self.status_layout.root.addStretch(1)
         self.page_stack.addWidget(self.status_page)
         self.page_stack.setCurrentWidget(self.empty_state)
@@ -219,17 +228,22 @@ class ContextLibraryPage(QFrame):
         """
         self._rag_enabled = rag_enabled
         self._source_index_enabled = source_index_enabled
-        root_hint = game_root or "未选择项目"
+        self._has_project = bool(game_root)
+        root_hint = game_root or ""
+        project_suffix = (
+            f" · 项目 {root_hint}"
+            if root_hint
+            else f" · {TASK_PROJECT_GATE_COPY['project_hint']}"
+        )
         self._project_analysis_enabled = project_analysis_enabled
         self._project_analysis_inject_enabled = project_analysis_inject_enabled
         self._project_analysis_status = dict(project_analysis_status or {})
-        self._has_project = bool(game_root)
         self.rag_status_row.set_status(
-            f"{'已启用' if rag_enabled else '未启用'} · 项目 {root_hint}"
+            f"{'已启用' if rag_enabled else '未启用'}{project_suffix}"
             + ("" if rag_enabled else " · 请先在设置 · 上下文开启并保存")
         )
         self.source_index_status_row.set_status(
-            f"{'已启用' if source_index_enabled else '未启用'} · 项目 {root_hint}"
+            f"{'已启用' if source_index_enabled else '未启用'}{project_suffix}"
             + ("" if source_index_enabled else " · 请先在设置 · 上下文开启并保存")
         )
         if project_analysis_label:
@@ -252,7 +266,7 @@ class ContextLibraryPage(QFrame):
         else:
             analysis_text += " · 用于翻译：关闭"
         self.project_analysis_status_row.set_status(
-            f"{analysis_text} · 项目 {root_hint}"
+            f"{analysis_text}{project_suffix}"
         )
         if project_analysis_status is not None:
             overall = str(project_analysis_status.get("overall_status") or "")
@@ -274,6 +288,40 @@ class ContextLibraryPage(QFrame):
             self.status_page if show_status else self.empty_state
         )
         self._refresh_action_states()
+
+    def set_bootstrap_progress(
+        self,
+        state: object | None,
+        *,
+        kind: str = "",
+    ) -> None:
+        """Render bootstrap progress inside the context page (#298)."""
+        if state is None or not getattr(state, "visible", False):
+            self.bootstrap_status_section.set_progress(None)
+            self.bootstrap_status_section.setVisible(False)
+            return
+        self.bootstrap_status_section.setVisible(True)
+        heading = "正在预建记忆库" if kind == "rag" else "正在预建原文索引"
+        self.bootstrap_status_section.set_status(
+            "running",
+            heading,
+            getattr(state, "label", "") or "",
+            [],
+        )
+        self.bootstrap_status_section.set_progress(state)
+
+    def workflow_status_snapshot(self) -> tuple[str, str, str, list[str]]:
+        """Return (status, heading, message, facts) for session freeze."""
+        badge = self.bootstrap_status_section.status_badge
+        status = str(badge.property("status") or "")
+        heading = badge.text()
+        message = self.bootstrap_status_section.message_label.text()
+        facts = [
+            line
+            for line in self.bootstrap_status_section.facts_label.text().splitlines()
+            if line.strip()
+        ]
+        return status, heading, message, facts
 
     def set_task_running(self, running: bool, operation: str = "") -> None:
         self._running = running

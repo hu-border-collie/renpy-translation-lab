@@ -58,6 +58,10 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         self.assertEqual(self.window.doctor_btn.text(), "环境检查")
         self.assertEqual(self.window.bootstrap_work_btn.text(), "准备工作目录")
 
+        # Task-route bar is compact: prep actions stay on 项目与环境 (#298).
+        self.assertTrue(self.window.doctor_btn.isHidden())
+        self.assertTrue(self.window.bootstrap_work_btn.isHidden())
+        self.window._activate_shell_route("project_prepare")
         self.assertFalse(self.window.doctor_btn.isHidden())
         self.assertFalse(self.window.bootstrap_work_btn.isHidden())
         self.assertIs(
@@ -157,16 +161,24 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         )
         self.assertEqual(runner_calls, [["bootstrap-work"]])
 
-    def test_project_bar_only_appears_on_project_environment_route(self) -> None:
-        self.assertTrue(self.window.global_project_bar.isHidden())
+    def test_project_bar_persists_on_task_routes_in_compact_mode(self) -> None:
+        """Task routes keep identity + switch; prep actions stay on 项目与环境."""
+        self.assertFalse(self.window.global_project_bar.isHidden())
         self.assertIs(
             self.window.global_project_bar.parentWidget(),
             self.window.workbench_primary,
         )
+        self.assertFalse(self.window.global_switch_project_btn.isHidden())
+        self.assertTrue(self.window.global_browse_project_btn.isHidden())
+        self.assertTrue(self.window.doctor_btn.isHidden())
+        self.assertTrue(self.window.bootstrap_work_btn.isHidden())
 
         self.window._activate_shell_route("project_prepare")
 
         self.assertFalse(self.window.global_project_bar.isHidden())
+        self.assertFalse(self.window.global_browse_project_btn.isHidden())
+        self.assertFalse(self.window.doctor_btn.isHidden())
+        self.assertFalse(self.window.bootstrap_work_btn.isHidden())
         self.assertTrue(self.window.workbench_stack.isHidden())
 
     def test_refresh_project_label_updates_global_bar(self) -> None:

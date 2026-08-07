@@ -69,6 +69,7 @@ class EmptyStateWidget(QWidget):
         description: str,
         *,
         action_text: str | None = None,
+        action_style: str = "secondary",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -135,7 +136,9 @@ class EmptyStateWidget(QWidget):
         self._action_btn: QPushButton | None = None
         if action_text is not None:
             self._action_btn = QPushButton(action_text)
-            self._action_btn.setObjectName("secondary_btn")
+            self._action_btn.setObjectName(
+                "primary_btn" if action_style == "primary" else "secondary_btn"
+            )
             self._action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             self._action_btn.setSizePolicy(
                 QSizePolicy.Policy.Fixed,
@@ -144,6 +147,9 @@ class EmptyStateWidget(QWidget):
             hint = self._action_btn.sizeHint()
             self._action_btn.setMinimumSize(hint)
             self._action_btn.clicked.connect(self.action_clicked)
+            # Public alias so callers can restyle/measure the CTA without
+            # reaching into the private widget.
+            self.action_button = self._action_btn
 
         content_layout.addWidget(self._icon_label, 0, Qt.AlignmentFlag.AlignHCenter)
         content_layout.addWidget(self._title_label, 0, Qt.AlignmentFlag.AlignHCenter)

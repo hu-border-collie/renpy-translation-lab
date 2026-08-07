@@ -122,6 +122,9 @@ class TaskControlsTests(unittest.TestCase):
     def test_keyword_and_revision_actions_wrap_at_narrow_width(self) -> None:
         for page in (KeywordsPage(), RevisionPage()):
             with self.subTest(page=page.objectName()):
+                # The project gate hides content by default; reveal it so the
+                # action bar participates in layout (#298).
+                page.set_project_ready(True)
                 page.resize(360, 180)
                 page.show()
                 self._app.processEvents()
