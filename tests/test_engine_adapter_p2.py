@@ -318,10 +318,9 @@ class TestRenPyAdapterP2(unittest.TestCase):
         occurrence = next(
             occ for occ in snapshot.occurrences if occ.unit.text == "Terry"
         )
-        # The marker parser captures the whole multi-string line; the replaceable
-        # span is only the name, so validation must use unit.text.
-        self.assertTrue(occurrence.unit.source.startswith(occurrence.unit.text))
-        self.assertGreater(len(occurrence.unit.source), len(occurrence.unit.text))
+        # Marker extraction keeps only the first literal of a multi-string
+        # speaker-label line, so the source is exactly the name span.
+        self.assertEqual(occurrence.unit.source, "Terry")
 
         result = adapter.validate_translation(occurrence, "特里")
 
@@ -349,6 +348,35 @@ class TestRenPyAdapterP2(unittest.TestCase):
                     for kind, counter in adapter._token_counters(
                         runtime,
                         "Hello {player}!",
+                    ).items()
+                },
+            }
+        )
+        self.assertEqual(result.source_constraints_digest, expected_digest)
+
+    def test_validation_keeps_full_source_when_text_is_a_prefix(self):
+        source = (
+            'translate schinese chapter:\n'
+            '    # e "Hello world"\n'
+            '    e "Hello world"\n'
+        )
+        _, _, adapter, snapshot = self.snapshot(source)
+        occurrence = self.occurrence_for(snapshot, "Hello world")
+        # A unit whose current text happens to be a prefix of the source must
+        # still validate against the full source span.
+        unit = replace(occurrence.unit, text="Hello", source="Hello world")
+        occurrence = replace(occurrence, unit=unit)
+
+        result = adapter.validate_translation(occurrence, "你好世界")
+
+        expected_digest = digest_json(
+            {
+                "source": "Hello world",
+                "tokens": {
+                    kind: adapter._counter_payload(counter)
+                    for kind, counter in adapter._token_counters(
+                        runtime,
+                        "Hello world",
                     ).items()
                 },
             }
