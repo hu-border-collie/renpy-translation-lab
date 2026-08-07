@@ -938,10 +938,14 @@ class MainWindow(QMainWindow):
 
         On Windows the activation logic can hand focus to the first focusable
         control (the log button), which then swallows arrow keys; the window
-        keeps Up/Down page switching working right after startup (#299).
+        keeps Up/Down page switching working right after startup. Later shows
+        (minimize restore, window switching) do not steal focus from controls
+        the user is editing (#299).
         """
         super().showEvent(event)
-        self.setFocus()
+        if not getattr(self, "_initial_focus_set", False):
+            self._initial_focus_set = True
+            self.setFocus()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Return keyboard focus to the window when clicking inert background.

@@ -63,6 +63,32 @@ LOCATOR_SCHEMA_VERSION = 1
 CONTENT_EVIDENCE_MIN_SCORE = 140
 
 
+def _first_comment_literal(raw_text: str) -> str:
+    """Return the first string literal captured by the greedy comment regex.
+
+    The regex captures from the opening quote to the final quote, so a
+    multi-literal line (``# "Terry" "Hello there."``) arrives as
+    ``Terry" "Hello there.``. This returns the content before the first
+    unescaped quote (``Terry``) and returns the input unchanged when no
+    unescaped quote is found (a single literal with escaped quotes such as
+    ``He said \\"hi\\".``).
+    """
+    out: list[str] = []
+    index = 0
+    while index < len(raw_text):
+        char = raw_text[index]
+        if char == "\\" and index + 1 < len(raw_text):
+            out.append(char)
+            out.append(raw_text[index + 1])
+            index += 2
+            continue
+        if char == '"':
+            return "".join(out)
+        out.append(char)
+        index += 1
+    return raw_text
+
+
 @dataclass(frozen=True)
 class RenPyTranslationSnapshot:
     """One immutable discovery/inventory/extraction pass for workflow callers."""
@@ -1074,9 +1100,11 @@ class RenPyAdapter:
                 # ``# "Terry" "Hello there."`` therefore concatenate adjacent
                 # string literals into ``TerryHello there.``. Keep only the
                 # first literal (the replaceable name span) in that case.
-                concatenated = len(raw_text.split('"')) > 2
-                if concatenated:
-                    raw_text = raw_text.split('"')[0]
+                # Escaped quotes inside one literal (``# "He said \\"hi\\"."``)
+                # must not count as separators.
+                first_literal = _first_comment_literal(raw_text)
+                if first_literal != raw_text:
+                    raw_text = first_literal
                 return {
                     "kind": "comment",
                     "line_index": previous_index,

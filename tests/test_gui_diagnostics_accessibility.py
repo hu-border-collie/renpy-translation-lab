@@ -7,7 +7,7 @@ from unittest import mock
 
 try:
     from PySide6.QtCore import Qt
-    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtGui import QKeyEvent, QShowEvent
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import (
         QApplication,
@@ -257,6 +257,17 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
         QTest.mouseClick(self.window.shell_breadcrumb_label, Qt.MouseButton.LeftButton)
         app.processEvents()
         self.assertEqual(app.focusWidget(), self.window)
+
+    def test_reshow_does_not_steal_focus_from_controls(self) -> None:
+        app = QApplication.instance()
+        _activate_window(self.window)
+        self.window._initial_focus_set = True
+        self.window.header_log_btn.setFocus()
+        self.assertEqual(app.focusWidget(), self.window.header_log_btn)
+
+        self.window.showEvent(QShowEvent())
+
+        self.assertEqual(app.focusWidget(), self.window.header_log_btn)
 
     def test_disabled_button_text_meets_normal_text_contrast(self) -> None:
         for theme, tokens in (("light", LIGHT_TOKENS), ("dark", DARK_TOKENS)):

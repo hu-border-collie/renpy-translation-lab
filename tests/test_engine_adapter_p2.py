@@ -326,6 +326,43 @@ class TestRenPyAdapterP2(unittest.TestCase):
 
         self.assertEqual(result.status, "pass")
 
+    def test_marker_with_escaped_quotes_is_not_truncated(self):
+        source = (
+            'translate schinese chapter:\n'
+            '    # e "He said \\"hi\\"."\n'
+            '    e "He said \\"hi\\"."\n'
+        )
+        _, _, adapter, snapshot = self.snapshot(source)
+        occurrence = self.occurrence_for(snapshot, 'He said "hi".')
+
+        # The single literal contains escaped quotes; marker extraction must
+        # keep the whole text instead of truncating at the first quote.
+        self.assertEqual(occurrence.unit.source, 'He said "hi".')
+        result = adapter.validate_translation(occurrence, '他说"嗨"。')
+        self.assertEqual(result.status, "pass")
+
+    def test_include_filter_changes_fingerprint_and_invalidates_cache(self):
+        source = (
+            'translate schinese chapter:\n'
+            '    # e "Hello"\n'
+            '    e "Hello"\n'
+        )
+        root, tl_dir = self.make_project(source)
+        adapter = RenPyAdapter(legacy_module=runtime)
+        full = adapter.discover_project(self.request(root, tl_dir))
+        filtered = adapter.discover_project(
+            ProjectDiscoveryRequest(
+                project_root=str(root),
+                localization_root=str(tl_dir),
+                target_language="schinese",
+                include_files=("other.rpy",),
+            )
+        )
+
+        # include/exclude changes are materialized into the document set, so
+        # the fingerprint (and therefore the relocation cache key) changes.
+        self.assertNotEqual(full.source_fingerprint, filtered.source_fingerprint)
+
     def test_validation_keeps_marker_source_when_unit_text_is_empty(self):
         source = (
             'translate schinese chapter:\n'
