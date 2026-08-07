@@ -22,6 +22,16 @@ class GuiThemeCacheTests(unittest.TestCase):
             self.assertIn(f"{selector}:pressed,", template)
             self.assertIn(f"{selector}:disabled,", template)
 
+    def test_doctor_details_toggle_focus_has_visible_indicator(self):
+        template = _TEMPLATE_PATH.read_text(encoding="utf-8")
+        # The focus rule must not suppress every border; a visible underline
+        # keeps the flat disclosure look while showing keyboard focus (#299).
+        self.assertIn("QToolButton#doctor_details_toggle:focus {", template)
+        focus_block = template.split("QToolButton#doctor_details_toggle:focus {", 1)[1]
+        focus_block = focus_block.split("}", 1)[0]
+        self.assertIn("border-bottom", focus_block)
+        self.assertNotIn("border: none;", focus_block)
+
     def test_clear_stylesheet_cache_allows_stylesheet_reload(self):
         with tempfile.TemporaryDirectory() as tmp:
             resources = Path(tmp)

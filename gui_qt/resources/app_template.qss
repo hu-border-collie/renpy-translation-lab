@@ -223,11 +223,16 @@ QToolButton#doctor_details_toggle:hover {
     color: ${fg_primary};
 }
 QToolButton#doctor_details_toggle:pressed,
-QToolButton#doctor_details_toggle:checked,
-QToolButton#doctor_details_toggle:focus {
+QToolButton#doctor_details_toggle:checked {
     background: transparent;
     border: none;
     color: ${fg_hint};
+}
+/* Visible keyboard focus: underline instead of a box, keeping the flat look. */
+QToolButton#doctor_details_toggle:focus {
+    background: transparent;
+    border-bottom: 1px solid ${accent_primary};
+    color: ${fg_primary};
 }
 
 /* Dialogs are top-level windows */
