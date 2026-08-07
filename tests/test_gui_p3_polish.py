@@ -219,7 +219,8 @@ class GuiP3PolishTests(unittest.TestCase):
         btn = empty._action_btn
         self.assertIsNotNone(btn)
         assert btn is not None
-        self.assertEqual(btn.text(), "去环境检查")
+        # After doctor passes the primary action is starting the batch run.
+        self.assertEqual(btn.text(), "开始翻译")
         self.assertFalse(btn.isHidden())
         # Button geometry fully inside empty-state widget.
         btn_in_empty = QRect(btn.mapTo(empty, QPoint(0, 0)), btn.size())

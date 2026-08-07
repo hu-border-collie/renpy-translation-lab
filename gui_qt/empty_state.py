@@ -182,6 +182,11 @@ class EmptyStateWidget(QWidget):
         if self._action_btn is not None:
             self._action_btn.setEnabled(bool(enabled))
 
+    def set_action_text(self, text: str) -> None:
+        """Update the optional action button label (if present)."""
+        if self._action_btn is not None:
+            self._action_btn.setText(text)
+
     def _reflow_content_width(self) -> None:
         """Keep centered copy inside narrow inspectors instead of overflowing."""
         outer = self.layout()

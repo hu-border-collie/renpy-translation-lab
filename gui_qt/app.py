@@ -2226,7 +2226,7 @@ class MainWindow(QMainWindow):
         # prepare status tab is hidden on task pages, so tab-index focus alone
         # would be remapped to 进度 and appear to do nothing.
         self.workflow_empty_state.action_clicked.connect(
-            lambda: self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+            self._on_workflow_empty_cta
         )
         workflow_layout.addWidget(self.workflow_empty_state)
         self.workflow_empty_state.setVisible(False)
@@ -8402,10 +8402,19 @@ class MainWindow(QMainWindow):
                 status = str(raw or "")
             if status and status not in {"idle", "stale", ""}:
                 show_wf_empty = False
-            if has_project and status in {"idle", "stale"} and not resume_ok and not has_workflow:
+            doctor_ready = self._doctor_allows_translate_action()
+            if (
+                has_project
+                and doctor_ready
+                and status in {"idle", "stale"}
+                and not resume_ok
+                and not has_workflow
+            ):
                 show_wf_empty = True
-            # No project: the batch page gate owns the doctor CTA (#316).
-            if not has_project:
+            # Without a project or doctor readiness, the batch page gate owns
+            # the doctor CTA (#316); the shared empty CTA only shows after
+            # prep passes, where its primary action is 开始翻译, not 去环境检查.
+            if not has_project or not doctor_ready:
                 show_wf_empty = False
             self.workflow_empty_state.setVisible(show_wf_empty)
             # Empty CTA shares the progress column with summary chrome. Hide the
@@ -8419,6 +8428,7 @@ class MainWindow(QMainWindow):
                 if widget is not None:
                     widget.setVisible(not show_wf_empty)
             if show_wf_empty:
+                self.workflow_empty_state.set_action_text("开始翻译")
                 for attr in (
                     "workflow_progress_bar",
                     "view_last_completed_btn",
@@ -8524,6 +8534,13 @@ class MainWindow(QMainWindow):
     def _on_task_page_gate_action(self, action: str) -> None:
         """Route page-level gate CTAs (e.g. 去环境检查) to shell routes."""
         if action == "open_doctor":
+            self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+
+    def _on_workflow_empty_cta(self) -> None:
+        """Route the batch empty CTA: start translation once prep passes."""
+        if self._doctor_allows_translate_action():
+            self._on_start_translation()
+        else:
             self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
 
     def _on_batch_translation_page_action(self, action: str) -> None:
