@@ -1,0 +1,134 @@
+
+import os
+import re
+
+# Glossary Definition
+glossary_raw = [
+    ("Moonfall Ceremonies", "月落庆典"),
+    ("Sacred Rend", "神圣裂隙"),
+    ("Silver Boughs", "银枝部族"),
+    ("Mead Hall", "蜜酒厅"),
+    ("High Clearing", "高地空地"),
+    ("Mooncalled", "月召者"),
+    ("Great Spirits", "伟大神灵"),
+    ("Teann Clans", "Teann 部族"),
+    ("Oron‑nkai", "Oron‑nkai 部族"),
+    ("The Mead Hall", "蜜酒厅"),
+    ("The Sanctum", "圣殿"),
+    ("Rend", "裂隙"),
+    ("Boughs", "林冠"),
+    ("Sanctum", "圣殿"),
+    ("Moontouched", "月触"),
+    ("Moonfall", "月落"),
+    ("Codex", "图鉴"),
+    ("Kantharos", "坎塔罗斯"),
+    ("Nwyfre", "Nwyfre"),
+]
+
+# Sort by length descending to prioritize longer phrases
+glossary_raw.sort(key=lambda x: len(x[0]), reverse=True)
+
+# Prepare Regex Patterns
+# using \b for word boundaries.
+# Escape keys just in case.
+replacements = []
+for en, cn in glossary_raw:
+    # Handle '-' which is not a word character in \b usually, but we want to match it literally.
+    # If the key contains special chars, we escape them.
+    # We strip 'The ' case insensitively if it's separate?
+    # Actually, we included "The Mead Hall" in the list.
+    
+    # Pattern: \b(escaped_en)\b, case insensitive
+    pattern_str = r'\b' + re.escape(en) + r'\b'
+    # "Oron‑nkai" has a non-breaking hyphen? Or normal hyphen?
+    # The glossary had "Oron‑nkai" (looks like non-breaking hyphen U+2011 or similar).
+    # I should be careful. I'll paste it exactly.
+    replacements.append((re.compile(pattern_str, re.IGNORECASE), cn))
+
+TARGET_DIR = r"C:\RenPy_Workspace\Game_Moontouched\work\game\tl\schinese"
+
+def process_line(text, is_string_content=False):
+    # Apply replacements
+    for pattern, replacement in replacements:
+        text = pattern.sub(replacement, text)
+    return text
+
+def process_file(filepath):
+    print(f"Processing: {filepath}")
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+    except Exception as e:
+        print(f"Failed to read {filepath}: {e}")
+        return
+
+    new_lines = []
+    changes_count = 0
+
+    for line in lines:
+        stripped = line.strip()
+        # Skip 'old' lines and comments
+        if stripped.startswith('old "') or stripped.startswith("old '") or stripped.startswith('#') or stripped.startswith('old_'):
+            new_lines.append(line)
+            continue
+        
+        # Identify strings in the line
+        # Regex to find strings: "..." or '...'
+        # We assume standard Ren'Py strings.
+        
+        def replace_in_match(match):
+            content = match.group(1) # The content inside quotes
+            # Apply glossary to content
+            new_content = process_line(content, is_string_content=True)
+            if new_content != content:
+                nonlocal changes_count
+                changes_count += 1
+            # Return the quoted string with new content
+            # match.group(0) is the full string including quotes
+            quote_char = match.group(0)[0]
+            return f"{quote_char}{new_content}{quote_char}"
+
+        # Pattern matches "content" or 'content'
+        # Be careful of escaped quotes inside strings... complex regex needed?
+        # Simple regex for distinct strings:
+        # Patter: "(?:[^"\\]|\\.)*" | '(?:[^'\\]|\\.)*'
+        string_pattern = r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\''
+        
+        # We need a custom function to handle the two groups (double or single quote)
+        def sub_func(m):
+            nonlocal changes_count
+            if m.group(1) is not None:
+                content = m.group(1)
+                new_content = process_line(content)
+                if new_content != content:
+                    changes_count += 1
+                return f'"{new_content}"'
+            else:
+                content = m.group(2)
+                new_content = process_line(content)
+                if new_content != content:
+                    changes_count += 1
+                return f"'{new_content}'"
+
+        processed_line = re.sub(string_pattern, sub_func, line)
+        new_lines.append(processed_line)
+
+    if changes_count > 0:
+        print(f"  Made {changes_count} replacements.")
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+    else:
+        print("  No changes.")
+
+def main():
+    if not os.path.exists(TARGET_DIR):
+        print(f"Directory not found: {TARGET_DIR}")
+        return
+
+    for root, dirs, files in os.walk(TARGET_DIR):
+        for file in files:
+            if file.endswith(".rpy"):
+                process_file(os.path.join(root, file))
+
+if __name__ == "__main__":
+    main()

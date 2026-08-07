@@ -1,0 +1,164 @@
+import re
+import sys
+import os
+
+RENPY_TAG_PATTERN = re.compile(r'\{[^}]+\}')
+BRACKET_VAR_PATTERN = re.compile(r'\[[^\]]+\]')
+
+def shield_content(text):
+    placeholders = []
+    
+    def tag_repl(match):
+        placeholders.append(match.group(0))
+        return f"__TAG_{len(placeholders)-1}__"
+    
+    def var_repl(match):
+        placeholders.append(match.group(0))
+        return f"__VAR_{len(placeholders)-1}__"
+    
+    text_shielded = RENPY_TAG_PATTERN.sub(tag_repl, text)
+    text_shielded = BRACKET_VAR_PATTERN.sub(var_repl, text_shielded)
+    return text_shielded, placeholders
+
+def unshield_content(text, placeholders):
+    for i, ph in enumerate(placeholders):
+        text = text.replace(f"__TAG_{i}__", ph)
+        text = text.replace(f"__VAR_{i}__", ph)
+    return text
+
+POLISH_REPLACEMENTS = [
+    (r'疲惫感如铅块般沉重地压在四肢和每一块肌肉上。', r'沉沉的倦意如灌了铅般拖垮了四肢与每一束肌肉。'),
+    (r'发出抗议的尖叫', r'不堪重负地酸痛抽搐'),
+    (r'这场漫长且非本意的午睡，确实把事情搞砸了。', r'这场打乱计划的意外沉睡，着实打乱了我的节奏。'),
+    (r'没关系，.*?还有时间挽回我的计划，让一切重回正轨。', r'无妨，要补救计划还来得及，一切终将重回正轨。'),
+    (r'我向灼烧的肺部深吸了一口气', r'我向如火灼烧般的肺部深深吸进一口气'),
+    (r'疲惫地在初升的阳光下眨了眨眼。', r'在刺眼的初升晨光中疲倦地眯起了双眼。'),
+    (r'那只能意味着一件事……', r'那只能说明一件事……'),
+    (r'这具躯体出了点毛病。', r'这具躯壳当真是出了毛病。'),
+    (r'数不胜数的勤劳工匠', r'汇聚于此的各路精湛工匠'),
+    (r'古老尊贵的王室所在地', r'亦是古老尊贵王室的安居之所'),
+    (r'确实是个高贵的城市。', r'确是一座宏伟高贵的名城。'),
+    (r'这并不意味着它是完美的。', r'但也绝非无瑕的世外桃源。'),
+    (r'在过去的几年里', r'数年来'),
+    (r'在过去的一周里', r'这周以来'),
+    (r'在过去的几天里', r'这几天来'),
+    (r'在未来的日子里', r'往后的日子里'),
+    (r'在某种程度上', r'某种意义上说'),
+    (r'在很大程度上', r'大体而言'),
+    (r'在大多数情况下', r'多数时候'),
+    (r'被用于', r'拿来'),
+    (r'被用来', r'用于'),
+    (r'被视为', r'堪称'),
+    (r'被称为', r'号称'),
+    (r'被认为', r'在众人眼中'),
+    (r'被告知', r'听说'),
+    (r'被发现', r'显露出来'),
+    (r'被摧毁', r'毁于旦夕'),
+    (r'令人感到不安', r'令人心神不宁'),
+    (r'感到非常', r'分外'),
+    (r'感到无比', r'万分'),
+    (r'发出了笑声', r'轻笑了出来'),
+    (r'发出了叹息', r'叹了口气'),
+    (r'发出了呼喊', r'喊了出来'),
+    (r'发出了怒吼', r'咆哮道'),
+    (r'发出了呻吟', r'低声呻吟'),
+    (r'露出了微笑', r'扬起微笑'),
+    (r'露出了苦笑', r'自嘲地一笑'),
+    (r'耸了耸肩膀', r'耸耸肩'),
+    (r'点了一点头', r'点点头'),
+    (r'摇了一摇头', r'摇摇头'),
+    (r'眨了一眨眼', r'眨眨眼'),
+    (r'看了一眼', r'瞄了一眼'),
+    (r'等了一等', r'稍作等待'),
+    (r'试了一试', r'试上一试'),
+    (r'有一点', r'略有些'),
+    (r'有一些', r'有些许'),
+    (r'有很多', r'为数不少'),
+    (r'所有的', r'悉数'),
+    (r'每一个', r'凡是'),
+    (r'毫无疑问', r'毋庸置疑'),
+    (r'不可否认', r'无可厚非'),
+    (r'不管怎么说', r'话又说回来'),
+    (r'无论如何', r'不论怎样'),
+    (r'说实话', r'老实说'),
+    (r'坦白讲', r'开门见山地说'),
+    (r'幸运的是', r'所幸'),
+    (r'不幸的是', r'遗憾的是'),
+    (r'显而易见的是', r'显而易见'),
+    (r'毫无疑问的是', r'毫无疑问'),
+    (r'值得注意的是', r'值得一提的是'),
+    (r'毫无预兆地', r'突如其来地'),
+    (r'不知不觉中', r'悄然无息间'),
+    (r'不情愿地', r'老大不情愿地'),
+    (r'毫不犹豫地', r'当机立断地'),
+    (r'毫不留情地', r'绝不姑息地'),
+    (r'小心翼翼地', r'蹑手蹑脚地'),
+    (r'紧紧地', r'死死地'),
+    (r'深深地吸', r'深吸'),
+    (r'重重地打', r'狠狠痛击'),
+    (r'狠狠地', r'毫不客气地'),
+    (r'死死地', r'抓紧不放'),
+    (r'极其', r'绝顶'),
+    (r'十分', r'极为'),
+    (r'异常', r'格外'),
+    (r'相当', r'甚为'),
+    (r'非常', r'颇为'),
+    (r'绝对', r'断然'),
+    (r'完全', r'彻头彻尾'),
+]
+
+def polish_line_content(text):
+    text_shielded, placeholders = shield_content(text)
+    
+    for pattern, repl in POLISH_REPLACEMENTS:
+        try:
+            text_shielded = re.sub(pattern, repl, text_shielded)
+        except Exception:
+            pass
+            
+    return unshield_content(text_shielded, placeholders)
+
+def process_file(file_path):
+    with open(file_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+        
+    modified_count = 0
+    new_lines = []
+    
+    in_translation_block = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("translate schinese"):
+            in_translation_block = True
+            new_lines.append(line)
+            continue
+            
+        if in_translation_block and not stripped.startswith("#") and stripped.startswith('"'):
+            polished = polish_line_content(line)
+            if polished != line:
+                modified_count += 1
+            new_lines.append(polished)
+        elif in_translation_block and not stripped.startswith("#") and (' "' in line or ' "' in stripped):
+            polished = polish_line_content(line)
+            if polished != line:
+                modified_count += 1
+            new_lines.append(polished)
+        else:
+            new_lines.append(line)
+            
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.writelines(new_lines)
+        
+    print(f"Processed {os.path.basename(file_path)}: Polished {modified_count} lines.")
+    return modified_count
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        target = sys.argv[1]
+        if os.path.isfile(target):
+            process_file(target)
+        elif os.path.isdir(target):
+            for root, _, files in os.walk(target):
+                for file in files:
+                    if file.endswith('.rpy'):
+                        process_file(os.path.join(root, file))
