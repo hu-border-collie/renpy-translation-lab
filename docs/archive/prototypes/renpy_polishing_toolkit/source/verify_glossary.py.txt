@@ -1,0 +1,57 @@
+
+import os
+import re
+
+glossary_keys = [
+    "Moonfall",
+    "Rend",
+    "Boughs",
+    "Sanctum",
+    "Mead Hall",
+    "High Clearing",
+    "Mooncalled",
+    "Moontouched",
+    "Codex",
+    "Kantharos",
+    "Great Spirits",
+    "Sculptor",
+    "Lovers",
+]
+
+TARGET_DIR = r"C:\RenPy_Workspace\Game_Moontouched\work\game\tl\schinese"
+
+def verify_file(filepath):
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+    except Exception as e:
+        print(f"Failed to read {filepath}: {e}")
+        return
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith('#'):
+            continue
+        if stripped.startswith('old'):
+            continue
+        
+        # Check for keywords
+        for key in glossary_keys:
+            # Word boundary check
+            # For "The Mead Hall", keys has spaces.
+            # Regex: \bKEY\b
+            pattern = r'\b' + re.escape(key) + r'\b'
+            if re.search(pattern, stripped, re.IGNORECASE):
+                print(f"{filepath}:{i+1}: {stripped.strip()}")
+                break
+
+def main():
+    for root, dirs, files in os.walk(TARGET_DIR):
+        for file in files:
+            if file.endswith(".rpy"):
+                verify_file(os.path.join(root, file))
+
+if __name__ == "__main__":
+    main()
