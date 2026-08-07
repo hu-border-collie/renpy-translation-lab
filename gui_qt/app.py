@@ -881,7 +881,8 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched: Any, event: QEvent) -> bool:
         if watched is self.work_mode_hint_label and event.type() == QEvent.Type.Resize:
             self._sync_work_mode_hint_height()
-        if hasattr(self, "split_status_table") and watched is self.split_status_table:
+        split_table = getattr(self, "split_status_table", None)
+        if split_table is not None and watched in (split_table, split_table.viewport()):
             if event.type() == QEvent.Type.KeyPress and event.key() in {
                 Qt.Key.Key_Return,
                 Qt.Key.Key_Enter,
@@ -889,23 +890,23 @@ class MainWindow(QMainWindow):
             }:
                 delegate = getattr(self, "_split_status_action_delegate", None)
                 if delegate is not None and delegate.keyboard_activate(
-                    self.split_status_table.currentIndex()
+                    split_table.currentIndex()
                 ):
                     return True
-        if hasattr(self, "split_status_table") and watched is self.split_status_table.viewport():
-            if event.type() == QEvent.Type.Resize:
-                self._sync_split_status_table_columns()
-            elif event.type() in {QEvent.Type.Leave, QEvent.Type.MouseMove}:
-                delegate = getattr(self, "_split_status_action_delegate", None)
-                if delegate is not None:
-                    if event.type() == QEvent.Type.Leave:
-                        delegate.clear_hover_state()
-                        delegate.clear_pressed_state()
-                    else:
-                        index = self.split_status_table.indexAt(event.position().toPoint())
-                        if not index.isValid() or not is_split_action_column(index.column()):
+            if watched is split_table.viewport():
+                if event.type() == QEvent.Type.Resize:
+                    self._sync_split_status_table_columns()
+                elif event.type() in {QEvent.Type.Leave, QEvent.Type.MouseMove}:
+                    delegate = getattr(self, "_split_status_action_delegate", None)
+                    if delegate is not None:
+                        if event.type() == QEvent.Type.Leave:
                             delegate.clear_hover_state()
                             delegate.clear_pressed_state()
+                        else:
+                            index = split_table.indexAt(event.position().toPoint())
+                            if not index.isValid() or not is_split_action_column(index.column()):
+                                delegate.clear_hover_state()
+                                delegate.clear_pressed_state()
         return super().eventFilter(watched, event)
 
     def _sync_work_mode_hint_height(self) -> None:
@@ -5154,16 +5155,26 @@ class MainWindow(QMainWindow):
                 action_item.setData(SPLIT_ACTION_DATA_ROLE, action_payload)
                 action_item.setToolTip(f"\u5207\u6362\u5230 {entry.part_label}")
             if show_action_button:
-                btn = QPushButton("选择")
-                btn.setObjectName("split_select_btn")
-                btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-                btn.setToolTip(f"切换到 {entry.part_label}")
-                btn.clicked.connect(lambda checked=False, path=entry.manifest_path: self._select_split_manifest(path))
-                self.split_status_table.setCellWidget(row, base_column + 5, btn)
+                self.split_status_table.setCellWidget(
+                    row,
+                    base_column + 5,
+                    self._build_split_select_button(entry),
+                )
             else:
                 self.split_status_table.removeCellWidget(row, base_column + 5)
             
             self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
+
+    def _build_split_select_button(self, entry: SplitManifestEntry) -> QPushButton:
+        """Build the keyboard-accessible split-status “选择” button."""
+        btn = QPushButton("选择")
+        btn.setObjectName("split_select_btn")
+        btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        btn.setToolTip(f"切换到 {entry.part_label}")
+        btn.clicked.connect(
+            lambda checked=False, path=entry.manifest_path: self._select_split_manifest(path)
+        )
+        return btn
 
     def _update_split_status_job_column_texts(self, profile: dict[str, int]) -> None:
         if not hasattr(self, "split_status_table"):
@@ -5220,12 +5231,11 @@ class MainWindow(QMainWindow):
         self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
         
         if show_action_button:
-            btn = QPushButton("选择")
-            btn.setObjectName("split_select_btn")
-            btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-            btn.setToolTip(f"切换到 {entry.part_label}")
-            btn.clicked.connect(lambda checked=False, path=entry.manifest_path: self._select_split_manifest(path))
-            self.split_status_table.setCellWidget(row, base_column + 5, btn)
+            self.split_status_table.setCellWidget(
+                row,
+                base_column + 5,
+                self._build_split_select_button(entry),
+            )
         else:
             self.split_status_table.removeCellWidget(row, base_column + 5)
 

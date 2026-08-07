@@ -13,26 +13,20 @@ from gui_qt.settings_schema import (
 
 class GuiSettingsSchemaTests(unittest.TestCase):
     def test_user_visible_setting_titles_use_chinese_copy(self):
-        for key in (
-            "sync_chunk_size",
-            "batch_chunk_size",
-            "batch_retry_chunk_size",
-            "keyword_chunk_size",
-            "revision_chunk_size",
-            "batch_safety_settings",
-        ):
+        expected_labels = {
+            "sync_chunk_size": "同步分块条数",
+            "batch_chunk_size": "批量分块条数",
+            "batch_retry_chunk_size": "补译分块条数",
+            "keyword_chunk_size": "关键词分块条数",
+            "keyword_max_candidates_per_chunk": "每分块候选上限",
+            "revision_chunk_size": "订正分块条数",
+            "batch_safety_settings": "安全设置",
+        }
+        for key, expected_label in expected_labels.items():
             with self.subTest(key=key):
                 field = ADVANCED_SETTING_FIELD_BY_KEY[key]
-                self.assertNotIn("chunk", field.label)
-                self.assertNotIn("Batch", field.label)
-        self.assertEqual(
-            ADVANCED_SETTING_FIELD_BY_KEY["batch_safety_settings"].label,
-            "安全设置",
-        )
-        self.assertEqual(
-            ADVANCED_SETTING_FIELD_BY_KEY["sync_chunk_size"].label,
-            "同步分块条数",
-        )
+                self.assertEqual(field.label, expected_label)
+                self.assertNotIn("chunk", field.description)
 
     def test_project_analysis_save_flags_preserve_saved_values_without_widgets(self):
         flags = resolve_project_analysis_flags_for_save(

@@ -42,20 +42,30 @@ def add_editable_combo_popup_action(combo: QComboBox) -> None:
     combo._popup_action = action
 
 
-def build_information_box(
+def _build_ok_box(
     parent: "QWidget | None",
     title: str,
     text: str,
+    icon: QMessageBox.Icon,
 ) -> QMessageBox:
-    """Build an information box with a Chinese 确定 button (not English OK)."""
+    """Build a single-button box with a Chinese 确定 button (not English OK)."""
     box = QMessageBox(parent)
-    box.setIcon(QMessageBox.Icon.Information)
+    box.setIcon(icon)
     box.setWindowTitle(title)
     box.setTextFormat(Qt.TextFormat.PlainText)
     box.setText(text)
     ok_btn = box.addButton("确定", QMessageBox.ButtonRole.AcceptRole)
     box.setDefaultButton(ok_btn)
     return box
+
+
+def build_information_box(
+    parent: "QWidget | None",
+    title: str,
+    text: str,
+) -> QMessageBox:
+    """Build an information box with a Chinese 确定 button (not English OK)."""
+    return _build_ok_box(parent, title, text, QMessageBox.Icon.Information)
 
 
 def build_warning_box(
@@ -64,14 +74,7 @@ def build_warning_box(
     text: str,
 ) -> QMessageBox:
     """Build a warning box with a Chinese 确定 button (not English OK)."""
-    box = QMessageBox(parent)
-    box.setIcon(QMessageBox.Icon.Warning)
-    box.setWindowTitle(title)
-    box.setTextFormat(Qt.TextFormat.PlainText)
-    box.setText(text)
-    ok_btn = box.addButton("确定", QMessageBox.ButtonRole.AcceptRole)
-    box.setDefaultButton(ok_btn)
-    return box
+    return _build_ok_box(parent, title, text, QMessageBox.Icon.Warning)
 
 
 def build_question_box(

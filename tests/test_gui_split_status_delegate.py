@@ -125,25 +125,33 @@ class GuiSplitStatusDelegateTests(unittest.TestCase):
             invoked: list[str] = []
             window._select_split_manifest = lambda path: invoked.append(path)
             table = window.split_status_table
-            item = QTableWidgetItem("")
-            item.setData(
-                SPLIT_ACTION_DATA_ROLE,
-                split_action_item_payload(
-                    selectable=True,
-                    manifest_path=r"C:\pkg\part02\manifest.json",
-                    part_label="part02/03",
-                ),
-            )
             table.setRowCount(1)
-            table.setItem(0, 0, item)
-            table.setCurrentCell(0, 0)
 
-            QTest.keyClick(table, Qt.Key.Key_Return)
-            self.assertEqual(invoked, [r"C:\pkg\part02\manifest.json"])
+            for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+                with self.subTest(key=key):
+                    item = QTableWidgetItem("")
+                    item.setData(
+                        SPLIT_ACTION_DATA_ROLE,
+                        split_action_item_payload(
+                            selectable=True,
+                            manifest_path=r"C:\pkg\part02\manifest.json",
+                            part_label="part02/03",
+                        ),
+                    )
+                    table.setItem(0, 0, item)
+                    table.setCurrentCell(0, 0)
+                    invoked.clear()
+
+                    QTest.keyClick(table, key)
+                    self.assertEqual(invoked, [r"C:\pkg\part02\manifest.json"])
 
             invoked.clear()
             table.setItem(0, 0, QTableWidgetItem("plain"))
             QTest.keyClick(table, Qt.Key.Key_Space)
+            self.assertEqual(invoked, [])
+
+            invoked.clear()
+            QTest.keyClick(table.viewport(), Qt.Key.Key_Return)
             self.assertEqual(invoked, [])
         finally:
             gui_test_support.close_main_window(window)

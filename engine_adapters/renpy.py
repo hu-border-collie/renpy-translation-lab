@@ -150,9 +150,16 @@ class RenPyAdapter:
 
     def __init__(self, legacy_module: ModuleType | None = None):
         self._legacy_module = legacy_module
-        # Cache live inventory/extract by source fingerprint so multi-chunk
-        # check/apply relocation does not rescan the same file repeatedly.
-        self._live_occurrence_cache: dict[str, tuple[ProjectDiscovery, tuple[Occurrence, ...]]] = {}
+        # Cache live inventory/extract per project identity so multi-chunk
+        # check/apply relocation does not rescan the same project repeatedly.
+        # The key includes the project root and target language so two
+        # different projects with the same source fingerprint never share a
+        # live snapshot. The cache lives for the adapter instance lifetime and
+        # holds at most one entry per project identity encountered.
+        self._live_occurrence_cache: dict[
+            tuple[str, str, str, str],
+            tuple[Occurrence, ...],
+        ] = {}
 
     def _legacy(self) -> ModuleType:
         if self._legacy_module is None:
@@ -1421,11 +1428,22 @@ class RenPyAdapter:
         self,
         live_project: ProjectDiscovery,
     ) -> tuple[ProjectDiscovery, tuple[Occurrence, ...]]:
-        """Return live occurrences for a project, reusing scans for the same source fingerprint."""
-        cache_key = str(live_project.source_fingerprint or "")
-        cached = self._live_occurrence_cache.get(cache_key)
-        if cached is not None:
-            return cached
+        """Return live occurrences for a project, reusing scans per project.
+
+        The cache is keyed by project identity (root, localization root,
+        target language) plus the source fingerprint. On a hit the current
+        ``live_project`` is returned together with the cached occurrence data,
+        so callers never reuse another project's ``ProjectDiscovery`` object.
+        """
+        cache_key = (
+            live_project.project_root,
+            live_project.localization_root,
+            live_project.target_language,
+            live_project.source_fingerprint,
+        )
+        cached_occurrences = self._live_occurrence_cache.get(cache_key)
+        if cached_occurrences is not None:
+            return live_project, cached_occurrences
 
         live_inventory = self.inventory_candidates(live_project, InventoryPolicy())
         approved_ids = [
@@ -1436,10 +1454,8 @@ class RenPyAdapter:
         live_occurrences = tuple(
             self.extract_occurrences(live_project, live_inventory, approved_ids)
         )
-        cached = (live_project, live_occurrences)
-        if cache_key:
-            self._live_occurrence_cache[cache_key] = cached
-        return cached
+        self._live_occurrence_cache[cache_key] = live_occurrences
+        return live_project, live_occurrences
 
     def relocate_occurrences(
         self,
@@ -1554,13 +1570,29 @@ class RenPyAdapter:
         occurrence: Occurrence,
         translated_text: str,
     ) -> ValidationResult:
+        """Validate ``translated_text`` against the replaceable source span.
+
+        Validation uses the marker-backed source text (the actual original for
+        ``# ...`` / ``old`` pairs) so translated marker lines are checked
+        against their source, not their current translation. Speaker-name units
+        are only the name span; their marker may have captured the whole
+        ``"Name" "Dialogue"`` line (adjacent string literals concatenate), so
+        validation falls back to ``unit.text`` (the name) whenever the source
+        text is just the replaceable span plus extra dialogue.
+        """
         if occurrence.engine != self.engine:
             raise ValueError(f"RenPyAdapter cannot validate engine={occurrence.engine!r}.")
         legacy = self._legacy()
-        # Validate the actual replaceable unit text, not concatenated source_text.
-        # Speaker-name units are only the name span; source_text may include the dialogue.
         unit = occurrence.unit
-        source_text = str(getattr(unit, "text", None) or getattr(unit, "source_text", None) or "")
+        source_text = str(unit.source or "")
+        unit_text = str(unit.text or "")
+        if source_text.startswith(unit_text) and len(source_text) > len(unit_text):
+            # Marker parsing concatenated adjacent strings on a speaker-label
+            # line (e.g. ``# "Terry" "Hello there."``); validate the
+            # replaceable span instead.
+            source_text = unit_text
+        if not source_text:
+            source_text = str(unit.source_text or "")
         translated_text = str(translated_text or "")
         try:
             valid, message = legacy.validate_translation(source_text, translated_text)
