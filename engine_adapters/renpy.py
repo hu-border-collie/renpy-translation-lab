@@ -61,6 +61,33 @@ LOCATOR_SCHEMA_VERSION = 1
 # clear this floor so bare unique-string hits without structural signals fail closed.
 # Typical unique stale-block fallback scores 140+ (shared block_occurrence / speaker).
 CONTENT_EVIDENCE_MIN_SCORE = 140
+LIVE_OCCURRENCE_CACHE_LIMIT = 8
+
+
+def _first_comment_literal(raw_text: str) -> str:
+    """Return the first string literal captured by the greedy comment regex.
+
+    The regex captures from the opening quote to the final quote, so a
+    multi-literal line (``# "Terry" "Hello there."``) arrives as
+    ``Terry" "Hello there.``. This returns the content before the first
+    unescaped quote (``Terry``) and returns the input unchanged when no
+    unescaped quote is found (a single literal with escaped quotes such as
+    ``He said \\"hi\\".``).
+    """
+    out: list[str] = []
+    index = 0
+    while index < len(raw_text):
+        char = raw_text[index]
+        if char == "\\" and index + 1 < len(raw_text):
+            out.append(char)
+            out.append(raw_text[index + 1])
+            index += 2
+            continue
+        if char == '"':
+            return "".join(out)
+        out.append(char)
+        index += 1
+    return raw_text
 
 
 @dataclass(frozen=True)
@@ -150,6 +177,16 @@ class RenPyAdapter:
 
     def __init__(self, legacy_module: ModuleType | None = None):
         self._legacy_module = legacy_module
+        # Cache live inventory/extract per project identity so multi-chunk
+        # check/apply relocation does not rescan the same project repeatedly.
+        # The key includes the project root and target language so two
+        # different projects with the same source fingerprint never share a
+        # live snapshot. The cache lives for the adapter instance lifetime and
+        # holds at most one entry per project identity encountered.
+        self._live_occurrence_cache: dict[
+            tuple[str, str, str, str],
+            tuple[Occurrence, ...],
+        ] = {}
 
     def _legacy(self) -> ModuleType:
         if self._legacy_module is None:
@@ -1058,10 +1095,21 @@ class RenPyAdapter:
             if comment_match:
                 if legacy.is_voice_comment_match(comment_match):
                     continue
+                raw_text = comment_match.group("text")
+                # The comment regex is greedy and captures every quoted string
+                # on the line. Speaker-label markers like
+                # ``# "Terry" "Hello there."`` therefore concatenate adjacent
+                # string literals into ``TerryHello there.``. Keep only the
+                # first literal (the replaceable name span) in that case.
+                # Escaped quotes inside one literal (``# "He said \\"hi\\"."``)
+                # must not count as separators.
+                first_literal = _first_comment_literal(raw_text)
+                if first_literal != raw_text:
+                    raw_text = first_literal
                 return {
                     "kind": "comment",
                     "line_index": previous_index,
-                    "text": legacy.decode_string_literal_text(comment_match.group("text")),
+                    "text": legacy.decode_string_literal_text(raw_text),
                 }
             old_match = legacy.TL_OLD_LINE_RE.match(lines[previous_index].rstrip("\r\n"))
             if old_match:
@@ -1413,15 +1461,34 @@ class RenPyAdapter:
             diagnostics.append({"message": message})
         return tuple(dict.fromkeys(reason_codes)), tuple(diagnostics)
 
-    def relocate_occurrences(
+
+    def _live_occurrences_for_project(
         self,
-        project: ProjectDiscovery,
-        occurrences: Sequence[Occurrence],
-        live_sources: Sequence[SourceDocument],
-    ) -> RelocationResult:
-        if project.engine != self.engine:
-            raise ValueError(f"RenPyAdapter cannot relocate engine={project.engine!r}.")
-        live_project = self._project_with_live_sources(project, live_sources)
+        live_project: ProjectDiscovery,
+    ) -> tuple[ProjectDiscovery, tuple[Occurrence, ...]]:
+        """Return live occurrences for a project, reusing scans per project.
+
+        The cache is keyed by project identity (root, localization root),
+        the project snapshot fingerprint (engine, localization mode, target
+        language, source fingerprint) and the inventory policy. The snapshot
+        fingerprint covers the full scanned document set and content hashes;
+        include/exclude filters and macro/glossary paths are already
+        materialized into that document set during discovery, so any
+        configuration change that could affect inventory/extract results
+        invalidates the key. On a hit the current ``live_project`` is returned
+        together with the cached occurrence data, so callers never reuse
+        another project's ``ProjectDiscovery`` object.
+        """
+        cache_key = (
+            live_project.project_root,
+            live_project.localization_root,
+            live_project.project_snapshot_fingerprint,
+            InventoryPolicy().review_policy,
+        )
+        cached_occurrences = self._live_occurrence_cache.get(cache_key)
+        if cached_occurrences is not None:
+            return live_project, cached_occurrences
+
         live_inventory = self.inventory_candidates(live_project, InventoryPolicy())
         approved_ids = [
             candidate.candidate_id
@@ -1431,6 +1498,24 @@ class RenPyAdapter:
         live_occurrences = tuple(
             self.extract_occurrences(live_project, live_inventory, approved_ids)
         )
+        if len(self._live_occurrence_cache) >= LIVE_OCCURRENCE_CACHE_LIMIT:
+            # Long-lived adapters keep at most a few project snapshots; when the
+            # cap is reached, drop everything so a fresh scan always wins over
+            # unbounded growth.
+            self._live_occurrence_cache.clear()
+        self._live_occurrence_cache[cache_key] = live_occurrences
+        return live_project, live_occurrences
+
+    def relocate_occurrences(
+        self,
+        project: ProjectDiscovery,
+        occurrences: Sequence[Occurrence],
+        live_sources: Sequence[SourceDocument],
+    ) -> RelocationResult:
+        if project.engine != self.engine:
+            raise ValueError(f"RenPyAdapter cannot relocate engine={project.engine!r}.")
+        live_project = self._project_with_live_sources(project, live_sources)
+        live_project, live_occurrences = self._live_occurrences_for_project(live_project)
         live_by_unit_id: dict[str, list[Occurrence]] = {}
         for candidate in live_occurrences:
             live_by_unit_id.setdefault(candidate.unit.id, []).append(candidate)
@@ -1534,10 +1619,20 @@ class RenPyAdapter:
         occurrence: Occurrence,
         translated_text: str,
     ) -> ValidationResult:
+        """Validate ``translated_text`` against the replaceable source span.
+
+        Validation uses the marker-backed source text (the actual original for
+        ``# ...`` / ``old`` pairs) so translated marker lines are checked
+        against their source, not their current translation. Speaker-name units
+        are only the name span; marker extraction already keeps just the first
+        literal of a ``"Name" "Dialogue"`` marker line, so the source is the
+        name itself.
+        """
         if occurrence.engine != self.engine:
             raise ValueError(f"RenPyAdapter cannot validate engine={occurrence.engine!r}.")
         legacy = self._legacy()
-        source_text = occurrence.unit.source_text
+        unit = occurrence.unit
+        source_text = str(unit.source or unit.text or "")
         translated_text = str(translated_text or "")
         try:
             valid, message = legacy.validate_translation(source_text, translated_text)

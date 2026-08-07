@@ -24,7 +24,7 @@ from gui_qt.workflow_factory import create_workflow
 
 try:
     from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtWidgets import QApplication
 
     from gui_qt.app import MainWindow
     from gui_qt.project_analysis_review_dialog import (
@@ -279,14 +279,14 @@ class ProjectAnalysisAppGlueTests(unittest.TestCase):
             return_value=latest,
         ):
             for answer, expected in (
-                (QMessageBox.StandardButton.Yes, (True, latest)),
-                (QMessageBox.StandardButton.No, (True, "")),
-                (QMessageBox.StandardButton.Cancel, (False, "")),
+                ("yes", (True, latest)),
+                ("no", (True, "")),
+                ("cancel", (False, "")),
             ):
                 with (
                     self.subTest(answer=answer),
                     mock.patch(
-                        "gui_qt.app.QMessageBox.question",
+                        "gui_qt.app.message_box_question",
                         return_value=answer,
                     ),
                 ):
@@ -417,7 +417,7 @@ class ProjectAnalysisAppGlueTests(unittest.TestCase):
 
         with (
             mock.patch("gui_qt.app.ProjectAnalysisReviewDialog", FakeDialog),
-            mock.patch("gui_qt.app.QMessageBox.warning") as warning,
+            mock.patch("gui_qt.app.message_box_warning") as warning,
         ):
             self.window._show_project_analysis_review_dialog()
 
@@ -433,8 +433,8 @@ class ProjectAnalysisAppGlueTests(unittest.TestCase):
         self.window._run_project_analysis_command = mock.Mock()
 
         with mock.patch(
-            "gui_qt.app.QMessageBox.question",
-            return_value=QMessageBox.StandardButton.No,
+            "gui_qt.app.message_box_question",
+            return_value="no",
         ):
             self.window._on_context_library_action("project_analysis_unpublish")
         self.window._run_project_analysis_command.assert_not_called()
@@ -444,8 +444,8 @@ class ProjectAnalysisAppGlueTests(unittest.TestCase):
             accept=mock.Mock(),
         )
         with mock.patch(
-            "gui_qt.project_analysis_review_dialog.QMessageBox.question",
-            return_value=QMessageBox.StandardButton.No,
+            "gui_qt.project_analysis_review_dialog.message_box_question",
+            return_value="no",
         ):
             ProjectAnalysisReviewDialog._request_unpublish(dialog_host)
         self.assertEqual(dialog_host.requested_action, "")

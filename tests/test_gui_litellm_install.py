@@ -112,7 +112,7 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         self.window._on_check_litellm_version = mock.Mock()
         self.window._selected_sync_backend = mock.Mock(return_value="gemini")
         self.window.statusBar = mock.Mock(return_value=mock.Mock())
-        with mock.patch("gui_qt.app.QMessageBox.warning") as warning:
+        with mock.patch("gui_qt.app.message_box_warning") as warning:
             self.window._on_litellm_install_finished(
                 "litellm",
                 False,
@@ -131,7 +131,7 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
         self.window._selected_sync_backend = mock.Mock(return_value="litellm")
         status_bar = mock.Mock()
         self.window.statusBar = mock.Mock(return_value=status_bar)
-        with mock.patch("gui_qt.app.QMessageBox.warning") as warning:
+        with mock.patch("gui_qt.app.message_box_warning") as warning:
             self.window._on_litellm_install_finished(
                 "litellm",
                 True,
@@ -216,7 +216,7 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
             return_value=True
         )
         self.window._litellm_install_blocks_mode = mock.Mock(return_value=True)
-        with mock.patch("gui_qt.app.QMessageBox.information") as information:
+        with mock.patch("gui_qt.app.message_box_information") as information:
             self.window._on_start_translation()
         self.window._confirm_unsaved_config_before_workflow.assert_called_once()
         self.window._litellm_install_blocks_mode.assert_called_once_with(

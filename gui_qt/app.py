@@ -32,12 +32,15 @@ from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QGuiApplication,
+    QKeyEvent,
     QKeySequence,
+    QMouseEvent,
     QPalette,
     QShortcut,
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractButton,
     QCompleter,
     QDialog,
     QMainWindow,
@@ -317,6 +320,11 @@ from .settings_schema import (
 # Selected on 设置 → 工作区; shown read-only on 设置 → 项目.
 _SETTINGS_WORKSPACE_MANAGED_KEYS = frozenset({"game_root"})
 from .translation_workflow import WorkflowUpdate
+from .widget_helpers import (
+    message_box_information,
+    message_box_question,
+    message_box_warning,
+)
 from .user_copy import (
     SETTINGS_WORKSPACE_IMMEDIATE_SAVE,
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
@@ -532,6 +540,9 @@ class MainWindow(QMainWindow):
         litellm_catalog_cache: LiteLLMCatalogCache | None = None,
     ):
         super().__init__()
+        app = QApplication.instance()
+        if app is not None:
+            app.focusChanged.connect(self._ensure_focused_widget_visible)
         self.setWindowTitle("Ren'Py Translation Lab - 图形工作台")
         self.setMinimumSize(960, 640)
         self.resize(1180, 780)
@@ -550,6 +561,7 @@ class MainWindow(QMainWindow):
         self._diagnostics_refresh_input_key: tuple[object, ...] | None = None
         self._main_tab_enter_generation = 0
         self._pending_log_lines: list[str] = []
+        self._enter_activate_buttons: set[QAbstractButton] = set()
         self._workflow_progress_dirty = False
         self._log_flush_timer = QTimer(self)
         self._log_flush_timer.setSingleShot(True)
@@ -686,6 +698,11 @@ class MainWindow(QMainWindow):
         self._build_workbench_tab()
         self._build_config_tab()
         self._build_log_tab()
+        # The sidebar replaces tab switching, so the hidden outer tab bar must
+        # not stay in the keyboard focus chain: QTabWidget hands Tab focus to
+        # its tab bar and claims the event, which stalls traversal when the bar
+        # is invisible (#299).
+        self.tab_widget.tabBar().setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tab_widget.tabBar().hide()
         self._populate_shell_nav()
         self._setup_shell_status_bar()
@@ -874,23 +891,119 @@ class MainWindow(QMainWindow):
         self._refresh_manifest_derived_ui(refresh_diagnostics=True)
 
     def eventFilter(self, watched: Any, event: QEvent) -> bool:
-        if watched is self.work_mode_hint_label and event.type() == QEvent.Type.Resize:
+        if (
+            isinstance(watched, QAbstractButton)
+            and watched in self._enter_activate_buttons
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() in {Qt.Key.Key_Enter, Qt.Key.Key_Return}
+        ):
+            # Qt buttons activate with Space only; allow Enter/Return on the
+            # explicitly opted-in main-window buttons. Dialog buttons are never
+            # registered here, so their default-button semantics are untouched.
+            watched.click()
+            return True
+        if (
+            getattr(self, "work_mode_hint_label", None) is watched
+            and event.type() == QEvent.Type.Resize
+        ):
             self._sync_work_mode_hint_height()
-        if hasattr(self, "split_status_table") and watched is self.split_status_table.viewport():
-            if event.type() == QEvent.Type.Resize:
-                self._sync_split_status_table_columns()
-            elif event.type() in {QEvent.Type.Leave, QEvent.Type.MouseMove}:
+        split_table = getattr(self, "split_status_table", None)
+        if split_table is not None and watched in (split_table, split_table.viewport()):
+            if event.type() == QEvent.Type.KeyPress and event.key() in {
+                Qt.Key.Key_Return,
+                Qt.Key.Key_Enter,
+                Qt.Key.Key_Space,
+            }:
                 delegate = getattr(self, "_split_status_action_delegate", None)
-                if delegate is not None:
-                    if event.type() == QEvent.Type.Leave:
-                        delegate.clear_hover_state()
-                        delegate.clear_pressed_state()
-                    else:
-                        index = self.split_status_table.indexAt(event.position().toPoint())
-                        if not index.isValid() or not is_split_action_column(index.column()):
+                if delegate is not None and delegate.keyboard_activate(
+                    split_table.currentIndex()
+                ):
+                    return True
+            if watched is split_table.viewport():
+                if event.type() == QEvent.Type.Resize:
+                    self._sync_split_status_table_columns()
+                elif event.type() in {QEvent.Type.Leave, QEvent.Type.MouseMove}:
+                    delegate = getattr(self, "_split_status_action_delegate", None)
+                    if delegate is not None:
+                        if event.type() == QEvent.Type.Leave:
                             delegate.clear_hover_state()
                             delegate.clear_pressed_state()
+                        else:
+                            index = split_table.indexAt(event.position().toPoint())
+                            if not index.isValid() or not is_split_action_column(index.column()):
+                                delegate.clear_hover_state()
+                                delegate.clear_pressed_state()
         return super().eventFilter(watched, event)
+
+    def showEvent(self, event: QEvent) -> None:
+        """Keep the initial keyboard focus on the window itself.
+
+        On Windows the activation logic can hand focus to the first focusable
+        control (the log button), which then swallows arrow keys; the window
+        keeps Up/Down page switching working right after startup. Later shows
+        (minimize restore, window switching) do not steal focus from controls
+        the user is editing (#299).
+        """
+        super().showEvent(event)
+        if not getattr(self, "_initial_focus_set", False):
+            self._initial_focus_set = True
+            self.setFocus()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Return keyboard focus to the window when clicking inert background.
+
+        Qt keeps the previous focus when the user clicks a label, frame or
+        other non-interactive surface; handing focus back to the window makes
+        the arrow-key page switching work again right after such a click.
+        Interactive controls consume their own clicks and never reach here.
+        """
+        super().mousePressEvent(event)
+        self.setFocus()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Switch the sidebar page with Up/Down when no control took the key."""
+        app = QApplication.instance()
+        focus = app.focusWidget() if app is not None else None
+        window_owns_focus = focus is self or focus is None
+        if (
+            window_owns_focus
+            and event.key() in {Qt.Key.Key_Up, Qt.Key.Key_Down}
+        ):
+            self._move_shell_nav(forward=event.key() == Qt.Key.Key_Down)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _move_shell_nav(self, *, forward: bool) -> None:
+        """Move the shell sidebar selection by one page, skipping section headers."""
+        rows = self.shell_nav.count()
+        if rows <= 0:
+            return
+        delta = 1 if forward else -1
+        next_row = self.shell_nav.currentRow()
+        for _ in range(rows):
+            next_row = (next_row + delta) % rows
+            item = self.shell_nav.item(next_row)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole):
+                self.shell_nav.setCurrentRow(next_row)
+                return
+
+    def _ensure_focused_widget_visible(self, _old, new) -> None:
+        """Scroll the enclosing scroll area so the focused control stays visible.
+
+        Qt's arrow-key focus navigation between buttons inside a scroll area can
+        move focus to a control scrolled out of the viewport; the focus frame
+        then disappears from the user's view. Scrolling the ancestor scroll area
+        keeps the frame visible while preserving the standard navigation (#299).
+        """
+        if new is None:
+            return
+        parent = new.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QScrollArea) and parent.widget() is not None:
+                parent.ensureWidgetVisible(new)
+                return
+            parent = parent.parentWidget()
 
     def _sync_work_mode_hint_height(self) -> None:
         label = self.work_mode_hint_label
@@ -1004,6 +1117,11 @@ class MainWindow(QMainWindow):
 
         self.shell_nav = QListWidget()
         self.shell_nav.setObjectName("shell_nav")
+        # The sidebar is a mouse/shortcut navigation rail (Ctrl+1..7) and page
+        # switching with Up/Down is handled at the window level when no control
+        # consumed the key; keeping the list itself out of the Tab chain avoids
+        # unexpected arrow-key behavior while exploring page content (#299).
+        self.shell_nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.shell_nav.setFrameShape(QFrame.Shape.NoFrame)
         self.shell_nav.setSpacing(1)
         self.shell_nav.setHorizontalScrollBarPolicy(
@@ -1055,6 +1173,8 @@ class MainWindow(QMainWindow):
         self.header_log_btn.setObjectName("header_log_btn")
         self.header_log_btn.setCheckable(True)
         self.header_log_btn.clicked.connect(self._on_header_log_clicked)
+        self.header_log_btn.installEventFilter(self)
+        self._enter_activate_buttons.add(self.header_log_btn)
         layout.addWidget(
             self.header_log_btn,
             0,
@@ -1701,6 +1821,9 @@ class MainWindow(QMainWindow):
         # stages + writeback) never crushes buttons into each other on short windows.
         right_scroll = QScrollArea()
         right_scroll.setObjectName("workbench_content_scroll")
+        # Scroll areas must not take Tab focus themselves: an invisible focus
+        # rect between buttons reads as a jumping focus frame (#299).
+        right_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         right_scroll.setWidgetResizable(True)
         right_scroll.setFrameShape(QFrame.Shape.NoFrame)
         right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1916,6 +2039,10 @@ class MainWindow(QMainWindow):
 
         self.workbench_status_tabs = NoWheelTabWidget()
         self.workbench_status_tabs.setObjectName("workbench_status_tabs")
+        # Stage tabs switch automatically with the task flow; exclude the bar
+        # from the Tab chain so arrow keys do not flip stages unexpectedly
+        # while the focus is inside the workbench (#299).
+        self.workbench_status_tabs.tabBar().setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.workbench_status_tabs.setDocumentMode(True)
         self.workbench_status_tabs.tabBar().setExpanding(True)
         self.workbench_status_tabs.tabBar().setUsesScrollButtons(False)
@@ -1951,6 +2078,7 @@ class MainWindow(QMainWindow):
         doctor_summary_layout.addWidget(self.doctor_status_label)
         self.doctor_summary_scroll = QScrollArea()
         self.doctor_summary_scroll.setObjectName("doctor_summary_scroll")
+        self.doctor_summary_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._style_themed_surface(self.doctor_summary_scroll)
         self.doctor_summary_scroll.setWidgetResizable(True)
         self.doctor_summary_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -1983,7 +2111,10 @@ class MainWindow(QMainWindow):
         self.doctor_details_toggle.setAutoRaise(True)
         self.doctor_details_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.doctor_details_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.doctor_details_toggle.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.doctor_details_toggle.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.doctor_details_toggle.setAccessibleName("更多详情")
+        self.doctor_details_toggle.installEventFilter(self)
+        self._enter_activate_buttons.add(self.doctor_details_toggle)
         self.doctor_details_toggle.setSizePolicy(
             QSizePolicy.Policy.Fixed,
             QSizePolicy.Policy.Fixed,
@@ -2034,6 +2165,7 @@ class MainWindow(QMainWindow):
         workflow_outer_layout.setSpacing(0)
         self.workflow_scroll = QScrollArea()
         self.workflow_scroll.setObjectName("workflow_summary_scroll")
+        self.workflow_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._style_themed_surface(self.workflow_scroll)
         self.workflow_scroll.setWidgetResizable(True)
         self.workflow_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2106,13 +2238,15 @@ class MainWindow(QMainWindow):
         self.split_status_table.setHorizontalHeaderLabels(["包", "状态", "项", "块", "云端任务", "操作"])
         self.split_status_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.split_status_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.split_status_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.split_status_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.split_status_table.setAccessibleName("拆分包状态表")
         self.split_status_table.setAlternatingRowColors(True)
         self.split_status_table.setWordWrap(False)
         self.split_status_table.setMinimumHeight(260)
         self.split_status_table.setMaximumHeight(360)
         self.split_status_table.verticalHeader().setVisible(False)
         self._configure_split_status_table_hover_palette()
+        self.split_status_table.installEventFilter(self)
         self.split_status_table.viewport().installEventFilter(self)
         self._split_status_action_delegate = SplitStatusActionDelegate(self.split_status_table)
         self._split_status_action_delegate.select_requested.connect(self._select_split_manifest)
@@ -2142,6 +2276,7 @@ class MainWindow(QMainWindow):
         writeback_layout.addWidget(self.writeback_status_label)
         writeback_scroll = QScrollArea()
         writeback_scroll.setObjectName("writeback_summary_scroll")
+        writeback_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._style_themed_surface(writeback_scroll)
         writeback_scroll.setWidgetResizable(True)
         writeback_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2371,18 +2506,21 @@ class MainWindow(QMainWindow):
         if not self._confirm_unsaved_config_before_workflow():
             return
         if not self.state.get_game_root():
-            QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
+            message_box_information(self, "请先选择项目", "请先选择游戏的 work 目录。")
             return
 
         if name in {"project_analysis_review", "project_analysis_publish"}:
             self._show_project_analysis_review_dialog()
             return
         if name == "project_analysis_unpublish":
-            if QMessageBox.question(
+            if message_box_question(
                 self,
                 PROJECT_ANALYSIS_COPY["unpublish_confirm_title"],
                 PROJECT_ANALYSIS_COPY["unpublish_confirm_body"],
-            ) != QMessageBox.StandardButton.Yes:
+                yes_text="停止使用",
+                no_text="取消",
+                default="yes",
+            ) != "yes":
                 return
             self._run_project_analysis_command(
                 "project_analysis_unpublish",
@@ -2413,31 +2551,33 @@ class MainWindow(QMainWindow):
             manifest=manifest,
         )
         if latest:
-            answer = QMessageBox.question(
+            answer = message_box_question(
                 self,
                 "发现剧情概要",
                 f"发现当前项目最近的 keyword_chunk_summaries：\n{latest}\n\n"
                 "是否先导入它，再构建结构？选择“否”会明确跳过导入。",
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.No
-                | QMessageBox.StandardButton.Cancel,
+                yes_text="是",
+                no_text="否",
+                cancel_text="取消",
+                default="yes",
             )
-            if answer == QMessageBox.StandardButton.Cancel:
+            if answer == "cancel":
                 return False, ""
-            return True, latest if answer == QMessageBox.StandardButton.Yes else ""
+            return True, latest if answer == "yes" else ""
 
-        answer = QMessageBox.question(
+        answer = message_box_question(
             self,
             "未发现剧情概要",
             "没有找到当前项目的 keyword_chunk_summaries.jsonl。\n"
             "选择“是”可手动导入一个文件；选择“否”会跳过导入并继续静态构建。",
-            QMessageBox.StandardButton.Yes
-            | QMessageBox.StandardButton.No
-            | QMessageBox.StandardButton.Cancel,
+            yes_text="是",
+            no_text="否",
+            cancel_text="取消",
+            default="yes",
         )
-        if answer == QMessageBox.StandardButton.Cancel:
+        if answer == "cancel":
             return False, ""
-        if answer == QMessageBox.StandardButton.No:
+        if answer == "no":
             return True, ""
         selected, _filter = QFileDialog.getOpenFileName(
             self,
@@ -2551,7 +2691,7 @@ class MainWindow(QMainWindow):
         """Open the full review workspace and execute its confirmed lifecycle action."""
         game_root = self.state.get_game_root() if hasattr(self, "state") else None
         if not game_root:
-            QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
+            message_box_information(self, "请先选择项目", "请先选择游戏的 work 目录。")
             return
         flags = self._saved_project_analysis_flags()
         try:
@@ -2563,13 +2703,13 @@ class MainWindow(QMainWindow):
                 parent=self,
             )
         except Exception as exc:
-            QMessageBox.warning(self, "无法打开项目分析审查", str(exc))
+            message_box_warning(self, "无法打开项目分析审查", str(exc))
             return
         dialog.exec()
         if dialog.requested_action == "publish":
             ok, live_fp, detail = self._project_analysis_publish_gate()
             if not ok:
-                QMessageBox.warning(
+                message_box_warning(
                     self,
                     "无法启用项目摘要",
                     detail or "请先重新构建结构或生成摘要后再启用。",
@@ -2976,6 +3116,7 @@ class MainWindow(QMainWindow):
 
     def _settings_page(self, object_name: str) -> tuple[QScrollArea, QVBoxLayout]:
         scroll = QScrollArea()
+        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         scroll.setObjectName(f"{object_name}_scroll")
         self._style_themed_surface(scroll)
         scroll.setWidgetResizable(True)
@@ -3439,7 +3580,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(message, 5000)
         else:
             self._optional_feature_last_failed.add(feature_id)
-            QMessageBox.warning(self, "关系分析器安装失败", message + "\n请查看工作台日志中的 pip 输出。")
+            message_box_warning(self, "关系分析器安装失败", message + "\n请查看工作台日志中的 pip 输出。")
         self._refresh_relation_analyzer_extension_ui()
 
     def _refresh_relation_analyzer_extension_ui(self) -> None:
@@ -3496,7 +3637,7 @@ class MainWindow(QMainWindow):
             return
         started, message = controller.start_install()
         if not started:
-            QMessageBox.information(self, "无法开始安装", message)
+            message_box_information(self, "无法开始安装", message)
             return
         self._refresh_relation_analyzer_extension_ui()
 
@@ -3506,7 +3647,7 @@ class MainWindow(QMainWindow):
         if docs.is_file():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(docs)))
             return
-        QMessageBox.information(
+        message_box_information(
             self,
             "使用说明",
             "请参阅 docs/relation_analysis.md 与 relation_analyzer/README.md。",
@@ -3893,14 +4034,15 @@ class MainWindow(QMainWindow):
 
         path_text = canonical_abs_path(directory)
         if not is_renpy_sdk_dir(path_text):
-            reply = QMessageBox.question(
+            reply = message_box_question(
                 self,
                 "目录可能不是 Ren'Py SDK",
                 f"所选目录未发现 renpy.py：\n{path_text}\n\n仍要填入吗？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                yes_text="是",
+                no_text="否",
+                default="no",
             )
-            if reply != QMessageBox.StandardButton.Yes:
+            if reply != "yes":
                 return
         line_edit.setText(path_text)
         self.statusBar().showMessage(f"已填入 Ren'Py SDK：{path_text}", 5000)
@@ -3933,7 +4075,7 @@ class MainWindow(QMainWindow):
         existing = existing_valid_sdk(current_text) or existing_valid_sdk(target_text)
         if existing is not None:
             line_edit.setText(canonical_abs_path(str(existing)))
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "已有有效 SDK",
                 (
@@ -3946,7 +4088,7 @@ class MainWindow(QMainWindow):
             self._append_log(f"跳过推荐 SDK 下载（已有有效目录）：{existing}")
             return
 
-        reply = QMessageBox.question(
+        reply = message_box_question(
             self,
             "下载推荐 Ren'Py SDK",
             (
@@ -3960,10 +4102,11 @@ class MainWindow(QMainWindow):
                 "目标目录若已是有效 SDK 将直接复用、不会联网。\n"
                 "是否继续？"
             ),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            yes_text="继续",
+            no_text="取消",
+            default="no",
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if reply != "yes":
             return
 
         from .sdk_install_worker import SdkInstallWorker
@@ -4017,7 +4160,7 @@ class MainWindow(QMainWindow):
                 line_edit.setText(canonical_abs_path(str(result.sdk_dir)))
             self.statusBar().showMessage(result.message, 8000)
         else:
-            QMessageBox.warning(self, "SDK 未配置", result.message)
+            message_box_warning(self, "SDK 未配置", result.message)
             self.statusBar().showMessage(result.message, 8000)
 
     def _cancel_sdk_install_worker(self, *, wait_ms: int = 5000) -> None:
@@ -4068,7 +4211,7 @@ class MainWindow(QMainWindow):
                 roots_hint.append(f"当前项目：{game_root}")
             if not roots_hint:
                 roots_hint.append("（尚未设置工作区或项目；请先接入工作区或指定项目）")
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "未找到 Ren'Py SDK",
                 "在已选工作区 / 当前项目下未找到包含 renpy.py 的 Ren'Py SDK。\n\n"
@@ -4447,6 +4590,7 @@ class MainWindow(QMainWindow):
         context_outer.setContentsMargins(0, 0, 0, 0)
         context_scroll = QScrollArea()
         context_scroll.setObjectName("diagnostics_context_scroll")
+        context_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._style_themed_surface(context_scroll)
         context_scroll.setWidgetResizable(True)
         context_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -4496,6 +4640,7 @@ class MainWindow(QMainWindow):
         commands_outer.setContentsMargins(0, 0, 0, 0)
         commands_scroll = QScrollArea()
         commands_scroll.setObjectName("diagnostics_commands_scroll")
+        commands_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._style_themed_surface(commands_scroll)
         commands_scroll.setWidgetResizable(True)
         commands_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -5128,16 +5273,37 @@ class MainWindow(QMainWindow):
                 action_item.setData(SPLIT_ACTION_DATA_ROLE, action_payload)
                 action_item.setToolTip(f"\u5207\u6362\u5230 {entry.part_label}")
             if show_action_button:
-                btn = QPushButton("选择")
-                btn.setObjectName("split_select_btn")
-                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                btn.setToolTip(f"切换到 {entry.part_label}")
-                btn.clicked.connect(lambda checked=False, path=entry.manifest_path: self._select_split_manifest(path))
-                self.split_status_table.setCellWidget(row, base_column + 5, btn)
+                self._replace_split_select_button(row, base_column + 5, entry)
             else:
                 self.split_status_table.removeCellWidget(row, base_column + 5)
             
             self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
+
+    def _replace_split_select_button(
+        self,
+        row: int,
+        column: int,
+        entry: SplitManifestEntry,
+    ) -> QPushButton:
+        """(Re)build the action button, restoring keyboard focus if it had it."""
+        old = self.split_status_table.cellWidget(row, column)
+        had_focus = old is not None and QApplication.focusWidget() is old
+        btn = self._build_split_select_button(entry)
+        self.split_status_table.setCellWidget(row, column, btn)
+        if had_focus:
+            btn.setFocus()
+        return btn
+
+    def _build_split_select_button(self, entry: SplitManifestEntry) -> QPushButton:
+        """Build the keyboard-accessible split-status “选择” button."""
+        btn = QPushButton("选择")
+        btn.setObjectName("split_select_btn")
+        btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        btn.setToolTip(f"切换到 {entry.part_label}")
+        btn.clicked.connect(
+            lambda checked=False, path=entry.manifest_path: self._select_split_manifest(path)
+        )
+        return btn
 
     def _update_split_status_job_column_texts(self, profile: dict[str, int]) -> None:
         if not hasattr(self, "split_status_table"):
@@ -5194,12 +5360,7 @@ class MainWindow(QMainWindow):
         self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
         
         if show_action_button:
-            btn = QPushButton("选择")
-            btn.setObjectName("split_select_btn")
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            btn.setToolTip(f"切换到 {entry.part_label}")
-            btn.clicked.connect(lambda checked=False, path=entry.manifest_path: self._select_split_manifest(path))
-            self.split_status_table.setCellWidget(row, base_column + 5, btn)
+            self._replace_split_select_button(row, base_column + 5, entry)
         else:
             self.split_status_table.removeCellWidget(row, base_column + 5)
 
@@ -5364,7 +5525,7 @@ class MainWindow(QMainWindow):
         try:
             self.state.remember_latest_manifest_path(manifest_path)
         except ValueError as exc:
-            QMessageBox.warning(self, "无法选择拆分包", str(exc))
+            message_box_warning(self, "无法选择拆分包", str(exc))
             return
         self._workflow = None
         self._workflow_step_output_lines = []
@@ -5459,12 +5620,12 @@ class MainWindow(QMainWindow):
     def _open_apply_failure_report(self) -> None:
         manifest_path = self._writeback_manifest_path
         if not manifest_path:
-            QMessageBox.warning(self, "无法查看写回失败报告", "当前没有可用的任务记录。")
+            message_box_warning(self, "无法查看写回失败报告", "当前没有可用的任务记录。")
             return
         try:
             manifest = self.state.load_manifest_file(manifest_path)
         except ValueError as exc:
-            QMessageBox.warning(self, "无法查看写回失败报告", str(exc))
+            message_box_warning(self, "无法查看写回失败报告", str(exc))
             return
 
         report = build_apply_failure_report(manifest, manifest_path=manifest_path)
@@ -5876,7 +6037,7 @@ class MainWindow(QMainWindow):
         try:
             retry_manifest = self.state.load_manifest_file(retry_manifest_path)
         except ValueError as exc:
-            QMessageBox.warning(self, "无法预览补译包", str(exc))
+            message_box_warning(self, "无法预览补译包", str(exc))
             return "error"
 
         report = summarize_retry_manifest(
@@ -5905,19 +6066,19 @@ class MainWindow(QMainWindow):
     def _start_retry_followup_workflow(self, *, retry_manifest_path: str = "") -> bool:
         parent_path = self._writeback_manifest_path
         if not parent_path:
-            QMessageBox.information(self, "无法继续补译", "当前没有可用的父任务记录。")
+            message_box_information(self, "无法继续补译", "当前没有可用的父任务记录。")
             return False
 
         try:
             parent_manifest = self.state.load_manifest_file(parent_path)
         except ValueError as exc:
-            QMessageBox.warning(self, "无法继续补译", str(exc))
+            message_box_warning(self, "无法继续补译", str(exc))
             return False
 
         if parent_path not in self._retry_followup_confirmed:
             resolved_retry_path = retry_manifest_path or existing_retry_manifest_path(parent_manifest)
             if not resolved_retry_path:
-                QMessageBox.information(self, "无法继续补译", "请先生成并预览补译包。")
+                message_box_information(self, "无法继续补译", "请先生成并预览补译包。")
                 return False
             preview_result = self._show_retry_preview(resolved_retry_path)
             if preview_result != "confirmed":
@@ -5925,18 +6086,18 @@ class MainWindow(QMainWindow):
             try:
                 parent_manifest = self.state.load_manifest_file(parent_path)
             except ValueError as exc:
-                QMessageBox.warning(self, "无法继续补译", str(exc))
+                message_box_warning(self, "无法继续补译", str(exc))
                 return False
 
         resolved_retry_path = retry_manifest_path or existing_retry_manifest_path(parent_manifest)
         if not resolved_retry_path:
-            QMessageBox.information(self, "无法继续补译", "未找到补译任务记录。")
+            message_box_information(self, "无法继续补译", "未找到补译任务记录。")
             return False
 
         try:
             retry_manifest = self.state.load_manifest_file(resolved_retry_path)
         except ValueError as exc:
-            QMessageBox.warning(self, "无法继续补译", str(exc))
+            message_box_warning(self, "无法继续补译", str(exc))
             return False
 
         workflow = create_retry_followup_workflow(
@@ -5947,7 +6108,7 @@ class MainWindow(QMainWindow):
         )
         next_step = workflow.current_step()
         if next_step is None:
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "无法继续补译",
                 "补译流程暂无后续步骤；可查看诊断与工具任务上下文确认状态。",
@@ -5964,7 +6125,7 @@ class MainWindow(QMainWindow):
 
     def _on_retry_followup_action(self) -> None:
         if not work_mode_spec(self._current_work_mode()).supports_translation_writeback:
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "当前模式不支持",
                 "「继续补译」仅适用于批量翻译。",
@@ -5989,14 +6150,14 @@ class MainWindow(QMainWindow):
 
         manifest = self._load_writeback_manifest()
         if manifest is None:
-            QMessageBox.warning(self, "无法生成补译包", "无法读取当前任务记录。")
+            message_box_warning(self, "无法生成补译包", "无法读取当前任务记录。")
             return
 
         eligibility = assess_retry_eligibility(
             manifest,
             manifest_path=self._writeback_manifest_path,
         )
-        reply = QMessageBox.question(
+        reply = message_box_question(
             self,
             "确认生成补译包",
             "\n".join(
@@ -6007,10 +6168,11 @@ class MainWindow(QMainWindow):
                     "界面不会自动提交云端任务；生成后会先让您预览范围。",
                 ]
             ),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            yes_text="生成",
+            no_text="取消",
+            default="no",
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if reply != "yes":
             return
 
         self._show_workbench_log_drawer()
@@ -6029,12 +6191,12 @@ class MainWindow(QMainWindow):
     def _open_check_issues(self) -> None:
         manifest_path = self._writeback_manifest_path
         if not manifest_path:
-            QMessageBox.warning(self, "无法查看问题清单", "当前没有可用的任务记录。")
+            message_box_warning(self, "无法查看问题清单", "当前没有可用的任务记录。")
             return
         try:
             manifest = self.state.load_manifest_file(manifest_path)
         except ValueError as exc:
-            QMessageBox.warning(self, "无法查看问题清单", str(exc))
+            message_box_warning(self, "无法查看问题清单", str(exc))
             return
 
         report = build_check_issues_report(manifest, manifest_path=manifest_path)
@@ -6328,7 +6490,7 @@ class MainWindow(QMainWindow):
             glossary_path=glossary_path,
         )
         if not ready:
-            QMessageBox.information(self, "无法合并关键词", message)
+            message_box_information(self, "无法合并关键词", message)
             return
         try:
             rows, candidates, resolved_glossary_path, _macro_path = load_keyword_merge_context(
@@ -6338,10 +6500,10 @@ class MainWindow(QMainWindow):
                 tool_root=str(self.state.get_tool_root()),
             )
         except ValueError as exc:
-            QMessageBox.warning(self, "无法读取候选", str(exc))
+            message_box_warning(self, "无法读取候选", str(exc))
             return
         if not rows:
-            QMessageBox.information(self, "没有可合并候选", "候选文件中没有可写入 glossary 的条目。")
+            message_box_information(self, "没有可合并候选", "候选文件中没有可写入 glossary 的条目。")
             return
 
         dialog = KeywordMergeDialog(
@@ -7016,10 +7178,10 @@ class MainWindow(QMainWindow):
         provider = str(provider or "").strip().lower()
         provider = resolve_provider_id(provider) or provider
         if not provider:
-            QMessageBox.information(self, "缺少 Provider", "请先选择 Provider。")
+            message_box_information(self, "缺少 Provider", "请先选择 Provider。")
             return False
         if provider == "ollama":
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "无需 API Key",
                 "Ollama 通常不需要 API Key；请确保本地服务可访问。",
@@ -7028,7 +7190,7 @@ class MainWindow(QMainWindow):
         try:
             store = load_provider_key_store(provider)
         except ProviderCredentialStoreError as exc:
-            QMessageBox.warning(self, "无法读取密钥", str(exc))
+            message_box_warning(self, "无法读取密钥", str(exc))
             return False
         label = provider_display_label(provider)
         dialog = ApiKeyDialog(
@@ -7054,7 +7216,7 @@ class MainWindow(QMainWindow):
                 active_index=dialog.result_active_index(),
             )
         except (ValueError, ProviderCredentialStoreError) as exc:
-            QMessageBox.warning(self, "无法保存密钥", str(exc))
+            message_box_warning(self, "无法保存密钥", str(exc))
             return False
         self._litellm_saved_key_status.pop(provider, None)
         self._refresh_litellm_credential_status()
@@ -7358,7 +7520,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("已取消供应商列表加载。", 4000)
             return
         if error and not providers:
-            QMessageBox.warning(self, "供应商列表加载失败", str(error))
+            message_box_warning(self, "供应商列表加载失败", str(error))
             return
         values = tuple(str(provider).strip().lower() for provider in providers)
         current = self._litellm_provider_combo_value()
@@ -7400,7 +7562,7 @@ class MainWindow(QMainWindow):
         endpoint = native_catalog_endpoint(provider)
         allow_subset_only = False
         if endpoint is not None and endpoint.require_key and not api_key:
-            reply = QMessageBox.question(
+            reply = message_box_question(
                 self,
                 "建议先保存 API Key",
                 (
@@ -7410,10 +7572,11 @@ class MainWindow(QMainWindow):
                     "且通常依赖 GitHub 网络，关代理时可能很慢或失败）。\n\n"
                     "是否仍使用 LiteLLM 子集目录？"
                 ),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                yes_text="继续",
+                no_text="取消",
+                default="no",
             )
-            if reply != QMessageBox.StandardButton.Yes:
+            if reply != "yes":
                 self.statusBar().showMessage(
                     f"已取消：请先保存 {endpoint.label} API Key 再加载官方模型列表。",
                     6000,
@@ -7466,7 +7629,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("已取消模型列表加载。", 4000)
             return
         if error and not models:
-            QMessageBox.warning(self, "模型列表加载失败", str(error))
+            message_box_warning(self, "模型列表加载失败", str(error))
             return
         values = tuple(str(model) for model in models)
         self._save_litellm_cache(
@@ -7500,7 +7663,7 @@ class MainWindow(QMainWindow):
             return
         model = self._litellm_model_text()
         if not model:
-            QMessageBox.information(self, "缺少模型", "请先选择或填写模型。")
+            message_box_information(self, "缺少模型", "请先选择或填写模型。")
             return
         # Empty → backend loads the active key from the OS credential store.
         api_key = ""
@@ -7760,7 +7923,7 @@ class MainWindow(QMainWindow):
             return
         started, message = controller.start_install()
         if not started:
-            QMessageBox.information(self, "无法安装 LiteLLM", message)
+            message_box_information(self, "无法安装 LiteLLM", message)
             return
         self._on_sync_backend_changed(-1)
 
@@ -7782,7 +7945,7 @@ class MainWindow(QMainWindow):
         if succeeded:
             self.statusBar().showMessage(message, 5000)
         else:
-            QMessageBox.warning(
+            message_box_warning(
                 self,
                 "LiteLLM 安装失败",
                 f"{message}\n请查看工作台日志中的 pip 输出。",
@@ -8429,13 +8592,13 @@ class MainWindow(QMainWindow):
 
         manifest_path, package = self._final_review_findings_context()
         if package is None:
-            QMessageBox.information(self, "没有可审核的报告", "请先完成一个最终审校任务。")
+            message_box_information(self, "没有可审核的报告", "请先完成一个最终审校任务。")
             return
         import final_review as fr
 
         status = fr.collect_campaign_status(package=package)
         if status.get("status") != fr.STATUS_DONE:
-            QMessageBox.information(self, "最终审校尚未完成", "请先继续任务并整理全部审查结果。")
+            message_box_information(self, "最终审校尚未完成", "请先继续任务并整理全部审查结果。")
             return
         dialog = FinalReviewFindingsDialog(package.get("findings") or [], self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -9221,7 +9384,7 @@ class MainWindow(QMainWindow):
             else:
                 self._clear_game_root_redirect_notice()
         except ValueError as exc:
-            QMessageBox.warning(self, "无法更新配置", str(exc))
+            message_box_warning(self, "无法更新配置", str(exc))
             self._append_log(f"更新 translator_config.json 失败：{exc}")
             return False
 
@@ -9318,7 +9481,7 @@ class MainWindow(QMainWindow):
             # Revert panel UI if it already showed the unpersisted path.
             if panel is not None and hasattr(panel, "set_workspace_root"):
                 panel.set_workspace_root(self.state.get_workspace_root())
-            QMessageBox.warning(self, "无法更新工作区", str(exc))
+            message_box_warning(self, "无法更新工作区", str(exc))
             self._append_log(f"更新 workspace_root 失败：{exc}")
             return
         if panel is not None and hasattr(panel, "set_workspace_root"):
@@ -9599,7 +9762,7 @@ class MainWindow(QMainWindow):
     def _on_download_recommended_fonts(self) -> None:
         if getattr(self, "_font_install_worker", None) is not None:
             return
-        reply = QMessageBox.question(
+        reply = message_box_question(
             self,
             "下载推荐字体",
             (
@@ -9608,10 +9771,11 @@ class MainWindow(QMainWindow):
                 "预计下载约 80 MB；下载后会校验 SHA-256，并保存到当前用户缓存目录。"
                 "是否继续？"
             ),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
+            yes_text="下载",
+            no_text="取消",
+            default="yes",
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if reply != "yes":
             return
 
         button = getattr(self, "download_fonts_btn", None)
@@ -9641,7 +9805,7 @@ class MainWindow(QMainWindow):
         self._refresh_font_install_status()
         if result.ok:
             self._show_settings_status("推荐字体下载完成；重启 GUI 后生效。", 8000)
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "字体安装完成",
                 "HarmonyOS Sans SC 和 LXGW WenKai Mono GB 已安装。\n"
@@ -10091,7 +10255,7 @@ class MainWindow(QMainWindow):
         try:
             self.state.save_api_keys(new_keys)
         except ValueError as exc:
-            QMessageBox.warning(self, "无法更新 API Key", str(exc))
+            message_box_warning(self, "无法更新 API Key", str(exc))
             self._append_log(f"更新 api_keys.json 失败：{exc}")
             return
 
@@ -10196,7 +10360,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_unsaved_config_before_workflow():
             return
         if not self.state.get_game_root():
-            QMessageBox.information(
+            message_box_information(
                 self, "请先选择项目",
                 "请先选择游戏的 work 目录。\n"
                 "环境检查会读取本地配置中的项目路径。"
@@ -10295,7 +10459,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_unsaved_config_before_workflow():
             return
         if not self.state.get_game_root():
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "请先选择项目",
                 "请先选择游戏目录（项目根目录或 work 目录均可）。\n"
@@ -10330,7 +10494,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_unsaved_config_before_workflow():
             return
         if not self.state.get_game_root():
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "请先选择项目",
                 "请先选择游戏的 work 目录。",
@@ -10427,13 +10591,13 @@ class MainWindow(QMainWindow):
         if not self._confirm_unsaved_config_before_workflow():
             return False
         if not self.state.get_game_root():
-            QMessageBox.information(self, "请先选择项目", "请先选择游戏的 work 目录。")
+            message_box_information(self, "请先选择项目", "请先选择游戏的 work 目录。")
             return False
 
         flags = self._saved_batch_context_flags()
         if kind == "rag":
             if not flags["rag_enabled"]:
-                QMessageBox.information(
+                message_box_information(
                     self,
                     "记忆库未启用",
                     bootstrap_disabled_message("rag"),
@@ -10445,7 +10609,7 @@ class MainWindow(QMainWindow):
             running_summary = running_bootstrap_summary("rag")
         else:
             if not flags["source_index_enabled"]:
-                QMessageBox.information(
+                message_box_information(
                     self,
                     "原文索引未启用",
                     bootstrap_disabled_message("source_index"),
@@ -10487,7 +10651,7 @@ class MainWindow(QMainWindow):
     def _on_start_translation(self):
         spec = work_mode_spec(self._current_work_mode())
         if not spec.implemented:
-            QMessageBox.information(self, "功能开发中", spec.not_implemented_message)
+            message_box_information(self, "功能开发中", spec.not_implemented_message)
             return
         if spec.is_bootstrap:
             self._start_bootstrap_task(spec.bootstrap_kind)
@@ -10505,7 +10669,7 @@ class MainWindow(QMainWindow):
             self._on_generate_template()
             return
         if not self.state.get_game_root():
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "请先选择项目",
                 "请先选择游戏的 work 目录。",
@@ -10519,14 +10683,14 @@ class MainWindow(QMainWindow):
                     "当前环境检查未通过或仍有阻塞项，无法开始翻译。"
                     "请查看环境检查摘要，处理问题后重新运行检查。"
                 )
-            QMessageBox.information(self, "请先运行环境检查", detail)
+            message_box_information(self, "请先运行环境检查", detail)
             return
 
         if not self._confirm_unsaved_config_before_workflow():
             return
 
         if self._litellm_install_blocks_mode(spec.mode):
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "LiteLLM 正在安装",
                 "请等待 LiteLLM 后台安装完成后再启动同步任务。其他功能仍可继续使用。",
@@ -10537,7 +10701,7 @@ class MainWindow(QMainWindow):
             sync_backend = self._saved_sync_backend()
             if sync_backend == "litellm":
                 if importlib.util.find_spec("litellm") is None:
-                    QMessageBox.information(
+                    message_box_information(
                         self,
                         "尚未安装 LiteLLM",
                         "当前同步后端是 LiteLLM。请先运行：\n"
@@ -10548,7 +10712,7 @@ class MainWindow(QMainWindow):
             else:
                 api_key_count, _ = self.state.get_api_key_status()
                 if api_key_count == 0:
-                    QMessageBox.information(
+                    message_box_information(
                         self,
                         "请先配置 API Key",
                         "Gemini 同步模式需要 API 密钥；请在设置页管理 API Key 或设置环境变量。",
@@ -10560,7 +10724,7 @@ class MainWindow(QMainWindow):
             submit_max_cost=self._submit_max_cost_from_config(),
         )
         if workflow is None:
-            QMessageBox.information(self, "无法开始任务", spec.not_implemented_message)
+            message_box_information(self, "无法开始任务", spec.not_implemented_message)
             return
 
         self._clear_log_view()
@@ -10603,10 +10767,10 @@ class MainWindow(QMainWindow):
             return
         spec = work_mode_spec(self._current_work_mode())
         if not spec.implemented or not spec.supports_resume:
-            QMessageBox.information(self, "功能开发中", spec.not_implemented_message)
+            message_box_information(self, "功能开发中", spec.not_implemented_message)
             return
         if not self.state.get_game_root():
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "请先选择项目",
                 "请先选择游戏的 work 目录。",
@@ -10616,7 +10780,7 @@ class MainWindow(QMainWindow):
         game_root = self.state.get_game_root()
         latest_manifest = self._latest_resume_manifest_path(game_root, spec)
         if latest_manifest is None:
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "没有可继续的任务",
                 f"未找到最近任务记录；请先开始一个{spec.label}任务。",
@@ -10629,7 +10793,7 @@ class MainWindow(QMainWindow):
                 work_mode=spec.mode,
             )
         except ValueError as exc:
-            QMessageBox.warning(self, "无法继续最新任务", str(exc))
+            message_box_warning(self, "无法继续最新任务", str(exc))
             return
 
         only_query = self._resume_button_is_query_mode()
@@ -10659,7 +10823,7 @@ class MainWindow(QMainWindow):
             submit_max_cost=self._submit_max_cost_from_config(),
         )
         if workflow is None:
-            QMessageBox.information(self, "无法继续任务", spec.not_implemented_message)
+            message_box_information(self, "无法继续任务", spec.not_implemented_message)
             return
         if workflow.current_step() is None:
             self._refresh_diagnostics_context()
@@ -10695,21 +10859,22 @@ class MainWindow(QMainWindow):
         latest_manifest, entries = self._load_latest_split_entries()
         pending_count = sum(1 for entry in entries if entry.needs_submit)
         if not latest_manifest or not entries or pending_count <= 0:
-            QMessageBox.information(self, "没有待提交拆分包", "当前拆分组没有尚未提交的包。")
+            message_box_information(self, "没有待提交拆分包", "当前拆分组没有尚未提交的包。")
             self._refresh_split_status_ui()
             return
 
-        reply = QMessageBox.question(
+        reply = message_box_question(
             self,
             "确认批量提交",
             (
                 f"将按顺序提交 {pending_count} 个尚未提交的拆分包。\n"
                 "已提交、处理中、已完成或已写回的包不会重复提交。"
             ),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
+            yes_text="提交",
+            no_text="取消",
+            default="yes",
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if reply != "yes":
             return
 
         workflow = SplitBatchQueueWorkflow.submit_remaining(
@@ -10718,7 +10883,7 @@ class MainWindow(QMainWindow):
             submit_max_cost=self._submit_max_cost_from_config(),
         )
         if workflow.current_step() is None:
-            QMessageBox.information(self, "没有待提交拆分包", "当前拆分组没有尚未提交的包。")
+            message_box_information(self, "没有待提交拆分包", "当前拆分组没有尚未提交的包。")
             return
 
         self._clear_log_view()
@@ -10895,7 +11060,7 @@ class MainWindow(QMainWindow):
         variants = build_variants_from_gui_selection(dimension_choices)
         valid, validation_message = validate_ab_experiment_variants(variants)
         if not valid:
-            QMessageBox.warning(dialog, "对比项不足", validation_message)
+            message_box_warning(dialog, "对比项不足", validation_message)
             return None
 
         api_key_index = None if api_key_spin.value() < 0 else api_key_spin.value()
@@ -10961,7 +11126,7 @@ class MainWindow(QMainWindow):
         manifest_path, manifest = self._current_diagnostics_manifest()
         ready, message = translation_probe_ready(manifest_path, manifest)
         if not ready:
-            QMessageBox.information(self, "无法试跑样本请求", message)
+            message_box_information(self, "无法试跑样本请求", message)
             return
 
         options = self._prompt_probe_options()
@@ -11011,7 +11176,7 @@ class MainWindow(QMainWindow):
         manifest_path, manifest = self._current_diagnostics_manifest()
         ready, message = translation_ab_experiment_ready(manifest_path, manifest)
         if not ready:
-            QMessageBox.information(self, "无法运行翻译 A/B 对比", message)
+            message_box_information(self, "无法运行翻译 A/B 对比", message)
             return
 
         options = self._prompt_compare_variants_options()
@@ -11066,7 +11231,7 @@ class MainWindow(QMainWindow):
         manifest_path, manifest = self._current_diagnostics_manifest()
         ready, message = translation_split_ready(manifest_path, manifest)
         if not ready:
-            QMessageBox.information(self, "无法拆分翻译包", message)
+            message_box_information(self, "无法拆分翻译包", message)
             return
 
         options = self._prompt_split_options()
@@ -11233,7 +11398,7 @@ class MainWindow(QMainWindow):
     def _on_run_repair(self) -> None:
         spec = work_mode_spec(self._current_work_mode())
         if not spec.supports_translation_writeback:
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "当前模式不支持",
                 "「同步修补」仅适用于批量翻译。",
@@ -11242,18 +11407,18 @@ class MainWindow(QMainWindow):
 
         manifest_path = self._writeback_manifest_path
         if not manifest_path:
-            QMessageBox.information(self, "无法同步修补", "没有可用的任务记录。")
+            message_box_information(self, "无法同步修补", "没有可用的任务记录。")
             return
 
         try:
             manifest = self.state.load_manifest_file(manifest_path)
         except ValueError as exc:
-            QMessageBox.warning(self, "无法同步修补", str(exc))
+            message_box_warning(self, "无法同步修补", str(exc))
             return
 
         eligibility = assess_repair_eligibility(manifest, manifest_path=manifest_path)
         if not eligibility.eligible:
-            QMessageBox.information(self, eligibility.heading, eligibility.message)
+            message_box_information(self, eligibility.heading, eligibility.message)
             return
 
         candidates = self._discover_repair_report_candidates(
@@ -11263,7 +11428,7 @@ class MainWindow(QMainWindow):
         report_path = self._prompt_repair_report_path(candidates)
         if not report_path:
             if not candidates:
-                QMessageBox.information(
+                message_box_information(
                     self,
                     "没有可用的修补报告",
                     "未在任务包或项目目录找到 remaining_need_translate_*.jsonl、"
@@ -11283,14 +11448,15 @@ class MainWindow(QMainWindow):
             eligibility.message,
             f"修补报告：{report_path}",
         ]
-        reply = QMessageBox.question(
+        reply = message_box_question(
             self,
             "确认同步修补",
             "\n".join(confirm_lines),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            yes_text="确认修补",
+            no_text="取消",
+            default="no",
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if reply != "yes":
             return
 
         self._clear_log_view()
@@ -11333,14 +11499,14 @@ class MainWindow(QMainWindow):
     def _on_recheck_writeback(self) -> None:
         spec = work_mode_spec(self._current_work_mode())
         if not spec.supports_translation_writeback:
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "当前模式不支持",
                 "「重新检查」仅适用于批量翻译。",
             )
             return
         if not self._writeback_manifest_path:
-            QMessageBox.information(self, "无法重新检查", "没有可检查的任务记录。")
+            message_box_information(self, "无法重新检查", "没有可检查的任务记录。")
             return
 
         summary = self._current_writeback_summary()
@@ -11348,7 +11514,7 @@ class MainWindow(QMainWindow):
             summary,
             supports_translation_writeback=spec.supports_translation_writeback,
         ):
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "无法重新检查",
                 "请先完成翻译并下载结果，再重新检查。",
@@ -11377,19 +11543,19 @@ class MainWindow(QMainWindow):
 
     def _on_apply_writeback(self):
         if not work_mode_spec(self._current_work_mode()).supports_translation_writeback:
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "当前模式不支持",
                 "「写回翻译」仅适用于批量翻译。",
             )
             return
         if not self._writeback_manifest_path:
-            QMessageBox.information(self, "无法写回", "没有可写回的任务；请先完成结果检查。")
+            message_box_information(self, "无法写回", "没有可写回的任务；请先完成结果检查。")
             return
 
         summary = self._current_writeback_summary()
         if not summary.can_apply:
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "当前不能写回",
                 summary.message or "只有检查结果为可写回时才允许写回。",
@@ -11403,14 +11569,15 @@ class MainWindow(QMainWindow):
             *summary.facts,
         ]
 
-        reply = QMessageBox.question(
+        reply = message_box_question(
             self,
             "确认写回翻译",
             "\n".join(confirm_lines),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            yes_text="确认写回",
+            no_text="取消",
+            default="no",
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if reply != "yes":
             return
 
         manifest_path = self._writeback_manifest_path
@@ -11431,23 +11598,24 @@ class MainWindow(QMainWindow):
 
     def _on_apply_sync_translation(self) -> None:
         if self._current_work_mode() != WorkMode.SYNC_TRANSLATION:
-            QMessageBox.information(self, "当前模式不支持", "请先切换到同步翻译。")
+            message_box_information(self, "当前模式不支持", "请先切换到同步翻译。")
             return
         manifest_path = self.sync_translation_page.preview_manifest_path()
         if not manifest_path:
-            QMessageBox.information(self, "无法写回", "请先生成包含变更的同步翻译预览。")
+            message_box_information(self, "无法写回", "请先生成包含变更的同步翻译预览。")
             return
 
-        reply = QMessageBox.question(
+        reply = message_box_question(
             self,
             "确认写回同步翻译",
             "即将重新校验项目、源文件和预览制品，然后修改项目脚本。\n\n"
             f"预览清单：{manifest_path}\n\n"
             "如果脚本在预览后发生变化，写回会自动拒绝。是否继续？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            yes_text="确认写回",
+            no_text="取消",
+            default="no",
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if reply != "yes":
             return
 
         self._clear_log_view()
@@ -11462,7 +11630,7 @@ class MainWindow(QMainWindow):
     def _on_apply_revision(self) -> None:
         spec = work_mode_spec(self._current_work_mode())
         if not self._uses_revision_writeback(spec.mode):
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "当前模式不支持",
                 "「写回订正」仅适用于订正相关模式。",
@@ -11471,7 +11639,7 @@ class MainWindow(QMainWindow):
 
         summary = self._current_writeback_summary()
         if not summary.can_apply:
-            QMessageBox.information(
+            message_box_information(
                 self,
                 "当前不能写回订正",
                 summary.message or "请先完成订正预览并确认有可写回项。",
@@ -11484,19 +11652,20 @@ class MainWindow(QMainWindow):
             "",
             *summary.facts,
         ]
-        reply = QMessageBox.question(
+        reply = message_box_question(
             self,
             "确认写回订正",
             "\n".join(confirm_lines),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            yes_text="确认写回",
+            no_text="取消",
+            default="no",
         )
-        if reply != QMessageBox.StandardButton.Yes:
+        if reply != "yes":
             return
 
         manifest_path = summary.manifest_path or self._writeback_manifest_path
         if not manifest_path:
-            QMessageBox.information(self, "无法写回订正", "没有可写回的订正任务记录。")
+            message_box_information(self, "无法写回订正", "没有可写回的订正任务记录。")
             return
 
         self._clear_log_view()
@@ -12194,7 +12363,7 @@ class MainWindow(QMainWindow):
                     "同步修补完成；建议点击「重新检查」。",
                     8000,
                 )
-                QMessageBox.information(
+                message_box_information(
                     self,
                     "同步修补完成",
                     "修补已写入翻译文件。请在「批量翻译 · 结果」的「问题处理」中"
@@ -12252,7 +12421,7 @@ class MainWindow(QMainWindow):
                 if preview_result == "cancelled":
                     self.statusBar().showMessage("补译包已生成，请先确认预览范围。", 6000)
             else:
-                QMessageBox.warning(self, result.heading, result.message)
+                message_box_warning(self, result.heading, result.message)
                 self.statusBar().showMessage(result.heading, 6000)
             return
 
@@ -12752,7 +12921,7 @@ class MainWindow(QMainWindow):
             self.state.save_translator_config(config)
             self._append_log(f"外观主题已保存：{self._theme_preference}。")
         except Exception as exc:
-            QMessageBox.warning(self, "保存主题失败", str(exc))
+            message_box_warning(self, "保存主题失败", str(exc))
             self._append_log(f"保存主题失败：{exc}")
 
     def _on_theme_changed(self, _index: int) -> None:
@@ -12991,7 +13160,7 @@ class MainWindow(QMainWindow):
 
     def _on_save_config(self) -> bool:
         if not self.state.get_game_root():
-            QMessageBox.information(self, "未选择项目", "请先选择游戏的 work 目录。")
+            message_box_information(self, "未选择项目", "请先选择游戏的 work 目录。")
             return False
         self._ensure_settings_pages_for_config()
         # Persist any debounced LiteLLM model selection before reading widgets.
@@ -13032,7 +13201,7 @@ class MainWindow(QMainWindow):
             litellm_model = self._litellm_model_text()
             if sync_backend == "litellm" and not litellm_model:
                 self._focus_settings_section("litellm")
-                QMessageBox.information(
+                message_box_information(
                     self,
                     "请配置 LiteLLM 模型",
                     "启用 LiteLLM 前，请填写带 provider 前缀的模型名称。",
@@ -13184,7 +13353,7 @@ class MainWindow(QMainWindow):
                 )
             return True
         except Exception as exc:
-            QMessageBox.warning(self, "保存设置失败", str(exc))
+            message_box_warning(self, "保存设置失败", str(exc))
             self._append_log(f"保存设置失败：{exc}")
             return False
 
@@ -13195,7 +13364,7 @@ class MainWindow(QMainWindow):
         try:
             new_root, _adjusted = self.state.normalize_game_root(value)
         except (TypeError, ValueError) as exc:
-            QMessageBox.warning(self, "同步项目目录失败", str(exc))
+            message_box_warning(self, "同步项目目录失败", str(exc))
             self._append_log(f"同步设置页 game_root 到当前窗口状态失败: {exc}")
             return False
 

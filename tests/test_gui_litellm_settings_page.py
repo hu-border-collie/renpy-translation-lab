@@ -271,7 +271,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         )
         self.window._litellm_catalog_worker = None
 
-        with mock.patch("gui_qt.app.QMessageBox.warning"):
+        with mock.patch("gui_qt.app.message_box_warning"):
             self.window._on_litellm_models_loaded(
                 "openai",
                 (),
@@ -359,8 +359,6 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertEqual(store_keys.call_args.kwargs.get("active_index"), 1)
 
     def test_missing_key_prompts_before_model_catalog_load(self):
-        from PySide6.QtWidgets import QMessageBox
-
         self.window._populate_litellm_providers(("deepseek",), selected="deepseek")
         self.window.sync_backend_combo.setCurrentIndex(
             self.window.sync_backend_combo.findData("litellm")
@@ -369,10 +367,10 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertEqual(self.window._current_litellm_provider(), "deepseek")
         with (
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
-            mock.patch("gui_qt.app.QMessageBox.question") as question,
+            mock.patch("gui_qt.app.message_box_question") as question,
             mock.patch("gui_qt.app.LiteLLMModelCatalogWorker") as worker_cls,
         ):
-            question.return_value = QMessageBox.StandardButton.No
+            question.return_value = "no"
             self.window._on_refresh_litellm_models()
             worker_cls.assert_not_called()
             question.assert_called_once()
@@ -380,7 +378,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
 
             question.reset_mock()
             worker_cls.reset_mock()
-            question.return_value = QMessageBox.StandardButton.Yes
+            question.return_value = "yes"
             worker = mock.Mock()
             worker_cls.return_value = worker
             self.window._on_refresh_litellm_models()
@@ -458,7 +456,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 return_value={"sync": {}, "batch": {}},
             ),
             mock.patch.object(self.window.state, "save_translator_config") as save_config,
-            mock.patch("gui_qt.app.QMessageBox.information") as information,
+            mock.patch("gui_qt.app.message_box_information") as information,
         ):
             saved = self.window._on_save_config()
         self.assertFalse(saved)
@@ -475,7 +473,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             self.assertFalse(self.window.litellm_test_connection_btn.isEnabled())
 
             self.window._litellm_catalog_worker = None
-            with mock.patch("gui_qt.app.QMessageBox.warning"):
+            with mock.patch("gui_qt.app.message_box_warning"):
                 self.window._on_litellm_models_loaded(
                     "openai",
                     (),

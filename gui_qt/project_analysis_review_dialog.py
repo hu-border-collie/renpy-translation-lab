@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSplitter,
@@ -40,6 +39,7 @@ from project_analysis import (
     normalize_lineage,
     resolve_project_analysis_store,
 )
+from .widget_helpers import message_box_information, message_box_question, message_box_warning
 from .user_copy import (
     PROJECT_ANALYSIS_COPY,
     project_analysis_artifact_label,
@@ -360,7 +360,7 @@ class ProjectAnalysisReviewDialog(QDialog):
     def _open_selected_source(self) -> None:
         path, _location = self._source_location()
         if path is None or not path.is_file():
-            QMessageBox.information(self, "来源不可用", "该条目没有可打开的来源文件。")
+            message_box_information(self, "来源不可用", "该条目没有可打开的来源文件。")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
@@ -380,7 +380,7 @@ class ProjectAnalysisReviewDialog(QDialog):
         try:
             result = mark_project_brief_reviewed(base_dir=self.base_dir)
         except Exception as exc:
-            QMessageBox.warning(self, "无法记录审查", str(exc))
+            message_box_warning(self, "无法记录审查", str(exc))
             return False
         self.data["reviewed_at"] = result["reviewed_at"]
         self._refresh_review_status()
@@ -388,12 +388,15 @@ class ProjectAnalysisReviewDialog(QDialog):
 
     def _request_publish(self) -> None:
         if (
-            QMessageBox.question(
+            message_box_question(
                 self,
                 PROJECT_ANALYSIS_COPY["publish_confirm_title"],
                 PROJECT_ANALYSIS_COPY["publish_confirm_body"],
+                yes_text="审查并启用",
+                no_text="取消",
+                default="yes",
             )
-            != QMessageBox.StandardButton.Yes
+            != "yes"
         ):
             return
         if self._record_review():
@@ -402,12 +405,15 @@ class ProjectAnalysisReviewDialog(QDialog):
 
     def _request_unpublish(self) -> None:
         if (
-            QMessageBox.question(
+            message_box_question(
                 self,
                 PROJECT_ANALYSIS_COPY["unpublish_confirm_title"],
                 PROJECT_ANALYSIS_COPY["unpublish_confirm_body"],
+                yes_text="停止使用",
+                no_text="取消",
+                default="yes",
             )
-            == QMessageBox.StandardButton.Yes
+            == "yes"
         ):
             self.requested_action = "unpublish"
             self.accept()

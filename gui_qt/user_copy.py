@@ -1,4 +1,10 @@
-"""Shared Chinese labels and copy helpers for GUI summaries."""
+"""Shared Chinese labels and copy helpers for GUI summaries.
+
+用户可见文案术语规则（#299）：
+- 概念优先使用中文：术语表（glossary）、分块（chunk）、词条（unit）、写回（apply）。
+- 文件名、配置键、CLI 标识符保留原文：``glossary.json``、``chunk_size``、``unit``。
+- 通用技术词允许保留：token、API Key、Provider、model、LiteLLM、Ren'Py。
+"""
 from __future__ import annotations
 
 from typing import Any

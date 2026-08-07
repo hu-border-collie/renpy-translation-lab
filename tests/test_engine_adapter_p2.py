@@ -224,6 +224,42 @@ class TestRenPyAdapterP2(unittest.TestCase):
         self.assertEqual(result.unresolved_occurrence_ids, (original.occurrence_id,))
         self.assertEqual(result.diagnostics[0]["reason_code"], "common.locator.unresolved")
 
+    def test_relocation_cache_is_scoped_to_project_identity(self):
+        source = (
+            'translate schinese chapter:\n'
+            '    # e "Hello {player}!"\n'
+            '    e "Hello {player}!"\n'
+        )
+        root1, tl1 = self.make_project(source)
+        adapter = RenPyAdapter(legacy_module=runtime)
+        snapshot1 = build_translation_snapshot(adapter, self.request(root1, tl1))
+        root2, tl2 = self.make_project(source)
+        snapshot2 = build_translation_snapshot(adapter, self.request(root2, tl2))
+
+        self.assertEqual(
+            snapshot1.project.source_fingerprint,
+            snapshot2.project.source_fingerprint,
+        )
+
+        original1 = self.occurrence_for(snapshot1, "Hello {player}!")
+        result1 = adapter.relocate_occurrences(
+            snapshot1.project,
+            (original1,),
+            snapshot1.project.source_documents,
+        )
+        self.assertEqual(len(result1.occurrences), 1)
+
+        original2 = self.occurrence_for(snapshot2, "Hello {player}!")
+        result2 = adapter.relocate_occurrences(
+            snapshot2.project,
+            (original2,),
+            snapshot2.project.source_documents,
+        )
+        self.assertEqual(len(result2.occurrences), 1)
+        relocated2 = result2.occurrences[0]
+        self.assertTrue(relocated2.unit.file_path.startswith(str(root2)))
+        self.assertNotIn(str(root1), relocated2.unit.file_path)
+
     def test_validation_maps_renpy_token_differences_to_stable_reason_codes(self):
         _, _, adapter, snapshot = self.snapshot('e "Hello {player} [count] %d"\n')
         occurrence = self.occurrence_for(snapshot, "Hello {player} [count] %d")
@@ -239,6 +275,151 @@ class TestRenPyAdapterP2(unittest.TestCase):
         self.assertIn("renpy.tag.changed", invalid.reason_codes)
         self.assertIn("renpy.field.changed", invalid.reason_codes)
         self.assertIn("renpy.percent_token.changed", invalid.reason_codes)
+
+    def test_validation_uses_marker_source_text_for_translated_units(self):
+        source = (
+            'translate schinese chapter:\n'
+            '    # e "Hello {player}!"\n'
+            '    e "Hello {player}!"\n'
+        )
+        _, _, adapter, snapshot = self.snapshot(source)
+        occurrence = self.occurrence_for(snapshot, "Hello {player}!")
+        unit = replace(
+            occurrence.unit,
+            text="你好 {player} {count}!",
+            source="Hello {player}!",
+        )
+        occurrence = replace(occurrence, unit=unit)
+
+        result = adapter.validate_translation(occurrence, "您好 {player}!")
+
+        self.assertEqual(result.status, "pass")
+        expected_digest = digest_json(
+            {
+                "source": "Hello {player}!",
+                "tokens": {
+                    kind: adapter._counter_payload(counter)
+                    for kind, counter in adapter._token_counters(
+                        runtime,
+                        "Hello {player}!",
+                    ).items()
+                },
+            }
+        )
+        self.assertEqual(result.source_constraints_digest, expected_digest)
+
+    def test_validation_uses_name_span_for_speaker_label_units(self):
+        source = (
+            'translate schinese chapter:\n'
+            '    # "Terry" "Hello there."\n'
+            '    "Terry" "Hello there."\n'
+        )
+        _, _, adapter, snapshot = self.snapshot(source)
+        occurrence = next(
+            occ for occ in snapshot.occurrences if occ.unit.text == "Terry"
+        )
+        # Marker extraction keeps only the first literal of a multi-string
+        # speaker-label line, so the source is exactly the name span.
+        self.assertEqual(occurrence.unit.source, "Terry")
+
+        result = adapter.validate_translation(occurrence, "特里")
+
+        self.assertEqual(result.status, "pass")
+
+    def test_marker_with_escaped_quotes_is_not_truncated(self):
+        source = (
+            'translate schinese chapter:\n'
+            '    # e "He said \\"hi\\"."\n'
+            '    e "He said \\"hi\\"."\n'
+        )
+        _, _, adapter, snapshot = self.snapshot(source)
+        occurrence = self.occurrence_for(snapshot, 'He said "hi".')
+
+        # The single literal contains escaped quotes; marker extraction must
+        # keep the whole text instead of truncating at the first quote.
+        self.assertEqual(occurrence.unit.source, 'He said "hi".')
+        result = adapter.validate_translation(occurrence, '他说"嗨"。')
+        self.assertEqual(result.status, "pass")
+
+    def test_include_filter_changes_fingerprint_and_invalidates_cache(self):
+        source = (
+            'translate schinese chapter:\n'
+            '    # e "Hello"\n'
+            '    e "Hello"\n'
+        )
+        root, tl_dir = self.make_project(source)
+        adapter = RenPyAdapter(legacy_module=runtime)
+        full = adapter.discover_project(self.request(root, tl_dir))
+        filtered = adapter.discover_project(
+            ProjectDiscoveryRequest(
+                project_root=str(root),
+                localization_root=str(tl_dir),
+                target_language="schinese",
+                include_files=("other.rpy",),
+            )
+        )
+
+        # include/exclude changes are materialized into the document set, so
+        # the fingerprint (and therefore the relocation cache key) changes.
+        self.assertNotEqual(full.source_fingerprint, filtered.source_fingerprint)
+
+    def test_validation_keeps_marker_source_when_unit_text_is_empty(self):
+        source = (
+            'translate schinese chapter:\n'
+            '    # e "Hello {player}!"\n'
+            '    e "Hello {player}!"\n'
+        )
+        _, _, adapter, snapshot = self.snapshot(source)
+        occurrence = self.occurrence_for(snapshot, "Hello {player}!")
+        unit = replace(occurrence.unit, text="", source="Hello {player}!")
+        occurrence = replace(occurrence, unit=unit)
+
+        result = adapter.validate_translation(occurrence, "您好 {player}!")
+
+        self.assertEqual(result.status, "pass")
+        expected_digest = digest_json(
+            {
+                "source": "Hello {player}!",
+                "tokens": {
+                    kind: adapter._counter_payload(counter)
+                    for kind, counter in adapter._token_counters(
+                        runtime,
+                        "Hello {player}!",
+                    ).items()
+                },
+            }
+        )
+        self.assertEqual(result.source_constraints_digest, expected_digest)
+
+    def test_validation_keeps_full_source_when_text_is_a_prefix(self):
+        source = (
+            'translate schinese chapter:\n'
+            '    # e "Hello world"\n'
+            '    e "Hello world"\n'
+        )
+        _, _, adapter, snapshot = self.snapshot(source)
+        occurrence = self.occurrence_for(snapshot, "Hello world")
+        # A unit whose current text happens to be a prefix of the source must
+        # still validate against the full source span.
+        unit = replace(occurrence.unit, text="Hello", source="Hello world")
+        occurrence = replace(occurrence, unit=unit)
+
+        result = adapter.validate_translation(occurrence, "你好世界")
+
+        self.assertEqual(result.status, "pass")
+        expected_digest = digest_json(
+            {
+                "source": "Hello world",
+                "tokens": {
+                    kind: adapter._counter_payload(counter)
+                    for kind, counter in adapter._token_counters(
+                        runtime,
+                        "Hello world",
+                    ).items()
+                },
+            }
+        )
+        self.assertEqual(result.source_constraints_digest, expected_digest)
 
     def test_writeback_plan_is_declarative_and_uses_live_source_hashes(self):
         source = 'e "Hello {player}!"\n'

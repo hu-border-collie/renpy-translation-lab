@@ -138,7 +138,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
         "sync_chunk_size",
         ("sync", "chunk_size"),
-        "同步 chunk 条数",
+        "同步分块条数",
         "同步翻译单次请求最多包含的条目数。",
         "int",
         40,
@@ -168,7 +168,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
         "batch_chunk_size",
         ("batch", "chunk_size"),
-        "批量 chunk 条数",
+        "批量分块条数",
         "Batch 构建时每个请求最多包含的条目数。",
         "int",
         60,
@@ -884,8 +884,8 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
         "batch_retry_chunk_size",
         ("batch", "retry_chunk_size"),
-        "补译 chunk 条数",
-        "build-retry 生成补译请求时每个 chunk 的最大条目数。",
+        "补译分块条数",
+        "build-retry 生成补译请求时每个分块的最大条目数。",
         "int",
         8,
         "翻译吞吐",
@@ -904,7 +904,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
         "batch_safety_settings",
         ("batch", "safety_settings"),
-        "Batch safety settings",
+        "安全设置",
         "可填 relaxed_adult 等预设，或 Google safety settings JSON 数组。留空表示默认。",
         "json",
         [],
@@ -935,7 +935,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
         "keyword_chunk_size",
         ("batch", "keyword_extraction", "chunk_size"),
-        "关键词 chunk 条数",
+        "关键词分块条数",
         "批量关键词提取每个请求的最大条目数。",
         "int",
         40,
@@ -945,8 +945,8 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
         "keyword_max_candidates_per_chunk",
         ("batch", "keyword_extraction", "max_candidates_per_chunk"),
-        "每 chunk 候选上限",
-        "关键词提取每个 chunk 允许返回的候选数量。",
+        "每分块候选上限",
+        "关键词提取每个分块允许返回的候选数量。",
         "int",
         12,
         "关键词提取",
@@ -965,7 +965,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
         "revision_chunk_size",
         ("batch", "revision", "chunk_size"),
-        "订正 chunk 条数",
+        "订正分块条数",
         "批量订正每个请求的最大条目数。",
         "int",
         6,

@@ -618,7 +618,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                 "project_context_settings.save_project_context_settings",
                 side_effect=OSError("project write failed"),
             ),
-            mock.patch("gui_qt.app.QMessageBox.warning"),
+            mock.patch("gui_qt.app.message_box_warning"),
         ):
             saved = self.window._on_save_config()
         self.assertFalse(saved)
@@ -1837,12 +1837,10 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.font_install_status_label = label
         self.window.font_install_progress = progress
 
-        from gui_qt.app import QMessageBox
-
         with (
             mock.patch(
-                "gui_qt.app.QMessageBox.question",
-                return_value=QMessageBox.StandardButton.Yes,
+                "gui_qt.app.message_box_question",
+                return_value="yes",
             ),
             mock.patch("gui_qt.app.FontInstallWorker", FakeWorker),
         ):

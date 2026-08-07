@@ -47,6 +47,18 @@ class SplitStatusActionDelegate(QStyledItemDelegate):
         self._pressed_index: QModelIndex | None = None
         self._style_button: QPushButton | None = None
 
+    def keyboard_activate(self, index: QModelIndex) -> bool:
+        """Activate the painted action for ``index`` (keyboard Enter/Space path).
+
+        Returns ``True`` when the cell carries an action payload and the
+        ``select_requested`` signal was emitted.
+        """
+        payload = read_split_action_payload(index)
+        if payload is None:
+            return False
+        self.select_requested.emit(payload["manifest_path"])
+        return True
+
     def paint(
         self,
         painter: QPainter,

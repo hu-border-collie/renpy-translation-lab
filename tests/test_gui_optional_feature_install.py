@@ -145,7 +145,7 @@ class GuiOptionalFeatureInstallTests(unittest.TestCase):
         # already present in the local interpreter (INSTALLED ignores last_failed).
         failed_status = _status(FeatureInstallState.FAILED, action="修复安装")
         with (
-            mock.patch("gui_qt.app.QMessageBox.warning") as warning,
+            mock.patch("gui_qt.app.message_box_warning") as warning,
             mock.patch(
                 "optional_feature.probe_feature",
                 return_value=failed_status,
