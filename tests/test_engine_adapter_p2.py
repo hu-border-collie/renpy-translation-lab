@@ -327,6 +327,34 @@ class TestRenPyAdapterP2(unittest.TestCase):
 
         self.assertEqual(result.status, "pass")
 
+    def test_validation_keeps_marker_source_when_unit_text_is_empty(self):
+        source = (
+            'translate schinese chapter:\n'
+            '    # e "Hello {player}!"\n'
+            '    e "Hello {player}!"\n'
+        )
+        _, _, adapter, snapshot = self.snapshot(source)
+        occurrence = self.occurrence_for(snapshot, "Hello {player}!")
+        unit = replace(occurrence.unit, text="", source="Hello {player}!")
+        occurrence = replace(occurrence, unit=unit)
+
+        result = adapter.validate_translation(occurrence, "您好 {player}!")
+
+        self.assertEqual(result.status, "pass")
+        expected_digest = digest_json(
+            {
+                "source": "Hello {player}!",
+                "tokens": {
+                    kind: adapter._counter_payload(counter)
+                    for kind, counter in adapter._token_counters(
+                        runtime,
+                        "Hello {player}!",
+                    ).items()
+                },
+            }
+        )
+        self.assertEqual(result.source_constraints_digest, expected_digest)
+
     def test_writeback_plan_is_declarative_and_uses_live_source_hashes(self):
         source = 'e "Hello {player}!"\n'
         _root, tl_dir, adapter, snapshot = self.snapshot(source)

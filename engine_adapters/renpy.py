@@ -1586,7 +1586,11 @@ class RenPyAdapter:
         unit = occurrence.unit
         source_text = str(unit.source or "")
         unit_text = str(unit.text or "")
-        if source_text.startswith(unit_text) and len(source_text) > len(unit_text):
+        if (
+            unit_text
+            and source_text.startswith(unit_text)
+            and len(source_text) > len(unit_text)
+        ):
             # Marker parsing concatenated adjacent strings on a speaker-label
             # line (e.g. ``# "Terry" "Hello there."``); validate the
             # replaceable span instead.
