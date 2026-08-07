@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 
 from ..empty_state import EmptyStateWidget
 from ..user_copy import TASK_PROJECT_GATE_COPY
-from ..work_modes import WorkMode, work_mode_submode_label, work_mode_spec
+from ..work_modes import WorkMode, work_mode_submode_label
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
 from .task_controls import TaskPageLayout
@@ -44,7 +44,7 @@ class RevisionPage(QFrame):
         self.empty_state = EmptyStateWidget(
             "",
             TASK_PROJECT_GATE_COPY["title"],
-            f"选择项目并运行环境检查后，才能{work_mode_spec(self.supported_modes[0]).start_button_label}。",
+            TASK_PROJECT_GATE_COPY["revision_body"],
             action_text=TASK_PROJECT_GATE_COPY["action"],
             action_style="primary",
         )

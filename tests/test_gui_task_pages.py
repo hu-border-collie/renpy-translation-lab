@@ -257,25 +257,27 @@ class GuiTaskPageTests(unittest.TestCase):
             (
                 WorkMode.SYNC_TRANSLATION,
                 "sync_translation_empty_state",
-                "同步翻译",
+                ("同步翻译", "差异预览", "确认后才写回"),
             ),
             (
                 WorkMode.KEYWORD_EXTRACTION,
                 "keywords_empty_state",
-                "提取关键词",
+                ("提取关键词", "候选报告", "合并到 glossary.json"),
             ),
             (
                 WorkMode.REVISION,
                 "revision_empty_state",
-                "订正预览",
+                ("订正预览", "确认预览后才可写回"),
             ),
         )
-        for mode, object_name, keyword in cases:
+        for mode, object_name, expected_copy in cases:
             self.window._set_work_mode(mode, refresh_manifest_writeback=False)
             page = self.window.workbench_stack.currentWidget()
             self.assertEqual(page.empty_state.objectName(), object_name)
             self.assertIn("环境检查", page.empty_state._title_label.text())
-            self.assertIn(keyword, page.empty_state._desc_label.text())
+            description = page.empty_state._desc_label.text()
+            for keyword in expected_copy:
+                self.assertIn(keyword, description)
 
     def test_context_rows_do_not_print_unselected_project(self) -> None:
         """#298: no '项目 未选择项目' copy without a project."""

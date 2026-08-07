@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 from ..empty_state import EmptyStateWidget
 from ..responsive_layout import FlowButtonBar
 from ..user_copy import TASK_PROJECT_GATE_COPY
-from ..work_modes import WorkMode, work_mode_spec
+from ..work_modes import WorkMode
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
 from .task_controls import TaskControlSection, TaskPageLayout
@@ -62,11 +62,10 @@ class BatchTranslationPage(QWidget):
         self.page_stack.setObjectName("batch_translation_page_stack")
         outer.addWidget(self.page_stack)
 
-        _gate_spec = work_mode_spec(self.supported_modes[0])
         self.empty_state = EmptyStateWidget(
             "",
             TASK_PROJECT_GATE_COPY["title"],
-            f"选择项目并运行环境检查后，才能{_gate_spec.start_button_label}。",
+            TASK_PROJECT_GATE_COPY["batch_body"],
             action_text=TASK_PROJECT_GATE_COPY["action"],
             action_style="primary",
         )

@@ -201,6 +201,31 @@ class GuiP3PolishTests(unittest.TestCase):
         # The force-show branch must not resurrect the CTA while running.
         self.assertTrue(self.window.workflow_empty_state.isHidden())
 
+    def test_workflow_empty_cta_respects_complete_start_gate(self) -> None:
+        """#316 review: shared CTA follows the same gate as the start button."""
+        from gui_qt.work_modes import WorkMode
+
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
+        self.window._workflow = None
+        self.window._writeback_manifest_path = ""
+        self.window._doctor_check_completed = True
+        self.window._doctor_summary_status = "ready"
+
+        with mock.patch.object(
+            self.window,
+            "_bootstrap_task_ready",
+            return_value=False,
+        ):
+            self.window._sync_workbench_empty_states()
+            self.assertTrue(self.window.workflow_empty_state.isHidden())
+            with mock.patch.object(self.window, "_on_start_translation") as start:
+                self.window._on_workflow_empty_cta()
+                start.assert_not_called()
+
     def test_workflow_empty_cta_button_fully_visible(self) -> None:
         """Empty-state CTA must not be clipped by the progress column."""
         from PySide6.QtCore import QPoint, QRect

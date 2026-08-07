@@ -8412,10 +8412,17 @@ class MainWindow(QMainWindow):
             if status and status not in {"idle", "stale", ""}:
                 show_wf_empty = False
             doctor_ready = self._doctor_allows_translate_action()
+            spec = work_mode_spec(self._current_work_mode())
+            start_ready = self._translate_button_enabled(
+                spec=spec,
+                bootstrap_ready=self._bootstrap_task_ready(spec),
+                running=running,
+            )
             if (
                 not running
                 and has_project
                 and doctor_ready
+                and start_ready
                 and status in {"idle", "stale"}
                 and not resume_ok
                 and not has_workflow
@@ -8424,7 +8431,7 @@ class MainWindow(QMainWindow):
             # Without a project or doctor readiness, the batch page gate owns
             # the doctor CTA (#316); the shared empty CTA only shows after
             # prep passes, where its primary action is 开始翻译, not 去环境检查.
-            if not has_project or not doctor_ready:
+            if not has_project or not doctor_ready or not start_ready:
                 show_wf_empty = False
             self.workflow_empty_state.setVisible(show_wf_empty)
             # Empty CTA shares the progress column with summary chrome. Hide the
@@ -8438,7 +8445,9 @@ class MainWindow(QMainWindow):
                 if widget is not None:
                     widget.setVisible(not show_wf_empty)
             if show_wf_empty:
-                self.workflow_empty_state.set_action_text("开始翻译")
+                self.workflow_empty_state.set_action_text(
+                    self._translate_button_label()
+                )
                 for attr in (
                     "workflow_progress_bar",
                     "view_last_completed_btn",
@@ -8547,16 +8556,26 @@ class MainWindow(QMainWindow):
             self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
 
     def _on_workflow_empty_cta(self) -> None:
-        """Route the batch empty CTA: start translation once prep passes."""
+        """Route the batch empty CTA through the complete start-action gate."""
         running = bool(getattr(self, "_task_running", False)) or (
             hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
         )
         if running:
             return
-        if self._doctor_allows_translate_action():
-            self._on_start_translation()
-        else:
+        has_project = bool(
+            hasattr(self, "state") and self.state.get_game_root() is not None
+        )
+        if not has_project or not self._doctor_allows_translate_action():
             self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+            return
+        spec = work_mode_spec(self._current_work_mode())
+        if not self._translate_button_enabled(
+            spec=spec,
+            bootstrap_ready=self._bootstrap_task_ready(spec),
+            running=False,
+        ):
+            return
+        self._on_start_translation()
 
     def _on_batch_translation_page_action(self, action: str) -> None:
         """Route a P5 page-local action to the existing batch coordinator."""
