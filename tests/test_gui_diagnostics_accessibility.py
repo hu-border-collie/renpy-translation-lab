@@ -188,6 +188,30 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
 
         self.assertEqual(app.focusWidget(), self.window.header_log_btn)
 
+    def test_arrow_keys_switch_shell_page_when_unfocused(self) -> None:
+        initial = self.window.shell_nav.currentRow()
+        total = self.window.shell_nav.count()
+        self.assertGreater(total, 0)
+
+        down = QKeyEvent(
+            QKeyEvent.Type.KeyPress,
+            Qt.Key.Key_Down,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        self.window.keyPressEvent(down)
+        self.assertEqual(
+            self.window.shell_nav.currentRow(),
+            (initial + 1) % total,
+        )
+
+        up = QKeyEvent(
+            QKeyEvent.Type.KeyPress,
+            Qt.Key.Key_Up,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        self.window.keyPressEvent(up)
+        self.assertEqual(self.window.shell_nav.currentRow(), initial)
+
     def test_disabled_button_text_meets_normal_text_contrast(self) -> None:
         for theme, tokens in (("light", LIGHT_TOKENS), ("dark", DARK_TOKENS)):
             with self.subTest(theme=theme, kind="default"):

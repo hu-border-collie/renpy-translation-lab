@@ -32,6 +32,7 @@ from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QGuiApplication,
+    QKeyEvent,
     QKeySequence,
     QPalette,
     QShortcut,
@@ -934,6 +935,22 @@ class MainWindow(QMainWindow):
                                 delegate.clear_pressed_state()
         return super().eventFilter(watched, event)
 
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Switch the sidebar page with Up/Down when no control took the key."""
+        if event.key() in {Qt.Key.Key_Up, Qt.Key.Key_Down}:
+            self._move_shell_nav(forward=event.key() == Qt.Key.Key_Down)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _move_shell_nav(self, *, forward: bool) -> None:
+        """Move the shell sidebar selection by one page (wrapping)."""
+        rows = self.shell_nav.count()
+        if rows <= 0:
+            return
+        delta = 1 if forward else -1
+        self.shell_nav.setCurrentRow((self.shell_nav.currentRow() + delta) % rows)
+
     def _sync_work_mode_hint_height(self) -> None:
         label = self.work_mode_hint_label
         width = label.width()
@@ -1046,9 +1063,10 @@ class MainWindow(QMainWindow):
 
         self.shell_nav = QListWidget()
         self.shell_nav.setObjectName("shell_nav")
-        # The sidebar is a mouse/shortcut navigation rail (Ctrl+1..7); keeping
-        # it in the Tab chain makes arrow keys switch pages unexpectedly while
-        # the user is exploring page content (#299).
+        # The sidebar is a mouse/shortcut navigation rail (Ctrl+1..7) and page
+        # switching with Up/Down is handled at the window level when no control
+        # consumed the key; keeping the list itself out of the Tab chain avoids
+        # unexpected arrow-key behavior while exploring page content (#299).
         self.shell_nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.shell_nav.setFrameShape(QFrame.Shape.NoFrame)
         self.shell_nav.setSpacing(1)
