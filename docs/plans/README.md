@@ -12,6 +12,9 @@
 
 ## 当前设计
 
+- [开放 Issues 审计（2026-08-08）](open_issues_audit_2026-08-08.md)：
+  基于 `main@78ab050` 的 21 个开放 issues 时间点快照、依赖关系、难度与收口顺序；
+  最新状态仍以 GitHub、当前代码和现行文档为准。
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](engine_adapter_contract.md)：
   #265 / #285 的调用链审计、adapter/coverage schema 与阶段接入边界。P1 的只读
   adapter 与 translation build 扫描迁移已经落地；本文继续作为 P2 以后合同基线。
