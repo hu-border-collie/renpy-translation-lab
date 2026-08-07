@@ -6,10 +6,12 @@ import warnings
 
 try:
     from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea
 
     from gui_qt.app import MainWindow
+    from gui_qt.widget_helpers import ArrowKeyButtonFilter
     from gui_qt.responsive_layout import FlowButtonBar
     from gui_qt.theme_tokens import DARK_TOKENS, LIGHT_TOKENS
 except ImportError as exc:
@@ -153,6 +155,38 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
         QTest.keyClick(toggle, Qt.Key.Key_Return)
 
         self.assertNotEqual(self.window._doctor_details_expanded, before)
+
+    def test_arrow_key_button_filter_swallows_direction_keys(self) -> None:
+        app = QApplication.instance()
+        app_filter = getattr(app, "_renpy_lab_arrow_filter", None)
+        self.assertIsNotNone(app_filter)
+        button = QPushButton()
+        for key in (
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
+            Qt.Key.Key_Left,
+            Qt.Key.Key_Right,
+        ):
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress,
+                key,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            self.assertTrue(app_filter.eventFilter(button, event))
+
+    def test_arrow_keys_keep_focus_on_button(self) -> None:
+        app = QApplication.instance()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            app.setActiveWindow(self.window)
+            self.window.setFocus()
+            self.window.header_log_btn.setFocus()
+        self.assertEqual(app.focusWidget(), self.window.header_log_btn)
+
+        QTest.keyClick(app.focusWidget(), Qt.Key.Key_Down)
+        QTest.keyClick(app.focusWidget(), Qt.Key.Key_Right)
+
+        self.assertEqual(app.focusWidget(), self.window.header_log_btn)
 
     def test_disabled_button_text_meets_normal_text_contrast(self) -> None:
         for theme, tokens in (("light", LIGHT_TOKENS), ("dark", DARK_TOKENS)):

@@ -319,6 +319,7 @@ from .settings_schema import (
 _SETTINGS_WORKSPACE_MANAGED_KEYS = frozenset({"game_root"})
 from .translation_workflow import WorkflowUpdate
 from .widget_helpers import (
+    ArrowKeyButtonFilter,
     message_box_information,
     message_box_question,
     message_box_warning,
@@ -538,6 +539,11 @@ class MainWindow(QMainWindow):
         litellm_catalog_cache: LiteLLMCatalogCache | None = None,
     ):
         super().__init__()
+        app = QApplication.instance()
+        if app is not None and getattr(app, "_renpy_lab_arrow_filter", None) is None:
+            arrow_filter = ArrowKeyButtonFilter(app)
+            app.installEventFilter(arrow_filter)
+            app._renpy_lab_arrow_filter = arrow_filter
         self.setWindowTitle("Ren'Py Translation Lab - 图形工作台")
         self.setMinimumSize(960, 640)
         self.resize(1180, 780)

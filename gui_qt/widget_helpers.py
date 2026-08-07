@@ -3,14 +3,48 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QWheelEvent
-from PySide6.QtWidgets import QComboBox, QLineEdit, QMessageBox, QStyle, QTabWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QStyle,
+    QTabWidget,
+    QToolButton,
+)
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
 
 QuestionReply = Literal["yes", "no", "cancel"]
+
+
+class ArrowKeyButtonFilter(QObject):
+    """Keep arrow keys from moving focus between plain buttons.
+
+    Qt's default focus navigation moves focus to the next control when an
+    arrow key is pressed on a QPushButton/QToolButton. Inside scroll areas the
+    target can be scrolled out of the viewport, so the focus frame disappears
+    from the user's view. Plain buttons have no arrow-key semantics; swallow
+    the keys and let users navigate with Tab. Radio buttons, check boxes,
+    spin boxes, tables and scroll bars keep their arrow-key behavior.
+    """
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if (
+            event.type() == QEvent.Type.KeyPress
+            and isinstance(obj, (QPushButton, QToolButton))
+            and event.key() in {
+                Qt.Key.Key_Up,
+                Qt.Key.Key_Down,
+                Qt.Key.Key_Left,
+                Qt.Key.Key_Right,
+            }
+        ):
+            return True
+        return False
 
 
 class NoWheelComboBox(QComboBox):
