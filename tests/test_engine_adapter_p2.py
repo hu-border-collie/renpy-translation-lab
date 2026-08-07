@@ -369,6 +369,7 @@ class TestRenPyAdapterP2(unittest.TestCase):
 
         result = adapter.validate_translation(occurrence, "你好世界")
 
+        self.assertEqual(result.status, "pass")
         expected_digest = digest_json(
             {
                 "source": "Hello world",

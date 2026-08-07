@@ -29,6 +29,21 @@ else:
 from tests import gui_test_support
 
 
+def _activate_window(window) -> None:
+    """Activate a window for keyboard-focus tests.
+
+    Prefers the non-deprecated ``activateWindow``; the offscreen test platform
+    never activates windows, so fall back to the deprecated
+    ``QApplication.setActiveWindow`` there.
+    """
+    window.show()
+    window.activateWindow()
+    if QApplication.focusWidget() is None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            QApplication.setActiveWindow(window)
+
+
 def _relative_luminance(color: str) -> float:
     channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
 
@@ -176,11 +191,9 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
 
     def test_arrow_keys_keep_focus_on_button(self) -> None:
         app = QApplication.instance()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            app.setActiveWindow(self.window)
-            self.window.setFocus()
-            self.window.header_log_btn.setFocus()
+        _activate_window(self.window)
+        self.window.setFocus()
+        self.window.header_log_btn.setFocus()
         self.assertEqual(app.focusWidget(), self.window.header_log_btn)
 
         QTest.keyClick(app.focusWidget(), Qt.Key.Key_Down)
@@ -230,12 +243,9 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
 
     def test_clicking_inert_background_returns_focus_to_window(self) -> None:
         app = QApplication.instance()
-        self.window.show()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            app.setActiveWindow(self.window)
-            self.window.setFocus()
-            self.window.header_log_btn.setFocus()
+        _activate_window(self.window)
+        self.window.setFocus()
+        self.window.header_log_btn.setFocus()
 
         QTest.mouseClick(self.window.header_log_btn, Qt.MouseButton.LeftButton)
         self.assertEqual(app.focusWidget(), self.window.header_log_btn)
