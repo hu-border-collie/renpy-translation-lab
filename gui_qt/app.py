@@ -935,6 +935,16 @@ class MainWindow(QMainWindow):
                                 delegate.clear_pressed_state()
         return super().eventFilter(watched, event)
 
+    def showEvent(self, event: QEvent) -> None:
+        """Keep the initial keyboard focus on the window itself.
+
+        On Windows the activation logic can hand focus to the first focusable
+        control (the log button), which then swallows arrow keys; the window
+        keeps Up/Down page switching working right after startup (#299).
+        """
+        super().showEvent(event)
+        self.setFocus()
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Switch the sidebar page with Up/Down when no control took the key."""
         if event.key() in {Qt.Key.Key_Up, Qt.Key.Key_Down}:
