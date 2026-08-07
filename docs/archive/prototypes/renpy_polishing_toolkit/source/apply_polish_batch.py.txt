@@ -1,0 +1,262 @@
+import os
+import re
+import argparse
+
+def clean_quotes(s):
+    if s and len(s) > 1 and s.startswith('"') and s.endswith('"'):
+        return s[1:-1]
+    return s
+
+def parse_polish_markdown(file_path):
+    changes = []
+    
+    with open(file_path, 'r', encoding='utf-8') as f:
+        # Read the file line by line
+        lines = f.readlines()
+        
+    current_id = None
+    current_orig = None
+    current_polish = None
+    
+    for line in lines:
+        line = line.strip()
+        
+        # New format parsing:
+        # ### S[Batch]-[ID]: [Brief Description]
+        # **Current**: [Current translation]
+        # **Proposed**: [New translation]
+        
+        if line.startswith("### S"):
+            # Save previous if complete
+            if current_id and current_orig and current_polish:
+                changes.append({
+                    'original': current_orig,
+                    'polished': current_polish,
+                    'id': current_id
+                })
+            
+            # Extract new ID (e.g., S1-01)
+            match = re.search(r'###\s*(S\d+-\d+)', line)
+            if match:
+                current_id = match.group(1)
+            current_orig = None
+            current_polish = None
+            
+        elif line.startswith("**Current**:"):
+            current_orig = clean_quotes(line.replace("**Current**:", "").strip())
+        elif line.startswith("**Proposed**:"):
+            current_polish = clean_quotes(line.replace("**Proposed**:", "").strip())
+            
+    # Add the last one
+    if current_id and current_orig and current_polish:
+        changes.append({
+            'original': current_orig,
+            'polished': current_polish,
+            'id': current_id
+        })
+
+    return changes
+
+def normalize_string(s):
+    # 1. *text* -> {i}text{/i}
+    s = re.sub(r'\*(.*?)\*', r'{i}\1{/i}', s)
+    return s
+
+def apply_changes(changes, target_dir):
+    files_cache = {}
+    
+    # Pre-load files
+    print(f"Loading files from {target_dir}...")
+    for root, dirs, files in os.walk(target_dir):
+        for file in files:
+            if file.endswith(".rpy"):
+                path = os.path.join(root, file)
+                with open(path, 'r', encoding='utf-8') as f:
+                    files_cache[path] = f.read()
+
+    applied_count = 0
+    errors = []
+    
+    for change in changes:
+        orig = change['original']
+        polish = change['polished']
+        cid = change['id']
+        
+        # 1. Exact substring match (NO QUOTES to allow partial match)
+        p1 = orig
+        
+        # 2. Match with Markdown->Renpy italic conversion
+        p2 = normalize_string(orig)
+        
+        # 3. Strip ellipses for partial matching (prefix/suffix match)
+        p3 = None
+        clean_orig = orig
+        if clean_orig.startswith("...") or clean_orig.startswith("……"):
+            clean_orig = clean_orig.lstrip(".…")
+        if clean_orig.endswith("...") or clean_orig.endswith("……"):
+            clean_orig = clean_orig.rstrip(".…")
+            
+        if clean_orig != orig and len(clean_orig) > 4: # Only if meaningful content remains
+             p3 = clean_orig
+             # Also normalize this stripped version
+             p4 = normalize_string(clean_orig)
+        else:
+             p4 = None
+        
+        patterns = [p1, p2, p3, p4]
+        
+        found = False
+        target_file = None
+        used_pattern = None
+        
+        for pattern in patterns:
+            if not pattern: continue
+            for filepath, content in files_cache.items():
+                if pattern in content:
+                    found = True
+                    target_file = filepath
+                    used_pattern = pattern
+                    break
+            if found: break
+            
+        if found:
+            # Prepare replacement
+            replacement = polish
+            if used_pattern == patterns[1]: # Normalized
+                replacement = normalize_string(polish)
+                
+            content = files_cache[target_file]
+            
+            # Check if already applied
+            if replacement in content and used_pattern not in content:
+                 print(f"[{cid}] Already applied in {os.path.basename(target_file)}")
+                 applied_count += 1
+                 continue
+            
+            # Replace
+            new_content = content.replace(used_pattern, replacement)
+            files_cache[target_file] = new_content
+            print(f"[{cid}] Replaced substring in {os.path.basename(target_file)}")
+            applied_count += 1
+            
+        else:
+            errors.append(f"[{cid}] NOT FOUND: {orig}")
+
+    # Write back
+    for filepath, content in files_cache.items():
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+    print(f"\nTotal applied: {applied_count}/{len(changes)}")
+    if errors:
+        print("Errors:")
+        for e in errors:
+            print(e)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Apply translation polish changes to Ren'Py scripts.")
+    parser.add_argument('-a', '--artifact', required=True, help='Path to the markdown artifact file containing the proposals')
+    parser.add_argument('-t', '--target', required=True, help='Target directory or file to apply changes to')
+    args = parser.parse_args()
+
+    # Collect target directories/files
+    target_path = os.path.abspath(args.target)
+    files_cache = {}
+    
+    if os.path.isfile(target_path):
+        if target_path.endswith('.rpy'):
+            print(f"Loading single file: {target_path}")
+            with open(target_path, 'r', encoding='utf-8') as f:
+                files_cache[target_path] = f.read()
+        else:
+            print("Error: Target file is not a .rpy file.")
+            exit(1)
+    else:
+        print(f"Loading files from directory: {target_path}...")
+        for root, dirs, files in os.walk(target_path):
+            for file in files:
+                if file.endswith(".rpy"):
+                    path = os.path.join(root, file)
+                    with open(path, 'r', encoding='utf-8') as f:
+                        files_cache[path] = f.read()
+
+    if not os.path.exists(args.artifact):
+        print(f"Error: Artifact file not found: {args.artifact}")
+        exit(1)
+
+    changes = parse_polish_markdown(args.artifact)
+    print(f"Processing {len(changes)} changes...")
+    if changes:
+        # We need to adapt apply_changes to use the pre-loaded files_cache directly
+        applied_count = 0
+        errors = []
+        
+        for change in changes:
+            orig = change['original']
+            polished = change['polished']
+            cid = change['id']
+            
+            p1 = orig
+            p2 = normalize_string(orig)
+            
+            p3 = None
+            clean_orig = orig
+            if clean_orig.startswith("...") or clean_orig.startswith("……"):
+                clean_orig = clean_orig.lstrip(".…")
+            if clean_orig.endswith("...") or clean_orig.endswith("……"):
+                clean_orig = clean_orig.rstrip(".…")
+                
+            if clean_orig != orig and len(clean_orig) > 4:
+                 p3 = clean_orig
+                 p4 = normalize_string(clean_orig)
+            else:
+                 p4 = None
+            
+            patterns = [p1, p2, p3, p4]
+            
+            found = False
+            target_file = None
+            used_pattern = None
+            
+            for pattern in patterns:
+                if not pattern: continue
+                for filepath, content in files_cache.items():
+                    if pattern in content:
+                        found = True
+                        target_file = filepath
+                        used_pattern = pattern
+                        break
+                if found: break
+                
+            if found:
+                replacement = polished
+                if used_pattern == patterns[1]:
+                    replacement = normalize_string(polished)
+                    
+                content = files_cache[target_file]
+                
+                if replacement in content and used_pattern not in content:
+                     print(f"[{cid}] Already applied in {os.path.basename(target_file)}")
+                     applied_count += 1
+                     continue
+                
+                new_content = content.replace(used_pattern, replacement)
+                files_cache[target_file] = new_content
+                print(f"[{cid}] Replaced in {os.path.basename(target_file)}")
+                applied_count += 1
+            else:
+                errors.append(f"[{cid}] NOT FOUND: {orig}")
+        
+        # Write back modified files
+        for filepath, content in files_cache.items():
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+                
+        print(f"\nTotal applied: {applied_count}/{len(changes)}")
+        if errors:
+            print("Errors (Not found in target):")
+            for e in errors:
+                print(e)
+    else:
+        print("No changes found in the markdown file.")
+

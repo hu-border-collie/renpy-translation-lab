@@ -1,0 +1,110 @@
+import os
+import re
+import argparse
+
+def clean_quotes(s):
+    if s and len(s) > 1 and s.startswith('"') and s.endswith('"'):
+        return s[1:-1]
+    return s
+
+def normalize_string(s):
+    # *text* -> {i}text{/i}
+    s = re.sub(r'\*(.*?)\*', r'{i}\1{/i}', s)
+    return s
+
+def parse_polish_markdown(file_path):
+    changes = []
+    
+    with open(file_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+        
+    current_id = None
+    current_polish = None
+    
+    for line in lines:
+        line = line.strip()
+        
+        if line.startswith("### S"):
+            # Save previous if complete
+            if current_id and current_polish:
+                changes.append({
+                    'polished': current_polish,
+                    'id': current_id
+                })
+            
+            match = re.search(r'###\s*(S\d+-\d+)', line)
+            if match:
+                current_id = match.group(1)
+            current_polish = None
+            
+        elif line.startswith("**Proposed**:"):
+            current_polish = clean_quotes(line.replace("**Proposed**:", "").strip())
+            
+    # Add the last one
+    if current_id and current_polish:
+        changes.append({
+            'polished': current_polish,
+            'id': current_id
+        })
+
+    return changes
+
+def verify_polish(changes, target_dir):
+    files_cache = {}
+    for root, dirs, files in os.walk(target_dir):
+        for file in files:
+            if file.endswith(".rpy"):
+                path = os.path.join(root, file)
+                with open(path, 'r', encoding='utf-8') as f:
+                    files_cache[path] = f.read()
+
+    found_count = 0
+    missing = []
+    
+    for change in changes:
+        polish = change['polished']
+        cid = change['id']
+        
+        # Check strict and normalized
+        p_strict = polish
+        p_norm = normalize_string(polish)
+        
+        found = False
+        for filepath, content in files_cache.items():
+            if p_strict in content or p_norm in content:
+                found = True
+                found_count += 1
+                break
+        
+        if not found:
+            missing.append(f"[{cid}] Missing: {polish}")
+
+    print(f"Verified Polished Strings: {found_count}/{len(changes)}")
+    if missing:
+        print("Missing Polish Strings:")
+        for m in missing:
+            print(m)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Verify if translation polish changes were applied to Ren'Py scripts.")
+    parser.add_argument('-a', '--artifact', required=True, help='Path to the markdown artifact file containing the proposals')
+    parser.add_argument('-t', '--target', required=True, help='Target directory or file to check against')
+    args = parser.parse_args()
+
+    targets = []
+    if os.path.isfile(args.target):
+        if args.target.endswith('.rpy'):
+             target_dir = os.path.dirname(os.path.abspath(args.target))
+    else:
+        target_dir = args.target
+
+    if not os.path.exists(args.artifact):
+        print(f"Error: Artifact file not found: {args.artifact}")
+        exit(1)
+
+    changes = parse_polish_markdown(args.artifact)
+    print(f"Verifying {len(changes)} changes in {target_dir}...")
+    if changes:
+        verify_polish(changes, target_dir)
+    else:
+        print("No changes found in the markdown file. Please check the parsing format.")
