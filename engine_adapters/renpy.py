@@ -150,6 +150,9 @@ class RenPyAdapter:
 
     def __init__(self, legacy_module: ModuleType | None = None):
         self._legacy_module = legacy_module
+        # Cache live inventory/extract by source fingerprint so multi-chunk
+        # check/apply relocation does not rescan the same file repeatedly.
+        self._live_occurrence_cache: dict[str, tuple[ProjectDiscovery, tuple[Occurrence, ...]]] = {}
 
     def _legacy(self) -> ModuleType:
         if self._legacy_module is None:
@@ -1413,15 +1416,17 @@ class RenPyAdapter:
             diagnostics.append({"message": message})
         return tuple(dict.fromkeys(reason_codes)), tuple(diagnostics)
 
-    def relocate_occurrences(
+
+    def _live_occurrences_for_project(
         self,
-        project: ProjectDiscovery,
-        occurrences: Sequence[Occurrence],
-        live_sources: Sequence[SourceDocument],
-    ) -> RelocationResult:
-        if project.engine != self.engine:
-            raise ValueError(f"RenPyAdapter cannot relocate engine={project.engine!r}.")
-        live_project = self._project_with_live_sources(project, live_sources)
+        live_project: ProjectDiscovery,
+    ) -> tuple[ProjectDiscovery, tuple[Occurrence, ...]]:
+        """Return live occurrences for a project, reusing scans for the same source fingerprint."""
+        cache_key = str(live_project.source_fingerprint or "")
+        cached = self._live_occurrence_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         live_inventory = self.inventory_candidates(live_project, InventoryPolicy())
         approved_ids = [
             candidate.candidate_id
@@ -1431,6 +1436,21 @@ class RenPyAdapter:
         live_occurrences = tuple(
             self.extract_occurrences(live_project, live_inventory, approved_ids)
         )
+        cached = (live_project, live_occurrences)
+        if cache_key:
+            self._live_occurrence_cache[cache_key] = cached
+        return cached
+
+    def relocate_occurrences(
+        self,
+        project: ProjectDiscovery,
+        occurrences: Sequence[Occurrence],
+        live_sources: Sequence[SourceDocument],
+    ) -> RelocationResult:
+        if project.engine != self.engine:
+            raise ValueError(f"RenPyAdapter cannot relocate engine={project.engine!r}.")
+        live_project = self._project_with_live_sources(project, live_sources)
+        live_project, live_occurrences = self._live_occurrences_for_project(live_project)
         live_by_unit_id: dict[str, list[Occurrence]] = {}
         for candidate in live_occurrences:
             live_by_unit_id.setdefault(candidate.unit.id, []).append(candidate)
@@ -1537,7 +1557,10 @@ class RenPyAdapter:
         if occurrence.engine != self.engine:
             raise ValueError(f"RenPyAdapter cannot validate engine={occurrence.engine!r}.")
         legacy = self._legacy()
-        source_text = occurrence.unit.source_text
+        # Validate the actual replaceable unit text, not concatenated source_text.
+        # Speaker-name units are only the name span; source_text may include the dialogue.
+        unit = occurrence.unit
+        source_text = str(getattr(unit, "text", None) or getattr(unit, "source_text", None) or "")
         translated_text = str(translated_text or "")
         try:
             valid, message = legacy.validate_translation(source_text, translated_text)
