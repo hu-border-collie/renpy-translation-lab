@@ -152,7 +152,7 @@ class RevisionPage(QFrame):
 
     def set_workflow_facts(self, facts: list[str]) -> None:
         """Replace the workflow facts shown in the page status section."""
-        self.status_section.facts_label.setText("\n".join(facts))
+        self.status_section.set_facts(facts)
 
     def set_writeback_status(self, summary: object | None) -> None:
         """Render the writeback result inside the page (#298)."""

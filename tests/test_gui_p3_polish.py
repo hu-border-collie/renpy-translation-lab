@@ -226,52 +226,83 @@ class GuiP3PolishTests(unittest.TestCase):
                 self.window._on_workflow_empty_cta()
                 start.assert_not_called()
 
-    def test_workflow_empty_cta_button_fully_visible(self) -> None:
-        """Empty-state CTA must not be clipped by the progress column."""
+    def test_batch_ready_idle_keeps_start_action_on_task_page(self) -> None:
+        """#327 review: ready idle uses the task-page CTA, not shared chrome."""
+        from gui_qt.doctor_report import DoctorSummary
+        from gui_qt.work_modes import WorkMode
+
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window.state.get_game_root = (  # type: ignore[method-assign]
+            lambda: Path("C:/games/Demo/work")
+        )
+        self.window._workflow = None
+        self.window._writeback_manifest_path = ""
+        self.window._doctor_check_completed = True
+
+        with mock.patch.object(
+            self.window,
+            "_bootstrap_task_ready",
+            return_value=True,
+        ):
+            self.window._set_doctor_summary(
+                DoctorSummary(
+                    status="ready",
+                    heading="项目检查通过",
+                    message="可以开始翻译。",
+                    facts=[],
+                    findings=[],
+                    mode="existing_tl_only",
+                )
+            )
+            self.window._sync_workbench_empty_states()
+
+        page = self.window.batch_translation_page
+        start = page.buttons["start"]
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+        self.assertFalse(start.isHidden())
+        self.assertTrue(start.isEnabled())
+        self.assertEqual(start.text(), "开始翻译")
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertTrue(self.window.workflow_empty_state.isHidden())
+
+    def test_batch_project_gate_fills_page_without_clipping(self) -> None:
+        """#298/#316: page gate owns the only visible CTA at minimum size."""
         from PySide6.QtCore import QPoint, QRect
         from PySide6.QtWidgets import QScrollArea
 
         from gui_qt.work_modes import WorkMode
 
-        self.window.resize(1100, 700)
+        self.window.resize(960, 640)
         self.window.show()
         for _ in range(8):
             self._app.processEvents()
         self.window._set_work_mode(WorkMode.BATCH_TRANSLATION, refresh_manifest_writeback=False)
-        self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
+        self.window.state.get_game_root = lambda: None  # type: ignore[method-assign]
         self.window._workflow = None
         self.window._writeback_manifest_path = ""
-        self.window._doctor_check_completed = True
-        self.window._doctor_summary_status = "ready"
-        self.window._set_workflow_summary(
-            "idle",
-            "批量翻译",
-            "完成环境检查后，可以开始批量翻译。",
-            [],
-        )
+        self.window._doctor_check_completed = False
+        self.window._doctor_summary_status = ""
         self.window._sync_workbench_empty_states()
-        for _ in range(6):
-            self._app.processEvents()
-        # Flush deferred ensureWidgetVisible scroll.
-        self.window._ensure_workflow_empty_cta_visible()
         for _ in range(12):
             self._app.processEvents()
 
-        empty = self.window.workflow_empty_state
+        page = self.window.batch_translation_page
+        empty = page.empty_state
+        self.assertIs(page.page_stack.currentWidget(), empty)
         self.assertFalse(empty.isHidden())
         btn = empty._action_btn
         self.assertIsNotNone(btn)
         assert btn is not None
-        # After doctor passes the primary action is starting the batch run.
-        self.assertEqual(btn.text(), "开始翻译")
+        self.assertEqual(btn.text(), "去环境检查")
         self.assertFalse(btn.isHidden())
-        # Button geometry fully inside empty-state widget.
         btn_in_empty = QRect(btn.mapTo(empty, QPoint(0, 0)), btn.size())
         self.assertTrue(
             empty.rect().contains(btn_in_empty),
             msg=f"btn {btn_in_empty} not in empty {empty.rect()}",
         )
-        # After auto-scroll, button must lie inside each ancestor scroll viewport.
         parent = btn.parentWidget()
         while parent is not None:
             if isinstance(parent, QScrollArea):
@@ -285,8 +316,49 @@ class GuiP3PolishTests(unittest.TestCase):
                     ),
                 )
             parent = parent.parentWidget()
-        # Competing summary chrome must yield space to the empty CTA.
-        self.assertTrue(self.window.workflow_message_label.isHidden())
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertTrue(self.window.workflow_empty_state.isHidden())
+        self.assertLessEqual(self.window.global_project_bar.height(), 64)
+
+    def test_ready_task_content_stays_below_compact_project_strip(self) -> None:
+        """#298 visual follow-up: fixed content stays top-aligned at 960×640."""
+        from PySide6.QtCore import QPoint
+
+        from gui_qt.doctor_report import DoctorSummary
+        from gui_qt.work_modes import WorkMode
+
+        self.window.resize(960, 640)
+        self.window.show()
+        self.window.state.get_game_root = lambda: "C:/Games/Demo/work"  # type: ignore[method-assign]
+        self.window._refresh_project_label()
+        self.window._doctor_check_completed = True
+        self.window._set_doctor_summary(
+            DoctorSummary(
+                status="ready",
+                heading="项目检查通过",
+                message="可以开始同步翻译。",
+                facts=[],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window._sync_workbench_empty_states()
+        for _ in range(12):
+            self._app.processEvents()
+
+        bar = self.window.global_project_bar
+        stack = self.window.workbench_stack
+        bar_top = bar.mapTo(self.window, QPoint(0, 0)).y()
+        stack_top = stack.mapTo(self.window, QPoint(0, 0)).y()
+        self.assertLessEqual(bar.height(), 64)
+        self.assertGreaterEqual(stack_top, bar_top + bar.height())
+        self.assertLessEqual(stack_top - (bar_top + bar.height()), 16)
+        self.assertTrue(self.window.sync_translation_page.status_section.isHidden())
+        self.assertTrue(self.window.workbench_status_card.isHidden())
 
     def test_restore_diagnostics_splitter_idle(self) -> None:
         self.window.resize(1280, 900)

@@ -102,6 +102,8 @@ class GuiTaskPageTests(unittest.TestCase):
             )
         )
         self.assertIs(page.page_stack.currentWidget(), page.content_page)
+        self.assertTrue(self.window.workflow_empty_state.isHidden())
+        self.assertTrue(self.window.workbench_status_card.isHidden())
         self.assertFalse(page.risk_warning.isHidden())
         self.assertIn("不会修改", page.risk_warning.text())
         self.assertEqual(page.start_btn.text(), "开始同步翻译")
@@ -203,6 +205,7 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window.workbench_status_card.isHidden())
         self.assertIn("正在同步翻译", page.status_section.status_badge.text())
         self.assertIn("files: 2/10", page.status_section.facts_label.text())
+        self.assertFalse(page.status_section.isHidden())
 
     def test_project_analysis_owns_workflow_status_and_progress(self) -> None:
         """#298 review: context workflows never write into the hidden shared card."""
@@ -481,6 +484,56 @@ class GuiTaskPageTests(unittest.TestCase):
         self.window._doctor_summary_status = "block"
         self.window._sync_workbench_empty_states()
         self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
+    def test_batch_gate_keeps_archived_result_when_doctor_regresses(self) -> None:
+        """#327 review: an idle completed snapshot remains reachable."""
+        from gui_qt.manifest_resume_summary import ManifestWorkflowDisplay
+
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window._doctor_check_completed = True
+        self.window._set_doctor_summary(
+            DoctorSummary(
+                status="ready",
+                heading="项目检查通过",
+                message="ok",
+                facts=[],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+        manifest_path = "C:/Games/Demo/work/logs/done/manifest.json"
+        self.window._completed_manifest_snapshot = {
+            "manifest_path": manifest_path,
+            "display": ManifestWorkflowDisplay(
+                status="done",
+                heading="翻译完成",
+                message="结果已下载。",
+                facts=(),
+                timeline_step_key=None,
+                workflow=None,
+                selected_manifest_path=manifest_path,
+                archive_when_idle=True,
+            ),
+            "split_entries": [],
+        }
+        self.window._viewing_completed_manifest = False
+        self.window._refresh_workflow_idle_summary()
+        self.assertEqual(
+            self.window.workflow_status_label.property("status"),
+            "idle",
+        )
+
+        self.window._doctor_check_completed = False
+        self.window._doctor_summary_status = "block"
+        self.window._sync_workbench_empty_states()
+
+        page = self.window.batch_translation_page
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+        self.assertFalse(self.window.workbench_status_card.isHidden())
+        self.assertFalse(self.window.view_last_completed_btn.isHidden())
 
     def test_batch_gate_hides_nonterminal_status_when_doctor_regresses(self) -> None:
         """#298 review: batch uses the same finished-result test as task pages."""
