@@ -364,6 +364,7 @@ from .workbench.context_library_page import ContextLibraryPage
 from .workbench.keywords_page import KeywordsPage
 from .workbench.revision_page import RevisionPage
 from .workbench.sync_translation_page import SyncTranslationPage
+from .workbench.task_controls import task_status_has_result
 from .workbench_session import WorkbenchModeSession
 from .batch_workflow_support import resolve_submit_max_cost
 from .workflow_factory import create_workflow, resume_workflow
@@ -8365,7 +8366,7 @@ class MainWindow(QMainWindow):
                     # page visible when a real result exists (#298 review).
                     raw = self.workflow_status_label.property("status")
                     status = str(raw) if raw is not None else ""
-                    has_result = bool(status and status not in {"", "idle", "stale"})
+                    has_result = task_status_has_result(status)
                     page.set_project_ready(has_result)
                 else:
                     page.set_project_ready(gate_ready)

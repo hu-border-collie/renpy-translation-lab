@@ -482,6 +482,33 @@ class GuiTaskPageTests(unittest.TestCase):
         self.window._sync_workbench_empty_states()
         self.assertIs(page.page_stack.currentWidget(), page.content_page)
 
+    def test_batch_gate_hides_nonterminal_status_when_doctor_regresses(self) -> None:
+        """#298 review: batch uses the same finished-result test as task pages."""
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window.state.get_game_root = lambda: "C:/Games/Demo/work"  # type: ignore[method-assign]
+        self.window._workflow = None
+        self.window._writeback_manifest_path = ""
+        self.window._doctor_check_completed = False
+        self.window._doctor_summary_status = "block"
+        page = self.window.batch_translation_page
+
+        for status in ("waiting", "running"):
+            with self.subTest(status=status):
+                self.window.workflow_status_label.set_status(
+                    status,
+                    "任务尚未完成",
+                )
+                self.window._sync_workbench_empty_states(
+                    resume_available=(False, ""),
+                )
+                self.assertIs(
+                    page.page_stack.currentWidget(),
+                    page.empty_state,
+                )
+
     def test_batch_page_gate_owns_first_use_cta(self) -> None:
         """#316 review: batch page hides the disabled action stack without a project."""
         self.window._set_work_mode(
