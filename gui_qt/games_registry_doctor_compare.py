@@ -78,7 +78,7 @@ def compare_registry_with_doctor_report(
             doctor_mode=doctor_mode,
             last_refresh_at="",
             project_name="",
-            message="当前项目尚未加入工作区总表。需要时请到「设置 → 工作区」扫描登记。",
+            message="当前项目尚未加入工作区总表。需要时请到「设置 → 项目列表」扫描登记。",
             log_line="[总表对比] 当前项目未登记在 games_registry.json。",
         )
 
@@ -94,7 +94,7 @@ def compare_registry_with_doctor_report(
             project_name=project_id,
             message=(
                 f"总表中找不到该项目（id={project_id}）。"
-                "请到「设置 → 工作区」重新扫描。"
+                "请到「设置 → 项目列表」重新扫描。"
             ),
             log_line=f"[总表对比] 项目 id={project_id} 未在 games_registry.json 中找到。",
         )
@@ -116,11 +116,11 @@ def compare_registry_with_doctor_report(
             f"（layout={registry_layout or '-'}, mode={registry_mode or '-'}）。"
         )
     else:
-        message = "总表记录与本次检查不同，请到「设置 → 工作区」刷新当前项目。"
+        message = "总表记录与本次检查不同，请到「设置 → 项目列表」刷新当前项目。"
         if last_refresh_at:
             message = f"{message}（总表上次刷新：{last_refresh_at}）"
         log_line = (
-            f"[总表对比] 记录不同 — registry: layout={registry_layout or '-'}, "
+            f"[总表对比] 记录不同 — registry: layout={registry_layout or '-'}, "  # noqa: RUF001
             f"mode={registry_mode or '-'}；doctor: layout={doctor_layout or '-'}, "
             f"mode={doctor_mode or '-'}。"
         )

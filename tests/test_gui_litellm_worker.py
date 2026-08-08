@@ -55,6 +55,23 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         )
         self.assertEqual(completed, [(True, "连接成功。模型返回：OK")])
 
+    def test_connection_test_omits_sampling_for_new_gemini_model(self):
+        backend = mock.Mock()
+        backend.generate_async = mock.AsyncMock(
+            return_value=SimpleNamespace(response_text="OK")
+        )
+        worker = LiteLLMConnectionTestWorker("gemini/gemini-3.6-flash")
+
+        with mock.patch(
+            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            return_value=backend,
+        ):
+            worker.run()
+
+        request = backend.generate_async.call_args.args[0]
+        self.assertNotIn("temperature", request.config)
+        self.assertEqual(request.config["max_output_tokens"], 8)
+
     def test_connection_error_never_includes_provider_exception_text(self):
         backend = mock.Mock()
         backend.generate_async.side_effect = LiteLLMBackendError(

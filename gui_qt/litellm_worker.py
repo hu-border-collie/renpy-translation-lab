@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 
 from PySide6.QtCore import QThread, Signal
 
+from gemini_model_catalog import filter_gemini_generation_config
 from litellm_provider_config import (
     LITELLM_CATALOG_URL,
     LITELLM_PYPI_URL,
@@ -371,11 +372,14 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
             SyncGenerationRequest(
                 model=self.model,
                 contents="Reply with OK.",
-                config={
-                    "max_output_tokens": 8,
-                    "temperature": 0,
-                    "timeout": CONNECTION_TEST_TIMEOUT_SECONDS,
-                },
+                config=filter_gemini_generation_config(
+                    self.model,
+                    {
+                        "max_output_tokens": 8,
+                        "temperature": 0,
+                        "timeout": CONNECTION_TEST_TIMEOUT_SECONDS,
+                    },
+                ),
             )
         )
 

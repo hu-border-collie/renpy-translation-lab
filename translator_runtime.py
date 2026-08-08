@@ -46,6 +46,7 @@ from gemini_model_catalog import (
     DEFAULT_GEMINI_TRANSLATION_MODEL,
     catalog_extra_models,
     default_model_rotation_list,
+    filter_gemini_generation_config,
     merge_model_lists,
     normalize_model_names,
 )
@@ -4316,6 +4317,7 @@ def call_gemini_sdk(
         "response_mime_type": "application/json",
         "response_json_schema": build_response_json_schema(items),
     }
+    generation_config = filter_gemini_generation_config(model_name, generation_config)
 
     if SYNC_BACKEND == "litellm":
         from litellm_sync_backend import LiteLLMSyncBackend

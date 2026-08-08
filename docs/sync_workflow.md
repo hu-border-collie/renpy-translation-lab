@@ -1,0 +1,87 @@
+# 同步翻译工作流
+
+文档地图：[docs/README.md](README.md)
+
+同步 CLI 适合小范围即时翻译、补译和局部验证。它与 Gemini Batch 主路径使用不同的运行合同：默认命令会调用所选同步供应商，但**只生成可审查预览**；只有显式传入该次预览的 manifest 才会写回项目。
+
+大型任务、远程排队、成本折扣和可恢复下载仍优先使用 [Batch 工作流](batch_workflows.md)。GUI 用户可直接阅读 [GUI 工作台 · 同步翻译](gui_workbench.md#同步翻译)。
+
+## 前置条件
+
+1. 使用 Python 3.11+ 安装主依赖；使用 GUI 或 LiteLLM 时再安装对应可选依赖。
+2. 在 `translator_config.json` 明确设置当前 `game_root` 与 `tl_subdir`，并用只读环境检查确认项目：
+
+   ```powershell
+   python gemini_translate_batch.py doctor
+   ```
+
+3. Gemini 后端需要本地 `api_keys.json` 或 `GEMINI_API_KEY*` 环境变量；LiteLLM 后端需要在操作系统凭据管理器或供应商约定的环境变量中保存凭据。
+4. 先备份项目，并用 `include_files` / `include_prefixes` 把第一次运行限制在少量文件。
+
+同步设置来自 `translator_config.json` 的 `sync` 段，主要包括 `backend`、`model`、`chunk_size`、`max_source_chars` 和 `max_output_tokens`。完整字段和模型目录见 [安装与本地配置](setup.md#运行模式)。
+
+## 预览后写回
+
+### 1. 生成预览
+
+```powershell
+python gemini_translate.py
+```
+
+命令会扫描当前项目的待译项、调用同步模型，并在 `logs/sync_runs/<run>/` 生成：
+
+- `manifest.json`：绑定当前项目、TL 目录、源文件快照、预览制品哈希和 adapter 写回计划；
+- `preview.diff`：供人工逐项审查的差异；
+- 预览候选文件与只读 coverage 证据。
+
+默认命令不会修改 `.rpy`，终端会打印本次 manifest 和 diff 的绝对路径。若部分文件未通过 adapter 写回计划校验，运行结果会标为 `partial`，这些文件不会进入可写回预览。
+
+只有明确需要运行配置中的 prepare 步骤时才使用：
+
+```powershell
+python gemini_translate.py --prepare
+```
+
+`translator_config.json` 的 prepare 自定义命令属于可执行本地配置；不要对来源不明的配置使用 `--prepare`。
+
+### 2. 审查预览
+
+写回前至少确认：
+
+- `preview.diff` 中的原文、译文、占位符、Ren'Py 标签和说话人均正确；
+- manifest 属于当前项目和本次运行，不是其他游戏或旧任务；
+- 没有未理解的 `preview_failures`；
+- 译文已经过必要的术语、语气和机械质量检查。
+
+同步预览通过结构校验也不代表内容质量合格。与 Batch 的 `check=safe` 一样，结构安全和翻译质量是两件事。
+
+### 3. 显式写回
+
+```powershell
+python gemini_translate.py --apply logs/sync_runs/<run>/manifest.json
+```
+
+`--apply` 不会重新调用模型。写回前会重新核对当前项目、TL 目录、每个源文件快照、预览制品哈希和 adapter 计划；项目切换、源文件变化或预览制品被修改都会阻止写回。遇到阻断时不要强行复用旧 manifest，应基于当前文件重新生成并审查预览。
+
+`--prepare` 与 `--apply` 不能同时使用。同步 CLI 当前输出面向人类阅读，不提供 Batch 核心命令的 JSON envelope；自动化需要稳定机器合同、远程状态轮询或断点恢复时应改用 Batch。
+
+## Gemini 与 LiteLLM 数据边界
+
+- **Gemini 同步**：本工具从本机通过 Google `google-genai` SDK 直接调用 Gemini API。本项目没有自建中转服务，也不会上传整个 `api_keys.json` 文件；但 API 调用必然会把认证信息发送到 Google，并把待译文本、提示词以及启用的 glossary、macro、RAG、Source Index、Story Memory 或 Project Analysis 上下文发送给 Gemini。
+- **LiteLLM 同步**：本工具从本机调用 LiteLLM Python SDK，再按所选 Provider / API Base 访问供应商。本项目不提供自建 LiteLLM 代理；待译文本、提示词和必要上下文会发送到所选供应商。凭据保存在操作系统凭据管理器或环境变量中，不写入 `translator_config.json`。
+- **本地产物**：manifest、diff、模型结果摘要、用量账本与日志保存在本机；它们可能包含私有游戏文本，不应提交到公开仓库或发给无权访问者。
+
+免费与付费服务的数据使用、日志、训练和保留政策可能不同，也可能随供应商更新。处理敏感、保密或无权发送的游戏文本前，应先核对所用账号层级和供应商当前条款；Gemini 可参考 [Additional Terms](https://ai.google.dev/gemini-api/terms) 与 [Data Logging and Sharing](https://ai.google.dev/gemini-api/docs/logs-policy)，LiteLLM 则以实际 Provider 的政策为准。
+
+## 与 Batch 的关键差异
+
+| 维度 | 同步 CLI | Gemini Batch |
+|---|---|---|
+| 调用方式 | 进程内逐批即时请求 | 远程异步 job |
+| 默认写回 | 只生成 preview，显式 `--apply` | `download -> check -> apply` |
+| 安全合同 | sync manifest + 源快照 + 制品哈希 + adapter 计划 | manifest/results identity + 最近一次 `check=safe` + 写回前复核 |
+| 状态恢复 | 复用已生成 preview；阻断后重新生成 | `status` / `download` / submit recovery / retry package |
+| 机器输出 | 人类可读文本 | 核心命令支持版本化 JSON envelope |
+| 费用语义 | 供应商同步计费，无 Batch 折扣 | Gemini Batch 定价；提交前可 `estimate-cost` |
+
+两条路径都不能代替完整游戏 QA。写回后仍应运行 Ren'Py lint、机械质量检查，并进行人工/LLM 语义审校。

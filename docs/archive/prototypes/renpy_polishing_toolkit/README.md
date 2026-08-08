@@ -27,6 +27,10 @@
 | `README.md` | [original_README.md.txt](original_README.md.txt) | 原始迭代润色工作流说明 |
 | `polishing_guide.md` | [polishing_guide.original.md.txt](polishing_guide.original.md.txt) | 原始润色与校对 SOP |
 
+### 原始快照中的历史断链
+
+`polishing_guide.original.md.txt` 末尾保留了原环境中的相对链接 `../renpy-translation-lab/docs/games_registry.md`。为保持 SHA-256 所记录的原始快照不改写，正文仍原样保留；归档中另放置一个只读 [兼容重定向](../renpy-translation-lab/docs/games_registry.md)，指向当前的 [工作区项目总表](../../../games_registry.md)。`*.original.md.txt` 仍是不可变证据，不是现行用户手册。
+
 ## 采用结论
 
 值得正式吸收的是工作流设计：

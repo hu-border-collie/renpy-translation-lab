@@ -7,6 +7,8 @@ translation path; this boundary is for explicitly selected synchronous calls.
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Mapping, Optional, Protocol, runtime_checkable
 
+from gemini_model_catalog import filter_gemini_generation_config
+
 SYNC_EXECUTION_MODE = "sync"
 
 @dataclass(frozen=True)
@@ -47,7 +49,10 @@ class GeminiSyncBackend:
 
     def generate(self, request: SyncGenerationRequest) -> SyncGenerationResult:
         response = self._client.models.generate_content(
-            model=request.model, contents=request.contents, config=dict(request.config))
+            model=request.model,
+            contents=request.contents,
+            config=filter_gemini_generation_config(request.model, request.config),
+        )
         payload = self._serialize_response(response)
         usage: Dict[str, Any] = {}
         if self._extract_usage is not None:

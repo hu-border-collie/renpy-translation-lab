@@ -2,6 +2,7 @@
 
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from gemini_model_catalog import filter_gemini_generation_config
 from litellm_provider_config import provider_from_model
 from sync_model_backend import SYNC_EXECUTION_MODE, SyncGenerationRequest, SyncGenerationResult
 
@@ -181,7 +182,7 @@ class LiteLLMSyncBackend:
         return self._build_result(request, response)
 
     def _build_request_kwargs(self, request: SyncGenerationRequest) -> Dict[str, Any]:
-        config = dict(request.config)
+        config = filter_gemini_generation_config(request.model, request.config)
         if config.get("safety_settings"):
             raise LiteLLMCapabilityError(
                 "LiteLLM does not share Gemini safety_settings semantics; "

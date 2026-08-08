@@ -33,6 +33,30 @@ UPDATE_GOLDEN_KEYWORD_ENV = 'UPDATE_GOLDEN_KEYWORD'
 
 
 class BatchRagRegressionTests(unittest.TestCase):
+    def test_generation_configs_filter_sampling_by_effective_model(self):
+        items = [{
+            'id': 'script.rpy:1:0',
+            'text': 'Hello',
+            'translation': '你好',
+        }]
+        builders = (
+            lambda model: batch_mod.build_generation_config(items, model=model),
+            lambda model: batch_mod.build_revision_generation_config(items, model=model),
+            lambda model: batch_mod.build_keyword_generation_config(model=model),
+        )
+        for builder in builders:
+            with self.subTest(builder=builder):
+                new_config = builder('gemini/gemini-3.5-flash')
+                self.assertNotIn('temperature', new_config)
+                self.assertIn('max_output_tokens', new_config)
+                self.assertEqual(
+                    new_config['thinking_config']['thinking_level'],
+                    batch_mod.BATCH_THINKING_LEVEL.upper(),
+                )
+
+                old_config = builder('gemini-3.1-flash-lite')
+                self.assertEqual(old_config['temperature'], batch_mod.BATCH_TEMPERATURE)
+
     def test_empty_thinking_level_omits_thinking_config_and_warning(self):
         old_values = {
             'model': batch_mod.BATCH_MODEL,

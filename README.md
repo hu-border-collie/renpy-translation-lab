@@ -2,13 +2,13 @@
 
 面向 Ren'Py 视觉小说的翻译工作台：Gemini Batch 作业流、上下文增强、轻量 RAG 记忆层，以及写回前安全校验。
 
-**稳定版（v1.0.0）。** GUI 是普通用户的推荐入口；CLI 是 Agent、脚本、CI 与高级用户的自动化事实来源。正式交付为源码安装运行，暂无零配置安装包。版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+**最新稳定发行版是 v1.0.0；`main` 是后续开发线。** `main` 已包含尚未发布的改进，项目版本号会在下一次正式发行时统一更新；需要可复现的稳定版本请使用 `v1.0.0` tag。GUI 是普通用户的推荐入口；CLI 是 Agent、脚本、CI 与高级用户的自动化事实来源。正式交付为源码安装运行，暂无零配置安装包。版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 这是什么
 
 - **GUI**（`python -m gui_qt`）：普通用户的推荐入口，覆盖项目准备、翻译、检查、问题处理和安全写回。
 - **Batch CLI**（`gemini_translate_batch.py`）：Agent 与自动化主路径，覆盖 `build / submit / status / probe / download / check / apply / split / repair` 等。
-- **同步 CLI**（`gemini_translate.py`）：小范围即时翻译、补译、局部修复与 smoke test。
+- **同步 CLI**（`gemini_translate.py`）：小范围即时翻译、补译、局部修复与 smoke test；默认只生成可审查预览，详见 [同步翻译工作流](docs/sync_workflow.md)。
 - **上下文**：glossary / macro setting、RAG（`rag_memory.py`）、可选 Story Memory（`story_memory.py`）。
 - **共用 runtime**（`translator_runtime.py`）：配置、SDK、校验、响应解析与文件处理。
 - **可选分析**（`extract_relations.py` / `relation_analyzer/`）：关系与语义分析。
@@ -33,6 +33,7 @@
 | 通过图形界面完成第一次翻译 | [GUI 快速开始](docs/quickstart_gui.md) |
 | 让 Agent 或脚本通过 CLI 操作 | [Agent / CLI 快速开始](docs/quickstart_agent.md) |
 | 查完整 Batch 命令与恢复流程 | [Batch 工作流与安全检查](docs/batch_workflows.md) |
+| 小批量使用同步 CLI 并审查后写回 | [同步翻译工作流](docs/sync_workflow.md) |
 | 修改本仓库代码或文档 | [AGENTS.md](AGENTS.md) → [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ### 安装基础环境
@@ -42,6 +43,7 @@
 ```bash
 git clone https://github.com/hu-border-collie/renpy-translation-lab.git
 cd renpy-translation-lab
+git checkout v1.0.0          # 使用最新稳定发行版；要跟随 main 时省略此行
 python -m venv .venv
 source .venv/bin/activate   # Windows PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -67,6 +69,7 @@ python -m gui_qt
 | 安装与配置 | [setup.md](docs/setup.md) |
 | GUI 工作台 | [gui_workbench.md](docs/gui_workbench.md) |
 | Batch 与写回安全 | [batch_workflows.md](docs/batch_workflows.md) |
+| 同步翻译预览与写回 | [sync_workflow.md](docs/sync_workflow.md) |
 | 实际模型用量账本 | [model_usage_ledger.md](docs/model_usage_ledger.md) |
 | RAG / 索引 / Story Memory | [context_systems.md](docs/context_systems.md) |
 | 边界、安全与烟测 | [project_notes.md](docs/project_notes.md) |
@@ -77,4 +80,4 @@ python -m gui_qt
 
 ## 安全提示
 
-执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。不要把 API key、本地配置、私有游戏脚本、batch 结果或日志提交到公开仓库。详见 [项目说明 · 安全](docs/project_notes.md#安全说明)。
+执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。Batch 的 `check=safe` 只表示当前结果满足结构性写回合同，不代表译文已经达到交付质量；写回后仍须做机械检查与人工/LLM 语义审校。不要把 API key、本地配置、私有游戏脚本、batch 结果或日志提交到公开仓库。详见 [项目说明 · 安全](docs/project_notes.md#安全说明)。

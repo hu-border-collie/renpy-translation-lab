@@ -82,6 +82,25 @@ class PromptAndRequestTests(unittest.TestCase):
         schema = row["request"]["generation_config"]["response_json_schema"]
         self.assertIn("findings", schema["properties"])
 
+    def test_generation_config_filters_sampling_by_model(self):
+        new_config = frl.build_generation_config(
+            model="gemini/gemini-3.6-flash",
+            temperature=0.4,
+            thinking_level="minimal",
+        )
+        self.assertNotIn("temperature", new_config)
+        self.assertIn("response_json_schema", new_config)
+        self.assertEqual(
+            new_config["thinking_config"]["thinking_level"],
+            "MINIMAL",
+        )
+
+        old_config = frl.build_generation_config(
+            model="gemini-3.1-flash-lite",
+            temperature=0.4,
+        )
+        self.assertEqual(old_config["temperature"], 0.4)
+
     def test_user_prompt_injects_shared_context(self):
         unit = _unit()
         prompt = frl.build_user_prompt(

@@ -21,6 +21,45 @@ class GeminiModelCatalogTests(unittest.TestCase):
         for name in catalog.BUILTIN_GEMINI_TRANSLATION_MODELS:
             self.assertIn(name, models)
 
+    def test_filter_generation_config_removes_sampling_for_new_models(self):
+        original = {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "top_k": 20,
+            "topP": 0.8,
+            "topK": 10,
+            "max_output_tokens": 1024,
+        }
+        for model in catalog.GEMINI_MODELS_WITHOUT_SAMPLING_PARAMETERS:
+            with self.subTest(model=model):
+                filtered = catalog.filter_gemini_generation_config(model, original)
+                self.assertEqual(filtered, {"max_output_tokens": 1024})
+
+        prefixed = catalog.filter_gemini_generation_config(
+            "gemini/gemini-3.6-flash",
+            original,
+        )
+        self.assertEqual(prefixed, {"max_output_tokens": 1024})
+        self.assertIn("temperature", original)
+
+    def test_model_id_normalization_is_shared_with_gemini_3_detection(self):
+        self.assertEqual(
+            catalog.normalize_gemini_model_id("gemini/gemini-3.6-flash"),
+            "gemini-3.6-flash",
+        )
+        self.assertTrue(catalog.is_gemini_3_model("gemini/gemini-3.6-flash"))
+        self.assertTrue(catalog.is_gemini_3_model("models/gemini-3.1-flash-lite"))
+        self.assertFalse(catalog.is_gemini_3_model("openai/gpt-test"))
+
+    def test_filter_generation_config_preserves_supported_models(self):
+        config = {"temperature": 0.2, "top_p": 0.9, "top_k": 20}
+        for model in ("gemini-3.1-flash-lite", "openai/gpt-test", ""):
+            with self.subTest(model=model):
+                self.assertEqual(
+                    catalog.filter_gemini_generation_config(model, config),
+                    config,
+                )
+
     def test_resolve_merges_builtins_catalog_and_selected(self):
         config = {
             "model_catalog": {

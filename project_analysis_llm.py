@@ -30,6 +30,7 @@ from project_analysis import (
     sha256_text,
     utc_now_iso,
 )
+from gemini_model_catalog import filter_gemini_generation_config
 from sync_model_backend import SyncGenerationRequest, SyncModelBackend, SyncGenerationResult
 
 PROMPT_SCHEMA_VERSION = "project-analysis-llm-v2"
@@ -187,7 +188,7 @@ def _build_request(
     return SyncGenerationRequest(
         model=model,
         contents=[{"role": "user", "parts": [{"text": user}]}],
-        config=config,
+        config=filter_gemini_generation_config(model, config),
     )
 
 

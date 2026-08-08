@@ -317,7 +317,7 @@ from .settings_schema import (
     validate_advanced_settings,
 )
 
-# Selected on 设置 → 工作区; shown read-only on 设置 → 项目.
+# Selected on 设置 → 项目列表; shown read-only on 设置 → 项目.
 _SETTINGS_WORKSPACE_MANAGED_KEYS = frozenset({"game_root"})
 from .translation_workflow import WorkflowUpdate
 from .widget_helpers import (

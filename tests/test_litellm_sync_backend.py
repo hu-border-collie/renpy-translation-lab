@@ -87,6 +87,26 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         self.assertEqual(result.finish_reason, "stop")
         self.assertEqual(result.usage_metadata["total_tokens"], 3)
 
+    def test_new_gemini_model_omits_sampling_but_keeps_other_config(self):
+        calls = []
+
+        def completion(**kwargs):
+            calls.append(kwargs)
+            return {
+                "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+                "usage": {},
+            }
+
+        backend = LiteLLMSyncBackend(completion=completion)
+        backend.generate(SyncGenerationRequest(
+            model="gemini/gemini-3.6-flash",
+            contents="hello",
+            config={"temperature": 0.2, "max_output_tokens": 42},
+        ))
+
+        self.assertNotIn("temperature", calls[0])
+        self.assertEqual(calls[0]["max_tokens"], 42)
+
     def test_preserves_provider_reported_cost_from_hidden_params(self):
         class Response:
             _hidden_params = {

@@ -42,6 +42,20 @@ BUILTIN_GEMINI_EMBEDDING_MODELS: tuple[str, ...] = (
     "gemini-embedding-001",
 )
 
+# Google no longer accepts/recommends explicit sampling controls for these
+# models. Keep the list exact so older Gemini and non-Gemini providers retain
+# their configured sampling behavior.
+GEMINI_MODELS_WITHOUT_SAMPLING_PARAMETERS: frozenset[str] = frozenset(
+    {
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+    }
+)
+GEMINI_SAMPLING_PARAMETER_KEYS: frozenset[str] = frozenset(
+    {"temperature", "top_p", "top_k", "topP", "topK"}
+)
+
 # Config keys under translator_config["model_catalog"].
 CATALOG_SECTION = "model_catalog"
 CATALOG_GEMINI_KEY = "gemini"
@@ -84,6 +98,35 @@ def merge_model_lists(*lists: Sequence[str] | None) -> list[str]:
             seen.add(cleaned)
             result.append(cleaned)
     return result
+
+
+def normalize_gemini_model_id(model: str) -> str:
+    """Return a lowercase bare model ID from SDK/resource/provider names."""
+    return str(model or "").strip().lower().rsplit("/", 1)[-1]
+
+
+def is_gemini_3_model(model: str) -> bool:
+    """Return whether a bare or provider-prefixed name identifies Gemini 3."""
+    return normalize_gemini_model_id(model).startswith("gemini-3")
+
+
+def filter_gemini_generation_config(
+    model: str,
+    config: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return a model-compatible copy of a Gemini generation config.
+
+    Gemini model IDs may arrive as bare SDK names (``gemini-*``), REST resource
+    names (``models/gemini-*``), or provider-prefixed LiteLLM names. Only the
+    explicitly listed new Gemini models lose sampling keys; every other model
+    keeps the caller's configuration unchanged.
+    """
+    filtered = dict(config or {})
+    model_id = normalize_gemini_model_id(model)
+    if model_id in GEMINI_MODELS_WITHOUT_SAMPLING_PARAMETERS:
+        for key in GEMINI_SAMPLING_PARAMETER_KEYS:
+            filtered.pop(key, None)
+    return filtered
 
 
 def default_model_rotation_list() -> list[str]:

@@ -62,6 +62,27 @@ class SyncModelBackendTests(unittest.TestCase):
         self.assertIsNot(client.models.calls[0]["config"], config)
         self.assertEqual(client.models.calls[0]["config"], config)
 
+    def test_new_gemini_model_omits_sampling_before_sdk_call(self):
+        config = {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "top_k": 20,
+            "max_output_tokens": 1024,
+        }
+        client = _Client(_Response())
+        backend = GeminiSyncBackend(
+            client,
+            serialize_response=lambda response: {},
+            extract_text=lambda payload: "",
+            extract_finish_reason=lambda payload: "",
+        )
+        backend.generate(SyncGenerationRequest("gemini-3.5-flash-lite", [], config))
+        self.assertEqual(
+            client.models.calls[0]["config"],
+            {"max_output_tokens": 1024},
+        )
+        self.assertIn("temperature", config)
+
 
 if __name__ == "__main__":
     unittest.main()
