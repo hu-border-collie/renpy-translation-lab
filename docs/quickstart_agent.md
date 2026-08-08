@@ -175,6 +175,8 @@ Linux / macOS 激活命令为 `source .venv/bin/activate`。CLI 不需要安装 
 }
 ```
 
+`api_keys.json` 保存在本机不等于请求内容留在本机。Gemini 调用会把认证信息、待译文本、提示词和启用的上下文发送给 Google；LiteLLM 同步调用会发送给所选 Provider。本项目没有自建模型中转服务。处理敏感文本前应核对供应商当前条款，并确保对发送的游戏内容拥有必要权限；详细边界见 [同步翻译工作流](sync_workflow.md#gemini-与-litellm-数据边界)。
+
 典型项目结构：
 
 ```text
@@ -227,7 +229,7 @@ python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json
 - `check` 是干跑校验，不修改 `.rpy`；它会输出 `safe / warn / block`，并把失败报告写入任务包目录。
 - `warn` 或 `block` 时停止写回，阅读 `check_failures.jsonl` 及命令输出，再按 [Batch 工作流与安全检查](batch_workflows.md) 使用 retry、repair 或 revision 流程。
 
-只有检查明确为 `safe` 时才执行：
+只有检查明确为 `safe` 时才执行。`safe` 是**结构性写回安全**结论，不是译文质量验收：
 
 ```powershell
 python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json
@@ -239,6 +241,7 @@ python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json
 
 - 检查 `apply` 摘要和目标 `.rpy` diff。
 - 在 Ren'Py 中运行 lint 或项目既有 smoke test。
+- 运行机械质量检查，并对错译、术语、语气、反讽和上下文一致性进行人工/LLM 通读；不能把 `check=safe` 报告成“译文质量合格”。
 - 报告使用的 manifest、最终安全等级、写回结果和仍未处理的失败项。
 - 不提交 `api_keys.json`、`translator_config.json`、私有游戏脚本、`logs/` 或 Batch 结果到公开仓库。
 

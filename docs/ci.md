@@ -16,6 +16,18 @@
 
 所有产品依赖安装均使用 `pip --require-hashes`。这些检查不访问供应商 API，也不下载 Ren'Py SDK，必须保持确定、快速并作为合并门禁。
 
+## PR-Agent 自动审查（非测试门禁）
+
+`.github/workflows/pr-agent.yml` 在 pull request 的 opened / reopened / ready_for_review / synchronize 事件上运行 PR-Agent，并允许仓库 OWNER / MEMBER / COLLABORATOR 在开放 PR 评论区用 `/review` 手动触发。外部用户评论、Bot 评论、普通 issue 评论和已关闭 PR 不会触发，以免评论注入或消耗供应商额度。
+
+- 使用 DeepSeek V4 Flash；需要仓库 Actions secret `DEEPSEEK_KEY`。
+- action 固定到不可变 commit，启用 restricted mode，并从默认分支读取 `AGENTS.md` 作为仓库上下文。
+- `GITHUB_TOKEN` 权限为 `contents: read`、`issues: write`、`pull-requests: write`，用于读取变更并写入持久化审查评论；不授予 contents write。
+- 该 workflow 是自动审查辅助，不属于 `tests.yml` 的确定性 blocking 测试，也不能代替人工审阅和合并门禁。
+- PR diff、提示词和配置的上下文会发送给 DeepSeek。不要在 PR 中放入 API Key、私有游戏脚本、Batch 结果或其他无权发送的敏感内容；供应商数据处理以当前账号和 DeepSeek 条款为准。
+
+自动审查失败不应被解释为产品测试失败；先区分 action / secret / provider 故障与 PR 自身代码问题。审查内容仍需由维护者验证，不能把模型评论当作权威事实源。
+
 ## Lint / 类型检查 / 依赖审计（quality）
 
 `quality` 任务安装 `requirements-dev.txt` 中的固定工具版本，并运行：

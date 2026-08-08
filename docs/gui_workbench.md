@@ -14,7 +14,7 @@
 - 底层仍调用现有 CLI 脚本，不重写翻译核心：**批量翻译**走 `gemini_translate_batch.py`；**同步翻译**走 `gemini_translate.py`。
 - GUI 调用 Batch 的 `build / submit / status / download / check / apply` 时，使用版本化 JSON envelope 读取结果、状态、制品和错误；stdout 只承载结构化结果，stderr 的进度、prepare 子进程输出与诊断会实时进入「运行日志」。旧版文本输出解析仅保留为兼容回退。
 - **开发与功能约定**：新能力须 CLI / GUI 同步交付，见根目录 [CONTRIBUTING.md](../CONTRIBUTING.md)。
-- 配置仍用 `api_keys.json`、`translator_config.json`；批量写回以 CLI 的 `check -> apply` 安全合约为准，同步模式按脚本规则直接写回。
+- 配置仍用 `api_keys.json`、`translator_config.json`；批量写回以 CLI 的 `check -> apply` 安全合约为准，同步模式默认生成 preview，只有显式确认并通过源快照与制品复核后才写回。
 - GUI 依赖在 `requirements-gui.txt`，不进入主 `requirements.txt`。**不装图形界面时，命令行工具可照常使用。**
 
 界面用语尽量使用中文说明；「诊断与运行日志」中的「命令参考」仍保留可复制 CLI 子命令，供高级用户对照。
@@ -120,11 +120,12 @@ doctor -> build -> submit -> status -> download -> check -> apply
 >
 > 若从其他设置分区带入了未保存修改，本区会改为警告并重新显示 **重新加载**（放弃未保存更改）与 **保存设置**；切换项目仍须经过“保存 / 不保存 / 取消”门禁。
 
-- **工作区 / 项目列表**：先 **创建 / 接入工作区…**（预览后初始化或接入 `games_registry.json`，成功后再写 `workspace_root`；默认未设置，不会用工具上一级），再浏览总表、扫描/刷新、同步 `GAMES.md`、编辑详情并**切换当前 `game_root`**。项目可人工维护一个 HTTP(S) 发布地址；列表“来源”列显示简短站点名，详情中只有显式点击“打开发布页”才调用系统浏览器。表头右键可显示 / 隐藏翻译进度、引擎、最近刷新、备注摘要等列并即时保存可见性。主工具条为项目刷新 + **维护**；展开后带「项目发现 / 总表维护」小标题，左对齐略缩进，宽屏四钮尽量同行。总览表与项目详情可拖拽分隔，详情可收起。未指定工作区时本区为空状态。「切换到此项目」成功后**留在项目列表**；术语表 / 准备流程等到「项目」分区调整。此分区的操作即时写入 registry / `workspace_root`，不使用底部「保存设置」。
+- **项目列表**：先 **创建 / 接入工作区…**（预览后初始化或接入 `games_registry.json`，成功后再写 `workspace_root`；默认未设置，不会用工具上一级），再浏览总表、扫描/刷新、同步 `GAMES.md`、编辑详情并**切换当前 `game_root`**。项目可人工维护一个 HTTP(S) 发布地址；列表“来源”列显示简短站点名，详情中只有显式点击“打开发布页”才调用系统浏览器。表头右键可显示 / 隐藏翻译进度、引擎、最近刷新、备注摘要等列并即时保存可见性。主工具条为项目刷新 + **维护**；展开后带「项目发现 / 总表维护」小标题，左对齐略缩进，宽屏四钮尽量同行。总览表与项目详情可拖拽分隔，详情可收起。未指定工作区时本区为空状态。「切换到此项目」成功后**留在项目列表**；术语表 / 准备流程等到「项目」分区调整。此分区的操作即时写入 registry / `workspace_root`，不使用底部「保存设置」。
 - **密钥**：
   - **Gemini**：读取 / 保存 `api_keys.json`；可添加多把 Key；环境变量 Key 只读提示。
   - **LiteLLM Provider**：按供应商保存在操作系统凭据管理器（与 Gemini 分离）。密钥页 Provider 列表含常用供应商（OpenAI / Anthropic / Gemini / OpenRouter / DeepSeek / xAI / Azure / Vertex 等），并合并 LiteLLM 页**已联网加载**的供应商；可搜索或手填自定义 id。每个 Provider 可用与 Gemini 相同的多 Key 对话框管理（添加 / 删除 / 显示明文核对 / **设为当前使用**），状态显示全部脱敏后缀与当前 Key。
 - **LiteLLM**：按“联网加载供应商 → 选择 Provider → **在密钥页或凭据区管理并保存 API Key** → 联网加载模型 → 选择模型 → 保存设置”配置同步替代后端。DeepSeek / OpenAI / Anthropic / xAI 等官方模型列表需要**先保存至少一把 API Key**；未保存时会提示，可取消或显式选择仅用 LiteLLM 子集目录（可能依赖 GitHub）。加载供应商 / 模型、检查更新、测试连接运行中可**再次点击同一按钮停止**；过程中状态栏会显示阶段（如「正在请求官方列表」「官方失败，正在改用子集」）。模型列表整次操作有约 **35 秒**总时限，单次 HTTP 约 **20 秒**上限，避免官方+回退叠成近一分钟无反馈。首次打开不会默认选择 OpenAI 或模型，也不会静默联网；Provider 下拉列表优先显示常用供应商，输入任意片段可搜索，也可手动填写自定义 Provider / 模型。
+- **扩展**：按需安装 / 修复 / 更新关系分析器的独立依赖。安装状态来自当前 Python 环境，不另存“已启用”开关；安装在后台运行，普通翻译不会加载这些科学计算与图像依赖。关系分析器的运行入口和边界见 [关系与语义分析](relation_analysis.md)。
 - **项目**：术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。Ren'Py SDK 须显式配置： **查找 SDK**（用户点击后才扫描附近）、**浏览…**，或确认后 **下载推荐 SDK…**（官方固定版本）；留空不会自动搜其它目录或联网。结果写入 `prepare.renpy_sdk_dir`，保存设置后生效。当前 `game_root` 只读展示；需换项目请用「项目与环境」或「项目列表」。
 - **模型**：同步 / 批量翻译模型、embedding model、批量 thinking level。
 - **上下文**：
@@ -160,7 +161,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 **上方内层 Tab**（`任务上下文` / `命令参考` / `任务记录`）：
 
 - **任务上下文**：任务记录路径、翻译包、云端任务状态、最近检查结果、是否已写回；报告路径逐行展示并支持复制。
-- **命令参考**：按当前任务记录生成可复制的手动命令（`doctor`、`submit`、`status`、`download`、`check`、`apply` 等）。GUI 保留人类可读文本模式；Agent、脚本或 CI 可在这些核心命令后追加 `--output json`，让 stdout 只返回版本化结果 envelope，并可再追加 `--strict-exit-codes` 获得稳定的语义退出码。需要禁止 stdin 与 latest-manifest 回退时，Agent 可使用 `--non-interactive`；只禁止 target 回退时使用 `--require-explicit-target`。机器结果还可用 `--compact`、`--fields` 和 `--output-file` 限制终端上下文或原子落盘。Agent 可通过 `capabilities` 和 `schema <command>` 直接读取当前 argparse 生成的机器命令索引、参数 schema 和这些能力标记，GUI 不复制维护另一份命令定义。批量翻译任务记录还会显示 `compare-variants` 试跑命令模板。当最近一次检查为「需处理」时，也会补出补译相关命令（底层为 `build-retry`、`merge-retry` 等）。
+- **命令参考**：按当前任务记录生成可复制的手动命令（`doctor`、`submit`、`status`、`download`、`check`、`apply` 等）；提交 journal 已记录远端 job、但 manifest 尚未落盘时会显示 `recover-submit`。GUI 保留人类可读文本模式；Agent、脚本或 CI 可在这些核心命令后追加 `--output json`，让 stdout 只返回版本化结果 envelope，并可再追加 `--strict-exit-codes` 获得稳定的语义退出码。需要禁止 stdin 与 latest-manifest 回退时，Agent 可使用 `--non-interactive`；只禁止 target 回退时使用 `--require-explicit-target`。机器结果还可用 `--compact`、`--fields` 和 `--output-file` 限制终端上下文或原子落盘。Agent 可通过 `capabilities` 和 `schema <command>` 直接读取当前 argparse 生成的机器命令索引、参数 schema 和这些能力标记，GUI 不复制维护另一份命令定义。批量翻译任务记录还会显示 `compare-variants` 试跑命令模板。当最近一次检查为「需处理」时，也会补出补译相关命令（底层为 `build-retry`、`merge-retry` 等）。提交前的 `estimate-cost` 与异常恢复语义见 [Batch 工作流](batch_workflows.md#提交前估算与异常恢复)。
 - **任务记录**：只读 JSON 预览（省略 `chunks` / `files` 大字段）。
 - **实际模型用量**：任务上下文显示当前项目累计调用、已知 token、未知记录数、最近运行及可用成本摘要；命令参考提供 `usage-import` 和 `usage-report`。缺失 usage 不显示成 0，完整字段与成本语义见 [实际模型用量账本](model_usage_ledger.md)。
 
@@ -241,7 +242,7 @@ GUI 不要求手写 JSON 变体文件。对话框以 **baseline + 可选覆盖�
 
 GUI 不引入新的主配置系统。
 
-- API Key 仍保存到 `api_keys.json` 的 `api_keys` 列表。
+- Gemini API Key 仍保存到本机 `api_keys.json` 的 `api_keys` 列表。本项目没有自建中转服务，但 Gemini 请求会把认证信息、待译文本、提示词和启用上下文发送给 Google；本地保存密钥不等于文本留在本机。完整数据边界见 [同步翻译工作流](sync_workflow.md#gemini-与-litellm-数据边界)。
 - LiteLLM 的供应商密钥按 Provider 保存到操作系统凭据管理器，不写入 `api_keys.json`、用户级目录缓存或 `translator_config.json`，也不会回显；已有的供应商环境变量仍可使用。若两者同时存在，系统凭据管理器中的密钥优先。切换或取消 Provider 会丢弃尚未保存的明文输入，但不会删除已保存凭据。
 - LiteLLM 的 Provider / 模型目录、目录来源、抓取时间和每个 Provider 的上次选择保存在用户级 GUI 缓存，不污染项目配置。只有用户点击加载按钮才会联网；失败时保留旧缓存，没有缓存则保持空白，不回填内置默认模型。LiteLLM 在线价格 / 上下文目录可能只是供应商目录的子集；无法枚举的 Provider、Azure 部署或自建 OpenAI-compatible 模型仍可手动填写，并按 LiteLLM 文档配置对应的 API Base、版本和额外认证环境变量。
 - 项目路径、准备流程、过滤器、模型、embedding model、批量 thinking level、GUI 主题、任务专用参数和上下文参数等写入 `translator_config.json`。
@@ -396,6 +397,8 @@ GUI 界面用中文显示检查结果；与 CLI 的对应关系为：
 | 禁止写回 | `block` |
 
 「写回翻译」按钮只在最近一次检查为**可写回**时启用（批量翻译 · 结果区主按钮）。
+
+「可写回」只表示当前 manifest/results、项目身份、源快照、占位符和 Ren'Py 标签等满足结构性写回合同，**不代表译文内容质量合格**。写回后仍须运行机械质量检查，并对错译、术语、语气与上下文进行人工/LLM 通读。
 
 - **可写回**：允许进入写回确认，并调用 `apply`。
 - **需处理**：禁用写回。展开 **问题处理**（默认折叠；需处理时自动展开或角标）。其中可：查看问题清单、生成/查看补译包、**继续补译**、**同步修补**、**重新检查**、查看写回失败报告、补救命令（高级回退）。

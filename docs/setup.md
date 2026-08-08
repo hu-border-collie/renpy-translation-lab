@@ -30,6 +30,15 @@
 - `macro_setting.md` 往往包含剧情、角色口吻、世界观约束，可供 Batch 的 `batch.macro_setting_file` 使用。
 - GUI 切换项目时会把上述两个路径同步到当前 `work` 目录；纯 CLI 使用者若保留相对路径，请确保仓库根目录没有同名旧资产，或直接填写绝对路径，避免加载到其他项目的文件。
 
+### 数据与凭据边界
+
+- `api_keys.json`、系统凭据管理器和环境变量都只是**本机凭据存储位置**。模型调用时，认证信息仍会发送到对应供应商端点。
+- Gemini Batch / 同步请求会把待译文本、提示词以及启用的 glossary、macro、RAG、Source Index、Story Memory 或 Project Analysis 上下文发送给 Google。本项目没有自建中转服务。
+- LiteLLM 同步请求会按所选 Provider / API Base 把同类内容发送给实际模型供应商；本项目不提供自建 LiteLLM 代理。
+- `logs/`、本地模型用量账本和项目上下文 store 可能包含私有脚本片段或模型输出，应与游戏源文件按同一敏感级别保管。
+
+免费与付费账号的数据使用、日志、训练和保留政策可能不同，也会随供应商更新。发送敏感或受许可约束的游戏文本前，应确认自己拥有必要权限，并核对供应商当前条款；Gemini 可参考 [Additional Terms](https://ai.google.dev/gemini-api/terms) 与 [Data Logging and Sharing](https://ai.google.dev/gemini-api/docs/logs-policy)，LiteLLM 以实际 Provider 的政策为准。
+
 ## 项目级上下文开关
 
 批量 **启用 RAG**、**启用原文索引**、**build 时自动暖库**，以及项目分析的 **启用** / **用于翻译** 开关跟随**当前游戏 work 目录**，不写进全局配置以免切换项目互相覆盖。
@@ -144,7 +153,7 @@ python gemini_translate_batch.py bootstrap-work
 python gemini_translate_batch.py doctor
 ```
 
-`doctor` 只检查配置、SDK/launcher 和 TL 文件形态，不调用 Gemini，也不会写回 `.rpy`。当检测到缺少 `work/` 或 TL 模板时，它还会在 `Recommendations` 段提示先运行 `bootstrap-work` 或 `build`。
+`doctor` 只检查配置、SDK/launcher 和 TL 文件形态，不调用 Gemini，也不会写回 `.rpy`。当检测到缺少 `work/` 或 TL 模板时，它还会在 `Recommendations` 段提示先运行 `bootstrap-work` 或 `generate-template`。
 
 ## 运行模式
 
@@ -156,21 +165,24 @@ python gemini_translate_batch.py doctor
 - 普通 Batch 翻译默认每个 chunk 最多 60 条、`max_source_chars=18000`。
 - 两种模式都会继续按源文本长度提前切块，避免单个请求输出过长。
 
-当前模型建议：
+当前模型选择说明：
 
-- 正式 Batch / 同步默认仍优先使用 `gemini-3.1-flash-lite`（高吞吐、低成本）。
+- 为兼容现有项目，Batch / 同步默认模型目前仍是 `gemini-3.1-flash-lite`；默认值不等于长期推荐，正式运行前应检查模型生命周期、价格和当前 API 能力。
 - **内置模型列表的单一源**是仓库根目录的 `gemini_model_catalog.py`（GUI 与 CLI 共用）。发版更新模型时优先改该文件。
 - **配置可扩展**：在 `translator_config.json` 增加 `model_catalog`，无需改代码即可把新模型 ID 加进下拉框与 CLI 轮换列表：
 
 ```json
-"model_catalog": {
-  "gemini": ["gemini-experimental-foo"],
-  "gemini_embedding": ["gemini-embedding-experimental"]
+{
+  "model_catalog": {
+    "gemini": ["gemini-experimental-foo"],
+    "gemini_embedding": ["gemini-embedding-experimental"]
+  }
 }
 ```
 
 - GUI「设置 → 模型」仅从下拉列表选择；自定义模型 ID 在「设置 → 高级 → 模型目录」编辑并保存到 `model_catalog`。
-- `gemini-3.5-flash-lite` 适合高频翻译与简单处理；需要更强推理时可改用 `gemini-3.6-flash` / `gemini-3.5-flash`。
+- Google 当前将 `gemini-3.5-flash-lite` 定位为高吞吐、低成本型号，将 `gemini-3.6-flash` / `gemini-3.5-flash` 定位为更强的 Flash 型号；具体选择仍须用 `probe` 或小 package 验证本项目的结构化翻译质量。
+- **采样参数兼容性：** Google 自 2026-07-21 起说明，`gemini-3.6-flash`、`gemini-3.5-flash-lite` 及后续型号会弃用并忽略 `temperature` / `top_p` / `top_k`，未来型号可能因这些参数返回 400。Lab 当前为兼容旧模型仍暴露并发送 Batch `temperature`；切换新模型前必须小样本验证，不能再把“温度越低”当成稳定性保证。见 [Latest model guide](https://ai.google.dev/gemini-api/docs/latest-model) 与 [模型弃用表](https://ai.google.dev/gemini-api/docs/deprecations)。
 - RAG 当前默认搭配 `gemini-embedding-001`（也可选 `gemini-embedding-2`）。
 
 ### 请求轮换（API Key / 模型）
@@ -178,11 +190,13 @@ python gemini_translate_batch.py doctor
 配置段：`translator_config.json` → `rotation`（GUI「设置 → 高级」也可改）。
 
 ```json
-"rotation": {
-  "api_key": { "enabled": true },
-  "model": {
-    "enabled": false,
-    "models": ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]
+{
+  "rotation": {
+    "api_key": { "enabled": true },
+    "model": {
+      "enabled": false,
+      "models": ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]
+    }
   }
 }
 ```

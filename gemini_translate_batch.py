@@ -4105,7 +4105,7 @@ def create_final_review_package(
     print(f"Snapshot digest: {str(snapshot.get('snapshot_digest') or '')[:16]}…")
     print('Mode: final_review (report-only; no autofix)')
     print(
-        'Next: submit → download → final-review-ingest-results '
+        'Next: submit → status → download → final-review-ingest-results '
         '(or final-review-resume after partial completion)'
     )
     if readiness.reasons:
@@ -4206,7 +4206,7 @@ def run_final_review_resume(target=None, force=False):
     print(f"Requests JSONL: {os.path.join(package_dir, fr.REQUESTS_JSONL_FILENAME)}")
     if result['run_count']:
         print(
-            'Next: submit → download → final-review-ingest-results '
+            'Next: submit → status → download → final-review-ingest-results '
             '(do not reuse pre-resume results.jsonl)'
         )
     else:

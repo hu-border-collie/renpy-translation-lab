@@ -1,8 +1,8 @@
 # 文译（Wenyi）参考对照与 Batch 主路径增强计划
 
-> **状态：核心路线已落地**（2026-07-26；#254–#256 与 #262 已完成项目分析、终审和 GUI 产品化）
+> **状态：已归档**（2026-08-08；#252、#254–#256 与 #262 已完成用量账本、项目分析、终审和 GUI 产品化）
 > **性质：设计与取舍记录，不是用户手册。**
-> 用户可见行为写入现行文档（如 `batch_workflows.md`、`context_systems.md`）；实现落地后本计划可迁入 `docs/archive/`。
+> 用户可见行为以现行的 `batch_workflows.md`、`context_systems.md` 和 `model_usage_ledger.md` 为准；本文只保留当时的参考、决策与未继续推进的问题。
 
 ## 1. 背景
 
@@ -32,12 +32,12 @@
 | 维度 | 文译（当前） | Lab（本仓库） |
 |------|--------------|----------------|
 | 翻译对象 | 长篇小说电子书 | Ren'Py `game/tl/<lang>/` |
-| 主路径 | **同步在线** LLM 调用（进程内长跑） | **Batch 异步**（`build → submit → download → check → apply`） |
+| 主路径 | **同步在线** LLM 调用（进程内长跑） | **Batch 异步**（`build → submit → status → download → check → apply`） |
 | 「batch」含义 | 切段大小（字符预算） | 远端 Batch 作业 + package/manifest |
 | 全书理解 | `pipeline.book_understanding`：预扫 → 章梗概 + 全书概览，直接注入翻译 prompt | **#254 / #256 / #262** 已交付：路线结构、分层摘要、人工审查启用、全局与局部上下文注入，以及完整 GUI 生命周期 |
 | 质量手段 | 多阶段 LLM（分析/梗概/译/润/审）+ 段数对齐 | glossary / macro / RAG / Story Memory + **规则闸门** + 订正/关键词 |
 | 最终审校 | 独立 `review` 命令；可 `--force` / 可选 `autofix_severe`；默认关闭 | **#255 已交付** report-only campaign，并把修订候选交给现有 revision preview/apply |
-| 用量 | `state/.../usage.json`：provider-neutral，按 tier/stage 归因，跨续跑增量合并 | 规划中：#252 项目级账本；现有估算 + 分散在 results 的 raw usage |
+| 用量 | `state/.../usage.json`：provider-neutral，按 tier/stage 归因，跨续跑增量合并 | **#252 已交付**项目级实际用量账本；估算成本与 provider usage 分列 |
 | 写回 | 组装 EPUB 等到 `output/` | 写回 `.rpy`，强调 identity、快照、safe check |
 | 状态目录 | `state/<book-slug>/`（manifest、chapters、context、glossary.db、usage…） | `logs/batch_jobs` manifest + 可选 `translation_context/` 上下文库 |
 | 代码自称 | multi-agent（实为 role-specialized LLM stage） | 无 Agent 层；可复用模块 + CLI + 可选 GUI |
@@ -53,8 +53,8 @@
 | `prepare` 仅预扫分析 | 先生成风格指南与初始术语，再 `translate` | 对应「准备阶段」思路；lab 用 `bootstrap-*` / 未来 analysis 子命令，不塞进 translation submit |
 | 独立 `review` 续跑 | `review` / `--force` / `--fix`；`REVIEW_*` 状态 | #255 最终审校 campaign；**默认无 autofix 写 `.rpy`** |
 | 全书理解 map-reduce | `agents/synopsis.py` 分组归并章梗概 | #254 路线感知层级摘要；模型改为 Ren'Py route，非线性章 |
-| 用量账本 | `llm/usage.py` + RunStore `usage.json` | #252；采集 Batch results + 同步 backend，项目隔离 |
-| 模型分档 | `llm.tiers`: strong / cheap / fast | 后续阶段级路由；**先有 #252 真实数据** |
+| 用量账本 | `llm/usage.py` + RunStore `usage.json` | #252 已交付；采集 Batch results + 同步 backend，项目隔离 |
+| 模型分档 | `llm.tiers`: strong / cheap / fast | 后续阶段级路由可参考已落地用量账本的真实数据 |
 | 断点续跑 | 章/批状态写盘，再跑跳过已完成 | lab 已有 Batch package/manifest；审校另建 digest 模型（#255） |
 | 术语作用域 | `glossary_scope: chapter` | 可在 build 时按 chunk 裁剪 glossary（P1a，与 epic 可并行） |
 
@@ -119,12 +119,12 @@
 ### 5.3 模型分档 strong / cheap / fast
 
 **文译：** 分析/润色用强档，梗概/审校用便宜档。
-**Lab 落点：** 主译 Batch、关键词、订正、后续 analysis/review 可配置不同模型；**阶段级自动路由应基于 #252 真实用量**，不要在无数据时硬编码。
+**Lab 落点：** 主译 Batch、关键词、订正、后续 analysis/review 可配置不同模型；阶段级自动路由应基于实际用量账本的数据，不要无数据硬编码。
 
-### 5.4 阶段开关与成本可见 → #252
+### 5.4 阶段开关与成本可见 → #252（已交付）
 
 **文译：** `pipeline.polish/review/...` 可关；`usage.json` 累计实际 token。
-**Lab 落点：** 已有多子命令 + `batch_cost_estimate`；#252 建立 provider-neutral 实际用量账本（Batch results + 同步路径，可去重、可按 project/task/stage 聚合）。
+**Lab 落点：** 现已提供 `batch_cost_estimate` 与 provider-neutral 实际用量账本：采集 Batch results 和同步路径，支持去重并按 project/task/stage 聚合。现行说明见 [实际模型用量账本](../model_usage_ledger.md)。
 
 ### 5.5 状态与续跑清晰度
 
@@ -137,11 +137,11 @@
 |--------|------|--------------|------|
 | P0 | 对照文档刷新 + issue 拆分 | 本文 + #252–#256 | 本轮完成对照刷新 |
 | **已完成** | Project Analysis 产物合同 | **#256** | 地基；不调模型 |
-| P1 | 实际模型用量账本 | #252 | 可与 #256 并行，勿混 PR |
+| **已完成** | 实际模型用量账本 | **#252** | provider-neutral、项目隔离、实际 usage 与估算分列 |
 | **已完成** | 路线感知生成、审查与启用 | #254 ← #256 | #262 补齐 GUI、组合上下文和用户旅程 |
 | **已完成** | 最终审校 campaign | #255 ← #256 | 合同、闸门、执行与 revision 交接均已接入 |
 | P1a | 术语：build 时按 chunk 裁剪 + 文档化「先 keyword 后翻译」 | 现有 keyword/glossary | 低风险、贴 Batch；可并行 |
-| P2 | 任务类型模型分档 / 路由 | 配置 + GUI；宜参考 #252 | 跨 CLI/GUI |
+| P2 | 任务类型模型分档 / 路由 | 配置 + GUI；宜参考实际用量账本 | 跨 CLI/GUI |
 | P2/P3 | 可选「风格向」订正策略 | 现有 revision | 显式，非默认 polish |
 | 低 | Story Graph 试点 | #147 | 不被 #253 吞并 |
 | 不做 | Agent 框架、默认同进程润色链、换主路径为同步、审校 autofix 写 rpy | — | 见 §3 |
@@ -152,7 +152,7 @@
 |------|----------|
 | Batch / 订正 / 关键词 | `docs/batch_workflows.md`，`gemini_translate_batch.py`，`translation_core.py` |
 | RAG / 索引 / Story Memory / Project Analysis | `docs/context_systems.md` |
-| CLI/GUI 同步 | `CONTRIBUTING.md`、`Agents.md` |
+| CLI/GUI 同步 | `CONTRIBUTING.md`、`AGENTS.md` |
 | 项目边界 | `docs/project_notes.md` |
 | 原子写 / 指纹 | `atomic_io.py`；Batch check fingerprint 在 `gemini_translate_batch.py` |
 
@@ -178,7 +178,7 @@
 1. 是否需要为极大项目增加可选的分析产物归档/压缩策略，而不影响当前可读 JSON/Markdown 合同？
 2. 术语「本章/本 chunk 裁剪」是否与 preserve_terms / identity 锁定词冲突，如何测？
 3. 是否需要在 doctor 中提示「大批量前建议先 keywords → 合并 glossary」？
-4. #252 账本与 #256 analysis fingerprint 是否共享 digest 工具函数（宜小公共模块，避免互相 import 重量级 batch 入口）？
+4. 已完成的 #252 账本与 #256 analysis fingerprint 采用各自的运行合同；是否进一步提取 digest 工具不再是交付阻塞项。
 
 ## 10. 变更记录
 
@@ -188,3 +188,4 @@
 | 2026-07-22 | 刷新本地 wenyi 至 `b796e45` / v0.3.4；补 prepare/review/usage/tiers；对齐 #252–#256；明确默认不复制源码 |
 | 2026-07-26 | 对齐当前实现：#254–#256 与 #262 已补齐项目分析生成、审查、上下文组合、终审边界和 GUI 产品化；移除“LLM/终审仍待实现”的旧状态 |
 | 2026-08-05 | 项目分析首轮真实项目观察：工程链路与 publish/inject 门禁可用，但自动 brief/label/route 偏路线目录，对初译边际收益有限；记录见 `docs/context_systems.md` 与 `docs/project_notes.md` |
+| 2026-08-08 | #252 实际模型用量账本已交付；本文移入 `docs/archive/`，现行行为改由 Batch、上下文和用量账本文档维护 |

@@ -210,16 +210,16 @@ python games_registry.py show --project game_example
 - 总表中的 `layout_status` / `auto.doctor_mode`（通常来自上次深度或快速刷新）
 - 本次 `collect_doctor_report()` 的 `layout_status` / `mode`
 
-结果会写入环境检查摘要与日志（`[总表对比]`）。若不一致，界面只提示**总表记录与本次检查不同**并引导到 **设置 → 工作区** 刷新；`layout` / `mode` 等机器字段只写日志，不面向用户展示。
+结果会写入环境检查摘要与日志（`[总表对比]`）。若不一致，界面只提示**总表记录与本次检查不同**并引导到 **设置 → 项目列表** 刷新；`layout` / `mode` 等机器字段只写日志，不面向用户展示。
 
-打开 **设置 → 工作区** 且当前项目刚跑过环境检查时，详情面板的「总表对比」行会显示是否一致。这**不能替代**完整环境检查，只用于发现总表是否过期。
+打开 **设置 → 项目列表** 且当前项目刚跑过环境检查时，详情面板的「总表对比」行会显示是否一致。这**不能替代**完整环境检查，只用于发现总表是否过期。
 
 ## 推荐工作流
 
 **首次接入：**
 
 ```text
-GUI **设置 → 项目列表 → 选择工作区…**（写入 workspace_root）
+GUI **设置 → 项目列表 → 创建 / 接入工作区…**（预览后写入 workspace_root）
   → 已有 GAMES.md：从 GAMES.md 导入
   → 已有 Game_*：扫描新项目
   → 新包/目录：导入游戏…
@@ -261,7 +261,8 @@ python games_registry.py --workspace path\to\workspace ingest --source path\to\g
 与本功能相关的自动化测试：
 
 ```powershell
-python -m pytest tests/test_game_ingest.py tests/test_games_registry.py tests/test_gui_games_registry*.py -q
+python -m unittest -q tests.test_game_ingest tests.test_games_registry tests.test_games_registry_source_url
+python -m unittest discover -s tests -p "test_gui_games_registry*.py" -q
 ```
 
 ## 已知限制

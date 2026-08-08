@@ -189,7 +189,7 @@ python gemini_translate_batch.py project-analysis-status --store-dir <path> --so
 - 诊断「命令参考」可复制 ingest / build-structure / publish / unpublish 命令。
 - GUI 的证据与翻译使用预览同样复用 `project_analysis` store / loader，不建立 GUI 专属产物格式；真正启用前仍同步重新计算 fingerprint，不依赖可能过期的页面缓存。
 
-设计对照与取舍见 [plans/wenyi_reference_and_batch_roadmap.md](plans/wenyi_reference_and_batch_roadmap.md)。
+历史设计对照与取舍见 [archive/wenyi_reference_and_batch_roadmap.md](archive/wenyi_reference_and_batch_roadmap.md)。
 
 ## Batch RAG 预建
 

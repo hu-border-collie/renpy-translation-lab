@@ -9,6 +9,7 @@
 | [GUI 信息架构重组计划](gui_ia_redesign.md) | Epic #157 设计与交付计划 SSOT（改造前用语较多） |
 | [翻译全生命周期审计](translation_workflow_audit.md) | 流水线与门禁代码审计快照，可能落后于实现 |
 | [Design QA 验收记录](design-qa.md) | 2026-07 侧边导航与页面归属的视觉/自动化验收快照 |
+| [文译参考对照与 Batch 主路径增强计划](wenyi_reference_and_batch_roadmap.md) | Project Analysis、最终审校与用量账本等已落地路线的设计取舍记录 |
 | [RenPy Polishing Toolkit 原型](prototypes/renpy_polishing_toolkit/README.md) | 仓库外润色脚本与 SOP 的只读快照；脚本不可直接运行 |
 
 维护约定：历史文稿只加状态横幅或修正断链，不整篇改写成新手册，避免与现行文档双重维护。

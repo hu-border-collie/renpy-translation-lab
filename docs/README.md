@@ -2,7 +2,7 @@
 
 根目录 `README.md` 负责快速上手和项目定位；本目录收纳配置、Batch、上下文、GUI 与项目边界等专题说明。
 
-**当前状态：稳定版。** 稳定范围、验证记录、交付方式与不覆盖事项见 [项目说明](project_notes.md)。
+**发行状态：最新稳定版为 v1.0.0，`main` 为后续开发线。** 稳定范围、未发布变化、验证记录、交付方式与不覆盖事项见 [变更日志](../CHANGELOG.md) 和 [项目说明](project_notes.md)。
 
 **读文档时**：用户手册以「现行」一组为准；[archive/](archive/README.md) 中的历史文稿只作设计/审计背景，不要当当前界面说明。
 
@@ -12,7 +12,7 @@
 |---|---|
 | 第一次通过 GUI 完成翻译 | [GUI 快速开始](quickstart_gui.md) → [GUI 工作台](gui_workbench.md) |
 | 让 Agent / 脚本通过 CLI 翻译 | [Agent / CLI 快速开始](quickstart_agent.md) → [Batch 工作流与安全检查](batch_workflows.md) |
-| 手动使用完整 CLI 工作流 | 根目录 `README.md` → [安装与本地配置](setup.md) → [Batch 工作流与安全检查](batch_workflows.md) |
+| 手动使用完整 CLI 工作流 | 根目录 `README.md` → [安装与本地配置](setup.md) → [Batch 工作流与安全检查](batch_workflows.md) 或 [同步翻译工作流](sync_workflow.md) |
 | 多游戏工作区总表 | [工作区项目总表](games_registry.md) |
 | 理解环境检查建议 | [环境检查智能建议机制](doctor_recommendations.md) · [状态矩阵](doctor_states_matrix.md) |
 | 理解 Ren'Py 扫描边界与 coverage 产物 | [Ren'Py Engine Adapter 与覆盖审计](engine_adapter.md) |
@@ -20,7 +20,7 @@
 | 角色关系 / 语义分析 | [关系与语义分析](relation_analysis.md) · [`relation_analyzer/README.md`](../relation_analyzer/README.md) |
 | 项目边界与安全 | [项目说明](project_notes.md) |
 | 了解项目如何从 OpenCode 原型演化而来 | [项目沿革](project_history.md) |
-| 查看版本变化 | [变更日志](../CHANGELOG.md) · [v1.0.0 发行说明](releases/v1.0.0.md) |
+| 查看版本变化 | [未发布与发行变化](../CHANGELOG.md) · [v1.0.0 发行说明](releases/v1.0.0.md) |
 | 参与开发 / AI 协作 | 根目录 [AGENTS.md](../AGENTS.md) → [CONTRIBUTING.md](../CONTRIBUTING.md)（含 **CLI / GUI 同步**） |
 | 理解 PR 门禁与定时集成 | [CI 与定时集成检查](ci.md)（含 lint / type / audit） |
 | 理解依赖所有权与哈希锁 | [依赖输入与哈希锁](dependencies.md) |
@@ -42,6 +42,7 @@
 ### 现行：Batch、上下文与检查
 
 - [Batch 工作流与安全检查](batch_workflows.md)：`build → apply`、订正、最终审校 campaign、关键词、identity v2、A/B、golden corpus。
+- [同步翻译工作流](sync_workflow.md)：同步 CLI 的 preview → 人工审查 → 显式 apply、配置、供应商与安全边界。
 - [Ren'Py Engine Adapter 与覆盖审计](engine_adapter.md)：P1 扫描边界、candidate / occurrence、coverage/review 产物与只读安全范围。
 - [实际模型用量账本](model_usage_ledger.md)：按当前项目、任务、阶段、provider 与模型归集 Batch / 同步实际调用，并说明离线补录、成本和未知值语义。
 - [上下文系统](context_systems.md)：RAG、原文索引、Story Memory、store 路径与 benchmark。
@@ -61,8 +62,8 @@
 
 进行中的设计与路线图在 [plans/](plans/README.md)。落地后应写入现行手册，旧稿可迁 [archive/](archive/README.md)。
 
+- [开放 Issues 审计（2026-08-08）](plans/open_issues_audit_2026-08-08.md)：基于当时 GitHub 与代码状态的时间点快照，不是长期事实源。
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](plans/engine_adapter_contract.md)
-- [文译参考对照与 Batch 主路径增强计划](plans/wenyi_reference_and_batch_roadmap.md)
 
 ### 历史参考（已归档）
 
@@ -71,6 +72,7 @@
 - [GUI 信息架构重组计划](archive/gui_ia_redesign.md)：Epic #157 的 P0–P3 历史设计 SSOT，并记录后续 #176 页面化交付衔接。文中「分析与准备」「诊断页」等多为改造前用语。
 - [翻译全生命周期审计](archive/translation_workflow_audit.md)：流水线与门禁的代码审计快照，可能落后于最新实现细节。
 - [Design QA 验收记录](archive/design-qa.md)：2026-07 统一侧边导航与页面归属的视觉/自动化验收快照；不是用户手册。
+- [文译参考对照与 Batch 主路径增强计划](archive/wenyi_reference_and_batch_roadmap.md)：已落地路线的设计与取舍记录；现行用法以 Batch、上下文和用量账本文档为准。
 
 ## 配置分层（速查）
 

@@ -82,7 +82,7 @@ class RegistryDoctorCompareTests(unittest.TestCase):
             self.assertIsNotNone(result)
             self.assertFalse(result.matched)
             self.assertIn("总表记录与本次检查不同", result.message)
-            self.assertIn("设置 → 工作区", result.message)
+            self.assertIn("设置 → 项目列表", result.message)
             self.assertIn("2026-07-04T08:05:48+00:00", result.message)
             self.assertNotIn("layout=", result.message)
             self.assertNotIn("mode=", result.message)
@@ -104,7 +104,7 @@ class RegistryDoctorCompareTests(unittest.TestCase):
             self.assertIsNotNone(result)
             self.assertIsNone(result.matched)
             self.assertIn("尚未加入工作区总表", result.message)
-            self.assertIn("设置 → 工作区", result.message)
+            self.assertIn("设置 → 项目列表", result.message)
 
     def test_compare_when_registry_json_invalid(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -188,7 +188,7 @@ class FormatRegistryCompareHintTests(unittest.TestCase):
             doctor_mode="existing_tl_only",
             last_refresh_at="",
             project_name="",
-            message="当前项目尚未加入工作区总表。需要时请到「设置 → 工作区」扫描登记。",
+            message="当前项目尚未加入工作区总表。需要时请到「设置 → 项目列表」扫描登记。",
             log_line="[总表对比] 当前项目未登记在 games_registry.json。",
         )
         self.assertEqual(
@@ -212,7 +212,7 @@ class FormatRegistryCompareHintTests(unittest.TestCase):
             doctor_mode="can_generate_template",
             last_refresh_at="",
             project_name="Example",
-            message="总表记录与本次检查不同，请到「设置 → 工作区」刷新当前项目。",
+            message="总表记录与本次检查不同，请到「设置 → 项目列表」刷新当前项目。",
             log_line="[总表对比] 记录不同 — registry: layout=ready, mode=existing_tl_only；doctor: layout=attention, mode=can_generate_template。",
         )
         hint = format_registry_compare_hint(compare, for_registry_dialog=True)

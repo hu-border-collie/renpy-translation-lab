@@ -219,7 +219,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "batch_temperature",
         ("batch", "temperature"),
         "批量 temperature",
-        "Batch 请求的温度；越低越稳定。",
+        "仅供仍支持采样参数的模型；新 Gemini 型号可能忽略或拒绝该值，数值更低不保证更稳定。",
         "float",
         0.2,
         "翻译吞吐",

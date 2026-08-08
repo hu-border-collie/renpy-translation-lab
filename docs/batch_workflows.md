@@ -85,6 +85,26 @@ Discovery schema 与核心结果 envelope 当前都使用 `schema_version=1`，�
 - `apply` 写回前会再次校验当前源文本；如果 apply 阶段发现漂移，会拒绝写回并在包目录写入 `apply_failure_report.json` / `failures.jsonl`。
 - 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包。
 
+### 提交前估算与异常恢复
+
+`build` 会把当前定价配置下的估算写入 manifest；提交前也可显式复算并查看 token / 成本上限：
+
+```powershell
+python gemini_translate_batch.py estimate-cost logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py submit logs/batch_jobs/<package>/manifest.json --max-cost <上限>
+```
+
+`estimate-cost` 是估算，不是供应商最终账单；实际 usage 与可用成本应在下载后查看 [模型用量账本](model_usage_ledger.md)。`submit --max-cost` 在估算最大成本超过显式上限时拒绝提交。
+
+提交进程若在“远端 job 已创建、manifest 尚未记入 job”之间中断，再次提交会检测 journal 并阻止可能的重复 job。按提示先恢复：
+
+```powershell
+python gemini_translate_batch.py recover-submit logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py status logs/batch_jobs/<package>/manifest.json
+```
+
+默认恢复会先验证远端 job，再把 journal 中已创建的 job 写回 manifest。只有已经独立核实远端状态、且明确接受跳过验证风险时才使用 `recover-submit --no-verify`。如果 journal 只记录到上传完成而尚未创建 job，则使用 `submit <manifest> --resume` 继续；`submit --force` 会开始新的提交尝试，不能作为不确定状态下的默认恢复手段。
+
 ## 实际模型用量
 
 Batch 下载、同步关键词/订正、普通同步翻译、repair、probe、A/B 与项目分析会把 provider 返回的实际 usage metadata 汇总到当前项目的本地账本。该旁路统计不改变 Batch 状态，也不放宽 `check -> apply` 写回门禁。
@@ -149,6 +169,7 @@ python gemini_translate_batch.py sync-revisions --apply
 # 构建 campaign：完成度闸门 + 冻结上下文 digest + review units + requests.jsonl
 python gemini_translate_batch.py final-review-build
 python gemini_translate_batch.py submit logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py status logs/batch_jobs/<package>/manifest.json
 python gemini_translate_batch.py download logs/batch_jobs/<package>/manifest.json
 python gemini_translate_batch.py final-review-ingest-results logs/batch_jobs/<package>/manifest.json
 python gemini_translate_batch.py final-review-status logs/batch_jobs/<package>/manifest.json
@@ -156,13 +177,20 @@ python gemini_translate_batch.py final-review-export logs/batch_jobs/<package>/m
 
 # 续跑：跳过 digest 未变的 done unit；--force 全部重审
 python gemini_translate_batch.py final-review-resume logs/batch_jobs/<package>/manifest.json
-python gemini_translate_batch.py final-review-resume logs/batch_jobs/<package>/manifest.json --force
+python gemini_translate_batch.py submit logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py status logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py download logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py final-review-ingest-results logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py final-review-status logs/batch_jobs/<package>/manifest.json
+# 需要全部重审时，把第一条 resume 改为：final-review-resume <manifest> --force
 
 # 将明确选择的问题转换为订正候选并立即生成预览（--finding-id 可重复）
 python gemini_translate_batch.py final-review-create-revisions logs/batch_jobs/<package>/manifest.json --finding-id <finding-id>
 # 确认预览后，仍使用现有安全写回入口
 python gemini_translate_batch.py apply-revisions logs/batch_jobs/<revision-package>/manifest.json
 ```
+
+通用 `status` 必须轮询到远端 job 成功后才能 `download`；pending/running 不是失败，也不能跳过轮询直接下载。`final-review-status` 查看的是 campaign 内 review unit / finding 生命周期，不能替代远端 job 的通用 `status`。`final-review-resume` 若报告 `Units to run: 0`，说明当前 digest 已是最新，不应再次 submit；若有待跑 unit，则必须完整执行 `submit -> status -> download -> final-review-ingest-results`，不能复用 resume 前的 `results.jsonl`。
 
 ### 启动闸门
 
