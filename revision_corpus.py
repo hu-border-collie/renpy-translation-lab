@@ -57,35 +57,105 @@ def aggregate_digest(digests: Mapping[str, str]) -> str:
     return stable_text_sha256(payload)
 
 
-def build_corpus_items(file_jobs: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Build deterministic corpus rows from revision scan jobs.
+def _int_or_zero(value: Any) -> tuple[int, str | None]:
+    """Coerce a locator value to int; report a diagnostic on failure."""
+    try:
+        return int(value or 0), None
+    except (TypeError, ValueError):
+        return 0, repr(value)
 
-    ``file_jobs`` must already be in a stable order (the CLI sorts files by rel
-    path); items keep their in-file order and carry a per-file 1-based ordinal.
-    Duplicate source text keeps distinct occurrences through ``identity_v2``
-    instead of being deduplicated by text.
+
+def _attach_adjacent_context(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach same-file previous/next old/new pairs as human-review context."""
+    by_file: dict[str, list[dict[str, Any]]] = {}
+    file_order: list[str] = []
+    for row in items:
+        rel_path = str(row.get("file_rel_path") or "")
+        if rel_path not in by_file:
+            by_file[rel_path] = []
+            file_order.append(rel_path)
+        by_file[rel_path].append(row)
+    for rel_path in file_order:
+        rows = by_file[rel_path]
+        for index, row in enumerate(rows):
+            previous = rows[index - 1] if index > 0 else None
+            following = rows[index + 1] if index + 1 < len(rows) else None
+            row["context"] = {
+                "previous": (
+                    {
+                        "source": previous["source"],
+                        "current_translation": previous["current_translation"],
+                    }
+                    if previous is not None
+                    else None
+                ),
+                "next": (
+                    {
+                        "source": following["source"],
+                        "current_translation": following["current_translation"],
+                    }
+                    if following is not None
+                    else None
+                ),
+            }
+    return items
+
+
+def build_corpus_items(
+    file_jobs: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build deterministic corpus rows (and diagnostics) from revision scan jobs.
+
+    Jobs are explicitly sorted by rel path so item order is stable regardless
+    of caller ordering; items keep their in-file order and carry a per-file
+    1-based ordinal. Duplicate source text keeps distinct occurrences through
+    ``identity_v2`` instead of being deduplicated by text. Non-numeric locator
+    values degrade to 0 and produce a ``LOCATOR_NON_NUMERIC`` diagnostic instead
+    of aborting the export.
     """
     items: list[dict[str, Any]] = []
-    for job in file_jobs:
+    diagnostics: list[dict[str, Any]] = []
+    ordered_jobs = sorted(
+        file_jobs,
+        key=lambda job: str(job.get("file_rel_path") or ""),
+    )
+    for job in ordered_jobs:
         file_rel_path = str(job.get("file_rel_path") or "")
         for ordinal, item in enumerate(job.get("items") or [], start=1):
             identity_v2 = str(item.get("identity_v2") or item.get("id") or "")
             source = str(item.get("source") or "")
             current_translation = str(item.get("current_translation") or "")
-            try:
-                line_number = int(item.get("line_number") or 0)
-            except (TypeError, ValueError):
-                line_number = 0
+            line, line_diag = _int_or_zero(item.get("line"))
+            start, start_diag = _int_or_zero(item.get("start"))
+            end, end_diag = _int_or_zero(item.get("end"))
+            line_number, line_number_diag = _int_or_zero(item.get("line_number"))
+            for field, diagnostic in (
+                ("line", line_diag),
+                ("start", start_diag),
+                ("end", end_diag),
+                ("line_number", line_number_diag),
+            ):
+                if diagnostic is not None:
+                    diagnostics.append(
+                        {
+                            "code": "LOCATOR_NON_NUMERIC",
+                            "identity_v2": identity_v2,
+                            "field": field,
+                            "value": diagnostic,
+                        }
+                    )
             row = {
                 "schema_version": REVISION_CORPUS_SCHEMA_VERSION,
                 "occurrence_id": identity_v2,
                 "identity_v2": identity_v2,
                 "file_rel_path": file_rel_path,
                 "locator": {
-                    "line": int(item.get("line") or 0),
+                    "line": line,
                     "line_number": line_number,
-                    "start": int(item.get("start") or 0),
-                    "end": int(item.get("end") or 0),
+                    "start": start,
+                    "end": end,
                     "ordinal": ordinal,
                 },
                 "display_line": line_number,
@@ -98,7 +168,7 @@ def build_corpus_items(file_jobs: Sequence[Mapping[str, Any]]) -> list[dict[str,
                 ),
             }
             items.append(row)
-    return items
+    return _attach_adjacent_context(items), diagnostics
 
 
 def render_corpus_markdown(
@@ -155,7 +225,7 @@ def export_revision_corpus(
     files changed while the scan was running. ``_output_dir`` / ``_manifest_path``
     are CLI-facing conveniences and are not persisted inside the manifest file.
     """
-    items = build_corpus_items(file_jobs)
+    items, diagnostics = build_corpus_items(file_jobs)
     os.makedirs(output_dir, exist_ok=True)
     jsonl_path = os.path.abspath(os.path.join(output_dir, CORPUS_JSONL_NAME))
     markdown_path = os.path.abspath(os.path.join(output_dir, CORPUS_MARKDOWN_NAME))
@@ -168,9 +238,12 @@ def export_revision_corpus(
     )
 
     source_digests = dict(source_digests_before or {})
-    source_changed = source_digests_after is not None and (
-        source_digests_after != source_digests
-    )
+    scanned_files = {str(row.get("file_rel_path") or "") for row in items}
+    scanned_files_missing_digest = sorted(scanned_files - set(source_digests))
+    source_changed = (
+        source_digests_after is not None
+        and source_digests_after != source_digests
+    ) or bool(scanned_files_missing_digest)
     manifest = {
         "schema_version": REVISION_CORPUS_SCHEMA_VERSION,
         "kind": "revision_corpus",
@@ -186,16 +259,27 @@ def export_revision_corpus(
         "scanner": {
             "engine": SCANNER_ENGINE,
             "identity_schema": IDENTITY_SCHEMA,
+            "description": (
+                "Reuses the legacy revision scanner: translate-block old/new "
+                "pairs and comment translations recognized by the revision "
+                "entry collector. Other source content is outside the corpus scope."
+            ),
         },
         "source": {
             "snapshot_digest": aggregate_digest(source_digests),
             "file_digests": dict(sorted(source_digests.items())),
             "source_changed_during_scan": bool(source_changed),
+            "scanned_files_missing_digest": scanned_files_missing_digest,
         },
         "scope": {
             "file_count": len({str(row.get("file_rel_path") or "") for row in items}),
             "item_count": len(items),
+            "note": (
+                "Only revision-scanner-recognized old/new and comment-translation "
+                "entries are included; other source content is outside the corpus scope."
+            ),
         },
+        "diagnostics": diagnostics,
         "paths": {
             "output_dir": os.path.abspath(output_dir),
             "jsonl": jsonl_path,

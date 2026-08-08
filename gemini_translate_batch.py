@@ -3411,9 +3411,18 @@ def should_include_revision_entry(entry):
     return bool(source and current_translation)
 
 
-def collect_revision_file_jobs():
+def collect_revision_file_jobs(file_paths=None):
+    """Collect revision old/new jobs, optionally over an explicit file set.
+
+    ``file_paths`` must be an iterable of ``(rel_path, abs_path)`` pairs (for
+    example the output of ``collect_files_to_process()``). Passing the same set
+    that produced the source digests removes the new-file race window between
+    digest collection and scanning.
+    """
     jobs = []
-    for rel_path, file_path in collect_files_to_process():
+    if file_paths is None:
+        file_paths = collect_files_to_process()
+    for rel_path, file_path in file_paths:
         with open(file_path, 'r', encoding='utf-8-sig') as handle:
             entries = collect_translation_entries_from_lines(handle.readlines(), file_rel_path=rel_path)
 
@@ -3467,11 +3476,10 @@ def run_revision_corpus_export(output_dir=None):
     digests are computed before and after the scan so a corpus produced while
     sources changed is explicitly flagged instead of silently mixed.
     """
-    file_paths = {
-        rel_path: file_path for rel_path, file_path in collect_files_to_process()
-    }
-    digests_before = revision_corpus.collect_file_digests(file_paths)
-    file_jobs = collect_revision_file_jobs()
+    file_paths = list(collect_files_to_process())
+    file_path_map = {rel_path: file_path for rel_path, file_path in file_paths}
+    digests_before = revision_corpus.collect_file_digests(file_path_map)
+    file_jobs = collect_revision_file_jobs(file_paths=file_paths)
     if output_dir and str(output_dir).strip():
         target_dir = os.path.abspath(str(output_dir).strip())
         os.makedirs(target_dir, exist_ok=True)
@@ -3480,7 +3488,7 @@ def run_revision_corpus_export(output_dir=None):
         target_dir = create_batch_package_dir(
             f'{stamp}_{guess_project_slug()}_revision_corpus'
         )
-    digests_after = revision_corpus.collect_file_digests(file_paths)
+    digests_after = revision_corpus.collect_file_digests(file_path_map)
     manifest = revision_corpus.export_revision_corpus(
         target_dir,
         file_jobs,

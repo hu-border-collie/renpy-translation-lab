@@ -121,7 +121,9 @@ class RevisionCorpusExportTests(unittest.TestCase):
             '    old "Repeat Me"\n'
             '    new "重复我二号"\n',
         )
-        rows = revision_corpus.build_corpus_items(batch.collect_revision_file_jobs())
+        rows, _ = revision_corpus.build_corpus_items(
+            batch.collect_revision_file_jobs()
+        )
         repeats = [row for row in rows if row["source"] == "Repeat Me"]
         self.assertEqual(len(repeats), 2)
         self.assertNotEqual(repeats[0]["occurrence_id"], repeats[1]["occurrence_id"])
@@ -131,7 +133,9 @@ class RevisionCorpusExportTests(unittest.TestCase):
             "chapter03/comments.rpy",
             '# 艾琳 "这扇门通往虚空。"\n"这扇门通向虚空。"\n',
         )
-        rows = revision_corpus.build_corpus_items(batch.collect_revision_file_jobs())
+        rows, _ = revision_corpus.build_corpus_items(
+            batch.collect_revision_file_jobs()
+        )
         comment = [row for row in rows if row["source"] == "这扇门通往虚空。"]
         self.assertEqual(len(comment), 1)
         self.assertEqual(comment[0]["current_translation"], "这扇门通向虚空。")
@@ -211,6 +215,126 @@ class RevisionCorpusExportTests(unittest.TestCase):
         )
         self.assertFalse(stable["source"]["source_changed_during_scan"])
 
+    def test_scanned_files_without_digest_are_flagged(self):
+        jobs = [
+            {
+                "file_rel_path": "chapter01/revisions.rpy",
+                "items": [
+                    {
+                        "id": "id-1",
+                        "source": "S",
+                        "current_translation": "T",
+                        "line_number": 1,
+                    }
+                ],
+            }
+        ]
+        manifest = revision_corpus.export_revision_corpus(
+            str(self.root / "out"),
+            jobs,
+            project_slug="demo",
+            game_root="",
+            tl_dir="",
+            tl_subdir="",
+            source_digests_before={},
+            source_digests_after={},
+        )
+        self.assertTrue(manifest["source"]["source_changed_during_scan"])
+        self.assertEqual(
+            manifest["source"]["scanned_files_missing_digest"],
+            ["chapter01/revisions.rpy"],
+        )
+
+    def test_locator_non_numeric_produces_diagnostic(self):
+        jobs = [
+            {
+                "file_rel_path": "a.rpy",
+                "items": [
+                    {
+                        "id": "id-1",
+                        "source": "S",
+                        "current_translation": "T",
+                        "line": "oops",
+                        "line_number": 3,
+                        "start": 1,
+                        "end": "x",
+                    }
+                ],
+            }
+        ]
+        rows, diagnostics = revision_corpus.build_corpus_items(jobs)
+        self.assertEqual(rows[0]["locator"]["line"], 0)
+        self.assertEqual(rows[0]["locator"]["end"], 0)
+        self.assertEqual(rows[0]["locator"]["line_number"], 3)
+        self.assertEqual(
+            {entry["field"] for entry in diagnostics},
+            {"line", "end"},
+        )
+        self.assertTrue(
+            all(entry["code"] == "LOCATOR_NON_NUMERIC" for entry in diagnostics)
+        )
+
+    def test_context_links_adjacent_items(self):
+        jobs = [
+            {
+                "file_rel_path": "a.rpy",
+                "items": [
+                    {
+                        "id": "id-1",
+                        "source": "First",
+                        "current_translation": "第一",
+                        "line_number": 1,
+                    },
+                    {
+                        "id": "id-2",
+                        "source": "Second",
+                        "current_translation": "第二",
+                        "line_number": 2,
+                    },
+                ],
+            }
+        ]
+        rows, _ = revision_corpus.build_corpus_items(jobs)
+        self.assertIsNone(rows[0]["context"]["previous"])
+        self.assertEqual(
+            rows[0]["context"]["next"],
+            {"source": "Second", "current_translation": "第二"},
+        )
+        self.assertEqual(
+            rows[1]["context"]["previous"],
+            {"source": "First", "current_translation": "第一"},
+        )
+        self.assertIsNone(rows[1]["context"]["next"])
+
+    def test_build_corpus_items_sorts_files_explicitly(self):
+        jobs = [
+            {
+                "file_rel_path": "z.rpy",
+                "items": [
+                    {
+                        "id": "z-1",
+                        "source": "Z",
+                        "current_translation": "Z译",
+                    }
+                ],
+            },
+            {
+                "file_rel_path": "a.rpy",
+                "items": [
+                    {
+                        "id": "a-1",
+                        "source": "A",
+                        "current_translation": "A译",
+                    }
+                ],
+            },
+        ]
+        rows, _ = revision_corpus.build_corpus_items(jobs)
+        self.assertEqual(
+            [row["file_rel_path"] for row in rows],
+            ["a.rpy", "z.rpy"],
+        )
+
     def test_build_corpus_items_preserves_speaker_and_locator_fields(self):
         jobs = [
             {
@@ -230,7 +354,7 @@ class RevisionCorpusExportTests(unittest.TestCase):
                 ],
             }
         ]
-        rows = revision_corpus.build_corpus_items(jobs)
+        rows, _ = revision_corpus.build_corpus_items(jobs)
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertEqual(row["identity_v2"], "id-1")
