@@ -2997,14 +2997,14 @@ class MainWindow(QMainWindow):
         self.settings_nav = QListWidget()
         self.settings_nav.setObjectName("settings_nav")
         self.settings_nav.setFixedHeight(50)
-        self.settings_nav.setSpacing(2)
+        self.settings_nav.setSpacing(1)
         self.settings_nav.setFrameShape(QFrame.Shape.NoFrame)
         self.settings_nav.setFlow(QListView.Flow.LeftToRight)
         self.settings_nav.setMovement(QListView.Movement.Static)
         self.settings_nav.setResizeMode(QListView.ResizeMode.Adjust)
         self.settings_nav.setWrapping(False)
         self.settings_nav.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         self.settings_nav.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff

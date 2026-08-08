@@ -4,17 +4,23 @@ from __future__ import annotations
 import unittest
 
 try:
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QFormLayout, QScrollArea
-
-    from gui_qt.app import MainWindow, _SETTINGS_PAGE_SPECS
 except ImportError as exc:
+    Qt = None  # type: ignore[assignment,misc]
     QApplication = None  # type: ignore[assignment,misc]
     QFormLayout = None  # type: ignore[assignment,misc]
     QScrollArea = None  # type: ignore[assignment,misc]
     MainWindow = None  # type: ignore[assignment,misc]
     _SETTINGS_PAGE_SPECS = ()  # type: ignore[assignment,misc]
+    apply_theme = None  # type: ignore[assignment,misc]
+    clear_theme_caches = None  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
 else:
+    # Project imports stay outside the PySide6 guard: failures here are real
+    # test failures, not a missing-GUI skip.
+    from gui_qt.app import MainWindow, _SETTINGS_PAGE_SPECS
+    from gui_qt.theme import apply_theme, clear_theme_caches
     IMPORT_ERROR = None
 
 from tests import gui_test_support
@@ -224,6 +230,52 @@ class GuiSettingsLayoutTests(unittest.TestCase):
                         self.window.settings_nav.visualItemRect(item)
                     )
                 )
+
+    def test_settings_nav_overflow_is_never_silently_clipped(self) -> None:
+        # The real GUI loads the theme stylesheet, which widens every nav item
+        # (QSS margins/padding). Load it here so the regression exercises the
+        # production metrics; otherwise the default style stays comfortably
+        # narrow and would never reproduce the clipping bug.
+        try:
+            apply_theme(self._app, self.window._resources_dir, "light")
+            self.window.resize(960, 640)
+            _process(self._app, 12)
+            nav = self.window.settings_nav
+            # Exact policy: overflow must be scrollable, never silently hidden.
+            self.assertEqual(
+                nav.horizontalScrollBarPolicy(),
+                Qt.ScrollBarPolicy.ScrollBarAsNeeded,
+            )
+            last_item = nav.item(nav.count() - 1)
+            # Default fitted state: strict horizontal containment. QRect's
+            # right() is inclusive, so equality with the viewport width would
+            # already be one pixel outside the viewport.
+            self.assertLess(
+                nav.visualItemRect(last_item).right(),
+                nav.viewport().width(),
+            )
+            # Overflow fallback (wider items force the horizontal scrollbar):
+            # the last section must stay reachable and its text line must fit
+            # the scrollbar-compressed viewport height.
+            nav.setStyleSheet(
+                "QListWidget#settings_nav::item { padding: 6px 60px; }"
+            )
+            _process(self._app, 8)
+            self.assertTrue(nav.horizontalScrollBar().isVisible())
+            nav.scrollToItem(last_item)
+            _process(self._app, 5)
+            rect = nav.visualItemRect(last_item)
+            self.assertLess(rect.right(), nav.viewport().width())
+            self.assertLessEqual(
+                nav.fontMetrics().height(),
+                nav.viewport().height(),
+            )
+        finally:
+            # Restore the unthemed state used by the other layout tests.
+            # apply_theme(..., "") would normalize to the system theme instead
+            # of clearing the stylesheet, so reset it directly.
+            self._app.setStyleSheet("")
+            clear_theme_caches()
 
     def test_settings_forms_share_label_and_field_spacing(self) -> None:
         form_count = 0
