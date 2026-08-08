@@ -42,6 +42,15 @@ class GeminiModelCatalogTests(unittest.TestCase):
         self.assertEqual(prefixed, {"max_output_tokens": 1024})
         self.assertIn("temperature", original)
 
+    def test_model_id_normalization_is_shared_with_gemini_3_detection(self):
+        self.assertEqual(
+            catalog.normalize_gemini_model_id("gemini/gemini-3.6-flash"),
+            "gemini-3.6-flash",
+        )
+        self.assertTrue(catalog.is_gemini_3_model("gemini/gemini-3.6-flash"))
+        self.assertTrue(catalog.is_gemini_3_model("models/gemini-3.1-flash-lite"))
+        self.assertFalse(catalog.is_gemini_3_model("openai/gpt-test"))
+
     def test_filter_generation_config_preserves_supported_models(self):
         config = {"temperature": 0.2, "top_p": 0.9, "top_k": 20}
         for model in ("gemini-3.1-flash-lite", "openai/gpt-test", ""):

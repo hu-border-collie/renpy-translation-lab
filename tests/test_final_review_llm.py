@@ -84,11 +84,16 @@ class PromptAndRequestTests(unittest.TestCase):
 
     def test_generation_config_filters_sampling_by_model(self):
         new_config = frl.build_generation_config(
-            model="gemini-3.6-flash",
+            model="gemini/gemini-3.6-flash",
             temperature=0.4,
+            thinking_level="minimal",
         )
         self.assertNotIn("temperature", new_config)
         self.assertIn("response_json_schema", new_config)
+        self.assertEqual(
+            new_config["thinking_config"]["thinking_level"],
+            "MINIMAL",
+        )
 
         old_config = frl.build_generation_config(
             model="gemini-3.1-flash-lite",

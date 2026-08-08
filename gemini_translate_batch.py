@@ -64,6 +64,7 @@ from gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
     filter_gemini_generation_config,
+    is_gemini_3_model,
 )
 from project_version import __version__
 from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
@@ -2993,7 +2994,7 @@ def build_generation_config(target_items, model=None):
         'response_mime_type': 'application/json',
         'response_json_schema': build_response_json_schema(target_items),
     }
-    if BATCH_THINKING_LEVEL and effective_model.startswith('gemini-3'):
+    if BATCH_THINKING_LEVEL and is_gemini_3_model(effective_model):
         config['thinking_config'] = {
             'thinking_level': BATCH_THINKING_LEVEL.upper(),
         }
@@ -3235,7 +3236,7 @@ def get_batch_risk_warnings():
         )
     if BATCH_MAX_OUTPUT_TOKENS < 2048:
         warnings_list.append(f'max_output_tokens={BATCH_MAX_OUTPUT_TOKENS} is likely too low for JSON batch output.')
-    if BATCH_MODEL.startswith('gemini-3') and BATCH_THINKING_LEVEL and BATCH_THINKING_LEVEL.lower() != 'minimal':
+    if is_gemini_3_model(BATCH_MODEL) and BATCH_THINKING_LEVEL and BATCH_THINKING_LEVEL.lower() != 'minimal':
         warnings_list.append(
             f'thinking_level={BATCH_THINKING_LEVEL} may waste output budget on reasoning tokens.'
         )
@@ -3582,7 +3583,7 @@ def build_revision_generation_config(target_items, model=None):
         'response_mime_type': 'application/json',
         'response_json_schema': build_revision_response_json_schema(target_items),
     }
-    if BATCH_THINKING_LEVEL and effective_model.startswith('gemini-3'):
+    if BATCH_THINKING_LEVEL and is_gemini_3_model(effective_model):
         config['thinking_config'] = {
             'thinking_level': BATCH_THINKING_LEVEL.upper(),
         }
@@ -4386,7 +4387,7 @@ def build_keyword_generation_config(max_candidates_per_chunk=None, model=None):
         'response_mime_type': 'application/json',
         'response_json_schema': build_keyword_response_json_schema(max_candidates_per_chunk),
     }
-    if BATCH_THINKING_LEVEL and effective_model.startswith('gemini-3'):
+    if BATCH_THINKING_LEVEL and is_gemini_3_model(effective_model):
         config['thinking_config'] = {
             'thinking_level': BATCH_THINKING_LEVEL.upper(),
         }

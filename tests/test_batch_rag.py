@@ -46,9 +46,13 @@ class BatchRagRegressionTests(unittest.TestCase):
         )
         for builder in builders:
             with self.subTest(builder=builder):
-                new_config = builder('gemini-3.5-flash')
+                new_config = builder('gemini/gemini-3.5-flash')
                 self.assertNotIn('temperature', new_config)
                 self.assertIn('max_output_tokens', new_config)
+                self.assertEqual(
+                    new_config['thinking_config']['thinking_level'],
+                    batch_mod.BATCH_THINKING_LEVEL.upper(),
+                )
 
                 old_config = builder('gemini-3.1-flash-lite')
                 self.assertEqual(old_config['temperature'], batch_mod.BATCH_TEMPERATURE)

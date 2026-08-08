@@ -100,6 +100,16 @@ def merge_model_lists(*lists: Sequence[str] | None) -> list[str]:
     return result
 
 
+def normalize_gemini_model_id(model: str) -> str:
+    """Return a lowercase bare model ID from SDK/resource/provider names."""
+    return str(model or "").strip().lower().rsplit("/", 1)[-1]
+
+
+def is_gemini_3_model(model: str) -> bool:
+    """Return whether a bare or provider-prefixed name identifies Gemini 3."""
+    return normalize_gemini_model_id(model).startswith("gemini-3")
+
+
 def filter_gemini_generation_config(
     model: str,
     config: Mapping[str, Any] | None,
@@ -112,7 +122,7 @@ def filter_gemini_generation_config(
     keeps the caller's configuration unchanged.
     """
     filtered = dict(config or {})
-    model_id = str(model or "").strip().lower().rsplit("/", 1)[-1]
+    model_id = normalize_gemini_model_id(model)
     if model_id in GEMINI_MODELS_WITHOUT_SAMPLING_PARAMETERS:
         for key in GEMINI_SAMPLING_PARAMETER_KEYS:
             filtered.pop(key, None)

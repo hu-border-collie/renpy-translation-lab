@@ -14,7 +14,7 @@ import re
 from typing import Any, Callable, Mapping, Sequence
 
 from atomic_io import atomic_write_json, atomic_write_jsonl, atomic_write_text
-from gemini_model_catalog import filter_gemini_generation_config
+from gemini_model_catalog import filter_gemini_generation_config, is_gemini_3_model
 from final_review import (
     FINDINGS_FILENAME,
     MANIFEST_FILENAME,
@@ -237,7 +237,7 @@ def build_generation_config(
         "response_mime_type": "application/json",
         "response_json_schema": build_response_json_schema(),
     }
-    if thinking_level and str(model or "").startswith("gemini-3"):
+    if thinking_level and is_gemini_3_model(model):
         config["thinking_config"] = {"thinking_level": str(thinking_level).upper()}
     return filter_gemini_generation_config(model, config)
 
