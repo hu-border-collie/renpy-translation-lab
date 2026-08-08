@@ -1019,6 +1019,14 @@ class BatchCliContractTests(unittest.TestCase):
                                 batch, "export_keyword_candidates", return_value=None
                             )
                         )
+                    elif command == "export-revision-corpus":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "run_revision_corpus_export",
+                                return_value={"paths": {}, "scope": {}},
+                            )
+                        )
                     elif command == "merge-keywords-to-glossary":
                         handler_patches.extend(
                             [
@@ -1047,12 +1055,19 @@ class BatchCliContractTests(unittest.TestCase):
                             argv = ["merge-retry", "parent.json", "retry.json"]
                         elif command == "merge-keywords-to-glossary":
                             argv = ["merge-keywords-to-glossary", "candidates.jsonl", "--yes"]
+                        elif command == "export-revision-corpus":
+                            argv = ["export-revision-corpus"]
                         else:
                             argv = [command, "manifest.json"]
                         exit_code = batch.main(argv)
 
                 self.assertEqual(exit_code, 0)
-                load_config.assert_called_once_with(require_api_key=False)
+                if command == "export-revision-corpus":
+                    # Read-only export takes an early dispatch path that must
+                    # not load (or rewrite) API-key / translator config.
+                    load_config.assert_not_called()
+                else:
+                    load_config.assert_called_once_with(require_api_key=False)
 
     def test_remote_batch_commands_still_require_api_key(self):
         load_config = mock.Mock()
