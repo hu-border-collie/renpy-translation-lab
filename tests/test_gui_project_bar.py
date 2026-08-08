@@ -181,6 +181,33 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         self.assertFalse(self.window.bootstrap_work_btn.isHidden())
         self.assertTrue(self.window.workbench_stack.isHidden())
 
+    def test_compact_project_bar_is_one_bounded_row(self) -> None:
+        """#298 visual follow-up: task identity must not absorb page height."""
+        from PySide6.QtCore import QPoint, QRect
+
+        self.window.resize(960, 640)
+        self.window.show()
+        for _ in range(12):
+            self._app.processEvents()
+
+        bar = self.window.global_project_bar
+        path = self.window.global_project_path_edit
+        switch = self.window.global_switch_project_btn
+        self.assertLessEqual(bar.height(), 64)
+        self.assertTrue(self.window.global_project_bar_label.isHidden())
+        path_rect = QRect(path.mapTo(bar, QPoint(0, 0)), path.size())
+        switch_rect = QRect(switch.mapTo(bar, QPoint(0, 0)), switch.size())
+        self.assertTrue(bar.rect().contains(path_rect))
+        self.assertTrue(bar.rect().contains(switch_rect))
+        self.assertLessEqual(abs(path_rect.center().y() - switch_rect.center().y()), 4)
+
+        compact_height = bar.height()
+        self.window._activate_shell_route("project_prepare")
+        for _ in range(8):
+            self._app.processEvents()
+        self.assertFalse(self.window.global_project_bar_label.isHidden())
+        self.assertGreater(bar.height(), compact_height)
+
     def test_refresh_project_label_updates_global_bar(self) -> None:
         self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
         self.window._refresh_project_label()

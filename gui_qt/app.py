@@ -58,6 +58,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
     QFormLayout,
+    QGridLayout,
     QScrollArea,
     QSplitter,
     QLayout,
@@ -1630,6 +1631,27 @@ class MainWindow(QMainWindow):
             return None
         return pages.get(nav)
 
+    def _batch_status_surface_needed(self) -> bool:
+        """Show the shared batch card only for active or persisted task state."""
+        page = getattr(self, "batch_translation_page", None)
+        if page is not None and page.page_stack.currentWidget() is page.empty_state:
+            return False
+        running = bool(getattr(self, "_task_running", False)) or (
+            hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
+        )
+        if running:
+            return True
+        if (
+            getattr(self, "_workflow", None) is not None
+            or bool(getattr(self, "_writeback_manifest_path", ""))
+            or bool(getattr(self, "_viewing_completed_manifest", False))
+            or getattr(self, "_completed_manifest_snapshot", None) is not None
+        ):
+            return True
+        badge = getattr(self, "workflow_status_label", None)
+        status = str(badge.property("status") or "") if badge is not None else ""
+        return status not in {"", "idle"}
+
     def _sync_workbench_status_surface(
         self,
         route: str | None = None,
@@ -1655,6 +1677,7 @@ class MainWindow(QMainWindow):
         # Only the batch workflow keeps the shared progress/writeback card;
         # every other task page owns its own status chrome (#298).
         writeback_visible = batch_route and self._work_mode_has_writeback_surface()
+        batch_status_visible = batch_route and self._batch_status_surface_needed()
 
         project_bar = getattr(self, "global_project_bar", None)
         if project_bar is not None:
@@ -1682,8 +1705,8 @@ class MainWindow(QMainWindow):
                 refresh_readiness=refresh_readiness,
             )
 
-        card.setVisible(project_route or batch_route)
-        tabs.setVisible(project_route or batch_route)
+        card.setVisible(project_route or batch_status_visible)
+        tabs.setVisible(project_route or batch_status_visible)
         card.updateGeometry()
         primary = getattr(self, "workbench_primary", None)
         if primary is not None and primary.layout() is not None:
@@ -1759,19 +1782,25 @@ class MainWindow(QMainWindow):
         bar = QFrame()
         bar.setObjectName("global_project_bar")
         self.global_project_bar = bar
-        outer = QVBoxLayout(bar)
+        bar.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Maximum,
+        )
+        outer = QGridLayout(bar)
+        self.global_project_bar_layout = outer
         outer.setContentsMargins(12, 8, 12, 8)
-        outer.setSpacing(6)
+        outer.setHorizontalSpacing(8)
+        outer.setVerticalSpacing(6)
 
         title = QLabel("当前项目")
         title.setObjectName("global_project_bar_label")
         self.global_project_bar_label = title
-        outer.addWidget(title)
+        outer.addWidget(title, 0, 0, 1, 2)
 
         self.global_project_path_edit = QLineEdit("尚未选择项目")
         self.global_project_path_edit.setReadOnly(True)
         self.global_project_path_edit.setObjectName("global_project_path_edit")
-        outer.addWidget(self.global_project_path_edit)
+        outer.addWidget(self.global_project_path_edit, 1, 0, 1, 2)
         # Keep legacy objectName for mono-font QSS / tests that still look up project_path_edit.
         self.project_path_edit = self.global_project_path_edit
         # Buttons wrap under the path on narrow windows instead of colliding.
@@ -1811,15 +1840,50 @@ class MainWindow(QMainWindow):
         self.global_project_actions.add_widget(self.bootstrap_work_btn, min_width=108)
 
         self.global_project_actions.finish_setup()
-        outer.addWidget(self.global_project_actions)
+        outer.addWidget(self.global_project_actions, 2, 0, 1, 2)
+        outer.setColumnStretch(0, 1)
+        outer.setColumnStretch(1, 0)
 
         return bar
 
     def _set_project_bar_compact(self, compact: bool) -> None:
-        """Toggle task-page compact mode (identity + switch only)."""
+        """Toggle a true single-row task identity strip vs full prep controls."""
         self.global_browse_project_btn.setVisible(not compact)
         self.doctor_btn.setVisible(not compact)
         self.bootstrap_work_btn.setVisible(not compact)
+        layout = self.global_project_bar_layout
+        widgets = (
+            self.global_project_bar_label,
+            self.global_project_path_edit,
+            self.global_project_actions,
+        )
+        for widget in widgets:
+            layout.removeWidget(widget)
+
+        if compact:
+            self.global_project_bar_label.setVisible(False)
+            layout.setContentsMargins(10, 6, 10, 6)
+            layout.setVerticalSpacing(0)
+            layout.addWidget(self.global_project_path_edit, 0, 0)
+            layout.addWidget(self.global_project_actions, 0, 1)
+            self.global_project_actions.setSizePolicy(
+                QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Minimum,
+            )
+        else:
+            self.global_project_bar_label.setVisible(True)
+            layout.setContentsMargins(12, 8, 12, 8)
+            layout.setVerticalSpacing(6)
+            layout.addWidget(self.global_project_bar_label, 0, 0, 1, 2)
+            layout.addWidget(self.global_project_path_edit, 1, 0, 1, 2)
+            layout.addWidget(self.global_project_actions, 2, 0, 1, 2)
+            self.global_project_actions.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Minimum,
+            )
+        self.global_project_bar.setProperty("compact", compact)
+        self.global_project_actions.reflow(force=True)
+        self.global_project_bar.updateGeometry()
 
     def _build_workbench_tab(self) -> None:
         tab = QWidget()
@@ -1954,6 +2018,8 @@ class MainWindow(QMainWindow):
         primary_layout.setSpacing(14)
         self.project_environment_bar = self._build_global_project_bar()
         primary_layout.addWidget(self.project_environment_bar)
+        # The coordinator clears this top alignment only while a project gate
+        # owns the page and should fill the remaining workbench height.
         primary_layout.addWidget(
             self.workbench_stack,
             0,
@@ -8337,14 +8403,8 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Show/hide EmptyState widgets on prepare/execute pages (P3 / #166)."""
         doctor_done = bool(getattr(self, "_doctor_check_completed", False))
-        has_project = bool(
-            hasattr(self, "state") and self.state.get_game_root() is not None
-        )
         running = bool(getattr(self, "_task_running", False)) or (
             hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
-        )
-        has_workflow = self._workflow is not None or bool(
-            getattr(self, "_writeback_manifest_path", "")
         )
         # Page-owned project gates (#298/#316): non-batch task pages show the
         # doctor CTA until project prep passes; gating semantics unchanged.
@@ -8370,12 +8430,11 @@ class MainWindow(QMainWindow):
                     page.set_project_ready(has_result)
                 else:
                     page.set_project_ready(gate_ready)
-        if running:
-            resume_ok = False
-        elif resume_available is not None:
-            resume_ok = bool(resume_available[0])
-        else:
-            resume_ok, _ = self._resume_task_available()
+            coordinator = getattr(self, "_workbench_coordinator", None)
+            if coordinator is not None:
+                coordinator.resize(
+                    workbench_nav_for_work_mode(self._current_work_mode())
+                )
 
         if hasattr(self, "doctor_empty_state"):
             show_doctor_empty = not doctor_done and not running
@@ -8399,44 +8458,10 @@ class MainWindow(QMainWindow):
                     doctor_scroll.setVisible(not show_doctor_empty)
 
         if hasattr(self, "workflow_empty_state") and self._batch_stage_mode_active():
-            show_wf_empty = (
-                not running
-                and not has_workflow
-                and not resume_ok
-                and not bool(getattr(self, "_viewing_completed_manifest", False))
-            )
-            # Hide when workflow labels already show non-idle content.
-            status = ""
-            if hasattr(self, "workflow_status_label"):
-                raw = self.workflow_status_label.property("status")
-                status = str(raw or "")
-            if status and status not in {"idle", "stale", ""}:
-                show_wf_empty = False
-            doctor_ready = self._doctor_allows_translate_action()
-            spec = work_mode_spec(self._current_work_mode())
-            start_ready = self._translate_button_enabled(
-                spec=spec,
-                bootstrap_ready=self._bootstrap_task_ready(spec),
-                running=running,
-            )
-            if (
-                not running
-                and has_project
-                and doctor_ready
-                and start_ready
-                and status in {"idle", "stale"}
-                and not resume_ok
-                and not has_workflow
-            ):
-                show_wf_empty = True
-            # Without a project or doctor readiness, the batch page gate owns
-            # the doctor CTA (#316); the shared empty CTA only shows after
-            # prep passes, where its primary action is 开始翻译, not 去环境检查.
-            if not has_project or not doctor_ready or not start_ready:
-                show_wf_empty = False
-            self.workflow_empty_state.setVisible(show_wf_empty)
-            # Empty CTA shares the progress column with summary chrome. Hide the
-            # chrome while empty so the action button is not height-crushed.
+            # The task page owns the idle/start action. The shared batch card is
+            # reserved for active or persisted progress, so it must never add a
+            # second primary CTA below the page controls (#298 visual follow-up).
+            self.workflow_empty_state.setVisible(False)
             for attr in (
                 "workflow_status_label",
                 "workflow_message_label",
@@ -8444,27 +8469,17 @@ class MainWindow(QMainWindow):
             ):
                 widget = getattr(self, attr, None)
                 if widget is not None:
-                    widget.setVisible(not show_wf_empty)
-            if show_wf_empty:
-                self.workflow_empty_state.set_action_text(
-                    self._translate_button_label()
-                )
-                for attr in (
-                    "workflow_progress_bar",
-                    "view_last_completed_btn",
-                    "hide_completed_view_btn",
-                    "split_status_title",
-                    "split_status_table",
-                ):
-                    widget = getattr(self, attr, None)
-                    if widget is not None:
-                        widget.setVisible(False)
-                self._ensure_workflow_empty_cta_visible()
-            else:
-                if hasattr(self, "_apply_workflow_progress_ui"):
-                    self._apply_workflow_progress_ui()
-                if hasattr(self, "_update_completed_manifest_entry_ui"):
-                    self._update_completed_manifest_entry_ui()
+                    widget.setVisible(True)
+            if hasattr(self, "_apply_workflow_progress_ui"):
+                self._apply_workflow_progress_ui()
+            if hasattr(self, "_update_completed_manifest_entry_ui"):
+                self._update_completed_manifest_entry_ui()
+
+        if hasattr(self, "workbench_status_card"):
+            self._sync_workbench_status_surface(
+                self._current_shell_route(),
+                refresh_readiness=False,
+            )
 
     def _ensure_workflow_empty_cta_visible(self) -> None:
         """Scroll outer/inner workbench scroll areas so the empty CTA is on-screen."""

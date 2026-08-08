@@ -102,6 +102,8 @@ class GuiTaskPageTests(unittest.TestCase):
             )
         )
         self.assertIs(page.page_stack.currentWidget(), page.content_page)
+        self.assertTrue(self.window.workflow_empty_state.isHidden())
+        self.assertTrue(self.window.workbench_status_card.isHidden())
         self.assertFalse(page.risk_warning.isHidden())
         self.assertIn("不会修改", page.risk_warning.text())
         self.assertEqual(page.start_btn.text(), "开始同步翻译")
@@ -203,6 +205,7 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window.workbench_status_card.isHidden())
         self.assertIn("正在同步翻译", page.status_section.status_badge.text())
         self.assertIn("files: 2/10", page.status_section.facts_label.text())
+        self.assertFalse(page.status_section.isHidden())
 
     def test_project_analysis_owns_workflow_status_and_progress(self) -> None:
         """#298 review: context workflows never write into the hidden shared card."""

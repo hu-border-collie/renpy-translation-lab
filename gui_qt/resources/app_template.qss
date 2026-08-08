@@ -748,6 +748,12 @@ QFrame#task_control_section {
     border-radius: 10px;
 }
 
+QFrame#task_status_section {
+    background-color: ${bg_surface_alt};
+    border: 1px solid ${border_light};
+    border-radius: 10px;
+}
+
 QLabel#global_project_bar_label {
     color: ${fg_muted};
     font-size: 12px;

@@ -347,7 +347,7 @@ class ContextLibraryPage(QFrame):
 
     def set_workflow_facts(self, facts: list[str]) -> None:
         """Replace project-analysis workflow facts in the context page."""
-        self.bootstrap_status_section.facts_label.setText("\n".join(facts))
+        self.bootstrap_status_section.set_facts(facts)
 
     def workflow_status_snapshot(self) -> tuple[str, str, str, list[str]]:
         """Return (status, heading, message, facts) for session freeze."""

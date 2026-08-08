@@ -118,6 +118,22 @@ class TaskControlsTests(unittest.TestCase):
         self.assertTrue(section.details_label.isHidden())
         self.assertEqual(section.details_label.text(), "")
 
+    def test_status_section_stays_out_of_idle_layout(self) -> None:
+        section = TaskStatusSection()
+        self.assertTrue(section.isHidden())
+
+        section.set_status("idle", "尚未开始", "可以开始任务。", [])
+        self.assertTrue(section.isHidden())
+
+        section.set_status("running", "正在处理", "请稍候。", ["文件：2/4"])
+        self.assertFalse(section.isHidden())
+
+        section.set_status("done", "处理完成", "可以查看结果。", [])
+        self.assertFalse(section.isHidden())
+
+        section.set_status("", "", "", [])
+        self.assertTrue(section.isHidden())
+
     def test_mode_selector_is_compact_and_result_hint_wraps(self) -> None:
         page = QWidget()
         task_layout = TaskPageLayout(page)

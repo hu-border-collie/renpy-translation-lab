@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QSizePolicy, QStackedWidget
 
 from ..work_modes import WorkMode, WorkbenchNavItem, workbench_nav_for_work_mode
@@ -39,6 +40,27 @@ class WorkbenchPageCoordinator:
     def resize(self, nav_item: WorkbenchNavItem) -> None:
         """Pin the stack to the active page instead of its tallest sibling."""
         page = self._pages[nav_item]
+        page_stack = getattr(page, "page_stack", None)
+        current = page_stack.currentWidget() if page_stack is not None else None
+        gate_widgets = {
+            getattr(page, "empty_state", None),
+            getattr(page, "project_gate_state", None),
+        }
+        parent_layout = self._stack.parentWidget().layout()
+        if current is not None and current in gate_widgets:
+            # A project gate is the whole page, not a short task-control row.
+            # Let it consume the remaining shell height so its centered CTA is
+            # never clipped by a content-page height estimate (#298/#316).
+            self._stack.setMinimumHeight(0)
+            self._stack.setMaximumHeight(16_777_215)
+            self._stack.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Expanding,
+            )
+            if parent_layout is not None:
+                parent_layout.setAlignment(self._stack, Qt.AlignmentFlag(0))
+                parent_layout.setStretchFactor(self._stack, 1)
+            return
         preferred_height = getattr(page, "preferred_height", None)
         if callable(preferred_height):
             height = preferred_height(self._stack.width())
@@ -50,3 +72,6 @@ class WorkbenchPageCoordinator:
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Maximum,
         )
+        if parent_layout is not None:
+            parent_layout.setAlignment(self._stack, Qt.AlignmentFlag.AlignTop)
+            parent_layout.setStretchFactor(self._stack, 0)

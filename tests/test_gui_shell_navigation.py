@@ -397,8 +397,16 @@ class GuiShellNavigationTests(unittest.TestCase):
     def test_route_owns_environment_progress_and_optional_writeback_tabs(self) -> None:
         batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)
         self.window._activate_shell_route(batch_route)
-        self.window.workbench_status_tabs.setCurrentIndex(2)
         tab_bar = self.window.workbench_status_tabs.tabBar()
+
+        # Idle/start actions live in the task page; the shared card appears
+        # only after batch progress or persisted result state exists.
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertTrue(self.window.workbench_status_tabs.isHidden())
+        self.window._workflow = MagicMock(manifest_path="")
+        self.window.batch_translation_page.set_project_ready(True)
+        self.window._sync_workbench_status_surface(batch_route)
+        self.window.workbench_status_tabs.setCurrentIndex(2)
 
         self.assertFalse(self.window.workbench_status_card.isHidden())
         self.assertFalse(self.window.workbench_status_tabs.isHidden())

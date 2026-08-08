@@ -134,6 +134,22 @@ class TaskStatusSection(QFrame):
         )
         self.details_label.setVisible(False)
         layout.addWidget(self.details_label)
+        # Idle copy already lives in each task page's result hint. Keep this
+        # surface out of the layout until it has active progress or a result.
+        self.setVisible(False)
+
+    def _sync_visibility(self) -> None:
+        status = str(self.status_badge.property("status") or "").strip()
+        has_status = status not in {"", "idle"} and any(
+            (
+                self.status_badge.text().strip(),
+                self.message_label.text().strip(),
+                self.facts_label.text().strip(),
+            )
+        )
+        has_progress = not self.progress_bar.isHidden()
+        has_details = not self.details_label.isHidden()
+        self.setVisible(has_status or has_progress or has_details)
 
     def set_status(
         self,
@@ -151,6 +167,7 @@ class TaskStatusSection(QFrame):
         self.progress_bar.setVisible(False)
         self.details_label.setText("")
         self.details_label.setVisible(False)
+        self._sync_visibility()
         self.updateGeometry()
 
     def reflow(self) -> None:
@@ -163,9 +180,17 @@ class TaskStatusSection(QFrame):
         if not cleaned:
             self.details_label.setText("")
             self.details_label.setVisible(False)
+            self._sync_visibility()
             return
         self.details_label.setText("\n".join(cleaned))
         self.details_label.setVisible(True)
+        self._sync_visibility()
+        self.updateGeometry()
+
+    def set_facts(self, facts: list[str]) -> None:
+        """Replace fact lines and keep visibility aligned with the status."""
+        self.facts_label.setText("\n".join(facts))
+        self._sync_visibility()
         self.updateGeometry()
 
     def set_progress(self, state: object | None) -> None:
@@ -173,6 +198,7 @@ class TaskStatusSection(QFrame):
         visible = bool(state is not None and getattr(state, "visible", False))
         if not visible:
             self.progress_bar.setVisible(False)
+            self._sync_visibility()
             self.updateGeometry()
             return
         indeterminate = bool(getattr(state, "indeterminate", False))
@@ -185,6 +211,7 @@ class TaskStatusSection(QFrame):
             self.progress_bar.setValue(current)
         self.progress_bar.setFormat(getattr(state, "label", None) or "正在处理…")
         self.progress_bar.setVisible(True)
+        self._sync_visibility()
         self.updateGeometry()
 
 
