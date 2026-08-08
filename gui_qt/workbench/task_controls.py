@@ -128,6 +128,7 @@ class TaskStatusSection(QFrame):
         self.details_label = QLabel("")
         self.details_label.setObjectName("task_status_details")
         self.details_label.setWordWrap(True)
+        self.details_label.setTextFormat(Qt.TextFormat.PlainText)
         self.details_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
@@ -145,8 +146,9 @@ class TaskStatusSection(QFrame):
         self.status_badge.set_status(status, heading)
         self.message_label.setText(message)
         self.facts_label.setText("\n".join(facts or []))
-        # A new snapshot supersedes previous issue details; callers that need
-        # them (e.g. writeback findings) re-apply via set_details.
+        # A new snapshot supersedes previous progress/details; callers that
+        # need them re-apply via set_progress/set_details.
+        self.progress_bar.setVisible(False)
         self.details_label.setText("")
         self.details_label.setVisible(False)
         self.updateGeometry()

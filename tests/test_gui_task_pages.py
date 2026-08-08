@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 try:
@@ -202,6 +203,46 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertTrue(self.window.workbench_status_card.isHidden())
         self.assertIn("正在同步翻译", page.status_section.status_badge.text())
         self.assertIn("files: 2/10", page.status_section.facts_label.text())
+
+    def test_project_analysis_owns_workflow_status_and_progress(self) -> None:
+        """#298 review: context workflows never write into the hidden shared card."""
+        self.window._set_work_mode(
+            WorkMode.PROJECT_ANALYSIS,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.context_library_page
+        page.set_context_status(
+            rag_enabled=False,
+            source_index_enabled=False,
+            game_root="C:/Games/Demo/work",
+            project_analysis_enabled=True,
+            project_analysis_inject_enabled=False,
+        )
+        self.window._set_workflow_summary(
+            "running",
+            "正在构建项目结构",
+            "正在读取剧情节点。",
+            ["阶段：结构"],
+        )
+        self.window._workflow_progress_base_facts = ["阶段：结构"]
+        self.window._workflow_progress = SimpleNamespace(
+            visible=True,
+            indeterminate=False,
+            total=4,
+            current=2,
+            label="生成 2/4",
+            facts=("当前：路线摘要",),
+        )
+        self.window._apply_workflow_progress_ui()
+
+        section = page.bootstrap_status_section
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertFalse(section.isHidden())
+        self.assertIn("正在构建项目结构", section.status_badge.text())
+        self.assertFalse(section.progress_bar.isHidden())
+        self.assertEqual(section.progress_bar.value(), 2)
+        self.assertIn("阶段：结构", section.facts_label.text())
+        self.assertIn("当前：路线摘要", section.facts_label.text())
 
     def test_task_pages_gate_on_project_prep(self) -> None:
         """#298/#316: non-batch task pages show the doctor CTA until ready."""

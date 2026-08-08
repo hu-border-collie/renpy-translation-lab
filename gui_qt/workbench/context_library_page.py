@@ -328,6 +328,27 @@ class ContextLibraryPage(QFrame):
         )
         self.bootstrap_status_section.set_progress(state)
 
+    def set_workflow_status(
+        self,
+        status: str,
+        heading: str,
+        message: str,
+        facts: list[str] | None = None,
+    ) -> None:
+        """Render project-analysis workflow status inside the context page."""
+        self.bootstrap_status_section.setVisible(True)
+        self.bootstrap_status_section.set_status(status, heading, message, facts)
+
+    def set_workflow_progress(self, state: object | None) -> None:
+        """Render optional project-analysis progress inside the context page."""
+        if state is not None and getattr(state, "visible", False):
+            self.bootstrap_status_section.setVisible(True)
+        self.bootstrap_status_section.set_progress(state)
+
+    def set_workflow_facts(self, facts: list[str]) -> None:
+        """Replace project-analysis workflow facts in the context page."""
+        self.bootstrap_status_section.facts_label.setText("\n".join(facts))
+
     def workflow_status_snapshot(self) -> tuple[str, str, str, list[str]]:
         """Return (status, heading, message, facts) for session freeze."""
         if not self.bootstrap_status_section.isVisible():
