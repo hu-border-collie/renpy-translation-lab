@@ -218,6 +218,7 @@ def export_revision_corpus(
     source_digests_before: Mapping[str, str] | None = None,
     source_digests_after: Mapping[str, str] | None = None,
     source_digests_scanned: Mapping[str, str] | None = None,
+    file_line_counts: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """Write JSONL + Markdown + manifest into ``output_dir``; return the manifest.
 
@@ -231,6 +232,21 @@ def export_revision_corpus(
     persisted inside the manifest file.
     """
     items, diagnostics = build_corpus_items(file_jobs)
+    item_count_by_file: dict[str, int] = {}
+    for row in items:
+        rel_path = str(row.get("file_rel_path") or "")
+        item_count_by_file[rel_path] = item_count_by_file.get(rel_path, 0) + 1
+    line_counts = {
+        str(rel_path): int(count or 0)
+        for rel_path, count in (file_line_counts or {}).items()
+    }
+    file_summaries = {
+        rel_path: {
+            "line_count": line_counts.get(rel_path, 0),
+            "item_count": item_count_by_file.get(rel_path, 0),
+        }
+        for rel_path in sorted(set(line_counts) | set(item_count_by_file))
+    }
     os.makedirs(output_dir, exist_ok=True)
     jsonl_path = os.path.abspath(os.path.join(output_dir, CORPUS_JSONL_NAME))
     markdown_path = os.path.abspath(os.path.join(output_dir, CORPUS_MARKDOWN_NAME))
@@ -297,6 +313,18 @@ def export_revision_corpus(
                 "entries are included; other source content is outside the corpus scope."
             ),
         },
+        "coverage": {
+            "mode": "revision_recognized_only",
+            "scanned_file_count": len(file_summaries),
+            "recognized_item_count": len(items),
+            "note": (
+                "Every in-scope TL file was scanned by the revision entry "
+                "collector; per-file line/item counts are reported in "
+                "file_summaries so unrecognized content is visible instead of "
+                "silently dropped."
+            ),
+        },
+        "file_summaries": file_summaries,
         "diagnostics": diagnostics,
         "paths": {
             "output_dir": os.path.abspath(output_dir),

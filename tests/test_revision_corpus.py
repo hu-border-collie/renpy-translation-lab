@@ -68,8 +68,9 @@ class RevisionCorpusExportTests(unittest.TestCase):
         target.write_text(text, encoding="utf-8")
         return target
 
-    def _export(self, output_dir: Path, **kwargs):
-        jobs = batch.collect_revision_file_jobs()
+    def _export(self, output_dir: Path, *, jobs=None, **kwargs):
+        if jobs is None:
+            jobs = batch.collect_revision_file_jobs()
         defaults = {
             "project_slug": "demo",
             "game_root": str(self.root),
@@ -81,7 +82,14 @@ class RevisionCorpusExportTests(unittest.TestCase):
 
     def test_export_writes_jsonl_markdown_and_manifest(self):
         out = self.root / "out"
-        manifest = self._export(out)
+        jobs = batch.collect_revision_file_jobs()
+        manifest = self._export(
+            out,
+            jobs=jobs,
+            file_line_counts={
+                job["file_rel_path"]: job["line_count"] for job in jobs
+            },
+        )
 
         jsonl_path = out / "revision_corpus.jsonl"
         md_path = out / "revision_corpus.md"
@@ -98,6 +106,13 @@ class RevisionCorpusExportTests(unittest.TestCase):
         self.assertGreaterEqual(len(rows), 3)
         self.assertEqual(manifest["scope"]["item_count"], len(rows))
         self.assertEqual(manifest["scope"]["file_count"], 1)
+        self.assertIn("file_summaries", manifest)
+        first_summary = manifest["file_summaries"]["chapter01/revisions.rpy"]
+        self.assertEqual(first_summary["item_count"], 3)
+        self.assertGreaterEqual(first_summary["line_count"], 1)
+        self.assertEqual(manifest["coverage"]["mode"], "revision_recognized_only")
+        self.assertEqual(manifest["coverage"]["recognized_item_count"], len(rows))
+        self.assertEqual(manifest["coverage"]["scanned_file_count"], 1)
         md = md_path.read_text(encoding="utf-8")
         self.assertEqual(md.count("- L"), len(rows))
         for row in rows:
@@ -140,6 +155,28 @@ class RevisionCorpusExportTests(unittest.TestCase):
         self.assertEqual(len(comment), 1)
         self.assertEqual(comment[0]["current_translation"], "这扇门通向虚空。")
         self.assertEqual(comment[0]["file_rel_path"], "chapter03/comments.rpy")
+
+    def test_empty_files_appear_in_coverage_summary(self):
+        self._write_tl("chapter04/empty.rpy", "# only a comment, no entries\n")
+        jobs = batch.collect_revision_file_jobs(include_empty_files=True)
+        rows, _ = revision_corpus.build_corpus_items(jobs)
+        line_counts = {
+            job["file_rel_path"]: job["line_count"] for job in jobs
+        }
+        manifest = revision_corpus.export_revision_corpus(
+            str(self.root / "out"),
+            jobs,
+            project_slug="demo",
+            game_root="",
+            tl_dir="",
+            tl_subdir="",
+            file_line_counts=line_counts,
+        )
+        summary = manifest["file_summaries"]["chapter04/empty.rpy"]
+        self.assertEqual(summary["item_count"], 0)
+        self.assertGreaterEqual(summary["line_count"], 1)
+        self.assertEqual(manifest["coverage"]["scanned_file_count"], 2)
+        self.assertEqual(len(rows), 3)  # empty file contributes no items
 
     def test_export_is_deterministic(self):
         out1 = self.root / "out1"
@@ -495,6 +532,9 @@ class RevisionCorpusExportTests(unittest.TestCase):
         with open(manifest_path, encoding="utf-8") as handle:
             persisted = json.load(handle)
         self.assertEqual(persisted["kind"], "revision_corpus")
+        self.assertIn("file_summaries", persisted)
+        self.assertIn("coverage", persisted)
+        self.assertGreaterEqual(persisted["coverage"]["scanned_file_count"], 1)
 
 
 if __name__ == "__main__":

@@ -3411,13 +3411,15 @@ def should_include_revision_entry(entry):
     return bool(source and current_translation)
 
 
-def collect_revision_file_jobs(file_paths=None):
+def collect_revision_file_jobs(file_paths=None, include_empty_files=False):
     """Collect revision old/new jobs, optionally over an explicit file set.
 
     ``file_paths`` must be an iterable of ``(rel_path, abs_path)`` pairs (for
     example the output of ``collect_files_to_process()``). Passing the same set
     that produced the source digests removes the new-file race window between
-    digest collection and scanning.
+    digest collection and scanning. ``include_empty_files`` keeps jobs for
+    scanned files without recognized entries so coverage summaries can account
+    for every in-scope file instead of silently dropping empty ones.
     """
     jobs = []
     if file_paths is None:
@@ -3460,12 +3462,13 @@ def collect_revision_file_jobs(file_paths=None):
                 item['speaker_id'] = speaker_id
             items.append(item)
 
-        if items:
+        if items or include_empty_files:
             jobs.append(
                 {
                     'file_rel_path': rel_path,
                     'file_path': file_path,
                     'source_digest': source_digest,
+                    'line_count': len(lines),
                     'task_count': len(items),
                     'items': items,
                 }
@@ -3483,7 +3486,10 @@ def run_revision_corpus_export(output_dir=None):
     file_paths = list(collect_files_to_process())
     file_path_map = {rel_path: file_path for rel_path, file_path in file_paths}
     digests_before = revision_corpus.collect_file_digests(file_path_map)
-    file_jobs = collect_revision_file_jobs(file_paths=file_paths)
+    file_jobs = collect_revision_file_jobs(
+        file_paths=file_paths,
+        include_empty_files=True,
+    )
     if output_dir and str(output_dir).strip():
         target_dir = os.path.abspath(str(output_dir).strip())
         os.makedirs(target_dir, exist_ok=True)
@@ -3495,6 +3501,9 @@ def run_revision_corpus_export(output_dir=None):
     digests_after = revision_corpus.collect_file_digests(file_path_map)
     scanned_digests = {
         job['file_rel_path']: job['source_digest'] for job in file_jobs
+    }
+    file_line_counts = {
+        job['file_rel_path']: job.get('line_count') or 0 for job in file_jobs
     }
     manifest = revision_corpus.export_revision_corpus(
         target_dir,
@@ -3508,6 +3517,7 @@ def run_revision_corpus_export(output_dir=None):
         source_digests_before=digests_before,
         source_digests_after=digests_after,
         source_digests_scanned=scanned_digests,
+        file_line_counts=file_line_counts,
     )
     print(f'Exported revision corpus: {target_dir}')
     print(
