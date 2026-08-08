@@ -252,6 +252,8 @@ python gemini_translate_batch.py export-revision-corpus --output json
 
 - 默认写入 `logs/batch_jobs/<timestamp>_<project>_revision_corpus/`；
   `--output-dir` 可指定其他目录。
+- 导出范围与当前配置一致：应用 `include_files` / `include_prefixes` 过滤后
+  的 TL 文件；不是无条件导出项目内全部 revision 对。
 - 产物：`revision_corpus.jsonl`（权威结构化合同）、`revision_corpus.md`
   （线性通读报告）、`revision_corpus_manifest.json`（项目身份、scanner/schema、
   源快照 digest、范围计数）。

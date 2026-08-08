@@ -217,13 +217,18 @@ def export_revision_corpus(
     include_prefixes: Sequence[str] = (),
     source_digests_before: Mapping[str, str] | None = None,
     source_digests_after: Mapping[str, str] | None = None,
+    source_digests_scanned: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Write JSONL + Markdown + manifest into ``output_dir``; return the manifest.
 
     The manifest carries project identity, scanner/schema identity, the source
     snapshot digest (per-file and aggregate), scope counts, and whether source
-    files changed while the scan was running. ``_output_dir`` / ``_manifest_path``
-    are CLI-facing conveniences and are not persisted inside the manifest file.
+    files changed while the scan was running. ``source_digests_scanned`` must be
+    the digests of the exact bytes the scanner consumed (recorded at read time);
+    a mismatch against either boundary digest means a file changed mid-scan and
+    was restored, so the corpus is flagged instead of silently mixed.
+    ``_output_dir`` / ``_manifest_path`` are CLI-facing conveniences and are not
+    persisted inside the manifest file.
     """
     items, diagnostics = build_corpus_items(file_jobs)
     os.makedirs(output_dir, exist_ok=True)
@@ -240,10 +245,22 @@ def export_revision_corpus(
     source_digests = dict(source_digests_before or {})
     scanned_files = {str(row.get("file_rel_path") or "") for row in items}
     scanned_files_missing_digest = sorted(scanned_files - set(source_digests))
+    scanned_digests = dict(source_digests_scanned or {})
+    scanned_files_digest_mismatch = sorted(
+        rel_path
+        for rel_path, digest in scanned_digests.items()
+        if digest != source_digests.get(rel_path)
+        or (
+            source_digests_after is not None
+            and digest != source_digests_after.get(rel_path)
+        )
+    )
     source_changed = (
         source_digests_after is not None
         and source_digests_after != source_digests
     ) or bool(scanned_files_missing_digest)
+    if scanned_files_digest_mismatch:
+        source_changed = True
     manifest = {
         "schema_version": REVISION_CORPUS_SCHEMA_VERSION,
         "kind": "revision_corpus",
@@ -270,6 +287,7 @@ def export_revision_corpus(
             "file_digests": dict(sorted(source_digests.items())),
             "source_changed_during_scan": bool(source_changed),
             "scanned_files_missing_digest": scanned_files_missing_digest,
+            "scanned_files_digest_mismatch": scanned_files_digest_mismatch,
         },
         "scope": {
             "file_count": len({str(row.get("file_rel_path") or "") for row in items}),

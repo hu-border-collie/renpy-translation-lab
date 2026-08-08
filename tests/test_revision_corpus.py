@@ -245,6 +245,64 @@ class RevisionCorpusExportTests(unittest.TestCase):
             ["chapter01/revisions.rpy"],
         )
 
+    def test_scanned_digest_mismatch_is_flagged(self):
+        jobs = [
+            {
+                "file_rel_path": "a.rpy",
+                "items": [
+                    {
+                        "id": "id-1",
+                        "source": "S",
+                        "current_translation": "T",
+                        "line_number": 1,
+                    }
+                ],
+            }
+        ]
+        manifest = revision_corpus.export_revision_corpus(
+            str(self.root / "out"),
+            jobs,
+            project_slug="demo",
+            game_root="",
+            tl_dir="",
+            tl_subdir="",
+            source_digests_before={"a.rpy": "digest-1"},
+            source_digests_after={"a.rpy": "digest-1"},
+            source_digests_scanned={"a.rpy": "digest-mid-scan"},
+        )
+        self.assertTrue(manifest["source"]["source_changed_during_scan"])
+        self.assertEqual(
+            manifest["source"]["scanned_files_digest_mismatch"],
+            ["a.rpy"],
+        )
+
+        stable = revision_corpus.export_revision_corpus(
+            str(self.root / "out2"),
+            jobs,
+            project_slug="demo",
+            game_root="",
+            tl_dir="",
+            tl_subdir="",
+            source_digests_before={"a.rpy": "digest-1"},
+            source_digests_after={"a.rpy": "digest-1"},
+            source_digests_scanned={"a.rpy": "digest-1"},
+        )
+        self.assertFalse(stable["source"]["source_changed_during_scan"])
+        self.assertEqual(
+            stable["source"]["scanned_files_digest_mismatch"],
+            [],
+        )
+
+    def test_revision_jobs_record_scanned_source_digest(self):
+        jobs = batch.collect_revision_file_jobs()
+        self.assertTrue(jobs)
+        self.assertTrue(all(job.get("source_digest") for job in jobs))
+        first = jobs[0]
+        expected = revision_corpus.collect_file_digests(
+            {first["file_rel_path"]: first["file_path"]}
+        )[first["file_rel_path"]]
+        self.assertEqual(first["source_digest"], expected)
+
     def test_locator_non_numeric_produces_diagnostic(self):
         jobs = [
             {

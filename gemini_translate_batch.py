@@ -3423,8 +3423,11 @@ def collect_revision_file_jobs(file_paths=None):
     if file_paths is None:
         file_paths = collect_files_to_process()
     for rel_path, file_path in file_paths:
-        with open(file_path, 'r', encoding='utf-8-sig') as handle:
-            entries = collect_translation_entries_from_lines(handle.readlines(), file_rel_path=rel_path)
+        with open(file_path, 'rb') as handle:
+            raw = handle.read()
+        source_digest = hashlib.sha256(raw).hexdigest()
+        lines = raw.decode('utf-8-sig').splitlines(keepends=True)
+        entries = collect_translation_entries_from_lines(lines, file_rel_path=rel_path)
 
         items = []
         for entry in entries:
@@ -3462,6 +3465,7 @@ def collect_revision_file_jobs(file_paths=None):
                 {
                     'file_rel_path': rel_path,
                     'file_path': file_path,
+                    'source_digest': source_digest,
                     'task_count': len(items),
                     'items': items,
                 }
@@ -3489,6 +3493,9 @@ def run_revision_corpus_export(output_dir=None):
             f'{stamp}_{guess_project_slug()}_revision_corpus'
         )
     digests_after = revision_corpus.collect_file_digests(file_path_map)
+    scanned_digests = {
+        job['file_rel_path']: job['source_digest'] for job in file_jobs
+    }
     manifest = revision_corpus.export_revision_corpus(
         target_dir,
         file_jobs,
@@ -3500,6 +3507,7 @@ def run_revision_corpus_export(output_dir=None):
         include_prefixes=sorted(legacy.INCLUDE_PREFIXES),
         source_digests_before=digests_before,
         source_digests_after=digests_after,
+        source_digests_scanned=scanned_digests,
     )
     print(f'Exported revision corpus: {target_dir}')
     print(
@@ -12742,6 +12750,16 @@ def dispatch_command(parser, args):
             raise SystemExit(f'Project analysis error: {exc}') from exc
 
     initialize_batch_logging()
+    if command == 'export-revision-corpus':
+        # Read-only export: avoid the common load path below, which can
+        # persist a corrected game_root into translator_config.json.
+        legacy.load_translator_settings(persist_corrected_game_root=False)
+        legacy.load_glossary()
+        load_batch_settings()
+        return run_revision_corpus_export(
+            getattr(args, 'output_dir', '') or None,
+        )
+
     if command in {'usage-import', 'usage-report'}:
         as_json = bool(getattr(args, 'json', False))
 
@@ -12820,14 +12838,6 @@ def dispatch_command(parser, args):
             chunk_size=args.chunk_size,
         )
         return
-
-    if command == 'export-revision-corpus':
-        legacy.load_translator_settings(persist_corrected_game_root=False)
-        legacy.load_glossary()
-        load_batch_settings()
-        return run_revision_corpus_export(
-            getattr(args, 'output_dir', '') or None,
-        )
 
     if command == 'bootstrap-rag':
         bootstrap_rag_store(skip_prepare=args.skip_prepare, seed_jsonl_paths=args.seed_jsonl)

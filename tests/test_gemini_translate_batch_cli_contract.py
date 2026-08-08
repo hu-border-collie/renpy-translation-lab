@@ -1062,7 +1062,12 @@ class BatchCliContractTests(unittest.TestCase):
                         exit_code = batch.main(argv)
 
                 self.assertEqual(exit_code, 0)
-                load_config.assert_called_once_with(require_api_key=False)
+                if command == "export-revision-corpus":
+                    # Read-only export takes an early dispatch path that must
+                    # not load (or rewrite) API-key / translator config.
+                    load_config.assert_not_called()
+                else:
+                    load_config.assert_called_once_with(require_api_key=False)
 
     def test_remote_batch_commands_still_require_api_key(self):
         load_config = mock.Mock()
