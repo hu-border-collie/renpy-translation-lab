@@ -385,6 +385,31 @@ class GuiTaskPageTests(unittest.TestCase):
         self.window._sync_workbench_empty_states()
         self.assertIs(page.page_stack.currentWidget(), page.content_page)
 
+    def test_gate_hides_nonterminal_status_when_doctor_regresses(self) -> None:
+        """#298 review: waiting/running snapshots are not finished results."""
+        cases = (
+            (WorkMode.SYNC_TRANSLATION, "sync_translation_page"),
+            (WorkMode.KEYWORD_EXTRACTION, "keywords_page"),
+            (WorkMode.REVISION, "revision_page"),
+        )
+        for mode, attr in cases:
+            with self.subTest(mode=mode.value):
+                self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+                page = getattr(self.window, attr)
+                for status in ("waiting", "running"):
+                    page.set_project_ready(True)
+                    page.set_workflow_status(
+                        status,
+                        "任务尚未完成",
+                        "仍在处理中。",
+                        [],
+                    )
+                    page.set_project_ready(False)
+                    self.assertIs(
+                        page.page_stack.currentWidget(),
+                        page.empty_state,
+                    )
+
     def test_batch_gate_keeps_results_when_doctor_regresses(self) -> None:
         """#298 review: batch results stay visible when doctor state regresses."""
         self.window._set_work_mode(

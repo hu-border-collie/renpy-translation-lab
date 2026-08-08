@@ -16,7 +16,7 @@ from ..user_copy import TASK_PROJECT_GATE_COPY
 from ..work_modes import WorkMode, work_mode_submode_label
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
-from .task_controls import TaskPageLayout
+from .task_controls import TaskPageLayout, task_status_has_result
 
 
 class KeywordsPage(QFrame):
@@ -127,7 +127,7 @@ class KeywordsPage(QFrame):
             self.page_stack.setCurrentWidget(self.content_page)
             return
         status, _heading, _message, _facts = self.workflow_status_snapshot()
-        has_result = bool(status and status not in {"idle", "stale"})
+        has_result = task_status_has_result(status)
         self.page_stack.setCurrentWidget(
             self.content_page if has_result else self.empty_state
         )

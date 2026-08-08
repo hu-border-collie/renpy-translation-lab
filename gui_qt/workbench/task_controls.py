@@ -21,6 +21,14 @@ from ..responsive_layout import FlowButtonBar
 
 
 TASK_PAGE_MIN_WIDTH = 260
+_NON_RESULT_TASK_STATUSES = frozenset(
+    {"", "idle", "stale", "running", "waiting"}
+)
+
+
+def task_status_has_result(status: str) -> bool:
+    """Return whether a page snapshot is a result worth keeping behind its gate."""
+    return str(status or "").strip() not in _NON_RESULT_TASK_STATUSES
 
 
 class TaskControlSection(QFrame):
