@@ -156,6 +156,28 @@ class RevisionCorpusExportTests(unittest.TestCase):
         self.assertEqual(comment[0]["current_translation"], "这扇门通向虚空。")
         self.assertEqual(comment[0]["file_rel_path"], "chapter03/comments.rpy")
 
+    def test_crlf_files_parse_like_universal_newlines(self):
+        chapter = self.tl_dir / "chapter05"
+        chapter.mkdir(parents=True, exist_ok=True)
+        (chapter / "crlf.rpy").write_bytes(
+            (
+                "translate schinese chapter05_terms:\r\n"
+                "    old \"CRLF Gate\"\r\n"
+                "    new \"回车门\"\r\n"
+            ).encode("utf-8")
+        )
+        jobs = batch.collect_revision_file_jobs(include_empty_files=True)
+        rows, _ = revision_corpus.build_corpus_items(jobs)
+        crlf = [row for row in rows if row["file_rel_path"] == "chapter05/crlf.rpy"]
+        self.assertEqual(len(crlf), 1)
+        self.assertEqual(crlf[0]["source"], "CRLF Gate")
+        self.assertEqual(crlf[0]["current_translation"], "回车门")
+        self.assertEqual(crlf[0]["locator"]["line_number"], 3)
+        crlf_job = next(
+            job for job in jobs if job["file_rel_path"] == "chapter05/crlf.rpy"
+        )
+        self.assertEqual(crlf_job["line_count"], 3)
+
     def test_empty_files_appear_in_coverage_summary(self):
         self._write_tl("chapter04/empty.rpy", "# only a comment, no entries\n")
         jobs = batch.collect_revision_file_jobs(include_empty_files=True)

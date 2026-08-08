@@ -3428,7 +3428,13 @@ def collect_revision_file_jobs(file_paths=None, include_empty_files=False):
         with open(file_path, 'rb') as handle:
             raw = handle.read()
         source_digest = hashlib.sha256(raw).hexdigest()
-        lines = raw.decode('utf-8-sig').splitlines(keepends=True)
+        text = raw.decode('utf-8-sig')
+        # Mirror the legacy text-mode read (universal newlines): CRLF/CR are
+        # normalized to LF and only LF splits lines, so parsing is identical
+        # for every consumer (build-revisions, final-review handoff, export).
+        lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+        if lines and lines[-1] == '':
+            lines.pop()
         entries = collect_translation_entries_from_lines(lines, file_rel_path=rel_path)
 
         items = []
