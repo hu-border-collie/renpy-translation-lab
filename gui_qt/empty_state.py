@@ -53,10 +53,17 @@ class EmptyStateWidget(QWidget):
         height is stable — avoids QLabel wrap height collapse that paints
         Chinese lines on top of each other).
     action_text:
-        If supplied, a secondary-style ``QPushButton`` is added below the
-        description and :pyattr:`action_clicked` is emitted on click.
+        If supplied, a ``QPushButton`` is added below the description and
+        :pyattr:`action_clicked` is emitted on click.
+    action_style:
+        Visual style for the optional action button: ``"secondary"`` (default)
+        or ``"primary"``. Only meaningful when ``action_text`` is supplied;
+        the primary style is used for the dominant first-use CTA (#316).
     parent:
         Optional parent widget.
+
+    The optional button is also exposed as :pyattr:`action_button`, which is
+    only created when ``action_text`` is supplied.
     """
 
     action_clicked = Signal()
@@ -69,6 +76,7 @@ class EmptyStateWidget(QWidget):
         description: str,
         *,
         action_text: str | None = None,
+        action_style: str = "secondary",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -135,7 +143,9 @@ class EmptyStateWidget(QWidget):
         self._action_btn: QPushButton | None = None
         if action_text is not None:
             self._action_btn = QPushButton(action_text)
-            self._action_btn.setObjectName("secondary_btn")
+            self._action_btn.setObjectName(
+                "primary_btn" if action_style == "primary" else "secondary_btn"
+            )
             self._action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             self._action_btn.setSizePolicy(
                 QSizePolicy.Policy.Fixed,
@@ -144,6 +154,9 @@ class EmptyStateWidget(QWidget):
             hint = self._action_btn.sizeHint()
             self._action_btn.setMinimumSize(hint)
             self._action_btn.clicked.connect(self.action_clicked)
+            # Public alias so callers can restyle/measure the CTA without
+            # reaching into the private widget.
+            self.action_button = self._action_btn
 
         content_layout.addWidget(self._icon_label, 0, Qt.AlignmentFlag.AlignHCenter)
         content_layout.addWidget(self._title_label, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -168,6 +181,11 @@ class EmptyStateWidget(QWidget):
         """Enable/disable the optional action button (if present)."""
         if self._action_btn is not None:
             self._action_btn.setEnabled(bool(enabled))
+
+    def set_action_text(self, text: str) -> None:
+        """Update the optional action button label (if present)."""
+        if self._action_btn is not None:
+            self._action_btn.setText(text)
 
     def _reflow_content_width(self) -> None:
         """Keep centered copy inside narrow inspectors instead of overflowing."""

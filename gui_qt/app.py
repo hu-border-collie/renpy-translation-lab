@@ -364,6 +364,7 @@ from .workbench.context_library_page import ContextLibraryPage
 from .workbench.keywords_page import KeywordsPage
 from .workbench.revision_page import RevisionPage
 from .workbench.sync_translation_page import SyncTranslationPage
+from .workbench.task_controls import task_status_has_result
 from .workbench_session import WorkbenchModeSession
 from .batch_workflow_support import resolve_submit_max_cost
 from .workflow_factory import create_workflow, resume_workflow
@@ -1615,6 +1616,20 @@ class MainWindow(QMainWindow):
             in {WorkMode.KEYWORD_EXTRACTION, WorkMode.SYNC_KEYWORD_EXTRACTION}
         )
 
+    def _workflow_status_page(self):
+        """Return the page that owns progress status for the current route.
+
+        Batch translation keeps the shared status card; every other real task
+        page owns its workflow / result chrome itself (#298).
+        """
+        pages = getattr(self, "_workbench_stack_pages", None)
+        if not pages:
+            return None
+        nav = workbench_nav_for_work_mode(self._current_work_mode())
+        if nav == WorkbenchNavItem.BATCH_TRANSLATION:
+            return None
+        return pages.get(nav)
+
     def _sync_workbench_status_surface(
         self,
         route: str | None = None,
@@ -1633,15 +1648,22 @@ class MainWindow(QMainWindow):
             or current_route.startswith(_SHELL_WORKBENCH_PREFIX)
         )
         project_route = current_route == _SHELL_ROUTE_PROJECT_PREPARE
-        writeback_visible = (
-            not project_route and self._work_mode_has_writeback_surface()
+        batch_route = (
+            current_route
+            == f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.BATCH_TRANSLATION.value}"
         )
+        # Only the batch workflow keeps the shared progress/writeback card;
+        # every other task page owns its own status chrome (#298).
+        writeback_visible = batch_route and self._work_mode_has_writeback_surface()
 
         project_bar = getattr(self, "global_project_bar", None)
         if project_bar is not None:
-            project_bar.setVisible(project_route)
+            # Task pages keep compact project identity; full prep actions stay
+            # on the 项目与环境 route (#298).
+            project_bar.setVisible(on_workbench)
+            self._set_project_bar_compact(not project_route)
         tabs.setTabVisible(_BATCH_STAGE_PREPARE, project_route)
-        tabs.setTabVisible(_BATCH_STAGE_EXECUTE, not project_route)
+        tabs.setTabVisible(_BATCH_STAGE_EXECUTE, batch_route)
         tabs.setTabVisible(_BATCH_STAGE_RESULT, writeback_visible)
 
         target_index = tabs.currentIndex()
@@ -1660,8 +1682,8 @@ class MainWindow(QMainWindow):
                 refresh_readiness=refresh_readiness,
             )
 
-        card.setVisible(on_workbench)
-        tabs.setVisible(on_workbench)
+        card.setVisible(project_route or batch_route)
+        tabs.setVisible(project_route or batch_route)
         card.updateGeometry()
         primary = getattr(self, "workbench_primary", None)
         if primary is not None and primary.layout() is not None:
@@ -1793,6 +1815,12 @@ class MainWindow(QMainWindow):
 
         return bar
 
+    def _set_project_bar_compact(self, compact: bool) -> None:
+        """Toggle task-page compact mode (identity + switch only)."""
+        self.global_browse_project_btn.setVisible(not compact)
+        self.doctor_btn.setVisible(not compact)
+        self.bootstrap_work_btn.setVisible(not compact)
+
     def _build_workbench_tab(self) -> None:
         tab = QWidget()
         tab.setObjectName("workbench_tab")
@@ -1878,6 +1906,7 @@ class MainWindow(QMainWindow):
                         start=self._on_start_translation,
                         stop=self._on_kill,
                         writeback=self._on_apply_sync_translation,
+                        action=self._on_task_page_gate_action,
                     )
                 )
                 self.sync_translation_page = page
@@ -1890,6 +1919,7 @@ class MainWindow(QMainWindow):
                         stop=self._on_kill,
                         writeback=self._on_open_keyword_merge,
                         select_mode=self._on_keywords_page_mode_selected,
+                        action=self._on_task_page_gate_action,
                     )
                 )
                 self.keywords_page = page
@@ -2190,13 +2220,14 @@ class MainWindow(QMainWindow):
             "选择项目并开始翻译后，这里会显示时间线与任务事实。"
             "若已有未完成的批量任务，可点「继续」。",
             action_text="去环境检查",
+            action_style="primary",
         )
         self.workflow_empty_state.setObjectName("workflow_empty_state")
         # Environment check lives on the project-prepare shell route; the
         # prepare status tab is hidden on task pages, so tab-index focus alone
         # would be remapped to 进度 and appear to do nothing.
         self.workflow_empty_state.action_clicked.connect(
-            lambda: self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+            self._on_workflow_empty_cta
         )
         workflow_layout.addWidget(self.workflow_empty_state)
         self.workflow_empty_state.setVisible(False)
@@ -2497,6 +2528,9 @@ class MainWindow(QMainWindow):
 
     def _on_context_library_action(self, name: str) -> None:
         """Run the Project Analysis lifecycle from the context-library page."""
+        if name == "open_doctor":
+            self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+            return
         if bool(getattr(self, "_task_running", False)):
             return
         runner = getattr(self, "runner", None)
@@ -2747,7 +2781,9 @@ class MainWindow(QMainWindow):
             game_root=str(game_root or ""),
             project_analysis_status=result.status if result is not None else None,
             project_analysis_label=(
-                result.label if result is not None else "正在读取项目摘要状态…"
+                result.label
+                if result is not None
+                else ("" if not game_root else "正在读取项目摘要状态…")
             ),
             project_analysis_enabled=analysis_flags["enabled"],
             project_analysis_inject_enabled=analysis_flags["inject_enabled"],
@@ -4855,13 +4891,19 @@ class MainWindow(QMainWindow):
             return
         del stage_index  # kept for call-site compat; visibility is mode-based
         is_batch = self._batch_stage_mode_active()
-        show = is_batch
+        # First-use guidance (#316): hide project-dependent advanced tools
+        # until the environment check passes instead of stacking disabled ones.
+        ready = self._doctor_allows_translate_action()
+        show = is_batch and ready
         self.batch_advanced_frame.setVisible(show)
         if show and hasattr(self, "batch_advanced_bar"):
             reflow = getattr(self.batch_advanced_bar, "reflow", None)
             if callable(reflow):
                 reflow(force=True)
-        if show and refresh_readiness:
+        if is_batch and refresh_readiness:
+            # Keep readiness fresh even while the advanced tools are hidden by
+            # the first-use gate (#316): switching back after 环境检查 must
+            # show correct probe/split enablement.
             running = (
                 bool(getattr(self, "_task_running", False))
                 or (hasattr(self, "kill_btn") and self.kill_btn.isEnabled())
@@ -7985,20 +8027,34 @@ class MainWindow(QMainWindow):
                 stage_index = int(saved_index)
         wf_status = ""
         wf_heading = ""
-        if hasattr(self, "workflow_status_label"):
+        wf_message = ""
+        wf_facts: list[str] = []
+        status_page = self._workflow_status_page()
+        if status_page is not None and callable(
+            getattr(status_page, "workflow_status_snapshot", None)
+        ):
+            snap_status, snap_heading, wf_message, wf_facts = (
+                status_page.workflow_status_snapshot()
+            )
+            wf_status = snap_status
+            wf_heading = (
+                str(getattr(self, "_workflow_heading_text", "") or "")
+                or snap_heading
+            )
+        elif hasattr(self, "workflow_status_label"):
             raw = self.workflow_status_label.property("status")
             wf_status = str(raw) if raw is not None else ""
             # StatusBadge text includes an icon prefix; keep raw heading if tracked.
             wf_heading = str(getattr(self, "_workflow_heading_text", "") or "")
             if not wf_heading:
                 wf_heading = self.workflow_status_label.text()
-        wf_message = ""
-        if hasattr(self, "workflow_message_label"):
-            wf_message = self.workflow_message_label.text()
-        wf_facts: list[str] = []
-        if hasattr(self, "workflow_facts_label"):
-            facts_text = self.workflow_facts_label.text()
-            wf_facts = [line for line in facts_text.splitlines() if line.strip()]
+            if hasattr(self, "workflow_message_label"):
+                wf_message = self.workflow_message_label.text()
+            if hasattr(self, "workflow_facts_label"):
+                facts_text = self.workflow_facts_label.text()
+                wf_facts = [
+                    line for line in facts_text.splitlines() if line.strip()
+                ]
         return WorkbenchModeSession(
             workflow=getattr(self, "_workflow", None),
             workflow_step_output_lines=list(
@@ -8290,6 +8346,30 @@ class MainWindow(QMainWindow):
         has_workflow = self._workflow is not None or bool(
             getattr(self, "_writeback_manifest_path", "")
         )
+        # Page-owned project gates (#298/#316): non-batch task pages show the
+        # doctor CTA until project prep passes; gating semantics unchanged.
+        if not running:
+            gate_ready = self._doctor_allows_translate_action()
+            for attr in (
+                "batch_translation_page",
+                "sync_translation_page",
+                "keywords_page",
+                "revision_page",
+            ):
+                page = getattr(self, attr, None)
+                if page is None or not callable(
+                    getattr(page, "set_project_ready", None)
+                ):
+                    continue
+                if attr == "batch_translation_page" and not gate_ready:
+                    # Batch results live in the shared status card; keep the
+                    # page visible when a real result exists (#298 review).
+                    raw = self.workflow_status_label.property("status")
+                    status = str(raw) if raw is not None else ""
+                    has_result = task_status_has_result(status)
+                    page.set_project_ready(has_result)
+                else:
+                    page.set_project_ready(gate_ready)
         if running:
             resume_ok = False
         elif resume_available is not None:
@@ -8318,7 +8398,7 @@ class MainWindow(QMainWindow):
                 if doctor_scroll is not None:
                     doctor_scroll.setVisible(not show_doctor_empty)
 
-        if hasattr(self, "workflow_empty_state"):
+        if hasattr(self, "workflow_empty_state") and self._batch_stage_mode_active():
             show_wf_empty = (
                 not running
                 and not has_workflow
@@ -8332,10 +8412,28 @@ class MainWindow(QMainWindow):
                 status = str(raw or "")
             if status and status not in {"idle", "stale", ""}:
                 show_wf_empty = False
-            if has_project and status in {"idle", "stale"} and not resume_ok and not has_workflow:
+            doctor_ready = self._doctor_allows_translate_action()
+            spec = work_mode_spec(self._current_work_mode())
+            start_ready = self._translate_button_enabled(
+                spec=spec,
+                bootstrap_ready=self._bootstrap_task_ready(spec),
+                running=running,
+            )
+            if (
+                not running
+                and has_project
+                and doctor_ready
+                and start_ready
+                and status in {"idle", "stale"}
+                and not resume_ok
+                and not has_workflow
+            ):
                 show_wf_empty = True
-            if not has_project:
-                show_wf_empty = True
+            # Without a project or doctor readiness, the batch page gate owns
+            # the doctor CTA (#316); the shared empty CTA only shows after
+            # prep passes, where its primary action is 开始翻译, not 去环境检查.
+            if not has_project or not doctor_ready or not start_ready:
+                show_wf_empty = False
             self.workflow_empty_state.setVisible(show_wf_empty)
             # Empty CTA shares the progress column with summary chrome. Hide the
             # chrome while empty so the action button is not height-crushed.
@@ -8348,6 +8446,9 @@ class MainWindow(QMainWindow):
                 if widget is not None:
                     widget.setVisible(not show_wf_empty)
             if show_wf_empty:
+                self.workflow_empty_state.set_action_text(
+                    self._translate_button_label()
+                )
                 for attr in (
                     "workflow_progress_bar",
                     "view_last_completed_btn",
@@ -8431,11 +8532,17 @@ class MainWindow(QMainWindow):
             return False
         if running or not spec.implemented or not bootstrap_ready:
             return False
-        if (
-            spec.mode == WorkMode.KEYWORD_EXTRACTION
-            and self.workflow_status_label.property("status") == "waiting"
-        ):
-            return False
+        if spec.mode == WorkMode.KEYWORD_EXTRACTION:
+            status_page = self._workflow_status_page()
+            if status_page is not None and callable(
+                getattr(status_page, "workflow_status_snapshot", None)
+            ):
+                page_status, _, _, _ = status_page.workflow_status_snapshot()
+            else:
+                raw = self.workflow_status_label.property("status")
+                page_status = str(raw) if raw is not None else ""
+            if page_status == "waiting":
+                return False
         if self._translation_requires_doctor_check(spec.mode):
             return self._doctor_allows_translate_action()
         return True
@@ -8444,8 +8551,38 @@ class MainWindow(QMainWindow):
         self.translate_btn.setText(self._translate_button_label())
         self._sync_sync_translation_page_controls(label_only=True)
 
+    def _on_task_page_gate_action(self, action: str) -> None:
+        """Route page-level gate CTAs (e.g. 去环境检查) to shell routes."""
+        if action == "open_doctor":
+            self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+
+    def _on_workflow_empty_cta(self) -> None:
+        """Route the batch empty CTA through the complete start-action gate."""
+        running = bool(getattr(self, "_task_running", False)) or (
+            hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
+        )
+        if running:
+            return
+        has_project = bool(
+            hasattr(self, "state") and self.state.get_game_root() is not None
+        )
+        if not has_project or not self._doctor_allows_translate_action():
+            self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+            return
+        spec = work_mode_spec(self._current_work_mode())
+        if not self._translate_button_enabled(
+            spec=spec,
+            bootstrap_ready=self._bootstrap_task_ready(spec),
+            running=False,
+        ):
+            return
+        self._on_start_translation()
+
     def _on_batch_translation_page_action(self, action: str) -> None:
         """Route a P5 page-local action to the existing batch coordinator."""
+        if action == "open_doctor":
+            self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+            return
         callbacks = {
             "start": self._on_start_translation,
             "resume": self._on_resume_translation,
@@ -8579,6 +8716,9 @@ class MainWindow(QMainWindow):
 
     def _on_final_review_page_action(self, action: str) -> None:
         """Start manual finding selection only for a completed review campaign."""
+        if action == "open_doctor":
+            self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+            return
         if action != "select_final_review_findings":
             return
         if bool(getattr(self, "_task_running", False)):
@@ -9120,6 +9260,19 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "workflow_progress_bar"):
             return
 
+        page = self._workflow_status_page()
+        if page is not None and callable(getattr(page, "set_workflow_progress", None)):
+            page.set_workflow_progress(self._workflow_progress)
+            state = self._workflow_progress
+            facts = list(self._workflow_progress_base_facts)
+            if state is not None:
+                for fact in state.facts:
+                    if fact and fact not in facts:
+                        facts.append(fact)
+            if callable(getattr(page, "set_workflow_facts", None)):
+                page.set_workflow_facts(facts)
+            return
+
         state = self._workflow_progress
         if state is None or not state.visible:
             self.workflow_progress_bar.setVisible(False)
@@ -9159,8 +9312,67 @@ class MainWindow(QMainWindow):
         ):
             self._apply_bootstrap_progress_ui()
 
+    def _adapt_bootstrap_progress_for_page(self) -> object | None:
+        """Adapt BootstrapProgressState into the generic page progress shape.
+
+        Maps ``total_segments``/``stored_segments`` onto the ``total``/``current``
+        fields TaskStatusSection renders, and carries the formatted label and
+        facts instead of dropping them (#298 review).
+        """
+        from types import SimpleNamespace
+
+        state = self._bootstrap_progress
+        if state is None or not state.visible:
+            return None
+        if self._active_command == "bootstrap_rag":
+            return SimpleNamespace(
+                visible=True,
+                indeterminate=True,
+                total=0,
+                current=0,
+                label="正在处理…",
+                facts=[],
+            )
+        tracker = self._bootstrap_progress_tracker
+        if tracker is not None:
+            tracker.observe(state)
+        facts = format_bootstrap_progress_facts(state)
+        if state.total_segments <= 0 and state.stored_segments <= 0:
+            return SimpleNamespace(
+                visible=True,
+                indeterminate=True,
+                total=0,
+                current=0,
+                label="正在扫描原文…",
+                facts=facts,
+            )
+        total = max(int(state.total_segments), 1)
+        current = min(max(int(state.stored_segments), 0), total)
+        remaining = (
+            tracker.estimate_remaining_seconds(state)
+            if tracker is not None
+            else None
+        )
+        return SimpleNamespace(
+            visible=True,
+            indeterminate=False,
+            total=total,
+            current=current,
+            label=format_bootstrap_progress_bar_label(state, remaining),
+            facts=facts,
+        )
+
     def _apply_bootstrap_progress_ui(self) -> None:
         if not hasattr(self, "workflow_progress_bar"):
+            return
+
+        page = self._workflow_status_page()
+        if page is not None and callable(getattr(page, "set_bootstrap_progress", None)):
+            kind = "rag" if self._active_command == "bootstrap_rag" else "source_index"
+            page.set_bootstrap_progress(
+                self._adapt_bootstrap_progress_for_page(),
+                kind=kind,
+            )
             return
 
         state = self._bootstrap_progress
@@ -11713,7 +11925,8 @@ class MainWindow(QMainWindow):
         self._set_writeback_summary(summary)
         self._refresh_diagnostics_context()
         if summary.status not in {"idle", "running", "stale"}:
-            self._focus_workbench_status_tab(2)
+            if self._workflow_status_page() is None:
+                self._focus_workbench_status_tab(2)
 
     @staticmethod
     def _manifest_path_from_sync_revision_output(output: str) -> str:
@@ -11955,9 +12168,13 @@ class MainWindow(QMainWindow):
         facts: list[str] | None = None,
     ):
         self._workflow_heading_text = heading
-        self.workflow_status_label.set_status(status, heading)
-        self.workflow_message_label.setText(message)
-        self.workflow_facts_label.setText("\n".join(facts or []))
+        page = self._workflow_status_page()
+        if page is not None and callable(getattr(page, "set_workflow_status", None)):
+            page.set_workflow_status(status, heading, message, list(facts or []))
+        else:
+            self.workflow_status_label.set_status(status, heading)
+            self.workflow_message_label.setText(message)
+            self.workflow_facts_label.setText("\n".join(facts or []))
         self._update_resume_btn_text()
         resume_available = self._resume_task_available()
         self._update_resume_btn_enabled(resume_available=resume_available)
@@ -12028,10 +12245,17 @@ class MainWindow(QMainWindow):
     def _set_writeback_summary(self, summary: WritebackSummary) -> None:
         self._writeback_summary = summary
         self._writeback_manifest_path = summary.manifest_path
-        self.writeback_status_label.set_status(summary.status, summary.heading)
-        self.writeback_message_label.setText(summary.message)
-        self.writeback_facts_label.setText("\n".join(summary.facts))
-        self._set_details_label(self.writeback_details_label, summary.findings)
+        page = self._workflow_status_page()
+        if page is not None and callable(getattr(page, "set_writeback_status", None)):
+            # Keep the captured workflow heading aligned with the writeback
+            # message/facts for pages without a separate writeback surface.
+            self._workflow_heading_text = summary.heading
+            page.set_writeback_status(summary)
+        else:
+            self.writeback_status_label.set_status(summary.status, summary.heading)
+            self.writeback_message_label.setText(summary.message)
+            self.writeback_facts_label.setText("\n".join(summary.facts))
+            self._set_details_label(self.writeback_details_label, summary.findings)
         self._update_writeback_action_buttons(
             summary,
             running=self.kill_btn.isEnabled(),

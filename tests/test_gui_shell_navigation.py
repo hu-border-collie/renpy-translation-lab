@@ -60,7 +60,8 @@ class GuiShellNavigationTests(unittest.TestCase):
             self.window.shell_nav.currentRow(),
             self.window._shell_nav_rows[batch_route],
         )
-        self.assertTrue(self.window.global_project_bar.isHidden())
+        # Task routes show the compact identity bar (#298).
+        self.assertFalse(self.window.global_project_bar.isHidden())
         self.assertIs(
             self.window.global_project_bar.parentWidget(),
             self.window.workbench_primary,
@@ -69,7 +70,7 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.assertEqual(self.window.app_sidebar.width(), 224)
         self.assertFalse(hasattr(self.window, "sidebar_brand_mark"))
         self.assertFalse(hasattr(self.window, "sidebar_collapse_btn"))
-        self.assertTrue(self.window.global_project_bar.isHidden())
+        self.assertFalse(self.window.global_project_bar.isHidden())
         self.assertEqual(self.window.global_project_bar_label.text(), "当前项目")
         for route in self.window._shell_nav_rows:
             item = self._route_item(route)
@@ -404,7 +405,8 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.assertFalse(tab_bar.isTabVisible(0))
         self.assertTrue(tab_bar.isTabVisible(1))
         self.assertTrue(tab_bar.isTabVisible(2))
-        self.assertTrue(self.window.global_project_bar.isHidden())
+        # Batch keeps the shared card, with the compact identity bar above.
+        self.assertFalse(self.window.global_project_bar.isHidden())
         self.assertFalse(hasattr(self.window, "workbench_status_toggle_btn"))
         self.assertFalse(hasattr(self.window, "workbench_status_header"))
 
@@ -434,7 +436,9 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.window._writeback_manifest_path = ""
         self.window._sync_workbench_empty_states()
 
-        empty = self.window.workflow_empty_state
+        page = self.window.batch_translation_page
+        empty = page.empty_state
+        self.assertIs(page.page_stack.currentWidget(), empty)
         self.assertFalse(empty.isHidden())
         btn = empty._action_btn
         self.assertIsNotNone(btn)

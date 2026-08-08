@@ -177,7 +177,54 @@ class GuiP3PolishTests(unittest.TestCase):
         self.window._workflow = None
         self.window._writeback_manifest_path = ""
         self.window._sync_workbench_empty_states()
-        self.assertFalse(self.window.workflow_empty_state.isHidden())
+        # No project: the batch page gate owns the doctor CTA (#316).
+        self.assertTrue(self.window.workflow_empty_state.isHidden())
+        page = self.window.batch_translation_page
+        self.assertIs(page.page_stack.currentWidget(), page.empty_state)
+        self.assertFalse(page.empty_state.isHidden())
+
+    def test_workflow_empty_cta_hidden_while_task_running(self) -> None:
+        """#298 review: probe/split keep status idle; no start CTA while busy."""
+        from gui_qt.work_modes import WorkMode
+
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
+        self.window._workflow = None
+        self.window._writeback_manifest_path = ""
+        self.window._doctor_check_completed = True
+        self.window._doctor_summary_status = "ready"
+        self.window._set_task_running(True)
+        self.window._sync_workbench_empty_states()
+        # The force-show branch must not resurrect the CTA while running.
+        self.assertTrue(self.window.workflow_empty_state.isHidden())
+
+    def test_workflow_empty_cta_respects_complete_start_gate(self) -> None:
+        """#316 review: shared CTA follows the same gate as the start button."""
+        from gui_qt.work_modes import WorkMode
+
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
+        self.window._workflow = None
+        self.window._writeback_manifest_path = ""
+        self.window._doctor_check_completed = True
+        self.window._doctor_summary_status = "ready"
+
+        with mock.patch.object(
+            self.window,
+            "_bootstrap_task_ready",
+            return_value=False,
+        ):
+            self.window._sync_workbench_empty_states()
+            self.assertTrue(self.window.workflow_empty_state.isHidden())
+            with mock.patch.object(self.window, "_on_start_translation") as start:
+                self.window._on_workflow_empty_cta()
+                start.assert_not_called()
 
     def test_workflow_empty_cta_button_fully_visible(self) -> None:
         """Empty-state CTA must not be clipped by the progress column."""
@@ -190,19 +237,19 @@ class GuiP3PolishTests(unittest.TestCase):
         self.window.show()
         for _ in range(8):
             self._app.processEvents()
-        self.window._set_work_mode(WorkMode.BOOTSTRAP_RAG, refresh_manifest_writeback=False)
-        self.window.state.get_game_root = lambda: None  # type: ignore[method-assign]
+        self.window._set_work_mode(WorkMode.BATCH_TRANSLATION, refresh_manifest_writeback=False)
+        self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
         self.window._workflow = None
         self.window._writeback_manifest_path = ""
+        self.window._doctor_check_completed = True
+        self.window._doctor_summary_status = "ready"
         self.window._set_workflow_summary(
             "idle",
-            "上下文库",
-            "选择项目后可预建记忆库或原文索引。",
+            "批量翻译",
+            "完成环境检查后，可以开始批量翻译。",
             [],
         )
-        self.window._activate_shell_route("project_prepare")
-        if hasattr(self.window, "workbench_status_tabs"):
-            self.window.workbench_status_tabs.setCurrentIndex(1)
+        self.window._sync_workbench_empty_states()
         for _ in range(6):
             self._app.processEvents()
         # Flush deferred ensureWidgetVisible scroll.
@@ -215,7 +262,8 @@ class GuiP3PolishTests(unittest.TestCase):
         btn = empty._action_btn
         self.assertIsNotNone(btn)
         assert btn is not None
-        self.assertEqual(btn.text(), "去环境检查")
+        # After doctor passes the primary action is starting the batch run.
+        self.assertEqual(btn.text(), "开始翻译")
         self.assertFalse(btn.isHidden())
         # Button geometry fully inside empty-state widget.
         btn_in_empty = QRect(btn.mapTo(empty, QPoint(0, 0)), btn.size())

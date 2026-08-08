@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 try:
@@ -85,6 +86,22 @@ class GuiTaskPageTests(unittest.TestCase):
         page = self.window.sync_translation_page
         self.assertIs(self.window.workbench_stack.currentWidget(), page)
         self.assertFalse(self.window.workbench_stack.isHidden())
+        # Project gate (#298/#316): until doctor passes, the page shows the
+        # environment-check CTA instead of the task controls.
+        self.assertIs(page.page_stack.currentWidget(), page.empty_state)
+        self.assertTrue(page.content_page.isHidden())
+        self.window._doctor_check_completed = True
+        self.window._set_doctor_summary(
+            DoctorSummary(
+                status="ready",
+                heading="项目检查通过",
+                message="可以开始同步翻译。",
+                facts=[],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
         self.assertFalse(page.risk_warning.isHidden())
         self.assertIn("不会修改", page.risk_warning.text())
         self.assertEqual(page.start_btn.text(), "开始同步翻译")
@@ -94,9 +111,8 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(page.apply_btn.isEnabled())
         self.assertTrue(self.window.sync_mode_warning.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
-        self.assertFalse(self.window.workbench_status_card.isHidden())
-        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(1))
-        self.assertFalse(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertTrue(hasattr(page, "status_section"))
         self.assertFalse(hasattr(self.window, "workbench_log_drawer"))
         self.assertTrue(self.window.context_library_panel.isHidden())
         self.assertGreaterEqual(
@@ -183,10 +199,150 @@ class GuiTaskPageTests(unittest.TestCase):
             "处理中…",
             ["files: 2/10"],
         )
-        self.assertFalse(self.window.workbench_status_card.isHidden())
-        self.assertEqual(self.window.workbench_status_tabs.currentIndex(), 1)
-        self.assertIn("正在同步翻译", self.window.workflow_status_label.text())
-        self.assertIn("files: 2/10", self.window.workflow_facts_label.text())
+        # Status lives inside the page, not the shared card (#298).
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertIn("正在同步翻译", page.status_section.status_badge.text())
+        self.assertIn("files: 2/10", page.status_section.facts_label.text())
+
+    def test_project_analysis_owns_workflow_status_and_progress(self) -> None:
+        """#298 review: context workflows never write into the hidden shared card."""
+        self.window._set_work_mode(
+            WorkMode.PROJECT_ANALYSIS,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.context_library_page
+        page.set_context_status(
+            rag_enabled=False,
+            source_index_enabled=False,
+            game_root="C:/Games/Demo/work",
+            project_analysis_enabled=True,
+            project_analysis_inject_enabled=False,
+        )
+        self.window._set_workflow_summary(
+            "running",
+            "正在构建项目结构",
+            "正在读取剧情节点。",
+            ["阶段：结构"],
+        )
+        self.window._workflow_progress_base_facts = ["阶段：结构"]
+        self.window._workflow_progress = SimpleNamespace(
+            visible=True,
+            indeterminate=False,
+            total=4,
+            current=2,
+            label="生成 2/4",
+            facts=("当前：路线摘要",),
+        )
+        self.window._apply_workflow_progress_ui()
+
+        section = page.bootstrap_status_section
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertFalse(section.isHidden())
+        self.assertIn("正在构建项目结构", section.status_badge.text())
+        self.assertFalse(section.progress_bar.isHidden())
+        self.assertEqual(section.progress_bar.value(), 2)
+        self.assertIn("阶段：结构", section.facts_label.text())
+        self.assertIn("当前：路线摘要", section.facts_label.text())
+
+    def test_task_pages_gate_on_project_prep(self) -> None:
+        """#298/#316: non-batch task pages show the doctor CTA until ready."""
+        cases = (
+            (WorkMode.SYNC_TRANSLATION, "sync_translation_page"),
+            (WorkMode.KEYWORD_EXTRACTION, "keywords_page"),
+            (WorkMode.REVISION, "revision_page"),
+        )
+        for mode, attr in cases:
+            self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+            # Reset doctor state so the gate is exercised for every mode.
+            self.window._doctor_check_completed = False
+            self.window._doctor_summary_status = ""
+            self.window._doctor_summary_mode = ""
+            self.window._sync_workbench_empty_states()
+            page = getattr(self.window, attr)
+            self.assertIs(page.page_stack.currentWidget(), page.empty_state)
+            btn = page.empty_state._action_btn
+            self.assertIsNotNone(btn)
+            assert btn is not None
+            self.assertEqual(btn.text(), "去环境检查")
+            self.assertEqual(btn.objectName(), "primary_btn")
+
+            self.window._doctor_check_completed = True
+            self.window._set_doctor_summary(
+                DoctorSummary(
+                    status="ready",
+                    heading="项目检查通过",
+                    message="ok",
+                    facts=[],
+                    findings=[],
+                    mode="existing_tl_only",
+                )
+            )
+            self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
+    def test_task_page_gate_cta_opens_project_prepare(self) -> None:
+        """#316: the gate CTA routes to 项目与环境."""
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.sync_translation_page
+        self.assertIs(page.page_stack.currentWidget(), page.empty_state)
+        # Route switch is synchronous; avoid processEvents so queued layout
+        # timers from earlier windows cannot touch stale widgets.
+        page.empty_state.action_clicked.emit()
+        self.assertEqual(self.window._current_shell_route(), "project_prepare")
+
+    def test_task_empty_state_copy_is_mode_specific(self) -> None:
+        """#315: per-page empty copy instead of shared batch wording."""
+        cases = (
+            (
+                WorkMode.SYNC_TRANSLATION,
+                "sync_translation_empty_state",
+                ("同步翻译", "差异预览", "确认后才写回"),
+            ),
+            (
+                WorkMode.KEYWORD_EXTRACTION,
+                "keywords_empty_state",
+                ("提取关键词", "候选报告", "合并到 glossary.json"),
+            ),
+            (
+                WorkMode.REVISION,
+                "revision_empty_state",
+                ("订正预览", "确认预览后才可写回"),
+            ),
+        )
+        for mode, object_name, expected_copy in cases:
+            self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+            page = self.window.workbench_stack.currentWidget()
+            self.assertEqual(page.empty_state.objectName(), object_name)
+            self.assertIn("环境检查", page.empty_state._title_label.text())
+            description = page.empty_state._desc_label.text()
+            for keyword in expected_copy:
+                self.assertIn(keyword, description)
+
+    def test_context_rows_do_not_print_unselected_project(self) -> None:
+        """#298: no '项目 未选择项目' copy without a project."""
+        self.window._set_work_mode(
+            WorkMode.BOOTSTRAP_RAG,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.context_library_page
+        page.set_context_status(
+            rag_enabled=True,
+            source_index_enabled=False,
+            game_root="",
+            project_analysis_label="未生成",
+        )
+        self.assertNotIn("未选择项目", page.rag_status_label.text())
+        self.assertIn("请先选择项目", page.rag_status_label.text())
+        page.set_context_status(
+            rag_enabled=True,
+            source_index_enabled=False,
+            game_root="C:/Games/Demo/work",
+            project_analysis_label="未生成",
+        )
+        self.assertIn("C:/Games/Demo/work", page.rag_status_label.text())
+        self.assertNotIn("请先选择项目", page.rag_status_label.text())
 
     def test_batch_hides_sync_warning(self) -> None:
         self.window._set_work_mode(
@@ -229,14 +385,186 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(self.window.workbench_stack.isHidden())
         self.assertTrue(self.window._mode_frame.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
-        self.assertFalse(self.window.workbench_status_card.isHidden())
-        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(1))
-        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertTrue(hasattr(page, "status_section"))
         self.assertTrue(self.window.keyword_merge_writeback_btn.isHidden())
         self.assertTrue(page.merge_btn.isEnabled())
         self.assertTrue(self.window.apply_revision_btn.isHidden())
         self.assertTrue(self.window.apply_btn.isHidden())
         self.assertFalse(hasattr(self.window, "work_submode_combo"))
+
+    def test_gate_keeps_finished_results_visible(self) -> None:
+        """#298 review: a regressed doctor state must not hide finished results."""
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window._doctor_check_completed = True
+        self.window._set_doctor_summary(
+            DoctorSummary(
+                status="ready",
+                heading="项目检查通过",
+                message="ok",
+                facts=[],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+        self.window._set_workflow_summary(
+            "done",
+            "同步完成",
+            "已写入 3 条译文",
+            ["files: 3"],
+        )
+        page = self.window.sync_translation_page
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
+        # Doctor state regresses (re-check failed): the gate must not hide
+        # the finished result view.
+        self.window._doctor_check_completed = False
+        self.window._doctor_summary_status = "block"
+        self.window._sync_workbench_empty_states()
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
+    def test_gate_hides_nonterminal_status_when_doctor_regresses(self) -> None:
+        """#298 review: waiting/running snapshots are not finished results."""
+        cases = (
+            (WorkMode.SYNC_TRANSLATION, "sync_translation_page"),
+            (WorkMode.KEYWORD_EXTRACTION, "keywords_page"),
+            (WorkMode.REVISION, "revision_page"),
+        )
+        for mode, attr in cases:
+            with self.subTest(mode=mode.value):
+                self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+                page = getattr(self.window, attr)
+                for status in ("waiting", "running"):
+                    page.set_project_ready(True)
+                    page.set_workflow_status(
+                        status,
+                        "任务尚未完成",
+                        "仍在处理中。",
+                        [],
+                    )
+                    page.set_project_ready(False)
+                    self.assertIs(
+                        page.page_stack.currentWidget(),
+                        page.empty_state,
+                    )
+
+    def test_batch_gate_keeps_results_when_doctor_regresses(self) -> None:
+        """#298 review: batch results stay visible when doctor state regresses."""
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window._doctor_check_completed = True
+        self.window._set_doctor_summary(
+            DoctorSummary(
+                status="ready",
+                heading="项目检查通过",
+                message="ok",
+                facts=[],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+        self.window._set_workflow_summary(
+            "done",
+            "翻译完成",
+            "结果已下载。",
+            [],
+        )
+        page = self.window.batch_translation_page
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
+        self.window._doctor_check_completed = False
+        self.window._doctor_summary_status = "block"
+        self.window._sync_workbench_empty_states()
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
+    def test_batch_gate_hides_nonterminal_status_when_doctor_regresses(self) -> None:
+        """#298 review: batch uses the same finished-result test as task pages."""
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window.state.get_game_root = lambda: "C:/Games/Demo/work"  # type: ignore[method-assign]
+        self.window._workflow = None
+        self.window._writeback_manifest_path = ""
+        self.window._doctor_check_completed = False
+        self.window._doctor_summary_status = "block"
+        page = self.window.batch_translation_page
+
+        for status in ("waiting", "running"):
+            with self.subTest(status=status):
+                self.window.workflow_status_label.set_status(
+                    status,
+                    "任务尚未完成",
+                )
+                self.window._sync_workbench_empty_states(
+                    resume_available=(False, ""),
+                )
+                self.assertIs(
+                    page.page_stack.currentWidget(),
+                    page.empty_state,
+                )
+
+    def test_batch_page_gate_owns_first_use_cta(self) -> None:
+        """#316 review: batch page hides the disabled action stack without a project."""
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        page = self.window.batch_translation_page
+        self.assertIs(page.page_stack.currentWidget(), page.empty_state)
+        self.assertTrue(page.content_page.isHidden())
+        btn = page.empty_state._action_btn
+        self.assertIsNotNone(btn)
+        assert btn is not None
+        self.assertEqual(btn.objectName(), "primary_btn")
+
+        self.window._doctor_check_completed = True
+        self.window._set_doctor_summary(
+            DoctorSummary(
+                status="ready",
+                heading="项目检查通过",
+                message="ok",
+                facts=[],
+                findings=[],
+                mode="existing_tl_only",
+            )
+        )
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+
+    def test_keywords_and_revision_route_writeback_into_page(self) -> None:
+        """#298 review: writeback results render inside keywords/revision pages."""
+        for mode, attr in (
+            (WorkMode.KEYWORD_EXTRACTION, "keywords_page"),
+            (WorkMode.REVISION, "revision_page"),
+        ):
+            self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+            summary = WritebackSummary(
+                status="ready",
+                heading="写回可执行",
+                message="检查通过，可以写回。",
+                facts=["files: 3"],
+                findings=["[需处理] 有 1 处问题待确认"],
+                can_apply=True,
+                manifest_path="C:/m.json",
+            )
+            self.window._set_writeback_summary(summary)
+            page = getattr(self.window, attr)
+            self.assertEqual(
+                page.status_section.status_badge.property("status"),
+                "ready",
+            )
+            self.assertIn("写回可执行", page.status_section.status_badge.text())
+            self.assertIn("检查通过", page.status_section.message_label.text())
+            self.assertIn("files: 3", page.status_section.facts_label.text())
+            self.assertIn(
+                "需处理",
+                page.status_section.details_label.text(),
+            )
 
     def test_keywords_page_uses_callbacks_and_local_mode_selector(self) -> None:
         page = self.window.keywords_page
@@ -343,9 +671,8 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(self.window.workbench_stack.isHidden())
         self.assertTrue(self.window._mode_frame.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
-        self.assertFalse(self.window.workbench_status_card.isHidden())
-        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(1))
-        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertTrue(hasattr(page, "status_section"))
         self.assertTrue(self.window.apply_revision_btn.isHidden())
         self.assertTrue(page.writeback_btn.isEnabled())
         self.assertTrue(self.window.apply_btn.isHidden())
@@ -648,14 +975,14 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(self.window.workbench_stack.isHidden())
         self.assertTrue(self.window._mode_frame.isHidden())
         self.assertTrue(self.window._workbench_actions_column.isHidden())
-        self.assertFalse(self.window.workbench_status_card.isHidden())
-        self.assertTrue(self.window.workbench_status_tabs.tabBar().isTabVisible(1))
-        self.assertFalse(self.window.workbench_status_tabs.tabBar().isTabVisible(2))
+        self.assertTrue(self.window.workbench_status_card.isHidden())
         self.assertFalse(hasattr(self.window, "work_submode_combo"))
         self.assertTrue(self.window.translate_btn.isHidden())
-        # Project-level prep actions stay on the hidden project-only bar.
-        self.assertTrue(self.window.global_project_bar.isHidden())
+        # Task routes show the compact identity bar; prep actions stay hidden.
+        self.assertFalse(self.window.global_project_bar.isHidden())
+        self.assertTrue(self.window.doctor_btn.isHidden())
         page = self.window.context_library_page
+        self.assertTrue(hasattr(page, "bootstrap_status_section"))
         self.assertEqual(page.rag_status_row.title_label.text(), "记忆库")
         self.assertEqual(page.source_index_status_row.title_label.text(), "原文索引")
         self.assertEqual(page.project_analysis_status_row.title_label.text(), "项目分析")
@@ -679,17 +1006,31 @@ class GuiTaskPageTests(unittest.TestCase):
         page = self.window.context_library_page
         prebuilds: list[str] = []
         opens: list[bool] = []
+        actions: list[str] = []
         page.set_action_callbacks(
             WorkbenchPageActions(
                 prebuild=prebuilds.append,
                 open_settings=lambda: opens.append(True),
+                action=actions.append,
             )
         )
 
+        # No project: the unified doctor gate owns the CTA (#298).
         page.set_context_status(
             rag_enabled=False,
             source_index_enabled=False,
             game_root="",
+            project_analysis_label="未生成",
+        )
+        self.assertIs(page.page_stack.currentWidget(), page.project_gate_state)
+        page.project_gate_state.action_clicked.emit()
+        self.assertEqual(actions, ["open_doctor"])
+
+        # Project selected but nothing enabled: settings empty state.
+        page.set_context_status(
+            rag_enabled=False,
+            source_index_enabled=False,
+            game_root="C:/Games/Example/work",
             project_analysis_label="未生成",
         )
         self.assertIs(page.page_stack.currentWidget(), page.empty_state)
@@ -940,7 +1281,8 @@ class GuiTaskPageTests(unittest.TestCase):
         ):
             self.assertNotIn(developer_term, visible_copy)
 
-    def test_global_prep_buttons_visible_on_all_task_pages(self) -> None:
+    def test_global_prep_buttons_visible_only_on_project_route(self) -> None:
+        """#298: task pages keep compact identity; prep actions stay on 项目与环境."""
         for mode in (
             WorkMode.BATCH_TRANSLATION,
             WorkMode.SYNC_TRANSLATION,
@@ -950,8 +1292,14 @@ class GuiTaskPageTests(unittest.TestCase):
         ):
             with self.subTest(mode=mode):
                 self.window._set_work_mode(mode, refresh_manifest_writeback=False)
-                self.assertFalse(self.window.doctor_btn.isHidden())
-                self.assertFalse(self.window.bootstrap_work_btn.isHidden())
+                self.assertFalse(self.window.global_project_bar.isHidden())
+                self.assertTrue(self.window.doctor_btn.isHidden())
+                self.assertTrue(self.window.bootstrap_work_btn.isHidden())
+                self.assertFalse(self.window.global_switch_project_btn.isHidden())
+
+        self.window._activate_shell_route("project_prepare")
+        self.assertFalse(self.window.doctor_btn.isHidden())
+        self.assertFalse(self.window.bootstrap_work_btn.isHidden())
 
     def test_context_bootstrap_buttons_disabled_while_running(self) -> None:
         self.window._set_work_mode(
@@ -1102,12 +1450,16 @@ class GuiTaskPageTests(unittest.TestCase):
             WorkMode.SYNC_TRANSLATION,
             refresh_manifest_writeback=True,
         )
+        page = self.window.sync_translation_page
         self.assertEqual(
-            self.window.workflow_status_label.property("status"),
+            page.status_section.status_badge.property("status"),
             "ready",
         )
-        self.assertIn("已写入 3 条译文", self.window.workflow_message_label.text())
-        self.assertIn("demo", self.window.workflow_facts_label.text())
+        self.assertIn(
+            "已写入 3 条译文",
+            page.status_section.message_label.text(),
+        )
+        self.assertIn("demo", page.status_section.facts_label.text())
 
     def test_keywords_submode_uses_short_labels(self) -> None:
         self.window._set_work_mode(

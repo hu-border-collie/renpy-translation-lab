@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 try:
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QComboBox, QPushButton, QWidget
 
     from gui_qt.workbench.keywords_page import KeywordsPage
@@ -12,8 +14,10 @@ try:
         TaskControlSection,
         TaskPageLayout,
         TaskStatusActionRow,
+        TaskStatusSection,
     )
 except ImportError as exc:
+    Qt = None  # type: ignore[assignment,misc]
     QApplication = None  # type: ignore[assignment,misc]
     QComboBox = None  # type: ignore[assignment,misc]
     QPushButton = None  # type: ignore[assignment,misc]
@@ -23,6 +27,7 @@ except ImportError as exc:
     TaskControlSection = None  # type: ignore[assignment,misc]
     TaskPageLayout = None  # type: ignore[assignment,misc]
     TaskStatusActionRow = None  # type: ignore[assignment,misc]
+    TaskStatusSection = None  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
@@ -90,6 +95,29 @@ class TaskControlsTests(unittest.TestCase):
         )
         row.close()
 
+    def test_new_status_snapshot_clears_progress_and_details(self) -> None:
+        section = TaskStatusSection()
+        section.set_progress(
+            SimpleNamespace(
+                visible=True,
+                indeterminate=False,
+                total=4,
+                current=2,
+                label="处理 2/4",
+            )
+        )
+        section.set_details(["<tag>需人工确认</tag>"])
+        self.assertFalse(section.progress_bar.isHidden())
+        self.assertFalse(section.details_label.isHidden())
+        self.assertEqual(section.details_label.textFormat(), Qt.TextFormat.PlainText)
+        self.assertEqual(section.details_label.text(), "<tag>需人工确认</tag>")
+
+        section.set_status("done", "处理完成", "可以继续。", [])
+
+        self.assertTrue(section.progress_bar.isHidden())
+        self.assertTrue(section.details_label.isHidden())
+        self.assertEqual(section.details_label.text(), "")
+
     def test_mode_selector_is_compact_and_result_hint_wraps(self) -> None:
         page = QWidget()
         task_layout = TaskPageLayout(page)
@@ -122,6 +150,9 @@ class TaskControlsTests(unittest.TestCase):
     def test_keyword_and_revision_actions_wrap_at_narrow_width(self) -> None:
         for page in (KeywordsPage(), RevisionPage()):
             with self.subTest(page=page.objectName()):
+                # The project gate hides content by default; reveal it so the
+                # action bar participates in layout (#298).
+                page.set_project_ready(True)
                 page.resize(360, 180)
                 page.show()
                 self._app.processEvents()
