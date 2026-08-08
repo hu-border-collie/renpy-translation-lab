@@ -1019,6 +1019,14 @@ class BatchCliContractTests(unittest.TestCase):
                                 batch, "export_keyword_candidates", return_value=None
                             )
                         )
+                    elif command == "export-revision-corpus":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "run_revision_corpus_export",
+                                return_value={"paths": {}, "scope": {}},
+                            )
+                        )
                     elif command == "merge-keywords-to-glossary":
                         handler_patches.extend(
                             [
@@ -1047,6 +1055,8 @@ class BatchCliContractTests(unittest.TestCase):
                             argv = ["merge-retry", "parent.json", "retry.json"]
                         elif command == "merge-keywords-to-glossary":
                             argv = ["merge-keywords-to-glossary", "candidates.jsonl", "--yes"]
+                        elif command == "export-revision-corpus":
+                            argv = ["export-revision-corpus"]
                         else:
                             argv = [command, "manifest.json"]
                         exit_code = batch.main(argv)

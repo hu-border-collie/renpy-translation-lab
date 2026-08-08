@@ -56,6 +56,7 @@ from engine_adapters.writeback import (
 import keyword_glossary_merge
 import model_usage_ledger
 import prompt_context
+import revision_corpus
 import translation_ab_experiment
 import story_memory
 import translation_core
@@ -98,6 +99,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'check',
         'apply',
         'apply-revisions',
+        'export-revision-corpus',
     }
 )
 EXPLICIT_TARGET_COMMANDS = frozenset({'submit', 'status', 'download', 'check', 'apply'})
@@ -109,6 +111,7 @@ OFFLINE_BATCH_COMMANDS = frozenset(
         'estimate-cost',
         'preview-revisions',
         'apply-revisions',
+        'export-revision-corpus',
         'split',
         'build-retry',
         'merge-retry',
@@ -3455,6 +3458,54 @@ def collect_revision_file_jobs():
                 }
             )
     return jobs
+
+
+def run_revision_corpus_export(output_dir=None):
+    """Export the read-only revision polishing corpus for the active project.
+
+    Files are scanned once with the existing revision scanner; per-file source
+    digests are computed before and after the scan so a corpus produced while
+    sources changed is explicitly flagged instead of silently mixed.
+    """
+    file_paths = {
+        rel_path: file_path for rel_path, file_path in collect_files_to_process()
+    }
+    digests_before = revision_corpus.collect_file_digests(file_paths)
+    file_jobs = collect_revision_file_jobs()
+    if output_dir and str(output_dir).strip():
+        target_dir = os.path.abspath(str(output_dir).strip())
+        os.makedirs(target_dir, exist_ok=True)
+    else:
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        target_dir = create_batch_package_dir(
+            f'{stamp}_{guess_project_slug()}_revision_corpus'
+        )
+    digests_after = revision_corpus.collect_file_digests(file_paths)
+    manifest = revision_corpus.export_revision_corpus(
+        target_dir,
+        file_jobs,
+        project_slug=guess_project_slug(),
+        game_root=legacy.BASE_DIR,
+        tl_dir=legacy.TL_DIR,
+        tl_subdir=legacy.TL_SUBDIR,
+        include_files=sorted(legacy.INCLUDE_FILES),
+        include_prefixes=sorted(legacy.INCLUDE_PREFIXES),
+        source_digests_before=digests_before,
+        source_digests_after=digests_after,
+    )
+    print(f'Exported revision corpus: {target_dir}')
+    print(
+        f"Files: {manifest['scope']['file_count']}, "
+        f"items: {manifest['scope']['item_count']}"
+    )
+    print(f"JSONL: {manifest['paths']['jsonl']}")
+    print(f"Markdown: {manifest['paths']['markdown']}")
+    if manifest.get('source', {}).get('source_changed_during_scan'):
+        print(
+            'Warning: source files changed during the scan; '
+            'rerun export for a consistent snapshot.'
+        )
+    return manifest
 
 
 def format_revision_context_block(items, empty_label):
@@ -11573,6 +11624,21 @@ def build_arg_parser():
         help='Old/new pair count per revision chunk. Defaults to batch.revision.chunk_size.',
     )
 
+    export_revision_corpus_parser = subparsers.add_parser(
+        'export-revision-corpus',
+        help=(
+            'Export a read-only revision polishing corpus '
+            '(JSONL + Markdown + manifest) without modifying game files.'
+        ),
+    )
+    export_revision_corpus_parser.add_argument(
+        '--output-dir',
+        default='',
+        metavar='DIR',
+        help='Write the corpus into DIR instead of a fresh timestamped Batch jobs subdirectory.',
+    )
+    add_machine_output_argument(export_revision_corpus_parser)
+
     bootstrap_rag_parser = subparsers.add_parser(
         'bootstrap-rag',
         help='Prebuild or refresh the Batch RAG history store from all allowed TL files.',
@@ -12747,6 +12813,14 @@ def dispatch_command(parser, args):
         )
         return
 
+    if command == 'export-revision-corpus':
+        legacy.load_translator_settings(persist_corrected_game_root=False)
+        legacy.load_glossary()
+        load_batch_settings()
+        return run_revision_corpus_export(
+            getattr(args, 'output_dir', '') or None,
+        )
+
     if command == 'bootstrap-rag':
         bootstrap_rag_store(skip_prepare=args.skip_prepare, seed_jsonl_paths=args.seed_jsonl)
         return
@@ -13028,6 +13102,32 @@ def build_machine_success_envelope(command, value, args):
         status = str(
             manifest.get('revision_apply_state')
             or ('applied' if manifest.get('revision_applied_at') else 'completed')
+        )
+    elif command == 'export-revision-corpus':
+        corpus = dict(value or {})
+        paths = dict(corpus.get('paths') or {})
+        scope = dict(corpus.get('scope') or {})
+        source = dict(corpus.get('source') or {})
+        result = {
+            'output_dir': paths.get('output_dir') or '',
+            'corpus_jsonl': paths.get('jsonl') or '',
+            'corpus_markdown': paths.get('markdown') or '',
+            'corpus_manifest': paths.get('manifest') or '',
+            'file_count': scope.get('file_count') or 0,
+            'item_count': scope.get('item_count') or 0,
+            'source_changed_during_scan': bool(
+                source.get('source_changed_during_scan')
+            ),
+        }
+        return cli_contract.success_envelope(
+            command,
+            status='completed',
+            result=result,
+            artifacts={
+                'corpus_manifest': paths.get('manifest') or '',
+                'corpus_jsonl': paths.get('jsonl') or '',
+                'corpus_markdown': paths.get('markdown') or '',
+            },
         )
 
     return cli_contract.success_envelope(

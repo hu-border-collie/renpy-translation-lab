@@ -238,6 +238,33 @@ logs/batch_jobs/<ts>_<project>_final_review/
 
 相关配置见 `translator_config.example.json` 的 `batch.final_review`。
 
+## 润色语料导出
+
+`export-revision-corpus` 是只读导出命令（#318 P1 / #320）：把当前项目中全部
+revision old/new 对照导出为 JSONL、Markdown 和 manifest，供人工线性通读或
+Agent 分批起草润色提案：
+
+```bash
+python gemini_translate_batch.py export-revision-corpus
+python gemini_translate_batch.py export-revision-corpus --output-dir C:/tmp/corpus
+python gemini_translate_batch.py export-revision-corpus --output json
+```
+
+- 默认写入 `logs/batch_jobs/<timestamp>_<project>_revision_corpus/`；
+  `--output-dir` 可指定其他目录。
+- 产物：`revision_corpus.jsonl`（权威结构化合同）、`revision_corpus.md`
+  （线性通读报告）、`revision_corpus_manifest.json`（项目身份、scanner/schema、
+  源快照 digest、范围计数）。
+- 每个 item 携带 schema version、`identity_v2` occurrence、文件相对路径、
+  locator（行号 / 起止 / ordinal）、speaker（可得时）、原文、现译和
+  old/new 快照 digest；重复原文保留不同 occurrence，不按文本去重。
+- 文件与 item 顺序跨运行稳定（文件按相对路径排序，item 保持文件内顺序）；
+  相同输入、adapter 和配置产生相同 item 集合与 digest。
+- 导出前后会重算 TL 文件 digest，扫描期间源文件变化会在 manifest 中标记
+  `source_changed_during_scan`，而不是静默混入。
+- 只读：不修改 `.rpy`、manifest、glossary 或 RAG；机器输出可用
+  `--output json`（envelope 含三个产物路径与 item/file 计数）。
+
 ## 关键词提取流程
 
 关键词提取模式只生成候选报告，不写回 `.rpy` / `glossary.json` / `story_graph.json`：
