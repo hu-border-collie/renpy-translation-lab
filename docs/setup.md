@@ -182,7 +182,7 @@ python gemini_translate_batch.py doctor
 
 - GUI「设置 → 模型」仅从下拉列表选择；自定义模型 ID 在「设置 → 高级 → 模型目录」编辑并保存到 `model_catalog`。
 - Google 当前将 `gemini-3.5-flash-lite` 定位为高吞吐、低成本型号，将 `gemini-3.6-flash` / `gemini-3.5-flash` 定位为更强的 Flash 型号；具体选择仍须用 `probe` 或小 package 验证本项目的结构化翻译质量。
-- **采样参数兼容性：** Google 自 2026-07-21 起说明，`gemini-3.6-flash`、`gemini-3.5-flash-lite` 及后续型号会弃用并忽略 `temperature` / `top_p` / `top_k`，未来型号可能因这些参数返回 400。Lab 当前为兼容旧模型仍暴露并发送 Batch `temperature`；切换新模型前必须小样本验证，不能再把“温度越低”当成稳定性保证。见 [Latest model guide](https://ai.google.dev/gemini-api/docs/latest-model) 与 [模型弃用表](https://ai.google.dev/gemini-api/docs/deprecations)。
+- **采样参数兼容性：** Google 自 2026-07-21 起说明，新 Gemini 型号不再推荐或支持显式 `temperature` / `top_p` / `top_k`，未来型号可能因这些参数返回 400。Lab 会为 `gemini-3.6-flash`、`gemini-3.5-flash` 和 `gemini-3.5-flash-lite` 自动移除这些参数，同时保留旧型号与非 Gemini 模型的既有配置；切换型号后仍应先用小 package 验证结构化翻译质量。见 [Latest model guide](https://ai.google.dev/gemini-api/docs/latest-model) 与 [模型弃用表](https://ai.google.dev/gemini-api/docs/deprecations)。
 - RAG 当前默认搭配 `gemini-embedding-001`（也可选 `gemini-embedding-2`）。
 
 ### 请求轮换（API Key / 模型）

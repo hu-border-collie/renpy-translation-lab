@@ -213,7 +213,7 @@ class FormatRegistryCompareHintTests(unittest.TestCase):
             last_refresh_at="",
             project_name="Example",
             message="总表记录与本次检查不同，请到「设置 → 项目列表」刷新当前项目。",
-            log_line="[总表对比] 记录不同 — registry: layout=ready, mode=existing_tl_only；doctor: layout=attention, mode=can_generate_template。",
+            log_line="[总表对比] 记录不同 — registry: layout=ready, mode=existing_tl_only；doctor: layout=attention, mode=can_generate_template。",  # noqa: RUF001
         )
         hint = format_registry_compare_hint(compare, for_registry_dialog=True)
         self.assertEqual(hint, "总表记录与环境检查不同，请刷新当前项目。")

@@ -54,6 +54,15 @@ class FakeBackend:
 
 
 class MapReduceTests(unittest.TestCase):
+    def test_new_gemini_model_omits_sampling_from_analysis_request(self):
+        request = llm._build_request(
+            model="gemini-3.5-flash",
+            system="system",
+            user="user",
+        )
+        self.assertNotIn("temperature", request.config)
+        self.assertEqual(request.config["max_output_tokens"], 2048)
+
     def test_mapreduce_refines_labels_routes_brief(self):
         with tempfile.TemporaryDirectory() as tmp:
             store_dir = os.path.join(tmp, "pa")

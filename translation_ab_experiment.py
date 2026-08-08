@@ -533,7 +533,7 @@ def run_variant_for_chunk(
     model_name = model_override.strip() or settings.get('model') or _batch().BATCH_MODEL
     try:
         enriched = enrich_chunk_for_current_settings(chunk, dry_run=dry_run)
-        request_row = _batch().build_batch_request(enriched)
+        request_row = _batch().build_batch_request(enriched, model=model_name)
         request_payload = request_row.get('request') or {}
         if dry_run:
             return VariantRunResult(

@@ -120,7 +120,7 @@ def compare_registry_with_doctor_report(
         if last_refresh_at:
             message = f"{message}（总表上次刷新：{last_refresh_at}）"
         log_line = (
-            f"[总表对比] 记录不同 — registry: layout={registry_layout or '-'}, "
+            f"[总表对比] 记录不同 — registry: layout={registry_layout or '-'}, "  # noqa: RUF001
             f"mode={registry_mode or '-'}；doctor: layout={doctor_layout or '-'}, "
             f"mode={doctor_mode or '-'}。"
         )

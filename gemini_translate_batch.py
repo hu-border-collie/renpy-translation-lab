@@ -63,6 +63,7 @@ import translator_runtime as runtime
 from gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
+    filter_gemini_generation_config,
 )
 from project_version import __version__
 from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
@@ -2984,21 +2985,22 @@ def build_response_json_schema(target_items):
     )
 
 
-def build_generation_config(target_items):
+def build_generation_config(target_items, model=None):
+    effective_model = str(model or BATCH_MODEL or '')
     config = {
         'temperature': BATCH_TEMPERATURE,
         'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
         'response_mime_type': 'application/json',
         'response_json_schema': build_response_json_schema(target_items),
     }
-    if BATCH_THINKING_LEVEL and BATCH_MODEL.startswith('gemini-3'):
+    if BATCH_THINKING_LEVEL and effective_model.startswith('gemini-3'):
         config['thinking_config'] = {
             'thinking_level': BATCH_THINKING_LEVEL.upper(),
         }
-    return config
+    return filter_gemini_generation_config(effective_model, config)
 
 
-def build_batch_request(chunk):
+def build_batch_request(chunk, model=None):
     request = {
         'system_instruction': {'parts': [{'text': build_system_instruction()}]},
         'contents': [
@@ -3020,7 +3022,7 @@ def build_batch_request(chunk):
                 ],
             }
         ],
-        'generation_config': build_generation_config(chunk['items']),
+        'generation_config': build_generation_config(chunk['items'], model=model),
     }
     if BATCH_SAFETY_SETTINGS:
         request['safety_settings'] = BATCH_SAFETY_SETTINGS
@@ -3572,21 +3574,22 @@ def build_revision_response_json_schema(target_items):
     )
 
 
-def build_revision_generation_config(target_items):
+def build_revision_generation_config(target_items, model=None):
+    effective_model = str(model or BATCH_MODEL or '')
     config = {
         'temperature': BATCH_TEMPERATURE,
         'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
         'response_mime_type': 'application/json',
         'response_json_schema': build_revision_response_json_schema(target_items),
     }
-    if BATCH_THINKING_LEVEL and BATCH_MODEL.startswith('gemini-3'):
+    if BATCH_THINKING_LEVEL and effective_model.startswith('gemini-3'):
         config['thinking_config'] = {
             'thinking_level': BATCH_THINKING_LEVEL.upper(),
         }
-    return config
+    return filter_gemini_generation_config(effective_model, config)
 
 
-def build_revision_request(chunk):
+def build_revision_request(chunk, model=None):
     return {
         'key': chunk['key'],
         'request': {
@@ -3597,7 +3600,10 @@ def build_revision_request(chunk):
                     'parts': [{'text': build_revision_user_prompt(chunk)}],
                 }
             ],
-            'generation_config': build_revision_generation_config(chunk['items']),
+            'generation_config': build_revision_generation_config(
+                chunk['items'],
+                model=model,
+            ),
         },
     }
 
@@ -4372,21 +4378,22 @@ def build_keyword_response_json_schema(max_candidates_per_chunk=None):
     )
 
 
-def build_keyword_generation_config(max_candidates_per_chunk=None):
+def build_keyword_generation_config(max_candidates_per_chunk=None, model=None):
+    effective_model = str(model or BATCH_MODEL or '')
     config = {
         'temperature': BATCH_TEMPERATURE,
         'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
         'response_mime_type': 'application/json',
         'response_json_schema': build_keyword_response_json_schema(max_candidates_per_chunk),
     }
-    if BATCH_THINKING_LEVEL and BATCH_MODEL.startswith('gemini-3'):
+    if BATCH_THINKING_LEVEL and effective_model.startswith('gemini-3'):
         config['thinking_config'] = {
             'thinking_level': BATCH_THINKING_LEVEL.upper(),
         }
-    return config
+    return filter_gemini_generation_config(effective_model, config)
 
 
-def build_keyword_request(chunk, max_candidates_per_chunk=None):
+def build_keyword_request(chunk, max_candidates_per_chunk=None, model=None):
     return {
         'key': chunk['key'],
         'request': {
@@ -4399,7 +4406,10 @@ def build_keyword_request(chunk, max_candidates_per_chunk=None):
                     'parts': [{'text': build_keyword_user_prompt(chunk['items'])}],
                 }
             ],
-            'generation_config': build_keyword_generation_config(max_candidates_per_chunk),
+            'generation_config': build_keyword_generation_config(
+                max_candidates_per_chunk,
+                model=model,
+            ),
         },
     }
 
@@ -8027,7 +8037,11 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
     for index, row in enumerate(sample, start=1):
         key = row.get('key', f'probe-{index}')
         request_payload = row.get('request') or {}
-        config = dict(request_payload.get('generation_config') or {})
+        model_name = str(manifest.get('batch_model') or BATCH_MODEL or '')
+        config = filter_gemini_generation_config(
+            model_name,
+            request_payload.get('generation_config') or {},
+        )
         system_instruction = request_payload.get('system_instruction')
         if system_instruction:
             config['system_instruction'] = system_instruction
@@ -8051,7 +8065,7 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
                 extract_usage=lambda payload: summarize_usage_metadata(extract_usage_metadata(payload)),
             )
             result = backend.generate(SyncGenerationRequest(
-                model=manifest.get('batch_model') or BATCH_MODEL,
+                model=model_name,
                 contents=request_payload.get('contents') or [],
                 config=config,
             ))
@@ -9582,7 +9596,7 @@ def _build_repair_job(file_rel_path, file_path, entries, target_group, context_b
     return job
 
 
-def build_repair_request(job):
+def build_repair_request(job, model=None):
     instruction = (
         build_system_instruction()
         + '\nSome targets may be short interjections, short UI text, or short reactions. Translate them naturally in context.'
@@ -9606,7 +9620,7 @@ def build_repair_request(job):
                 ],
             }
         ],
-        'generation_config': build_generation_config(job['items']),
+        'generation_config': build_generation_config(job['items'], model=model),
     }
     if BATCH_SAFETY_SETTINGS:
         request['safety_settings'] = BATCH_SAFETY_SETTINGS
@@ -9636,6 +9650,7 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
     if safety_settings:
         config['safety_settings'] = safety_settings
     effective_model = SYNC_MODEL or model_name
+    config = filter_gemini_generation_config(effective_model, config)
 
     if SYNC_BACKEND == 'litellm':
         if api_key_index is not None:
@@ -9864,7 +9879,11 @@ def sync_keyword_candidates(
     display_name = display_name_override.strip() if display_name_override else ''
     if not display_name:
         display_name = f'sync-{KEYWORD_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
-    request_rows = [build_keyword_request(chunk, max_candidates) for chunk in chunks]
+    effective_model = SYNC_MODEL or BATCH_MODEL
+    request_rows = [
+        build_keyword_request(chunk, max_candidates, model=effective_model)
+        for chunk in chunks
+    ]
     manifest_path = make_sync_manifest(
         package_dir=package_dir,
         mode=MANIFEST_MODE_KEYWORD_EXTRACTION,
@@ -9929,7 +9948,11 @@ def sync_revisions(
     display_name = display_name_override.strip() if display_name_override else ''
     if not display_name:
         display_name = f'sync-{REVISION_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
-    request_rows = [build_revision_request(chunk) for chunk in chunks]
+    effective_model = SYNC_MODEL or BATCH_MODEL
+    request_rows = [
+        build_revision_request(chunk, model=effective_model)
+        for chunk in chunks
+    ]
     extra_fields = {
         'revision_settings': {
             'chunk_size': chunk_size,
@@ -10072,7 +10095,8 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
             }
         )
 
-    request_rows = [build_repair_request(job) for job in jobs]
+    effective_model = SYNC_MODEL or BATCH_MODEL
+    request_rows = [build_repair_request(job, model=effective_model) for job in jobs]
     write_jsonl_file(request_log_path, request_rows)
 
     for index, (job, request_row) in enumerate(zip(jobs, request_rows), start=1):
