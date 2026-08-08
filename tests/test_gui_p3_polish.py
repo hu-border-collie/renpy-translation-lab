@@ -226,6 +226,48 @@ class GuiP3PolishTests(unittest.TestCase):
                 self.window._on_workflow_empty_cta()
                 start.assert_not_called()
 
+    def test_batch_ready_idle_keeps_start_action_on_task_page(self) -> None:
+        """#327 review: ready idle uses the task-page CTA, not shared chrome."""
+        from gui_qt.doctor_report import DoctorSummary
+        from gui_qt.work_modes import WorkMode
+
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window.state.get_game_root = (  # type: ignore[method-assign]
+            lambda: Path("C:/games/Demo/work")
+        )
+        self.window._workflow = None
+        self.window._writeback_manifest_path = ""
+        self.window._doctor_check_completed = True
+
+        with mock.patch.object(
+            self.window,
+            "_bootstrap_task_ready",
+            return_value=True,
+        ):
+            self.window._set_doctor_summary(
+                DoctorSummary(
+                    status="ready",
+                    heading="项目检查通过",
+                    message="可以开始翻译。",
+                    facts=[],
+                    findings=[],
+                    mode="existing_tl_only",
+                )
+            )
+            self.window._sync_workbench_empty_states()
+
+        page = self.window.batch_translation_page
+        start = page.buttons["start"]
+        self.assertIs(page.page_stack.currentWidget(), page.content_page)
+        self.assertFalse(start.isHidden())
+        self.assertTrue(start.isEnabled())
+        self.assertEqual(start.text(), "开始翻译")
+        self.assertTrue(self.window.workbench_status_card.isHidden())
+        self.assertTrue(self.window.workflow_empty_state.isHidden())
+
     def test_batch_project_gate_fills_page_without_clipping(self) -> None:
         """#298/#316: page gate owns the only visible CTA at minimum size."""
         from PySide6.QtCore import QPoint, QRect
