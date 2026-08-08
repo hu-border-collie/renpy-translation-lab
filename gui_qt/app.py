@@ -1631,6 +1631,12 @@ class MainWindow(QMainWindow):
             return None
         return pages.get(nav)
 
+    def _batch_has_result_state(self, status: str) -> bool:
+        """Return whether batch owns a terminal or archived result."""
+        return task_status_has_result(status) or (
+            getattr(self, "_completed_manifest_snapshot", None) is not None
+        )
+
     def _batch_status_surface_needed(self) -> bool:
         """Show the shared batch card only for active or persisted task state."""
         page = getattr(self, "batch_translation_page", None)
@@ -1641,15 +1647,15 @@ class MainWindow(QMainWindow):
         )
         if running:
             return True
+        badge = getattr(self, "workflow_status_label", None)
+        status = str(badge.property("status") or "") if badge is not None else ""
         if (
             getattr(self, "_workflow", None) is not None
             or bool(getattr(self, "_writeback_manifest_path", ""))
             or bool(getattr(self, "_viewing_completed_manifest", False))
-            or getattr(self, "_completed_manifest_snapshot", None) is not None
+            or self._batch_has_result_state(status)
         ):
             return True
-        badge = getattr(self, "workflow_status_label", None)
-        status = str(badge.property("status") or "") if badge is not None else ""
         return status not in {"", "idle"}
 
     def _sync_workbench_status_surface(
@@ -8426,7 +8432,7 @@ class MainWindow(QMainWindow):
                     # page visible when a real result exists (#298 review).
                     raw = self.workflow_status_label.property("status")
                     status = str(raw) if raw is not None else ""
-                    has_result = task_status_has_result(status)
+                    has_result = self._batch_has_result_state(status)
                     page.set_project_ready(has_result)
                 else:
                     page.set_project_ready(gate_ready)
