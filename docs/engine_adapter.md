@@ -147,8 +147,9 @@ occurrence 扫描，输出：
 `reconciliation_report.json` 保存摘要与输入 digest，`reconciliation_items.jsonl`
 保存逐项证据、置信度和候选来源。
 
-快照、occurrence、reconciliation item 和报告均有独立 schema/digest 校验；JSONL
-被修改、路径逃出 artifact 目录或数量/identity 不一致时导入失败。旧报告通过
+快照、occurrence、reconciliation item 和报告均有独立 schema/digest 校验；枚举、
+布尔值以及 manifest digest 列表与 JSONL 的逐项关系也会严格核对。JSONL 被修改、
+路径逃出 artifact 目录或数量/identity 不一致时导入失败。旧报告通过
 `validate_reconciliation_freshness()` 对照当前两个 snapshot digest 与 coverage/review
 dependency digest；任一依赖改变时状态为 `stale`。
 

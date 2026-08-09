@@ -51,6 +51,16 @@ MAX_EXACT_GROUP_PAIR_CANDIDATES = 128
 MAX_FUZZY_PAIR_CANDIDATES = 64
 MAX_NGRAM_POSTING = 512
 MAX_NGRAM_KEYS_PER_SOURCE = 16
+MATCHED_RECONCILIATION_KINDS = frozenset(
+    {
+        "confirmed_lineage",
+        "locator_exact",
+        "content_exact",
+        "moved_exact",
+        "context_high_confidence",
+        "source_modified",
+    }
+)
 
 
 class VersioningArtifactError(ValueError):
@@ -111,6 +121,12 @@ def _int_value(value: Any, *, field_name: str, minimum: int = 0) -> int:
     if parsed < minimum:
         raise VersioningArtifactError(f"{field_name} must be >= {minimum}.")
     return parsed
+
+
+def _bool_value(value: Any, *, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise VersioningArtifactError(f"{field_name} must be a boolean.")
+    return value
 
 
 def _float_value(value: Any, *, field_name: str) -> float:
@@ -281,7 +297,10 @@ class CoverageBinding:
             unresolved_findings,
             field_name="coverage.unresolved_findings",
         )
-        normalized_policy_satisfied = bool(review_policy_satisfied)
+        normalized_policy_satisfied = _bool_value(
+            review_policy_satisfied,
+            field_name="coverage.review_policy_satisfied",
+        )
         if normalized_policy_satisfied and (
             normalized_review_status not in {"agent_reviewed", "human_reviewed"}
             or normalized_unresolved
@@ -353,7 +372,10 @@ class CoverageBinding:
             review_digest=str(payload.get("review_digest") or ""),
             review_status=str(payload.get("review_status") or ""),
             review_policy=str(payload.get("review_policy") or ""),
-            review_policy_satisfied=bool(payload.get("review_policy_satisfied")),
+            review_policy_satisfied=_bool_value(
+                payload.get("review_policy_satisfied"),
+                field_name="coverage.review_policy_satisfied",
+            ),
             unresolved_findings=_int_value(
                 payload.get("unresolved_findings"),
                 field_name="coverage.unresolved_findings",
@@ -956,6 +978,25 @@ def load_project_snapshot(path: str | os.PathLike[str]) -> ProjectSnapshot:
         artifact_name="unit occurrences",
     )
     occurrences = tuple(UnitOccurrenceRecord.from_dict(row) for row in rows)
+    manifest_occurrence_digests = tuple(
+        _required_text(
+            value,
+            field_name=f"occurrence_digests[{index}]",
+        )
+        for index, value in enumerate(
+            _sequence(
+                manifest.get("occurrence_digests"),
+                field_name="occurrence_digests",
+            )
+        )
+    )
+    actual_occurrence_digests = tuple(
+        occurrence.occurrence_digest for occurrence in occurrences
+    )
+    if manifest_occurrence_digests != actual_occurrence_digests:
+        raise VersioningArtifactError(
+            "Project snapshot occurrence digests do not match JSONL."
+        )
     expected_count = _int_value(
         manifest.get("occurrence_count"),
         field_name="occurrence_count",
@@ -1274,6 +1315,18 @@ class ReconciliationItem:
         normalized_target_id = str(target_occurrence_id or "")
         normalized_candidate_ids = tuple(sorted(set(candidate_target_occurrence_ids)))
         normalized_match_kind = str(match_kind or "")
+        allowed_match_kinds = {
+            "matched": MATCHED_RECONCILIATION_KINDS,
+            "ambiguous": frozenset({"ambiguous"}),
+            "ambiguous_target": frozenset({"ambiguous_target"}),
+            "deleted": frozenset({""}),
+            "added": frozenset({""}),
+        }[normalized_disposition]
+        if normalized_match_kind not in allowed_match_kinds:
+            raise VersioningArtifactError(
+                "Unsupported reconciliation match kind for "
+                f"{normalized_disposition}: {normalized_match_kind or '(empty)'}"
+            )
         if normalized_disposition == "matched" and not (
             normalized_base_id and normalized_target_id and normalized_match_kind
         ):
@@ -2164,6 +2217,23 @@ def load_reconciliation_report(
             artifact_name="reconciliation items",
         )
     )
+    manifest_item_digests = tuple(
+        _required_text(
+            value,
+            field_name=f"item_digests[{index}]",
+        )
+        for index, value in enumerate(
+            _sequence(
+                manifest.get("item_digests"),
+                field_name="item_digests",
+            )
+        )
+    )
+    actual_item_digests = tuple(item.item_digest for item in items)
+    if manifest_item_digests != actual_item_digests:
+        raise VersioningArtifactError(
+            "Reconciliation item digests do not match JSONL."
+        )
     if _int_value(manifest.get("item_count"), field_name="item_count") != len(items):
         raise VersioningArtifactError("Reconciliation item count does not match JSONL.")
     inputs = _mapping(manifest.get("inputs"), field_name="inputs")

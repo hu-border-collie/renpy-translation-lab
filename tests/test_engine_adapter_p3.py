@@ -161,6 +161,40 @@ class TestEngineAdapterP3(unittest.TestCase):
             ):
                 versioning.load_project_snapshot(paths.snapshot_path)
 
+    def test_snapshot_loader_checks_manifest_occurrence_digests(self):
+        snapshot = self._snapshot("1.0", [{"key": "a", "source": "Hello"}])
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = versioning.export_project_snapshot(snapshot, tmp)
+            snapshot_path = Path(paths.snapshot_path)
+            manifest = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            manifest["occurrence_digests"][0] = "tampered-digest"
+            snapshot_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                versioning.VersioningArtifactError,
+                "occurrence digests do not match JSONL",
+            ):
+                versioning.load_project_snapshot(snapshot_path)
+
+    def test_snapshot_loader_rejects_non_boolean_review_policy_state(self):
+        snapshot = self._snapshot("1.0", [{"key": "a", "source": "Hello"}])
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = versioning.export_project_snapshot(snapshot, tmp)
+            snapshot_path = Path(paths.snapshot_path)
+            manifest = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            manifest["coverage"]["review_policy_satisfied"] = "false"
+            snapshot_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                versioning.VersioningArtifactError,
+                "review_policy_satisfied must be a boolean",
+            ):
+                versioning.load_project_snapshot(snapshot_path)
+
     def test_occurrence_context_uses_normalized_relative_paths(self):
         occurrences = [
             self._occurrence(
@@ -484,6 +518,25 @@ class TestEngineAdapterP3(unittest.TestCase):
             ):
                 versioning.load_reconciliation_report(paths.report_path)
 
+    def test_report_loader_checks_manifest_item_digests(self):
+        base = self._snapshot("1.0", [{"key": "a", "source": "Hello"}])
+        target = self._snapshot("2.0", [{"key": "a", "source": "Hello"}])
+        report = versioning.reconcile_project_snapshots(base, target)
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = versioning.export_reconciliation_report(report, tmp)
+            report_path = Path(paths.report_path)
+            manifest = json.loads(report_path.read_text(encoding="utf-8"))
+            manifest["item_digests"][0] = "tampered-digest"
+            report_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                versioning.VersioningArtifactError,
+                "item digests do not match JSONL",
+            ):
+                versioning.load_reconciliation_report(report_path)
+
     def test_reconciliation_item_rejects_non_numeric_confidence(self):
         item = versioning.ReconciliationItem.create(
             disposition="deleted",
@@ -507,6 +560,33 @@ class TestEngineAdapterP3(unittest.TestCase):
                 base_occurrence_id="occ-base",
                 confidence=float("nan"),
             )
+
+    def test_reconciliation_item_rejects_unknown_match_kind(self):
+        cases = (
+            {
+                "disposition": "matched",
+                "match_kind": "unknown_match",
+                "base_occurrence_id": "occ-base",
+                "target_occurrence_id": "occ-target",
+            },
+            {
+                "disposition": "ambiguous",
+                "match_kind": "moved_exact",
+                "base_occurrence_id": "occ-base",
+                "candidate_target_occurrence_ids": ["occ-target"],
+            },
+            {
+                "disposition": "added",
+                "match_kind": "source_modified",
+                "target_occurrence_id": "occ-target",
+            },
+        )
+        for values in cases:
+            with self.subTest(disposition=values["disposition"]), self.assertRaisesRegex(
+                versioning.VersioningArtifactError,
+                "Unsupported reconciliation match kind",
+            ):
+                versioning.ReconciliationItem.create(**values)
 
     def test_coverage_dependency_change_marks_old_report_stale(self):
         specs = [{"key": "a", "source": "Hello"}]
