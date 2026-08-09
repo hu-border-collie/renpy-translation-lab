@@ -147,6 +147,24 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
                 self._app.processEvents()
             self.assertTrue(panel._detail_host.isHidden())
 
+    def test_project_notes_editor_has_room_for_multiple_lines(self) -> None:
+        self.window.resize(1200, 800)
+        self.window.show()
+        self.window._focus_settings_section("workspace")
+        for _ in range(12):
+            self._app.processEvents()
+
+        panel = self.window._games_registry_panel
+        assert panel is not None
+        panel._set_detail_visible(True)
+        for _ in range(4):
+            self._app.processEvents()
+
+        notes = panel._notes_edit
+        self.assertGreaterEqual(notes.minimumHeight(), 112)
+        self.assertGreater(notes.maximumHeight(), notes.minimumHeight())
+        self.assertGreaterEqual(notes.height(), notes.minimumHeight())
+
     def test_table_column_path_is_last_stretch_and_drag_clamps_eui_min(self) -> None:
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QHeaderView
