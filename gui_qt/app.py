@@ -23,6 +23,7 @@ from PySide6.QtCore import (
     QProcessEnvironment,
     QSize,
     Qt,
+    QThread,
     QThreadPool,
     QTimer,
     QUrl,
@@ -208,6 +209,7 @@ from .retry_workflow import (
     retry_followup_workflow_ready,
 )
 from .cli_runner import CliRunner
+from .lifecycle import ShutdownCoordinator
 from .doctor_report import (
     DoctorSummary,
     idle_summary,
@@ -327,6 +329,7 @@ from .widget_helpers import (
     message_box_warning,
 )
 from .user_copy import (
+    APP_SHUTDOWN_COPY,
     SETTINGS_WORKSPACE_IMMEDIATE_SAVE,
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
     PROJECT_ANALYSIS_COPY,
@@ -580,7 +583,7 @@ class MainWindow(QMainWindow):
         self._qt_app = qt_app
         self._resources_dir = resources_dir or Path(__file__).resolve().parent / "resources"
         self._theme_preference = DEFAULT_THEME_PREFERENCE
-        self.runner = CliRunner()
+        self.runner = CliRunner(self)
         self._loading_config_to_ui = False
         self._loading_theme_to_ui = False
         self._updating_batch_thinking_combo = False
@@ -630,6 +633,7 @@ class MainWindow(QMainWindow):
         self._doctor_summary_status = ""
         self._doctor_check_completed = False
         self._doctor_worker: DoctorWorker | None = None
+        self._retired_doctor_workers: set[DoctorWorker] = set()
         self._last_doctor_report: dict | None = None
         self._last_doctor_report_game_root = ""
         self._build_retry_output_lines: list[str] = []
@@ -655,6 +659,7 @@ class MainWindow(QMainWindow):
         self._litellm_latest_requires_python = ""
         self._litellm_connection_worker: LiteLLMConnectionTestWorker | None = None
         self._font_install_worker: FontInstallWorker | None = None
+        self._sdk_install_worker = None
         self._updating_litellm_provider = False
         self._applied_litellm_provider = ""
         self._pending_litellm_model_selection: tuple[str, str] | None = None
@@ -671,6 +676,10 @@ class MainWindow(QMainWindow):
         # triggers __getattr__ lazy materialization of 设置 · 项目列表.
         self._litellm_install: OptionalFeatureInstallController | None = None
         self._relation_analyzer_install: OptionalFeatureInstallController | None = None
+        self._shutdown_requested = False
+        self._shutdown_close_ready = False
+        self._shutdown_coordinator = ShutdownCoordinator(self)
+        self._configure_shutdown_coordinator()
         self._optional_feature_last_failed: set[str] = set()
         self._settings_pages_built: set[str] = set()
         self._settings_models_signals_wired = False
@@ -883,6 +892,8 @@ class MainWindow(QMainWindow):
                 self._on_save_config()
 
     def _deferred_startup_refresh(self) -> None:
+        if getattr(self, "_shutdown_requested", False):
+            return
         self._apply_work_mode_ui(
             refresh_manifest_writeback=True,
             refresh_diagnostics=False,
@@ -890,6 +901,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._deferred_startup_diagnostics_refresh)
 
     def _deferred_startup_diagnostics_refresh(self) -> None:
+        if getattr(self, "_shutdown_requested", False):
+            return
         self._refresh_manifest_derived_ui(refresh_diagnostics=True)
 
     def eventFilter(self, watched: Any, event: QEvent) -> bool:
@@ -1008,6 +1021,8 @@ class MainWindow(QMainWindow):
             parent = parent.parentWidget()
 
     def _sync_work_mode_hint_height(self) -> None:
+        if getattr(self, "_shutdown_requested", False):
+            return
         label = self.work_mode_hint_label
         width = label.width()
         if width <= 0:
@@ -2933,6 +2948,9 @@ class MainWindow(QMainWindow):
 
     def _on_context_library_status_ready(self, result: object) -> None:
         self._context_library_status_job = None
+        if getattr(self, "_shutdown_requested", False):
+            self._context_library_status_pending_base = ""
+            return
         if not isinstance(result, ContextLibraryStatusResult):
             return
         self._context_library_status_cache = result
@@ -3683,6 +3701,8 @@ class MainWindow(QMainWindow):
         succeeded: bool,
         message: str,
     ) -> None:
+        if getattr(self, "_shutdown_requested", False):
+            return
         if succeeded:
             self._optional_feature_last_failed.discard(feature_id)
             self.statusBar().showMessage(message, 5000)
@@ -4238,6 +4258,7 @@ class MainWindow(QMainWindow):
         )
         worker.progress.connect(self._on_sdk_install_progress)
         worker.completed.connect(self._on_sdk_install_completed)
+        worker.finished.connect(worker.deleteLater)
         worker.start()
 
     def _on_sdk_install_progress(self, phase: str, current: int, total: int) -> None:
@@ -4251,6 +4272,8 @@ class MainWindow(QMainWindow):
         from renpy_sdk_install import SdkInstallResult
 
         self._sdk_install_worker = None
+        if getattr(self, "_shutdown_requested", False):
+            return
         download_btn = getattr(self, "_prepare_renpy_sdk_download_btn", None)
         if download_btn is not None:
             download_btn.setText("下载推荐 SDK…")
@@ -4271,29 +4294,246 @@ class MainWindow(QMainWindow):
             message_box_warning(self, "SDK 未配置", result.message)
             self.statusBar().showMessage(result.message, 8000)
 
-    def _cancel_sdk_install_worker(self, *, wait_ms: int = 5000) -> None:
-        """Request cancel and wait for the SDK worker (window close / shutdown)."""
+    def _cancel_sdk_install_worker(self) -> None:
+        """Request SDK cancellation without discarding its running QThread."""
         worker = getattr(self, "_sdk_install_worker", None)
         if worker is None:
             return
         if worker.isRunning():
             worker.request_cancel()
             worker.requestInterruption()
-            if not worker.wait(wait_ms):
-                self._append_log("SDK 下载线程在关闭时未能及时退出。")
-        self._sdk_install_worker = None
-        download_btn = getattr(self, "_prepare_renpy_sdk_download_btn", None)
-        if download_btn is not None:
-            download_btn.setText("下载推荐 SDK…")
-            download_btn.setEnabled(True)
+
+    def _configure_shutdown_coordinator(self) -> None:
+        """Register application-owned work without materializing lazy pages."""
+        coordinator = self._shutdown_coordinator
+        coordinator.register_callbacks(
+            "workbench_task",
+            "当前工作台任务",
+            is_active=self._main_task_active_for_shutdown,
+            request_shutdown=self._request_main_task_shutdown,
+        )
+        coordinator.register_callbacks(
+            "background_threads",
+            "后台下载、检查或列表任务",
+            is_active=lambda: bool(self._owned_background_threads()),
+            request_shutdown=self._request_background_threads_shutdown,
+        )
+        coordinator.register_callbacks(
+            "context_status",
+            "上下文状态扫描",
+            is_active=lambda: getattr(self, "_context_library_status_job", None)
+            is not None,
+            request_shutdown=self._request_context_status_shutdown,
+        )
+        coordinator.register_callbacks(
+            "optional_feature_install",
+            "可选功能安装",
+            is_active=self._optional_feature_install_active,
+            request_shutdown=self._request_optional_feature_install_shutdown,
+        )
+        coordinator.settled.connect(self._on_shutdown_settled)
+        coordinator.stalled.connect(self._on_shutdown_stalled)
+        coordinator.cancellation_failed.connect(self._on_shutdown_cancel_failed)
+
+    def _main_task_active_for_shutdown(self) -> bool:
+        runner = getattr(self, "runner", None)
+        runner_active = False
+        if runner is not None:
+            is_active = getattr(runner, "is_active", None)
+            if not callable(is_active):
+                is_active = getattr(runner, "is_running", None)
+            if callable(is_active):
+                # Lifecycle probes must return an explicit bool. This avoids
+                # treating permissive mocks/proxies as an active real process.
+                runner_active = is_active() is True
+        return bool(getattr(self, "_task_running", False) or runner_active)
+
+    def _request_main_task_shutdown(self) -> None:
+        """Stop the foreground doctor/CLI task without waiting in the UI thread."""
+        doctor = getattr(self, "_doctor_worker", None)
+        doctor_active = bool(
+            doctor is not None
+            and getattr(doctor, "isRunning", lambda: False)()
+        )
+        if doctor_active:
+            self._invalidate_doctor_worker()
+
+        runner = getattr(self, "runner", None)
+        runner_active = False
+        if runner is not None:
+            is_active = getattr(runner, "is_active", None)
+            if not callable(is_active):
+                is_active = getattr(runner, "is_running", None)
+            runner_active = bool(callable(is_active) and is_active() is True)
+            if runner_active:
+                request_stop = getattr(runner, "request_stop", None)
+                if callable(request_stop):
+                    request_stop()
+                else:
+                    runner.kill()
+
+        # Interrupted DoctorWorker deliberately suppresses ``completed``. Move
+        # foreground chrome to cancelled/idle now; the generic QThread owner
+        # below still retains and waits for the real thread terminal state.
+        if not doctor_active and not runner_active and getattr(self, "_task_running", False):
+            self._active_command = ""
+            self._set_task_running(False)
+
+    def _owned_background_threads(self) -> tuple[QThread, ...]:
+        """Return running descendant threads not represented by foreground chrome."""
+        try:
+            threads = self.findChildren(QThread)
+        except RuntimeError:
+            return ()
+        current_doctor = getattr(self, "_doctor_worker", None)
+        doctor_is_foreground = bool(getattr(self, "_task_running", False))
+        active: list[QThread] = []
+        for thread in threads:
+            try:
+                if not thread.isRunning():
+                    continue
+            except RuntimeError:
+                continue
+            if doctor_is_foreground and thread is current_doctor:
+                continue
+            active.append(thread)
+        return tuple(active)
+
+    def _request_background_threads_shutdown(self) -> None:
+        for thread in self._owned_background_threads():
+            for method_name in ("request_cancel", "request_stop"):
+                method = getattr(thread, method_name, None)
+                if callable(method):
+                    method()
+                    break
+            thread.requestInterruption()
+
+    def _optional_feature_controllers(self) -> tuple[OptionalFeatureInstallController, ...]:
+        return tuple(
+            controller
+            for controller in (
+                getattr(self, "_litellm_install", None),
+                getattr(self, "_relation_analyzer_install", None),
+            )
+            if controller is not None
+        )
+
+    def _optional_feature_install_active(self) -> bool:
+        for controller in self._optional_feature_controllers():
+            process = getattr(controller, "_process", None)
+            if process is None:
+                continue
+            try:
+                if process.state() != QProcess.ProcessState.NotRunning:
+                    return True
+            except RuntimeError:
+                continue
+        return False
+
+    def _request_optional_feature_install_shutdown(self) -> None:
+        for controller in self._optional_feature_controllers():
+            if not controller.is_running():
+                continue
+            request_stop = getattr(controller, "request_stop", None)
+            if callable(request_stop):
+                request_stop()
+
+    def _request_context_status_shutdown(self) -> None:
+        self._context_library_status_pending_base = ""
+        job = getattr(self, "_context_library_status_job", None)
+        request_cancel = getattr(job, "request_cancel", None)
+        if callable(request_cancel):
+            request_cancel()
+
+    def _confirm_active_tasks_before_close(self, labels: tuple[str, ...]) -> bool:
+        if not labels:
+            return True
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Icon.Warning)
+        message.setWindowTitle(APP_SHUTDOWN_COPY["active_title"])
+        message.setText(APP_SHUTDOWN_COPY["active_heading"])
+        task_lines = "\n".join(f"• {label}" for label in labels)
+        message.setInformativeText(
+            f"{task_lines}\n\n{APP_SHUTDOWN_COPY['active_detail']}"
+        )
+        stop_btn = message.addButton(
+            APP_SHUTDOWN_COPY["confirm"],
+            QMessageBox.ButtonRole.DestructiveRole,
+        )
+        cancel_btn = message.addButton(
+            APP_SHUTDOWN_COPY["cancel"],
+            QMessageBox.ButtonRole.RejectRole,
+        )
+        message.setDefaultButton(cancel_btn)
+        message.exec()
+        return message.clickedButton() is stop_btn
+
+    def _on_shutdown_settled(self) -> None:
+        if not getattr(self, "_shutdown_requested", False):
+            return
+        self._shutdown_close_ready = True
+        QTimer.singleShot(0, self.close)
+
+    def _on_shutdown_stalled(self, labels: object) -> None:
+        task_labels = tuple(str(label) for label in (labels or ()))
+        suffix = f"（{'、'.join(task_labels)}）" if task_labels else ""
+        message = f"{APP_SHUTDOWN_COPY['stalled']}{suffix}"
+        self._append_log(message)
+        self.statusBar().showMessage(message, 0)
+
+    def _on_shutdown_cancel_failed(self, label: str, error: str) -> None:
+        self._append_log(f"停止 {label} 时出错：{error}")
+
+    def _lock_ui_for_shutdown(self) -> None:
+        """Prevent new user work after the user confirmed application exit."""
+        panel = self.__dict__.get("_games_registry_panel")
+        request_panel_shutdown = getattr(panel, "request_shutdown", None)
+        if callable(request_panel_shutdown):
+            request_panel_shutdown()
+        try:
+            self.setEnabled(False)
+        except RuntimeError:
+            # Helper tests may construct a Python-only MainWindow wrapper.
+            pass
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        coordinator = getattr(self, "_shutdown_coordinator", None)
+        if getattr(self, "_shutdown_close_ready", False):
+            # A completion callback may have started follow-up work in the same
+            # event-loop turn. Re-check before accepting the terminal close.
+            active_labels = coordinator.active_labels() if coordinator is not None else ()
+            if not active_labels:
+                super().closeEvent(event)
+                return
+            self._shutdown_close_ready = False
+            event.ignore()
+            self.statusBar().showMessage(APP_SHUTDOWN_COPY["stopping"], 0)
+            if not coordinator.in_progress:
+                coordinator.begin(timeout_ms=10_000)
+            return
+        if coordinator is not None and coordinator.in_progress:
+            event.ignore()
+            self.statusBar().showMessage(APP_SHUTDOWN_COPY["stopping"], 0)
+            return
         # Same unsaved-settings gate as leaving the Settings tab: closing the
         # window must not silently drop translator_config edits.
         if not self._confirm_unsaved_config_before_close():
             event.ignore()
             return
-        self._cancel_sdk_install_worker(wait_ms=5000)
+        if coordinator is None:
+            super().closeEvent(event)
+            return
+        active_labels = coordinator.active_labels()
+        if active_labels and not self._confirm_active_tasks_before_close(active_labels):
+            event.ignore()
+            return
+        self._shutdown_requested = True
+        if active_labels:
+            event.ignore()
+            self._lock_ui_for_shutdown()
+            self.statusBar().showMessage(APP_SHUTDOWN_COPY["stopping"], 0)
+            coordinator.begin(timeout_ms=10_000)
+            return
         super().closeEvent(event)
 
     def _on_find_renpy_sdk_dir(self, line_edit: QLineEdit) -> None:
@@ -5824,6 +6064,8 @@ class MainWindow(QMainWindow):
 
     def _reflow_button_bars(self) -> None:
         """Re-pack all flow/responsive button strips after visibility or size changes."""
+        if getattr(self, "_shutdown_requested", False):
+            return
         for name in (
             "action_panel",
             "diagnostics_action_panel",
@@ -5843,6 +6085,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._reflow_button_bars_deferred)
 
     def _reflow_button_bars_deferred(self) -> None:
+        if getattr(self, "_shutdown_requested", False):
+            return
         for name in (
             "action_panel",
             "writeback_primary_bar",
@@ -7555,6 +7799,7 @@ class MainWindow(QMainWindow):
             )
         )
         worker.completed.connect(self._on_litellm_version_checked)
+        worker.finished.connect(worker.deleteLater)
         self._litellm_version_worker = worker
         worker.start()
         self.statusBar().showMessage("正在检查 LiteLLM 版本…（可再次点击停止）", 0)
@@ -7567,10 +7812,9 @@ class MainWindow(QMainWindow):
         requires_python: str,
         error: object,
     ) -> None:
-        worker = getattr(self, "_litellm_version_worker", None)
         self._litellm_version_worker = None
-        if worker is not None:
-            worker.deleteLater()
+        if getattr(self, "_shutdown_requested", False):
+            return
         button = self._settings_widget("litellm_check_version_btn")
         if button is not None:
             button.setText("检查更新")
@@ -7612,6 +7856,7 @@ class MainWindow(QMainWindow):
             )
         )
         worker.completed.connect(self._on_litellm_providers_loaded)
+        worker.finished.connect(worker.deleteLater)
         self._litellm_provider_catalog_worker = worker
         worker.start()
         self.statusBar().showMessage("正在加载供应商…（可再次点击停止）", 0)
@@ -7622,10 +7867,9 @@ class MainWindow(QMainWindow):
         source: str,
         error: object,
     ) -> None:
-        worker = self._litellm_provider_catalog_worker
         self._litellm_provider_catalog_worker = None
-        if worker is not None:
-            worker.deleteLater()
+        if getattr(self, "_shutdown_requested", False):
+            return
         button = self._settings_widget("litellm_refresh_providers_btn")
         if button is not None:
             button.setText("联网加载供应商")
@@ -7714,6 +7958,7 @@ class MainWindow(QMainWindow):
                 selected, models, error, source
             )
         )
+        worker.finished.connect(worker.deleteLater)
         self._litellm_catalog_worker = worker
         worker.start()
         if allow_subset_only:
@@ -7731,10 +7976,9 @@ class MainWindow(QMainWindow):
     def _on_litellm_models_loaded(
         self, provider: str, models: object, error: object, source: str = ""
     ) -> None:
-        worker = self._litellm_catalog_worker
         self._litellm_catalog_worker = None
-        if worker is not None:
-            worker.deleteLater()
+        if getattr(self, "_shutdown_requested", False):
+            return
         button = self._settings_widget("litellm_refresh_models_btn")
         if button is not None:
             button.setText("联网加载模型")
@@ -7799,15 +8043,15 @@ class MainWindow(QMainWindow):
             )
         )
         worker.completed.connect(self._on_litellm_connection_tested)
+        worker.finished.connect(worker.deleteLater)
         self._litellm_connection_worker = worker
         worker.start()
         self.statusBar().showMessage("正在测试 LiteLLM 连接…（可再次点击停止）", 0)
 
     def _on_litellm_connection_tested(self, success: bool, message: str) -> None:
-        worker = self._litellm_connection_worker
         self._litellm_connection_worker = None
-        if worker is not None:
-            worker.deleteLater()
+        if getattr(self, "_shutdown_requested", False):
+            return
         self.litellm_test_connection_btn.setText("测试连接")
         self.litellm_connection_status_label.setText(message)
         self._on_sync_backend_changed(-1)
@@ -8055,6 +8299,8 @@ class MainWindow(QMainWindow):
         message: str,
     ) -> None:
         if feature_id != "litellm":
+            return
+        if getattr(self, "_shutdown_requested", False):
             return
         if succeeded:
             self.statusBar().showMessage(message, 5000)
@@ -9590,15 +9836,37 @@ class MainWindow(QMainWindow):
             worker.completed.disconnect(self._on_doctor_completed)
         except (RuntimeError, TypeError):
             pass
-        if worker.isRunning():
-            worker.requestInterruption()
-            # Subprocess isolation needs a moment to terminate the child; keep
-            # this short so cancel stays snappy if the worker is already done.
-            worker.wait(1500)
         self._doctor_worker = None
+        if worker.isRunning():
+            self._retire_doctor_worker(worker)
+            worker.requestInterruption()
+        else:
+            worker.deleteLater()
         if self._active_command == "doctor":
             self._active_command = ""
             self._set_task_running(False)
+
+    def _retire_doctor_worker(self, worker: DoctorWorker) -> None:
+        """Keep a cancelled worker owned until QThread emits real ``finished``."""
+        retired = self._retired_doctor_workers
+        if worker in retired:
+            return
+        retired.add(worker)
+        self._wire_doctor_worker_terminal(worker)
+
+    def _wire_doctor_worker_terminal(self, worker: DoctorWorker) -> None:
+        if getattr(worker, "_rtl_finished_wired", False):
+            return
+        worker._rtl_finished_wired = True
+        worker.finished.connect(
+            lambda current=worker: self._on_doctor_worker_finished(current)
+        )
+
+    def _on_doctor_worker_finished(self, worker: DoctorWorker) -> None:
+        self._retired_doctor_workers.discard(worker)
+        if worker is self._doctor_worker:
+            self._doctor_worker = None
+        worker.deleteLater()
 
     def _switch_game_root(self, directory: str) -> bool:
         if self._is_doctor_running():
@@ -10024,14 +10292,14 @@ class MainWindow(QMainWindow):
 
         worker = FontInstallWorker(self)
         worker.completed.connect(self._on_recommended_fonts_downloaded)
+        worker.finished.connect(worker.deleteLater)
         self._font_install_worker = worker
         worker.start()
 
     def _on_recommended_fonts_downloaded(self, result: FontInstallResult) -> None:
-        worker = getattr(self, "_font_install_worker", None)
         self._font_install_worker = None
-        if worker is not None:
-            worker.deleteLater()
+        if getattr(self, "_shutdown_requested", False):
+            return
         progress = getattr(self, "font_install_progress", None)
         if progress is not None:
             progress.setVisible(False)
@@ -10617,14 +10885,20 @@ class MainWindow(QMainWindow):
         # (or disk reload) cannot mutate globals mid-doctor. The worker restores
         # prior globals after the check (issue #216 phase 2).
         doctor_config = self._snapshot_runtime_config_for_job(persist_corrected_game_root=False)
-        self._doctor_worker = DoctorWorker(config=doctor_config, parent=self)
-        self._doctor_worker.completed.connect(self._on_doctor_completed)
-        self._doctor_worker.start()
+        worker = DoctorWorker(config=doctor_config, parent=self)
+        self._wire_doctor_worker_terminal(worker)
+        worker.completed.connect(self._on_doctor_completed)
+        self._doctor_worker = worker
+        worker.start()
 
     def _on_doctor_completed(self, result: DoctorWorkerResult) -> None:
         worker = self.sender()
-        if worker is self._doctor_worker:
-            self._doctor_worker = None
+        # Queued Qt signals can still arrive after disconnect(). Only the
+        # currently owned operation may update project/task UI; retired workers
+        # are cleaned by their ``finished`` connection.
+        if worker is not self._doctor_worker:
+            return
+        self._doctor_worker = None
         self._active_command = ""
         self._set_task_running(False)
 
@@ -12396,6 +12670,13 @@ class MainWindow(QMainWindow):
 
     def _on_finished(self, exit_code: int):
         self._append_log(f"\n[进程已结束，退出码：{exit_code}]")
+        if getattr(self, "_shutdown_requested", False):
+            if self._active_command == "compare_variants":
+                self._cleanup_compare_variants_temp_file()
+            self._active_command = ""
+            self._workflow = None
+            self._set_task_running(False)
+            return
         if self._active_command in {"translation_workflow", "project_analysis_workflow"}:
             self._on_workflow_step_finished(exit_code)
             return

@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
+from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
 
 class CliRunner(QObject):
@@ -28,6 +28,8 @@ class CliRunner(QObject):
     line_ready = Signal(str)
     stdout_line_ready = Signal(str)
     stderr_line_ready = Signal(str)
+    started = Signal()
+    stopping = Signal()
     finished = Signal(int)
     error = Signal(str)
 
@@ -36,21 +38,36 @@ class CliRunner(QObject):
         self._proc: QProcess | None = None
         self._stdout_pending_buffer = b""
         self._stderr_pending_buffer = b""
+        self._error_reported = False
+        self._stop_requested = False
 
-    def run(self, script_path: str | Path, args: list[str]) -> None:
+        self._start_timeout_timer = QTimer(self)
+        self._start_timeout_timer.setSingleShot(True)
+        self._start_timeout_timer.timeout.connect(self._on_start_timeout)
+        self._stop_timeout_timer = QTimer(self)
+        self._stop_timeout_timer.setSingleShot(True)
+        self._stop_timeout_timer.timeout.connect(self._force_kill)
+
+    def run(self, script_path: str | Path, args: list[str]) -> bool:
         """Start the CLI command.
 
         Example:
             runner.run("/path/to/gemini_translate_batch.py", ["doctor"])
             runner.run(..., ["build", "--display-name", "foo"])
+
+        Returns ``True`` once the asynchronous start request has been issued.
+        Process startup success or failure is reported by Qt signals; this
+        method never waits in the caller (normally the GUI) thread.
         """
-        if self._proc is not None and self._proc.state() == QProcess.ProcessState.Running:
-            self.kill()
+        if self.is_active():
+            self.error.emit("已有命令行任务正在运行，请先停止后再重试。")
+            return False
+        self._error_reported = False
 
         script = Path(script_path).resolve()
         if not script.exists():
             self._fail(f"找不到命令行脚本：{script}")
-            return
+            return False
 
         python_exe = sys.executable
 
@@ -63,47 +80,103 @@ class CliRunner(QObject):
         env.insert("PYTHONUTF8", "1")
         self._proc.setProcessEnvironment(env)
 
-        self._proc.readyReadStandardOutput.connect(self._on_stdout_ready)
-        self._proc.readyReadStandardError.connect(self._on_stderr_ready)
-        self._proc.finished.connect(self._on_finished)
-        self._proc.errorOccurred.connect(self._on_error)
+        process = self._proc
+        process.started.connect(lambda current=process: self._on_started(current))
+        process.readyReadStandardOutput.connect(
+            lambda current=process: self._on_stdout_ready(current)
+        )
+        process.readyReadStandardError.connect(
+            lambda current=process: self._on_stderr_ready(current)
+        )
+        process.finished.connect(
+            lambda exit_code, exit_status, current=process: self._on_process_finished(
+                current,
+                exit_code,
+                exit_status,
+            )
+        )
+        process.errorOccurred.connect(
+            lambda error, current=process: self._on_process_error(current, error)
+        )
 
         # Use list of arguments - never shell
         cmd_args = [str(script)] + args
         self._stdout_pending_buffer = b""
         self._stderr_pending_buffer = b""
+        self._stop_requested = False
 
         self.line_ready.emit(f"[GUI] 正在启动：{python_exe} {script} {' '.join(args)}\n")
-        self._proc.start(python_exe, cmd_args)
+        self._start_timeout_timer.start(3000)
+        process.start(python_exe, cmd_args)
+        return True
 
-        if not self._proc.waitForStarted(3000):
-            self._fail("启动进程失败（超时）")
-            return
+    def is_active(self) -> bool:
+        """Return True while a subprocess is starting or running."""
+        return (
+            self._proc is not None
+            and self._proc.state() != QProcess.ProcessState.NotRunning
+        )
 
     def is_running(self) -> bool:
-        """Return True while a CLI subprocess is active."""
-        return self._proc is not None and self._proc.state() == QProcess.ProcessState.Running
+        """Backward-compatible alias for :meth:`is_active`."""
+        return self.is_active()
 
     def kill(self) -> None:
-        """Terminate the running process if any."""
-        if self._proc and self._proc.state() == QProcess.ProcessState.Running:
-            self.line_ready.emit("\n[GUI] 正在停止进程...\n")
-            self._proc.kill()
-            self._proc.waitForFinished(2000)
+        """Request non-blocking termination of the active process, if any."""
+        self.request_stop()
 
-    def _on_stdout_ready(self):
-        if not self._proc:
+    def request_stop(self, *, grace_ms: int = 2000) -> bool:
+        """Ask the child to terminate, then asynchronously fall back to kill."""
+        process = self._proc
+        if process is None or process.state() == QProcess.ProcessState.NotRunning:
+            return False
+        if self._stop_requested:
+            return True
+        self._stop_requested = True
+        self._start_timeout_timer.stop()
+        self.line_ready.emit("\n[GUI] 正在停止本地进程...\n")
+        self.stopping.emit()
+        self._stop_timeout_timer.start(max(1, int(grace_ms)))
+        process.terminate()
+        return True
+
+    def _on_started(self, process: QProcess) -> None:
+        if process is not self._proc:
+            return
+        self._start_timeout_timer.stop()
+        self.started.emit()
+
+    def _on_start_timeout(self) -> None:
+        process = self._proc
+        if process is None or process.state() != QProcess.ProcessState.Starting:
+            return
+        self._emit_error_once("启动进程失败（超时）")
+        self._stop_requested = True
+        self._stop_timeout_timer.start(1000)
+        process.kill()
+
+    def _force_kill(self) -> None:
+        process = self._proc
+        if process is None or process.state() == QProcess.ProcessState.NotRunning:
+            return
+        self.line_ready.emit("[GUI] 本地进程未及时停止，正在强制终止...\n")
+        process.kill()
+
+    def _on_stdout_ready(self, process: QProcess | None = None):
+        process = process or self._proc
+        if process is None or process is not self._proc:
             return
         self._stdout_pending_buffer = self._emit_complete_lines(
-            self._stdout_pending_buffer + bytes(self._proc.readAllStandardOutput()),
+            self._stdout_pending_buffer + bytes(process.readAllStandardOutput()),
             self.stdout_line_ready,
         )
 
-    def _on_stderr_ready(self):
-        if not self._proc:
+    def _on_stderr_ready(self, process: QProcess | None = None):
+        process = process or self._proc
+        if process is None or process is not self._proc:
             return
         self._stderr_pending_buffer = self._emit_complete_lines(
-            self._stderr_pending_buffer + bytes(self._proc.readAllStandardError()),
+            self._stderr_pending_buffer + bytes(process.readAllStandardError()),
             self.stderr_line_ready,
         )
 
@@ -122,11 +195,24 @@ class CliRunner(QObject):
         return buffer
 
     def _on_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
-        if self._proc is None:
+        process = self._proc
+        if process is None:
             return
+        self._on_process_finished(process, exit_code, exit_status)
+
+    def _on_process_finished(
+        self,
+        process: QProcess,
+        exit_code: int,
+        _exit_status: QProcess.ExitStatus,
+    ) -> None:
+        if process is not self._proc:
+            return
+        self._start_timeout_timer.stop()
+        self._stop_timeout_timer.stop()
         # QProcess may still hold final bytes when finished is delivered.
-        self._on_stdout_ready()
-        self._on_stderr_ready()
+        self._on_stdout_ready(process)
+        self._on_stderr_ready(process)
         for buffer_name, channel_signal in (
             ("_stdout_pending_buffer", self.stdout_line_ready),
             ("_stderr_pending_buffer", self.stderr_line_ready),
@@ -139,18 +225,45 @@ class CliRunner(QObject):
                     self.line_ready.emit(leftover)
                 setattr(self, buffer_name, b"")
 
-        self.finished.emit(exit_code)
         self._proc = None
+        delete_later = getattr(process, "deleteLater", None)
+        if callable(delete_later):
+            delete_later()
+        # Clear ownership before notifying consumers: workflow callbacks may
+        # synchronously start the next process from ``finished``.
+        self.finished.emit(exit_code)
 
     def _on_error(self, error: QProcess.ProcessError):
+        process = self._proc
+        if process is not None:
+            self._on_process_error(process, error)
+
+    def _on_process_error(
+        self,
+        process: QProcess,
+        error: QProcess.ProcessError,
+    ) -> None:
+        if process is not self._proc:
+            return
         msg = f"进程错误：{error}"
-        if self._proc:
-            msg += f" - {self._proc.errorString()}"
-        self._fail(msg)
+        msg += f" - {process.errorString()}"
+        self._emit_error_once(msg)
+        if (
+            error == QProcess.ProcessError.FailedToStart
+            or process.state() == QProcess.ProcessState.NotRunning
+        ):
+            self._on_process_finished(
+                process,
+                -1,
+                QProcess.ExitStatus.CrashExit,
+            )
+
+    def _emit_error_once(self, message: str) -> None:
+        if self._error_reported:
+            return
+        self._error_reported = True
+        self.error.emit(message)
 
     def _fail(self, message: str) -> None:
-        if self._proc and self._proc.state() != QProcess.ProcessState.NotRunning:
-            self._proc.kill()
-        self._proc = None
-        self.error.emit(message)
+        self._emit_error_once(message)
         self.finished.emit(-1)

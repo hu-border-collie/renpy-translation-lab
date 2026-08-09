@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
+from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
 from optional_feature import (
     FeatureInstallState,
@@ -56,6 +56,9 @@ class OptionalFeatureInstallController(QObject):
         self._active = False
         self._last_failed = False
         self._is_update = False
+        self._stop_timeout_timer = QTimer(self)
+        self._stop_timeout_timer.setSingleShot(True)
+        self._stop_timeout_timer.timeout.connect(self._force_kill)
 
     @classmethod
     def any_install_running(cls) -> bool:
@@ -90,6 +93,27 @@ class OptionalFeatureInstallController(QObject):
         status = self.current_status()
         self.state_changed.emit(self.feature.feature_id, status)
         return status
+
+    def request_stop(self, *, grace_ms: int = 2000) -> bool:
+        """Request non-blocking installer termination with a kill fallback."""
+        process = self._process
+        if process is None or process.state() == QProcess.ProcessState.NotRunning:
+            return False
+        self.output_received.emit(
+            f"\n[正在停止 {self.feature.display_name} 本地安装进程]\n"
+        )
+        self._stop_timeout_timer.start(max(1, int(grace_ms)))
+        process.terminate()
+        return True
+
+    def _force_kill(self) -> None:
+        process = self._process
+        if process is None or process.state() == QProcess.ProcessState.NotRunning:
+            return
+        self.output_received.emit(
+            f"[{self.feature.display_name} 安装进程未及时停止，正在强制终止]\n"
+        )
+        process.kill()
 
     def start_install(self, *, upgrade: bool | None = None) -> tuple[bool, str]:
         """Start a background install. Returns (started, message)."""
@@ -179,6 +203,7 @@ class OptionalFeatureInstallController(QObject):
             self.output_received.emit(text)
 
     def _on_finished(self, exit_code: int, _exit_status: object) -> None:
+        self._stop_timeout_timer.stop()
         process = self._process
         if process is not None:
             self._on_output()
@@ -215,6 +240,7 @@ class OptionalFeatureInstallController(QObject):
         )
         if error != QProcess.ProcessError.FailedToStart:
             return
+        self._stop_timeout_timer.stop()
         self._process = None
         self._active = False
         self._last_failed = True

@@ -265,6 +265,23 @@ class GuiOptionalFeatureInstallTests(unittest.TestCase):
         self.assertIs(OptionalFeatureInstallController._active_controller, controller)
         finished.assert_not_called()
 
+    def test_request_stop_is_non_blocking_with_kill_fallback(self) -> None:
+        from PySide6.QtCore import QProcess
+
+        controller = OptionalFeatureInstallController(relation_analyzer_feature())
+        process = mock.Mock()
+        process.state.return_value = QProcess.ProcessState.Running
+        controller._process = process
+        controller._stop_timeout_timer = mock.Mock()
+
+        self.assertTrue(controller.request_stop(grace_ms=25))
+
+        process.terminate.assert_called_once_with()
+        controller._stop_timeout_timer.start.assert_called_once_with(25)
+        process.kill.assert_not_called()
+        controller._force_kill()
+        process.kill.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()

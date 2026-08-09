@@ -32,6 +32,19 @@ JOB_STATE_LABELS = {
     "JOB_STATE_RUNNING": "处理中",
 }
 
+APP_SHUTDOWN_COPY = {
+    "active_title": "任务仍在运行",
+    "active_heading": "关闭前需要停止本机正在运行的任务。",
+    "active_detail": (
+        "停止只影响本机进程、下载和状态轮询；已经提交到云端的任务会继续运行，"
+        "不会被远程取消。"
+    ),
+    "confirm": "停止任务并退出",
+    "cancel": "取消",
+    "stopping": "正在安全停止后台任务，完成后将自动退出…",
+    "stalled": "部分后台任务仍在停止；窗口会保持打开，直到线程真实结束。",
+}
+
 MANIFEST_MODE_LABELS = {
     "translation": "普通翻译",
     "revision": "订正",
