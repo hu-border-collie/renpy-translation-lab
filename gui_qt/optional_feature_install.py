@@ -56,6 +56,7 @@ class OptionalFeatureInstallController(QObject):
         self._active = False
         self._last_failed = False
         self._is_update = False
+        self._stop_requested = False
         self._stop_timeout_timer = QTimer(self)
         self._stop_timeout_timer.setSingleShot(True)
         self._stop_timeout_timer.timeout.connect(self._force_kill)
@@ -99,6 +100,9 @@ class OptionalFeatureInstallController(QObject):
         process = self._process
         if process is None or process.state() == QProcess.ProcessState.NotRunning:
             return False
+        if self._stop_requested:
+            return True
+        self._stop_requested = True
         self.output_received.emit(
             f"\n[正在停止 {self.feature.display_name} 本地安装进程]\n"
         )
@@ -127,6 +131,7 @@ class OptionalFeatureInstallController(QObject):
         if error:
             return False, error
 
+        self._stop_requested = False
         process = QProcess(self)
         process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         environment = QProcessEnvironment.systemEnvironment()
@@ -204,6 +209,7 @@ class OptionalFeatureInstallController(QObject):
 
     def _on_finished(self, exit_code: int, _exit_status: object) -> None:
         self._stop_timeout_timer.stop()
+        self._stop_requested = False
         process = self._process
         if process is not None:
             self._on_output()
@@ -241,6 +247,7 @@ class OptionalFeatureInstallController(QObject):
         if error != QProcess.ProcessError.FailedToStart:
             return
         self._stop_timeout_timer.stop()
+        self._stop_requested = False
         self._process = None
         self._active = False
         self._last_failed = True

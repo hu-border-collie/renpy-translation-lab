@@ -198,6 +198,13 @@ class GuiOptionalFeatureInstallTests(unittest.TestCase):
                 )
             )
 
+    def test_shutdown_probe_uses_controller_public_running_state(self) -> None:
+        controller = self.window._ensure_relation_analyzer_install_controller()
+        controller._process = None
+        controller._active = True
+
+        self.assertTrue(self.window._optional_feature_install_active())
+
     def test_action_enabled_helper(self) -> None:
         self.assertTrue(
             action_enabled_for_status(_status(FeatureInstallState.NOT_INSTALLED))
@@ -275,6 +282,7 @@ class GuiOptionalFeatureInstallTests(unittest.TestCase):
         controller._stop_timeout_timer = mock.Mock()
 
         self.assertTrue(controller.request_stop(grace_ms=25))
+        self.assertTrue(controller.request_stop(grace_ms=5))
 
         process.terminate.assert_called_once_with()
         controller._stop_timeout_timer.start.assert_called_once_with(25)

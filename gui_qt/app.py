@@ -4419,16 +4419,10 @@ class MainWindow(QMainWindow):
         )
 
     def _optional_feature_install_active(self) -> bool:
-        for controller in self._optional_feature_controllers():
-            process = getattr(controller, "_process", None)
-            if process is None:
-                continue
-            try:
-                if process.state() != QProcess.ProcessState.NotRunning:
-                    return True
-            except RuntimeError:
-                continue
-        return False
+        return any(
+            controller.is_running()
+            for controller in self._optional_feature_controllers()
+        )
 
     def _request_optional_feature_install_shutdown(self) -> None:
         for controller in self._optional_feature_controllers():
