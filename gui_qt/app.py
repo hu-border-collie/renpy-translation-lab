@@ -12346,6 +12346,8 @@ class MainWindow(QMainWindow):
         args: list[str],
     ) -> bool:
         """Start one CLI command and keep task chrome coherent on rejection."""
+        if getattr(self, "_shutdown_requested", False):
+            return False
         if self._cli_runner_is_active():
             # Preserve the existing command owner. ``run`` emits the canonical
             # user-facing rejection and its False return is consumed here.
@@ -12514,6 +12516,12 @@ class MainWindow(QMainWindow):
         )
 
     def _run_workflow_current_step(self):
+        if getattr(self, "_shutdown_requested", False):
+            self._active_command = ""
+            self._workflow = None
+            self._set_task_running(False)
+            self._clear_workflow_progress_ui()
+            return
         if self._workflow is not None:
             step = self._workflow.current_step()
             if step is not None:

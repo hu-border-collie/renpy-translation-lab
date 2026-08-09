@@ -1889,6 +1889,24 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             [mock.call(True), mock.call(False)],
         )
 
+    def test_start_cli_command_rejects_after_shutdown_without_touching_runner(self):
+        runner = mock.Mock()
+        self.window.runner = runner
+        self.window._shutdown_requested = True
+        self.window._active_command = ""
+        self.window._set_task_running = mock.Mock()
+
+        started = self.window._start_cli_command(
+            "status",
+            "batch.py",
+            ["status"],
+        )
+
+        self.assertFalse(started)
+        runner.run.assert_not_called()
+        runner.is_active.assert_not_called()
+        self.window._set_task_running.assert_not_called()
+
     def test_doctor_cancel_retires_worker_without_waiting(self):
         class FakeSignal:
             def __init__(self):
@@ -1951,6 +1969,22 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(self.window._active_command, "")
         self.assertIsNone(self.window._workflow)
         self.window._set_task_running.assert_called_once_with(False)
+
+    def test_queued_workflow_step_during_shutdown_is_discarded(self):
+        self.window._shutdown_requested = True
+        self.window._active_command = "translation_workflow"
+        self.window._workflow = object()
+        self.window.runner = mock.Mock()
+        self.window._set_task_running = mock.Mock()
+        self.window._clear_workflow_progress_ui = mock.Mock()
+
+        self.window._run_workflow_current_step()
+
+        self.assertEqual(self.window._active_command, "")
+        self.assertIsNone(self.window._workflow)
+        self.window.runner.run.assert_not_called()
+        self.window._set_task_running.assert_called_once_with(False)
+        self.window._clear_workflow_progress_ui.assert_called_once_with()
 
     def test_retired_doctor_queued_completion_cannot_overwrite_current_state(self):
         current_worker = object()
