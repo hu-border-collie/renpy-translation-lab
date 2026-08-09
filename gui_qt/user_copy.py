@@ -159,6 +159,58 @@ SETTINGS_WORKSPACE_UNSAVED_CHANGES = (
     "其他设置有未保存的更改；可保存、重新加载放弃，或切换项目时再处理。"
 )
 
+# Shared copy for the custom OpenAI-compatible LiteLLM provider management UI.
+# Keep GUI wording in one place per the repo convention (AGENTS.md).
+CUSTOM_LITELLM_PROVIDER_COPY = {
+    "dialog_intro": (
+        "自定义 OpenAI 兼容 Provider（如 OpenCode Go、各类中转站、本地 vLLM）。"
+        "请求会改写为 openai/<模型> 并逐请求透传 API Base；"
+        "模型显示名保持 <id>/<模型>。id 同时用作密钥存储用户名。"
+    ),
+    "id_tooltip": (
+        "创建后不可修改；只能包含小写字母、数字、- 和 _，"
+        "且不能与 LiteLLM 已知 provider 前缀冲突。"
+    ),
+    "env_tooltip": (
+        "仅当系统凭据管理器中未保存该 Provider 的密钥时，"
+        "后端才会读取此环境变量并显式传给请求。"
+    ),
+    "requires_key_tooltip": (
+        "关闭后适用于无需鉴权的本地 vLLM / LocalAI 网关："
+        "模型列表与请求都不会要求或携带密钥。"
+    ),
+    "table_empty": "尚未注册自定义 Provider。",
+    "table_count": "已注册 {count} 个自定义 Provider。",
+    "missing_key_title": "请先保存 API Key",
+    "missing_key_body": (
+        "{label} 的模型列表需要 API Key。\n\n"
+        "请先在下方「Provider 凭据」中粘贴并保存密钥，再加载模型列表。"
+    ),
+    "missing_key_env_hint": "\n也可设置环境变量 {env} 作为回退。",
+    "worker_missing_key": "请先保存 {label} API Key，再刷新官方模型列表",
+    "missing_connection_key": (
+        "自定义 Provider「{label}」还没有可用的密钥。\n\n"
+        "请先在下方「Provider 凭据」中保存 API Key"
+    ),
+    "missing_connection_env_hint": "，或设置环境变量 {env}。",
+    "missing_connection_env_suffix": "。",
+    "delete_title": "删除自定义 Provider",
+    "delete_confirm": (
+        "确定删除自定义 Provider「{label}」（{id}）？\n\n"
+        "删除只移除注册信息，不会删除系统凭据管理器中的密钥或用户目录缓存；"
+        "如需清理密钥请到「管理密钥…」中删除。"
+    ),
+    "delete_current_note": (
+        "\n\n该 Provider 当前正在使用：删除后当前模型选择会被清除，"
+        "请重新选择 Provider 与模型。"
+    ),
+    "load_error_status": "已忽略无效的 custom_litellm_providers 配置：{error}",
+    "keyless_status": (
+        "该自定义 Provider 无需 API Key（requires_key=false），"
+        "可直接加载模型列表与测试连接。"
+    ),
+}
+
 
 GAMES_REGISTRY_SOURCE_URL_COPY = {
     "field_label": "发布地址",

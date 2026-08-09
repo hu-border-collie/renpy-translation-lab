@@ -29,6 +29,7 @@ from litellm_provider_config import (
 )
 from litellm_sync_backend import LiteLLMSyncBackend
 from sync_model_backend import SyncGenerationRequest
+from .user_copy import CUSTOM_LITELLM_PROVIDER_COPY
 
 
 CONNECTION_TEST_TIMEOUT_SECONDS = 30
@@ -222,7 +223,11 @@ class LiteLLMModelCatalogWorker(_CancellableNetworkWorker):
             # back to OPENAI_API_KEY for a third-party endpoint.
             api_key = str(os.environ.get(custom.api_key_env) or "").strip()
         if endpoint.require_key and not api_key:
-            raise ValueError(f"请先保存 {endpoint.label} API Key，再刷新官方模型列表")
+            raise ValueError(
+                CUSTOM_LITELLM_PROVIDER_COPY["worker_missing_key"].format(
+                    label=endpoint.label
+                )
+            )
 
         headers = build_native_catalog_headers(endpoint, api_key)
         request = Request(endpoint.url, headers=headers)

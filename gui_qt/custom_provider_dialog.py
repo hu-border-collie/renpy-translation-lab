@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from .litellm_settings import validate_custom_provider_form
+from .user_copy import CUSTOM_LITELLM_PROVIDER_COPY
 
 
 class CustomLiteLLMProviderDialog(QDialog):
@@ -50,11 +51,7 @@ class CustomLiteLLMProviderDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        intro = QLabel(
-            "自定义 OpenAI 兼容 Provider（如 OpenCode Go、各类中转站、本地 vLLM）。"
-            "请求会改写为 openai/<模型> 并逐请求透传 API Base；"
-            "模型显示名保持 <id>/<模型>。id 同时用作密钥存储用户名。"
-        )
+        intro = QLabel(CUSTOM_LITELLM_PROVIDER_COPY["dialog_intro"])
         intro.setWordWrap(True)
         intro.setObjectName("config_hint_label")
         layout.addWidget(intro)
@@ -64,10 +61,7 @@ class CustomLiteLLMProviderDialog(QDialog):
         self.id_edit = QLineEdit(str(values.get("id") or ""))
         self.id_edit.setPlaceholderText("例如 opencode-go")
         self.id_edit.setReadOnly(self._editing)
-        self.id_edit.setToolTip(
-            "创建后不可修改；只能包含小写字母、数字、- 和 _，"
-            "且不能与 LiteLLM 已知 provider 前缀冲突。"
-        )
+        self.id_edit.setToolTip(CUSTOM_LITELLM_PROVIDER_COPY["id_tooltip"])
         form.addRow("Provider id：", self.id_edit)
 
         self.label_edit = QLineEdit(str(values.get("label") or ""))
@@ -84,10 +78,7 @@ class CustomLiteLLMProviderDialog(QDialog):
 
         self.api_key_env_edit = QLineEdit(str(values.get("api_key_env") or ""))
         self.api_key_env_edit.setPlaceholderText("可选，例如 OPENCODE_GO_API_KEY")
-        self.api_key_env_edit.setToolTip(
-            "仅当系统凭据管理器中未保存该 Provider 的密钥时，"
-            "后端才会读取此环境变量并显式传给请求。"
-        )
+        self.api_key_env_edit.setToolTip(CUSTOM_LITELLM_PROVIDER_COPY["env_tooltip"])
         form.addRow("密钥环境变量：", self.api_key_env_edit)
 
         self.requires_key_cb = QCheckBox("需要 API Key")
@@ -95,8 +86,7 @@ class CustomLiteLLMProviderDialog(QDialog):
             bool(values.get("requires_key", True))
         )
         self.requires_key_cb.setToolTip(
-            "关闭后适用于无需鉴权的本地 vLLM / LocalAI 网关："
-            "模型列表与请求都不会要求或携带密钥。"
+            CUSTOM_LITELLM_PROVIDER_COPY["requires_key_tooltip"]
         )
         form.addRow("认证：", self.requires_key_cb)
         layout.addLayout(form)

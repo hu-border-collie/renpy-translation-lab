@@ -334,6 +334,7 @@ from .widget_helpers import (
     message_box_warning,
 )
 from .user_copy import (
+    CUSTOM_LITELLM_PROVIDER_COPY,
     APP_SHUTDOWN_COPY,
     SETTINGS_WORKSPACE_IMMEDIATE_SAVE,
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
@@ -3845,7 +3846,7 @@ class MainWindow(QMainWindow):
         self.litellm_provider_catalog_status_label.setObjectName("config_hint_label")
         backend_layout.addRow(self.litellm_provider_catalog_status_label)
         self._populate_litellm_providers(
-            self._litellm_cache.providers.values,
+            self._cached_litellm_provider_values(),
             selected=self._litellm_cache.selected_provider,
         )
 
@@ -7606,8 +7607,7 @@ class MainWindow(QMainWindow):
         elif provider in self._custom_litellm_providers:
             custom = self._custom_litellm_providers[provider]
             message = (
-                "该自定义 Provider 无需 API Key（requires_key=false），"
-                "可直接加载模型列表与测试连接。"
+                CUSTOM_LITELLM_PROVIDER_COPY["keyless_status"]
                 if not custom.requires_key
                 else "系统凭据管理器中尚未保存密钥。"
             )
@@ -7812,9 +7812,9 @@ class MainWindow(QMainWindow):
         if label is not None:
             count = len(self._custom_litellm_providers)
             label.setText(
-                f"已注册 {count} 个自定义 Provider。"
+                CUSTOM_LITELLM_PROVIDER_COPY["table_count"].format(count=count)
                 if count
-                else "尚未注册自定义 Provider。"
+                else CUSTOM_LITELLM_PROVIDER_COPY["table_empty"]
             )
 
     def _refresh_custom_provider_actions(self) -> None:
@@ -7840,15 +7840,24 @@ class MainWindow(QMainWindow):
         """Re-sync every LiteLLM surface that renders the provider registry."""
         self._refresh_custom_provider_table()
         current = self._current_litellm_provider()
-        litellm_cache = self.__dict__.get("_litellm_cache")
         self._populate_litellm_providers(
-            litellm_cache.providers.values if litellm_cache is not None else (),
+            self._cached_litellm_provider_values(),
             selected=current,
         )
         self._populate_litellm_keys_provider_combo(selected=current)
         self._refresh_litellm_catalog_status()
         self._refresh_litellm_credential_status()
         self._on_sync_backend_changed(-1)
+
+    def _cached_litellm_provider_values(self) -> tuple[str, ...]:
+        """Provider ids from the user-level catalog cache, tolerant of missing
+        or partially loaded snapshots (same contract as _reserved_custom_provider_ids)."""
+        cache = self.__dict__.get("_litellm_cache")
+        if cache is None:
+            return ()
+        providers = getattr(cache, "providers", None)
+        values = getattr(providers, "values", ()) if providers is not None else ()
+        return tuple(values) if values else ()
 
     def _on_add_custom_litellm_provider(self) -> None:
         dialog = CustomLiteLLMProviderDialog(
@@ -7925,14 +7934,14 @@ class MainWindow(QMainWindow):
         is_current = self._current_litellm_provider() == provider_id
         reply = message_box_question(
             self,
-            "删除自定义 Provider",
+            CUSTOM_LITELLM_PROVIDER_COPY["delete_title"],
             (
-                f"确定删除自定义 Provider「{provider.label}」（{provider.id}）？\n\n"
-                "删除只移除注册信息，不会删除系统凭据管理器中的密钥或用户目录缓存；"
-                "如需清理密钥请到「管理密钥…」中删除。"
+                CUSTOM_LITELLM_PROVIDER_COPY["delete_confirm"].format(
+                    label=provider.label,
+                    id=provider.id,
+                )
                 + (
-                    "\n\n该 Provider 当前正在使用：删除后当前模型选择会被清除，"
-                    "请重新选择 Provider 与模型。"
+                    CUSTOM_LITELLM_PROVIDER_COPY["delete_current_note"]
                     if is_current
                     else ""
                 )
@@ -8308,12 +8317,15 @@ class MainWindow(QMainWindow):
                     # confusing prompt. Require a key (keyring or api_key_env).
                     message_box_information(
                         self,
-                        "请先保存 API Key",
+                        CUSTOM_LITELLM_PROVIDER_COPY["missing_key_title"],
                         (
-                            f"{endpoint.label} 的模型列表需要 API Key。\n\n"
-                            "请先在下方「Provider 凭据」中粘贴并保存密钥，再加载模型列表。"
+                            CUSTOM_LITELLM_PROVIDER_COPY["missing_key_body"].format(
+                                label=endpoint.label
+                            )
                             + (
-                                f"\n也可设置环境变量 {custom.api_key_env} 作为回退。"
+                                CUSTOM_LITELLM_PROVIDER_COPY[
+                                    "missing_key_env_hint"
+                                ].format(env=custom.api_key_env)
                                 if custom.api_key_env
                                 else ""
                             )
@@ -8447,14 +8459,19 @@ class MainWindow(QMainWindow):
             else:
                 message_box_information(
                     self,
-                    "缺少 API Key",
+                    CUSTOM_LITELLM_PROVIDER_COPY["missing_key_title"],
                     (
-                        f"自定义 Provider「{custom.label}」还没有可用的密钥。\n\n"
-                        "请先在下方「Provider 凭据」中保存 API Key"
+                        CUSTOM_LITELLM_PROVIDER_COPY[
+                            "missing_connection_key"
+                        ].format(label=custom.label)
                         + (
-                            f"，或设置环境变量 {custom.api_key_env}。"
+                            CUSTOM_LITELLM_PROVIDER_COPY[
+                                "missing_connection_env_hint"
+                            ].format(env=custom.api_key_env)
                             if custom.api_key_env
-                            else "。"
+                            else CUSTOM_LITELLM_PROVIDER_COPY[
+                                "missing_connection_env_suffix"
+                            ]
                         )
                     ),
                 )
@@ -10955,11 +10972,8 @@ class MainWindow(QMainWindow):
                         before != dict(self._custom_litellm_providers)
                     )
                     self._refresh_custom_provider_table()
-                    litellm_cache = self.__dict__.get("_litellm_cache")
                     self._populate_litellm_providers(
-                        litellm_cache.providers.values
-                        if litellm_cache is not None
-                        else (),
+                        self._cached_litellm_provider_values(),
                         selected=self._current_litellm_provider(),
                     )
             if "theme" in snapshot:
@@ -14159,14 +14173,13 @@ class MainWindow(QMainWindow):
                         )
                         if status_label is not None:
                             status_label.setText(
-                                f"已忽略无效的 custom_litellm_providers 配置：{exc}"
+                                CUSTOM_LITELLM_PROVIDER_COPY[
+                                    "load_error_status"
+                                ].format(error=exc)
                             )
                     self._refresh_custom_provider_table()
-                    litellm_cache = self.__dict__.get("_litellm_cache")
                     self._populate_litellm_providers(
-                        litellm_cache.providers.values
-                        if litellm_cache is not None
-                        else (),
+                        self._cached_litellm_provider_values(),
                         selected=provider_from_model(backend_models.litellm_model),
                     )
                     self._restore_configured_litellm_model(backend_models.litellm_model)

@@ -812,7 +812,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
 
         worker_cls.assert_not_called()
         information.assert_called_once()
-        self.assertIn("缺少 API Key", information.call_args.args[1])
+        self.assertIn("请先保存 API Key", information.call_args.args[1])
 
     def test_custom_provider_connection_test_uses_api_key_env(self):
         self.window._ensure_settings_page("litellm")
