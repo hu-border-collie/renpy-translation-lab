@@ -8,12 +8,13 @@ from pathlib import Path
 from unittest import mock
 
 import games_registry as registry
-import gui_test_support
+from tests import gui_test_support
 
 try:
     from PySide6.QtWidgets import QApplication
 
     from gui_qt.games_registry_actions import RegistryActionResult
+    from gui_qt.games_registry_panel import GamesRegistryPanel
     from gui_qt.games_registry_worker import RegistryIngestWorker, RegistryRefreshWorker
 except ImportError as exc:
     RegistryRefreshWorker = None  # type: ignore[assignment,misc]
@@ -127,6 +128,44 @@ class GuiGamesRegistryWorkerTests(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertFalse(results[0].ok)
             self.assertIn("boom", results[0].message)
+
+    def test_panel_hide_requests_stop_without_waiting_for_workers(self):
+        class FakeWorker:
+            def __init__(self):
+                self.stop_count = 0
+
+            def request_stop(self):
+                self.stop_count += 1
+
+            def wait(self, *_args):
+                raise AssertionError("hideEvent must not block on QThread.wait")
+
+        panel = GamesRegistryPanel.__new__(GamesRegistryPanel)
+        refresh = FakeWorker()
+        ingest = FakeWorker()
+        panel._refresh_worker = refresh
+        panel._ingest_worker = ingest
+        panel._is_refresh_running = lambda: True
+        panel._is_ingest_running = lambda: True
+
+        with mock.patch("PySide6.QtWidgets.QWidget.hideEvent") as super_hide:
+            panel.hideEvent(object())
+
+        self.assertEqual(refresh.stop_count, 1)
+        self.assertEqual(ingest.stop_count, 1)
+        super_hide.assert_called_once()
+
+    def test_panel_shutdown_suppresses_late_ingest_result_dialogs(self):
+        panel = GamesRegistryPanel.__new__(GamesRegistryPanel)
+        panel._shutdown_requested = True
+        panel._ingest_worker = None
+        panel._set_refresh_busy = mock.Mock()
+        panel._handle_action_result = mock.Mock()
+
+        panel._on_ingest_finished(RegistryActionResult(False, "已取消", cancelled=True))
+
+        panel._set_refresh_busy.assert_called_once_with(False)
+        panel._handle_action_result.assert_not_called()
 
 
 if __name__ == "__main__":

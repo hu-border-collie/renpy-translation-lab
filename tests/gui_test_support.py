@@ -38,9 +38,37 @@ def skip_unless_gui(
 
 def close_main_window(window: Any) -> None:
     """Close a MainWindow in tests without opening an interactive prompt."""
-    with mock.patch.object(
-        window,
-        "_confirm_unsaved_config_before_close",
-        return_value=True,
+    with (
+        mock.patch.object(
+            window,
+            "_confirm_unsaved_config_before_close",
+            return_value=True,
+        ),
+        mock.patch.object(
+            window,
+            "_confirm_active_tasks_before_close",
+            return_value=True,
+        ),
     ):
         window.close()
+        coordinator = getattr(window, "_shutdown_coordinator", None)
+        asynchronous_close = bool(
+            getattr(window, "_shutdown_close_ready", False)
+            or getattr(coordinator, "in_progress", False)
+        )
+        if not asynchronous_close:
+            return
+        # Active-task cleanup intentionally ignores the first close event and
+        # schedules a terminal second close after the coordinator settles.
+        # Drain a few zero-delay callbacks only for that asynchronous path so
+        # ordinary teardown cannot run a hidden window's pending focus callback
+        # before the caller queues deleteLater().
+        try:
+            from PySide6.QtWidgets import QApplication
+
+            app = QApplication.instance()
+            if app is not None:
+                for _ in range(3):
+                    app.processEvents()
+        except (ImportError, RuntimeError):
+            pass

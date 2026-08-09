@@ -207,6 +207,7 @@ class GamesRegistryPanel(QWidget):
         self._selected_project_root = ""
         self._refresh_worker: RegistryRefreshWorker | None = None
         self._ingest_worker: RegistryIngestWorker | None = None
+        self._shutdown_requested = False
         self._edit_loading = False
         self._preserved_project_id = ""
         self._current_game_root = current_game_root
@@ -1036,13 +1037,24 @@ class GamesRegistryPanel(QWidget):
             _uniform_combo_width(play, translation)
 
     def hideEvent(self, event) -> None:
+        self.request_stop_active_workers()
+        super().hideEvent(event)
+
+    def has_active_workers(self) -> bool:
+        """Return whether refresh or ingest is still reaching a real terminal state."""
+        return self._is_refresh_running() or self._is_ingest_running()
+
+    def request_stop_active_workers(self) -> None:
+        """Request worker cancellation without blocking navigation."""
         if self._is_refresh_running() and self._refresh_worker is not None:
             self._refresh_worker.request_stop()
-            self._refresh_worker.wait(5000)
         if self._is_ingest_running() and self._ingest_worker is not None:
             self._ingest_worker.request_stop()
-            self._ingest_worker.wait(5000)
-        super().hideEvent(event)
+
+    def request_shutdown(self) -> None:
+        """Enter terminal shutdown mode and suppress completion dialogs."""
+        self._shutdown_requested = True
+        self.request_stop_active_workers()
 
     def _registry_disk_signature_now(self) -> tuple[str, int]:
         if self._workspace_root is None:
@@ -1595,6 +1607,7 @@ class GamesRegistryPanel(QWidget):
         self._ingest_worker = worker
         worker.progress.connect(self._on_ingest_progress)
         worker.completed.connect(self._on_ingest_finished)
+        worker.finished.connect(worker.deleteLater)
         worker.start()
 
     def _on_ingest_progress(self, current: int, total: int, name: str) -> None:
@@ -1604,13 +1617,15 @@ class GamesRegistryPanel(QWidget):
         self._status_label.setText(f"正在导入：{name}（{current}/{total}）")
 
     def _on_ingest_finished(self, result: object) -> None:
-        worker = self._ingest_worker
         self._ingest_worker = None
-        if worker is not None:
-            worker.deleteLater()
         self._set_refresh_busy(False)
+        if getattr(self, "_shutdown_requested", False):
+            return
         if not isinstance(result, RegistryActionResult):
             result = RegistryActionResult(False, "导入失败：未知结果。")
+        if result.cancelled:
+            self._status_label.setText(result.message)
+            return
         if result.project_id:
             self._preserved_project_id = result.project_id
         self._handle_action_result(result, title="导入失败")
@@ -1765,6 +1780,7 @@ class GamesRegistryPanel(QWidget):
         )
         self._refresh_worker.progress.connect(self._on_refresh_progress)
         self._refresh_worker.completed.connect(self._on_refresh_completed)
+        self._refresh_worker.finished.connect(self._refresh_worker.deleteLater)
         self._set_refresh_busy(True)
         self._refresh_worker.start()
 
@@ -1773,6 +1789,8 @@ class GamesRegistryPanel(QWidget):
         if worker is self._refresh_worker:
             self._refresh_worker = None
         self._set_refresh_busy(False)
+        if getattr(self, "_shutdown_requested", False):
+            return
 
         self._reload_table_from_disk()
         message = result.message

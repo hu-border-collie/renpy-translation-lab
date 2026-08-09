@@ -124,6 +124,7 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         class _FakeDoctorWorker:
             def __init__(self, *args, **kwargs) -> None:
                 self.completed = MagicMock()
+                self.finished = MagicMock()
 
             def isRunning(self) -> bool:
                 return False

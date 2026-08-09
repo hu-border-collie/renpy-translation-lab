@@ -6,7 +6,10 @@ import unittest
 from unittest import mock
 
 try:
-    from gui_qt.context_library_worker import collect_context_library_status
+    from gui_qt.context_library_worker import (
+        ContextLibraryStatusJob,
+        collect_context_library_status,
+    )
 except ImportError as exc:
     collect_context_library_status = None  # type: ignore[assignment]
     IMPORT_ERROR = exc
@@ -67,6 +70,20 @@ class ContextLibraryStatusCollectionTests(unittest.TestCase):
         self.assertIsNone(result.status)
         self.assertIn("读取失败", result.label)
         self.assertIn("broken store", result.error)
+
+    def test_cancelled_queued_job_completes_without_scanning(self) -> None:
+        job = ContextLibraryStatusJob("C:/Games/Demo/work")
+        completed = []
+        job.signals.completed.connect(completed.append)
+        job.request_cancel()
+
+        with mock.patch(
+            "gui_qt.context_library_worker.collect_context_library_status"
+        ) as collect:
+            job.run()
+
+        collect.assert_not_called()
+        self.assertEqual(completed, [None])
 
 
 if __name__ == "__main__":

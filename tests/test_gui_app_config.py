@@ -1717,22 +1717,442 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def accept(self):
                 self.accepted = True
 
-        self.window._cancel_sdk_install_worker = mock.Mock()
+        coordinator = mock.Mock()
+        coordinator.in_progress = False
+        coordinator.active_labels.return_value = ()
+        self.window._shutdown_coordinator = coordinator
+        self.window._shutdown_close_ready = False
+        self.window._shutdown_requested = False
         self.window._confirm_unsaved_config_before_close = mock.Mock(return_value=False)
         event = FakeEvent()
         # Avoid QMainWindow.closeEvent on an incomplete __new__ instance.
         with mock.patch("PySide6.QtWidgets.QMainWindow.closeEvent"):
             self.window.closeEvent(event)
         self.assertTrue(event.ignored)
-        self.window._cancel_sdk_install_worker.assert_not_called()
+        coordinator.active_labels.assert_not_called()
 
         event = FakeEvent()
         self.window._confirm_unsaved_config_before_close = mock.Mock(return_value=True)
         with mock.patch("PySide6.QtWidgets.QMainWindow.closeEvent") as super_close:
             self.window.closeEvent(event)
         self.assertFalse(event.ignored)
-        self.window._cancel_sdk_install_worker.assert_called_once()
         super_close.assert_called_once()
+
+    def test_close_event_confirms_and_asynchronously_stops_active_tasks(self):
+        class FakeEvent:
+            def __init__(self):
+                self.ignored = False
+
+            def ignore(self):
+                self.ignored = True
+
+        coordinator = mock.Mock()
+        coordinator.in_progress = False
+        coordinator.active_labels.return_value = ("当前工作台任务",)
+        self.window._shutdown_coordinator = coordinator
+        self.window._shutdown_close_ready = False
+        self.window._shutdown_requested = False
+        self.window._confirm_unsaved_config_before_close = mock.Mock(return_value=True)
+        self.window._confirm_active_tasks_before_close = mock.Mock(return_value=False)
+        self.window.statusBar = mock.Mock(return_value=mock.Mock())
+
+        event = FakeEvent()
+        with mock.patch("PySide6.QtWidgets.QMainWindow.closeEvent") as super_close:
+            self.window.closeEvent(event)
+        self.assertTrue(event.ignored)
+        coordinator.begin.assert_not_called()
+        super_close.assert_not_called()
+
+        self.window._confirm_active_tasks_before_close.return_value = True
+        event = FakeEvent()
+        with mock.patch("PySide6.QtWidgets.QMainWindow.closeEvent") as super_close:
+            self.window.closeEvent(event)
+        self.assertTrue(event.ignored)
+        self.assertTrue(self.window._shutdown_requested)
+        coordinator.begin.assert_called_once_with(timeout_ms=10_000)
+        super_close.assert_not_called()
+
+    def test_shutdown_settled_second_close_rechecks_and_accepts(self):
+        class FakeEvent:
+            def __init__(self):
+                self.ignored = False
+
+            def ignore(self):
+                self.ignored = True
+
+        coordinator = mock.Mock()
+        coordinator.in_progress = False
+        coordinator.active_labels.return_value = ()
+        self.window._shutdown_coordinator = coordinator
+        self.window._shutdown_requested = True
+        self.window._shutdown_close_ready = False
+
+        with mock.patch("gui_qt.app.QTimer.singleShot") as single_shot:
+            self.window._on_shutdown_settled()
+        self.assertTrue(self.window._shutdown_close_ready)
+        single_shot.assert_called_once()
+
+        event = FakeEvent()
+        with mock.patch("PySide6.QtWidgets.QMainWindow.closeEvent") as super_close:
+            self.window.closeEvent(event)
+        self.assertFalse(event.ignored)
+        super_close.assert_called_once()
+
+    def test_shutdown_close_rechecks_new_activity_and_does_not_accept(self):
+        class FakeEvent:
+            def __init__(self):
+                self.ignored = False
+
+            def ignore(self):
+                self.ignored = True
+
+        coordinator = mock.Mock()
+        coordinator.in_progress = False
+        coordinator.active_labels.return_value = ("后台下载、检查或列表任务",)
+        self.window._shutdown_coordinator = coordinator
+        self.window._shutdown_requested = True
+        self.window._shutdown_close_ready = True
+        self.window.statusBar = mock.Mock(return_value=mock.Mock())
+
+        event = FakeEvent()
+        with mock.patch("PySide6.QtWidgets.QMainWindow.closeEvent") as super_close:
+            self.window.closeEvent(event)
+
+        self.assertTrue(event.ignored)
+        self.assertFalse(self.window._shutdown_close_ready)
+        coordinator.begin.assert_called_once_with(timeout_ms=10_000)
+        super_close.assert_not_called()
+
+    def test_repeated_close_during_shutdown_only_reports_progress(self):
+        class FakeEvent:
+            def __init__(self):
+                self.ignored = False
+
+            def ignore(self):
+                self.ignored = True
+
+        coordinator = mock.Mock()
+        coordinator.in_progress = True
+        self.window._shutdown_coordinator = coordinator
+        self.window._shutdown_close_ready = False
+        self.window._confirm_unsaved_config_before_close = mock.Mock()
+        status_bar = mock.Mock()
+        self.window.statusBar = mock.Mock(return_value=status_bar)
+
+        event = FakeEvent()
+        self.window.closeEvent(event)
+
+        self.assertTrue(event.ignored)
+        self.window._confirm_unsaved_config_before_close.assert_not_called()
+        coordinator.active_labels.assert_not_called()
+        status_bar.showMessage.assert_called_once()
+
+    def test_start_cli_command_preserves_existing_owner_when_runner_is_active(self):
+        runner = mock.Mock()
+        runner.is_active.return_value = True
+        runner.run.return_value = False
+        self.window.runner = runner
+        self.window._active_command = "existing"
+        self.window._task_running = True
+        self.window._set_task_running = mock.Mock()
+
+        started = self.window._start_cli_command(
+            "replacement",
+            "batch.py",
+            ["status"],
+        )
+
+        self.assertFalse(started)
+        self.assertEqual(self.window._active_command, "existing")
+        self.window._set_task_running.assert_not_called()
+        runner.run.assert_called_once_with("batch.py", ["status"])
+
+    def test_start_cli_command_restores_idle_chrome_after_rejection(self):
+        runner = mock.Mock()
+        runner.is_active.return_value = False
+        runner.run.return_value = False
+        self.window.runner = runner
+        self.window._active_command = ""
+        self.window._task_running = False
+        self.window._set_task_running = mock.Mock()
+
+        started = self.window._start_cli_command(
+            "status",
+            "batch.py",
+            ["status"],
+        )
+
+        self.assertFalse(started)
+        self.assertEqual(self.window._active_command, "")
+        self.assertEqual(
+            self.window._set_task_running.call_args_list,
+            [mock.call(True), mock.call(False)],
+        )
+
+    def test_start_cli_command_preserves_synchronous_terminal_callback_state(self):
+        runner = mock.Mock()
+        runner.is_active.return_value = False
+        workflow = object()
+        self.window.runner = runner
+        self.window._runner_terminal_generation = 4
+        self.window._active_command = ""
+        self.window._workflow = None
+        self.window._set_task_running = mock.Mock()
+
+        def reject_after_terminal_callback(*_args) -> bool:
+            self.window._runner_terminal_generation += 1
+            self.window._active_command = "translation_workflow"
+            self.window._workflow = workflow
+            self.window._set_task_running(True)
+            return False
+
+        runner.run.side_effect = reject_after_terminal_callback
+
+        started = self.window._start_cli_command(
+            "translation_workflow",
+            "batch.py",
+            ["status"],
+        )
+
+        self.assertFalse(started)
+        self.assertEqual(self.window._active_command, "translation_workflow")
+        self.assertIs(self.window._workflow, workflow)
+        self.assertEqual(
+            self.window._set_task_running.call_args_list,
+            [mock.call(True), mock.call(True)],
+        )
+        runner.is_active.assert_called_once_with()
+
+    def test_start_cli_command_rejects_after_shutdown_without_touching_runner(self):
+        runner = mock.Mock()
+        self.window.runner = runner
+        self.window._shutdown_requested = True
+        self.window._active_command = ""
+        self.window._set_task_running = mock.Mock()
+
+        started = self.window._start_cli_command(
+            "status",
+            "batch.py",
+            ["status"],
+        )
+
+        self.assertFalse(started)
+        runner.run.assert_not_called()
+        runner.is_active.assert_not_called()
+        self.window._set_task_running.assert_not_called()
+
+    def test_start_cli_command_rejects_while_close_confirmation_is_open(self):
+        runner = mock.Mock()
+        self.window.runner = runner
+        self.window._shutdown_requested = False
+        self.window._shutdown_confirmation_active = True
+        self.window._active_command = "translation_workflow"
+        self.window._set_task_running = mock.Mock()
+
+        started = self.window._start_cli_command(
+            "status",
+            "batch.py",
+            ["status"],
+        )
+
+        self.assertFalse(started)
+        runner.run.assert_not_called()
+        runner.is_active.assert_not_called()
+        self.window._set_task_running.assert_not_called()
+
+    def test_doctor_cancel_retires_worker_without_waiting(self):
+        class FakeSignal:
+            def __init__(self):
+                self.callback = None
+                self.disconnected = None
+
+            def connect(self, callback):
+                self.callback = callback
+
+            def disconnect(self, callback):
+                self.disconnected = callback
+
+        class FakeWorker:
+            def __init__(self):
+                self.completed = FakeSignal()
+                self.finished = FakeSignal()
+                self.interrupted = False
+                self.deleted = False
+
+            def isRunning(self):
+                return True
+
+            def requestInterruption(self):
+                self.interrupted = True
+
+            def wait(self, *_args):
+                raise AssertionError("doctor cancellation must not block")
+
+            def deleteLater(self):
+                self.deleted = True
+
+        worker = FakeWorker()
+        self.window._doctor_worker = worker
+        self.window._retired_doctor_workers = set()
+        self.window._active_command = "doctor"
+        self.window._set_task_running = mock.Mock()
+
+        self.window._invalidate_doctor_worker()
+
+        self.assertIsNone(self.window._doctor_worker)
+        self.assertTrue(worker.interrupted)
+        self.assertIn(worker, self.window._retired_doctor_workers)
+        self.window._set_task_running.assert_called_once_with(False)
+
+        worker.finished.callback()
+        self.assertNotIn(worker, self.window._retired_doctor_workers)
+        self.assertTrue(worker.deleted)
+
+    def test_runner_finish_during_shutdown_cannot_start_next_workflow_step(self):
+        self.window._shutdown_requested = True
+        self.window._runner_terminal_generation = 2
+        self.window._active_command = "translation_workflow"
+        self.window._workflow = object()
+        self.window._append_log = mock.Mock()
+        self.window._set_task_running = mock.Mock()
+        self.window._on_workflow_step_finished = mock.Mock()
+
+        self.window._on_finished(0)
+
+        self.window._on_workflow_step_finished.assert_not_called()
+        self.assertEqual(self.window._active_command, "")
+        self.assertIsNone(self.window._workflow)
+        self.assertEqual(self.window._runner_terminal_generation, 3)
+        self.window._set_task_running.assert_called_once_with(False)
+
+    def test_queued_workflow_step_during_shutdown_is_discarded(self):
+        self.window._shutdown_requested = True
+        self.window._active_command = "translation_workflow"
+        self.window._workflow = object()
+        self.window.runner = mock.Mock()
+        self.window._set_task_running = mock.Mock()
+        self.window._clear_workflow_progress_ui = mock.Mock()
+
+        self.window._run_workflow_current_step()
+
+        self.assertEqual(self.window._active_command, "")
+        self.assertIsNone(self.window._workflow)
+        self.window.runner.run.assert_not_called()
+        self.window._set_task_running.assert_called_once_with(False)
+        self.window._clear_workflow_progress_ui.assert_called_once_with()
+
+    def test_queued_workflow_step_waits_for_close_confirmation_decision(self):
+        workflow = object()
+        self.window._shutdown_requested = False
+        self.window._shutdown_confirmation_active = True
+        self.window._workflow_step_deferred_for_close_confirmation = False
+        self.window._active_command = "translation_workflow"
+        self.window._workflow = workflow
+        self.window.runner = mock.Mock()
+        self.window._set_task_running = mock.Mock()
+        self.window._clear_workflow_progress_ui = mock.Mock()
+
+        self.window._run_workflow_current_step()
+
+        self.assertTrue(self.window._workflow_step_deferred_for_close_confirmation)
+        self.assertEqual(self.window._active_command, "translation_workflow")
+        self.assertIs(self.window._workflow, workflow)
+        self.window.runner.run.assert_not_called()
+        self.window._set_task_running.assert_not_called()
+        self.window._clear_workflow_progress_ui.assert_not_called()
+
+    def test_cancelling_close_resumes_deferred_workflow_step(self):
+        workflow = object()
+        self.window._shutdown_requested = False
+        self.window._shutdown_confirmation_active = False
+        self.window._workflow_step_deferred_for_close_confirmation = False
+        self.window._workflow = workflow
+
+        with (
+            mock.patch("gui_qt.app.QMessageBox") as message_box_cls,
+            mock.patch("gui_qt.app.QTimer.singleShot") as single_shot,
+        ):
+            message = message_box_cls.return_value
+            stop_btn = object()
+            cancel_btn = object()
+            message.addButton.side_effect = [stop_btn, cancel_btn]
+
+            def finish_step_while_confirming() -> None:
+                self.assertTrue(self.window._shutdown_confirmation_active)
+                self.window._workflow_step_deferred_for_close_confirmation = True
+
+            message.exec.side_effect = finish_step_while_confirming
+            message.clickedButton.return_value = cancel_btn
+
+            confirmed = self.window._confirm_active_tasks_before_close(("当前任务",))
+
+        self.assertFalse(confirmed)
+        self.assertFalse(self.window._shutdown_confirmation_active)
+        self.assertFalse(self.window._workflow_step_deferred_for_close_confirmation)
+        self.assertIs(self.window._workflow, workflow)
+        single_shot.assert_called_once_with(0, self.window._run_workflow_current_step)
+
+    def test_confirming_close_does_not_resume_deferred_workflow_step(self):
+        self.window._shutdown_requested = False
+        self.window._shutdown_confirmation_active = False
+        self.window._workflow_step_deferred_for_close_confirmation = False
+        self.window._workflow = object()
+
+        with (
+            mock.patch("gui_qt.app.QMessageBox") as message_box_cls,
+            mock.patch("gui_qt.app.QTimer.singleShot") as single_shot,
+        ):
+            message = message_box_cls.return_value
+            stop_btn = object()
+            cancel_btn = object()
+            message.addButton.side_effect = [stop_btn, cancel_btn]
+
+            def finish_step_while_confirming() -> None:
+                self.window._workflow_step_deferred_for_close_confirmation = True
+
+            message.exec.side_effect = finish_step_while_confirming
+            message.clickedButton.return_value = stop_btn
+
+            confirmed = self.window._confirm_active_tasks_before_close(("当前任务",))
+
+        self.assertTrue(confirmed)
+        self.assertFalse(self.window._shutdown_confirmation_active)
+        self.assertFalse(self.window._workflow_step_deferred_for_close_confirmation)
+        single_shot.assert_not_called()
+
+    def test_retired_doctor_queued_completion_cannot_overwrite_current_state(self):
+        current_worker = object()
+        retired_worker = object()
+        self.window._doctor_worker = current_worker
+        self.window.sender = lambda: retired_worker
+        self.window._active_command = "doctor"
+        self.window._set_task_running = mock.Mock()
+
+        self.window._on_doctor_completed(object())
+
+        self.assertIs(self.window._doctor_worker, current_worker)
+        self.assertEqual(self.window._active_command, "doctor")
+        self.window._set_task_running.assert_not_called()
+
+    def test_doctor_queued_completion_is_silent_during_shutdown(self):
+        worker = object()
+        self.window._doctor_worker = worker
+        self.window.sender = lambda: worker
+        self.window._shutdown_requested = True
+        self.window._active_command = "doctor"
+        self.window._set_task_running = mock.Mock()
+        self.window._append_log = mock.Mock()
+        self.window._set_doctor_summary = mock.Mock()
+        self.window.state = mock.Mock()
+
+        self.window._on_doctor_completed(object())
+
+        self.assertIsNone(self.window._doctor_worker)
+        self.assertEqual(self.window._active_command, "")
+        self.window._set_task_running.assert_called_once_with(False)
+        self.window._append_log.assert_not_called()
+        self.window._set_doctor_summary.assert_not_called()
+        self.window.state.get_api_key_status.assert_not_called()
 
     def test_confirm_close_save_discard_and_cancel_paths(self):
         self.window._config_tab_has_unsaved_changes = mock.Mock(return_value=False)
@@ -1824,10 +2244,15 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             def __init__(self, parent):
                 self.parent = parent
                 self.completed = FakeSignal()
+                self.finished = FakeSignal()
                 self.started = False
+                self.deleted = False
 
             def start(self):
                 self.started = True
+
+            def deleteLater(self):
+                self.deleted = True
 
         button = FakeWidget()
         label = FakeWidget()
@@ -1850,6 +2275,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertIsInstance(worker, FakeWorker)
         self.assertTrue(worker.started)
         self.assertEqual(worker.completed.callback, self.window._on_recommended_fonts_downloaded)
+        self.assertEqual(worker.finished.callback, worker.deleteLater)
         self.assertFalse(button.enabled)
         self.assertEqual(button.text, "正在下载…")
         self.assertTrue(progress.visible)
@@ -1891,11 +2317,27 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._on_recommended_fonts_downloaded(FontInstallResult(False, error="network down"))
 
         self.assertIsNone(self.window._font_install_worker)
-        self.assertTrue(worker.deleted)
+        self.assertFalse(worker.deleted)
         self.assertFalse(progress.visible)
         self.assertIn("系统字体回退", label.text)
         self.assertIn("network down", label.text)
         self.assertIn("下载失败", messages[-1][0])
+
+    def test_recommended_fonts_completion_is_silent_during_shutdown(self):
+        from gui_qt.font_worker import FontInstallResult
+
+        self.window._shutdown_requested = True
+        self.window._font_install_worker = object()
+        self.window._refresh_font_install_status = mock.Mock()
+        self.window._show_settings_status = mock.Mock()
+
+        with mock.patch("gui_qt.app.message_box_information") as information:
+            self.window._on_recommended_fonts_downloaded(FontInstallResult(True))
+
+        self.assertIsNone(self.window._font_install_worker)
+        self.window._refresh_font_install_status.assert_not_called()
+        self.window._show_settings_status.assert_not_called()
+        information.assert_not_called()
 
     def test_theme_change_previews_without_persisting(self):
         class FakeCombo:

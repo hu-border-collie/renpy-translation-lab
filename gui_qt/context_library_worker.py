@@ -82,8 +82,15 @@ class ContextLibraryStatusJob(QRunnable):
         self.base_dir = str(base_dir or "")
         self.config = dict(config or {})
         self.signals = ContextLibraryStatusSignals()
+        self._cancel_requested = False
+
+    def request_cancel(self) -> None:
+        """Cancel a queued job; an already-running scan finishes cooperatively."""
+        self._cancel_requested = True
 
     def run(self) -> None:
-        self.signals.completed.emit(
-            collect_context_library_status(self.base_dir, self.config)
-        )
+        if self._cancel_requested:
+            self.signals.completed.emit(None)
+            return
+        result = collect_context_library_status(self.base_dir, self.config)
+        self.signals.completed.emit(result)
