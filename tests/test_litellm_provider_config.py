@@ -3,9 +3,12 @@ from types import SimpleNamespace
 
 from litellm_provider_config import (
     KEYRING_SERVICE,
+    CustomLiteLLMProvider,
     ProviderApiKeyStore,
     _decode_provider_key_store,
     catalog_source_label,
+    custom_provider_from_mapping,
+    custom_provider_registry,
     delete_provider_api_key,
     load_provider_api_key,
     load_provider_api_keys,
@@ -17,12 +20,17 @@ from litellm_provider_config import (
     models_from_openrouter_payload,
     models_from_remote_catalog,
     native_catalog_endpoint,
+    parse_custom_litellm_providers,
+    provider_display_label,
     providers_from_remote_catalog,
+    reserved_litellm_provider_ids,
     resolve_provider_id,
     sort_provider_ids,
     store_provider_api_key,
     store_provider_key_store,
     credential_provider_candidates,
+    validate_custom_provider_id,
+    validate_custom_provider_url,
     version_key,
     provider_from_model,
     python_requirement_allows,
@@ -336,6 +344,125 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
     def test_provider_is_derived_from_model_prefix(self):
         self.assertEqual(provider_from_model(" OpenRouter/openai/gpt-5 "), "openrouter")
         self.assertEqual(provider_from_model("gpt-5"), "")
+
+    def test_custom_provider_parse_derives_models_url_and_env(self):
+        raw = [
+            {
+                "id": "opencode-go",
+                "label": "OpenCode Go",
+                "base_url": "https://opencode.ai/zen/go/v1",
+                "api_key_env": "OPENCODE_GO_API_KEY",
+            }
+        ]
+        providers = parse_custom_litellm_providers(raw)
+        self.assertEqual(len(providers), 1)
+        provider = providers[0]
+        self.assertEqual(provider.id, "opencode-go")
+        self.assertEqual(provider.label, "OpenCode Go")
+        self.assertEqual(provider.base_url, "https://opencode.ai/zen/go/v1")
+        self.assertEqual(provider.models_url, "https://opencode.ai/zen/go/v1/models")
+        self.assertEqual(provider.api_key_env, "OPENCODE_GO_API_KEY")
+
+        registry = custom_provider_registry(raw)
+        self.assertIsInstance(registry["opencode-go"], CustomLiteLLMProvider)
+
+    def test_custom_provider_rejects_non_http_urls(self):
+        with self.assertRaises(ValueError):
+            validate_custom_provider_url("ftp://example.com", field_name="base_url")
+        with self.assertRaises(ValueError):
+            validate_custom_provider_url("opencode.ai/zen", field_name="base_url")
+        with self.assertRaises(ValueError):
+            validate_custom_provider_url("", field_name="base_url")
+        self.assertEqual(
+            validate_custom_provider_url("http://127.0.0.1:8000/v1", field_name="base_url"),
+            "http://127.0.0.1:8000/v1",
+        )
+        with self.assertRaises(ValueError):
+            custom_provider_from_mapping(
+                {"id": "bad", "base_url": "not-a-url"},
+                index=0,
+            )
+
+    def test_custom_provider_id_rules(self):
+        self.assertEqual(validate_custom_provider_id("opencode-go"), "opencode-go")
+        self.assertEqual(validate_custom_provider_id(" my_vendor_2 "), "my_vendor_2")
+        self.assertEqual(validate_custom_provider_id("Uppercase"), "uppercase")
+        with self.assertRaises(ValueError):
+            validate_custom_provider_id("has space")
+        with self.assertRaises(ValueError):
+            validate_custom_provider_id("")
+        # Built-in and common LiteLLM prefixes are reserved.
+        for reserved in ("openai", "anthropic", "gemini", "azure", "ollama", "mistral"):
+            with self.subTest(reserved=reserved):
+                with self.assertRaises(ValueError):
+                    validate_custom_provider_id(reserved)
+        self.assertIn("openai", reserved_litellm_provider_ids())
+
+    def test_custom_provider_id_merges_installed_litellm_table(self):
+        fake_litellm = SimpleNamespace(models_by_provider={"some_custom_prefix": ()})
+        reserved = reserved_litellm_provider_ids(fake_litellm)
+        self.assertIn("some_custom_prefix", reserved)
+        self.assertIn("openai", reserved)
+
+    def test_custom_provider_duplicate_ids_are_rejected(self):
+        raw = [
+            {"id": "dup", "base_url": "https://a.example.com"},
+            {"id": "dup", "base_url": "https://b.example.com"},
+        ]
+        with self.assertRaises(ValueError) as captured:
+            parse_custom_litellm_providers(raw)
+        self.assertIn("重复", str(captured.exception))
+
+    def test_custom_provider_requires_list_shape(self):
+        self.assertEqual(parse_custom_litellm_providers(None), ())
+        with self.assertRaises(ValueError):
+            parse_custom_litellm_providers({"id": "x", "base_url": "https://x"})
+
+    def test_custom_provider_env_name_must_be_valid(self):
+        with self.assertRaises(ValueError):
+            custom_provider_from_mapping(
+                {
+                    "id": "vendor",
+                    "base_url": "https://vendor.example.com",
+                    "api_key_env": "BAD ENV NAME",
+                }
+            )
+        provider = custom_provider_from_mapping(
+            {"id": "vendor", "base_url": "https://vendor.example.com", "api_key_env": "_KEY1"}
+        )
+        self.assertEqual(provider.api_key_env, "_KEY1")
+
+    def test_custom_provider_endpoint_label_and_source(self):
+        registry = custom_provider_registry(
+            [
+                {
+                    "id": "opencode-go",
+                    "label": "OpenCode Go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                }
+            ]
+        )
+        endpoint = native_catalog_endpoint("opencode-go", registry)
+        self.assertIsNotNone(endpoint)
+        self.assertEqual(endpoint.url, "https://opencode.ai/zen/go/v1/models")
+        self.assertEqual(endpoint.label, "OpenCode Go")
+        self.assertEqual(endpoint.source, "opencode-go")
+        self.assertEqual(endpoint.auth, "bearer")
+        self.assertTrue(endpoint.require_key)
+        self.assertEqual(endpoint.payload_style, "openai")
+        # Built-in endpoints still win over custom entries.
+        self.assertEqual(
+            native_catalog_endpoint("openai", registry).url,
+            "https://api.openai.com/v1/models",
+        )
+        self.assertEqual(provider_display_label("opencode-go", registry), "OpenCode Go")
+        self.assertEqual(provider_display_label("opencode-go"), "opencode-go")
+        self.assertIn(
+            "OpenCode Go 官方模型列表",
+            catalog_source_label("opencode-go", registry),
+        )
+        self.assertEqual(catalog_source_label("opencode-go"), "目录来源：未知。")
+        self.assertEqual(catalog_source_label("unknown"), "目录来源：未知。")
 
 
 if __name__ == "__main__":

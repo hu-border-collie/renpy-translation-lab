@@ -8,6 +8,7 @@ from importlib import metadata
 import json
 import re
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 
 KEYRING_SERVICE = "renpy-translation-lab:litellm"
@@ -18,6 +19,9 @@ SUPPORTED_PROVIDERS: tuple[tuple[str, str], ...] = (
     ("deepseek", "DeepSeek"),
     ("xai", "xAI"),
     ("ollama", "Ollama（本地）"),
+)
+SUPPORTED_PROVIDER_IDS: frozenset[str] = frozenset(
+    provider for provider, _label in SUPPORTED_PROVIDERS
 )
 _COMMON_PROVIDER_ORDER = (
     "openai",
@@ -77,6 +81,173 @@ OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
 AuthStyle = Literal["none", "bearer", "x-api-key"]
 CatalogPayloadStyle = Literal["openai", "openrouter", "ollama"]
+
+
+@dataclass(frozen=True)
+class CustomLiteLLMProvider:
+    """One user-defined OpenAI-compatible provider from ``sync.custom_litellm_providers``.
+
+    The id doubles as the display/selection model prefix (``opencode-go/<model>``)
+    and as the keyring username.  Requests are rewritten to ``openai/<model>``
+    plus ``api_base`` by the sync backend, so the id must never collide with a
+    prefix LiteLLM already understands.
+    """
+
+    id: str
+    label: str
+    base_url: str
+    models_url: str
+    api_key_env: str = ""
+
+
+_CUSTOM_PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+_ENVIRONMENT_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def reserved_litellm_provider_ids(litellm_module: Any = None) -> frozenset[str]:
+    """Return provider prefixes that custom ids must not shadow.
+
+    The static reserve covers built-in choices and common LiteLLM prefixes;
+    callers that already hold a litellm module (tests, optional integrations)
+    may pass it to merge in the installed provider table. Importing litellm is
+    deliberately avoided here: it is a heavy optional dependency and this
+    function runs on GUI startup and config validation.
+    """
+    reserved = set(_RESERVED_PROVIDER_IDS)
+    if litellm_module is not None:
+        by_provider = getattr(litellm_module, "models_by_provider", {})
+        if isinstance(by_provider, Mapping):
+            for provider in by_provider:
+                provider = str(provider or "").strip().lower()
+                if provider:
+                    reserved.add(provider)
+    return frozenset(reserved)
+
+
+def validate_custom_provider_url(value: object, *, field_name: str) -> str:
+    """Require an http(s) absolute URL; return the trimmed value."""
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{field_name}不能为空。")
+    parsed = urlsplit(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"{field_name}必须是 http(s) URL。")
+    return text
+
+
+def validate_custom_provider_id(
+    value: object,
+    *,
+    reserved: frozenset[str] | None = None,
+) -> str:
+    """Validate a custom provider id (lowercase, ``[a-z0-9_-]+``, no shadowing)."""
+    provider = str(value or "").strip().lower()
+    if not provider:
+        raise ValueError("自定义 Provider id 不能为空。")
+    if not _CUSTOM_PROVIDER_ID_PATTERN.fullmatch(provider):
+        raise ValueError("自定义 Provider id 只能包含小写字母、数字、- 和 _。")
+    reserved_ids = reserved_litellm_provider_ids() if reserved is None else reserved
+    if provider in reserved_ids:
+        raise ValueError(
+            f"自定义 Provider id 与 LiteLLM 已知前缀冲突：{provider}。"
+            "请更换一个不会覆盖内置 provider 的 id。"
+        )
+    return provider
+
+
+def validate_custom_provider_env_name(value: object) -> str:
+    """Validate an optional environment-variable name used as key fallback."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if not _ENVIRONMENT_NAME_PATTERN.fullmatch(text):
+        raise ValueError("api_key_env 必须是合法的环境变量名（字母/数字/下划线）。")
+    return text
+
+
+def custom_provider_from_mapping(
+    entry: Mapping[str, object],
+    *,
+    index: int = 0,
+    reserved: frozenset[str] | None = None,
+) -> CustomLiteLLMProvider:
+    """Parse and validate one ``custom_litellm_providers`` config entry."""
+    if not isinstance(entry, Mapping):
+        raise ValueError(f"custom_litellm_providers[{index}] 必须是对象。")
+    provider_id = validate_custom_provider_id(entry.get("id"), reserved=reserved)
+    label = str(entry.get("label") or "").strip() or provider_id
+    base_url = validate_custom_provider_url(
+        entry.get("base_url"),
+        field_name="base_url",
+    )
+    raw_models_url = str(entry.get("models_url") or "").strip()
+    if raw_models_url:
+        models_url = validate_custom_provider_url(
+            raw_models_url,
+            field_name="models_url",
+        )
+    else:
+        models_url = base_url.rstrip("/") + "/models"
+    api_key_env = validate_custom_provider_env_name(entry.get("api_key_env"))
+    return CustomLiteLLMProvider(
+        id=provider_id,
+        label=label,
+        base_url=base_url,
+        models_url=models_url,
+        api_key_env=api_key_env,
+    )
+
+
+def parse_custom_litellm_providers(
+    raw: object,
+    *,
+    litellm_module: Any = None,
+) -> tuple[CustomLiteLLMProvider, ...]:
+    """Parse ``sync.custom_litellm_providers`` into validated provider entries.
+
+    Raises ValueError on structural errors, invalid ids/URLs or duplicate ids;
+    a missing or non-list value is treated as an empty registry so older configs
+    keep working.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError("custom_litellm_providers 必须是列表。")
+    reserved = reserved_litellm_provider_ids(litellm_module)
+    providers: list[CustomLiteLLMProvider] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(raw):
+        provider = custom_provider_from_mapping(
+            entry,
+            index=index,
+            reserved=reserved,
+        )
+        if provider.id in seen:
+            raise ValueError(f"自定义 Provider id 重复：{provider.id}。")
+        seen.add(provider.id)
+        providers.append(provider)
+    return tuple(providers)
+
+
+def custom_provider_registry(
+    raw: object,
+    *,
+    litellm_module: Any = None,
+) -> dict[str, CustomLiteLLMProvider]:
+    """Build the id → provider lookup used by backend/GUI/CLI paths."""
+    return {
+        provider.id: provider
+        for provider in parse_custom_litellm_providers(raw, litellm_module=litellm_module)
+    }
+
+
+def _custom_registry_lookup(
+    custom_providers: Mapping[str, CustomLiteLLMProvider] | None,
+    provider: str,
+) -> CustomLiteLLMProvider | None:
+    if not isinstance(custom_providers, Mapping):
+        return None
+    return custom_providers.get(provider)
 
 
 @dataclass(frozen=True)
@@ -152,6 +323,54 @@ NATIVE_CATALOG_ENDPOINTS: dict[str, NativeCatalogEndpoint] = {
     ),
 }
 
+# Static reserve of provider prefixes that must never be shadowed by a custom
+# id.  When litellm is installed its own provider table is merged in too, so
+# the runtime check also covers providers LiteLLM knows but this list does not.
+_RESERVED_PROVIDER_IDS: frozenset[str] = frozenset(
+    {
+        *SUPPORTED_PROVIDER_IDS,
+        *_COMMON_PROVIDER_ORDER,
+        *NATIVE_CATALOG_ENDPOINTS,
+        # Frequent LiteLLM prefixes that may appear in the online catalog.
+        "aliyun",
+        "baidu",
+        "bedrock",
+        "cerebras",
+        "cohere",
+        "databricks",
+        "deepinfra",
+        "dashscope",
+        "ernie",
+        "fireworks_ai",
+        "glm",
+        "groq",
+        "huggingface",
+        "kimi",
+        "lmstudio",
+        "localai",
+        "minimax",
+        "mistral",
+        "moonshot",
+        "novita",
+        "nvidia_nim",
+        "perplexity",
+        "predibase",
+        "qwen",
+        "replicate",
+        "sagemaker",
+        "spark",
+        "stepfun",
+        "tencent",
+        "text-generation-webui",
+        "together_ai",
+        "vllm",
+        "volcengine",
+        "watsonx",
+        "yi",
+        "zhipu",
+    }
+)
+
 
 class ProviderCredentialStoreError(RuntimeError):
     """The operating-system credential store could not be used."""
@@ -164,10 +383,19 @@ def provider_from_model(model: str) -> str:
     return text.split("/", 1)[0].strip().lower()
 
 
-def provider_display_label(provider: str) -> str:
+def provider_display_label(
+    provider: str,
+    custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+) -> str:
     """Return a friendly label without restricting dynamic provider ids."""
     provider = str(provider or "").strip().lower()
-    return _PROVIDER_LABELS.get(provider, provider)
+    label = _PROVIDER_LABELS.get(provider)
+    if label:
+        return label
+    custom = _custom_registry_lookup(custom_providers, provider)
+    if custom is not None:
+        return custom.label
+    return provider
 
 
 def resolve_provider_id(value: str) -> str:
@@ -579,8 +807,33 @@ def models_from_ollama_payload(payload: Mapping[str, object] | object) -> tuple[
     return tuple(sorted(models, key=str.casefold))
 
 
-def native_catalog_endpoint(provider: str) -> NativeCatalogEndpoint | None:
-    return NATIVE_CATALOG_ENDPOINTS.get(str(provider or "").strip().lower())
+def native_catalog_endpoint(
+    provider: str,
+    custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+) -> NativeCatalogEndpoint | None:
+    """Return the model-list endpoint for *provider*.
+
+    Built-in providers use the official ``NATIVE_CATALOG_ENDPOINTS`` table;
+    custom OpenAI-compatible providers synthesize an OpenAI-style endpoint from
+    their configured ``models_url`` so catalog refresh, key gating and error
+    copy are shared with built-in providers.
+    """
+    provider = str(provider or "").strip().lower()
+    endpoint = NATIVE_CATALOG_ENDPOINTS.get(provider)
+    if endpoint is not None:
+        return endpoint
+    custom = _custom_registry_lookup(custom_providers, provider)
+    if custom is not None:
+        return NativeCatalogEndpoint(
+            provider=provider,
+            url=custom.models_url,
+            label=custom.label,
+            source=provider,
+            auth="bearer",
+            require_key=True,
+            payload_style="openai",
+        )
+    return None
 
 
 def build_native_catalog_headers(
@@ -612,7 +865,10 @@ def models_from_native_catalog_payload(
     return models_from_openai_compatible_payload(endpoint.provider, payload)
 
 
-def catalog_source_label(source: str) -> str:
+def catalog_source_label(
+    source: str,
+    custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+) -> str:
     """Human-readable status line for a catalog ``source`` token."""
     token = str(source or "").strip().lower()
     if token == "online":
@@ -622,6 +878,9 @@ def catalog_source_label(source: str) -> str:
         if token == "ollama":
             return f"目录来源：{endpoint.label} 本机已安装模型。"
         return f"目录来源：{endpoint.label} 官方模型列表。"
+    custom = _custom_registry_lookup(custom_providers, token)
+    if custom is not None:
+        return f"目录来源：{custom.label} 官方模型列表。"
     return "目录来源：未知。"
 
 

@@ -170,6 +170,8 @@ MAX_CHARS = DEFAULT_MAX_CHARS
 MAX_ITEMS = DEFAULT_MAX_ITEMS
 SYNC_MAX_OUTPUT_TOKENS = DEFAULT_SYNC_MAX_OUTPUT_TOKENS
 SYNC_BACKEND = DEFAULT_SYNC_BACKEND
+# Custom OpenAI-compatible LiteLLM providers parsed from sync.custom_litellm_providers.
+CUSTOM_LITELLM_PROVIDERS: dict[str, object] = {}
 MIN_DELAY = 1.0  # Reduced delay for SDK
 MAX_DELAY = 3.0
 BATCH_RETRIES = 3
@@ -1029,6 +1031,7 @@ def load_rotation_settings(config):
 
 def load_sync_translation_settings(config):
     global MAX_ITEMS, MAX_CHARS, SYNC_MAX_OUTPUT_TOKENS, SYNC_BACKEND
+    global CUSTOM_LITELLM_PROVIDERS
 
     sync = config.get("sync")
     if not isinstance(sync, dict):
@@ -1040,6 +1043,12 @@ def load_sync_translation_settings(config):
             f"Unsupported sync backend: {backend_name}. Choose 'gemini' or 'litellm'."
         )
     SYNC_BACKEND = backend_name
+
+    from litellm_provider_config import custom_provider_registry
+
+    CUSTOM_LITELLM_PROVIDERS = custom_provider_registry(
+        sync.get("custom_litellm_providers")
+    )
 
     load_rotation_settings(config)
 
@@ -1191,6 +1200,7 @@ class RuntimeConfig:
     max_items: int = DEFAULT_MAX_ITEMS
     sync_max_output_tokens: int = DEFAULT_SYNC_MAX_OUTPUT_TOKENS
     sync_backend: str = DEFAULT_SYNC_BACKEND
+    custom_litellm_providers: dict = field(default_factory=dict)
 
     include_files: set = field(default_factory=set)
     include_prefixes: set = field(default_factory=set)
@@ -1222,6 +1232,7 @@ class RuntimeConfig:
             api_keys=list(self.api_keys),
             models=list(self.models),
             model_rotation_models=list(self.model_rotation_models),
+            custom_litellm_providers=dict(self.custom_litellm_providers or {}),
             include_files=set(self.include_files),
             include_prefixes=set(self.include_prefixes),
             prep_unpack_command=(
@@ -1263,6 +1274,7 @@ def default_runtime_config() -> RuntimeConfig:
         max_items=DEFAULT_MAX_ITEMS,
         sync_max_output_tokens=DEFAULT_SYNC_MAX_OUTPUT_TOKENS,
         sync_backend=DEFAULT_SYNC_BACKEND,
+        custom_litellm_providers={},
         prep_language=DEFAULT_PREP_LANGUAGE,
         context_storage_location=DEFAULT_CONTEXT_STORAGE_LOCATION,
         context_storage_game_dir_name=DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME,
@@ -1311,6 +1323,7 @@ def snapshot_runtime_config() -> RuntimeConfig:
         max_items=MAX_ITEMS,
         sync_max_output_tokens=SYNC_MAX_OUTPUT_TOKENS,
         sync_backend=SYNC_BACKEND,
+        custom_litellm_providers=dict(CUSTOM_LITELLM_PROVIDERS),
         include_files=set(INCLUDE_FILES),
         include_prefixes=set(INCLUDE_PREFIXES),
         sync_rag_enabled=SYNC_RAG_ENABLED,
@@ -1345,6 +1358,7 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
     global API_KEYS, MODELS, CURRENT_KEY_INDEX, CURRENT_MODEL_INDEX
     global API_KEY_ROTATION_ENABLED, MODEL_ROTATION_ENABLED, MODEL_ROTATION_MODELS
     global MAX_CHARS, MAX_ITEMS, SYNC_MAX_OUTPUT_TOKENS, SYNC_BACKEND
+    global CUSTOM_LITELLM_PROVIDERS
     global INCLUDE_FILES, INCLUDE_PREFIXES
     global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
     global SYNC_RAG_QUERY_TASK_TYPE, SYNC_RAG_DOCUMENT_TASK_TYPE
@@ -1396,6 +1410,7 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
         MAX_ITEMS = int(applied.max_items)
         SYNC_MAX_OUTPUT_TOKENS = int(applied.sync_max_output_tokens)
         SYNC_BACKEND = applied.sync_backend or DEFAULT_SYNC_BACKEND
+        CUSTOM_LITELLM_PROVIDERS = dict(applied.custom_litellm_providers or {})
 
         INCLUDE_FILES = set(applied.include_files)
         INCLUDE_PREFIXES = set(applied.include_prefixes)
@@ -4322,7 +4337,9 @@ def call_gemini_sdk(
     if SYNC_BACKEND == "litellm":
         from litellm_sync_backend import LiteLLMSyncBackend
 
-        result = LiteLLMSyncBackend().generate(SyncGenerationRequest(
+        result = LiteLLMSyncBackend(
+            custom_providers=CUSTOM_LITELLM_PROVIDERS
+        ).generate(SyncGenerationRequest(
             model=model_name,
             contents=prompt,
             config=generation_config,

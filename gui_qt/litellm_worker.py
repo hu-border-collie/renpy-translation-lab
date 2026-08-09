@@ -6,6 +6,7 @@ import asyncio
 import json
 import sys
 import time
+from collections.abc import Mapping
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -16,6 +17,7 @@ from gemini_model_catalog import filter_gemini_generation_config
 from litellm_provider_config import (
     LITELLM_CATALOG_URL,
     LITELLM_PYPI_URL,
+    CustomLiteLLMProvider,
     build_native_catalog_headers,
     installed_litellm_version,
     latest_compatible_litellm_version,
@@ -178,10 +180,19 @@ class LiteLLMModelCatalogWorker(_CancellableNetworkWorker):
     completed = Signal(object, object, object)
     progress = Signal(str)
 
-    def __init__(self, provider: str, api_key: str = "", parent=None) -> None:
+    def __init__(
+        self,
+        provider: str,
+        api_key: str = "",
+        parent=None,
+        custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.provider = str(provider or "").strip().lower()
         self.api_key = str(api_key or "").strip()
+        self._custom_providers = (
+            dict(custom_providers) if isinstance(custom_providers, Mapping) else {}
+        )
 
     def _fetch_litellm_catalog(self) -> tuple[str, ...]:
         catalog = self._load_litellm_catalog()
@@ -191,7 +202,7 @@ class LiteLLMModelCatalogWorker(_CancellableNetworkWorker):
         return models
 
     def _fetch_native_catalog(self) -> tuple[tuple[str, ...], str]:
-        endpoint = native_catalog_endpoint(self.provider)
+        endpoint = native_catalog_endpoint(self.provider, self._custom_providers)
         if endpoint is None:
             raise ValueError(f"未配置 {self.provider} 官方模型列表")
         if endpoint.require_key and not self.api_key:
@@ -220,7 +231,7 @@ class LiteLLMModelCatalogWorker(_CancellableNetworkWorker):
         self._start_budget(CATALOG_TOTAL_BUDGET_SECONDS)
         try:
             self._ensure_not_cancelled()
-            endpoint = native_catalog_endpoint(self.provider)
+            endpoint = native_catalog_endpoint(self.provider, self._custom_providers)
             if endpoint is not None:
                 # Prefer each provider's own live catalog. LiteLLM's pricing table
                 # is only a subset and lags behind official model releases.
@@ -238,6 +249,11 @@ class LiteLLMModelCatalogWorker(_CancellableNetworkWorker):
                 except Exception as native_exc:
                     online_errors.append(f"{endpoint.label}：{native_exc}")
                     self._ensure_not_cancelled()
+                    if self.provider in self._custom_providers:
+                        # LiteLLM's online subset has no entry for user-defined
+                        # ids, so the fallback would always fail with a
+                        # misleading "provider not found" error.
+                        raise RuntimeError("；".join(online_errors)) from native_exc
                     # Bail before claiming "正在回退" if the shared budget is gone.
                     try:
                         self._remaining_timeout()
@@ -347,10 +363,19 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
     completed = Signal(bool, str)
     progress = Signal(str)
 
-    def __init__(self, model: str, api_key: str = "", parent=None) -> None:
+    def __init__(
+        self,
+        model: str,
+        api_key: str = "",
+        parent=None,
+        custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.model = model
         self.api_key = api_key
+        self._custom_providers = (
+            dict(custom_providers) if isinstance(custom_providers, Mapping) else {}
+        )
         self._async_loop: asyncio.AbstractEventLoop | None = None
         self._async_task: asyncio.Task | None = None
 
@@ -368,7 +393,10 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
     async def _generate_async(self):
         self._ensure_not_cancelled()
         self._emit_progress("正在发起最小连接测试请求…")
-        return await LiteLLMSyncBackend(api_key=self.api_key or None).generate_async(
+        return await LiteLLMSyncBackend(
+            api_key=self.api_key or None,
+            custom_providers=self._custom_providers,
+        ).generate_async(
             SyncGenerationRequest(
                 model=self.model,
                 contents="Reply with OK.",

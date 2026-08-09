@@ -159,6 +159,46 @@ python gemini_translate_batch.py doctor
 
 当前更推荐优先使用 Gemini Batch 模式；同步模式可显式选择 Gemini 原生调用或可选 LiteLLM 后端。同步模式的 `backend/model/chunk_size/max_source_chars/max_output_tokens` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。LiteLLM 未安装或未启用时，不影响 Gemini Batch、doctor 或 GUI 启动。
 
+### 自定义 OpenAI 兼容 Provider（LiteLLM 同步）
+
+LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提供 OpenAI 兼容 API 的服务（OpenCode Go、各类中转站、本地 vLLM / LocalAI 网关等）都可以通过 `sync.custom_litellm_providers` 注册，无需修改代码：
+
+```json
+{
+  "sync": {
+    "backend": "litellm",
+    "litellm_model": "opencode-go/gpt-4o-mini",
+    "custom_litellm_providers": [
+      {
+        "id": "opencode-go",
+        "label": "OpenCode Go",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "models_url": "https://opencode.ai/zen/go/v1/models",
+        "api_key_env": "OPENCODE_GO_API_KEY"
+      }
+    ]
+  }
+}
+```
+
+字段说明：
+
+| 项 | 必填 | 说明 |
+|----|------|------|
+| `id` | 是 | 模型前缀与密钥存储用户名；只能包含小写字母、数字、`-`、`_`，且不能与 LiteLLM 已知 provider 前缀（如 `openai`、`anthropic`、`deepseek` 等）冲突 |
+| `label` | 否 | GUI 显示名称；留空使用 `id` |
+| `base_url` | 是 | OpenAI 兼容端点（http/https），例如 `https://opencode.ai/zen/go/v1`；请求会逐请求透传为 LiteLLM 的 `api_base` |
+| `models_url` | 否 | 模型列表端点；留空使用 `base_url + /models` |
+| `api_key_env` | 否 | 环境变量名；仅当系统凭据管理器中未保存该 Provider 密钥时，后端读取该环境变量并**显式**传给请求，避免 LiteLLM 静默回退 `OPENAI_API_KEY` 把错误密钥发给第三方端点 |
+
+行为说明：
+
+- 界面与配置中模型保持 `<id>/<模型>` 形式（如 `opencode-go/gpt-4o-mini`）；实际请求改写为 `openai/<模型>` + `api_base`，按请求传参，不使用进程级 `OPENAI_API_KEY` / `OPENAI_API_BASE` 环境变量。
+- 密钥优先使用系统凭据管理器（GUI「管理密钥…」多 Key 对话框），与内置 provider 一致。
+- 模型列表走 `GET {models_url}`（Bearer 认证），解析 OpenAI 风格 `{data:[{id:...}]}` 响应。
+- 非法 `base_url`、非法字符或与内置前缀冲突的 `id` 会被拒绝；GUI 保存或 CLI 加载配置时均会报错。
+- CLI 与 GUI 读取同一份 `translator_config.json` 配置。
+
 默认切块策略：
 
 - 同步翻译默认每个 chunk 最多 40 条、`max_source_chars=12000`。

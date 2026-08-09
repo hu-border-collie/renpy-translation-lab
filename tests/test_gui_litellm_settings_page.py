@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 from gui_qt.litellm_catalog_cache import LiteLLMCatalogCache
+from litellm_provider_config import custom_provider_registry
 
 try:
     from PySide6.QtCore import Qt
@@ -53,6 +54,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window._populate_litellm_providers((), selected="")
         self.window._set_litellm_models("", ())
         self.window._litellm_saved_key_status.clear()
+        self.window._custom_litellm_providers = {}
         self.window._refresh_litellm_catalog_status()
         self.window._on_sync_backend_changed(-1)
 
@@ -506,6 +508,286 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             self.window.sync_backend_combo.setCurrentIndex(gemini_index)
         self.assertTrue(self.window.sync_model_combo.isEnabled())
         self.assertEqual(self.window.sync_model_combo.toolTip(), "")
+
+    def _dialog_result(self, *, provider_id="opencode-go", editing=False):
+        from PySide6.QtWidgets import QDialog
+
+        dialog = mock.Mock()
+        dialog.exec.return_value = QDialog.DialogCode.Accepted
+        entry = {
+            "id": provider_id,
+            "label": "OpenCode Go",
+            "base_url": "https://opencode.ai/zen/go/v1",
+            "models_url": "https://opencode.ai/zen/go/v1/models",
+            "api_key_env": "OPENCODE_GO_API_KEY",
+        }
+        dialog.result_provider.return_value = entry
+        return dialog, entry
+
+    def test_add_custom_provider_populates_registry_and_dropdowns(self):
+        self.window._ensure_settings_page("litellm")
+        dialog, _entry = self._dialog_result()
+        with (
+            mock.patch(
+                "gui_qt.app.CustomLiteLLMProviderDialog",
+                return_value=dialog,
+            ) as dialog_cls,
+            mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
+            mock.patch("gui_qt.app.load_provider_key_store"),
+        ):
+            self.window._on_add_custom_litellm_provider()
+
+        dialog_cls.assert_called_once()
+        self.assertIn("opencode-go", self.window._custom_litellm_providers)
+        provider = self.window._custom_litellm_providers["opencode-go"]
+        self.assertEqual(provider.label, "OpenCode Go")
+        self.assertEqual(provider.base_url, "https://opencode.ai/zen/go/v1")
+        self.assertEqual(provider.api_key_env, "OPENCODE_GO_API_KEY")
+        # Table row and both provider dropdowns show the custom label.
+        self.assertEqual(self.window.custom_provider_table.rowCount(), 1)
+        combo = self.window.litellm_provider_combo
+        index = combo.findData("opencode-go")
+        self.assertGreaterEqual(index, 0)
+        self.assertEqual(combo.itemText(index), "OpenCode Go")
+        keys_combo = self.window.litellm_keys_provider_combo
+        self.assertGreaterEqual(keys_combo.findData("opencode-go"), 0)
+        self.assertEqual(
+            self.window._custom_provider_entries()[0]["id"],
+            "opencode-go",
+        )
+
+    def test_edit_custom_provider_updates_fields_and_keeps_id(self):
+        self.window._ensure_settings_page("litellm")
+        self.window._custom_litellm_providers = {
+            "opencode-go": custom_provider_registry(
+                [
+                    {
+                        "id": "opencode-go",
+                        "label": "OpenCode Go",
+                        "base_url": "https://old.example.com/v1",
+                    }
+                ]
+            )["opencode-go"],
+        }
+        self.window._refresh_custom_provider_table()
+        self.window.custom_provider_table.selectRow(0)
+        dialog = mock.Mock()
+        from PySide6.QtWidgets import QDialog
+
+        dialog.exec.return_value = QDialog.DialogCode.Accepted
+        dialog.result_provider.return_value = {
+            "id": "opencode-go",
+            "label": "OpenCode Go 新端点",
+            "base_url": "https://new.example.com/v1",
+            "models_url": "https://new.example.com/v1/models",
+        }
+        with mock.patch(
+            "gui_qt.app.CustomLiteLLMProviderDialog",
+            return_value=dialog,
+        ) as dialog_cls, mock.patch("gui_qt.app.load_provider_api_key", return_value=""), mock.patch("gui_qt.app.load_provider_key_store"):
+            self.window._on_edit_custom_litellm_provider()
+
+        provider = self.window._custom_litellm_providers["opencode-go"]
+        self.assertEqual(provider.base_url, "https://new.example.com/v1")
+        self.assertEqual(provider.label, "OpenCode Go 新端点")
+        self.assertEqual(provider.id, "opencode-go")
+        self.assertTrue(dialog_cls.call_args.kwargs.get("provider"))
+        self.assertEqual(
+            dialog_cls.call_args.kwargs["provider"]["id"],
+            "opencode-go",
+        )
+
+    def test_delete_custom_provider_requires_confirmation(self):
+        self.window._ensure_settings_page("litellm")
+        self.window._custom_litellm_providers = {
+            "opencode-go": custom_provider_registry(
+                [
+                    {
+                        "id": "opencode-go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                    }
+                ]
+            )["opencode-go"],
+        }
+        self.window._refresh_custom_provider_table()
+        self.window.custom_provider_table.selectRow(0)
+        with (
+            mock.patch("gui_qt.app.message_box_question", return_value="no"),
+            mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
+            mock.patch("gui_qt.app.load_provider_key_store"),
+        ):
+            self.window._on_delete_custom_litellm_provider()
+        self.assertIn("opencode-go", self.window._custom_litellm_providers)
+
+        with (
+            mock.patch("gui_qt.app.message_box_question", return_value="yes"),
+            mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
+            mock.patch("gui_qt.app.load_provider_key_store"),
+        ):
+            self.window._on_delete_custom_litellm_provider()
+        self.assertEqual(self.window._custom_litellm_providers, {})
+        self.assertEqual(self.window.custom_provider_table.rowCount(), 0)
+
+    def test_custom_provider_loaded_from_config_and_saved_back(self):
+        config = {
+            "sync": {
+                "backend": "litellm",
+                "litellm_model": "opencode-go/gpt-4o-mini",
+                "custom_litellm_providers": [
+                    {
+                        "id": "opencode-go",
+                        "label": "OpenCode Go",
+                        "base_url": "https://opencode.ai/zen/go/v1",
+                    }
+                ],
+            },
+            "batch": {},
+        }
+        with (
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=Path("C:/Game/work"),
+            ),
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+        ):
+            if "litellm" not in self.window._settings_pages_built:
+                self.window._ensure_settings_page("litellm")
+            self.window._load_config_to_ui(pages={"litellm"})
+
+        self.assertIn("opencode-go", self.window._custom_litellm_providers)
+        self.assertEqual(self.window.custom_provider_table.rowCount(), 1)
+        index = self.window.litellm_provider_combo.findData("opencode-go")
+        self.assertGreaterEqual(index, 0)
+        self.assertEqual(
+            self.window.litellm_provider_combo.itemText(index),
+            "OpenCode Go",
+        )
+
+        with (
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=Path("C:/Game/work"),
+            ),
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+            mock.patch.object(
+                self.window.state,
+                "save_translator_config",
+            ) as save_config,
+            mock.patch("gui_qt.app.message_box_information"),
+            mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
+            mock.patch("gui_qt.app.load_provider_key_store"),
+            mock.patch("project_context_settings.save_project_context_settings"),
+        ):
+            saved = self.window._on_save_config()
+        self.assertTrue(saved)
+        saved_payload = save_config.call_args.args[0]
+        entries = saved_payload["sync"]["custom_litellm_providers"]
+        self.assertEqual(entries[0]["id"], "opencode-go")
+        self.assertEqual(entries[0]["base_url"], "https://opencode.ai/zen/go/v1")
+
+    def test_custom_provider_model_catalog_worker_receives_registry(self):
+        self.window._ensure_settings_page("litellm")
+        self.window._custom_litellm_providers = custom_provider_registry(
+            [
+                {
+                    "id": "opencode-go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                }
+            ]
+        )
+        self.window._populate_litellm_providers((), selected="opencode-go")
+        self.window.sync_backend_combo.setCurrentIndex(
+            self.window.sync_backend_combo.findData("litellm")
+        )
+        self.window._on_sync_backend_changed(-1)
+        self.assertEqual(self.window._current_litellm_provider(), "opencode-go")
+
+        with (
+            mock.patch(
+                "gui_qt.app.load_provider_api_key",
+                return_value="custom-key",
+            ),
+            mock.patch("gui_qt.app.LiteLLMModelCatalogWorker") as worker_cls,
+        ):
+            worker = mock.Mock()
+            worker_cls.return_value = worker
+            self.window._on_refresh_litellm_models()
+
+        self.assertEqual(worker_cls.call_args.args[0], "opencode-go")
+        self.assertEqual(
+            worker_cls.call_args.kwargs.get("custom_providers"),
+            self.window._custom_litellm_providers,
+        )
+        worker.start.assert_called_once()
+        self.window._litellm_catalog_worker = None
+
+    def test_custom_provider_connection_test_requires_key(self):
+        self.window._ensure_settings_page("litellm")
+        self.window._custom_litellm_providers = custom_provider_registry(
+            [
+                {
+                    "id": "opencode-go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                }
+            ]
+        )
+        self.window._populate_litellm_providers((), selected="opencode-go")
+        self.window.sync_backend_combo.setCurrentIndex(
+            self.window.sync_backend_combo.findData("litellm")
+        )
+        self.window._on_sync_backend_changed(-1)
+        self.window.litellm_model_combo.setEditText("opencode-go/gpt-4o-mini")
+        with (
+            mock.patch(
+                "gui_qt.app.load_provider_api_key",
+                return_value="",
+            ),
+            mock.patch(
+                "gui_qt.app.LiteLLMConnectionTestWorker",
+            ) as worker_cls,
+            mock.patch("gui_qt.app.message_box_information") as information,
+        ):
+            self.window._on_test_litellm_connection()
+
+        worker_cls.assert_not_called()
+        information.assert_called_once()
+        self.assertIn("缺少 API Key", information.call_args.args[1])
+
+    def test_invalid_custom_provider_config_is_ignored_on_load(self):
+        config = {
+            "sync": {
+                "backend": "gemini",
+                "custom_litellm_providers": [
+                    {"id": "bad", "base_url": "not-a-url"},
+                ],
+            },
+            "batch": {},
+        }
+        with (
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+            mock.patch.object(self.window, "_append_log") as append_log,
+        ):
+            if "litellm" not in self.window._settings_pages_built:
+                self.window._ensure_settings_page("litellm")
+            self.window._load_config_to_ui(pages={"litellm"})
+
+        self.assertEqual(self.window._custom_litellm_providers, {})
+        append_log.assert_called_once()
+        self.assertIn("custom_litellm_providers", append_log.call_args.args[0])
 
 
 if __name__ == "__main__":

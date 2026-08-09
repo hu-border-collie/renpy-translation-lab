@@ -36,6 +36,15 @@
   "sync": {
     "backend": "gemini",
     "model": "gemini-3.1-flash-lite",
+    "custom_litellm_providers": [
+      {
+        "id": "opencode-go",
+        "label": "OpenCode Go",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "models_url": "https://opencode.ai/zen/go/v1/models",
+        "api_key_env": "OPENCODE_GO_API_KEY"
+      }
+    ],
     "chunk_size": 40,
     "max_source_chars": 12000,
     "max_output_tokens": 24576,

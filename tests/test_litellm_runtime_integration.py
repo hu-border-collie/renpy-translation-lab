@@ -109,6 +109,76 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
             runtime.load_sync_translation_settings({"sync": {"backend": "automatic"}})
         self.assertIn("Unsupported sync backend", str(captured.exception))
 
+    def test_sync_settings_load_custom_providers_into_runtime(self):
+        previous_backend = runtime.SYNC_BACKEND
+        previous_registry = runtime.CUSTOM_LITELLM_PROVIDERS
+        try:
+            runtime.load_sync_translation_settings({
+                "sync": {
+                    "backend": "litellm",
+                    "custom_litellm_providers": [
+                        {
+                            "id": "opencode-go",
+                            "label": "OpenCode Go",
+                            "base_url": "https://opencode.ai/zen/go/v1",
+                            "api_key_env": "OPENCODE_GO_API_KEY",
+                        }
+                    ],
+                }
+            })
+            provider = runtime.CUSTOM_LITELLM_PROVIDERS["opencode-go"]
+            self.assertEqual(provider.base_url, "https://opencode.ai/zen/go/v1")
+            self.assertEqual(provider.models_url, "https://opencode.ai/zen/go/v1/models")
+            self.assertEqual(provider.api_key_env, "OPENCODE_GO_API_KEY")
+        finally:
+            runtime.SYNC_BACKEND = previous_backend
+            runtime.CUSTOM_LITELLM_PROVIDERS = previous_registry
+
+    def test_invalid_custom_provider_config_blocks_sync_settings(self):
+        with self.assertRaises(ValueError) as captured:
+            runtime.load_sync_translation_settings({
+                "sync": {
+                    "custom_litellm_providers": [
+                        {"id": "bad", "base_url": "not-a-url"},
+                    ],
+                }
+            })
+        self.assertIn("http(s)", str(captured.exception))
+
+    def test_call_gemini_sdk_passes_custom_provider_registry_to_backend(self):
+        fake_result = type("Result", (), {
+            "parsed": None,
+            "response_text": '[{"id":"a","translation":"你好"}]',
+            "response_payload": {},
+            "finish_reason": "stop",
+        })()
+        fake_backend = mock.Mock()
+        fake_backend.generate.return_value = fake_result
+        registry = {"opencode-go": object()}
+        previous_backend = runtime.SYNC_BACKEND
+        previous_registry = runtime.CUSTOM_LITELLM_PROVIDERS
+        try:
+            runtime.SYNC_BACKEND = "litellm"
+            runtime.CUSTOM_LITELLM_PROVIDERS = registry
+            with (
+                mock.patch.object(runtime, "get_current_model", return_value="opencode-go/test"),
+                mock.patch.object(runtime, "create_genai_client") as create_gemini,
+                mock.patch(
+                    "litellm_sync_backend.LiteLLMSyncBackend",
+                    return_value=fake_backend,
+                ) as backend_cls,
+            ):
+                result = runtime.call_gemini_sdk("prompt", [{"id": "a", "text": "Hello"}])
+
+            create_gemini.assert_not_called()
+            self.assertEqual(backend_cls.call_args.kwargs["custom_providers"], registry)
+            request = fake_backend.generate.call_args.args[0]
+            self.assertEqual(request.model, "opencode-go/test")
+            self.assertEqual(result, [{"id": "a", "translation": "你好"}])
+        finally:
+            runtime.SYNC_BACKEND = previous_backend
+            runtime.CUSTOM_LITELLM_PROVIDERS = previous_registry
+
 
 if __name__ == "__main__":
     unittest.main()

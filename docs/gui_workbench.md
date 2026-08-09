@@ -128,6 +128,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
   - **Gemini**：读取 / 保存 `api_keys.json`；可添加多把 Key；环境变量 Key 只读提示。
   - **LiteLLM Provider**：按供应商保存在操作系统凭据管理器（与 Gemini 分离）。密钥页 Provider 列表含常用供应商（OpenAI / Anthropic / Gemini / OpenRouter / DeepSeek / xAI / Azure / Vertex 等），并合并 LiteLLM 页**已联网加载**的供应商；可搜索或手填自定义 id。每个 Provider 可用与 Gemini 相同的多 Key 对话框管理（添加 / 删除 / 显示明文核对 / **设为当前使用**），状态显示全部脱敏后缀与当前 Key。
 - **LiteLLM**：按“联网加载供应商 → 选择 Provider → **在密钥页或凭据区管理并保存 API Key** → 联网加载模型 → 选择模型 → 保存设置”配置同步替代后端。DeepSeek / OpenAI / Anthropic / xAI 等官方模型列表需要**先保存至少一把 API Key**；未保存时会提示，可取消或显式选择仅用 LiteLLM 子集目录（可能依赖 GitHub）。加载供应商 / 模型、检查更新、测试连接运行中可**再次点击同一按钮停止**；过程中状态栏会显示阶段（如「正在请求官方列表」「官方失败，正在改用子集」）。模型列表整次操作有约 **35 秒**总时限，单次 HTTP 约 **20 秒**上限，避免官方+回退叠成近一分钟无反馈。首次打开不会默认选择 OpenAI 或模型，也不会静默联网；Provider 下拉列表优先显示常用供应商，输入任意片段可搜索，也可手动填写自定义 Provider / 模型。
+- **自定义 OpenAI 兼容 Provider**：LiteLLM 设置页的「自定义 OpenAI 兼容 Provider」区域可**添加 / 编辑 / 删除** OpenCode Go、中转站、本地 vLLM 等 LiteLLM 未内置但兼容 OpenAI 的服务，持久化到 `translator_config.json` 的 `sync.custom_litellm_providers`。添加时填写 `id`（创建后不可改，同时用作模型前缀与密钥用户名）、显示名称、API Base、模型列表 URL（可留空）与可选密钥环境变量；非法 URL 或与内置前缀冲突的 id 会被拒绝。注册后 Provider 下拉与密钥页列表自动合并该条目，选择后即可像内置 provider 一样保存密钥、加载模型与测试连接。实际请求改写为 `openai/<模型>` + `api_base`，`api_key_env` 仅在系统凭据为空时生效。
 - **扩展**：按需安装 / 修复 / 更新关系分析器的独立依赖。安装状态来自当前 Python 环境，不另存“已启用”开关；安装在后台运行，普通翻译不会加载这些科学计算与图像依赖。关系分析器的运行入口和边界见 [关系与语义分析](relation_analysis.md)。
 - **项目**：术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。Ren'Py SDK 须显式配置： **查找 SDK**（用户点击后才扫描附近）、**浏览…**，或确认后 **下载推荐 SDK…**（官方固定版本）；留空不会自动搜其它目录或联网。结果写入 `prepare.renpy_sdk_dir`，保存设置后生效。当前 `game_root` 只读展示；需换项目请用「项目与环境」或「项目列表」。
 - **模型**：同步 / 批量翻译模型、embedding model、批量 thinking level。
@@ -247,7 +248,8 @@ GUI 不引入新的主配置系统。
 
 - Gemini API Key 仍保存到本机 `api_keys.json` 的 `api_keys` 列表。本项目没有自建中转服务，但 Gemini 请求会把认证信息、待译文本、提示词和启用上下文发送给 Google；本地保存密钥不等于文本留在本机。完整数据边界见 [同步翻译工作流](sync_workflow.md#gemini-与-litellm-数据边界)。
 - LiteLLM 的供应商密钥按 Provider 保存到操作系统凭据管理器，不写入 `api_keys.json`、用户级目录缓存或 `translator_config.json`，也不会回显；已有的供应商环境变量仍可使用。若两者同时存在，系统凭据管理器中的密钥优先。切换或取消 Provider 会丢弃尚未保存的明文输入，但不会删除已保存凭据。
-- LiteLLM 的 Provider / 模型目录、目录来源、抓取时间和每个 Provider 的上次选择保存在用户级 GUI 缓存，不污染项目配置。只有用户点击加载按钮才会联网；失败时保留旧缓存，没有缓存则保持空白，不回填内置默认模型。LiteLLM 在线价格 / 上下文目录可能只是供应商目录的子集；无法枚举的 Provider、Azure 部署或自建 OpenAI-compatible 模型仍可手动填写，并按 LiteLLM 文档配置对应的 API Base、版本和额外认证环境变量。
+- LiteLLM 的 Provider / 模型目录、目录来源、抓取时间和每个 Provider 的上次选择保存在用户级 GUI 缓存，不污染项目配置。只有用户点击加载按钮才会联网；失败时保留旧缓存，没有缓存则保持空白，不回填内置默认模型。LiteLLM 在线价格 / 上下文目录可能只是供应商目录的子集；无法枚举的 Provider、Azure 部署或自建 OpenAI-compatible 模型仍可手动填写，并按 LiteLLM 文档配置对应的 API Base、版本和额外认证环境变量。自定义 OpenAI 兼容 Provider 的模型列表直接请求其 `models_url`，不依赖 LiteLLM 在线子集目录（该目录不含用户定义 id）；未保存密钥时不会发起请求，而是提示先保存 API Key。
+- **自定义 Provider 删除边界**：删除自定义 Provider 只移除 `translator_config.json` 中的注册信息，不会删除系统凭据管理器中的密钥或用户级目录缓存；如需清理密钥请到「管理密钥…」中删除。
 - 项目路径、准备流程、过滤器、模型、embedding model、批量 thinking level、GUI 主题、任务专用参数和上下文参数等写入 `translator_config.json`。
 - 保存设置时应保留未知字段，避免破坏手写配置。
 - 如果 API Key 来自 `GEMINI_API_KEY` 等环境变量，GUI 只提示只读状态，不强行写回文件。
