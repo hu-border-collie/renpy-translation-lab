@@ -253,6 +253,19 @@ class CliRunnerChannelTests(unittest.TestCase):
         self.assertEqual(stop_timer.started_with, [1000])
         self.assertIs(self.runner._proc, process)
 
+    def test_force_kill_finalizes_owned_process_that_is_already_not_running(self):
+        process = _LifecycleFakeProcess(state=QProcess.ProcessState.NotRunning)
+        self.runner._proc = process
+        self.runner._start_timeout_timer = _FakeTimer()
+        self.runner._stop_timeout_timer = _FakeTimer()
+
+        self.runner._force_kill()
+
+        self.assertEqual(process.kill_count, 0)
+        self.assertTrue(process.deleted)
+        self.assertIsNone(self.runner._proc)
+        self.assertEqual(self.finished_codes, [-1])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -164,7 +164,17 @@ class CliRunner(QObject):
 
     def _force_kill(self) -> None:
         process = self._proc
-        if process is None or process.state() == QProcess.ProcessState.NotRunning:
+        if process is None:
+            return
+        if process.state() == QProcess.ProcessState.NotRunning:
+            # The state can change before Qt delivers the queued ``finished``
+            # signal. Complete ownership now so a missed/delayed callback cannot
+            # leave the runner permanently active; the stale signal is ignored.
+            self._on_process_finished(
+                process,
+                -1,
+                QProcess.ExitStatus.CrashExit,
+            )
             return
         self.line_ready.emit("[GUI] 本地进程未及时停止，正在强制终止...\n")
         process.kill()
