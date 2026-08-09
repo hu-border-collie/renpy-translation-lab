@@ -171,11 +171,13 @@ class ShutdownCoordinatorTests(unittest.TestCase):
                         key="worker",
                         label="后台任务",
                         active_callback=mock.Mock(side_effect=error_type("wrapper deleted")),
-                        shutdown_callback=lambda: requests.append(True),
+                        shutdown_callback=lambda requests=requests: requests.append(True),
                     )
                 )
                 coordinator.cancellation_failed.connect(
-                    lambda label, error: failures.append((label, error))
+                    lambda label, error, failures=failures: failures.append(
+                        (label, error)
+                    )
                 )
 
                 self.assertTrue(coordinator.begin(timeout_ms=5000))
