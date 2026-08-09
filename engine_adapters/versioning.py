@@ -9,7 +9,7 @@ candidate relationships; it never confirms lineage or emits writeback plans.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 import json
@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 import unicodedata
 
-from atomic_io import atomic_write_json, atomic_write_text
+from atomic_io import atomic_write_json, atomic_write_lines
 
 from .contracts import Occurrence
 from .coverage import (
@@ -324,11 +324,9 @@ class CoverageBinding:
             unresolved_findings=normalized_unresolved,
             dependency_digest="",
         )
-        return cls(
-            **{
-                **provisional.__dict__,
-                "dependency_digest": digest_json(provisional.stable_payload()),
-            }
+        return replace(
+            provisional,
+            dependency_digest=digest_json(provisional.stable_payload()),
         )
 
     @classmethod
@@ -487,11 +485,9 @@ class UnitOccurrenceRecord:
             context_after=str(context_after or ""),
             occurrence_digest="",
         )
-        return cls(
-            **{
-                **provisional.__dict__,
-                "occurrence_digest": digest_json(provisional.stable_payload()),
-            }
+        return replace(
+            provisional,
+            occurrence_digest=digest_json(provisional.stable_payload()),
         )
 
     @classmethod
@@ -737,11 +733,9 @@ def create_project_snapshot(
         generated_at=generated_at or _utc_now(),
         snapshot_digest="",
     )
-    snapshot = ProjectSnapshot(
-        **{
-            **provisional.__dict__,
-            "snapshot_digest": digest_json(provisional.stable_payload()),
-        }
+    snapshot = replace(
+        provisional,
+        snapshot_digest=digest_json(provisional.stable_payload()),
     )
     validate_project_snapshot(snapshot)
     return snapshot
@@ -875,8 +869,14 @@ def export_project_snapshot(
     package_dir.mkdir(parents=True, exist_ok=True)
     occurrences_path = package_dir / DEFAULT_OCCURRENCES_FILENAME
     snapshot_path = package_dir / DEFAULT_SNAPSHOT_FILENAME
-    rows = "".join(stable_json_dumps(item.to_dict()) + "\n" for item in snapshot.occurrences)
-    atomic_write_text(occurrences_path, rows, encoding="utf-8")
+    atomic_write_lines(
+        occurrences_path,
+        (
+            stable_json_dumps(item.to_dict()) + "\n"
+            for item in snapshot.occurrences
+        ),
+        encoding="utf-8",
+    )
     atomic_write_json(
         snapshot_path,
         snapshot.to_manifest(occurrences_file=DEFAULT_OCCURRENCES_FILENAME),
@@ -901,25 +901,25 @@ def _read_json_object(path: Path, *, artifact_name: str) -> dict[str, Any]:
 
 
 def _read_jsonl_objects(path: Path, *, artifact_name: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     try:
-        lines = path.read_text(encoding="utf-8-sig").splitlines()
+        with path.open("r", encoding="utf-8-sig") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise VersioningArtifactError(
+                        f"Invalid {artifact_name} JSON at line {line_number}: {exc}"
+                    ) from exc
+                if not isinstance(value, dict):
+                    raise VersioningArtifactError(
+                        f"{artifact_name} line {line_number} must be an object."
+                    )
+                rows.append(value)
     except (OSError, UnicodeError) as exc:
         raise VersioningArtifactError(f"Could not read {artifact_name}: {exc}") from exc
-    rows: list[dict[str, Any]] = []
-    for line_number, line in enumerate(lines, start=1):
-        if not line.strip():
-            continue
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise VersioningArtifactError(
-                f"Invalid {artifact_name} JSON at line {line_number}: {exc}"
-            ) from exc
-        if not isinstance(value, dict):
-            raise VersioningArtifactError(
-                f"{artifact_name} line {line_number} must be an object."
-            )
-        rows.append(value)
     return rows
 
 
@@ -1162,12 +1162,15 @@ def _bounded_exact_group(
         ):
             distinctive.append(target_id)
     selected = distinctive[:MAX_FUZZY_PAIR_CANDIDATES]
-    selected.extend(
-        target_id
-        for target_id in ordered
-        if target_id not in selected
-    )
-    return tuple(selected[:MAX_EXACT_GROUP_PAIR_CANDIDATES])
+    chosen = set(selected)
+    for target_id in ordered:
+        if len(selected) >= MAX_EXACT_GROUP_PAIR_CANDIDATES:
+            break
+        if target_id in chosen:
+            continue
+        chosen.add(target_id)
+        selected.append(target_id)
+    return tuple(selected)
 
 
 def _unique_best(
@@ -1341,11 +1344,9 @@ class ReconciliationItem:
             evidence=dict(evidence or {}),
             item_digest="",
         )
-        return cls(
-            **{
-                **provisional.__dict__,
-                "item_digest": digest_json(provisional.stable_payload()),
-            }
+        return replace(
+            provisional,
+            item_digest=digest_json(provisional.stable_payload()),
         )
 
     @classmethod
@@ -1921,11 +1922,9 @@ def reconcile_project_snapshots(
         generated_at=generated_at or _utc_now(),
         reconciliation_digest="",
     )
-    report = ReconciliationReport(
-        **{
-            **provisional.__dict__,
-            "reconciliation_digest": digest_json(provisional.stable_payload()),
-        }
+    report = replace(
+        provisional,
+        reconciliation_digest=digest_json(provisional.stable_payload()),
     )
     validate_reconciliation_report(report)
     return report
@@ -2110,8 +2109,11 @@ def export_reconciliation_report(
     package_dir.mkdir(parents=True, exist_ok=True)
     items_path = package_dir / DEFAULT_RECONCILIATION_ITEMS_FILENAME
     report_path = package_dir / DEFAULT_RECONCILIATION_FILENAME
-    rows = "".join(stable_json_dumps(item.to_dict()) + "\n" for item in report.items)
-    atomic_write_text(items_path, rows, encoding="utf-8")
+    atomic_write_lines(
+        items_path,
+        (stable_json_dumps(item.to_dict()) + "\n" for item in report.items),
+        encoding="utf-8",
+    )
     atomic_write_json(
         report_path,
         report.to_manifest(items_file=DEFAULT_RECONCILIATION_ITEMS_FILENAME),

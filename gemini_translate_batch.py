@@ -3551,7 +3551,7 @@ def run_revision_corpus_export(output_dir=None):
 
 def _versioning_artifact_component(value):
     normalized = re.sub(r'[^A-Za-z0-9._-]+', '-', str(value or '').strip())
-    return normalized.strip('._-')[:80] or 'version'
+    return normalized.strip('._-')[:80].strip('._-') or 'version'
 
 
 def _create_versioning_output_dir(root_dir, name):

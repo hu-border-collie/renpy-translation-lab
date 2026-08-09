@@ -60,6 +60,8 @@ class TestEngineAdapterP3(unittest.TestCase):
         specs,
         *,
         review_digest=None,
+        coverage_status="ready",
+        review_policy_satisfied=True,
         generated_at="2026-08-09T00:00:00+00:00",
     ):
         project_fingerprint = f"project-{version}"
@@ -70,7 +72,7 @@ class TestEngineAdapterP3(unittest.TestCase):
         files = sorted({spec.get("file", "chapter.rpy") for spec in specs})
         coverage = versioning.CoverageBinding.create(
             coverage_digest=f"coverage-{version}",
-            coverage_status="ready",
+            coverage_status=coverage_status,
             coverage_schema_version=1,
             inventory_digest=f"inventory-{version}",
             source_fingerprint=source_fingerprint,
@@ -79,7 +81,7 @@ class TestEngineAdapterP3(unittest.TestCase):
             review_digest=review_digest or f"review-{version}",
             review_status="human_reviewed",
             review_policy="agent_or_human",
-            review_policy_satisfied=True,
+            review_policy_satisfied=review_policy_satisfied,
             unresolved_findings=0,
         )
         lineage = {
@@ -298,6 +300,7 @@ class TestEngineAdapterP3(unittest.TestCase):
             generated_at="2026-08-09T00:00:00+00:00",
         )
 
+        self.assertEqual(report.status, "ready")
         self.assertEqual(report.summary["matched"], 7)
         self.assertEqual(report.summary["confirmed_lineage"], 1)
         self.assertEqual(report.summary["locator_exact"], 1)
@@ -336,6 +339,7 @@ class TestEngineAdapterP3(unittest.TestCase):
             ],
         )
         report = versioning.reconcile_project_snapshots(base, target)
+        self.assertEqual(report.status, "attention")
         self.assertEqual(report.summary["matched"], 0)
         self.assertEqual(report.summary["ambiguous"], 2)
         self.assertEqual(report.summary["ambiguous_target_count"], 2)
@@ -344,6 +348,29 @@ class TestEngineAdapterP3(unittest.TestCase):
         ambiguous = [item for item in report.items if item.disposition == "ambiguous"]
         self.assertTrue(
             all(len(item.candidate_target_occurrence_ids) == 2 for item in ambiguous)
+        )
+
+    def test_reconciliation_status_requires_reviewable_snapshots(self):
+        specs = [{"key": "line", "source": "A stable line"}]
+        base = self._snapshot("1.0", specs)
+        policy_pending = self._snapshot(
+            "2.0",
+            specs,
+            review_policy_satisfied=False,
+        )
+        blocked_coverage = self._snapshot(
+            "3.0",
+            specs,
+            coverage_status="block",
+        )
+
+        self.assertEqual(
+            versioning.reconcile_project_snapshots(base, policy_pending).status,
+            "attention",
+        )
+        self.assertEqual(
+            versioning.reconcile_project_snapshots(base, blocked_coverage).status,
+            "attention",
         )
 
     def test_large_ambiguity_group_lists_every_target_explicitly(self):
@@ -625,34 +652,73 @@ class TestEngineAdapterP3(unittest.TestCase):
             by_label["版本资产·比较两个快照"],
         )
 
-    def test_machine_output_file_cannot_overwrite_versioning_artifacts(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            output_dir = Path(tmp) / "snapshot"
-            protected = output_dir / versioning.DEFAULT_SNAPSHOT_FILENAME
-            stdout = io.StringIO()
-            with mock.patch.object(batch, "dispatch_command") as dispatch, redirect_stdout(
-                stdout
-            ):
-                exit_code = batch.main(
-                    [
-                        "export-project-snapshot",
-                        "--version-id",
-                        "1.0",
-                        "--output-dir",
-                        str(output_dir),
-                        "--output",
-                        "json",
-                        "--output-file",
-                        str(protected),
-                    ]
+    def test_versioning_artifact_component_strips_after_truncation(self):
+        for marker in (".", "_", "-"):
+            with self.subTest(marker=marker):
+                component = batch._versioning_artifact_component(
+                    "a" * 79 + marker + "suffix"
                 )
-            envelope = json.loads(stdout.getvalue())
-            self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
-            self.assertEqual(
-                envelope["error"]["code"],
-                "OUTPUT_FILE_PATH_CONFLICT",
-            )
-            dispatch.assert_not_called()
+                self.assertEqual(component, "a" * 79)
+
+    def test_machine_output_file_cannot_overwrite_versioning_artifacts(self):
+        cases = (
+            (
+                "snapshot",
+                versioning.DEFAULT_SNAPSHOT_FILENAME,
+                ["export-project-snapshot", "--version-id", "1.0"],
+            ),
+            (
+                "occurrences",
+                versioning.DEFAULT_OCCURRENCES_FILENAME,
+                ["export-project-snapshot", "--version-id", "1.0"],
+            ),
+            (
+                "report",
+                versioning.DEFAULT_RECONCILIATION_FILENAME,
+                [
+                    "reconcile-project-snapshots",
+                    "base/project_snapshot.json",
+                    "target/project_snapshot.json",
+                ],
+            ),
+            (
+                "items",
+                versioning.DEFAULT_RECONCILIATION_ITEMS_FILENAME,
+                [
+                    "reconcile-project-snapshots",
+                    "base/project_snapshot.json",
+                    "target/project_snapshot.json",
+                ],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, filename, command in cases:
+                with self.subTest(artifact=label):
+                    output_dir = Path(tmp) / label
+                    protected = output_dir / filename
+                    stdout = io.StringIO()
+                    with mock.patch.object(
+                        batch,
+                        "dispatch_command",
+                    ) as dispatch, redirect_stdout(stdout):
+                        exit_code = batch.main(
+                            [
+                                *command,
+                                "--output-dir",
+                                str(output_dir),
+                                "--output",
+                                "json",
+                                "--output-file",
+                                str(protected),
+                            ]
+                        )
+                    envelope = json.loads(stdout.getvalue())
+                    self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+                    self.assertEqual(
+                        envelope["error"]["code"],
+                        "OUTPUT_FILE_PATH_CONFLICT",
+                    )
+                    dispatch.assert_not_called()
 
 
 if __name__ == "__main__":
