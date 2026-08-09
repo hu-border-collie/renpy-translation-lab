@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from tests import gui_test_support
 
@@ -95,6 +96,37 @@ class ShutdownCoordinatorTests(unittest.TestCase):
         self._register("same", "一", state)
         with self.assertRaisesRegex(ValueError, "duplicate"):
             self._register("same", "二", state)
+
+
+@gui_test_support.skip_unless_gui(ShutdownCoordinator is None, IMPORT_ERROR)
+class CloseMainWindowHelperTests(unittest.TestCase):
+    @mock.patch("PySide6.QtWidgets.QApplication.instance")
+    def test_synchronous_close_does_not_drain_pending_focus_events(self, instance):
+        app = instance.return_value
+        window = mock.Mock()
+        window._shutdown_close_ready = False
+        window._shutdown_coordinator.in_progress = False
+
+        gui_test_support.close_main_window(window)
+
+        window.close.assert_called_once_with()
+        app.processEvents.assert_not_called()
+
+    @mock.patch("PySide6.QtWidgets.QApplication.instance")
+    def test_asynchronous_close_drains_terminal_close_callback(self, instance):
+        app = instance.return_value
+        window = mock.Mock()
+        window._shutdown_close_ready = False
+        window._shutdown_coordinator.in_progress = False
+
+        def schedule_terminal_close():
+            window._shutdown_close_ready = True
+
+        window.close.side_effect = schedule_terminal_close
+
+        gui_test_support.close_main_window(window)
+
+        self.assertEqual(app.processEvents.call_count, 3)
 
 
 if __name__ == "__main__":

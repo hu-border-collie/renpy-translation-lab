@@ -51,10 +51,18 @@ def close_main_window(window: Any) -> None:
         ),
     ):
         window.close()
+        coordinator = getattr(window, "_shutdown_coordinator", None)
+        asynchronous_close = bool(
+            getattr(window, "_shutdown_close_ready", False)
+            or getattr(coordinator, "in_progress", False)
+        )
+        if not asynchronous_close:
+            return
         # Active-task cleanup intentionally ignores the first close event and
         # schedules a terminal second close after the coordinator settles.
-        # Drain a few zero-delay callbacks so teardown never leaves that close
-        # queued for the next test's shared QApplication event loop.
+        # Drain a few zero-delay callbacks only for that asynchronous path so
+        # ordinary teardown cannot run a hidden window's pending focus callback
+        # before the caller queues deleteLater().
         try:
             from PySide6.QtWidgets import QApplication
 
