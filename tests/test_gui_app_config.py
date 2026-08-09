@@ -1966,6 +1966,26 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(self.window._active_command, "doctor")
         self.window._set_task_running.assert_not_called()
 
+    def test_doctor_queued_completion_is_silent_during_shutdown(self):
+        worker = object()
+        self.window._doctor_worker = worker
+        self.window.sender = lambda: worker
+        self.window._shutdown_requested = True
+        self.window._active_command = "doctor"
+        self.window._set_task_running = mock.Mock()
+        self.window._append_log = mock.Mock()
+        self.window._set_doctor_summary = mock.Mock()
+        self.window.state = mock.Mock()
+
+        self.window._on_doctor_completed(object())
+
+        self.assertIsNone(self.window._doctor_worker)
+        self.assertEqual(self.window._active_command, "")
+        self.window._set_task_running.assert_called_once_with(False)
+        self.window._append_log.assert_not_called()
+        self.window._set_doctor_summary.assert_not_called()
+        self.window.state.get_api_key_status.assert_not_called()
+
     def test_confirm_close_save_discard_and_cancel_paths(self):
         self.window._config_tab_has_unsaved_changes = mock.Mock(return_value=False)
         self.assertTrue(self.window._confirm_unsaved_config_before_close())

@@ -10900,6 +10900,8 @@ class MainWindow(QMainWindow):
         self._doctor_worker = None
         self._active_command = ""
         self._set_task_running(False)
+        if getattr(self, "_shutdown_requested", False):
+            return
 
         log_text = result.log_text.strip()
         if log_text:
