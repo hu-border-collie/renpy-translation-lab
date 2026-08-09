@@ -134,16 +134,22 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
             runtime.SYNC_BACKEND = previous_backend
             runtime.CUSTOM_LITELLM_PROVIDERS = previous_registry
 
-    def test_invalid_custom_provider_config_blocks_sync_settings(self):
-        with self.assertRaises(ValueError) as captured:
-            runtime.load_sync_translation_settings({
-                "sync": {
-                    "custom_litellm_providers": [
-                        {"id": "bad", "base_url": "not-a-url"},
-                    ],
-                }
-            })
-        self.assertIn("http(s)", str(captured.exception))
+    def test_invalid_custom_provider_config_warns_and_degrades(self):
+        previous_registry = runtime.CUSTOM_LITELLM_PROVIDERS
+        try:
+            with mock.patch("sys.stdout", output := io.StringIO()):
+                runtime.load_sync_translation_settings({
+                    "sync": {
+                        "custom_litellm_providers": [
+                            {"id": "bad", "base_url": "not-a-url"},
+                        ],
+                    }
+                })
+            self.assertEqual(runtime.CUSTOM_LITELLM_PROVIDERS, {})
+            self.assertIn("已忽略无效的 sync.custom_litellm_providers", output.getvalue())
+            self.assertIn("http(s)", output.getvalue())
+        finally:
+            runtime.CUSTOM_LITELLM_PROVIDERS = previous_registry
 
     def test_call_gemini_sdk_passes_custom_provider_registry_to_backend(self):
         fake_result = type("Result", (), {

@@ -1046,9 +1046,19 @@ def load_sync_translation_settings(config):
 
     from litellm_provider_config import custom_provider_registry
 
-    CUSTOM_LITELLM_PROVIDERS = custom_provider_registry(
-        sync.get("custom_litellm_providers")
-    )
+    try:
+        CUSTOM_LITELLM_PROVIDERS = custom_provider_registry(
+            sync.get("custom_litellm_providers")
+        )
+    except ValueError as exc:
+        # Same degrade-and-warn contract as the GUI: an invalid custom-provider
+        # entry must not make the whole sync path crash at config load.
+        CUSTOM_LITELLM_PROVIDERS = {}
+        print(
+            "Warning: 已忽略无效的 sync.custom_litellm_providers 配置"
+            f"（{exc}）；请修正 translator_config.json 后重试。",
+            flush=True,
+        )
 
     load_rotation_settings(config)
 
