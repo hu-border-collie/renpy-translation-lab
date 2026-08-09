@@ -98,6 +98,7 @@ class CustomLiteLLMProvider:
     base_url: str
     models_url: str
     api_key_env: str = ""
+    requires_key: bool = True
 
 
 _CUSTOM_PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9_-]+$")
@@ -125,13 +126,22 @@ def reserved_litellm_provider_ids(litellm_module: Any = None) -> frozenset[str]:
 
 
 def validate_custom_provider_url(value: object, *, field_name: str) -> str:
-    """Require an http(s) absolute URL; return the trimmed value."""
+    """Require a clean http(s) URL; return the trimmed value.
+
+    Rejects embedded credentials (``user:pass@``) and query/fragment strings:
+    credentials must never land in the plaintext config, and a query/fragment
+    would produce a malformed ``api_base`` for the request rewrite.
+    """
     text = str(value or "").strip()
     if not text:
         raise ValueError(f"{field_name}不能为空。")
     parsed = urlsplit(text)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError(f"{field_name}必须是 http(s) URL。")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{field_name}不能包含用户名或密码。")
+    if parsed.query or parsed.fragment:
+        raise ValueError(f"{field_name}不能包含查询参数或片段。")
     return text
 
 
@@ -189,12 +199,16 @@ def custom_provider_from_mapping(
     else:
         models_url = base_url.rstrip("/") + "/models"
     api_key_env = validate_custom_provider_env_name(entry.get("api_key_env"))
+    requires_key = entry.get("requires_key", True)
+    if not isinstance(requires_key, bool):
+        raise ValueError(f"custom_litellm_providers[{index}].requires_key 必须是布尔值。")
     return CustomLiteLLMProvider(
         id=provider_id,
         label=label,
         base_url=base_url,
         models_url=models_url,
         api_key_env=api_key_env,
+        requires_key=requires_key,
     )
 
 
@@ -205,14 +219,19 @@ def parse_custom_litellm_providers(
 ) -> tuple[CustomLiteLLMProvider, ...]:
     """Parse ``sync.custom_litellm_providers`` into validated provider entries.
 
-    Raises ValueError on structural errors, invalid ids/URLs or duplicate ids;
-    a missing or non-list value is treated as an empty registry so older configs
-    keep working.
+    A missing value (``None``) is treated as an empty registry so older configs
+    keep working; any other non-list value raises ValueError. Raises ValueError
+    on structural errors, invalid ids/URLs, non-boolean ``requires_key`` or
+    duplicate ids. When *litellm_module* is omitted but the optional litellm
+    dependency is installed, its provider table is merged into the reserved-id
+    check (the import result is cached per process).
     """
     if raw is None:
         return ()
     if not isinstance(raw, list):
         raise ValueError("custom_litellm_providers 必须是列表。")
+    if litellm_module is None:
+        litellm_module = _installed_litellm_module()
     reserved = reserved_litellm_provider_ids(litellm_module)
     providers: list[CustomLiteLLMProvider] = []
     seen: set[str] = set()
@@ -239,6 +258,28 @@ def custom_provider_registry(
         provider.id: provider
         for provider in parse_custom_litellm_providers(raw, litellm_module=litellm_module)
     }
+
+
+_INSTALLED_LITELLM_MODULE: Any = None
+_INSTALLED_LITELLM_PROBED = False
+
+
+def _installed_litellm_module() -> Any:
+    """Return the installed litellm module, or None (probed once per process)."""
+    global _INSTALLED_LITELLM_MODULE, _INSTALLED_LITELLM_PROBED
+    if _INSTALLED_LITELLM_PROBED:
+        return _INSTALLED_LITELLM_MODULE
+    _INSTALLED_LITELLM_PROBED = True
+    try:
+        from importlib.util import find_spec
+
+        if find_spec("litellm") is None:
+            return None
+        import litellm as litellm_module
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return None
+    _INSTALLED_LITELLM_MODULE = litellm_module
+    return litellm_module
 
 
 def _custom_registry_lookup(
@@ -830,7 +871,7 @@ def native_catalog_endpoint(
             label=custom.label,
             source=provider,
             auth="bearer",
-            require_key=True,
+            require_key=custom.requires_key,
             payload_style="openai",
         )
     return None

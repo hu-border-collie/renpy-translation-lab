@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 from collections.abc import Mapping
@@ -177,6 +178,15 @@ class _CancellableNetworkWorker(QThread):
 
 
 class LiteLLMModelCatalogWorker(_CancellableNetworkWorker):
+    """Fetch a provider's text-model list in a cancellable background thread.
+
+    ``custom_providers`` is a snapshot of the custom OpenAI-compatible registry
+    (id → :class:`~litellm_provider_config.CustomLiteLLMProvider`) taken at
+    construction time. Custom ids route to their configured ``models_url`` with
+    the resolved keyring/env key; they never fall back to the LiteLLM online
+    subset because user-defined ids do not exist there.
+    """
+
     completed = Signal(object, object, object)
     progress = Signal(str)
 
@@ -205,10 +215,16 @@ class LiteLLMModelCatalogWorker(_CancellableNetworkWorker):
         endpoint = native_catalog_endpoint(self.provider, self._custom_providers)
         if endpoint is None:
             raise ValueError(f"未配置 {self.provider} 官方模型列表")
-        if endpoint.require_key and not self.api_key:
+        api_key = self.api_key
+        custom = self._custom_providers.get(self.provider)
+        if not api_key and custom is not None and custom.api_key_env:
+            # Same explicit env fallback as the request backend: never fall
+            # back to OPENAI_API_KEY for a third-party endpoint.
+            api_key = str(os.environ.get(custom.api_key_env) or "").strip()
+        if endpoint.require_key and not api_key:
             raise ValueError(f"请先保存 {endpoint.label} API Key，再刷新官方模型列表")
 
-        headers = build_native_catalog_headers(endpoint, self.api_key)
+        headers = build_native_catalog_headers(endpoint, api_key)
         request = Request(endpoint.url, headers=headers)
         try:
             payload = self._load_json_url(request, timeout=self._remaining_timeout())
@@ -360,6 +376,14 @@ class LiteLLMVersionWorker(_CancellableNetworkWorker):
 
 
 class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
+    """Send one minimal completion request to verify a provider connection.
+
+    ``custom_providers`` is snapshotted at construction and forwarded to
+    :class:`~litellm_sync_backend.LiteLLMSyncBackend` so custom ids get the same
+    ``openai/<model>`` + ``api_base`` rewrite and credential resolution as
+    production sync requests.
+    """
+
     completed = Signal(bool, str)
     progress = Signal(str)
 

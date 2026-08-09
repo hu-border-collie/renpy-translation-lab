@@ -7,6 +7,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -62,7 +63,7 @@ class CustomLiteLLMProviderDialog(QDialog):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.id_edit = QLineEdit(str(values.get("id") or ""))
         self.id_edit.setPlaceholderText("例如 opencode-go")
-        self.id_edit.setEnabled(not self._editing)
+        self.id_edit.setReadOnly(self._editing)
         self.id_edit.setToolTip(
             "创建后不可修改；只能包含小写字母、数字、- 和 _，"
             "且不能与 LiteLLM 已知 provider 前缀冲突。"
@@ -88,6 +89,16 @@ class CustomLiteLLMProviderDialog(QDialog):
             "后端才会读取此环境变量并显式传给请求。"
         )
         form.addRow("密钥环境变量：", self.api_key_env_edit)
+
+        self.requires_key_cb = QCheckBox("需要 API Key")
+        self.requires_key_cb.setChecked(
+            bool(values.get("requires_key", True))
+        )
+        self.requires_key_cb.setToolTip(
+            "关闭后适用于无需鉴权的本地 vLLM / LocalAI 网关："
+            "模型列表与请求都不会要求或携带密钥。"
+        )
+        form.addRow("认证：", self.requires_key_cb)
         layout.addLayout(form)
 
         self.error_label = QLabel()
@@ -106,18 +117,33 @@ class CustomLiteLLMProviderDialog(QDialog):
         layout.addWidget(buttons)
 
     def _on_accept(self) -> None:
-        error = validate_custom_provider_form(
-            self.id_edit.text().strip(),
-            self.base_url_edit.text().strip(),
-            label=self.label_edit.text().strip(),
-            models_url=self.models_url_edit.text().strip(),
-            api_key_env=self.api_key_env_edit.text().strip(),
-            reserved=self._reserved,
-        )
+        provider_id = self.id_edit.text().strip()
+        if self._editing:
+            # The id field is locked and the id is already registered; only the
+            # mutable fields are re-validated on accept.
+            error = validate_custom_provider_form(
+                provider_id,
+                self.base_url_edit.text().strip(),
+                label=self.label_edit.text().strip(),
+                models_url=self.models_url_edit.text().strip(),
+                api_key_env=self.api_key_env_edit.text().strip(),
+                # The id is locked and already registered; skip conflict
+                # checking (empty reserved set) while still validating the
+                # character set and the mutable fields.
+                reserved=frozenset(),
+            )
+        else:
+            error = validate_custom_provider_form(
+                provider_id,
+                self.base_url_edit.text().strip(),
+                label=self.label_edit.text().strip(),
+                models_url=self.models_url_edit.text().strip(),
+                api_key_env=self.api_key_env_edit.text().strip(),
+                reserved=self._reserved,
+            )
         if error:
             self.error_label.setText(error)
             self.error_label.setVisible(True)
-            self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(True)
             return
         self.accept()
 
@@ -136,4 +162,6 @@ class CustomLiteLLMProviderDialog(QDialog):
         api_key_env = self.api_key_env_edit.text().strip()
         if api_key_env:
             entry["api_key_env"] = api_key_env
+        if not self.requires_key_cb.isChecked():
+            entry["requires_key"] = False
         return entry

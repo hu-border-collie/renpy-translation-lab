@@ -228,6 +228,16 @@ class LiteLLMSyncBackend:
             # named environment variable's value instead of letting LiteLLM
             # silently fall back to OPENAI_API_KEY for a third-party endpoint.
             api_key = str(os.environ.get(custom.api_key_env) or "").strip()
+        if custom is not None and custom.requires_key and not api_key:
+            # The model id has been rewritten to openai/<model>, so LiteLLM
+            # would otherwise fall back to OPENAI_API_KEY and leak an unrelated
+            # OpenAI key to the third-party api_base. Fail before dispatch
+            # instead of risking that leak.
+            raise LiteLLMBackendError(
+                f"自定义 Provider {custom.label} 需要 API Key，"
+                "但系统凭据与 api_key_env 环境变量均未提供。",
+                category="authentication",
+            )
         if api_key:
             kwargs["api_key"] = api_key
         if custom is not None:

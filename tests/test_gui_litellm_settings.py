@@ -40,13 +40,33 @@ class GuiLiteLLMSettingsTests(unittest.TestCase):
                 "vertex_ai/gemini",
                 {"VERTEXAI_PROJECT": "secret-project", "VERTEXAI_LOCATION": "region"},
             ),
+            (
+                "opencode-go/gpt-4o-mini",
+                {"OPENCODE_GO_API_KEY": "secret-value"},
+            ),
+        )
+        registry = custom_provider_registry(
+            [
+                {
+                    "id": "opencode-go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                    "api_key_env": "OPENCODE_GO_API_KEY",
+                }
+            ]
         )
         for model, values in cases:
             with self.subTest(model=model):
-                status = provider_credential_status(
-                    model,
-                    _PresenceOnlyEnvironment(values),
-                )
+                if model.startswith("opencode-go"):
+                    status = provider_credential_status(
+                        model,
+                        _PresenceOnlyEnvironment(values),
+                        registry,
+                    )
+                else:
+                    status = provider_credential_status(
+                        model,
+                        _PresenceOnlyEnvironment(values),
+                    )
                 self.assertTrue(status.configured)
 
     def test_ollama_does_not_require_key(self):
@@ -104,6 +124,24 @@ class GuiLiteLLMSettingsTests(unittest.TestCase):
         self.assertIsNone(status.configured)
         self.assertIn("保存 API Key", status.message)
 
+    def test_keyless_custom_provider_credential_status(self):
+        registry = custom_provider_registry(
+            [
+                {
+                    "id": "local-vllm",
+                    "base_url": "http://127.0.0.1:8000/v1",
+                    "requires_key": False,
+                }
+            ]
+        )
+        status = provider_credential_status(
+            "local-vllm/llama-3",
+            {},
+            registry,
+        )
+        self.assertTrue(status.configured)
+        self.assertIn("无需 API Key", status.message)
+
     def test_custom_provider_form_validation(self):
         self.assertEqual(
             validate_custom_provider_form(
@@ -139,6 +177,14 @@ class GuiLiteLLMSettingsTests(unittest.TestCase):
                 api_key_env="OPENCODE_GO_API_KEY",
             ),
             "",
+        )
+        self.assertIn(
+            "模型列表 URL",
+            validate_custom_provider_form(
+                "opencode-go",
+                "https://opencode.ai/zen/go/v1",
+                models_url="ftp://example.com/models",
+            ),
         )
 
     def test_legacy_litellm_model_loads_without_overwriting_gemini_default(self):

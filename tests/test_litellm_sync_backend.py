@@ -298,24 +298,6 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         self.assertEqual(calls[0]["model"], "openai/gpt-4o-mini")
         self.assertEqual(calls[0]["api_key"], "env-custom-key")
 
-    def test_custom_provider_without_key_leaves_auth_to_endpoint(self):
-        calls = []
-        backend = LiteLLMSyncBackend(
-            completion=lambda **kwargs: calls.append(kwargs) or {"choices": []},
-            custom_providers=self._custom_registry(),
-        )
-        with (
-            mock.patch(
-                "litellm_provider_config.load_provider_api_key",
-                return_value="",
-            ),
-            mock.patch.dict(os.environ, {}, clear=True),
-        ):
-            backend.generate(SyncGenerationRequest("opencode-go/gpt-4o-mini", "hello"))
-
-        self.assertNotIn("api_key", calls[0])
-        self.assertEqual(calls[0]["api_base"], "https://opencode.ai/zen/go/v1")
-
     def test_custom_provider_async_path_rewrites_identically(self):
         calls = []
 
@@ -327,11 +309,15 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
             async_completion=completion,
             custom_providers=self._custom_registry(),
         )
-        result = asyncio.run(
-            backend.generate_async(
-                SyncGenerationRequest("opencode-go/model-x", "hello")
+        with mock.patch(
+            "litellm_provider_config.load_provider_api_key",
+            return_value="stored-custom-key",
+        ):
+            result = asyncio.run(
+                backend.generate_async(
+                    SyncGenerationRequest("opencode-go/model-x", "hello")
+                )
             )
-        )
 
         self.assertEqual(calls[0]["model"], "openai/model-x")
         self.assertEqual(calls[0]["api_base"], "https://opencode.ai/zen/go/v1")
@@ -356,6 +342,63 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         self.assertEqual(calls[0]["model"], "openai/gpt-test")
         self.assertNotIn("api_base", calls[0])
         self.assertEqual(calls[0]["response_format"]["type"], "json_schema")
+
+    def test_custom_provider_blocks_implicit_openai_key_fallback(self):
+        """Regression: OPENAI_API_KEY must never reach a third-party api_base."""
+        calls = []
+        backend = LiteLLMSyncBackend(
+            completion=lambda **kwargs: calls.append(kwargs) or {"choices": []},
+            custom_providers=self._custom_registry(),
+        )
+        with (
+            mock.patch(
+                "litellm_provider_config.load_provider_api_key",
+                return_value="",
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"OPENAI_API_KEY": "official-openai-key"},
+                clear=True,
+            ),
+        ):
+            with self.assertRaises(LiteLLMBackendError) as captured:
+                backend.generate(SyncGenerationRequest("opencode-go/gpt-4o-mini", "hello"))
+
+        self.assertEqual(calls, [])
+        self.assertEqual(captured.exception.category, "authentication")
+        self.assertIn("需要 API Key", str(captured.exception))
+
+    def test_custom_provider_without_key_requirement_skips_key_gate(self):
+        calls = []
+        registry = custom_provider_registry(
+            [
+                {
+                    "id": "local-vllm",
+                    "base_url": "http://127.0.0.1:8000/v1",
+                    "requires_key": False,
+                }
+            ]
+        )
+        backend = LiteLLMSyncBackend(
+            completion=lambda **kwargs: calls.append(kwargs) or {"choices": []},
+            custom_providers=registry,
+        )
+        with (
+            mock.patch(
+                "litellm_provider_config.load_provider_api_key",
+                return_value="",
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"OPENAI_API_KEY": "official-openai-key"},
+                clear=True,
+            ),
+        ):
+            backend.generate(SyncGenerationRequest("local-vllm/llama-3", "hello"))
+
+        self.assertNotIn("api_key", calls[0])
+        self.assertEqual(calls[0]["api_base"], "http://127.0.0.1:8000/v1")
+        self.assertEqual(calls[0]["model"], "openai/llama-3")
 
 
 if __name__ == "__main__":

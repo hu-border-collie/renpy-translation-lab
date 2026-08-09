@@ -7416,10 +7416,17 @@ class MainWindow(QMainWindow):
                 except ProviderCredentialStoreError:
                     has_key = False
                 if not has_key:
-                    message = (
-                        f"{message} 提示：{endpoint.label} 官方列表需先保存 API Key；"
-                        "未保存时只能尝试 LiteLLM 子集目录（可能依赖 GitHub 网络）。"
-                    )
+                    custom = self._custom_litellm_providers.get(provider)
+                    if custom is not None:
+                        message = (
+                            f"{message} 提示：{endpoint.label} 模型列表需先保存 API Key；"
+                            "自定义 Provider 没有 LiteLLM 子集目录可回退。"
+                        )
+                    else:
+                        message = (
+                            f"{message} 提示：{endpoint.label} 官方列表需先保存 API Key；"
+                            "未保存时只能尝试 LiteLLM 子集目录（可能依赖 GitHub 网络）。"
+                        )
             model_label.setText(message)
 
     def _save_litellm_cache(self, action: Callable[[], None]) -> None:
@@ -7575,6 +7582,14 @@ class MainWindow(QMainWindow):
                 f"系统凭据管理器中尚未保存密钥。"
                 f"加载 {label} 官方模型列表前请先保存 API Key。"
             )
+        elif provider in self._custom_litellm_providers:
+            custom = self._custom_litellm_providers[provider]
+            message = (
+                f"该自定义 Provider 无需 API Key（requires_key=false），"
+                "可直接加载模型列表与测试连接。"
+                if not custom.requires_key
+                else "系统凭据管理器中尚未保存密钥。"
+            )
         else:
             message = "系统凭据管理器中尚未保存密钥。"
         self._litellm_saved_key_status[provider] = message
@@ -7716,7 +7731,7 @@ class MainWindow(QMainWindow):
 
     def _custom_provider_entries(self) -> list[dict[str, str]]:
         """Serialize the in-memory registry for config writes / dirty checks."""
-        entries: list[dict[str, str]] = []
+        entries: list[dict[str, object]] = []
         registry = self.__dict__.get("_custom_litellm_providers") or {}
         for provider in registry.values():
             entry = {
@@ -7727,6 +7742,8 @@ class MainWindow(QMainWindow):
             }
             if provider.api_key_env:
                 entry["api_key_env"] = provider.api_key_env
+            if not provider.requires_key:
+                entry["requires_key"] = False
             entries.append(entry)
         return entries
 
@@ -7751,6 +7768,7 @@ class MainWindow(QMainWindow):
         table = self._settings_widget("custom_provider_table")
         if table is None:
             return
+        previous = self._selected_custom_provider()
         table.setRowCount(0)
         for provider in self._custom_litellm_providers.values():
             row = table.rowCount()
@@ -7766,6 +7784,8 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, provider.id)
                 table.setItem(row, column, item)
+            if previous and provider.id == previous:
+                table.selectRow(row)
         self._refresh_custom_provider_actions()
         label = self._settings_widget("custom_provider_status_label")
         if label is not None:
@@ -7848,8 +7868,16 @@ class MainWindow(QMainWindow):
                 "base_url": provider.base_url,
                 "models_url": provider.models_url,
                 "api_key_env": provider.api_key_env,
+                "requires_key": provider.requires_key,
             },
-            reserved=self._reserved_custom_provider_ids(),
+            # The edited id is already registered; exclude it from the reserved
+            # set so accept does not report a self-conflict on a locked field.
+            reserved=frozenset(
+                {
+                    *self._reserved_custom_provider_ids(),
+                }
+                - {provider.id}
+            ),
             title="编辑自定义 Provider",
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -7871,6 +7899,7 @@ class MainWindow(QMainWindow):
         provider = self._custom_litellm_providers.get(provider_id)
         if provider is None:
             return
+        is_current = self._current_litellm_provider() == provider_id
         reply = message_box_question(
             self,
             "删除自定义 Provider",
@@ -7878,6 +7907,12 @@ class MainWindow(QMainWindow):
                 f"确定删除自定义 Provider「{provider.label}」（{provider.id}）？\n\n"
                 "删除只移除注册信息，不会删除系统凭据管理器中的密钥或用户目录缓存；"
                 "如需清理密钥请到「管理密钥…」中删除。"
+                + (
+                    "\n\n该 Provider 当前正在使用：删除后当前模型选择会被清除，"
+                    "请重新选择 Provider 与模型。"
+                    if is_current
+                    else ""
+                )
             ),
             yes_text="删除",
             no_text="取消",
@@ -7886,6 +7921,22 @@ class MainWindow(QMainWindow):
         if reply != "yes":
             return
         del self._custom_litellm_providers[provider_id]
+        if is_current:
+            # Drop the ghost selection: the model still references the deleted
+            # id, which would fail on the next sync request after save.
+            self._cancel_litellm_model_selection_save()
+            self._save_litellm_cache(
+                lambda p=provider_id: self._litellm_cache.select_provider("")
+            )
+            self._set_litellm_models("", ())
+            combo = self._settings_widget("litellm_provider_combo")
+            if combo is not None:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(-1)
+                if combo.isEditable():
+                    combo.lineEdit().clear()
+                combo.blockSignals(False)
+            self._applied_litellm_provider = ""
         self._after_custom_providers_changed()
         self.statusBar().showMessage(
             f"已删除自定义 Provider：{provider.label}（{provider.id}）。",
@@ -8220,47 +8271,52 @@ class MainWindow(QMainWindow):
                 api_key = ""
         endpoint = native_catalog_endpoint(provider, self._custom_litellm_providers)
         allow_subset_only = False
-        if endpoint is not None and endpoint.require_key and not api_key:
+        if endpoint is not None and endpoint.require_key:
             custom = self._custom_litellm_providers.get(provider)
-            if custom is not None:
-                # LiteLLM's online subset has no entry for user-defined ids, so
-                # the "subset only" fallback would always fail after a confusing
-                # prompt. Require the key first instead.
-                message_box_information(
+            if custom is not None and not api_key and custom.api_key_env:
+                # Same explicit env fallback as the request/connection paths;
+                # never fall back to OPENAI_API_KEY for a third-party endpoint.
+                api_key = str(os.environ.get(custom.api_key_env) or "").strip()
+            if not api_key:
+                if custom is not None:
+                    # LiteLLM's online subset has no entry for user-defined ids,
+                    # so the "subset only" fallback would always fail after a
+                    # confusing prompt. Require a key (keyring or api_key_env).
+                    message_box_information(
+                        self,
+                        "请先保存 API Key",
+                        (
+                            f"{endpoint.label} 的模型列表需要 API Key。\n\n"
+                            "请先在下方「Provider 凭据」中粘贴并保存密钥，再加载模型列表。"
+                            + (
+                                f"\n也可设置环境变量 {custom.api_key_env} 作为回退。"
+                                if custom.api_key_env
+                                else ""
+                            )
+                        ),
+                    )
+                    return
+                reply = message_box_question(
                     self,
-                    "请先保存 API Key",
+                    "建议先保存 API Key",
                     (
-                        f"{endpoint.label} 的模型列表需要已保存的 API Key。\n\n"
-                        "请先在下方「Provider 凭据」中粘贴并保存密钥，再加载模型列表。"
-                        + (
-                            f"\n也可设置环境变量 {custom.api_key_env} 作为回退。"
-                            if custom.api_key_env
-                            else ""
-                        )
+                        f"{endpoint.label} 的官方模型列表需要已保存的 API Key。\n\n"
+                        "请先在下方「Provider 凭据」中粘贴并保存密钥，再加载官方列表。\n\n"
+                        "若仍继续，将只尝试 LiteLLM 在线子集目录（可能不完整，"
+                        "且通常依赖 GitHub 网络，关代理时可能很慢或失败）。\n\n"
+                        "是否仍使用 LiteLLM 子集目录？"
                     ),
+                    yes_text="继续",
+                    no_text="取消",
+                    default="no",
                 )
-                return
-            reply = message_box_question(
-                self,
-                "建议先保存 API Key",
-                (
-                    f"{endpoint.label} 的官方模型列表需要已保存的 API Key。\n\n"
-                    "请先在下方「Provider 凭据」中粘贴并保存密钥，再加载官方列表。\n\n"
-                    "若仍继续，将只尝试 LiteLLM 在线子集目录（可能不完整，"
-                    "且通常依赖 GitHub 网络，关代理时可能很慢或失败）。\n\n"
-                    "是否仍使用 LiteLLM 子集目录？"
-                ),
-                yes_text="继续",
-                no_text="取消",
-                default="no",
-            )
-            if reply != "yes":
-                self.statusBar().showMessage(
-                    f"已取消：请先保存 {endpoint.label} API Key 再加载官方模型列表。",
-                    6000,
-                )
-                return
-            allow_subset_only = True
+                if reply != "yes":
+                    self.statusBar().showMessage(
+                        f"已取消：请先保存 {endpoint.label} API Key 再加载官方模型列表。",
+                        6000,
+                    )
+                    return
+                allow_subset_only = True
         button = self._settings_widget("litellm_refresh_models_btn")
         if button is not None:
             button.setEnabled(True)
@@ -8356,13 +8412,15 @@ class MainWindow(QMainWindow):
             api_key = load_provider_api_key(provider)
         except ProviderCredentialStoreError:
             api_key = ""
-        if not api_key and custom is not None:
+        if not api_key and custom is not None and custom.requires_key:
             env_key = (
                 str(os.environ.get(custom.api_key_env) or "").strip()
                 if custom.api_key_env
                 else ""
             )
-            if not env_key:
+            if env_key:
+                api_key = env_key
+            else:
                 message_box_information(
                     self,
                     "缺少 API Key",
@@ -14045,6 +14103,18 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"忽略无效的 custom_litellm_providers 配置：{exc}"
                         )
+                        self.statusBar().showMessage(
+                            f"translator_config.json 中的 custom_litellm_providers "
+                            f"配置无效，已忽略：{exc}",
+                            8000,
+                        )
+                        status_label = self._settings_widget(
+                            "custom_provider_status_label"
+                        )
+                        if status_label is not None:
+                            status_label.setText(
+                                f"已忽略无效的 custom_litellm_providers 配置：{exc}"
+                            )
                     self._refresh_custom_provider_table()
                     litellm_cache = self.__dict__.get("_litellm_cache")
                     self._populate_litellm_providers(

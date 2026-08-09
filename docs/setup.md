@@ -167,14 +167,15 @@ LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提
 {
   "sync": {
     "backend": "litellm",
-    "litellm_model": "opencode-go/gpt-4o-mini",
+    "model": "opencode-go/gpt-4o-mini",
     "custom_litellm_providers": [
       {
         "id": "opencode-go",
         "label": "OpenCode Go",
         "base_url": "https://opencode.ai/zen/go/v1",
         "models_url": "https://opencode.ai/zen/go/v1/models",
-        "api_key_env": "OPENCODE_GO_API_KEY"
+        "api_key_env": "OPENCODE_GO_API_KEY",
+        "requires_key": true
       }
     ]
   }
@@ -190,12 +191,14 @@ LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提
 | `base_url` | 是 | OpenAI 兼容端点（http/https），例如 `https://opencode.ai/zen/go/v1`；请求会逐请求透传为 LiteLLM 的 `api_base` |
 | `models_url` | 否 | 模型列表端点；留空使用 `base_url + /models` |
 | `api_key_env` | 否 | 环境变量名；仅当系统凭据管理器中未保存该 Provider 密钥时，后端读取该环境变量并**显式**传给请求，避免 LiteLLM 静默回退 `OPENAI_API_KEY` 把错误密钥发给第三方端点 |
+| `requires_key` | 否 | 是否要求 API Key，默认 `true`。本地无鉴权的 vLLM / LocalAI 网关可设 `false`：模型列表与请求都不会要求或携带密钥 |
 
 行为说明：
 
 - 界面与配置中模型保持 `<id>/<模型>` 形式（如 `opencode-go/gpt-4o-mini`）；实际请求改写为 `openai/<模型>` + `api_base`，按请求传参，不使用进程级 `OPENAI_API_KEY` / `OPENAI_API_BASE` 环境变量。
 - 密钥优先使用系统凭据管理器（GUI「管理密钥…」多 Key 对话框），与内置 provider 一致。
 - 模型列表走 `GET {models_url}`（Bearer 认证），解析 OpenAI 风格 `{data:[{id:...}]}` 响应。
+- `requires_key=true` 且 keyring 与 `api_key_env` 均无密钥时，请求会在发送前失败，杜绝 `OPENAI_API_KEY` 被静默发送到第三方端点。
 - 非法 `base_url`、非法字符或与内置前缀冲突的 `id` 会被拒绝；GUI 保存或 CLI 加载配置时均会报错。
 - CLI 与 GUI 读取同一份 `translator_config.json` 配置。
 

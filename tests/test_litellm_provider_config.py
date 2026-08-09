@@ -432,6 +432,53 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
         )
         self.assertEqual(provider.api_key_env, "_KEY1")
 
+    def test_custom_provider_requires_key_defaults_true_and_validates_bool(self):
+        provider = custom_provider_from_mapping(
+            {"id": "vendor", "base_url": "https://vendor.example.com"}
+        )
+        self.assertTrue(provider.requires_key)
+        keyless = custom_provider_from_mapping(
+            {
+                "id": "local-vllm",
+                "base_url": "http://127.0.0.1:8000/v1",
+                "requires_key": False,
+            }
+        )
+        self.assertFalse(keyless.requires_key)
+        with self.assertRaises(ValueError):
+            custom_provider_from_mapping(
+                {
+                    "id": "bad",
+                    "base_url": "https://vendor.example.com",
+                    "requires_key": "yes",
+                }
+            )
+
+    def test_custom_provider_url_rejects_userinfo_and_query_fragment(self):
+        with self.assertRaises(ValueError) as captured:
+            validate_custom_provider_url(
+                "https://user:pass@host/v1",
+                field_name="base_url",
+            )
+        self.assertIn("用户名或密码", str(captured.exception))
+        with self.assertRaises(ValueError):
+            validate_custom_provider_url(
+                "https://host/v1?x=1",
+                field_name="base_url",
+            )
+        with self.assertRaises(ValueError):
+            validate_custom_provider_url(
+                "https://host/v1#frag",
+                field_name="models_url",
+            )
+        self.assertEqual(
+            validate_custom_provider_url(
+                "http://127.0.0.1:8000/v1",
+                field_name="base_url",
+            ),
+            "http://127.0.0.1:8000/v1",
+        )
+
     def test_custom_provider_endpoint_label_and_source(self):
         registry = custom_provider_registry(
             [
@@ -463,6 +510,21 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
         )
         self.assertEqual(catalog_source_label("opencode-go"), "目录来源：未知。")
         self.assertEqual(catalog_source_label("unknown"), "目录来源：未知。")
+
+    def test_custom_provider_endpoint_propagates_requires_key(self):
+        registry = custom_provider_registry(
+            [
+                {
+                    "id": "local-vllm",
+                    "base_url": "http://127.0.0.1:8000/v1",
+                    "requires_key": False,
+                }
+            ]
+        )
+        endpoint = native_catalog_endpoint("local-vllm", registry)
+        self.assertIsNotNone(endpoint)
+        self.assertFalse(endpoint.require_key)
+        self.assertEqual(endpoint.auth, "bearer")
 
 
 if __name__ == "__main__":

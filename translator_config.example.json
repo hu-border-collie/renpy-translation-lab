@@ -42,7 +42,8 @@
         "label": "OpenCode Go",
         "base_url": "https://opencode.ai/zen/go/v1",
         "models_url": "https://opencode.ai/zen/go/v1/models",
-        "api_key_env": "OPENCODE_GO_API_KEY"
+        "api_key_env": "OPENCODE_GO_API_KEY",
+        "requires_key": true
       }
     ],
     "chunk_size": 40,

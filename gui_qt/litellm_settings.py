@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from litellm_provider_config import (
     CustomLiteLLMProvider,
     provider_from_model,
+    validate_custom_provider_env_name,
+    validate_custom_provider_id,
+    validate_custom_provider_url,
 )
 
 
@@ -113,6 +116,13 @@ def provider_credential_status(
         )
     custom = custom_providers.get(provider) if isinstance(custom_providers, Mapping) else None
     if custom is not None:
+        if not custom.requires_key:
+            return ProviderCredentialStatus(
+                provider=provider,
+                environment_names=(),
+                configured=True,
+                message="该自定义 Provider 无需 API Key（本地无鉴权网关）。",
+            )
         if custom.api_key_env:
             names = (custom.api_key_env,)
             configured = names[0] in environment
@@ -171,13 +181,9 @@ def validate_custom_provider_form(
     reserved: frozenset[str] | None = None,
 ) -> str:
     """Validate one custom-provider form row; return an error message or ''."""
-    from litellm_provider_config import (
-        validate_custom_provider_env_name,
-        validate_custom_provider_id,
-        validate_custom_provider_url,
-    )
-
     try:
+        # label is intentionally accepted for signature symmetry with
+        # custom_provider_from_mapping; it is display-only and needs no rule.
         validate_custom_provider_id(provider_id, reserved=reserved)
         validate_custom_provider_url(base_url, field_name="API Base URL")
         if models_url.strip():
