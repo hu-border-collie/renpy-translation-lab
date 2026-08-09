@@ -145,16 +145,31 @@ class CliRunnerChannelTests(unittest.TestCase):
 
     def test_run_requests_start_without_waiting_for_started(self):
         start_timer = _FakeTimer()
+        stop_timer = _FakeTimer()
         self.runner._start_timeout_timer = start_timer
+        self.runner._stop_timeout_timer = stop_timer
 
         with mock.patch("gui_qt.cli_runner.QProcess", _LifecycleFakeProcess):
             started = self.runner.run(Path(__file__), ["--example"])
 
         self.assertTrue(started)
+        self.assertEqual(start_timer.stop_count, 1)
+        self.assertEqual(stop_timer.stop_count, 1)
         self.assertEqual(start_timer.started_with, [3000])
         self.assertIsNotNone(self.runner._proc.start_args)
         # The fake intentionally has no waitForStarted method: reaching here
         # proves run() did not synchronously wait in the caller thread.
+
+    def test_not_running_process_remains_owned_until_finished_callback(self):
+        completed = _LifecycleFakeProcess(state=QProcess.ProcessState.NotRunning)
+        self.runner._proc = completed
+
+        with mock.patch("gui_qt.cli_runner.QProcess", _LifecycleFakeProcess):
+            started = self.runner.run(Path(__file__), ["--replacement"])
+
+        self.assertFalse(started)
+        self.assertIs(self.runner._proc, completed)
+        self.assertEqual(self.errors, ["已有命令行任务正在运行，请先停止后再重试。"])
 
     def test_stop_uses_async_terminate_then_kill_fallback(self):
         process = _LifecycleFakeProcess(state=QProcess.ProcessState.Running)

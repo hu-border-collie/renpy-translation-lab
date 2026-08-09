@@ -62,6 +62,11 @@ class CliRunner(QObject):
         if self.is_active():
             self.error.emit("已有命令行任务正在运行，请先停止后再重试。")
             return False
+        # Timers are shared by consecutive invocations. Clear any defensive
+        # residue before installing a new process so an older grace timeout can
+        # never act on the new owner.
+        self._start_timeout_timer.stop()
+        self._stop_timeout_timer.stop()
         self._error_reported = False
 
         script = Path(script_path).resolve()
@@ -111,11 +116,13 @@ class CliRunner(QObject):
         return True
 
     def is_active(self) -> bool:
-        """Return True while a subprocess is starting or running."""
-        return (
-            self._proc is not None
-            and self._proc.state() != QProcess.ProcessState.NotRunning
-        )
+        """Return True until the owned process delivers its terminal signal.
+
+        ``QProcess.state()`` can become ``NotRunning`` before the queued
+        ``finished`` callback is handled. Keeping ownership through that gap
+        prevents a replacement process from inheriting an older stop timer.
+        """
+        return self._proc is not None
 
     def is_running(self) -> bool:
         """Backward-compatible alias for :meth:`is_active`."""

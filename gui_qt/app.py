@@ -2745,10 +2745,8 @@ class MainWindow(QMainWindow):
     ) -> None:
         self._clear_log_view()
         self._show_workbench_log_drawer()
-        self._active_command = command
         self._append_log(f"=== 正在运行：{log_heading} ===\n")
-        self._set_task_running(True)
-        self.runner.run(self.state.get_batch_script_path(), args)
+        self._start_cli_command(command, self.state.get_batch_script_path(), args)
 
     def _project_analysis_live_fingerprint(self) -> str:
         """Compute live structure fingerprint for the current game root / store."""
@@ -4335,18 +4333,24 @@ class MainWindow(QMainWindow):
         coordinator.stalled.connect(self._on_shutdown_stalled)
         coordinator.cancellation_failed.connect(self._on_shutdown_cancel_failed)
 
-    def _main_task_active_for_shutdown(self) -> bool:
+    def _cli_runner_is_active(self) -> bool:
+        """Return whether the runner still owns an unfinished invocation."""
         runner = getattr(self, "runner", None)
-        runner_active = False
-        if runner is not None:
-            is_active = getattr(runner, "is_active", None)
-            if not callable(is_active):
-                is_active = getattr(runner, "is_running", None)
-            if callable(is_active):
-                # Lifecycle probes must return an explicit bool. This avoids
-                # treating permissive mocks/proxies as an active real process.
-                runner_active = is_active() is True
-        return bool(getattr(self, "_task_running", False) or runner_active)
+        if runner is None:
+            return False
+        is_active = getattr(runner, "is_active", None)
+        if not callable(is_active):
+            is_active = getattr(runner, "is_running", None)
+        try:
+            # Permissive mocks/proxies are not evidence of a real process.
+            return bool(callable(is_active) and is_active() is True)
+        except RuntimeError:
+            return False
+
+    def _main_task_active_for_shutdown(self) -> bool:
+        return bool(
+            getattr(self, "_task_running", False) or self._cli_runner_is_active()
+        )
 
     def _request_main_task_shutdown(self) -> None:
         """Stop the foreground doctor/CLI task without waiting in the UI thread."""
@@ -4359,12 +4363,8 @@ class MainWindow(QMainWindow):
             self._invalidate_doctor_worker()
 
         runner = getattr(self, "runner", None)
-        runner_active = False
+        runner_active = self._cli_runner_is_active()
         if runner is not None:
-            is_active = getattr(runner, "is_active", None)
-            if not callable(is_active):
-                is_active = getattr(runner, "is_running", None)
-            runner_active = bool(callable(is_active) and is_active() is True)
             if runner_active:
                 request_stop = getattr(runner, "request_stop", None)
                 if callable(request_stop):
@@ -6534,14 +6534,13 @@ class MainWindow(QMainWindow):
             return
 
         self._show_workbench_log_drawer()
-        self._active_command = "build_retry"
         self._build_retry_output_lines = []
-        self._set_task_running(True)
         self._append_log(
             "\n=== 正在生成补译包："
             f"gemini_translate_batch.py {' '.join(build_retry_cli_args(self._writeback_manifest_path))} ===\n"
         )
-        self.runner.run(
+        self._start_cli_command(
+            "build_retry",
             self.state.get_batch_script_path(),
             build_retry_cli_args(self._writeback_manifest_path),
         )
@@ -10978,7 +10977,6 @@ class MainWindow(QMainWindow):
         self._focus_workbench_main_tab(special_route=_SHELL_ROUTE_PROJECT_PREPARE)
         self._clear_log_view()
         self._show_workbench_log_drawer()
-        self._active_command = "bootstrap_work"
         self._work_bootstrap_output_lines = []
         self._workflow_progress = create_workflow_progress_state("work_bootstrap")
         self._workflow_progress_base_facts = []
@@ -10994,8 +10992,11 @@ class MainWindow(QMainWindow):
         )
         self._apply_workflow_progress_ui()
         self._append_log("=== 正在运行：gemini_translate_batch.py bootstrap-work ===\n")
-        self._set_task_running(True)
-        self.runner.run(self.state.get_batch_script_path(), ["bootstrap-work"])
+        self._start_cli_command(
+            "bootstrap_work",
+            self.state.get_batch_script_path(),
+            ["bootstrap-work"],
+        )
 
     def _on_generate_template(self):
         if not self._confirm_unsaved_config_before_workflow():
@@ -11012,7 +11013,6 @@ class MainWindow(QMainWindow):
         self._focus_workbench_main_tab(special_route=_SHELL_ROUTE_PROJECT_PREPARE)
         self._clear_log_view()
         self._show_workbench_log_drawer()
-        self._active_command = "generate_template"
         self._template_generation_output_lines = []
         self._focus_workbench_status_tab(0)
         running_summary = running_template_generation_summary()
@@ -11025,8 +11025,11 @@ class MainWindow(QMainWindow):
             running_summary.facts,
         )
         self._append_log("=== 正在运行：gemini_translate_batch.py generate-template ===\n")
-        self._set_task_running(True)
-        self.runner.run(self.state.get_batch_script_path(), ["generate-template"])
+        self._start_cli_command(
+            "generate_template",
+            self.state.get_batch_script_path(),
+            ["generate-template"],
+        )
 
     def _game_root_str_for_flags(self) -> str | None:
         """Resolve current game_root for project-scoped context flags (defensive)."""
@@ -11129,7 +11132,6 @@ class MainWindow(QMainWindow):
 
         self._clear_log_view()
         self._show_workbench_log_drawer()
-        self._active_command = command
         self._bootstrap_output_lines = []
         self._bootstrap_progress = create_bootstrap_progress_state(kind)
         self._bootstrap_progress_tracker = (
@@ -11150,10 +11152,12 @@ class MainWindow(QMainWindow):
         self._focus_workbench_status_tab(1)
         self._set_workflow_from_bootstrap_summary(running_summary)
         self._append_log(f"=== 正在运行：{log_heading} ===\n")
-        self._set_task_running(True)
         self._apply_bootstrap_progress_ui()
-        self.runner.run(self.state.get_batch_script_path(), args)
-        return True
+        return self._start_cli_command(
+            command,
+            self.state.get_batch_script_path(),
+            args,
+        )
 
     def _on_start_translation(self):
         spec = work_mode_spec(self._current_work_mode())
@@ -11266,7 +11270,6 @@ class MainWindow(QMainWindow):
         self._workflow_step_output_lines = []
         self._focus_workbench_status_tab(status_tab)
         self._append_log(f"=== {log_heading} ===\n")
-        self._set_task_running(True)
         self._run_workflow_current_step()
 
     def _on_resume_translation(self):
@@ -11319,7 +11322,6 @@ class MainWindow(QMainWindow):
                 self._workflow_step_output_lines = []
                 self._focus_workbench_status_tab(1)
                 self._append_log("=== 正在刷新全部拆分包状态 ===\n")
-                self._set_task_running(True)
                 self._run_workflow_current_step()
                 return
 
@@ -11356,7 +11358,6 @@ class MainWindow(QMainWindow):
         self._workflow_step_output_lines = []
         self._focus_workbench_status_tab(1)
         self._append_log(f"=== 正在继续最新 {spec.label} 任务 ===\n")
-        self._set_task_running(True)
         self._run_workflow_current_step()
 
     def _on_submit_remaining_split_packages(self) -> None:
@@ -11401,7 +11402,6 @@ class MainWindow(QMainWindow):
         self._workflow_step_output_lines = []
         self._focus_workbench_status_tab(1)
         self._append_log(f"=== 正在批量提交剩余拆分包（{pending_count} 个） ===\n")
-        self._set_task_running(True)
         self._run_workflow_current_step()
 
     def _on_kill(self):
@@ -11643,7 +11643,6 @@ class MainWindow(QMainWindow):
         self._clear_log_view()
         # Workbench entry (P2a): keep user on batch · 执行 with drawer logs.
         self._show_workbench_log_drawer()
-        self._active_command = "probe"
         self._probe_output_lines = []
         base_context = build_diagnostics_context(
             latest_manifest_path=manifest_path,
@@ -11669,8 +11668,7 @@ class MainWindow(QMainWindow):
         self._append_log(
             f"=== 正在试跑样本请求：gemini_translate_batch.py {' '.join(args)} ===\n"
         )
-        self._set_task_running(True)
-        self.runner.run(self.state.get_batch_script_path(), args)
+        self._start_cli_command("probe", self.state.get_batch_script_path(), args)
 
     def _cleanup_compare_variants_temp_file(self) -> None:
         temp_file = self._compare_variants_temp_file
@@ -11692,7 +11690,6 @@ class MainWindow(QMainWindow):
 
         self._clear_log_view()
         self._expand_diagnostics_log()
-        self._active_command = "compare_variants"
         self._compare_variants_output_lines = []
         variants = list(options["variants"])
         variant_names = format_variant_names(variants)
@@ -11731,8 +11728,11 @@ class MainWindow(QMainWindow):
         self._append_log(
             f"=== 正在运行翻译 A/B 对比：gemini_translate_batch.py {' '.join(args)} ===\n"
         )
-        self._set_task_running(True)
-        self.runner.run(self.state.get_batch_script_path(), args)
+        self._start_cli_command(
+            "compare_variants",
+            self.state.get_batch_script_path(),
+            args,
+        )
 
     def _on_run_split(self) -> None:
         manifest_path, manifest = self._current_diagnostics_manifest()
@@ -11748,7 +11748,6 @@ class MainWindow(QMainWindow):
         self._clear_log_view()
         # Workbench entry (P2a): keep user on batch · 执行 with drawer logs.
         self._show_workbench_log_drawer()
-        self._active_command = "split"
         self._split_output_lines = []
         base_context = build_diagnostics_context(
             latest_manifest_path=manifest_path,
@@ -11774,8 +11773,7 @@ class MainWindow(QMainWindow):
         self._append_log(
             f"=== 正在拆分翻译包：gemini_translate_batch.py {' '.join(args)} ===\n"
         )
-        self._set_task_running(True)
-        self.runner.run(self.state.get_batch_script_path(), args)
+        self._start_cli_command("split", self.state.get_batch_script_path(), args)
 
     def _repair_search_roots(self) -> list[str]:
         roots: list[str] = []
@@ -11968,7 +11966,6 @@ class MainWindow(QMainWindow):
 
         self._clear_log_view()
         self._show_workbench_log_drawer()
-        self._active_command = "repair"
         self._repair_output_lines = []
         base_context = build_diagnostics_context(
             latest_manifest_path=manifest_path,
@@ -12000,8 +11997,7 @@ class MainWindow(QMainWindow):
         self._append_log(
             f"=== 正在同步修补：gemini_translate_batch.py {' '.join(args)} ===\n"
         )
-        self._set_task_running(True)
-        self.runner.run(self.state.get_batch_script_path(), args)
+        self._start_cli_command("repair", self.state.get_batch_script_path(), args)
 
     def _on_recheck_writeback(self) -> None:
         spec = work_mode_spec(self._current_work_mode())
@@ -12031,7 +12027,6 @@ class MainWindow(QMainWindow):
         manifest_path = self._writeback_manifest_path
         self._clear_log_view()
         self._show_workbench_log_drawer()
-        self._active_command = "recheck"
         self._recheck_output_lines = []
         self._focus_workbench_status_tab(2)
         self._set_writeback_summary(
@@ -12045,8 +12040,7 @@ class MainWindow(QMainWindow):
         self._append_log(
             f"=== 正在重新检查：gemini_translate_batch.py {' '.join(args)} ===\n"
         )
-        self._set_task_running(True)
-        self.runner.run(self.state.get_batch_script_path(), args)
+        self._start_cli_command("recheck", self.state.get_batch_script_path(), args)
 
     def _on_apply_writeback(self):
         if not work_mode_spec(self._current_work_mode()).supports_translation_writeback:
@@ -12090,15 +12084,14 @@ class MainWindow(QMainWindow):
         manifest_path = self._writeback_manifest_path
         self._clear_log_view()
         self._show_workbench_log_drawer()
-        self._active_command = "apply"
         self._apply_output_lines = []
         self._focus_workbench_status_tab(2)
         self._set_writeback_summary(running_writeback_summary(manifest_path=manifest_path))
         self._append_log(
             f"=== 正在写回：gemini_translate_batch.py apply {manifest_path} ===\n"
         )
-        self._set_task_running(True)
-        self.runner.run(
+        self._start_cli_command(
+            "apply",
             self.state.get_batch_script_path(),
             ["apply", manifest_path, "--output", "json", "--non-interactive"],
         )
@@ -12177,7 +12170,6 @@ class MainWindow(QMainWindow):
 
         self._clear_log_view()
         self._show_workbench_log_drawer()
-        self._active_command = "apply_revision"
         self._apply_revision_output_lines = []
         self._focus_workbench_status_tab(2)
         self._set_writeback_summary(
@@ -12187,13 +12179,15 @@ class MainWindow(QMainWindow):
                 message="正在写回订正；完成后这里会显示写回摘要。",
             )
         )
-        self._set_task_running(True)
-
         command_label = f"gemini_translate_batch.py apply-revisions {manifest_path}"
         args = ["apply-revisions", manifest_path]
 
         self._append_log(f"=== 正在写回订正：{command_label} ===\n")
-        self.runner.run(self.state.get_batch_script_path(), args)
+        self._start_cli_command(
+            "apply_revision",
+            self.state.get_batch_script_path(),
+            args,
+        )
 
     def _update_revision_writeback_from_preview(
         self,
@@ -12348,6 +12342,35 @@ class MainWindow(QMainWindow):
         self._pending_log_lines = []
         self.log_view.append("\n".join(lines))
         self._scroll_log_views_to_end()
+
+    def _start_cli_command(
+        self,
+        command: str,
+        script_path: str | Path,
+        args: list[str],
+    ) -> bool:
+        """Start one CLI command and keep task chrome coherent on rejection."""
+        if self._cli_runner_is_active():
+            # Preserve the existing command owner. ``run`` emits the canonical
+            # user-facing rejection and its False return is consumed here.
+            return self.runner.run(script_path, args) is True
+
+        previous_command = getattr(self, "_active_command", "")
+        self._active_command = command
+        self._set_task_running(True)
+        started = self.runner.run(script_path, args)
+        if started is not False:
+            # Some lightweight test runners predate the bool contract and
+            # return None; only an explicit False means the start was rejected.
+            return True
+
+        if self._cli_runner_is_active():
+            self._active_command = previous_command
+            self._set_task_running(True)
+        else:
+            self._active_command = ""
+            self._set_task_running(False)
+        return False
 
     def _set_task_running(self, running: bool):
         was_running = bool(getattr(self, "_task_running", False))
@@ -12532,7 +12555,7 @@ class MainWindow(QMainWindow):
         args_text = " ".join(step.args)
         command_label = f"{step.script_basename} {args_text}".strip()
         self._append_log(f"\n=== {step.heading}：{command_label} ===\n")
-        self.runner.run(script_path, step.args)
+        self._start_cli_command(self._active_command, script_path, step.args)
 
     def _current_writeback_summary(self) -> WritebackSummary:
         return getattr(self, "_writeback_summary", idle_writeback_summary())

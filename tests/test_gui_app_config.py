@@ -1847,6 +1847,48 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         coordinator.active_labels.assert_not_called()
         status_bar.showMessage.assert_called_once()
 
+    def test_start_cli_command_preserves_existing_owner_when_runner_is_active(self):
+        runner = mock.Mock()
+        runner.is_active.return_value = True
+        runner.run.return_value = False
+        self.window.runner = runner
+        self.window._active_command = "existing"
+        self.window._task_running = True
+        self.window._set_task_running = mock.Mock()
+
+        started = self.window._start_cli_command(
+            "replacement",
+            "batch.py",
+            ["status"],
+        )
+
+        self.assertFalse(started)
+        self.assertEqual(self.window._active_command, "existing")
+        self.window._set_task_running.assert_not_called()
+        runner.run.assert_called_once_with("batch.py", ["status"])
+
+    def test_start_cli_command_restores_idle_chrome_after_rejection(self):
+        runner = mock.Mock()
+        runner.is_active.return_value = False
+        runner.run.return_value = False
+        self.window.runner = runner
+        self.window._active_command = ""
+        self.window._task_running = False
+        self.window._set_task_running = mock.Mock()
+
+        started = self.window._start_cli_command(
+            "status",
+            "batch.py",
+            ["status"],
+        )
+
+        self.assertFalse(started)
+        self.assertEqual(self.window._active_command, "")
+        self.assertEqual(
+            self.window._set_task_running.call_args_list,
+            [mock.call(True), mock.call(False)],
+        )
+
     def test_doctor_cancel_retires_worker_without_waiting(self):
         class FakeSignal:
             def __init__(self):
