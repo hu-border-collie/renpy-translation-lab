@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "unit_item_count": 2,
+  "candidate_codes": [
+    "truncate",
+    "missing_findings",
+    "schema",
+    "duplicate_item",
+    "refusal",
+    "empty_ok"
+  ],
+  "cases": [
+    {
+      "id": "truncated_json",
+      "description": "JSON is cut off inside the first finding.",
+      "result_row": {
+        "response_text": "{\"findings\":[{\"item_id\":\"id-a\",\"finding_type\":\"omission\",\"severity\":\"high\",\"reason\":\"cut off\"}"
+      },
+      "candidate_code": "truncate",
+      "evidence_scope": "current_contract",
+      "expected_decision": "reject",
+      "current_status": "failed",
+      "current_finding_count": 0,
+      "current_error_contains": "failed_to_parse_model_json",
+      "decision_assessment": "correct_reject"
+    },
+    {
+      "id": "missing_findings",
+      "description": "The root object has no findings member.",
+      "result_row": {
+        "response_text": "{\"issues_count\":0}"
+      },
+      "candidate_code": "missing_findings",
+      "evidence_scope": "current_contract",
+      "expected_decision": "reject",
+      "current_status": "failed",
+      "current_finding_count": 0,
+      "current_error_contains": "missing findings array",
+      "decision_assessment": "correct_reject"
+    },
+    {
+      "id": "schema_missing_reason",
+      "description": "A finding omits the response schema's required reason field.",
+      "result_row": {
+        "response_text": "{\"findings\":[{\"item_id\":\"id-a\",\"finding_type\":\"omission\",\"severity\":\"high\"}]}"
+      },
+      "candidate_code": "schema",
+      "evidence_scope": "current_contract",
+      "expected_decision": "reject",
+      "current_status": "done",
+      "current_finding_count": 1,
+      "current_error_contains": "",
+      "decision_assessment": "false_accept"
+    },
+    {
+      "id": "duplicate_item",
+      "description": "The same normalized finding for one input item is repeated exactly.",
+      "result_row": {
+        "response_text": "{\"findings\":[{\"item_id\":\"id-a\",\"finding_type\":\"terminology\",\"severity\":\"medium\",\"reason\":\"term mismatch\"},{\"item_id\":\"id-a\",\"finding_type\":\"terminology\",\"severity\":\"medium\",\"reason\":\"term mismatch\"}]}"
+      },
+      "candidate_code": "duplicate_item",
+      "evidence_scope": "current_contract",
+      "expected_decision": "reject",
+      "current_status": "done",
+      "current_finding_count": 2,
+      "current_error_contains": "",
+      "decision_assessment": "false_accept"
+    },
+    {
+      "id": "refusal",
+      "description": "Provider metadata reports a safety block and contains no candidate text.",
+      "result_row": {
+        "response": {
+          "promptFeedback": {
+            "blockReason": "SAFETY"
+          },
+          "candidates": []
+        }
+      },
+      "candidate_code": "refusal",
+      "evidence_scope": "current_contract",
+      "expected_decision": "reject",
+      "current_status": "failed",
+      "current_finding_count": 0,
+      "current_error_contains": "missing_response_text",
+      "decision_assessment": "correct_reject"
+    },
+    {
+      "id": "empty_ok",
+      "description": "A complete response reports no findings.",
+      "result_row": {
+        "response_text": "{\"findings\":[]}"
+      },
+      "candidate_code": "empty_ok",
+      "evidence_scope": "current_contract",
+      "expected_decision": "accept",
+      "current_status": "done",
+      "current_finding_count": 0,
+      "current_error_contains": "",
+      "decision_assessment": "correct_accept"
+    },
+    {
+      "id": "reviewed_count_mismatch",
+      "description": "A hypothetical receipt says only one of the unit's two items was reviewed.",
+      "result_row": {
+        "response_text": "{\"findings\":[],\"complete\":true,\"reviewed_item_count\":1}"
+      },
+      "candidate_code": "schema",
+      "evidence_scope": "hypothetical_receipt",
+      "expected_decision": "reject",
+      "current_status": "done",
+      "current_finding_count": 0,
+      "current_error_contains": "",
+      "decision_assessment": "false_accept"
+    }
+  ]
+}
