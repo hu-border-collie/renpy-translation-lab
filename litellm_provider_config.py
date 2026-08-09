@@ -109,11 +109,13 @@ def reserved_litellm_provider_ids(litellm_module: Any = None) -> frozenset[str]:
     """Return provider prefixes that custom ids must not shadow.
 
     The static reserve covers built-in choices and common LiteLLM prefixes;
-    callers that already hold a litellm module (tests, optional integrations)
-    may pass it to merge in the installed provider table. Importing litellm is
-    deliberately avoided here: it is a heavy optional dependency and this
-    function runs on GUI startup and config validation.
+    when litellm is installed its ``models_by_provider`` table is merged in too,
+    so GUI validation and config loading always agree on the same reserved set.
+    The import is probed once per process and cached (callers that already hold
+    a litellm module may pass it explicitly to skip the probe).
     """
+    if litellm_module is None:
+        litellm_module = _installed_litellm_module()
     reserved = set(_RESERVED_PROVIDER_IDS)
     if litellm_module is not None:
         by_provider = getattr(litellm_module, "models_by_provider", {})
