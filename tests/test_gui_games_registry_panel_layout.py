@@ -161,8 +161,10 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
             self._app.processEvents()
 
         notes = panel._notes_edit
-        self.assertGreaterEqual(notes.minimumHeight(), 112)
-        self.assertGreater(notes.maximumHeight(), notes.minimumHeight())
+        notes.setPlainText("第一行\n第二行\n第三行")
+        self.assertEqual(notes.minimumHeight(), 112)
+        self.assertEqual(notes.maximumHeight(), 220)
+        self.assertGreaterEqual(notes.document().blockCount(), 3)
         self.assertGreaterEqual(notes.height(), notes.minimumHeight())
 
     def test_table_column_path_is_last_stretch_and_drag_clamps_eui_min(self) -> None:
