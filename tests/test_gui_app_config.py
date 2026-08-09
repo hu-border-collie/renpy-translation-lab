@@ -1889,6 +1889,40 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             [mock.call(True), mock.call(False)],
         )
 
+    def test_start_cli_command_preserves_synchronous_terminal_callback_state(self):
+        runner = mock.Mock()
+        runner.is_active.return_value = False
+        workflow = object()
+        self.window.runner = runner
+        self.window._runner_terminal_generation = 4
+        self.window._active_command = ""
+        self.window._workflow = None
+        self.window._set_task_running = mock.Mock()
+
+        def reject_after_terminal_callback(*_args) -> bool:
+            self.window._runner_terminal_generation += 1
+            self.window._active_command = "translation_workflow"
+            self.window._workflow = workflow
+            self.window._set_task_running(True)
+            return False
+
+        runner.run.side_effect = reject_after_terminal_callback
+
+        started = self.window._start_cli_command(
+            "translation_workflow",
+            "batch.py",
+            ["status"],
+        )
+
+        self.assertFalse(started)
+        self.assertEqual(self.window._active_command, "translation_workflow")
+        self.assertIs(self.window._workflow, workflow)
+        self.assertEqual(
+            self.window._set_task_running.call_args_list,
+            [mock.call(True), mock.call(True)],
+        )
+        runner.is_active.assert_called_once_with()
+
     def test_start_cli_command_rejects_after_shutdown_without_touching_runner(self):
         runner = mock.Mock()
         self.window.runner = runner
@@ -1976,6 +2010,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
     def test_runner_finish_during_shutdown_cannot_start_next_workflow_step(self):
         self.window._shutdown_requested = True
+        self.window._runner_terminal_generation = 2
         self.window._active_command = "translation_workflow"
         self.window._workflow = object()
         self.window._append_log = mock.Mock()
@@ -1987,6 +2022,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._on_workflow_step_finished.assert_not_called()
         self.assertEqual(self.window._active_command, "")
         self.assertIsNone(self.window._workflow)
+        self.assertEqual(self.window._runner_terminal_generation, 3)
         self.window._set_task_running.assert_called_once_with(False)
 
     def test_queued_workflow_step_during_shutdown_is_discarded(self):

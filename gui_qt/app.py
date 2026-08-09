@@ -584,6 +584,7 @@ class MainWindow(QMainWindow):
         self._resources_dir = resources_dir or Path(__file__).resolve().parent / "resources"
         self._theme_preference = DEFAULT_THEME_PREFERENCE
         self.runner = CliRunner(self)
+        self._runner_terminal_generation = 0
         self._loading_config_to_ui = False
         self._loading_theme_to_ui = False
         self._updating_batch_thinking_combo = False
@@ -12378,7 +12379,9 @@ class MainWindow(QMainWindow):
             # user-facing rejection and its False return is consumed here.
             return self.runner.run(script_path, args) is True
 
-        previous_command = getattr(self, "_active_command", "")
+        terminal_generation = int(
+            getattr(self, "_runner_terminal_generation", 0)
+        )
         self._active_command = command
         self._set_task_running(True)
         started = self.runner.run(script_path, args)
@@ -12387,12 +12390,15 @@ class MainWindow(QMainWindow):
             # return None; only an explicit False means the start was rejected.
             return True
 
+        # ``CliRunner`` can emit ``finished`` synchronously on a rejected start.
+        # The callback owns any resulting workflow/command state; do not roll it
+        # back from this older stack frame.
+        if int(getattr(self, "_runner_terminal_generation", 0)) != terminal_generation:
+            return False
         if self._cli_runner_is_active():
-            self._active_command = previous_command
-            self._set_task_running(True)
-        else:
-            self._active_command = ""
-            self._set_task_running(False)
+            return False
+        self._active_command = ""
+        self._set_task_running(False)
         return False
 
     def _set_task_running(self, running: bool):
@@ -12730,6 +12736,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("任务运行失败，请查看运行日志。", 6000)
 
     def _on_finished(self, exit_code: int):
+        self._runner_terminal_generation = int(
+            getattr(self, "_runner_terminal_generation", 0)
+        ) + 1
         self._append_log(f"\n[进程已结束，退出码：{exit_code}]")
         if getattr(self, "_shutdown_requested", False):
             if self._active_command == "compare_variants":
