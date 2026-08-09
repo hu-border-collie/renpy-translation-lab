@@ -1907,6 +1907,25 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         runner.is_active.assert_not_called()
         self.window._set_task_running.assert_not_called()
 
+    def test_start_cli_command_rejects_while_close_confirmation_is_open(self):
+        runner = mock.Mock()
+        self.window.runner = runner
+        self.window._shutdown_requested = False
+        self.window._shutdown_confirmation_active = True
+        self.window._active_command = "translation_workflow"
+        self.window._set_task_running = mock.Mock()
+
+        started = self.window._start_cli_command(
+            "status",
+            "batch.py",
+            ["status"],
+        )
+
+        self.assertFalse(started)
+        runner.run.assert_not_called()
+        runner.is_active.assert_not_called()
+        self.window._set_task_running.assert_not_called()
+
     def test_doctor_cancel_retires_worker_without_waiting(self):
         class FakeSignal:
             def __init__(self):
@@ -1985,6 +2004,85 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.runner.run.assert_not_called()
         self.window._set_task_running.assert_called_once_with(False)
         self.window._clear_workflow_progress_ui.assert_called_once_with()
+
+    def test_queued_workflow_step_waits_for_close_confirmation_decision(self):
+        workflow = object()
+        self.window._shutdown_requested = False
+        self.window._shutdown_confirmation_active = True
+        self.window._workflow_step_deferred_for_close_confirmation = False
+        self.window._active_command = "translation_workflow"
+        self.window._workflow = workflow
+        self.window.runner = mock.Mock()
+        self.window._set_task_running = mock.Mock()
+        self.window._clear_workflow_progress_ui = mock.Mock()
+
+        self.window._run_workflow_current_step()
+
+        self.assertTrue(self.window._workflow_step_deferred_for_close_confirmation)
+        self.assertEqual(self.window._active_command, "translation_workflow")
+        self.assertIs(self.window._workflow, workflow)
+        self.window.runner.run.assert_not_called()
+        self.window._set_task_running.assert_not_called()
+        self.window._clear_workflow_progress_ui.assert_not_called()
+
+    def test_cancelling_close_resumes_deferred_workflow_step(self):
+        workflow = object()
+        self.window._shutdown_requested = False
+        self.window._shutdown_confirmation_active = False
+        self.window._workflow_step_deferred_for_close_confirmation = False
+        self.window._workflow = workflow
+
+        with (
+            mock.patch("gui_qt.app.QMessageBox") as message_box_cls,
+            mock.patch("gui_qt.app.QTimer.singleShot") as single_shot,
+        ):
+            message = message_box_cls.return_value
+            stop_btn = object()
+            cancel_btn = object()
+            message.addButton.side_effect = [stop_btn, cancel_btn]
+
+            def finish_step_while_confirming() -> None:
+                self.assertTrue(self.window._shutdown_confirmation_active)
+                self.window._workflow_step_deferred_for_close_confirmation = True
+
+            message.exec.side_effect = finish_step_while_confirming
+            message.clickedButton.return_value = cancel_btn
+
+            confirmed = self.window._confirm_active_tasks_before_close(("当前任务",))
+
+        self.assertFalse(confirmed)
+        self.assertFalse(self.window._shutdown_confirmation_active)
+        self.assertFalse(self.window._workflow_step_deferred_for_close_confirmation)
+        self.assertIs(self.window._workflow, workflow)
+        single_shot.assert_called_once_with(0, self.window._run_workflow_current_step)
+
+    def test_confirming_close_does_not_resume_deferred_workflow_step(self):
+        self.window._shutdown_requested = False
+        self.window._shutdown_confirmation_active = False
+        self.window._workflow_step_deferred_for_close_confirmation = False
+        self.window._workflow = object()
+
+        with (
+            mock.patch("gui_qt.app.QMessageBox") as message_box_cls,
+            mock.patch("gui_qt.app.QTimer.singleShot") as single_shot,
+        ):
+            message = message_box_cls.return_value
+            stop_btn = object()
+            cancel_btn = object()
+            message.addButton.side_effect = [stop_btn, cancel_btn]
+
+            def finish_step_while_confirming() -> None:
+                self.window._workflow_step_deferred_for_close_confirmation = True
+
+            message.exec.side_effect = finish_step_while_confirming
+            message.clickedButton.return_value = stop_btn
+
+            confirmed = self.window._confirm_active_tasks_before_close(("当前任务",))
+
+        self.assertTrue(confirmed)
+        self.assertFalse(self.window._shutdown_confirmation_active)
+        self.assertFalse(self.window._workflow_step_deferred_for_close_confirmation)
+        single_shot.assert_not_called()
 
     def test_retired_doctor_queued_completion_cannot_overwrite_current_state(self):
         current_worker = object()

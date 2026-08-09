@@ -677,6 +677,10 @@ class MainWindow(QMainWindow):
         self._litellm_install: OptionalFeatureInstallController | None = None
         self._relation_analyzer_install: OptionalFeatureInstallController | None = None
         self._shutdown_requested = False
+        # QMessageBox.exec() keeps a nested loop alive during close confirmation;
+        # pause queued workflow starts until the user confirms or cancels.
+        self._shutdown_confirmation_active = False
+        self._workflow_step_deferred_for_close_confirmation = False
         self._shutdown_close_ready = False
         self._shutdown_coordinator = ShutdownCoordinator(self)
         self._configure_shutdown_coordinator()
@@ -4459,8 +4463,25 @@ class MainWindow(QMainWindow):
             QMessageBox.ButtonRole.RejectRole,
         )
         message.setDefaultButton(cancel_btn)
-        message.exec()
-        return message.clickedButton() is stop_btn
+        self._shutdown_confirmation_active = True
+        try:
+            message.exec()
+            confirmed = message.clickedButton() is stop_btn
+        finally:
+            self._shutdown_confirmation_active = False
+
+        deferred_workflow_step = bool(
+            getattr(self, "_workflow_step_deferred_for_close_confirmation", False)
+        )
+        self._workflow_step_deferred_for_close_confirmation = False
+        if (
+            not confirmed
+            and deferred_workflow_step
+            and not getattr(self, "_shutdown_requested", False)
+            and getattr(self, "_workflow", None) is not None
+        ):
+            QTimer.singleShot(0, self._run_workflow_current_step)
+        return confirmed
 
     def _on_shutdown_settled(self) -> None:
         if not getattr(self, "_shutdown_requested", False):
@@ -12346,7 +12367,11 @@ class MainWindow(QMainWindow):
         args: list[str],
     ) -> bool:
         """Start one CLI command and keep task chrome coherent on rejection."""
-        if getattr(self, "_shutdown_requested", False):
+        if getattr(self, "_shutdown_requested", False) or getattr(
+            self,
+            "_shutdown_confirmation_active",
+            False,
+        ):
             return False
         if self._cli_runner_is_active():
             # Preserve the existing command owner. ``run`` emits the canonical
@@ -12516,12 +12541,21 @@ class MainWindow(QMainWindow):
         )
 
     def _run_workflow_current_step(self):
+        if getattr(self, "_shutdown_confirmation_active", False):
+            # The current process may finish inside the close dialog's nested
+            # event loop. Preserve the workflow so cancelling close can resume it.
+            self._workflow_step_deferred_for_close_confirmation = (
+                self._workflow is not None
+            )
+            return
         if getattr(self, "_shutdown_requested", False):
+            self._workflow_step_deferred_for_close_confirmation = False
             self._active_command = ""
             self._workflow = None
             self._set_task_running(False)
             self._clear_workflow_progress_ui()
             return
+        self._workflow_step_deferred_for_close_confirmation = False
         if self._workflow is not None:
             step = self._workflow.current_step()
             if step is not None:
