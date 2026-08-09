@@ -46,8 +46,9 @@ from engine_adapters.contracts import (
     SourceDocument,
     ValidatedTranslation,
 )
-from engine_adapters.coverage import export_coverage_package
+from engine_adapters.coverage import export_coverage_package, load_review_record
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
+import engine_adapters.versioning as engine_versioning
 from engine_adapters.writeback import (
     WritebackPlanError,
     render_writeback_plan,
@@ -87,6 +88,8 @@ BATCH_JOBS_DIR = os.path.join(LOG_DIR, 'batch_jobs')
 LATEST_MANIFEST_FILE = os.path.join(BATCH_JOBS_DIR, 'latest_manifest.txt')
 REPAIR_RUNS_DIR = os.path.join(LOG_DIR, 'repair_runs')
 SYNC_RUNS_DIR = os.path.join(LOG_DIR, 'sync_runs')
+PROJECT_SNAPSHOTS_DIR = os.path.join(LOG_DIR, 'project_snapshots')
+PROJECT_RECONCILIATIONS_DIR = os.path.join(LOG_DIR, 'project_reconciliations')
 SYNC_BACKEND = 'gemini'
 SYNC_MODEL = ''
 MACHINE_OUTPUT_COMMANDS = frozenset(
@@ -100,6 +103,8 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'apply',
         'apply-revisions',
         'export-revision-corpus',
+        'export-project-snapshot',
+        'reconcile-project-snapshots',
     }
 )
 EXPLICIT_TARGET_COMMANDS = frozenset({'submit', 'status', 'download', 'check', 'apply'})
@@ -112,6 +117,8 @@ OFFLINE_BATCH_COMMANDS = frozenset(
         'preview-revisions',
         'apply-revisions',
         'export-revision-corpus',
+        'export-project-snapshot',
+        'reconcile-project-snapshots',
         'split',
         'build-retry',
         'merge-retry',
@@ -144,6 +151,8 @@ def ensure_batch_dirs():
     os.makedirs(BATCH_JOBS_DIR, exist_ok=True)
     os.makedirs(REPAIR_RUNS_DIR, exist_ok=True)
     os.makedirs(SYNC_RUNS_DIR, exist_ok=True)
+    os.makedirs(PROJECT_SNAPSHOTS_DIR, exist_ok=True)
+    os.makedirs(PROJECT_RECONCILIATIONS_DIR, exist_ok=True)
 
 
 def initialize_batch_logging():
@@ -3538,6 +3547,124 @@ def run_revision_corpus_export(output_dir=None):
             'rerun export for a consistent snapshot.'
         )
     return manifest
+
+
+def _versioning_artifact_component(value):
+    normalized = re.sub(r'[^A-Za-z0-9._-]+', '-', str(value or '').strip())
+    return normalized.strip('._-')[:80].strip('._-') or 'version'
+
+
+def _create_versioning_output_dir(root_dir, name):
+    os.makedirs(root_dir, exist_ok=True)
+    return create_unique_child_dir(root_dir, name)
+
+
+def run_project_snapshot_export(
+    *,
+    version_id,
+    version_label='',
+    source_revision='',
+    output_dir=None,
+    coverage_review_path=None,
+):
+    """Export one source-only P3 project snapshot for the active project."""
+    adapter_snapshot = build_translation_snapshot(
+        RenPyAdapter(legacy_module=legacy),
+        ProjectDiscoveryRequest(
+            project_root=legacy.BASE_DIR,
+            localization_root=legacy.TL_DIR,
+            target_language=legacy.PREP_LANGUAGE,
+            include_files=tuple(sorted(legacy.INCLUDE_FILES)),
+            include_prefixes=tuple(sorted(legacy.INCLUDE_PREFIXES)),
+        ),
+    )
+    review_record = None
+    if coverage_review_path and str(coverage_review_path).strip():
+        review_record = load_review_record(str(coverage_review_path).strip())
+    game_version = engine_versioning.GameVersion(
+        version_id=str(version_id).strip(),
+        label=str(version_label or ''),
+        source_revision=str(source_revision or ''),
+    )
+    snapshot = engine_versioning.build_project_snapshot(
+        adapter_snapshot,
+        game_version,
+        coverage_review=review_record,
+    )
+    if output_dir and str(output_dir).strip():
+        target_dir = os.path.abspath(str(output_dir).strip())
+        os.makedirs(target_dir, exist_ok=True)
+    else:
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        name = (
+            f'{stamp}_{guess_project_slug()}_'
+            f'{_versioning_artifact_component(game_version.version_id)}'
+        )
+        target_dir = _create_versioning_output_dir(PROJECT_SNAPSHOTS_DIR, name)
+    paths = engine_versioning.export_project_snapshot(snapshot, target_dir)
+    result = {
+        'kind': engine_versioning.PROJECT_SNAPSHOT_KIND,
+        'snapshot_digest': snapshot.snapshot_digest,
+        'version_id': snapshot.game_version.version_id,
+        'engine': snapshot.engine,
+        'occurrence_count': len(snapshot.occurrences),
+        'coverage': snapshot.coverage.to_dict(),
+        'paths': {
+            'output_dir': paths.package_dir,
+            'snapshot': paths.snapshot_path,
+            'occurrences': paths.occurrences_path,
+        },
+    }
+    print(f'Exported project snapshot: {paths.package_dir}')
+    print(f'Game version: {snapshot.game_version.version_id}')
+    print(f'Occurrences: {len(snapshot.occurrences)}')
+    print(f'Snapshot digest: {snapshot.snapshot_digest}')
+    print(f'Manifest: {paths.snapshot_path}')
+    return result
+
+
+def run_project_snapshot_reconciliation(base_path, target_path, *, output_dir=None):
+    """Compare two saved snapshots without reading or writing live game files."""
+    base = engine_versioning.load_project_snapshot(base_path)
+    target = engine_versioning.load_project_snapshot(target_path)
+    report = engine_versioning.reconcile_project_snapshots(base, target)
+    if output_dir and str(output_dir).strip():
+        target_dir = os.path.abspath(str(output_dir).strip())
+        os.makedirs(target_dir, exist_ok=True)
+    else:
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        base_part = _versioning_artifact_component(base.game_version.version_id)
+        target_part = _versioning_artifact_component(target.game_version.version_id)
+        target_dir = _create_versioning_output_dir(
+            PROJECT_RECONCILIATIONS_DIR,
+            f'{stamp}_{base_part}_to_{target_part}',
+        )
+    paths = engine_versioning.export_reconciliation_report(report, target_dir)
+    result = {
+        'kind': engine_versioning.RECONCILIATION_KIND,
+        'status': report.status,
+        'reconciliation_digest': report.reconciliation_digest,
+        'base_version_id': report.base_version_id,
+        'target_version_id': report.target_version_id,
+        'summary': dict(report.summary),
+        'coverage_changes': dict(report.coverage_changes),
+        'paths': {
+            'output_dir': paths.package_dir,
+            'report': paths.report_path,
+            'items': paths.items_path,
+        },
+    }
+    print(f'Exported reconciliation report: {paths.package_dir}')
+    print(f'Versions: {report.base_version_id} -> {report.target_version_id}')
+    print(
+        'Matches: '
+        f"{report.summary.get('matched', 0)}, "
+        f"ambiguous: {report.summary.get('ambiguous', 0)}, "
+        f"added: {report.summary.get('added', 0)}, "
+        f"deleted: {report.summary.get('deleted', 0)}"
+    )
+    print(f'Report: {paths.report_path}')
+    return result
 
 
 def format_revision_context_block(items, empty_label):
@@ -11671,6 +11798,68 @@ def build_arg_parser():
     )
     add_machine_output_argument(export_revision_corpus_parser)
 
+    export_project_snapshot_parser = subparsers.add_parser(
+        'export-project-snapshot',
+        help=(
+            'Export a source-only project/game-version snapshot '
+            '(JSON + JSONL) without modifying game files.'
+        ),
+    )
+    export_project_snapshot_parser.add_argument(
+        '--version-id',
+        required=True,
+        help='Stable project-supplied game version ID (for example 1.4.0 or build-20260809).',
+    )
+    export_project_snapshot_parser.add_argument(
+        '--version-label',
+        default='',
+        help='Optional human-readable game version label.',
+    )
+    export_project_snapshot_parser.add_argument(
+        '--source-revision',
+        default='',
+        help='Optional source revision/build identifier stored as provenance.',
+    )
+    export_project_snapshot_parser.add_argument(
+        '--coverage-review',
+        default='',
+        metavar='FILE',
+        help=(
+            'Optional completed coverage review JSON. '
+            'Without it the snapshot freezes a pending review record.'
+        ),
+    )
+    export_project_snapshot_parser.add_argument(
+        '--output-dir',
+        default='',
+        metavar='DIR',
+        help='Write the snapshot into DIR instead of logs/project_snapshots/.',
+    )
+    add_machine_output_argument(export_project_snapshot_parser)
+
+    reconcile_project_snapshots_parser = subparsers.add_parser(
+        'reconcile-project-snapshots',
+        help=(
+            'Compare two saved project snapshots and export a read-only '
+            'reconciliation report.'
+        ),
+    )
+    reconcile_project_snapshots_parser.add_argument(
+        'base',
+        help='Base snapshot directory or project_snapshot.json path.',
+    )
+    reconcile_project_snapshots_parser.add_argument(
+        'target',
+        help='Target snapshot directory or project_snapshot.json path.',
+    )
+    reconcile_project_snapshots_parser.add_argument(
+        '--output-dir',
+        default='',
+        metavar='DIR',
+        help='Write the report into DIR instead of logs/project_reconciliations/.',
+    )
+    add_machine_output_argument(reconcile_project_snapshots_parser)
+
     bootstrap_rag_parser = subparsers.add_parser(
         'bootstrap-rag',
         help='Prebuild or refresh the Batch RAG history store from all allowed TL files.',
@@ -12765,6 +12954,34 @@ def dispatch_command(parser, args):
         except ProjectAnalysisError as exc:
             raise SystemExit(f'Project analysis error: {exc}') from exc
 
+    if command == 'export-project-snapshot':
+        # Read-only scan: do not persist an auto-corrected game_root and do not
+        # require provider configuration or API keys.
+        legacy.load_translator_settings(persist_corrected_game_root=False)
+        load_batch_settings()
+        try:
+            return run_project_snapshot_export(
+                version_id=getattr(args, 'version_id', ''),
+                version_label=getattr(args, 'version_label', '') or '',
+                source_revision=getattr(args, 'source_revision', '') or '',
+                output_dir=getattr(args, 'output_dir', '') or None,
+                coverage_review_path=getattr(args, 'coverage_review', '') or None,
+            )
+        except ValueError as exc:
+            raise SystemExit(f'Project snapshot error: {exc}') from exc
+
+    if command == 'reconcile-project-snapshots':
+        # Saved-artifact comparison is fully offline and does not inspect the
+        # active project or load translator configuration.
+        try:
+            return run_project_snapshot_reconciliation(
+                getattr(args, 'base', ''),
+                getattr(args, 'target', ''),
+                output_dir=getattr(args, 'output_dir', '') or None,
+            )
+        except ValueError as exc:
+            raise SystemExit(f'Project reconciliation error: {exc}') from exc
+
     initialize_batch_logging()
     if command == 'export-revision-corpus':
         # Read-only export: avoid the common load path below, which can
@@ -13137,6 +13354,53 @@ def build_machine_success_envelope(command, value, args):
             manifest.get('revision_apply_state')
             or ('applied' if manifest.get('revision_applied_at') else 'completed')
         )
+    elif command == 'export-project-snapshot':
+        snapshot = dict(value or {})
+        paths = dict(snapshot.get('paths') or {})
+        coverage = dict(snapshot.get('coverage') or {})
+        result = {
+            'version_id': snapshot.get('version_id') or '',
+            'engine': snapshot.get('engine') or '',
+            'snapshot_digest': snapshot.get('snapshot_digest') or '',
+            'occurrence_count': int(snapshot.get('occurrence_count') or 0),
+            'coverage_status': coverage.get('coverage_status') or '',
+            'review_status': coverage.get('review_status') or '',
+            'review_policy_satisfied': bool(
+                coverage.get('review_policy_satisfied')
+            ),
+        }
+        return cli_contract.success_envelope(
+            command,
+            status='completed',
+            result=result,
+            artifacts={
+                'project_snapshot': paths.get('snapshot') or '',
+                'unit_occurrences': paths.get('occurrences') or '',
+            },
+        )
+    elif command == 'reconcile-project-snapshots':
+        reconciliation = dict(value or {})
+        paths = dict(reconciliation.get('paths') or {})
+        result = {
+            'base_version_id': reconciliation.get('base_version_id') or '',
+            'target_version_id': reconciliation.get('target_version_id') or '',
+            'reconciliation_digest': (
+                reconciliation.get('reconciliation_digest') or ''
+            ),
+            'summary': dict(reconciliation.get('summary') or {}),
+            'coverage_changes': dict(
+                reconciliation.get('coverage_changes') or {}
+            ),
+        }
+        return cli_contract.success_envelope(
+            command,
+            status=str(reconciliation.get('status') or 'completed'),
+            result=result,
+            artifacts={
+                'reconciliation_report': paths.get('report') or '',
+                'reconciliation_items': paths.get('items') or '',
+            },
+        )
     elif command == 'export-revision-corpus':
         corpus = dict(value or {})
         paths = dict(corpus.get('paths') or {})
@@ -13449,9 +13713,12 @@ def _collect_output_file_protected_paths(args):
 
     for attr in (
         'target',
+        'base',
         'parent',
         'retry',
         'report',
+        'coverage_review',
+        'output_dir',
         'jsonl',
         'markdown',
         'summary_jsonl',
@@ -13466,6 +13733,30 @@ def _collect_output_file_protected_paths(args):
         add_path(abs_path)
         if os.path.isdir(abs_path):
             add_path(os.path.join(abs_path, 'manifest.json'))
+
+    command = str(getattr(args, 'command', '') or '')
+    output_dir = str(getattr(args, 'output_dir', '') or '').strip()
+    if output_dir and command == 'export-project-snapshot':
+        add_path(os.path.join(output_dir, engine_versioning.DEFAULT_SNAPSHOT_FILENAME))
+        add_path(
+            os.path.join(
+                output_dir,
+                engine_versioning.DEFAULT_OCCURRENCES_FILENAME,
+            )
+        )
+    if output_dir and command == 'reconcile-project-snapshots':
+        add_path(
+            os.path.join(
+                output_dir,
+                engine_versioning.DEFAULT_RECONCILIATION_FILENAME,
+            )
+        )
+        add_path(
+            os.path.join(
+                output_dir,
+                engine_versioning.DEFAULT_RECONCILIATION_ITEMS_FILENAME,
+            )
+        )
 
     # merge-keywords-to-glossary falls back to the active glossary file.
     glossary_value = getattr(args, 'glossary', None)

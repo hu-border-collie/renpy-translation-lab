@@ -49,7 +49,7 @@ python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json -
 
 JSON 模式下 stdout 只包含结果文档，原有 banner、进度、prepare 子进程输出和诊断文本实时进入 stderr。`result` 提供业务摘要，`artifacts` 提供 manifest / results / 报告路径，`status` 表示 job state 或 `safe / warn / block` 等业务状态。文本模式和默认退出码保持兼容；仍须根据 `status` 判断是否可以继续写回。
 
-Agent 可追加 `--strict-exit-codes`（必须与 `--output json` 同时使用），启用稳定的语义退出码：`0` 成功/继续轮询，`1` 未分类内部错误，`2` 用法错误，`3` 需要处理（例如 `warn`），`4` 被安全门禁阻止或任务终止失败，`5` 输入/配置/状态失效，`6` 远端临时错误、可稍后重试。例如：
+Agent 可追加 `--strict-exit-codes`（必须与 `--output json` 同时使用），启用稳定的语义退出码：`0` 成功/继续轮询，`1` 未分类内部错误，`2` 用法错误，`3` 需要处理（例如 `warn`，或 reconciliation 的 `attention`），`4` 被安全门禁阻止或任务终止失败，`5` 输入/配置/状态失效，`6` 远端临时错误、可稍后重试。例如：
 
 ```powershell
 python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json --output json --strict-exit-codes
@@ -268,6 +268,32 @@ python gemini_translate_batch.py export-revision-corpus --output json
   `source_changed_during_scan`，而不是静默混入。
 - 只读：不修改 `.rpy`、manifest、glossary 或 RAG；机器输出可用
   `--output json`（envelope 含三个产物路径与 item/file 计数）。
+
+## 项目版本快照与只读 reconciliation
+
+本节对应 `#265` P3 / `#330`，增加两个不调用模型、不要求 API Key 的高级命令：
+
+```bash
+python gemini_translate_batch.py export-project-snapshot --version-id 1.4.0
+python gemini_translate_batch.py reconcile-project-snapshots \
+  C:/snapshots/1.3.0/project_snapshot.json \
+  C:/snapshots/1.4.0/project_snapshot.json
+```
+
+- `export-project-snapshot` 复用当前 Ren'Py adapter 的 discovery / inventory /
+  coverage / occurrence 结果，输出 `project_snapshot.json` 与
+  `unit_occurrences.jsonl`；默认目录为 `logs/project_snapshots/`。
+- 快照只保存原文 occurrence、opaque locator、speaker、上下文及 coverage/review
+  dependency digest，不保存当前译文；可用 `--coverage-review` 导入并校验已有核对记录。
+- `reconcile-project-snapshots` 只读取两个保存的 artifact，输出
+  `reconciliation_report.json` 与 `reconciliation_items.jsonl`；默认目录为
+  `logs/project_reconciliations/`。
+- 匹配报告区分 confirmed lineage、locator/content exact、移动、上下文高置信、
+  原文小改、新增、删除与歧义；每个未决目标会以 `ambiguous_target` 独立列出，并用
+  共享 ambiguity group ID 连接对应的候选组，候选摘要截断时也不会丢失目标；歧义
+  不会自动确认，也没有写回入口。
+- 两个命令都支持 `--output json` 及通用机器输出裁剪参数。完整 schema、digest、
+  stale 与 P4/P6 边界见 [Engine Adapter 与覆盖审计](engine_adapter.md#p3-项目版本快照)。
 
 ## 关键词提取流程
 

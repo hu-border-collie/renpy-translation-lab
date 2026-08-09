@@ -140,6 +140,14 @@ class CliContractTests(unittest.TestCase):
             "status",
             status="JOB_STATE_PENDING",
         )
+        reconciliation_ready = cli_contract.success_envelope(
+            "reconcile-project-snapshots",
+            status="ready",
+        )
+        reconciliation_attention = cli_contract.success_envelope(
+            "reconcile-project-snapshots",
+            status="attention",
+        )
 
         self.assertEqual(
             cli_contract.strict_exit_code(warn),
@@ -150,6 +158,14 @@ class CliContractTests(unittest.TestCase):
             cli_contract.EXIT_BLOCKED,
         )
         self.assertEqual(cli_contract.strict_exit_code(pending), 0)
+        self.assertEqual(
+            cli_contract.strict_exit_code(reconciliation_ready),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(reconciliation_attention),
+            cli_contract.EXIT_NEEDS_ACTION,
+        )
         unknown = cli_contract.success_envelope("check", status="unknown")
         unclassified_error = cli_contract.error_envelope(
             "apply",

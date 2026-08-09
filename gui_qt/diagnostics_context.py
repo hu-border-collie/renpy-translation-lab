@@ -21,6 +21,7 @@ from .batch_workflow_support import (
 )
 from .user_copy import (
     USAGE_LEDGER_COPY,
+    VERSION_ASSET_COPY,
     format_notice_fact,
     format_usage_ledger_facts,
     format_job_fact,
@@ -213,6 +214,26 @@ def build_cli_commands(
         DiagnosticsCommand(
             label="项目检查",
             command=format_cli_command(python_exe, batch_script_path, ["doctor"]),
+        ),
+        DiagnosticsCommand(
+            label=VERSION_ASSET_COPY["export_snapshot"],
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["export-project-snapshot", "--version-id", "<GAME_VERSION>"],
+            ),
+        ),
+        DiagnosticsCommand(
+            label=VERSION_ASSET_COPY["reconcile_snapshots"],
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                [
+                    "reconcile-project-snapshots",
+                    "path/to/base/project_snapshot.json",
+                    "path/to/target/project_snapshot.json",
+                ],
+            ),
         ),
         DiagnosticsCommand(
             label="项目分析状态",

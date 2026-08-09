@@ -216,6 +216,12 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
         return EXIT_INVALID_STATE
     if command == "doctor" and status == "blocked":
         return EXIT_BLOCKED
+    if command == "reconcile-project-snapshots":
+        if status == "ready":
+            return EXIT_OK
+        if status == "attention":
+            return EXIT_NEEDS_ACTION
+        return EXIT_INVALID_STATE
     if command in {"submit", "status"} and status in {
         "failed",
         "cancelled",
