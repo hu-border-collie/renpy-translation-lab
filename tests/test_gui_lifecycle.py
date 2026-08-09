@@ -124,6 +124,66 @@ class ShutdownCoordinatorTests(unittest.TestCase):
         self.coordinator.check_now()
         self.assertFalse(self.coordinator.in_progress)
 
+    def test_unexpected_probe_failure_reports_once_and_fails_closed(self):
+        state = {"raises": True, "active": False, "requests": 0}
+
+        def is_active() -> bool:
+            if state["raises"]:
+                raise ValueError("probe failed")
+            return bool(state["active"])
+
+        self.coordinator.register(
+            CallbackShutdownParticipant(
+                key="worker",
+                label="后台任务",
+                active_callback=is_active,
+                shutdown_callback=lambda: state.__setitem__(
+                    "requests",
+                    int(state["requests"]) + 1,
+                ),
+            )
+        )
+        failures = []
+        self.coordinator.cancellation_failed.connect(
+            lambda label, error: failures.append((label, error))
+        )
+
+        self.coordinator.begin(timeout_ms=5000)
+        self.coordinator.check_now()
+        self.coordinator.check_now()
+
+        self.assertTrue(self.coordinator.in_progress)
+        self.assertEqual(state["requests"], 1)
+        self.assertEqual(failures, [("后台任务", "probe failed")])
+
+        state["raises"] = False
+        self.coordinator.check_now()
+        self.assertFalse(self.coordinator.in_progress)
+
+    def test_disappeared_qt_wrapper_probe_errors_are_inactive(self):
+        for error_type in (RuntimeError, TypeError):
+            with self.subTest(error_type=error_type.__name__):
+                coordinator = ShutdownCoordinator()
+                requests = []
+                failures = []
+                coordinator.register(
+                    CallbackShutdownParticipant(
+                        key="worker",
+                        label="后台任务",
+                        active_callback=mock.Mock(side_effect=error_type("wrapper deleted")),
+                        shutdown_callback=lambda: requests.append(True),
+                    )
+                )
+                coordinator.cancellation_failed.connect(
+                    lambda label, error: failures.append((label, error))
+                )
+
+                self.assertTrue(coordinator.begin(timeout_ms=5000))
+
+                self.assertFalse(coordinator.in_progress)
+                self.assertEqual(requests, [])
+                self.assertEqual(failures, [])
+
     def test_duplicate_participant_key_is_rejected(self):
         state = {"active": False, "requests": 0}
         self._register("same", "一", state)

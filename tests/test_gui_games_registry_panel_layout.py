@@ -1,9 +1,13 @@
-"""Layout regression for settings · workspace registry toolbar."""
+"""Layout and lifecycle regressions for settings · workspace registry panel."""
 from __future__ import annotations
 
+import threading
 import unittest
+from pathlib import Path
+from unittest import mock
 
 try:
+    from PySide6.QtCore import QThread
     from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea
 
     from gui_qt.app import MainWindow
@@ -33,6 +37,57 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
     def tearDown(self) -> None:
         gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
+
+    def test_registry_worker_is_owned_by_main_window_shutdown(self) -> None:
+        import games_registry as registry
+
+        from gui_qt.games_registry_actions import RegistryActionResult
+        from gui_qt.games_registry_worker import RegistryRefreshWorker
+
+        panel = self.window._games_registry_panel
+        started = threading.Event()
+        release = threading.Event()
+        worker = RegistryRefreshWorker(
+            workspace_root=Path.cwd(),
+            refresh_everything=True,
+            mode=registry.REFRESH_MODE_LITE,
+            parent=panel,
+        )
+        panel._refresh_worker = worker
+
+        def blocked_refresh(*_args, **_kwargs):
+            started.set()
+            release.wait(timeout=2)
+            return RegistryActionResult(False, "已取消", cancelled=True)
+
+        try:
+            with mock.patch(
+                "gui_qt.games_registry_worker.refresh_registry_projects",
+                side_effect=blocked_refresh,
+            ):
+                worker.start()
+                self.assertTrue(started.wait(timeout=1))
+                self.assertTrue(self.window.isAncestorOf(panel))
+                self.assertIn(worker, self.window.findChildren(QThread))
+                self.assertIn(worker, self.window._owned_background_threads())
+                self.assertIn(
+                    "后台下载、检查或列表任务",
+                    self.window._shutdown_coordinator.active_labels(),
+                )
+
+                self.window._request_background_threads_shutdown()
+                self.assertTrue(worker._should_cancel())
+
+                self.window._lock_ui_for_shutdown()
+                self.assertTrue(panel._shutdown_requested)
+                release.set()
+                self.assertTrue(worker.wait(1000))
+        finally:
+            release.set()
+            worker.request_stop()
+            worker.requestInterruption()
+            worker.wait(1000)
+            panel._refresh_worker = None
 
     def test_workspace_toolbar_fits_settings_viewport_without_hscroll(self) -> None:
         self.window.resize(960, 700)

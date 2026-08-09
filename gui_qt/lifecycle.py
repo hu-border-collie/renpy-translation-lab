@@ -54,7 +54,7 @@ class ShutdownCoordinator(QObject):
 
     settled = Signal()
     stalled = Signal(object)  # tuple[str, ...] user-facing task labels
-    cancellation_failed = Signal(str, str)  # label, error
+    cancellation_failed = Signal(str, str)  # participant label, probe/stop error
 
     def __init__(self, parent: QObject | None = None, *, poll_interval_ms: int = 50):
         super().__init__(parent)
@@ -63,6 +63,7 @@ class ShutdownCoordinator(QObject):
         self._stalled_reported = False
         self._requested_active_keys: set[str] = set()
         self._cancellation_failed_keys: set[str] = set()
+        self._probe_failed_keys: set[str] = set()
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(max(1, int(poll_interval_ms)))
@@ -113,11 +114,17 @@ class ShutdownCoordinator(QObject):
                 active = participant.is_active()
             except (RuntimeError, TypeError):
                 # A Qt wrapper may disappear between completion and polling.
+                self._probe_failed_keys.discard(participant.key)
                 active = False
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
                 # Fail closed for unexpected probe errors: do not declare a
                 # possibly-running task settled merely because inspection failed.
+                if self._in_progress and participant.key not in self._probe_failed_keys:
+                    self.cancellation_failed.emit(participant.label, str(exc))
+                    self._probe_failed_keys.add(participant.key)
                 active = True
+            else:
+                self._probe_failed_keys.discard(participant.key)
             if active:
                 active_participants.append(participant)
         return tuple(active_participants)
@@ -149,6 +156,7 @@ class ShutdownCoordinator(QObject):
         self._stalled_reported = False
         self._requested_active_keys = set()
         self._cancellation_failed_keys = set()
+        self._probe_failed_keys = set()
 
         self._request_participants(self._active_participants())
 
@@ -198,4 +206,5 @@ class ShutdownCoordinator(QObject):
         self._stalled_reported = False
         self._requested_active_keys = set()
         self._cancellation_failed_keys = set()
+        self._probe_failed_keys = set()
         self.settled.emit()

@@ -227,6 +227,19 @@ class CliRunnerChannelTests(unittest.TestCase):
         self.assertEqual(self.finished_codes, [-1])
         self.assertIsNone(self.runner._proc)
 
+    def test_repeated_non_fatal_errors_emit_once_while_process_is_owned(self):
+        process = _LifecycleFakeProcess(state=QProcess.ProcessState.Running)
+        self.runner._proc = process
+        self.runner._start_timeout_timer = _FakeTimer()
+        self.runner._stop_timeout_timer = _FakeTimer()
+
+        self.runner._on_process_error(process, QProcess.ProcessError.WriteError)
+        self.runner._on_process_error(process, QProcess.ProcessError.ReadError)
+
+        self.assertEqual(len(self.errors), 1)
+        self.assertEqual(self.finished_codes, [])
+        self.assertIs(self.runner._proc, process)
+
     def test_start_timeout_keeps_process_owned_until_finished(self):
         process = _LifecycleFakeProcess(state=QProcess.ProcessState.Starting)
         stop_timer = _FakeTimer()
