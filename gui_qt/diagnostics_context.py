@@ -220,7 +220,7 @@ def build_cli_commands(
             command=format_cli_command(
                 python_exe,
                 batch_script_path,
-                ["export-project-snapshot", "--version-id", "GAME_VERSION"],
+                ["export-project-snapshot", "--version-id", "<GAME_VERSION>"],
             ),
         ),
         DiagnosticsCommand(

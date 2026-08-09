@@ -30,6 +30,13 @@ python gemini_translate_batch.py check <manifest> --output json
 python gemini_translate_batch.py apply <manifest> --output json
 ```
 
+P3 的两个只读版本资产命令也使用同一 envelope：
+
+```powershell
+python gemini_translate_batch.py export-project-snapshot --version-id <GAME_VERSION> --output json
+python gemini_translate_batch.py reconcile-project-snapshots <base-snapshot> <target-snapshot> --output json
+```
+
 JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning、prepare 子进程输出和原有文本摘要会实时写入 stderr，完整 Batch 控制台日志仍会落盘。成功结果使用版本化 envelope：
 
 ```json
@@ -47,7 +54,8 @@ JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning、
 
 其中：
 
-- `status` 表示业务状态，例如 Batch job state、`safe / warn / block` 或 `applied`；
+- `status` 表示业务状态，例如 Batch job state、`safe / warn / block`、reconciliation
+  的 `ready / attention` 或 `applied`；
 - `result` 是命令摘要，`artifacts` 给出 manifest、results、检查报告等产物路径；
 - 命令拒绝执行时 `ok=false`，`error.code` 与 `error.message` 用于程序判断和诊断；
 - 默认退出码仍保持兼容。Agent 可同时传入 `--output json --strict-exit-codes`，让业务状态映射为稳定退出码；严格模式只与 JSON 输出组合使用。
@@ -60,7 +68,7 @@ JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning、
 | `0` | 命令成功，可继续或继续轮询 | `safe`、job pending/running、无待处理工作 |
 | `1` | 未分类的内部错误，默认不可重试 | 意外异常或未知 SDK 错误 |
 | `2` | 命令行用法错误 | 参数缺失、严格模式未配合 JSON 输出 |
-| `3` | 命令完成，但需要 Agent 处理 | `check` 返回 `warn` |
+| `3` | 命令完成，但需要 Agent 处理 | `check` 返回 `warn`，或 reconciliation 返回 `attention` |
 | `4` | 被门禁阻止或进入终止失败状态 | `block`、doctor blocked、job failed/cancelled |
 | `5` | 输入、配置或状态已失效 | stale check、manifest/results 漂移、前置产物缺失 |
 | `6` | 远端临时错误，可稍后重试 | rate limit、quota、timeout、service unavailable |
@@ -91,7 +99,7 @@ python gemini_translate_batch.py status <manifest> --output json --non-interacti
 
 ## 输出裁剪与文件输出
 
-七个核心 JSON 命令还支持三个可组合选项：
+上述七个核心 JSON 命令与两个版本资产命令还支持三个可组合选项：
 
 ```powershell
 python gemini_translate_batch.py status <manifest> --output json --compact
@@ -141,7 +149,8 @@ python gemini_translate_batch.py schema status
 `capabilities` 与 `schema` 本身就是 JSON 命令，也接受 `--compact / --fields / --output-file`，但不需要也不提供冗余的 `--output json`。
 
 没有单独提供 `commands` 命令，因为 `capabilities.commands` 已覆盖同一用途。输出裁剪是公开参数，不存在 discovery schema 之外的隐藏 Agent 行为。
-没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式只承诺覆盖上面的七个核心命令；其他子命令以各自 `--help` 和落盘产物为准。
+没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式承诺覆盖上面的七个
+核心命令和两个版本资产命令；其他子命令以各自 `--help` 和落盘产物为准。
 
 ## 1. 安装核心依赖
 

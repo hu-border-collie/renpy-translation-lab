@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -69,7 +70,12 @@ def _normalize_path(value: Any) -> str:
     normalized = str(value or "").replace("\\", "/").strip()
     while normalized.startswith("./"):
         normalized = normalized[2:]
-    normalized = normalized.lstrip("/")
+    if normalized.startswith("/") or (
+        len(normalized) >= 2
+        and normalized[0].isalpha()
+        and normalized[1] == ":"
+    ):
+        raise VersioningArtifactError(f"Invalid relative path: {value!r}")
     parts = [part for part in normalized.split("/") if part not in {"", "."}]
     if not parts or any(part == ".." for part in parts):
         raise VersioningArtifactError(f"Invalid relative path: {value!r}")
@@ -104,6 +110,20 @@ def _int_value(value: Any, *, field_name: str, minimum: int = 0) -> int:
         raise VersioningArtifactError(f"{field_name} must be an integer.") from exc
     if parsed < minimum:
         raise VersioningArtifactError(f"{field_name} must be >= {minimum}.")
+    return parsed
+
+
+def _float_value(value: Any, *, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise VersioningArtifactError(f"{field_name} must be a finite number.")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise VersioningArtifactError(
+            f"{field_name} must be a finite number."
+        ) from exc
+    if not math.isfinite(parsed):
+        raise VersioningArtifactError(f"{field_name} must be a finite number.")
     return parsed
 
 
@@ -524,7 +544,7 @@ class UnitOccurrenceRecord:
 def _occurrence_sort_key(occurrence: Occurrence) -> tuple[Any, ...]:
     unit = occurrence.unit
     return (
-        str(unit.file_rel_path or "").replace("\\", "/"),
+        _normalize_path(unit.file_rel_path),
         int(unit.display_line_number or 0),
         int(unit.start or 0),
         occurrence.occurrence_id,
@@ -538,17 +558,21 @@ def build_unit_occurrence_records(
 ) -> tuple[UnitOccurrenceRecord, ...]:
     """Convert adapter occurrences into source-only, context-linked records."""
 
-    ordered = sorted(occurrences, key=_occurrence_sort_key)
+    ordered = sorted(
+        ((_occurrence_sort_key(occurrence), occurrence) for occurrence in occurrences),
+        key=lambda item: item[0],
+    )
     lineage = dict(lineage_by_occurrence or {})
     records: list[UnitOccurrenceRecord] = []
-    for index, occurrence in enumerate(ordered):
+    for index, (sort_key, occurrence) in enumerate(ordered):
         unit = occurrence.unit
+        current_path = str(sort_key[0])
         before = ""
         after = ""
-        if index > 0 and ordered[index - 1].unit.file_rel_path == unit.file_rel_path:
-            before = ordered[index - 1].unit.source_text
-        if index + 1 < len(ordered) and ordered[index + 1].unit.file_rel_path == unit.file_rel_path:
-            after = ordered[index + 1].unit.source_text
+        if index > 0 and str(ordered[index - 1][0][0]) == current_path:
+            before = ordered[index - 1][1].unit.source_text
+        if index + 1 < len(ordered) and str(ordered[index + 1][0][0]) == current_path:
+            after = ordered[index + 1][1].unit.source_text
         records.append(
             UnitOccurrenceRecord.create(
                 occurrence_id=occurrence.occurrence_id,
@@ -1207,7 +1231,10 @@ class ReconciliationItem:
             "candidate_target_occurrence_ids": list(
                 self.candidate_target_occurrence_ids
             ),
-            "confidence": round(float(self.confidence), 6),
+            "confidence": round(
+                _float_value(self.confidence, field_name="confidence"),
+                6,
+            ),
             "evidence": dict(self.evidence),
         }
 
@@ -1230,7 +1257,13 @@ class ReconciliationItem:
             disposition,
             field_name="disposition",
         )
-        if normalized_disposition not in {"matched", "ambiguous", "deleted", "added"}:
+        if normalized_disposition not in {
+            "matched",
+            "ambiguous",
+            "ambiguous_target",
+            "deleted",
+            "added",
+        }:
             raise VersioningArtifactError(
                 f"Unsupported reconciliation disposition: {normalized_disposition}"
             )
@@ -1250,6 +1283,10 @@ class ReconciliationItem:
             raise VersioningArtifactError(
                 "Ambiguous reconciliation items require base and candidate targets."
             )
+        if normalized_disposition == "ambiguous_target" and not normalized_target_id:
+            raise VersioningArtifactError(
+                "Ambiguous target items require a target ID."
+            )
         if normalized_disposition == "deleted" and not normalized_base_id:
             raise VersioningArtifactError("Deleted reconciliation items require a base ID.")
         if normalized_disposition == "added" and not normalized_target_id:
@@ -1261,6 +1298,12 @@ class ReconciliationItem:
         if normalized_disposition == "ambiguous" and normalized_target_id:
             raise VersioningArtifactError(
                 "Ambiguous reconciliation items cannot carry a confirmed target."
+            )
+        if normalized_disposition == "ambiguous_target" and (
+            normalized_base_id or normalized_candidate_ids
+        ):
+            raise VersioningArtifactError(
+                "Ambiguous target items cannot carry base or candidate IDs."
             )
         if normalized_disposition == "deleted" and (
             normalized_target_id or normalized_candidate_ids
@@ -1274,7 +1317,10 @@ class ReconciliationItem:
             raise VersioningArtifactError(
                 "Added reconciliation items cannot carry base or candidate IDs."
             )
-        normalized_confidence = round(float(confidence), 6)
+        normalized_confidence = round(
+            _float_value(confidence, field_name="confidence"),
+            6,
+        )
         if not 0.0 <= normalized_confidence <= 1.0:
             raise VersioningArtifactError("Reconciliation confidence must be between 0 and 1.")
         identity = {
@@ -1324,7 +1370,10 @@ class ReconciliationItem:
                     field_name="candidate_target_occurrence_ids",
                 )
             ],
-            confidence=float(payload.get("confidence") or 0.0),
+            confidence=_float_value(
+                payload.get("confidence"),
+                field_name="confidence",
+            ),
             evidence=_mapping(payload.get("evidence") or {}, field_name="evidence"),
         )
         if str(payload.get("item_id") or "") != item.item_id:
@@ -1567,18 +1616,25 @@ def reconcile_project_snapshots(
                 )
                 evidence_by_pair[(base_item.occurrence_id, target_item.occurrence_id)] = evidence
 
+    evidence_by_rank: dict[int, list[_MatchEvidence]] = defaultdict(list)
+    evidence_by_base: dict[str, list[_MatchEvidence]] = defaultdict(list)
+    for evidence in evidence_by_pair.values():
+        evidence_by_rank[evidence.rank].append(evidence)
+        evidence_by_base[evidence.base_id].append(evidence)
+
     remaining_base = set(base_by_id)
     remaining_target = set(target_by_id)
     matched: list[_MatchEvidence] = []
     for rank in (600, 500, 450, 300, 200):
+        pool = evidence_by_rank.get(rank, [])
         while True:
             candidates = [
                 item
-                for item in evidence_by_pair.values()
-                if item.rank == rank
-                and item.base_id in remaining_base
+                for item in pool
+                if item.base_id in remaining_base
                 and item.target_id in remaining_target
             ]
+            pool = candidates
             by_base: dict[str, list[_MatchEvidence]] = defaultdict(list)
             by_target: dict[str, list[_MatchEvidence]] = defaultdict(list)
             for item in candidates:
@@ -1637,12 +1693,15 @@ def reconcile_project_snapshots(
         )
 
     ambiguous_targets: set[str] = set()
-    expanded_ambiguous_groups: set[tuple[str, str]] = set()
+    expanded_ambiguous_groups: set[str] = set()
+    ambiguity_group_ids_by_target: dict[str, set[str]] = defaultdict(set)
+    remaining_related_targets: dict[tuple[str, str], tuple[str, ...]] = {}
+    remaining_related_target_sets: dict[tuple[str, str], frozenset[str]] = {}
     for base_id in sorted(remaining_base):
         candidates = [
             item
-            for item in evidence_by_pair.values()
-            if item.base_id == base_id and item.target_id in remaining_target
+            for item in evidence_by_base.get(base_id, ())
+            if item.target_id in remaining_target
         ]
         if not candidates:
             items.append(
@@ -1658,35 +1717,100 @@ def reconcile_project_snapshots(
             key=lambda item: (-item.rank, -item.score, item.target_id),
         )
         top_rank = ordered[0].rank
-        top = [item for item in ordered if item.rank == top_rank][:8]
+        top_all = [item for item in ordered if item.rank == top_rank]
+        top = top_all[:8]
         candidate_ids = [item.target_id for item in top]
+        ambiguity_group_ids: set[str] = set()
+        ambiguity_groups: list[dict[str, Any]] = []
+        top_candidate_ids = tuple(sorted({item.target_id for item in top_all}))
+        covered_top_candidate_ids: set[str] = set()
+
         related_groups = related_group_keys_by_base.get(base_id, ())
-        sampled_related_targets: list[str] = []
-        has_related_target = False
         for group_key in related_groups:
-            group_targets = related_target_groups.get(group_key, ())
-            for target_id in group_targets:
-                if target_id not in remaining_target:
-                    continue
-                has_related_target = True
-                if len(sampled_related_targets) < 8:
-                    sampled_related_targets.append(target_id)
-            if group_key not in expanded_ambiguous_groups:
-                ambiguous_targets.update(
-                    target_id
-                    for target_id in group_targets
-                    if target_id in remaining_target
+            if group_key not in remaining_related_targets:
+                remaining_related_targets[group_key] = tuple(
+                    sorted(
+                        target_id
+                        for target_id in related_target_groups.get(group_key, ())
+                        if target_id in remaining_target
+                    )
                 )
-                expanded_ambiguous_groups.add(group_key)
-        if not has_related_target:
-            ambiguous_targets.update(candidate_ids)
-        if len(candidate_ids) < 8:
-            candidate_ids.extend(
+                remaining_related_target_sets[group_key] = frozenset(
+                    remaining_related_targets[group_key]
+                )
+            group_targets = remaining_related_targets[group_key]
+            if not group_targets:
+                continue
+            covered_top_candidate_ids.update(
                 target_id
-                for target_id in sorted(sampled_related_targets)
-                if target_id not in candidate_ids
+                for target_id in top_candidate_ids
+                if target_id in remaining_related_target_sets[group_key]
             )
-            candidate_ids = candidate_ids[:8]
+            group_id = "ambiguity-group1:" + digest_json(
+                {"kind": group_key[0], "value": group_key[1]}
+            )
+            ambiguity_group_ids.add(group_id)
+            ambiguity_groups.append(
+                {
+                    "group_id": group_id,
+                    "kind": group_key[0],
+                    "target_count": len(group_targets),
+                    "sample_target_occurrence_ids": list(group_targets[:8]),
+                    "sample_truncated": len(group_targets) > 8,
+                }
+            )
+            if len(candidate_ids) < 8:
+                candidate_ids.extend(
+                    target_id
+                    for target_id in group_targets[:8]
+                    if target_id not in candidate_ids
+                )
+                candidate_ids = candidate_ids[:8]
+            if group_id not in expanded_ambiguous_groups:
+                ambiguous_targets.update(group_targets)
+                for target_id in group_targets:
+                    ambiguity_group_ids_by_target[target_id].add(group_id)
+                expanded_ambiguous_groups.add(group_id)
+
+        unlinked_top_candidate_ids = tuple(
+            target_id
+            for target_id in top_candidate_ids
+            if target_id not in covered_top_candidate_ids
+        )
+        if unlinked_top_candidate_ids:
+            top_group_id = "ambiguity-group1:" + digest_json(
+                {
+                    "kind": "ranked_candidates",
+                    "base_occurrence_id": base_id,
+                    "rank": top_rank,
+                    "target_occurrence_ids": list(unlinked_top_candidate_ids),
+                }
+            )
+            ambiguity_group_ids.add(top_group_id)
+            ambiguity_groups.append(
+                {
+                    "group_id": top_group_id,
+                    "kind": "ranked_candidates",
+                    "target_count": len(unlinked_top_candidate_ids),
+                    "sample_target_occurrence_ids": list(
+                        unlinked_top_candidate_ids[:8]
+                    ),
+                    "sample_truncated": len(unlinked_top_candidate_ids) > 8,
+                }
+            )
+            ambiguous_targets.update(unlinked_top_candidate_ids)
+            for target_id in unlinked_top_candidate_ids:
+                ambiguity_group_ids_by_target[target_id].add(top_group_id)
+            expanded_ambiguous_groups.add(top_group_id)
+
+        candidate_ids = list(dict.fromkeys(candidate_ids))[:8]
+        candidate_ids_truncated = any(
+            bool(group["sample_truncated"]) for group in ambiguity_groups
+        ) or any(
+            target_id not in candidate_ids
+            for group in ambiguity_groups
+            for target_id in group["sample_target_occurrence_ids"]
+        )
         items.append(
             ReconciliationItem.create(
                 disposition="ambiguous",
@@ -1704,7 +1828,26 @@ def reconcile_project_snapshots(
                             "evidence": dict(item.evidence),
                         }
                         for item in top
-                    ]
+                    ],
+                    "ambiguity_group_ids": sorted(ambiguity_group_ids),
+                    "ambiguity_groups": ambiguity_groups,
+                    "candidate_target_occurrence_ids_truncated": (
+                        candidate_ids_truncated
+                    ),
+                },
+            )
+        )
+
+    for target_id in sorted(ambiguous_targets):
+        items.append(
+            ReconciliationItem.create(
+                disposition="ambiguous_target",
+                match_kind="ambiguous_target",
+                target_occurrence_id=target_id,
+                evidence={
+                    "ambiguity_group_ids": sorted(
+                        ambiguity_group_ids_by_target[target_id]
+                    )
                 },
             )
         )
@@ -1718,7 +1861,13 @@ def reconcile_project_snapshots(
             )
         )
 
-    disposition_order = {"matched": 0, "ambiguous": 1, "deleted": 2, "added": 3}
+    disposition_order = {
+        "matched": 0,
+        "ambiguous": 1,
+        "ambiguous_target": 2,
+        "deleted": 3,
+        "added": 4,
+    }
     items.sort(
         key=lambda item: (
             disposition_order.get(item.disposition, 99),
@@ -1738,7 +1887,7 @@ def reconcile_project_snapshots(
         "ambiguous": summary_counter["ambiguous"],
         "deleted": summary_counter["deleted"],
         "added": summary_counter["added"],
-        "ambiguous_target_count": len(ambiguous_targets),
+        "ambiguous_target_count": summary_counter["ambiguous_target"],
         **{
             kind: summary_counter[kind]
             for kind in (
@@ -1814,6 +1963,12 @@ def validate_reconciliation_report(report: ReconciliationReport) -> None:
             raise VersioningArtifactError(
                 f"Reconciliation summary does not match items: {key}"
             )
+    if int(report.summary.get("ambiguous_target_count", -1)) != item_counts[
+        "ambiguous_target"
+    ]:
+        raise VersioningArtifactError(
+            "Reconciliation ambiguous target summary does not match items."
+        )
     for key in (
         "confirmed_lineage",
         "locator_exact",
@@ -1838,12 +1993,61 @@ def validate_reconciliation_report(report: ReconciliationReport) -> None:
     expected_target_count = (
         item_counts["matched"]
         + item_counts["added"]
-        + int(report.summary.get("ambiguous_target_count", -1))
+        + item_counts["ambiguous_target"]
     )
     if int(report.summary.get("target_occurrence_count", -1)) != expected_target_count:
         raise VersioningArtifactError(
             "Reconciliation target occurrence count does not match items."
         )
+    target_ids = [
+        item.target_occurrence_id
+        for item in report.items
+        if item.disposition in {"matched", "added", "ambiguous_target"}
+    ]
+    if len(target_ids) != len(set(target_ids)):
+        raise VersioningArtifactError(
+            "Reconciliation target occurrences must have one disposition each."
+        )
+    ambiguous_target_ids = {
+        item.target_occurrence_id
+        for item in report.items
+        if item.disposition == "ambiguous_target"
+    }
+    referenced_candidate_ids = {
+        target_id
+        for item in report.items
+        if item.disposition == "ambiguous"
+        for target_id in item.candidate_target_occurrence_ids
+    }
+    if not referenced_candidate_ids <= ambiguous_target_ids:
+        raise VersioningArtifactError(
+            "Ambiguous candidates must have explicit ambiguous target items."
+        )
+    ambiguous_group_ids: set[str] = set()
+    for item in report.items:
+        if item.disposition != "ambiguous":
+            continue
+        group_ids = item.evidence.get("ambiguity_group_ids")
+        if not isinstance(group_ids, list) or not all(
+            isinstance(group_id, str) and group_id
+            for group_id in group_ids
+        ):
+            raise VersioningArtifactError(
+                "Ambiguous items require valid ambiguity group IDs."
+            )
+        ambiguous_group_ids.update(group_ids)
+    for item in report.items:
+        if item.disposition != "ambiguous_target":
+            continue
+        group_ids = item.evidence.get("ambiguity_group_ids")
+        if not isinstance(group_ids, list) or not {
+            group_id
+            for group_id in group_ids
+            if isinstance(group_id, str)
+        } & ambiguous_group_ids:
+            raise VersioningArtifactError(
+                "Ambiguous target items must link to an ambiguous base group."
+            )
     if digest_json(report.stable_payload()) != report.reconciliation_digest:
         raise VersioningArtifactError("Reconciliation digest does not match its payload.")
 

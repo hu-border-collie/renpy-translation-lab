@@ -139,10 +139,13 @@ occurrence 扫描，输出：
 4. 原文一致的移动项，以及可由 speaker / 区分性上下文唯一支持的重复原文；
 5. 超过固定相似度与唯一性门槛的原文小改。
 
-重复原文没有独立证据、多个候选同分或同一目标被竞争时会输出 `ambiguous`，不会按
-原文哈希或文件顺序静默合并。报告另外列出 `added`、`deleted`、coverage 分类变化和
-新增 unresolved 结构。`reconciliation_report.json` 保存摘要与输入 digest，
-`reconciliation_items.jsonl` 保存逐项证据、置信度和候选来源。
+重复原文没有独立证据、多个候选同分或同一目标被竞争时会输出 base 侧
+`ambiguous`，不会按原文哈希或文件顺序静默合并。每个未决 target 另有一条
+`ambiguous_target` item；base/target item 通过稳定 ambiguity group ID 相连，因此
+即使 base item 只保留 8 个候选样本，大歧义组中的每个目标仍可逐项追溯。报告另外
+列出 `added`、`deleted`、coverage 分类变化和新增 unresolved 结构。
+`reconciliation_report.json` 保存摘要与输入 digest，`reconciliation_items.jsonl`
+保存逐项证据、置信度和候选来源。
 
 快照、occurrence、reconciliation item 和报告均有独立 schema/digest 校验；JSONL
 被修改、路径逃出 artifact 目录或数量/identity 不一致时导入失败。旧报告通过

@@ -159,6 +159,47 @@ class TestEngineAdapterP3(unittest.TestCase):
             ):
                 versioning.load_project_snapshot(paths.snapshot_path)
 
+    def test_occurrence_context_uses_normalized_relative_paths(self):
+        occurrences = [
+            self._occurrence(
+                "1.0",
+                {
+                    "key": "first",
+                    "source": "First",
+                    "file": "./chapter.rpy",
+                    "line": 1,
+                },
+                "project-1.0",
+            ),
+            self._occurrence(
+                "1.0",
+                {
+                    "key": "second",
+                    "source": "Second",
+                    "file": "chapter.rpy",
+                    "line": 2,
+                },
+                "project-1.0",
+            ),
+        ]
+
+        records = versioning.build_unit_occurrence_records(occurrences)
+
+        self.assertEqual(records[0].file_rel_path, "chapter.rpy")
+        self.assertEqual(records[0].context_after, "Second")
+        self.assertEqual(records[1].context_before, "First")
+
+    def test_snapshot_rejects_absolute_source_paths(self):
+        for path in ("C:/game/chapter.rpy", "/game/chapter.rpy", "//server/game.rpy"):
+            with self.subTest(path=path), self.assertRaisesRegex(
+                versioning.VersioningArtifactError,
+                "Invalid relative path",
+            ):
+                self._snapshot(
+                    "1.0",
+                    [{"key": "absolute", "source": "Hello", "file": path}],
+                )
+
     def test_reconciliation_covers_match_classes_and_version_deltas(self):
         base = self._snapshot(
             "1.0",
@@ -305,6 +346,52 @@ class TestEngineAdapterP3(unittest.TestCase):
             all(len(item.candidate_target_occurrence_ids) == 2 for item in ambiguous)
         )
 
+    def test_large_ambiguity_group_lists_every_target_explicitly(self):
+        base = self._snapshot(
+            "1.0",
+            [{"key": "base", "source": "Same", "content": "shared"}],
+        )
+        target = self._snapshot(
+            "2.0",
+            [
+                {
+                    "key": f"target-{index}",
+                    "source": "Same",
+                    "content": "shared",
+                }
+                for index in range(12)
+            ],
+        )
+
+        report = versioning.reconcile_project_snapshots(base, target)
+
+        self.assertEqual(report.summary["ambiguous"], 1)
+        self.assertEqual(report.summary["ambiguous_target_count"], 12)
+        self.assertEqual(report.summary["added"], 0)
+        ambiguous = next(
+            item for item in report.items if item.disposition == "ambiguous"
+        )
+        self.assertEqual(len(ambiguous.candidate_target_occurrence_ids), 8)
+        self.assertTrue(
+            ambiguous.evidence["candidate_target_occurrence_ids_truncated"]
+        )
+        target_items = [
+            item
+            for item in report.items
+            if item.disposition == "ambiguous_target"
+        ]
+        self.assertEqual(
+            {item.target_occurrence_id for item in target_items},
+            {item.occurrence_id for item in target.occurrences},
+        )
+        base_group_ids = set(ambiguous.evidence["ambiguity_group_ids"])
+        self.assertTrue(
+            all(
+                base_group_ids & set(item.evidence["ambiguity_group_ids"])
+                for item in target_items
+            )
+        )
+
     def test_duplicate_source_is_not_resolved_only_by_elimination(self):
         base = self._snapshot(
             "1.0",
@@ -369,6 +456,30 @@ class TestEngineAdapterP3(unittest.TestCase):
                 "item digest",
             ):
                 versioning.load_reconciliation_report(paths.report_path)
+
+    def test_reconciliation_item_rejects_non_numeric_confidence(self):
+        item = versioning.ReconciliationItem.create(
+            disposition="deleted",
+            match_kind="",
+            base_occurrence_id="occ-base",
+        )
+        payload = item.to_dict()
+        payload["confidence"] = "not-a-number"
+        with self.assertRaisesRegex(
+            versioning.VersioningArtifactError,
+            "confidence must be a finite number",
+        ):
+            versioning.ReconciliationItem.from_dict(payload)
+        with self.assertRaisesRegex(
+            versioning.VersioningArtifactError,
+            "confidence must be a finite number",
+        ):
+            versioning.ReconciliationItem.create(
+                disposition="deleted",
+                match_kind="",
+                base_occurrence_id="occ-base",
+                confidence=float("nan"),
+            )
 
     def test_coverage_dependency_change_marks_old_report_stale(self):
         specs = [{"key": "a", "source": "Hello"}]
@@ -508,6 +619,7 @@ class TestEngineAdapterP3(unittest.TestCase):
         )
         by_label = {item.label: item.command for item in commands}
         self.assertIn("export-project-snapshot", by_label["版本资产·导出项目快照"])
+        self.assertIn("<GAME_VERSION>", by_label["版本资产·导出项目快照"])
         self.assertIn(
             "reconcile-project-snapshots",
             by_label["版本资产·比较两个快照"],
