@@ -212,6 +212,8 @@ python gemini_translate_batch.py apply-revisions logs/batch_jobs/<revision-packa
 
 `final-review-resume` 会**重新采集 live 共享上下文**（而非只读冻结 snapshot）来判断 skip / stale，只为 pending / stale / failed 重建 `requests.jsonl`；`--force` 才重审全部。有待跑 unit 时会清空 `job_name` / 下载字段，并把旧 `results.jsonl` 改名为 `results.jsonl.pre_resume_*`，避免 `download` 短路复用上一轮结果。`final-review-ingest-results` 解析 Batch 结果：成功（含空 findings）→ `done`，并在成功时写回本次 live `input_digest`；解析失败 / 缺响应 → `failed`（**不会**记成「零问题 done」）。resume 之后若尚未重新 download，默认**拒绝**用 resume 前的 `results.jsonl`（可用 `--result` 或 `--allow-stale-results` 显式覆盖）。
 
+当前 ingest 的固定 fixture 基线发现两个现行误接受边界：finding 缺 response schema 必填字段、完全重复 finding；另单列一个未来 completion receipt 数量不符的假设性探针。它们尚未进入生产 parser；本阶段也不启用宽松 JSON repair。现状对比、候选稳定码、unit 级 targeted resume 合约和 receipt 暂缓结论见 [Final Review 结果失败分类 fixture spike](plans/final_review_result_failure_spike.md)。
+
 ### 产物布局
 
 ```text
