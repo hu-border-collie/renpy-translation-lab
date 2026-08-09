@@ -267,6 +267,30 @@ python gemini_translate_batch.py export-revision-corpus --output json
 - 只读：不修改 `.rpy`、manifest、glossary 或 RAG；机器输出可用
   `--output json`（envelope 含三个产物路径与 item/file 计数）。
 
+## 项目版本快照与只读 reconciliation
+
+#265 P3 / #330 增加两个不调用模型、不要求 API Key 的高级命令：
+
+```bash
+python gemini_translate_batch.py export-project-snapshot --version-id 1.4.0
+python gemini_translate_batch.py reconcile-project-snapshots \
+  C:/snapshots/1.3.0/project_snapshot.json \
+  C:/snapshots/1.4.0/project_snapshot.json
+```
+
+- `export-project-snapshot` 复用当前 Ren'Py adapter 的 discovery / inventory /
+  coverage / occurrence 结果，输出 `project_snapshot.json` 与
+  `unit_occurrences.jsonl`；默认目录为 `logs/project_snapshots/`。
+- 快照只保存原文 occurrence、opaque locator、speaker、上下文及 coverage/review
+  dependency digest，不保存当前译文；可用 `--coverage-review` 导入并校验已有核对记录。
+- `reconcile-project-snapshots` 只读取两个保存的 artifact，输出
+  `reconciliation_report.json` 与 `reconciliation_items.jsonl`；默认目录为
+  `logs/project_reconciliations/`。
+- 匹配报告区分 confirmed lineage、locator/content exact、移动、上下文高置信、
+  原文小改、新增、删除与歧义；歧义不会自动确认，也没有写回入口。
+- 两个命令都支持 `--output json` 及通用机器输出裁剪参数。完整 schema、digest、
+  stale 与 P4/P6 边界见 [Engine Adapter 与覆盖审计](engine_adapter.md#p3-项目版本快照)。
+
 ## 关键词提取流程
 
 关键词提取模式只生成候选报告，不写回 `.rpy` / `glossary.json` / `story_graph.json`：

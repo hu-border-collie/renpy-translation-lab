@@ -13,20 +13,29 @@ import gemini_translate_batch as batch
 
 
 class BatchCliContractTests(unittest.TestCase):
+    @staticmethod
+    def _machine_command_argv(command):
+        if command == "export-project-snapshot":
+            return [command, "--version-id", "test-version"]
+        if command == "reconcile-project-snapshots":
+            return [command, "base-snapshot.json", "target-snapshot.json"]
+        return [command]
+
     def test_core_commands_accept_json_output_after_subcommand(self):
         parser = batch.build_arg_parser()
 
         for command in sorted(batch.MACHINE_OUTPUT_COMMANDS):
             with self.subTest(command=command):
-                args = parser.parse_args([command, "--output", "json"])
+                argv = self._machine_command_argv(command)
+                args = parser.parse_args([*argv, "--output", "json"])
                 self.assertEqual(args.command, command)
                 self.assertEqual(args.output, "json")
                 self.assertFalse(args.strict_exit_codes)
                 strict_args = parser.parse_args(
-                    [command, "--output", "json", "--strict-exit-codes"]
+                    [*argv, "--output", "json", "--strict-exit-codes"]
                 )
                 strict_invocation = parser.parse_args(
-                    [command, "--non-interactive", "--require-explicit-target"]
+                    [*argv, "--non-interactive", "--require-explicit-target"]
                 )
                 self.assertTrue(strict_invocation.non_interactive)
                 self.assertTrue(strict_invocation.require_explicit_target)
@@ -1027,6 +1036,22 @@ class BatchCliContractTests(unittest.TestCase):
                                 return_value={"paths": {}, "scope": {}},
                             )
                         )
+                    elif command == "export-project-snapshot":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "run_project_snapshot_export",
+                                return_value={"paths": {}, "coverage": {}},
+                            )
+                        )
+                    elif command == "reconcile-project-snapshots":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "run_project_snapshot_reconciliation",
+                                return_value={"paths": {}, "summary": {}},
+                            )
+                        )
                     elif command == "merge-keywords-to-glossary":
                         handler_patches.extend(
                             [
@@ -1057,12 +1082,24 @@ class BatchCliContractTests(unittest.TestCase):
                             argv = ["merge-keywords-to-glossary", "candidates.jsonl", "--yes"]
                         elif command == "export-revision-corpus":
                             argv = ["export-revision-corpus"]
+                        elif command == "export-project-snapshot":
+                            argv = ["export-project-snapshot", "--version-id", "test-version"]
+                        elif command == "reconcile-project-snapshots":
+                            argv = [
+                                "reconcile-project-snapshots",
+                                "base-snapshot.json",
+                                "target-snapshot.json",
+                            ]
                         else:
                             argv = [command, "manifest.json"]
                         exit_code = batch.main(argv)
 
                 self.assertEqual(exit_code, 0)
-                if command == "export-revision-corpus":
+                if command in {
+                    "export-revision-corpus",
+                    "export-project-snapshot",
+                    "reconcile-project-snapshots",
+                }:
                     # Read-only export takes an early dispatch path that must
                     # not load (or rewrite) API-key / translator config.
                     load_config.assert_not_called()

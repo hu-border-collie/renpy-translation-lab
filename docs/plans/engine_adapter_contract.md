@@ -3,7 +3,9 @@
 > 状态：#265 / #285 的 P0 设计基线；#265 P1 已按本文合同实现只读
 > `RenPyAdapter`、coverage/review 产物，并迁移 sync 与普通 Batch translation
 > build 的扫描入口；#265 P2 已实现 Ren'Py relocation、validation、声明式
-> writeback plan 及 sync/Batch/revision 的公共 plan 消费。
+> writeback plan 及 sync/Batch/revision 的公共 plan 消费；#330 实现 P3 的
+> source-only ProjectSnapshot / GameVersion JSON/JSONL 与只读
+> reconciliation/freshness。P4–P6 尚未交付。
 > 当前实现说明见 [Ren'Py Engine Adapter 与覆盖审计](../engine_adapter.md)。
 
 ## 1. 范围与硬性边界

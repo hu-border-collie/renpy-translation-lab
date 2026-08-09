@@ -2,11 +2,12 @@
 
 文档地图：[docs/README.md](README.md)
 
-当前已交付 #265 的 P1 与 P2：同步翻译预览、普通 Batch translation build，以及
-revision preview/apply 通过 `RenPyAdapter` 的 relocation、validation 和声明式
-writeback plan；公共层重新校验 plan 后，仍由既有 workflow 执行 check→apply、路径
-约束、事务恢复和 atomic write。P2 不改变现有命令、配置、manifest v1/v2、identity
-v2 或终端文案合同。
+当前已交付 #265 的 P1 与 P2，并由 #330 实现 P3 的只读项目版本快照与
+reconciliation：同步翻译预览、普通 Batch translation build，以及 revision
+preview/apply 通过 `RenPyAdapter` 的 relocation、validation 和声明式 writeback plan；
+公共层重新校验 plan 后，仍由既有 workflow 执行 check→apply、路径约束、事务恢复和
+atomic write。P3 在这条写回路径之外保存 source-only occurrence 证据并比较两个版本，
+不会复用译文、确认 lineage 或修改游戏文件。
 
 ## 当前边界
 
@@ -16,6 +17,7 @@ v2 或终端文案合同。
 | `engine_adapters/renpy.py` | Ren'Py 项目发现、`.rpy` inventory、分类、source marker、speaker、translate block / occurrence / ordinal、只读 occurrence 提取 |
 | `engine_adapters/coverage.py` | 独立校验 inventory invariant、生成稳定 digest、导出 coverage/review package、导入并校验人工或 Agent review |
 | `engine_adapters/writeback.py` | 公共 plan schema、source snapshot、相对路径、文件 hash、span、重叠和 plan digest 校验；只在内存中渲染，不持有 writer |
+| `engine_adapters/versioning.py` | P3 `GameVersion` / `ProjectSnapshot` / source-only `UnitOccurrenceRecord`、JSON/JSONL 导入导出、只读 reconciliation 与 freshness 校验 |
 | `translation_core.py` | 唯一的 `TranslationUnit` / `ModelResult` 核心模型；adapter 不创建第二套翻译单元 |
 | sync / Batch / revision workflow | 模型调用、prompt、progress、manifest、preview/check/apply、RAG / Source Index 回灌；atomic writer 仍在 workflow/common 层 |
 
@@ -98,6 +100,58 @@ Ren'Py P1 只能从现有 TL 脚本推断 catalog provenance，因此自动报�
 
 发现漏项时应修 adapter/parser 或添加后续定义的结构化 extraction override，然后重新
 执行 inventory → audit → review；不能只把漏掉的文本手工塞进 review 文件继续翻译。
+
+## P3 项目版本快照
+
+P3 提供两个离线命令：
+
+```powershell
+python gemini_translate_batch.py export-project-snapshot `
+  --version-id 1.4.0 `
+  --source-revision game-build-140 `
+  --output-dir logs/project_snapshots/game-1.4.0
+
+python gemini_translate_batch.py reconcile-project-snapshots `
+  logs/project_snapshots/game-1.3.0/project_snapshot.json `
+  logs/project_snapshots/game-1.4.0/project_snapshot.json `
+  --output-dir logs/project_reconciliations/1.3.0-to-1.4.0
+```
+
+`export-project-snapshot` 复用一次完整 adapter discovery / inventory / coverage /
+occurrence 扫描，输出：
+
+- `project_snapshot.json`：`GameVersion`、engine/adapter/schema、source files、coverage
+  digest、review digest/status、分类计数、snapshot digest；
+- `unit_occurrences.jsonl`：opaque locator、source text、speaker、前后 occurrence
+  context 和 content fingerprint。该文件不保存 `current_translation`，不是 P4 的译文
+  历史存储。
+
+可用 `--coverage-review <FILE>` 冻结已经完成并通过现有合同校验的人工 / Agent review；
+未提供时，快照会明确冻结 `pending` review，而不是伪造覆盖确认。相同稳定输入与
+`version-id` 产生相同 snapshot digest；`generated_at` 不参与 digest。
+
+`reconcile-project-snapshots` 只读取两个已保存的快照，按以下证据优先级产生一对一
+候选：
+
+1. 已确认 lineage；
+2. opaque locator 完全一致；
+3. content fingerprint 完全一致；
+4. 原文一致的移动项，以及可由 speaker / 区分性上下文唯一支持的重复原文；
+5. 超过固定相似度与唯一性门槛的原文小改。
+
+重复原文没有独立证据、多个候选同分或同一目标被竞争时会输出 `ambiguous`，不会按
+原文哈希或文件顺序静默合并。报告另外列出 `added`、`deleted`、coverage 分类变化和
+新增 unresolved 结构。`reconciliation_report.json` 保存摘要与输入 digest，
+`reconciliation_items.jsonl` 保存逐项证据、置信度和候选来源。
+
+快照、occurrence、reconciliation item 和报告均有独立 schema/digest 校验；JSONL
+被修改、路径逃出 artifact 目录或数量/identity 不一致时导入失败。旧报告通过
+`validate_reconciliation_freshness()` 对照当前两个 snapshot digest 与 coverage/review
+dependency digest；任一依赖改变时状态为 `stale`。
+
+P3 是按 #265 分阶段交付的高级 CLI 能力；GUI 当前只在「诊断与运行日志 → 命令参考」
+提供命令模板。快照浏览、版本 diff、歧义处理和复用候选交互属于 P6。P4 之前任何
+reconciliation 结论都不能直接进入 preview/check/apply。
 
 完整 schema、P2 安全边界与后续阶段见
 [Engine Adapter 合同设计](plans/engine_adapter_contract.md)。

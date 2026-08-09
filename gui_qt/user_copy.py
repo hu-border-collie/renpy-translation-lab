@@ -38,6 +38,11 @@ MANIFEST_MODE_LABELS = {
     "keyword_extraction": "关键词提取",
 }
 
+VERSION_ASSET_COPY = {
+    "export_snapshot": "版本资产·导出项目快照",
+    "reconcile_snapshots": "版本资产·比较两个快照",
+}
+
 CONTEXT_LIBRARY_COPY = {
     "empty_title": "尚未启用上下文库",
     "empty_body": (
