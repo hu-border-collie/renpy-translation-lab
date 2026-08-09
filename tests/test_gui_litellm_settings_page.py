@@ -1105,6 +1105,68 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         append_log.assert_called_once()
         self.assertIn("快照", append_log.call_args.args[0])
 
+    def test_deleting_all_providers_clears_config_on_save(self):
+        """User-emptied registry must remove the key even when disk has entries."""
+        self.window._ensure_settings_page("litellm")
+        self.window.sync_backend_combo.setCurrentIndex(
+            self.window.sync_backend_combo.findData("gemini")
+        )
+        self.window._custom_litellm_providers = custom_provider_registry(
+            [
+                {
+                    "id": "opencode-go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                }
+            ]
+        )
+        self.window._refresh_custom_provider_table()
+        self.window.custom_provider_table.selectRow(0)
+        with (
+            mock.patch(
+                "gui_qt.app.message_box_question",
+                return_value="yes",
+            ),
+            mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
+            mock.patch("gui_qt.app.load_provider_key_store"),
+        ):
+            self.window._on_delete_custom_litellm_provider()
+        self.assertEqual(self.window._custom_litellm_providers, {})
+        self.assertTrue(self.window._custom_litellm_providers_modified)
+
+        config = {
+            "sync": {
+                "backend": "gemini",
+                "custom_litellm_providers": [
+                    {"id": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1"},
+                ],
+            },
+            "batch": {},
+        }
+        with (
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=Path("C:/Game/work"),
+            ),
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+            mock.patch.object(
+                self.window.state,
+                "save_translator_config",
+            ) as save_config,
+            mock.patch("gui_qt.app.message_box_information"),
+            mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
+            mock.patch("gui_qt.app.load_provider_key_store"),
+            mock.patch("project_context_settings.save_project_context_settings"),
+        ):
+            saved = self.window._on_save_config()
+        self.assertTrue(saved)
+        saved_payload = save_config.call_args.args[0]
+        self.assertNotIn("custom_litellm_providers", saved_payload["sync"])
+
 
 if __name__ == "__main__":
     unittest.main()

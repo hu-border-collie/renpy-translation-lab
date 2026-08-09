@@ -1056,7 +1056,7 @@ def load_sync_translation_settings(config):
         CUSTOM_LITELLM_PROVIDERS = {}
         print(
             "Warning: 已忽略无效的 sync.custom_litellm_providers 配置"
-            f"（{exc}）；请修正 translator_config.json 后重试。",
+            f"（{exc}）；请修正 translator_config.json 后重试。",  # noqa: RUF001
             flush=True,
         )
 

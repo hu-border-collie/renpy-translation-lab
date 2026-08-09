@@ -686,6 +686,7 @@ class MainWindow(QMainWindow):
         self._litellm_saved_key_status: dict[str, str] = {}
         self._custom_litellm_providers: dict[str, CustomLiteLLMProvider] = {}
         self._custom_litellm_providers_load_error = ""
+        self._custom_litellm_providers_modified = False
         # _games_registry_panel is intentionally NOT set here so attribute access
         # triggers __getattr__ lazy materialization of 设置 · 项目列表.
         self._litellm_install: OptionalFeatureInstallController | None = None
@@ -7418,6 +7419,12 @@ class MainWindow(QMainWindow):
                     has_key = False
                 if not has_key:
                     custom = self._custom_litellm_providers.get(provider)
+                    if custom is not None and custom.api_key_env and os.environ.get(
+                        custom.api_key_env
+                    ):
+                        has_key = True
+                if not has_key:
+                    custom = self._custom_litellm_providers.get(provider)
                     if custom is not None:
                         message = (
                             f"{message} 提示：{endpoint.label} 模型列表需先保存 API Key；"
@@ -7560,6 +7567,13 @@ class MainWindow(QMainWindow):
             return str(exc)
         endpoint = native_catalog_endpoint(provider, self._custom_litellm_providers)
         needs_official_key = bool(endpoint is not None and endpoint.require_key)
+        env_key_available = ""
+        if not store.keys and needs_official_key:
+            custom = self._custom_litellm_providers.get(provider)
+            if custom is not None and custom.api_key_env and os.environ.get(
+                custom.api_key_env
+            ):
+                env_key_available = custom.api_key_env
         if store.keys:
             masked = "、".join(mask_api_key(key) for key in store.keys)
             active = store.active_key()
@@ -7579,10 +7593,16 @@ class MainWindow(QMainWindow):
                 if endpoint is not None
                 else provider_display_label(provider, self._custom_litellm_providers)
             )
-            message = (
-                f"系统凭据管理器中尚未保存密钥。"
-                f"加载 {label} 官方模型列表前请先保存 API Key。"
-            )
+            if env_key_available:
+                message = (
+                    "系统凭据管理器中尚未保存密钥；"
+                    f"已检测到环境变量 {env_key_available}，将作为回退使用。"
+                )
+            else:
+                message = (
+                    f"系统凭据管理器中尚未保存密钥。"
+                    f"加载 {label} 官方模型列表前请先保存 API Key。"
+                )
         elif provider in self._custom_litellm_providers:
             custom = self._custom_litellm_providers[provider]
             message = (
@@ -7847,6 +7867,7 @@ class MainWindow(QMainWindow):
             )
             return
         self._custom_litellm_providers[provider.id] = provider
+        self._custom_litellm_providers_modified = True
         self._after_custom_providers_changed()
         self.statusBar().showMessage(
             f"已添加自定义 Provider：{provider.label}（{provider.id}）。",
@@ -7886,6 +7907,7 @@ class MainWindow(QMainWindow):
         entry = dialog.result_provider()
         updated = custom_provider_from_mapping(entry)
         self._custom_litellm_providers[provider.id] = updated
+        self._custom_litellm_providers_modified = True
         self._after_custom_providers_changed()
         self.statusBar().showMessage(
             f"已更新自定义 Provider：{updated.label}（{updated.id}）。",
@@ -7922,6 +7944,7 @@ class MainWindow(QMainWindow):
         if reply != "yes":
             return
         del self._custom_litellm_providers[provider_id]
+        self._custom_litellm_providers_modified = True
         if is_current:
             # Drop the ghost selection: the model still references the deleted
             # id, which would fail on the next sync request after save.
@@ -10903,9 +10926,13 @@ class MainWindow(QMainWindow):
                 litellm_combo = self._settings_widget("litellm_model_combo")
                 if litellm_combo is not None:
                     self._set_combo_value(litellm_combo, snapshot["litellm_model"])
-            if "custom_litellm_providers" in snapshot:
+            if (
+                "custom_litellm_providers" in snapshot
+                and "litellm" in self.__dict__.get("_settings_pages_built", ())
+            ):
                 raw_entries = snapshot["custom_litellm_providers"]
                 if isinstance(raw_entries, (list, tuple)):
+                    before = dict(self._custom_litellm_providers)
                     try:
                         self._custom_litellm_providers = custom_provider_registry(
                             [
@@ -10924,6 +10951,9 @@ class MainWindow(QMainWindow):
                         self._append_log(
                             f"恢复自定义 Provider 快照失败，已忽略：{exc}"
                         )
+                    self._custom_litellm_providers_modified = (
+                        before != dict(self._custom_litellm_providers)
+                    )
                     self._refresh_custom_provider_table()
                     litellm_cache = self.__dict__.get("_litellm_cache")
                     self._populate_litellm_providers(
@@ -14111,9 +14141,11 @@ class MainWindow(QMainWindow):
                             sync_config.get("custom_litellm_providers")
                         )
                         self._custom_litellm_providers_load_error = ""
+                        self._custom_litellm_providers_modified = False
                     except ValueError as exc:
                         self._custom_litellm_providers = {}
                         self._custom_litellm_providers_load_error = str(exc)
+                        self._custom_litellm_providers_modified = False
                         self._append_log(
                             f"忽略无效的 custom_litellm_providers 配置：{exc}"
                         )
@@ -14273,10 +14305,10 @@ class MainWindow(QMainWindow):
             custom_entries = self._custom_provider_entries()
             if custom_entries:
                 sync_config["custom_litellm_providers"] = custom_entries
-            elif not self.__dict__.get("_custom_litellm_providers_load_error"):
-                # Only clear the config key when the loaded registry was valid
-                # and empty; an invalid config must not be silently erased by an
-                # unrelated save (data-loss guard for hand-edited files).
+            elif self.__dict__.get("_custom_litellm_providers_modified"):
+                # Only the user explicitly emptying the registry clears the key.
+                # Unrelated saves must preserve the on-disk configuration even
+                # when the page was never built or the config failed to load.
                 sync_config.pop("custom_litellm_providers", None)
             if "models" in sync_config:
                 sync_models = self._sync_models_for_save(sync_config.get("models"), sync_model)
