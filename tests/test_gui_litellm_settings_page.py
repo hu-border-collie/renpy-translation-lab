@@ -1024,6 +1024,87 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         append_log.assert_called_once()
         self.assertIn("custom_litellm_providers", append_log.call_args.args[0])
 
+    def test_invalid_config_is_preserved_on_save(self):
+        """Data-loss guard: an invalid provider list must survive an unrelated save."""
+        self.window._ensure_settings_page("litellm")
+        config = {
+            "sync": {
+                "backend": "gemini",
+                "custom_litellm_providers": [
+                    {"id": "valid-one", "base_url": "https://valid.example.com"},
+                    {"id": "bad", "base_url": "not-a-url"},
+                ],
+            },
+            "batch": {},
+        }
+        with (
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=Path("C:/Game/work"),
+            ),
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+        ):
+            self.window._load_config_to_ui(pages={"litellm"})
+
+        self.assertEqual(self.window._custom_litellm_providers, {})
+        self.assertTrue(self.window._custom_litellm_providers_load_error)
+
+        with (
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=Path("C:/Game/work"),
+            ),
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+            mock.patch.object(
+                self.window.state,
+                "save_translator_config",
+            ) as save_config,
+            mock.patch("gui_qt.app.message_box_information"),
+            mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
+            mock.patch("gui_qt.app.load_provider_key_store"),
+            mock.patch("project_context_settings.save_project_context_settings"),
+        ):
+            saved = self.window._on_save_config()
+        self.assertTrue(saved)
+        saved_payload = save_config.call_args.args[0]
+        self.assertEqual(
+            saved_payload["sync"]["custom_litellm_providers"],
+            config["sync"]["custom_litellm_providers"],
+        )
+
+    def test_restore_config_snapshot_degrades_on_invalid_providers(self):
+        self.window._ensure_settings_page("litellm")
+        with (
+            mock.patch.object(self.window, "_append_log") as append_log,
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value={"sync": {}, "batch": {}},
+            ),
+        ):
+            self.window._restore_config_ui_snapshot(
+                {
+                    "custom_litellm_providers": (
+                        (("id", "bad"), ("base_url", "not-a-url")),
+                    ),
+                }
+            )
+
+        self.assertEqual(self.window._custom_litellm_providers, {})
+        self.assertTrue(self.window._custom_litellm_providers_load_error)
+        append_log.assert_called_once()
+        self.assertIn("快照", append_log.call_args.args[0])
+
 
 if __name__ == "__main__":
     unittest.main()

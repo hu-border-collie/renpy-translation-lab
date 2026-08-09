@@ -685,6 +685,7 @@ class MainWindow(QMainWindow):
         )
         self._litellm_saved_key_status: dict[str, str] = {}
         self._custom_litellm_providers: dict[str, CustomLiteLLMProvider] = {}
+        self._custom_litellm_providers_load_error = ""
         # _games_registry_panel is intentionally NOT set here so attribute access
         # triggers __getattr__ lazy materialization of 设置 · 项目列表.
         self._litellm_install: OptionalFeatureInstallController | None = None
@@ -10905,13 +10906,24 @@ class MainWindow(QMainWindow):
             if "custom_litellm_providers" in snapshot:
                 raw_entries = snapshot["custom_litellm_providers"]
                 if isinstance(raw_entries, (list, tuple)):
-                    self._custom_litellm_providers = custom_provider_registry(
-                        [
-                            dict(entry)
-                            for entry in raw_entries
-                            if isinstance(entry, (Mapping, list, tuple))
-                        ]
-                    )
+                    try:
+                        self._custom_litellm_providers = custom_provider_registry(
+                            [
+                                dict(entry)
+                                for entry in raw_entries
+                                if isinstance(entry, (Mapping, list, tuple))
+                            ]
+                        )
+                        self._custom_litellm_providers_load_error = ""
+                    except ValueError as exc:
+                        # Degrade like _load_config_to_ui: a snapshot entry that
+                        # no longer validates (e.g. a provider table changed)
+                        # must not crash the config restore path.
+                        self._custom_litellm_providers = {}
+                        self._custom_litellm_providers_load_error = str(exc)
+                        self._append_log(
+                            f"恢复自定义 Provider 快照失败，已忽略：{exc}"
+                        )
                     self._refresh_custom_provider_table()
                     litellm_cache = self.__dict__.get("_litellm_cache")
                     self._populate_litellm_providers(
@@ -14098,8 +14110,10 @@ class MainWindow(QMainWindow):
                         self._custom_litellm_providers = custom_provider_registry(
                             sync_config.get("custom_litellm_providers")
                         )
+                        self._custom_litellm_providers_load_error = ""
                     except ValueError as exc:
                         self._custom_litellm_providers = {}
+                        self._custom_litellm_providers_load_error = str(exc)
                         self._append_log(
                             f"忽略无效的 custom_litellm_providers 配置：{exc}"
                         )
@@ -14259,7 +14273,10 @@ class MainWindow(QMainWindow):
             custom_entries = self._custom_provider_entries()
             if custom_entries:
                 sync_config["custom_litellm_providers"] = custom_entries
-            else:
+            elif not self.__dict__.get("_custom_litellm_providers_load_error"):
+                # Only clear the config key when the loaded registry was valid
+                # and empty; an invalid config must not be silently erased by an
+                # unrelated save (data-loss guard for hand-edited files).
                 sync_config.pop("custom_litellm_providers", None)
             if "models" in sync_config:
                 sync_models = self._sync_models_for_save(sync_config.get("models"), sync_model)
