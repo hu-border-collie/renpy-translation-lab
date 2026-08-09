@@ -34,6 +34,8 @@ from PySide6.QtWidgets import (
 # Prefer giving the overview table real height inside the settings viewport.
 _REGISTRY_TABLE_MIN_HEIGHT = 280
 _REGISTRY_DETAIL_DEFAULT_HEIGHT = 260
+_REGISTRY_NOTES_MIN_HEIGHT = 112
+_REGISTRY_NOTES_MAX_HEIGHT = 220
 
 from games_registry import (
     PLAY_STATUSES,
@@ -574,9 +576,12 @@ class GamesRegistryPanel(QWidget):
 
         self._notes_edit = QPlainTextEdit()
         self._notes_edit.setPlaceholderText("备注 / 下一步")
-        self._notes_edit.setFixedHeight(72)
-        self._notes_edit.setMinimumHeight(56)
-        self._notes_edit.setMaximumHeight(120)
+        self._notes_edit.setMinimumHeight(_REGISTRY_NOTES_MIN_HEIGHT)
+        self._notes_edit.setMaximumHeight(_REGISTRY_NOTES_MAX_HEIGHT)
+        self._notes_edit.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.MinimumExpanding,
+        )
         edit_layout.addRow("备注", self._notes_edit)
 
         edit_actions_host = QWidget()
