@@ -62,6 +62,7 @@ class ShutdownCoordinator(QObject):
         self._in_progress = False
         self._stalled_reported = False
         self._requested_active_keys: set[str] = set()
+        self._cancellation_failed_keys: set[str] = set()
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(max(1, int(poll_interval_ms)))
@@ -129,7 +130,12 @@ class ShutdownCoordinator(QObject):
             try:
                 participant.request_shutdown()
             except Exception as exc:
-                self.cancellation_failed.emit(participant.label, str(exc))
+                if participant.key not in self._cancellation_failed_keys:
+                    self.cancellation_failed.emit(participant.label, str(exc))
+                self._cancellation_failed_keys.add(participant.key)
+                self._requested_active_keys.discard(participant.key)
+                continue
+            self._cancellation_failed_keys.discard(participant.key)
             self._requested_active_keys.add(participant.key)
 
     def begin(self, *, timeout_ms: int = 10_000) -> bool:
@@ -142,6 +148,7 @@ class ShutdownCoordinator(QObject):
         self._in_progress = True
         self._stalled_reported = False
         self._requested_active_keys = set()
+        self._cancellation_failed_keys = set()
 
         self._request_participants(self._active_participants())
 
@@ -160,6 +167,7 @@ class ShutdownCoordinator(QObject):
         active = self._active_participants()
         active_keys = {participant.key for participant in active}
         self._requested_active_keys.intersection_update(active_keys)
+        self._cancellation_failed_keys.intersection_update(active_keys)
         newly_active = tuple(
             participant
             for participant in active
@@ -189,4 +197,5 @@ class ShutdownCoordinator(QObject):
         self._in_progress = False
         self._stalled_reported = False
         self._requested_active_keys = set()
+        self._cancellation_failed_keys = set()
         self.settled.emit()

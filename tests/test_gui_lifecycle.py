@@ -91,6 +91,39 @@ class ShutdownCoordinatorTests(unittest.TestCase):
         self.coordinator.check_now()
         self.assertFalse(self.coordinator.in_progress)
 
+    def test_failed_cancellation_retries_without_repeating_error_signal(self):
+        state = {"active": True, "requests": 0}
+
+        def request_shutdown() -> None:
+            state["requests"] += 1
+            if state["requests"] == 1:
+                raise RuntimeError("temporary failure")
+
+        self.coordinator.register(
+            CallbackShutdownParticipant(
+                key="worker",
+                label="后台任务",
+                active_callback=lambda: bool(state["active"]),
+                shutdown_callback=request_shutdown,
+            )
+        )
+        failures = []
+        self.coordinator.cancellation_failed.connect(
+            lambda label, error: failures.append((label, error))
+        )
+
+        self.coordinator.begin(timeout_ms=5000)
+        self.assertEqual(state["requests"], 1)
+        self.assertEqual(failures, [("后台任务", "temporary failure")])
+
+        self.coordinator.check_now()
+        self.assertEqual(state["requests"], 2)
+        self.assertEqual(failures, [("后台任务", "temporary failure")])
+
+        state["active"] = False
+        self.coordinator.check_now()
+        self.assertFalse(self.coordinator.in_progress)
+
     def test_duplicate_participant_key_is_rejected(self):
         state = {"active": False, "requests": 0}
         self._register("same", "一", state)
