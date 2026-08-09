@@ -7585,7 +7585,7 @@ class MainWindow(QMainWindow):
         elif provider in self._custom_litellm_providers:
             custom = self._custom_litellm_providers[provider]
             message = (
-                f"该自定义 Provider 无需 API Key（requires_key=false），"
+                "该自定义 Provider 无需 API Key（requires_key=false），"
                 "可直接加载模型列表与测试连接。"
                 if not custom.requires_key
                 else "系统凭据管理器中尚未保存密钥。"
