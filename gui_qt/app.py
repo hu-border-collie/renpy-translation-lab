@@ -11006,6 +11006,15 @@ class MainWindow(QMainWindow):
                         self._cached_litellm_provider_values(),
                         selected=self._current_litellm_provider(),
                     )
+                    # Keep every LiteLLM surface in sync after a restore, like
+                    # _after_custom_providers_changed: the keys-page dropdown and
+                    # credential status must not keep showing deleted ids.
+                    current_provider = self._current_litellm_provider()
+                    self._populate_litellm_keys_provider_combo(
+                        selected=current_provider
+                    )
+                    self._refresh_litellm_catalog_status()
+                    self._refresh_litellm_credential_status()
             if "theme" in snapshot:
                 self._set_theme_combo_value(str(snapshot.get("theme") or "system"))
 
