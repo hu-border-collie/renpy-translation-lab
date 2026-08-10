@@ -20,6 +20,8 @@
 
 同步设置来自 `translator_config.json` 的 `sync` 段，主要包括 `backend`、`model`、`chunk_size`、`max_source_chars` 和 `max_output_tokens`。完整字段和模型目录见 [安装与本地配置](setup.md#运行模式)。
 
+选择 LiteLLM 后端时，可通过 `sync.custom_litellm_providers` 注册 OpenAI 兼容但 LiteLLM 未内置的服务（OpenCode Go、中转站、本地 vLLM 等）：每项配置 `id` / `label` / `base_url` / `models_url` / `api_key_env`，请求会改写为 `openai/<模型>` 并逐请求透传 `api_base`，密钥优先使用系统凭据管理器。字段与示例见 [安装与本地配置 · 自定义 OpenAI 兼容 Provider](setup.md#自定义-openai-兼容-providerlitellm-同步)。
+
 ## 预览后写回
 
 ### 1. 生成预览

@@ -59,6 +59,27 @@ class LiteLLMCatalogCacheTests(unittest.TestCase):
                 "2026-07-28T12:00:00Z",
             )
 
+    def test_remove_provider_drops_models_selection_and_persists(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "catalog.json"
+            cache = LiteLLMCatalogCache(path)
+            cache.update_models(
+                "opencode-go",
+                ["opencode-go/gpt-4o-mini"],
+                source="opencode-go",
+            )
+            cache.select_provider("opencode-go")
+            cache.select_model("opencode-go", "opencode-go/gpt-4o-mini")
+
+            cache.remove_provider("opencode-go")
+
+            self.assertEqual(cache.models("opencode-go").values, ())
+            self.assertEqual(cache.selected_model("opencode-go"), "")
+            self.assertEqual(cache.selected_provider, "")
+            restored = LiteLLMCatalogCache(path)
+            self.assertEqual(restored.models("opencode-go").values, ())
+            self.assertEqual(restored.selected_provider, "")
+
     def test_corrupt_or_wrong_version_cache_is_ignored(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "catalog.json"

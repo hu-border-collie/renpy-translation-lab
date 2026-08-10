@@ -3,6 +3,13 @@
 This module intentionally has no Qt dependency.  The GUI owns widgets and user
 interaction; this module owns field metadata, coercion, validation, and
 translator_config.json writes for managed advanced settings.
+
+``sync.custom_litellm_providers`` is intentionally NOT modeled here: it is a
+list of structured objects managed exclusively by the dedicated LiteLLM
+settings page (table + dialog) and validated by
+``litellm_provider_config.parse_custom_litellm_providers`` (shared by CLI and
+GUI).  Adding it to ADVANCED_SETTING_FIELDS would render it as a plain
+advanced-page widget, which is not the intended UX.
 """
 from __future__ import annotations
 

@@ -21,8 +21,10 @@ try:
         is_cancelled_message,
     )
     from litellm_sync_backend import LiteLLMBackendError
+    from litellm_provider_config import custom_provider_registry
 except ImportError as exc:
     LiteLLMConnectionTestWorker = None
+    custom_provider_registry = None
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
@@ -299,6 +301,185 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
             worker.run()
         self.assertIn("127.0.0.1:11434/api/tags", urlopen.call_args.args[0].full_url)
         self.assertEqual(completed[0], (("ollama/llama3:latest",), "ollama", None))
+
+    def test_custom_provider_catalog_uses_configured_models_url(self):
+        registry = custom_provider_registry(
+            [
+                {
+                    "id": "opencode-go",
+                    "label": "OpenCode Go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                }
+            ]
+        )
+        payload = {
+            "data": [
+                {"id": "gpt-4o-mini"},
+                {"id": "text-embedding-3-small"},
+            ]
+        }
+        response = mock.MagicMock()
+        response.__enter__.return_value = io.BytesIO(
+            json.dumps(payload).encode("utf-8")
+        )
+        completed = []
+        worker = LiteLLMModelCatalogWorker(
+            "opencode-go",
+            api_key="custom-secret",
+            custom_providers=registry,
+        )
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+
+        with mock.patch("gui_qt.litellm_worker.urlopen", return_value=response) as urlopen:
+            worker.run()
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(
+            request.full_url,
+            "https://opencode.ai/zen/go/v1/models",
+        )
+        self.assertEqual(request.get_header("Authorization"), "Bearer custom-secret")
+        self.assertEqual(
+            completed,
+            [(("opencode-go/gpt-4o-mini",), "opencode-go", None)],
+        )
+
+    def test_custom_provider_catalog_requires_saved_key(self):
+        registry = custom_provider_registry(
+            [
+                {
+                    "id": "opencode-go",
+                    "label": "OpenCode Go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                }
+            ]
+        )
+        completed = []
+        worker = LiteLLMModelCatalogWorker(
+            "opencode-go",
+            api_key="",
+            custom_providers=registry,
+        )
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+
+        with mock.patch("gui_qt.litellm_worker.urlopen") as urlopen:
+            worker.run()
+
+        urlopen.assert_not_called()
+        self.assertEqual(completed[0][0], ())
+        self.assertIn("请先保存 OpenCode Go API Key", completed[0][2])
+
+    def test_custom_provider_catalog_uses_api_key_env_when_keyring_empty(self):
+        registry = custom_provider_registry(
+            [
+                {
+                    "id": "opencode-go",
+                    "label": "OpenCode Go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                    "api_key_env": "OPENCODE_GO_API_KEY",
+                }
+            ]
+        )
+        payload = {"data": [{"id": "gpt-4o-mini"}]}
+        response = mock.MagicMock()
+        response.__enter__.return_value = io.BytesIO(
+            json.dumps(payload).encode("utf-8")
+        )
+        completed = []
+        worker = LiteLLMModelCatalogWorker(
+            "opencode-go",
+            api_key="",
+            custom_providers=registry,
+        )
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+
+        with (
+            mock.patch("gui_qt.litellm_worker.urlopen", return_value=response) as urlopen,
+            mock.patch.dict(
+                "gui_qt.litellm_worker.os.environ",
+                {"OPENCODE_GO_API_KEY": "env-custom-key"},
+                clear=True,
+            ),
+        ):
+            worker.run()
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer env-custom-key")
+        self.assertEqual(
+            completed,
+            [(("opencode-go/gpt-4o-mini",), "opencode-go", None)],
+        )
+
+    def test_keyless_custom_provider_catalog_does_not_require_key(self):
+        registry = custom_provider_registry(
+            [
+                {
+                    "id": "local-vllm",
+                    "base_url": "http://127.0.0.1:8000/v1",
+                    "requires_key": False,
+                }
+            ]
+        )
+        payload = {"data": [{"id": "llama-3"}]}
+        response = mock.MagicMock()
+        response.__enter__.return_value = io.BytesIO(
+            json.dumps(payload).encode("utf-8")
+        )
+        completed = []
+        worker = LiteLLMModelCatalogWorker(
+            "local-vllm",
+            api_key="",
+            custom_providers=registry,
+        )
+        worker.completed.connect(
+            lambda models, source, error: completed.append((models, source, error))
+        )
+
+        with mock.patch("gui_qt.litellm_worker.urlopen", return_value=response) as urlopen:
+            worker.run()
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), None)
+        self.assertEqual(completed, [(("local-vllm/llama-3",), "local-vllm", None)])
+
+    def test_connection_test_forwards_custom_providers_to_backend(self):
+        registry = custom_provider_registry(
+            [
+                {
+                    "id": "opencode-go",
+                    "base_url": "https://opencode.ai/zen/go/v1",
+                    "api_key_env": "OPENCODE_GO_API_KEY",
+                }
+            ]
+        )
+        backend = mock.Mock()
+        backend.generate_async = mock.AsyncMock(
+            return_value=SimpleNamespace(response_text="OK")
+        )
+        completed = []
+        worker = LiteLLMConnectionTestWorker(
+            "opencode-go/gpt-4o-mini",
+            "custom-secret",
+            custom_providers=registry,
+        )
+        worker.completed.connect(lambda success, message: completed.append((success, message)))
+
+        with mock.patch(
+            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            return_value=backend,
+        ) as backend_cls:
+            worker.run()
+
+        self.assertEqual(backend_cls.call_args.kwargs["custom_providers"], registry)
+        request = backend.generate_async.call_args.args[0]
+        self.assertEqual(request.model, "opencode-go/gpt-4o-mini")
+        self.assertEqual(completed, [(True, "连接成功。模型返回：OK")])
 
     def test_openrouter_falls_back_to_litellm_subset_then_local(self):
         litellm_payload = {

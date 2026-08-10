@@ -1,9 +1,13 @@
 """Optional LiteLLM implementation of the synchronous model backend."""
 
+import os
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from gemini_model_catalog import filter_gemini_generation_config
-from litellm_provider_config import provider_from_model
+from litellm_provider_config import (
+    CustomLiteLLMProvider,
+    provider_from_model,
+)
 from sync_model_backend import SYNC_EXECUTION_MODE, SyncGenerationRequest, SyncGenerationResult
 
 
@@ -125,10 +129,14 @@ class LiteLLMSyncBackend:
         completion: Optional[Callable[..., Any]] = None,
         api_key: Optional[str] = None,
         async_completion: Optional[Callable[..., Any]] = None,
+        custom_providers: Optional[Mapping[str, CustomLiteLLMProvider]] = None,
     ) -> None:
         self._completion = completion
         self._async_completion = async_completion
         self._api_key = str(api_key or "").strip()
+        self._custom_providers = (
+            dict(custom_providers) if isinstance(custom_providers, Mapping) else {}
+        )
 
     def _resolve_completion(self) -> Callable[..., Any]:
         if self._completion is not None:
@@ -188,8 +196,22 @@ class LiteLLMSyncBackend:
                 "LiteLLM does not share Gemini safety_settings semantics; "
                 "remove that setting or use Gemini."
             )
+        provider = provider_from_model(request.model)
+        custom = self._custom_providers.get(provider)
+        model = request.model
+        if custom is not None:
+            # Custom OpenAI-compatible providers are not known to LiteLLM, so
+            # the display id is rewritten to the official openai prefix and the
+            # endpoint is passed per-request as api_base (never process-wide).
+            prefix = f"{provider}/"
+            suffix = (
+                model[len(prefix):]
+                if model.lower().startswith(prefix)
+                else model
+            )
+            model = f"openai/{suffix}"
         kwargs: Dict[str, Any] = {
-            "model": request.model,
+            "model": model,
             "messages": _messages(request.contents, config),
         }
         api_key = self._api_key
@@ -197,12 +219,29 @@ class LiteLLMSyncBackend:
             try:
                 from litellm_provider_config import load_provider_api_key
 
-                api_key = load_provider_api_key(provider_from_model(request.model))
+                api_key = load_provider_api_key(provider)
             except Exception:
                 # keyring is optional; LiteLLM can still use environment variables.
                 api_key = ""
+        if not api_key and custom is not None and custom.api_key_env:
+            # Explicit opt-in env fallback: without a keyring entry, send the
+            # named environment variable's value instead of letting LiteLLM
+            # silently fall back to OPENAI_API_KEY for a third-party endpoint.
+            api_key = str(os.environ.get(custom.api_key_env) or "").strip()
+        if custom is not None and custom.requires_key and not api_key:
+            # The model id has been rewritten to openai/<model>, so LiteLLM
+            # would otherwise fall back to OPENAI_API_KEY and leak an unrelated
+            # OpenAI key to the third-party api_base. Fail before dispatch
+            # instead of risking that leak.
+            raise LiteLLMBackendError(
+                f"自定义 Provider {custom.label} 需要 API Key，"
+                "但系统凭据与 api_key_env 环境变量均未提供。",
+                category="authentication",
+            )
         if api_key:
             kwargs["api_key"] = api_key
+        if custom is not None:
+            kwargs["api_base"] = custom.base_url
         if "timeout" in config:
             kwargs["timeout"] = config["timeout"]
         if "temperature" in config:
@@ -211,9 +250,10 @@ class LiteLLMSyncBackend:
             kwargs["max_tokens"] = config["max_output_tokens"]
         schema = config.get("response_json_schema")
         if schema:
-            provider = provider_from_model(request.model)
             # DeepSeek rejects json_schema even though it supports JSON mode.
-            # Other providers still benefit from downstream schema validation.
+            # Custom OpenAI-compatible providers usually target OpenAI-compatible
+            # gateways, many of which reject strict schemas; the capability
+            # decision therefore uses the *original* id, before the rewrite.
             if provider in {"openai", "azure"}:
                 kwargs["response_format"] = {
                     "type": "json_schema",

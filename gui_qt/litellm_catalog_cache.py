@@ -204,6 +204,21 @@ class LiteLLMCatalogCache:
         )
         self._save()
 
+    def remove_provider(self, provider: str) -> None:
+        """Drop every cached artifact for *provider* (models, selection).
+
+        Used when a custom provider is deleted so its id cannot resurface in
+        dropdowns or restores from the persistent cache. OSError may propagate.
+        """
+        provider = _clean_text(provider, limit=_MAX_PROVIDER_LENGTH).lower()
+        if not provider:
+            return
+        self._models.pop(provider, None)
+        self._selected_models.pop(provider, None)
+        if self._selected_provider == provider:
+            self._selected_provider = ""
+        self._save()
+
     def _timestamp(self) -> str:
         value = self._now()
         if value.tzinfo is None:
