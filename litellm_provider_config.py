@@ -105,17 +105,26 @@ _CUSTOM_PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 _ENVIRONMENT_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def reserved_litellm_provider_ids(litellm_module: Any = None) -> frozenset[str]:
+def reserved_litellm_provider_ids(
+    litellm_module: Any = None,
+    *,
+    allow_import: bool = True,
+) -> frozenset[str]:
     """Return provider prefixes that custom ids must not shadow.
 
     The static reserve covers built-in choices and common LiteLLM prefixes;
     when litellm is installed its ``models_by_provider`` table is merged in too,
     so GUI validation and config loading always agree on the same reserved set.
     The import is probed once per process and cached (callers that already hold
-    a litellm module may pass it explicitly to skip the probe).
+    a litellm module may pass it explicitly to skip the probe).  Pass
+    ``allow_import=False`` from GUI main-thread paths: the check then uses only
+    the static reserve plus any module already cached by a background
+    ``warm_litellm_module`` call, and never blocks on the slow litellm import.
     """
     if litellm_module is None:
-        litellm_module = _installed_litellm_module()
+        litellm_module = (
+            _installed_litellm_module() if allow_import else cached_litellm_module()
+        )
     reserved = set(_RESERVED_PROVIDER_IDS)
     if litellm_module is not None:
         by_provider = getattr(litellm_module, "models_by_provider", {})
@@ -151,6 +160,7 @@ def validate_custom_provider_id(
     value: object,
     *,
     reserved: frozenset[str] | None = None,
+    allow_import: bool = True,
 ) -> str:
     """Validate a custom provider id (lowercase, ``[a-z0-9_-]+``, no shadowing)."""
     provider = str(value or "").strip().lower()
@@ -158,7 +168,11 @@ def validate_custom_provider_id(
         raise ValueError("自定义 Provider id 不能为空。")
     if not _CUSTOM_PROVIDER_ID_PATTERN.fullmatch(provider):
         raise ValueError("自定义 Provider id 只能包含小写字母、数字、- 和 _。")
-    reserved_ids = reserved_litellm_provider_ids() if reserved is None else reserved
+    reserved_ids = (
+        reserved_litellm_provider_ids(allow_import=allow_import)
+        if reserved is None
+        else reserved
+    )
     if provider in reserved_ids:
         raise ValueError(
             f"自定义 Provider id 与 LiteLLM 已知前缀冲突：{provider}。"
@@ -182,11 +196,16 @@ def custom_provider_from_mapping(
     *,
     index: int = 0,
     reserved: frozenset[str] | None = None,
+    allow_import: bool = True,
 ) -> CustomLiteLLMProvider:
     """Parse and validate one ``custom_litellm_providers`` config entry."""
     if not isinstance(entry, Mapping):
         raise ValueError(f"custom_litellm_providers[{index}] 必须是对象。")
-    provider_id = validate_custom_provider_id(entry.get("id"), reserved=reserved)
+    provider_id = validate_custom_provider_id(
+        entry.get("id"),
+        reserved=reserved,
+        allow_import=allow_import,
+    )
     label = str(entry.get("label") or "").strip() or provider_id
     base_url = validate_custom_provider_url(
         entry.get("base_url"),
@@ -218,6 +237,7 @@ def parse_custom_litellm_providers(
     raw: object,
     *,
     litellm_module: Any = None,
+    allow_import: bool = True,
 ) -> tuple[CustomLiteLLMProvider, ...]:
     """Parse ``sync.custom_litellm_providers`` into validated provider entries.
 
@@ -226,15 +246,21 @@ def parse_custom_litellm_providers(
     on structural errors, invalid ids/URLs, non-boolean ``requires_key`` or
     duplicate ids. When *litellm_module* is omitted but the optional litellm
     dependency is installed, its provider table is merged into the reserved-id
-    check (the import result is cached per process).
+    check (the import result is cached per process).  GUI callers pass
+    ``allow_import=False`` so parsing never blocks the UI thread on the slow
+    litellm import; the cached module is still merged in when already warmed.
     """
     if raw is None:
         return ()
     if not isinstance(raw, list):
         raise ValueError("custom_litellm_providers 必须是列表。")
     if litellm_module is None:
-        litellm_module = _installed_litellm_module()
-    reserved = reserved_litellm_provider_ids(litellm_module)
+        litellm_module = (
+            _installed_litellm_module() if allow_import else cached_litellm_module()
+        )
+    # litellm_module was already resolved above; passing None here must not
+    # re-trigger the import (allow_import=False keeps the GUI path non-blocking).
+    reserved = reserved_litellm_provider_ids(litellm_module, allow_import=False)
     providers: list[CustomLiteLLMProvider] = []
     seen: set[str] = set()
     for index, entry in enumerate(raw):
@@ -254,11 +280,16 @@ def custom_provider_registry(
     raw: object,
     *,
     litellm_module: Any = None,
+    allow_import: bool = True,
 ) -> dict[str, CustomLiteLLMProvider]:
     """Build the id → provider lookup used by backend/GUI/CLI paths."""
     return {
         provider.id: provider
-        for provider in parse_custom_litellm_providers(raw, litellm_module=litellm_module)
+        for provider in parse_custom_litellm_providers(
+            raw,
+            litellm_module=litellm_module,
+            allow_import=allow_import,
+        )
     }
 
 
@@ -266,22 +297,66 @@ _INSTALLED_LITELLM_MODULE: Any = None
 _INSTALLED_LITELLM_PROBED = False
 
 
-def _installed_litellm_module() -> Any:
-    """Return the installed litellm module, or None (probed once per process)."""
-    global _INSTALLED_LITELLM_MODULE, _INSTALLED_LITELLM_PROBED
+def cached_litellm_module() -> Any:
+    """Return the already-probed litellm module, or None.
+
+    Never imports litellm, so it is safe for the GUI main thread.  The module
+    is present only after :func:`warm_litellm_module` (or a synchronous
+    ``_installed_litellm_module`` call) completed in this process.
+    """
     if _INSTALLED_LITELLM_PROBED:
         return _INSTALLED_LITELLM_MODULE
-    _INSTALLED_LITELLM_PROBED = True
+    return None
+
+
+def litellm_install_probe() -> bool:
+    """Cheap ``find_spec`` check for litellm without importing it.
+
+    GUI callers use this before starting a background warmup thread so that
+    machines without the optional dependency never spin up a thread at all.
+    """
+    if _INSTALLED_LITELLM_PROBED:
+        return _INSTALLED_LITELLM_MODULE is not None
     try:
         from importlib.util import find_spec
 
-        if find_spec("litellm") is None:
-            return None
-        import litellm as litellm_module
+        return find_spec("litellm") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def warm_litellm_module() -> Any:
+    """Probe and import litellm once, caching the result for the process.
+
+    The import is expensive — the package pulls in many dependencies and can
+    take ~10s cold — so GUI callers run this in a background thread and read
+    the result later via :func:`cached_litellm_module`.  Idempotent: repeated
+    calls return the cached module without re-importing.
+    """
+    global _INSTALLED_LITELLM_MODULE, _INSTALLED_LITELLM_PROBED
+    if _INSTALLED_LITELLM_PROBED and _INSTALLED_LITELLM_MODULE is not None:
+        return _INSTALLED_LITELLM_MODULE
+    litellm_module = None
+    try:
+        from importlib.util import find_spec
+
+        if find_spec("litellm") is not None:
+            import litellm as litellm_module
     except (ImportError, ModuleNotFoundError, ValueError):
-        return None
+        litellm_module = None
     _INSTALLED_LITELLM_MODULE = litellm_module
+    _INSTALLED_LITELLM_PROBED = True
     return litellm_module
+
+
+def _installed_litellm_module() -> Any:
+    """Return the installed litellm module, or None (synchronous import).
+
+    Kept for CLI/backend callers where a blocking import is acceptable; GUI
+    main-thread paths pass ``allow_import=False`` and use the cached module
+    instead (see :func:`cached_litellm_module` and :func:`warm_litellm_module`).
+    """
+    return warm_litellm_module()
 
 
 def _custom_registry_lookup(

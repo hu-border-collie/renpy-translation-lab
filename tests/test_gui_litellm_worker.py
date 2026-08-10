@@ -16,6 +16,7 @@ try:
         CONNECTION_TEST_TIMEOUT_SECONDS,
         LiteLLMConnectionTestWorker,
         LiteLLMModelCatalogWorker,
+        LiteLLMModuleWarmupWorker,
         LiteLLMProviderCatalogWorker,
         LiteLLMVersionWorker,
         is_cancelled_message,
@@ -24,6 +25,7 @@ try:
     from litellm_provider_config import custom_provider_registry
 except ImportError as exc:
     LiteLLMConnectionTestWorker = None
+    LiteLLMModuleWarmupWorker = None
     custom_provider_registry = None
     IMPORT_ERROR = exc
 else:
@@ -751,6 +753,39 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
             worker.run()
 
         self.assertEqual(completed, [("", "", "", "", "broken metadata")])
+
+
+@unittest.skipIf(
+    LiteLLMModuleWarmupWorker is None,
+    f"GUI dependencies are unavailable: {IMPORT_ERROR}",
+)
+class LiteLLMModuleWarmupWorkerTests(unittest.TestCase):
+    def test_warmup_emits_cached_module(self):
+        fake_litellm = SimpleNamespace(models_by_provider={"warmed_prefix": ()})
+        completed = []
+        worker = LiteLLMModuleWarmupWorker()
+        worker.completed.connect(lambda module: completed.append(module))
+
+        with mock.patch(
+            "gui_qt.litellm_worker.warm_litellm_module",
+            return_value=fake_litellm,
+        ):
+            worker.run()
+
+        self.assertEqual(completed, [fake_litellm])
+
+    def test_warmup_emits_none_when_probe_fails(self):
+        completed = []
+        worker = LiteLLMModuleWarmupWorker()
+        worker.completed.connect(lambda module: completed.append(module))
+
+        with mock.patch(
+            "gui_qt.litellm_worker.warm_litellm_module",
+            side_effect=RuntimeError("broken import"),
+        ):
+            worker.run()
+
+        self.assertEqual(completed, [None])
 
 if __name__ == "__main__":
     unittest.main()
