@@ -137,12 +137,12 @@ class CustomLiteLLMProviderDialog(QDialog):
             return
         self.accept()
 
-    def result_provider(self) -> dict[str, str]:
+    def result_provider(self) -> dict[str, str | bool]:
         """Return the validated entry for ``sync.custom_litellm_providers``."""
         provider_id = self.id_edit.text().strip().lower()
         base_url = self.base_url_edit.text().strip()
         models_url = self.models_url_edit.text().strip()
-        entry: dict[str, str] = {
+        entry: dict[str, str | bool] = {
             "id": provider_id,
             "label": self.label_edit.text().strip() or provider_id,
             "base_url": base_url,

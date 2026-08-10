@@ -7807,6 +7807,16 @@ class MainWindow(QMainWindow):
         self._refresh_custom_provider_actions()
         label = self._settings_widget("custom_provider_status_label")
         if label is not None:
+            load_error = self.__dict__.get("_custom_litellm_providers_load_error")
+            if load_error:
+                # Keep the load-error message visible instead of overwriting it
+                # with the plain empty/count status on every refresh.
+                label.setText(
+                    CUSTOM_LITELLM_PROVIDER_COPY["load_error_status"].format(
+                        error=load_error
+                    )
+                )
+                return
             count = len(self._custom_litellm_providers)
             label.setText(
                 CUSTOM_LITELLM_PROVIDER_COPY["table_count"].format(count=count)

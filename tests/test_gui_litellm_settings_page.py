@@ -55,6 +55,8 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window._set_litellm_models("", ())
         self.window._litellm_saved_key_status.clear()
         self.window._custom_litellm_providers = {}
+        self.window._custom_litellm_providers_load_error = ""
+        self.window._custom_litellm_providers_modified = False
         self.window._refresh_litellm_catalog_status()
         self.window._on_sync_backend_changed(-1)
 
@@ -1023,6 +1025,9 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertEqual(self.window._custom_litellm_providers, {})
         append_log.assert_called_once()
         self.assertIn("custom_litellm_providers", append_log.call_args.args[0])
+        status_text = self.window.custom_provider_status_label.text()
+        self.assertIn("已忽略无效的 custom_litellm_providers 配置", status_text)
+        self.assertNotEqual(status_text, "尚未注册自定义 Provider。")
 
     def test_invalid_config_is_preserved_on_save(self):
         """Data-loss guard: an invalid provider list must survive an unrelated save."""
