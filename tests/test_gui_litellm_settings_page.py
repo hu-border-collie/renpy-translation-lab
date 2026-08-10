@@ -1167,6 +1167,111 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         saved_payload = save_config.call_args.args[0]
         self.assertNotIn("custom_litellm_providers", saved_payload["sync"])
 
+    def test_cached_catalog_ids_do_not_block_same_provider_readd(self):
+        """Historical catalog cache ids must not shadow a re-added provider."""
+        self.window._ensure_settings_page("litellm")
+        self.cache.update_providers(
+            ("opencode-go", "openai"),
+            source="online",
+        )
+        reserved = self.window._reserved_custom_provider_ids()
+        self.assertIn("openai", reserved)  # built-in stays reserved
+        self.assertNotIn("opencode-go", reserved)  # cache history is ignored
+
+    def test_save_blocked_when_config_load_failed_and_modified(self):
+        """A save that would drop valid disk entries is blocked after a bad load."""
+        self.window._ensure_settings_page("litellm")
+        config = {
+            "sync": {
+                "backend": "gemini",
+                "custom_litellm_providers": [
+                    {"id": "valid-one", "base_url": "https://valid.example.com"},
+                    {"id": "bad", "base_url": "not-a-url"},
+                ],
+            },
+            "batch": {},
+        }
+        with (
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=Path("C:/Game/work"),
+            ),
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+        ):
+            self.window._load_config_to_ui(pages={"litellm"})
+        self.assertTrue(self.window._custom_litellm_providers_load_error)
+
+        # Simulate the user adding a new provider after the failed load.
+        from PySide6.QtWidgets import QDialog
+
+        dialog = mock.Mock()
+        dialog.exec.return_value = QDialog.DialogCode.Accepted
+        dialog.result_provider.return_value = {
+            "id": "new-one",
+            "base_url": "https://new.example.com/v1",
+        }
+        with (
+            mock.patch(
+                "gui_qt.app.CustomLiteLLMProviderDialog",
+                return_value=dialog,
+            ),
+            mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
+            mock.patch("gui_qt.app.load_provider_key_store"),
+        ):
+            self.window._on_add_custom_litellm_provider()
+        self.assertIn("new-one", self.window._custom_litellm_providers)
+        self.assertTrue(self.window._custom_litellm_providers_modified)
+        with (
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=Path("C:/Game/work"),
+            ),
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+            mock.patch.object(
+                self.window.state,
+                "save_translator_config",
+            ) as save_config,
+            mock.patch("gui_qt.app.message_box_warning") as warning,
+        ):
+            saved = self.window._on_save_config()
+        self.assertFalse(saved)
+        save_config.assert_not_called()
+        warning.assert_called_once()
+        self.assertIn("无效", warning.call_args.args[1])
+
+    def test_restore_snapshot_skips_malformed_entries(self):
+        self.window._ensure_settings_page("litellm")
+        with (
+            mock.patch.object(self.window, "_append_log") as append_log,
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value={"sync": {}, "batch": {}},
+            ),
+        ):
+            self.window._restore_config_ui_snapshot(
+                {
+                    "custom_litellm_providers": (
+                        ("good",),
+                        (("id", "opencode-go"), ("base_url", "https://ok.example.com")),
+                    ),
+                }
+            )
+
+        self.assertIn("opencode-go", self.window._custom_litellm_providers)
+        self.assertFalse(self.window._custom_litellm_providers_load_error)
+        append_log.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

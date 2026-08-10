@@ -205,6 +205,14 @@ CUSTOM_LITELLM_PROVIDER_COPY = {
         "请重新选择 Provider 与模型。"
     ),
     "load_error_status": "已忽略无效的 custom_litellm_providers 配置：{error}",
+    "load_error_title": "自定义 Provider 配置无效",
+    "load_error_save_blocked": (
+        "translator_config.json 中的 sync.custom_litellm_providers 存在无效条目，"
+        "当前仅加载了部分内容。\n\n"
+        "直接保存会用当前内存列表覆盖磁盘配置，可能丢失原本有效的条目；"
+        "已阻止保存。请先手工修正配置文件，或删除无效条目后重试。\n\n"
+        "错误详情：{error}"
+    ),
     "keyless_status": (
         "该自定义 Provider 无需 API Key（requires_key=false），"
         "可直接加载模型列表与测试连接。"

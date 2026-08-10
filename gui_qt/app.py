@@ -7771,16 +7771,13 @@ class MainWindow(QMainWindow):
     def _reserved_custom_provider_ids(self) -> frozenset[str]:
         from litellm_provider_config import reserved_litellm_provider_ids
 
-        litellm_cache = self.__dict__.get("_litellm_cache")
-        cached_values = (
-            getattr(litellm_cache.providers, "values", ())
-            if litellm_cache is not None
-            else ()
-        )
+        # Reserved set is based only on known LiteLLM prefixes and the current
+        # registry. Historical catalog cache ids are intentionally excluded:
+        # they are user-level state with no UI to clear, and including them
+        # would block re-adding a deleted provider under the same id.
         return frozenset(
             {
                 *reserved_litellm_provider_ids(),
-                *cached_values,
                 *self.__dict__.get("_custom_litellm_providers", {}),
             }
         )
@@ -10851,6 +10848,23 @@ class MainWindow(QMainWindow):
                 merged[key] = current[key]
         self._config_ui_saved_snapshot = merged
 
+    def _mapping_from_entry(self, entry: object) -> dict[str, object] | None:
+        """Convert a config-snapshot custom-provider entry to a mapping.
+
+        Malformed sequences (e.g. a single-element tuple) are skipped instead of
+        raising, so hand-edited or stale snapshots degrade gracefully.
+        """
+        if isinstance(entry, Mapping):
+            return dict(entry)
+        if isinstance(entry, (list, tuple)) and all(
+            isinstance(pair, (list, tuple)) and len(pair) == 2 for pair in entry
+        ):
+            try:
+                return dict(entry)
+            except (TypeError, ValueError):
+                return None
+        return None
+
     def _current_config_ui_snapshot(self) -> dict[str, object]:
         """Snapshot only already-built settings widgets (no lazy page build)."""
 
@@ -10953,9 +10967,12 @@ class MainWindow(QMainWindow):
                     try:
                         self._custom_litellm_providers = custom_provider_registry(
                             [
-                                dict(entry)
+                                converted
                                 for entry in raw_entries
-                                if isinstance(entry, (Mapping, list, tuple))
+                                if (
+                                    converted := self._mapping_from_entry(entry)
+                                )
+                                is not None
                             ]
                         )
                         self._custom_litellm_providers_load_error = ""
@@ -14301,6 +14318,24 @@ class MainWindow(QMainWindow):
 
             sync_backend = self._selected_sync_backend()
             litellm_model = self._litellm_model_text()
+            if (
+                self.__dict__.get("_custom_litellm_providers_modified")
+                and self.__dict__.get("_custom_litellm_providers_load_error")
+            ):
+                # The on-disk list is invalid and was only partially loaded;
+                # saving the in-memory registry would silently drop the valid
+                # entries that failed to parse. Require fixing the config first.
+                self._focus_settings_section("litellm")
+                message_box_warning(
+                    self,
+                    CUSTOM_LITELLM_PROVIDER_COPY["load_error_title"],
+                    (
+                        CUSTOM_LITELLM_PROVIDER_COPY["load_error_save_blocked"].format(
+                            error=self.__dict__["_custom_litellm_providers_load_error"]
+                        )
+                    ),
+                )
+                return False
             if sync_backend == "litellm" and not litellm_model:
                 self._focus_settings_section("litellm")
                 message_box_information(
