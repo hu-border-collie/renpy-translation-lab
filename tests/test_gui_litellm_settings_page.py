@@ -652,6 +652,11 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
 
     def test_delete_custom_provider_requires_confirmation(self):
         self.window._ensure_settings_page("litellm")
+        self.cache.update_models(
+            "opencode-go",
+            ["opencode-go/gpt-4o-mini"],
+            source="opencode-go",
+        )
         self.window._custom_litellm_providers = {
             "opencode-go": custom_provider_registry(
                 [
@@ -680,6 +685,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             self.window._on_delete_custom_litellm_provider()
         self.assertEqual(self.window._custom_litellm_providers, {})
         self.assertEqual(self.window.custom_provider_table.rowCount(), 0)
+        self.assertEqual(self.cache.models("opencode-go").values, ())
 
     def test_custom_provider_loaded_from_config_and_saved_back(self):
         config = {

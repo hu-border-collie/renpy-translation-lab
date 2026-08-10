@@ -7961,13 +7961,16 @@ class MainWindow(QMainWindow):
             return
         del self._custom_litellm_providers[provider_id]
         self._custom_litellm_providers_modified = True
+        # Also drop the user-level catalog artifacts (models snapshot and any
+        # selection) so the deleted id cannot resurface from the persistent
+        # cache in dropdowns or restores.
+        self._save_litellm_cache(
+            lambda p=provider_id: self._litellm_cache.remove_provider(p)
+        )
         if is_current:
             # Drop the ghost selection: the model still references the deleted
             # id, which would fail on the next sync request after save.
             self._cancel_litellm_model_selection_save()
-            self._save_litellm_cache(
-                lambda p=provider_id: self._litellm_cache.select_provider("")
-            )
             self._set_litellm_models("", ())
             combo = self._settings_widget("litellm_provider_combo")
             if combo is not None:
