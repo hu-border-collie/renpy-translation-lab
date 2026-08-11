@@ -247,6 +247,7 @@ from .work_bootstrap_report import (
 from .litellm_worker import (
     LiteLLMConnectionTestWorker,
     LiteLLMModelCatalogWorker,
+    LiteLLMModuleWarmupWorker,
     LiteLLMProviderCatalogWorker,
     LiteLLMVersionWorker,
     is_cancelled_message,
@@ -277,6 +278,7 @@ from litellm_provider_config import (
     custom_provider_from_mapping,
     custom_provider_registry,
     installed_litellm_version,
+    litellm_install_probe,
     load_provider_key_store,
     native_catalog_endpoint,
     provider_display_label,
@@ -406,6 +408,13 @@ _BATCH_STAGE_RESULT = 2  # 写回 / 结果
 _LOG_FLUSH_INTERVAL_MS = 80
 _LAYOUT_SYNC_DEBOUNCE_MS = 32
 _LITELLM_MODEL_SELECTION_SAVE_DEBOUNCE_MS = 400
+
+# Application-level ownership for warmup workers detached from a closing
+# window: MainWindow teardown must never destroy a QThread whose import is
+# still running (Qt aborts the process).  Workers are removed once their
+# thread finished; entries left behind after the window itself is gone are
+# harmless process-exit cleanup.
+_RETIRED_LITELLM_WARMUP_WORKERS: set[LiteLLMModuleWarmupWorker] = set()
 _UI_PROGRESS_FLUSH_INTERVAL_MS = 100
 _CONTEXT_STATUS_CACHE_TTL_S = 2.0
 
@@ -667,6 +676,7 @@ class MainWindow(QMainWindow):
         self._litellm_provider_catalog_worker: LiteLLMProviderCatalogWorker | None = None
         self._litellm_catalog_worker: LiteLLMModelCatalogWorker | None = None
         self._litellm_version_worker: LiteLLMVersionWorker | None = None
+        self._litellm_module_warmup_worker: LiteLLMModuleWarmupWorker | None = None
         self._litellm_latest_version = ""
         self._litellm_latest_compatible_version = ""
         self._litellm_latest_requires_python = ""
@@ -3929,11 +3939,22 @@ class MainWindow(QMainWindow):
             QAbstractItemView.SelectionMode.SingleSelection
         )
         self.custom_provider_table.verticalHeader().setVisible(False)
+        # Long URLs/ids elide instead of forcing a horizontal scrollbar; hover
+        # tooltips keep the full value readable (set while filling rows).
+        self.custom_provider_table.setWordWrap(False)
+        self.custom_provider_table.setTextElideMode(Qt.TextElideMode.ElideRight)
         header = self.custom_provider_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(60)
+        # id / label / env columns stay user-resizable; API Base absorbs the
+        # leftover width so a long endpoint never collapses the other columns.
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        self.custom_provider_table.setColumnWidth(0, 110)
+        self.custom_provider_table.setColumnWidth(1, 110)
+        self.custom_provider_table.setColumnWidth(3, 150)
         self.custom_provider_table.setMinimumHeight(120)
         self.custom_provider_table.itemSelectionChanged.connect(
             self._refresh_custom_provider_actions
@@ -4017,6 +4038,10 @@ class MainWindow(QMainWindow):
         self._refresh_litellm_catalog_status()
         self._refresh_litellm_credential_status()
         self._refresh_custom_provider_table()
+        # Warm the heavy litellm import in the background so the installed
+        # provider table can be merged into the reserved-id check without
+        # blocking this (or any later) page visit.
+        self._start_litellm_module_warmup()
         layout.addStretch(1)
         return page
 
@@ -4475,12 +4500,20 @@ class MainWindow(QMainWindow):
             return ()
         current_doctor = getattr(self, "_doctor_worker", None)
         doctor_is_foreground = bool(getattr(self, "_task_running", False))
+        # The LiteLLM module warmup import is local, not user-cancellable and
+        # fully owned by the settings page; it must not gate window shutdown
+        # with a confirmation dialog.  Retired workers are already detached
+        # and only kept alive until their import finishes.
+        warmup_worker = getattr(self, "_litellm_module_warmup_worker", None)
+        retired_workers = _RETIRED_LITELLM_WARMUP_WORKERS
         active: list[QThread] = []
         for thread in threads:
             try:
                 if not thread.isRunning():
                     continue
             except RuntimeError:
+                continue
+            if thread is warmup_worker or thread in retired_workers:
                 continue
             if doctor_is_foreground and thread is current_doctor:
                 continue
@@ -4627,6 +4660,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._shutdown_requested = True
+        self._detach_litellm_module_warmup()
         if active_labels:
             event.ignore()
             self._lock_ui_for_shutdown()
@@ -7775,9 +7809,12 @@ class MainWindow(QMainWindow):
         # registry. Historical catalog cache ids are intentionally excluded:
         # they are user-level state with no UI to clear, and including them
         # would block re-adding a deleted provider under the same id.
+        # allow_import=False keeps this call off the ~10s synchronous litellm
+        # import; the background warmup worker merges the installed provider
+        # table into the reserved set as soon as it finishes.
         return frozenset(
             {
-                *reserved_litellm_provider_ids(),
+                *reserved_litellm_provider_ids(allow_import=False),
                 *self.__dict__.get("_custom_litellm_providers", {}),
             }
         )
@@ -7801,6 +7838,10 @@ class MainWindow(QMainWindow):
             ):
                 item = QTableWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, provider.id)
+                if len(text) > 20:
+                    # Long API Base URLs and labels are elided in the cell;
+                    # keep the full value readable on hover.
+                    item.setToolTip(text)
                 table.setItem(row, column, item)
             if previous and provider.id == previous:
                 table.selectRow(row)
@@ -7874,7 +7915,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         entry = dialog.result_provider()
-        provider = custom_provider_from_mapping(entry)
+        provider = custom_provider_from_mapping(entry, allow_import=False)
         if provider.id in self._custom_litellm_providers:
             message_box_warning(
                 self,
@@ -7921,7 +7962,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         entry = dialog.result_provider()
-        updated = custom_provider_from_mapping(entry)
+        updated = custom_provider_from_mapping(entry, allow_import=False)
         self._custom_litellm_providers[provider.id] = updated
         self._custom_litellm_providers_modified = True
         self._after_custom_providers_changed()
@@ -8151,6 +8192,92 @@ class MainWindow(QMainWindow):
             button.setText("正在取消…")
         self.statusBar().showMessage(status_message, 4000)
         return True
+
+    def _start_litellm_module_warmup(self) -> None:
+        """Preload the heavy litellm package in a background thread.
+
+        ``import litellm`` can take ~10s cold; running it off the main thread
+        keeps the first LiteLLM settings visit and the custom-provider dialogs
+        responsive.  When the import finishes, the installed provider table is
+        merged into the reserved-id set and any open LiteLLM page is re-read.
+        Idempotent and cheap when litellm is not installed (probe only).
+        """
+        if getattr(self, "_shutdown_requested", False):
+            return
+        if os.environ.get("RTL_DISABLE_LITELLM_WARMUP"):
+            return
+        if getattr(self, "_litellm_module_warmup_worker", None) is not None:
+            return
+        if not litellm_install_probe():
+            return
+        worker = LiteLLMModuleWarmupWorker(self)
+        worker.setPriority(QThread.Priority.LowPriority)
+        worker.completed.connect(self._on_litellm_module_warmed)
+        self._litellm_module_warmup_worker = worker
+        worker.start()
+
+    def _on_litellm_module_warmed(self, _module: object) -> None:
+        worker = getattr(self, "_litellm_module_warmup_worker", None)
+        if worker is not None:
+            self._litellm_module_warmup_worker = None
+            worker.deleteLater()
+        # A worker detached during shutdown finishes in the background; drop
+        # it once the thread is no longer running so teardown stays safe.
+        for retired_worker in tuple(_RETIRED_LITELLM_WARMUP_WORKERS):
+            if not getattr(retired_worker, "isRunning", lambda: False)():
+                _RETIRED_LITELLM_WARMUP_WORKERS.discard(retired_worker)
+                retired_worker.deleteLater()
+        if getattr(self, "_shutdown_requested", False):
+            return
+        # Skip when the user already edited providers unsaved, or when the
+        # page was never opened.
+        if getattr(self, "_custom_litellm_providers_modified", False):
+            return
+        if "litellm" not in self.__dict__.get("_settings_pages_built", ()):
+            return
+        # Re-validate the registry with the now-complete reserved set, then
+        # refresh table/dropdowns/status while preserving the current page
+        # selection.  A full _load_config_to_ui would silently reset any
+        # unsaved edits the user made during the ~10s warmup window.
+        try:
+            config = self.state.load_translator_config()
+            sync_config = self._config_section(config, "sync")
+            self._custom_litellm_providers = custom_provider_registry(
+                sync_config.get("custom_litellm_providers"),
+                allow_import=False,
+            )
+            self._custom_litellm_providers_load_error = ""
+        except Exception:
+            self._custom_litellm_providers = {}
+            self._custom_litellm_providers_load_error = (
+                "后台预热 LiteLLM 后重新校验自定义 Provider 失败，"
+                "请重新加载设置页。"
+            )
+            self._append_log("后台预热 LiteLLM 后重新校验自定义 Provider 失败。")
+        self._after_custom_providers_changed()
+
+    def _detach_litellm_module_warmup(self) -> None:
+        """Detach a still-running warmup thread from window teardown.
+
+        A QThread destroyed while its import is still running aborts the
+        process, so on shutdown the worker is released from the window's
+        ownership but kept alive in the application-level retired set until
+        the import finishes; the completed signal still fires and cleans it up
+        afterwards.  The set lives at module scope so window destruction can
+        never drop the last reference to a running thread.
+        """
+        worker = getattr(self, "_litellm_module_warmup_worker", None)
+        if worker is None:
+            return
+        self._litellm_module_warmup_worker = None
+        if not getattr(worker, "isRunning", lambda: False)():
+            worker.deleteLater()
+            return
+        try:
+            worker.setParent(None)
+        except RuntimeError:
+            pass
+        _RETIRED_LITELLM_WARMUP_WORKERS.add(worker)
 
     def _on_litellm_network_progress(
         self,
@@ -10986,7 +11113,8 @@ class MainWindow(QMainWindow):
                                     converted := self._mapping_from_entry(entry)
                                 )
                                 is not None
-                            ]
+                            ],
+                            allow_import=False,
                         )
                         self._custom_litellm_providers_load_error = ""
                     except ValueError as exc:
@@ -14191,7 +14319,8 @@ class MainWindow(QMainWindow):
                 if need_litellm:
                     try:
                         self._custom_litellm_providers = custom_provider_registry(
-                            sync_config.get("custom_litellm_providers")
+                            sync_config.get("custom_litellm_providers"),
+                            allow_import=False,
                         )
                         self._custom_litellm_providers_load_error = ""
                         self._custom_litellm_providers_modified = False

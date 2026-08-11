@@ -17,12 +17,18 @@ Use in test modules::
 """
 from __future__ import annotations
 
+import os
 import unittest
 from collections.abc import Callable
 from typing import Any, TypeVar
 from unittest import mock
 
 _T = TypeVar("_T", bound=type)
+
+# Headless GUI tests must not spin up the background LiteLLM import warmup
+# thread: the import takes ~10s on machines with the optional dependency and a
+# QThread destroyed while still importing aborts the process.
+os.environ.setdefault("RTL_DISABLE_LITELLM_WARMUP", "1")
 
 
 def skip_unless_gui(
