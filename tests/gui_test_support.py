@@ -18,8 +18,10 @@ Use in test modules::
 from __future__ import annotations
 
 import os
+import sys
 import unittest
 from collections.abc import Callable
+from contextlib import contextmanager
 from typing import Any, TypeVar
 from unittest import mock
 
@@ -29,6 +31,147 @@ _T = TypeVar("_T", bound=type)
 # thread: the import takes ~10s on machines with the optional dependency and a
 # QThread destroyed while still importing aborts the process.
 os.environ.setdefault("RTL_DISABLE_LITELLM_WARMUP", "1")
+
+
+class GuiTestModalGuard:
+    """Reject unexpected modal widgets so unattended GUI tests cannot hang."""
+
+    def __init__(self, app: Any, *, interval_ms: int = 25) -> None:
+        self._app = app
+        self._interval_ms = max(1, int(interval_ms))
+        self._timer: Any = None
+        self._seen_modal_ids: set[int] = set()
+        self._rejected_dialogs: list[str] = []
+        self._current_test_id = ""
+
+    @property
+    def rejected_dialogs(self) -> tuple[str, ...]:
+        return tuple(self._rejected_dialogs)
+
+    def start(self) -> None:
+        """Poll from the Qt event loop, including nested ``dialog.exec()`` loops."""
+        if self._timer is not None:
+            return
+        from PySide6.QtCore import QTimer
+
+        self._timer = QTimer(self._app)
+        self._timer.setInterval(self._interval_ms)
+        self._timer.timeout.connect(self.reject_active_modal)
+        self._timer.start()
+
+    def set_current_test(self, test_id: str) -> None:
+        self._current_test_id = str(test_id or "").strip()
+
+    def stop(self) -> None:
+        timer = self._timer
+        self._timer = None
+        if timer is None:
+            return
+        timer.stop()
+        timer.deleteLater()
+
+    def reject_active_modal(self) -> None:
+        """Reject the current modal once, without exposing its message body."""
+        try:
+            widget = self._app.activeModalWidget()
+        except RuntimeError:
+            return
+        if widget is None:
+            return
+        identity = id(widget)
+        if identity in self._seen_modal_ids:
+            return
+        self._seen_modal_ids.add(identity)
+        title = str(getattr(widget, "windowTitle", lambda: "")() or "").strip()
+        object_name = str(getattr(widget, "objectName", lambda: "")() or "").strip()
+        label = type(widget).__name__
+        if title:
+            label += f" title={title!r}"
+        if object_name:
+            label += f" object={object_name!r}"
+        if self._current_test_id:
+            label += f" test={self._current_test_id!r}"
+        self._rejected_dialogs.append(label)
+        reject = getattr(widget, "reject", None)
+        if callable(reject):
+            reject()
+            return
+        close = getattr(widget, "close", None)
+        if callable(close):
+            close()
+
+    def cleanup_top_levels(self) -> None:
+        """Hide and schedule deletion of widgets leaked by completed tests."""
+        try:
+            widgets = tuple(self._app.topLevelWidgets())
+        except RuntimeError:
+            return
+        for widget in widgets:
+            try:
+                widget.hide()
+                widget.deleteLater()
+            except RuntimeError:
+                continue
+
+
+def _modal_guard_enabled() -> bool:
+    value = os.environ.get("RENPY_TRANSLATION_LAB_GUI_TEST_MODAL_GUARD", "1")
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def guarded_test_result_class(guard: GuiTestModalGuard | None):
+    """Build a unittest result class that tells the guard which test is active."""
+
+    class GuardedGuiTestResult(unittest.TextTestResult):
+        def startTest(self, test) -> None:
+            if guard is not None:
+                guard.set_current_test(test.id())
+            super().startTest(test)
+
+    return GuardedGuiTestResult
+
+
+@contextmanager
+def guarded_gui_test_environment():
+    """Reject accidental dialogs without changing the caller's Qt platform."""
+    try:
+        from PySide6.QtCore import QCoreApplication, Qt
+        from PySide6.QtWidgets import QApplication
+    except ImportError:
+        yield None
+        return
+
+    app = QApplication.instance()
+    if app is None:
+        QCoreApplication.setAttribute(
+            Qt.ApplicationAttribute.AA_DontUseNativeDialogs,
+            True,
+        )
+        app = QApplication([])
+
+    guard = GuiTestModalGuard(app) if _modal_guard_enabled() else None
+    if guard is not None:
+        guard.start()
+    try:
+        yield guard
+    finally:
+        if guard is not None:
+            guard.reject_active_modal()
+            guard.cleanup_top_levels()
+        try:
+            app.processEvents()
+        except RuntimeError:
+            pass
+        if guard is not None:
+            guard.stop()
+            if guard.rejected_dialogs:
+                summary = "\n".join(
+                    f"  - {label}" for label in guard.rejected_dialogs
+                )
+                sys.stderr.write(
+                    "\nGUI modal guard auto-rejected unexpected dialogs:\n"
+                    f"{summary}\n"
+                )
 
 
 def skip_unless_gui(

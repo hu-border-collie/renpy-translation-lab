@@ -13,6 +13,9 @@ try:
         CANCELLED_MESSAGE_PREFIX,
         CATALOG_TIMEOUT_SECONDS,
         CATALOG_TOTAL_BUDGET_SECONDS,
+        CONNECTION_TEST_MAX_OUTPUT_TOKENS,
+        CONNECTION_TEST_PROMPT,
+        CONNECTION_TEST_RESPONSE_SCHEMA,
         CONNECTION_TEST_TIMEOUT_SECONDS,
         LiteLLMConnectionTestWorker,
         LiteLLMModelCatalogWorker,
@@ -40,7 +43,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
     def test_connection_test_passes_a_bounded_timeout(self):
         backend = mock.Mock()
         backend.generate_async = mock.AsyncMock(
-            return_value=SimpleNamespace(response_text="OK")
+            return_value=SimpleNamespace(response_text='{"ok":true}')
         )
         completed = []
         worker = LiteLLMConnectionTestWorker("openai/test", "typed-secret")
@@ -57,12 +60,24 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
             request.config["timeout"],
             CONNECTION_TEST_TIMEOUT_SECONDS,
         )
-        self.assertEqual(completed, [(True, "连接成功。模型返回：OK")])
+        self.assertEqual(request.contents, CONNECTION_TEST_PROMPT)
+        self.assertEqual(
+            request.config["max_output_tokens"],
+            CONNECTION_TEST_MAX_OUTPUT_TOKENS,
+        )
+        self.assertEqual(
+            request.config["response_json_schema"],
+            CONNECTION_TEST_RESPONSE_SCHEMA,
+        )
+        self.assertEqual(
+            completed,
+            [(True, "连接成功。已通过最小 JSON 响应校验。")],
+        )
 
     def test_connection_test_omits_sampling_for_new_gemini_model(self):
         backend = mock.Mock()
         backend.generate_async = mock.AsyncMock(
-            return_value=SimpleNamespace(response_text="OK")
+            return_value=SimpleNamespace(response_text='{"ok":true}')
         )
         worker = LiteLLMConnectionTestWorker("gemini/gemini-3.6-flash")
 
@@ -74,7 +89,77 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
 
         request = backend.generate_async.call_args.args[0]
         self.assertNotIn("temperature", request.config)
-        self.assertEqual(request.config["max_output_tokens"], 8)
+        self.assertEqual(
+            request.config["max_output_tokens"],
+            CONNECTION_TEST_MAX_OUTPUT_TOKENS,
+        )
+
+    def test_connection_test_rejects_empty_invalid_or_mismatched_json(self):
+        responses = (
+            "",
+            "not json",
+            '{"ok":false}',
+            '{"ok":1}',
+            '{"ok":true,"detail":"provider-secret"}',
+        )
+        for response_text in responses:
+            with self.subTest(response_text=response_text):
+                backend = mock.Mock()
+                backend.generate_async = mock.AsyncMock(
+                    return_value=SimpleNamespace(response_text=response_text)
+                )
+                completed = []
+                worker = LiteLLMConnectionTestWorker("openai/test")
+                worker.completed.connect(
+                    lambda success, message: completed.append((success, message))
+                )
+
+                with mock.patch(
+                    "gui_qt.litellm_worker.LiteLLMSyncBackend",
+                    return_value=backend,
+                ):
+                    worker.run()
+
+                self.assertEqual(len(completed), 1)
+                self.assertFalse(completed[0][0])
+                self.assertIn("invalid_response", completed[0][1])
+                self.assertNotIn("provider-secret", completed[0][1])
+
+    def test_connection_test_prefers_parsed_response_when_available(self):
+        cases = (
+            (
+                SimpleNamespace(parsed={"ok": True}, response_text="not json"),
+                True,
+            ),
+            (
+                SimpleNamespace(
+                    parsed={"ok": False, "detail": "provider-secret"},
+                    response_text='{"ok":true}',
+                ),
+                False,
+            ),
+        )
+        for result, expected_success in cases:
+            with self.subTest(parsed=result.parsed):
+                backend = mock.Mock()
+                backend.generate_async = mock.AsyncMock(return_value=result)
+                completed = []
+                worker = LiteLLMConnectionTestWorker("openai/test")
+                worker.completed.connect(
+                    lambda success, message: completed.append((success, message))
+                )
+
+                with mock.patch(
+                    "gui_qt.litellm_worker.LiteLLMSyncBackend",
+                    return_value=backend,
+                ):
+                    worker.run()
+
+                self.assertEqual(len(completed), 1)
+                self.assertEqual(completed[0][0], expected_success)
+                self.assertNotIn("provider-secret", completed[0][1])
+                if not expected_success:
+                    self.assertIn("invalid_response", completed[0][1])
 
     def test_connection_error_never_includes_provider_exception_text(self):
         backend = mock.Mock()
@@ -119,7 +204,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
     def test_connection_test_cancel_after_generate_discards_success(self):
         backend = mock.Mock()
         backend.generate_async = mock.AsyncMock(
-            return_value=SimpleNamespace(response_text="OK")
+            return_value=SimpleNamespace(response_text='{"ok":true}')
         )
         completed = []
         worker = LiteLLMConnectionTestWorker("openai/test")
@@ -127,7 +212,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
 
         def generate_and_cancel(request):
             worker.request_cancel()
-            return SimpleNamespace(response_text="OK")
+            return SimpleNamespace(response_text='{"ok":true}')
 
         backend.generate_async.side_effect = generate_and_cancel
         with mock.patch(
@@ -462,7 +547,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         )
         backend = mock.Mock()
         backend.generate_async = mock.AsyncMock(
-            return_value=SimpleNamespace(response_text="OK")
+            return_value=SimpleNamespace(response_text='{"ok":true}')
         )
         completed = []
         worker = LiteLLMConnectionTestWorker(
@@ -481,7 +566,10 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         self.assertEqual(backend_cls.call_args.kwargs["custom_providers"], registry)
         request = backend.generate_async.call_args.args[0]
         self.assertEqual(request.model, "opencode-go/gpt-4o-mini")
-        self.assertEqual(completed, [(True, "连接成功。模型返回：OK")])
+        self.assertEqual(
+            completed,
+            [(True, "连接成功。已通过最小 JSON 响应校验。")],
+        )
 
     def test_openrouter_falls_back_to_litellm_subset_then_local(self):
         litellm_payload = {
