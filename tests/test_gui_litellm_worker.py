@@ -125,6 +125,42 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
                 self.assertIn("invalid_response", completed[0][1])
                 self.assertNotIn("provider-secret", completed[0][1])
 
+    def test_connection_test_prefers_parsed_response_when_available(self):
+        cases = (
+            (
+                SimpleNamespace(parsed={"ok": True}, response_text="not json"),
+                True,
+            ),
+            (
+                SimpleNamespace(
+                    parsed={"ok": False, "detail": "provider-secret"},
+                    response_text='{"ok":true}',
+                ),
+                False,
+            ),
+        )
+        for result, expected_success in cases:
+            with self.subTest(parsed=result.parsed):
+                backend = mock.Mock()
+                backend.generate_async = mock.AsyncMock(return_value=result)
+                completed = []
+                worker = LiteLLMConnectionTestWorker("openai/test")
+                worker.completed.connect(
+                    lambda success, message: completed.append((success, message))
+                )
+
+                with mock.patch(
+                    "gui_qt.litellm_worker.LiteLLMSyncBackend",
+                    return_value=backend,
+                ):
+                    worker.run()
+
+                self.assertEqual(len(completed), 1)
+                self.assertEqual(completed[0][0], expected_success)
+                self.assertNotIn("provider-secret", completed[0][1])
+                if not expected_success:
+                    self.assertIn("invalid_response", completed[0][1])
+
     def test_connection_error_never_includes_provider_exception_text(self):
         backend = mock.Mock()
         backend.generate_async.side_effect = LiteLLMBackendError(

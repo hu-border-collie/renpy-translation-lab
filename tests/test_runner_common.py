@@ -42,6 +42,11 @@ def run_discovered_suite(
     verbose: bool = False,
     resultclass=None,
 ) -> int:
+    """Run a suite and return its process exit status.
+
+    When provided, ``resultclass`` is passed to ``unittest.TextTestRunner``
+    and must be a compatible ``unittest.TextTestResult`` implementation.
+    """
     verbosity = 2 if verbose else (1 if quiet else 2)
     runner_options = {"verbosity": verbosity}
     if resultclass is not None:

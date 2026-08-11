@@ -58,6 +58,30 @@ class TestDiscoveryRunners(unittest.TestCase):
         ):
             self.assertEqual(run_gui_tests.main([]), 1)
 
+    def test_gui_runner_reads_rejected_dialogs_after_guard_cleanup(self):
+        guard = mock.Mock(rejected_dialogs=())
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = guard
+
+        def reject_during_cleanup(*_args):
+            guard.rejected_dialogs = ("QDialog title='teardown'",)
+            return False
+
+        manager.__exit__.side_effect = reject_during_cleanup
+        with (
+            mock.patch(
+                "gui_test_support.guarded_gui_test_environment",
+                return_value=manager,
+            ),
+            mock.patch.object(
+                run_gui_tests,
+                "build_suite",
+                return_value=unittest.TestSuite(),
+            ),
+            mock.patch.object(run_gui_tests, "run_discovered_suite", return_value=0),
+        ):
+            self.assertEqual(run_gui_tests.main([]), 1)
+
 
 class GuiTestModalGuardTests(unittest.TestCase):
     def test_rejects_each_modal_once_without_recording_body(self):

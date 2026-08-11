@@ -23,6 +23,7 @@ def main(argv: list[str] | None = None) -> int:
         guarded_test_result_class,
     )
 
+    guard = None
     with guarded_gui_test_environment() as guard:
         exit_code = run_discovered_suite(
             build_suite(),
@@ -30,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
             verbose=args.verbose,
             resultclass=guarded_test_result_class(guard),
         )
-        unexpected_dialogs = bool(guard and guard.rejected_dialogs)
+    unexpected_dialogs = bool(guard and guard.rejected_dialogs)
     return 1 if unexpected_dialogs else exit_code
 
 
