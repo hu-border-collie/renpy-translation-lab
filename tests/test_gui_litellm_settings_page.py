@@ -47,6 +47,10 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         cls._temp_dir.cleanup()
 
     def setUp(self):
+        # Materialization reads the user's translator_config.json. Build first,
+        # then reset every mutable LiteLLM surface so local custom providers
+        # cannot leak into otherwise isolated tests.
+        self.window._ensure_settings_page("litellm")
         self.cache = LiteLLMCatalogCache(
             Path(self._temp_dir.name) / f"{self._testMethodName}.json"
         )
@@ -536,10 +540,12 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             ) as dialog_cls,
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
+            mock.patch("gui_qt.app.message_box_warning") as warning,
         ):
             self.window._on_add_custom_litellm_provider()
 
         dialog_cls.assert_called_once()
+        warning.assert_not_called()
         self.assertIn("opencode-go", self.window._custom_litellm_providers)
         provider = self.window._custom_litellm_providers["opencode-go"]
         self.assertEqual(provider.label, "OpenCode Go")

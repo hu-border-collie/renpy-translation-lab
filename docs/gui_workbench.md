@@ -127,7 +127,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 - **密钥**：
   - **Gemini**：读取 / 保存 `api_keys.json`；可添加多把 Key；环境变量 Key 只读提示。
   - **LiteLLM Provider**：按供应商保存在操作系统凭据管理器（与 Gemini 分离）。密钥页 Provider 列表含常用供应商（OpenAI / Anthropic / Gemini / OpenRouter / DeepSeek / xAI / Azure / Vertex 等），并合并 LiteLLM 页**已联网加载**的供应商；可搜索或手填自定义 id。每个 Provider 可用与 Gemini 相同的多 Key 对话框管理（添加 / 删除 / 显示明文核对 / **设为当前使用**），状态显示全部脱敏后缀与当前 Key。
-- **LiteLLM**：按“联网加载供应商 → 选择 Provider → **在密钥页或凭据区管理并保存 API Key** → 联网加载模型 → 选择模型 → 保存设置”配置同步替代后端。DeepSeek / OpenAI / Anthropic / xAI 等官方模型列表需要**先保存至少一把 API Key**；未保存时会提示，可取消或显式选择仅用 LiteLLM 子集目录（可能依赖 GitHub）。加载供应商 / 模型、检查更新、测试连接运行中可**再次点击同一按钮停止**；过程中状态栏会显示阶段（如「正在请求官方列表」「官方失败，正在改用子集」）。模型列表整次操作有约 **35 秒**总时限，单次 HTTP 约 **20 秒**上限，避免官方+回退叠成近一分钟无反馈。首次打开不会默认选择 OpenAI 或模型，也不会静默联网；Provider 下拉列表优先显示常用供应商，输入任意片段可搜索，也可手动填写自定义 Provider / 模型。
+- **LiteLLM**：按“联网加载供应商 → 选择 Provider → **在密钥页或凭据区管理并保存 API Key** → 联网加载模型 → 选择模型 → 保存设置”配置同步替代后端。DeepSeek / OpenAI / Anthropic / xAI 等官方模型列表需要**先保存至少一把 API Key**；未保存时会提示，可取消或显式选择仅用 LiteLLM 子集目录（可能依赖 GitHub）。加载供应商 / 模型、检查更新、测试连接运行中可**再次点击同一按钮停止**；过程中状态栏会显示阶段（如「正在请求官方列表」「官方失败，正在改用子集」）。连接测试使用有界的最小 JSON 请求，只有收到非空且符合合同的响应才会成功；空正文、不可解析 JSON 或字段不匹配均会报告失败。模型列表整次操作有约 **35 秒**总时限，单次 HTTP 约 **20 秒**上限，避免官方+回退叠成近一分钟无反馈。首次打开不会默认选择 OpenAI 或模型，也不会静默联网；Provider 下拉列表优先显示常用供应商，输入任意片段可搜索，也可手动填写自定义 Provider / 模型。
 - **自定义 OpenAI 兼容 Provider**：LiteLLM 设置页的「自定义 OpenAI 兼容 Provider」区域可**添加 / 编辑 / 删除** OpenCode Go、中转站、本地 vLLM 等 LiteLLM 未内置但兼容 OpenAI 的服务，持久化到 `translator_config.json` 的 `sync.custom_litellm_providers`。添加时填写 `id`（创建后不可改，同时用作模型前缀与密钥用户名）、显示名称、API Base、模型列表 URL（可留空）、可选密钥环境变量，以及「需要 API Key」开关（默认开启；本地无鉴权网关可关闭）。非法 URL 或与内置前缀冲突的 id 会被拒绝。注册后 Provider 下拉与密钥页列表自动合并该条目，选择后即可像内置 provider 一样保存密钥、加载模型与测试连接。实际请求改写为 `openai/<模型>` + `api_base`，`api_key_env` 仅在系统凭据为空时生效；需要密钥但两者均缺失时请求会直接失败，不会把 `OPENAI_API_KEY` 静默发给第三方端点。
 - **扩展**：按需安装 / 修复 / 更新关系分析器的独立依赖。安装状态来自当前 Python 环境，不另存“已启用”开关；安装在后台运行，普通翻译不会加载这些科学计算与图像依赖。关系分析器的运行入口和边界见 [关系与语义分析](relation_analysis.md)。
 - **项目**：术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。Ren'Py SDK 须显式配置： **查找 SDK**（用户点击后才扫描附近）、**浏览…**，或确认后 **下载推荐 SDK…**（官方固定版本）；留空不会自动搜其它目录或联网。结果写入 `prepare.renpy_sdk_dir`，保存设置后生效。当前 `game_root` 只读展示；需换项目请用「项目与环境」或「项目列表」。
@@ -438,7 +438,7 @@ GUI 不提供普通用户入口来运行 `apply --force`。`apply --force` 只�
 
 - 同步翻译、关键词提取（批量/同步）与 glossary 合并、订正与写回订正、翻译 A/B 对比。
 
-仓库 CI：`unittest`（含 GUI 依赖）、`cli-without-gui`（排除 `test_gui_*`）、`gui`（offscreen）。新增 GUI 测试见 `tests/gui_test_support.py`。
+仓库 CI：`unittest`（含 GUI 依赖）、`cli-without-gui`（排除 `test_gui_*`）、`gui`（offscreen）。本地 `python -B tests/run_gui_tests.py -q` 保留当前 Qt 平台，但会禁用原生文件对话框，并自动拒绝意外进入 `exec()` 的模态弹窗，避免无人值守运行等待人工点击；被拒绝的弹窗类型、标题和当前测试会写到测试输出（不记录正文），并使该次测试运行失败，防止弹窗回归被静默忽略。需要完全无窗口运行时可设置 `QT_QPA_PLATFORM=offscreen`；需要人工调试真实模态交互时，可用 `RENPY_TRANSLATION_LAB_GUI_TEST_MODAL_GUARD=0` 临时关闭守卫。新增 GUI 测试及窗口清理约定见 `tests/gui_test_support.py`。
 
 **烟测**：2026-06-19 曾在一部约 3,300 待译行的真实项目上跑通 GUI **批量翻译**主路径（该记录早于 2026-07 IA 重构）。2026-07-14 在隔离的最小 Ren'Py 项目副本上跑通 **LiteLLM + DeepSeek 同步翻译**真实供应商烟测：从系统凭据读取密钥，以 `deepseek/deepseek-v4-flash` 完成 5/5 条翻译，并保留 `[player_name]` 与 Ren'Py color tag；过程中确认 DeepSeek 使用 `json_object` 返回模式。该记录只验证小规模同步替代链路，不等于批量吞吐、成本或完整项目 QA。关键词 / 订正 / A/B 仍只有单元测试，建议在副本上小范围试跑。
 

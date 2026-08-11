@@ -220,6 +220,23 @@ CUSTOM_LITELLM_PROVIDER_COPY = {
 }
 
 
+LITELLM_CONNECTION_TEST_COPY = {
+    "progress": "正在发起最小 JSON 连接测试请求…",
+    "success": "连接成功。已通过最小 JSON 响应校验。",
+    "errors": {
+        "authentication": "身份验证失败，请检查供应商密钥。",
+        "rate_limit": "供应商限流或配额不足，请稍后重试。",
+        "service_unavailable": "供应商服务暂时不可用或请求超时。",
+        "missing_dependency": "LiteLLM 尚未正确安装。",
+        "invalid_response": (
+            "模型未返回预期的 JSON 结果；请检查模型兼容性或 reasoning 输出预算。"
+        ),
+        "unsupported_capability": "当前 Provider 不支持连接测试所需的 JSON 能力。",
+        "provider_error": "请求失败，请检查模型、API Base 和网络。",
+    },
+}
+
+
 GAMES_REGISTRY_SOURCE_URL_COPY = {
     "field_label": "发布地址",
     "placeholder": "https://…（可留空）",

@@ -27,12 +27,27 @@ from litellm_provider_config import (
     native_catalog_endpoint,
     providers_from_remote_catalog,
 )
-from litellm_sync_backend import LiteLLMSyncBackend
+from litellm_sync_backend import LiteLLMBackendError, LiteLLMSyncBackend
 from sync_model_backend import SyncGenerationRequest
-from .user_copy import CUSTOM_LITELLM_PROVIDER_COPY
+from .user_copy import CUSTOM_LITELLM_PROVIDER_COPY, LITELLM_CONNECTION_TEST_COPY
 
 
 CONNECTION_TEST_TIMEOUT_SECONDS = 30
+CONNECTION_TEST_MAX_OUTPUT_TOKENS = 64
+CONNECTION_TEST_PROMPT = (
+    'Return exactly this JSON object and no other text: {"ok":true}'
+)
+CONNECTION_TEST_RESPONSE_SCHEMA = {
+    "type": "object",
+    "required": ["ok"],
+    "additionalProperties": False,
+    "properties": {
+        "ok": {
+            "type": "boolean",
+            "enum": [True],
+        }
+    },
+}
 # Per-request cap for catalog/version HTTP calls.
 CATALOG_TIMEOUT_SECONDS = 20
 # Whole model-catalog operation (official + optional LiteLLM fallback).
@@ -54,14 +69,36 @@ class BudgetExhausted(TimeoutError):
 
 def _connection_error_message(exc: Exception) -> str:
     category = str(getattr(exc, "category", "provider_error") or "provider_error")
-    details = {
-        "authentication": "身份验证失败，请检查供应商密钥。",
-        "rate_limit": "供应商限流或配额不足，请稍后重试。",
-        "service_unavailable": "供应商服务暂时不可用或请求超时。",
-        "missing_dependency": "LiteLLM 尚未正确安装。",
-        "provider_error": "请求失败，请检查模型、API Base 和网络。",
-    }
+    details = LITELLM_CONNECTION_TEST_COPY["errors"]
     return f"连接失败 [{category}]: {details.get(category, details['provider_error'])}"
+
+
+def _validate_connection_response(result: object) -> None:
+    """Require the provider to return the exact minimal connection contract."""
+    payload = getattr(result, "parsed", None)
+    if payload is None:
+        text = str(getattr(result, "response_text", "") or "").strip()
+        if not text:
+            raise LiteLLMBackendError(
+                "Connection test returned an empty response.",
+                category="invalid_response",
+            )
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError) as exc:
+            raise LiteLLMBackendError(
+                "Connection test returned invalid JSON.",
+                category="invalid_response",
+            ) from exc
+    if (
+        not isinstance(payload, Mapping)
+        or set(payload) != {"ok"}
+        or payload.get("ok") is not True
+    ):
+        raise LiteLLMBackendError(
+            "Connection test JSON did not match the expected contract.",
+            category="invalid_response",
+        )
 
 
 def _http_error_message(exc: HTTPError, label: str) -> str:
@@ -421,20 +458,21 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
 
     async def _generate_async(self):
         self._ensure_not_cancelled()
-        self._emit_progress("正在发起最小连接测试请求…")
+        self._emit_progress(LITELLM_CONNECTION_TEST_COPY["progress"])
         return await LiteLLMSyncBackend(
             api_key=self.api_key or None,
             custom_providers=self._custom_providers,
         ).generate_async(
             SyncGenerationRequest(
                 model=self.model,
-                contents="Reply with OK.",
+                contents=CONNECTION_TEST_PROMPT,
                 config=filter_gemini_generation_config(
                     self.model,
                     {
-                        "max_output_tokens": 8,
+                        "max_output_tokens": CONNECTION_TEST_MAX_OUTPUT_TOKENS,
                         "temperature": 0,
                         "timeout": CONNECTION_TEST_TIMEOUT_SECONDS,
+                        "response_json_schema": CONNECTION_TEST_RESPONSE_SCHEMA,
                     },
                 ),
             )
@@ -454,8 +492,8 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
             if self.is_cancelled():
                 self.completed.emit(False, f"{CANCELLED_MESSAGE_PREFIX}连接测试。")
                 return
-            text = result.response_text.strip()
-            self.completed.emit(True, f"连接成功。模型返回：{text[:80] or '（空响应）'}")
+            _validate_connection_response(result)
+            self.completed.emit(True, LITELLM_CONNECTION_TEST_COPY["success"])
         except asyncio.CancelledError:
             self.completed.emit(False, f"{CANCELLED_MESSAGE_PREFIX}连接测试。")
         except OperationCancelled:

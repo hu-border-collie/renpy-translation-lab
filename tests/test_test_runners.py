@@ -4,11 +4,14 @@ from __future__ import annotations
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 _TESTS_DIR = pathlib.Path(__file__).resolve().parent
 if str(_TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(_TESTS_DIR))
 
+import run_gui_tests
+from gui_test_support import GuiTestModalGuard
 from run_cli_tests import build_suite as build_cli_suite
 from run_gui_tests import build_suite as build_gui_suite
 
@@ -39,6 +42,55 @@ class TestDiscoveryRunners(unittest.TestCase):
         self.assertTrue(
             all(module.startswith("test_gui_") for module in _module_names(names))
         )
+
+    def test_gui_runner_fails_when_modal_guard_rejects_a_dialog(self):
+        guard = mock.Mock(rejected_dialogs=("QMessageBox title='unexpected'",))
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = guard
+        manager.__exit__.return_value = False
+        with (
+            mock.patch(
+                "gui_test_support.guarded_gui_test_environment",
+                return_value=manager,
+            ),
+            mock.patch.object(run_gui_tests, "build_suite", return_value=unittest.TestSuite()),
+            mock.patch.object(run_gui_tests, "run_discovered_suite", return_value=0),
+        ):
+            self.assertEqual(run_gui_tests.main([]), 1)
+
+
+class GuiTestModalGuardTests(unittest.TestCase):
+    def test_rejects_each_modal_once_without_recording_body(self):
+        dialog = mock.Mock()
+        dialog.windowTitle.return_value = "未保存设置"
+        dialog.objectName.return_value = "confirm_close"
+        app = mock.Mock()
+        app.activeModalWidget.return_value = dialog
+        guard = GuiTestModalGuard(app)
+        guard.set_current_test("test_gui_example.ExampleTests.test_modal")
+
+        guard.reject_active_modal()
+        guard.reject_active_modal()
+
+        dialog.reject.assert_called_once_with()
+        self.assertEqual(len(guard.rejected_dialogs), 1)
+        self.assertIn("未保存设置", guard.rejected_dialogs[0])
+        self.assertIn("test_gui_example", guard.rejected_dialogs[0])
+        self.assertNotIn("secret body", guard.rejected_dialogs[0])
+
+    def test_cleanup_hides_and_deletes_leaked_top_level_widgets(self):
+        first = mock.Mock()
+        second = mock.Mock()
+        app = mock.Mock()
+        app.topLevelWidgets.return_value = [first, second]
+        guard = GuiTestModalGuard(app)
+
+        guard.cleanup_top_levels()
+
+        first.hide.assert_called_once_with()
+        first.deleteLater.assert_called_once_with()
+        second.hide.assert_called_once_with()
+        second.deleteLater.assert_called_once_with()
 
 
 if __name__ == "__main__":

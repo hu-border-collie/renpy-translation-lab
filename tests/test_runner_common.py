@@ -40,8 +40,12 @@ def run_discovered_suite(
     *,
     quiet: bool = False,
     verbose: bool = False,
+    resultclass=None,
 ) -> int:
     verbosity = 2 if verbose else (1 if quiet else 2)
-    runner = unittest.TextTestRunner(verbosity=verbosity)
+    runner_options = {"verbosity": verbosity}
+    if resultclass is not None:
+        runner_options["resultclass"] = resultclass
+    runner = unittest.TextTestRunner(**runner_options)
     result = runner.run(suite)
     return 0 if result.wasSuccessful() else 1
