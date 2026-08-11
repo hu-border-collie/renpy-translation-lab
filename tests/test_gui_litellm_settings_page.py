@@ -10,9 +10,10 @@ try:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QCompleter, QGroupBox, QLineEdit
 
-    from gui_qt.app import MainWindow
+    from gui_qt.app import _RETIRED_LITELLM_WARMUP_WORKERS, MainWindow
 except ImportError as exc:
     MainWindow = None
+    _RETIRED_LITELLM_WARMUP_WORKERS = None
     QApplication = None
     IMPORT_ERROR = exc
 else:
@@ -31,6 +32,15 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             Path(cls._temp_dir.name) / "litellm_catalog.json"
         )
         cls.window = MainWindow(litellm_catalog_cache=cls.cache)
+        # Build the LiteLLM page once against an empty config so tests never
+        # load a developer's real translator_config.json (which may register
+        # custom providers and break the fresh-state / duplicate-id tests).
+        with mock.patch.object(
+            cls.window.state,
+            "load_translator_config",
+            return_value={"sync": {}, "batch": {}},
+        ):
+            cls.window._ensure_settings_page("litellm")
 
     @classmethod
     def tearDownClass(cls):
@@ -47,10 +57,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         cls._temp_dir.cleanup()
 
     def setUp(self):
-        # Materialization reads the user's translator_config.json. Build first,
-        # then reset every mutable LiteLLM surface so local custom providers
-        # cannot leak into otherwise isolated tests.
-        self.window._ensure_settings_page("litellm")
+        _RETIRED_LITELLM_WARMUP_WORKERS.clear()
         self.cache = LiteLLMCatalogCache(
             Path(self._temp_dir.name) / f"{self._testMethodName}.json"
         )
@@ -1288,6 +1295,148 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertIn("opencode-go", self.window._custom_litellm_providers)
         self.assertFalse(self.window._custom_litellm_providers_load_error)
         append_log.assert_not_called()
+
+    def test_detach_litellm_warmup_keeps_running_worker_alive(self):
+        """Shutdown must not drop the only reference to a running QThread."""
+        self.window._ensure_settings_page("litellm")
+        worker = mock.Mock()
+        worker.isRunning.return_value = True
+        self.window._litellm_module_warmup_worker = worker
+
+        self.window._detach_litellm_module_warmup()
+
+        self.assertIsNone(self.window._litellm_module_warmup_worker)
+        self.assertIn(worker, _RETIRED_LITELLM_WARMUP_WORKERS)
+        worker.setParent.assert_called_once_with(None)
+        worker.deleteLater.assert_not_called()
+
+    def test_detach_litellm_warmup_deletes_finished_worker(self):
+        self.window._ensure_settings_page("litellm")
+        worker = mock.Mock()
+        worker.isRunning.return_value = False
+        self.window._litellm_module_warmup_worker = worker
+
+        self.window._detach_litellm_module_warmup()
+
+        self.assertIsNone(self.window._litellm_module_warmup_worker)
+        worker.deleteLater.assert_called_once_with()
+        self.assertNotIn(worker, _RETIRED_LITELLM_WARMUP_WORKERS)
+
+    def test_module_warmup_refreshes_without_full_reload(self):
+        """Warmup revalidation must not reset unsaved page selections."""
+        self.window._ensure_settings_page("litellm")
+        config = {"sync": {"backend": "gemini"}, "batch": {}}
+        with (
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+            mock.patch.object(
+                self.window,
+                "_load_config_to_ui",
+            ) as reload_page,
+            mock.patch.object(
+                self.window,
+                "_after_custom_providers_changed",
+            ) as refresh,
+        ):
+            self.window._on_litellm_module_warmed(None)
+
+        reload_page.assert_not_called()
+        refresh.assert_called_once_with()
+        self.assertFalse(self.window._custom_litellm_providers_load_error)
+
+    def test_module_warmup_skips_refresh_when_providers_edited(self):
+        self.window._ensure_settings_page("litellm")
+        self.window._custom_litellm_providers_modified = True
+        with (
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+            ) as load,
+            mock.patch.object(
+                self.window,
+                "_after_custom_providers_changed",
+            ) as refresh,
+        ):
+            self.window._on_litellm_module_warmed(None)
+
+        load.assert_not_called()
+        refresh.assert_not_called()
+
+    def test_module_warmup_revalidation_error_sets_load_error(self):
+        self.window._ensure_settings_page("litellm")
+        config = {
+            "sync": {
+                "backend": "gemini",
+                "custom_litellm_providers": [
+                    {"id": "bad", "base_url": "not-a-url"},
+                ],
+            },
+            "batch": {},
+        }
+        with (
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+            mock.patch.object(
+                self.window,
+                "_after_custom_providers_changed",
+            ),
+            mock.patch.object(self.window, "_append_log"),
+        ):
+            self.window._on_litellm_module_warmed(None)
+
+        self.assertTrue(self.window._custom_litellm_providers_load_error)
+        self.assertEqual(self.window._custom_litellm_providers, {})
+
+    def test_module_warmup_cleans_retired_workers(self):
+        self.window._ensure_settings_page("litellm")
+        retired = mock.Mock()
+        retired.isRunning.return_value = False
+        _RETIRED_LITELLM_WARMUP_WORKERS.add(retired)
+        config = {"sync": {"backend": "gemini"}, "batch": {}}
+        with (
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+            mock.patch.object(
+                self.window,
+                "_after_custom_providers_changed",
+            ),
+        ):
+            self.window._on_litellm_module_warmed(None)
+
+        self.assertNotIn(retired, _RETIRED_LITELLM_WARMUP_WORKERS)
+        retired.deleteLater.assert_called_once_with()
+
+    def test_warmup_worker_is_not_a_background_task(self):
+        """The warmup import must not gate shutdown with a task dialog."""
+        self.window._ensure_settings_page("litellm")
+        worker = mock.Mock()
+        worker.isRunning.return_value = True
+        self.window._litellm_module_warmup_worker = worker
+        with mock.patch.object(
+            self.window,
+            "findChildren",
+            return_value=[worker],
+        ):
+            self.assertEqual(self.window._owned_background_threads(), ())
+
+        # A retired (detached, still importing) worker is excluded as well.
+        self.window._litellm_module_warmup_worker = None
+        _RETIRED_LITELLM_WARMUP_WORKERS.add(worker)
+        with mock.patch.object(
+            self.window,
+            "findChildren",
+            return_value=[worker],
+        ):
+            self.assertEqual(self.window._owned_background_threads(), ())
 
 
 if __name__ == "__main__":

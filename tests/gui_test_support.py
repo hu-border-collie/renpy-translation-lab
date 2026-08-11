@@ -27,6 +27,11 @@ from unittest import mock
 
 _T = TypeVar("_T", bound=type)
 
+# Headless GUI tests must not spin up the background LiteLLM import warmup
+# thread: the import takes ~10s on machines with the optional dependency and a
+# QThread destroyed while still importing aborts the process.
+os.environ.setdefault("RTL_DISABLE_LITELLM_WARMUP", "1")
+
 
 class GuiTestModalGuard:
     """Reject unexpected modal widgets so unattended GUI tests cannot hang."""

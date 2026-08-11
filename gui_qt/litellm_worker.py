@@ -26,6 +26,7 @@ from litellm_provider_config import (
     models_from_remote_catalog,
     native_catalog_endpoint,
     providers_from_remote_catalog,
+    warm_litellm_module,
 )
 from litellm_sync_backend import LiteLLMBackendError, LiteLLMSyncBackend
 from sync_model_backend import SyncGenerationRequest
@@ -376,6 +377,25 @@ class LiteLLMProviderCatalogWorker(_CancellableNetworkWorker):
                 self.completed.emit((), "", f"{CANCELLED_MESSAGE_PREFIX}供应商列表加载。")
             else:
                 self.completed.emit((), "", f"联网加载供应商失败：{exc}")
+
+
+class LiteLLMModuleWarmupWorker(QThread):
+    """Import the heavy litellm package in the background.
+
+    `import litellm` can take ~10s cold; running it off the GUI main thread lets
+    the settings form open immediately while the reserved-provider table is
+    being prepared.  ``completed`` fires with the cached module (or None) once
+    the probe finished, so the window can refresh validation state afterwards.
+    """
+
+    completed = Signal(object)
+
+    def run(self) -> None:
+        try:
+            module = warm_litellm_module()
+        except Exception:
+            module = None
+        self.completed.emit(module)
 
 
 class LiteLLMVersionWorker(_CancellableNetworkWorker):
