@@ -69,7 +69,12 @@ from gemini_model_catalog import (
     is_gemini_3_model,
 )
 from project_version import __version__
-from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
+from sync_model_backend import (
+    DEFAULT_SYNC_TIMEOUT_SECONDS,
+    GeminiSyncBackend,
+    SyncGenerationRequest,
+    normalize_sync_timeout_seconds,
+)
 
 try:
     from google import genai
@@ -92,6 +97,7 @@ PROJECT_SNAPSHOTS_DIR = os.path.join(LOG_DIR, 'project_snapshots')
 PROJECT_RECONCILIATIONS_DIR = os.path.join(LOG_DIR, 'project_reconciliations')
 SYNC_BACKEND = 'gemini'
 SYNC_MODEL = ''
+SYNC_TIMEOUT_SECONDS = DEFAULT_SYNC_TIMEOUT_SECONDS
 MACHINE_OUTPUT_COMMANDS = frozenset(
     {
         'doctor',
@@ -410,7 +416,7 @@ def load_batch_settings():
     global FINAL_REVIEW_ENABLED, FINAL_REVIEW_REQUIRE_ZERO_PENDING, FINAL_REVIEW_CHUNK_SIZE
     global FINAL_REVIEW_PROMPT_SCHEMA_VERSION, FINAL_REVIEW_MODEL
     global FINAL_REVIEW_DISPLAY_NAME_PREFIX
-    global BATCH_NON_CHINESE_RULES, SYNC_BACKEND, SYNC_MODEL
+    global BATCH_NON_CHINESE_RULES, SYNC_BACKEND, SYNC_MODEL, SYNC_TIMEOUT_SECONDS
 
     config = load_json_file(legacy.CONFIG_FILE)
     translator_config = load_json_file(legacy.TRANSLATOR_CONFIG)
@@ -476,6 +482,10 @@ def load_batch_settings():
         SYNC_MODEL = sync_model.strip()
     else:
         SYNC_MODEL = ''
+    SYNC_TIMEOUT_SECONDS = normalize_sync_timeout_seconds(
+        sync.get('timeout_seconds'),
+        DEFAULT_SYNC_TIMEOUT_SECONDS,
+    )
     model_name = batch.get('model')
     if isinstance(model_name, str) and model_name.strip():
         BATCH_MODEL = model_name.strip()
@@ -8253,6 +8263,7 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
             model_name,
             request_payload.get('generation_config') or {},
         )
+        config['timeout'] = SYNC_TIMEOUT_SECONDS
         system_instruction = request_payload.get('system_instruction')
         if system_instruction:
             config['system_instruction'] = system_instruction
@@ -9854,6 +9865,7 @@ def _sync_result_to_dict(result):
 
 def run_sync_request(request_payload, model_name, api_key_index=None):
     config = dict(request_payload.get('generation_config') or {})
+    config['timeout'] = SYNC_TIMEOUT_SECONDS
     system_instruction = request_payload.get('system_instruction')
     if system_instruction:
         config['system_instruction'] = system_instruction
@@ -10016,6 +10028,8 @@ def make_sync_manifest(
     settings,
     extra_fields=None,
 ):
+    settings = dict(settings or {})
+    settings.setdefault('timeout_seconds', SYNC_TIMEOUT_SECONDS)
     input_jsonl_path = os.path.join(package_dir, 'requests.jsonl')
     result_jsonl_path = os.path.join(package_dir, 'results.jsonl')
     write_request_rows(input_jsonl_path, request_rows)
@@ -12854,6 +12868,7 @@ def dispatch_command(parser, args):
                     config={
                         'model': model,
                         'thinking_level': PROJECT_ANALYSIS_THINKING_LEVEL,
+                        'timeout_seconds': SYNC_TIMEOUT_SECONDS,
                         'max_label_summary_chars': PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS,
                         'max_route_summary_chars': PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS,
                         'max_brief_chars': PROJECT_ANALYSIS_MAX_BRIEF_CHARS,

@@ -32,6 +32,7 @@ def _snapshot_sensitive_runtime():
         "MAX_ITEMS": runtime.MAX_ITEMS,
         "MAX_CHARS": runtime.MAX_CHARS,
         "SYNC_MAX_OUTPUT_TOKENS": runtime.SYNC_MAX_OUTPUT_TOKENS,
+        "SYNC_TIMEOUT_SECONDS": runtime.SYNC_TIMEOUT_SECONDS,
         "SYNC_BACKEND": runtime.SYNC_BACKEND,
         "INCLUDE_FILES": set(runtime.INCLUDE_FILES),
         "INCLUDE_PREFIXES": set(runtime.INCLUDE_PREFIXES),
@@ -70,21 +71,43 @@ class RuntimeConfigObjectTests(unittest.TestCase):
             cfg.tl_dir = "C:/games/Example/work/game/tl/japanese"
             cfg.work_game_dir = "C:/games/Example/work/game"
             cfg.max_items = 11
+            cfg.sync_timeout_seconds = 45
             applied = runtime.apply_runtime_config(cfg)
             self.assertEqual(runtime.API_KEYS, ["key-a"])
             self.assertEqual(runtime.PREP_LANGUAGE, "japanese")
             self.assertEqual(runtime.TL_SUBDIR, "game/tl/japanese")
             self.assertEqual(runtime.MAX_ITEMS, 11)
+            self.assertEqual(runtime.SYNC_TIMEOUT_SECONDS, 45)
 
             snapped = runtime.snapshot_runtime_config()
             self.assertEqual(snapped.api_keys, ["key-a"])
             self.assertEqual(snapped.prep_language, "japanese")
             self.assertEqual(snapped.tl_subdir, "game/tl/japanese")
             self.assertEqual(snapped.max_items, 11)
+            self.assertEqual(snapped.sync_timeout_seconds, 45)
             self.assertIsInstance(applied, runtime.RuntimeConfig)
             self.assertIs(runtime.ProjectContext, runtime.RuntimeConfig)
             got = runtime.get_runtime_config()
             self.assertEqual(got.api_keys, ["key-a"])
+        finally:
+            _restore_sensitive_runtime(snapshot)
+
+    def test_apply_runtime_config_normalizes_timeout_in_active_snapshot(self):
+        snapshot = _snapshot_sensitive_runtime()
+        try:
+            cfg = runtime.default_runtime_config()
+            cfg.sync_timeout_seconds = 9999
+
+            applied = runtime.apply_runtime_config(cfg)
+
+            self.assertEqual(
+                applied.sync_timeout_seconds,
+                runtime.MAX_SYNC_TIMEOUT_SECONDS,
+            )
+            self.assertEqual(
+                runtime.get_runtime_config().sync_timeout_seconds,
+                runtime.MAX_SYNC_TIMEOUT_SECONDS,
+            )
         finally:
             _restore_sensitive_runtime(snapshot)
 
@@ -236,6 +259,10 @@ class DefaultsFirstReloadTests(unittest.TestCase):
                     self.assertEqual(cfg_b.prep_language, runtime.DEFAULT_PREP_LANGUAGE)
                     self.assertEqual(cfg_b.tl_subdir, runtime.DEFAULT_TL_SUBDIR)
                     self.assertEqual(cfg_b.sync_backend, runtime.DEFAULT_SYNC_BACKEND)
+                    self.assertEqual(
+                        cfg_b.sync_timeout_seconds,
+                        runtime.DEFAULT_SYNC_TIMEOUT_SECONDS,
+                    )
                     self.assertEqual(runtime.API_KEYS, ["key-b"])
                     self.assertEqual(runtime.PREP_LANGUAGE, runtime.DEFAULT_PREP_LANGUAGE)
                     # With model rotation off (default), the active list pins to

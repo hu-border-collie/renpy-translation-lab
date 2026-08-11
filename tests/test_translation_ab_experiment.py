@@ -92,6 +92,11 @@ class TranslationAbExperimentTests(unittest.TestCase):
             self.assertTrue(batch_mod.RAG_ENABLED)
         self.assertFalse(batch_mod.RAG_ENABLED)
 
+    def test_variant_settings_report_effective_sync_timeout(self):
+        with mock.patch.object(batch_mod, 'SYNC_TIMEOUT_SECONDS', 45):
+            settings = ab_mod.summarize_variant_settings()
+        self.assertEqual(settings['timeout_seconds'], 45)
+
     def test_variant_overrides_win_over_project_context_without_clearing_base_dir(self):
         """compare-variants must keep BASE_DIR for project paths, but still honor RAG overrides."""
         import translator_runtime as runtime

@@ -132,6 +132,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 - **扩展**：按需安装 / 修复 / 更新关系分析器的独立依赖。安装状态来自当前 Python 环境，不另存“已启用”开关；安装在后台运行，普通翻译不会加载这些科学计算与图像依赖。关系分析器的运行入口和边界见 [关系与语义分析](relation_analysis.md)。
 - **项目**：术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。Ren'Py SDK 须显式配置： **查找 SDK**（用户点击后才扫描附近）、**浏览…**，或确认后 **下载推荐 SDK…**（官方固定版本）；留空不会自动搜其它目录或联网。结果写入 `prepare.renpy_sdk_dir`，保存设置后生效。当前 `game_root` 只读展示；需换项目请用「项目与环境」或「项目列表」。
 - **模型**：同步 / 批量翻译模型、embedding model、批量 thinking level。
+- **高级 · 翻译吞吐**：`同步单请求超时` 统一控制同步翻译、项目分析、关键词、订正、修补和 A/B 对比的每次模型请求等待上限；默认 120 秒，可设 5–600 秒，不是整次任务总时限。
 - **上下文**：
   - **按当前项目保存**（`work/project_context_settings.json`）：启用批量 RAG、启用原文索引、开始翻译时自动暖 RAG，以及项目分析的启用 / 用于翻译。切换游戏互不影响。
   - **工具全局**（`translator_config.json`）：上下文库保存位置（工具 `logs/` 或游戏旁 `translation_context/`）；以及 **同步 RAG / 同步·批量剧情记忆主开关**（仅在本分区编辑，高级页不重复）。
@@ -269,7 +270,7 @@ build -> submit -> status -> download -> check
 
 ### 同步翻译
 
-在左导航选择 **同步翻译**，点击「**开始同步翻译**」。GUI 先无参数调用 `gemini_translate.py`，在 `logs/sync_runs/` 生成绑定当前项目的 manifest、源文件快照、候选文件和 `preview.diff`，此时不会修改项目脚本。预览包含变更时，页面启用「**确认并写回预览**」；若部分文件未通过 adapter 写回计划校验，GUI 显示「部分完成」警告，只允许写回 manifest 中其余已生成的安全预览。用户确认后 GUI 调用 `gemini_translate.py --apply MANIFEST`，写回前重新核对当前项目、翻译目录、manifest 中所有预览文件对应的源快照哈希和预览制品哈希。任何项目切换、源文件变化或制品篡改都会阻止写回。配置仍来自 `translator_config.json` 的 `sync.*` 段；Gemini 后端使用现有 Gemini API Key，LiteLLM 后端使用「设置 → LiteLLM」中保存的供应商凭据或 LiteLLM 约定的环境变量。
+在左导航选择 **同步翻译**，点击「**开始同步翻译**」。GUI 先无参数调用 `gemini_translate.py`，在 `logs/sync_runs/` 生成绑定当前项目的 manifest、源文件快照、候选文件和 `preview.diff`，此时不会修改项目脚本。预览包含变更时，页面启用「**确认并写回预览**」；若部分文件未通过 adapter 写回计划校验，GUI 显示「部分完成」警告，只允许写回 manifest 中其余已生成的安全预览。用户确认后 GUI 调用 `gemini_translate.py --apply MANIFEST`，写回前重新核对当前项目、翻译目录、manifest 中所有预览文件对应的源快照哈希和预览制品哈希。任何项目切换、源文件变化或制品篡改都会阻止写回。配置仍来自 `translator_config.json` 的 `sync.*` 段；其中 `timeout_seconds` 是单请求上限并会写入同步 manifest 的设置诊断。Gemini 后端使用现有 Gemini API Key，LiteLLM 后端使用「设置 → LiteLLM」中保存的供应商凭据或 LiteLLM 约定的环境变量。
 
 #### LiteLLM 同步替代边界
 

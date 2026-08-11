@@ -15,6 +15,7 @@ class GuiSettingsSchemaTests(unittest.TestCase):
     def test_user_visible_setting_titles_use_chinese_copy(self):
         expected_labels = {
             "sync_chunk_size": "同步分块条数",
+            "sync_timeout_seconds": "同步单请求超时",
             "batch_chunk_size": "批量分块条数",
             "batch_retry_chunk_size": "补译分块条数",
             "keyword_chunk_size": "关键词分块条数",
@@ -74,6 +75,7 @@ class GuiSettingsSchemaTests(unittest.TestCase):
         values = read_advanced_settings({})
 
         self.assertEqual(values["sync_chunk_size"], 40)
+        self.assertEqual(values["sync_timeout_seconds"], 120)
         self.assertEqual(values["batch_chunk_size"], 60)
         self.assertEqual(values["batch_temperature"], 0.2)
         self.assertEqual(values["batch_source_index_min_similarity"], 0.72)
@@ -85,6 +87,7 @@ class GuiSettingsSchemaTests(unittest.TestCase):
             {
                 "sync": {
                     "chunk_size": "7",
+                    "timeout_seconds": "45",
                     "rag": {
                         "enabled": True,
                         "min_similarity": "0.5",
@@ -100,6 +103,7 @@ class GuiSettingsSchemaTests(unittest.TestCase):
         )
 
         self.assertEqual(values["sync_chunk_size"], 7)
+        self.assertEqual(values["sync_timeout_seconds"], 45)
         self.assertTrue(values["sync_rag_enabled"])
         self.assertEqual(values["sync_rag_min_similarity"], 0.5)
         self.assertEqual(values["sync_rag_store_dir"], "logs/sync_rag")
@@ -112,6 +116,7 @@ class GuiSettingsSchemaTests(unittest.TestCase):
         values["batch_chunk_size"] = 0
         values["batch_temperature"] = 2.5
         values["sync_rag_min_similarity"] = -0.1
+        values["sync_timeout_seconds"] = 601
         values["context_storage_game_dir_name"] = ""
 
         errors = validate_advanced_settings(values)
@@ -119,6 +124,7 @@ class GuiSettingsSchemaTests(unittest.TestCase):
         self.assertIn("batch_chunk_size", errors)
         self.assertIn("batch_temperature", errors)
         self.assertIn("sync_rag_min_similarity", errors)
+        self.assertIn("sync_timeout_seconds", errors)
         self.assertIn("context_storage_game_dir_name", errors)
 
     def test_list_and_json_fields_round_trip_from_text(self):

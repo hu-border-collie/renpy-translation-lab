@@ -31,7 +31,13 @@ from project_analysis import (
     utc_now_iso,
 )
 from gemini_model_catalog import filter_gemini_generation_config
-from sync_model_backend import SyncGenerationRequest, SyncModelBackend, SyncGenerationResult
+from sync_model_backend import (
+    DEFAULT_SYNC_TIMEOUT_SECONDS,
+    SyncGenerationRequest,
+    SyncGenerationResult,
+    SyncModelBackend,
+    normalize_sync_timeout_seconds,
+)
 
 PROMPT_SCHEMA_VERSION = "project-analysis-llm-v2"
 
@@ -46,6 +52,7 @@ class AnalysisLlmConfig(Protocol):
     max_brief_chars: int
     max_input_chars_per_request: int
     max_output_tokens: int
+    timeout_seconds: int
 
 
 def default_llm_config(
@@ -57,6 +64,7 @@ def default_llm_config(
     max_brief_chars: int = 4000,
     max_input_chars_per_request: int = 12000,
     max_output_tokens: int = 2048,
+    timeout_seconds: int = DEFAULT_SYNC_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     return {
         "model": str(model or "").strip(),
@@ -66,6 +74,7 @@ def default_llm_config(
         "max_brief_chars": int(max_brief_chars),
         "max_input_chars_per_request": int(max_input_chars_per_request),
         "max_output_tokens": int(max_output_tokens),
+        "timeout_seconds": normalize_sync_timeout_seconds(timeout_seconds),
     }
 
 
@@ -79,6 +88,10 @@ def merge_llm_config(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
         max_brief_chars=int(raw.get("max_brief_chars") or 4000),
         max_input_chars_per_request=int(raw.get("max_input_chars_per_request") or 12000),
         max_output_tokens=int(raw.get("max_output_tokens") or 2048),
+        timeout_seconds=normalize_sync_timeout_seconds(
+            raw.get("timeout_seconds"),
+            DEFAULT_SYNC_TIMEOUT_SECONDS,
+        ),
     )
 
 
@@ -177,11 +190,13 @@ def _build_request(
     user: str,
     thinking_level: str = "",
     max_output_tokens: int = 2048,
+    timeout_seconds: int = DEFAULT_SYNC_TIMEOUT_SECONDS,
 ) -> SyncGenerationRequest:
     config: dict[str, Any] = {
         "system_instruction": system,
         "max_output_tokens": max_output_tokens,
         "temperature": 0.2,
+        "timeout": normalize_sync_timeout_seconds(timeout_seconds),
     }
     if thinking_level:
         config["thinking_config"] = {"thinking_level": thinking_level}
@@ -200,6 +215,7 @@ def complete_analysis_text(
     user: str,
     thinking_level: str = "",
     max_output_tokens: int = 2048,
+    timeout_seconds: int = DEFAULT_SYNC_TIMEOUT_SECONDS,
 ) -> tuple[str, Mapping[str, Any]]:
     """Call backend; return (text, usage_metadata)."""
     if not model:
@@ -211,6 +227,7 @@ def complete_analysis_text(
             user=user,
             thinking_level=thinking_level,
             max_output_tokens=max_output_tokens,
+            timeout_seconds=timeout_seconds,
         )
     )
     text = str(getattr(result, "response_text", "") or "").strip()
@@ -284,6 +301,7 @@ def refine_label_record(
         user=user,
         thinking_level=cfg["thinking_level"],
         max_output_tokens=cfg["max_output_tokens"],
+        timeout_seconds=cfg["timeout_seconds"],
     )
     text = _clip(text, cfg["max_label_summary_chars"])
     out = dict(rec)
@@ -347,6 +365,7 @@ def refine_route_record(
         user=user,
         thinking_level=cfg["thinking_level"],
         max_output_tokens=cfg["max_output_tokens"],
+        timeout_seconds=cfg["timeout_seconds"],
     )
     text = _clip(text, cfg["max_route_summary_chars"])
     out = dict(rec)
@@ -405,6 +424,7 @@ def refine_project_brief(
         user=user,
         thinking_level=cfg["thinking_level"],
         max_output_tokens=cfg["max_output_tokens"],
+        timeout_seconds=cfg["timeout_seconds"],
     )
     return _clip(text, cfg["max_brief_chars"])
 

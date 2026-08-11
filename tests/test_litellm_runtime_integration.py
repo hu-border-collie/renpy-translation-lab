@@ -80,6 +80,7 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
 
         with (
             mock.patch.object(runtime, "SYNC_BACKEND", "litellm"),
+            mock.patch.object(runtime, "SYNC_TIMEOUT_SECONDS", 45),
             mock.patch.object(runtime, "get_current_model", return_value="openai/test"),
             mock.patch.object(runtime, "create_genai_client") as create_gemini,
             mock.patch("litellm_sync_backend.LiteLLMSyncBackend", return_value=fake_backend),
@@ -89,6 +90,7 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
         create_gemini.assert_not_called()
         request = fake_backend.generate.call_args.args[0]
         self.assertEqual(request.model, "openai/test")
+        self.assertEqual(request.config["timeout"], 45)
         self.assertEqual(result, [{"id": "a", "translation": "你好"}])
 
     def test_sync_settings_default_to_gemini_and_accept_litellm(self):
@@ -108,6 +110,33 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
         with self.assertRaises(ValueError) as captured:
             runtime.load_sync_translation_settings({"sync": {"backend": "automatic"}})
         self.assertIn("Unsupported sync backend", str(captured.exception))
+
+    def test_sync_timeout_settings_are_bounded(self):
+        previous = runtime.SYNC_TIMEOUT_SECONDS
+        try:
+            runtime.load_sync_translation_settings(
+                {"sync": {"timeout_seconds": 1}}
+            )
+            self.assertEqual(
+                runtime.SYNC_TIMEOUT_SECONDS,
+                runtime.MIN_SYNC_TIMEOUT_SECONDS,
+            )
+            runtime.load_sync_translation_settings(
+                {"sync": {"timeout_seconds": 9999}}
+            )
+            self.assertEqual(
+                runtime.SYNC_TIMEOUT_SECONDS,
+                runtime.MAX_SYNC_TIMEOUT_SECONDS,
+            )
+            runtime.load_sync_translation_settings(
+                {"sync": {"timeout_seconds": "invalid"}}
+            )
+            self.assertEqual(
+                runtime.SYNC_TIMEOUT_SECONDS,
+                runtime.DEFAULT_SYNC_TIMEOUT_SECONDS,
+            )
+        finally:
+            runtime.SYNC_TIMEOUT_SECONDS = previous
 
     def test_sync_settings_load_custom_providers_into_runtime(self):
         previous_backend = runtime.SYNC_BACKEND

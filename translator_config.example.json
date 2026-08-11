@@ -49,6 +49,7 @@
     "chunk_size": 40,
     "max_source_chars": 12000,
     "max_output_tokens": 24576,
+    "timeout_seconds": 120,
     "rag": {
       "enabled": false,
       "embedding_model": "gemini-embedding-001",

@@ -157,7 +157,7 @@ python gemini_translate_batch.py doctor
 
 ## 运行模式
 
-当前更推荐优先使用 Gemini Batch 模式；同步模式可显式选择 Gemini 原生调用或可选 LiteLLM 后端。同步模式的 `backend/model/chunk_size/max_source_chars/max_output_tokens` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。LiteLLM 未安装或未启用时，不影响 Gemini Batch、doctor 或 GUI 启动。
+当前更推荐优先使用 Gemini Batch 模式；同步模式可显式选择 Gemini 原生调用或可选 LiteLLM 后端。同步模式的 `backend/model/chunk_size/max_source_chars/max_output_tokens/timeout_seconds` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。`timeout_seconds` 默认 120，允许 5–600 秒，表示单次模型请求上限而非整次任务总时限，并统一用于同步翻译、项目分析、关键词、订正、修补和 A/B 对比。LiteLLM 未安装或未启用时，不影响 Gemini Batch、doctor 或 GUI 启动。
 
 ### 自定义 OpenAI 兼容 Provider（LiteLLM 同步）
 

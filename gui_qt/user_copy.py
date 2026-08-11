@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import doctor_recommendations as doctor_rec
+from sync_model_backend import MAX_SYNC_TIMEOUT_SECONDS, MIN_SYNC_TIMEOUT_SECONDS
 
 SAFETY_LEVEL_LABELS = {
     "safe": "可写回",
@@ -91,6 +92,15 @@ USAGE_LEDGER_COPY = {
     "recent": "最近一次运行",
     "estimated_cost": "估算成本（非 provider 账单）",
     "actual_cost": "Provider 报告成本",
+}
+
+SYNC_TIMEOUT_COPY = {
+    "label": "同步单请求超时",
+    "description": (
+        "普通翻译、项目分析、关键词、订正、补译与 A/B 对比中，每次模型请求的等待上限；"
+        "不是整次任务的总时限。允许范围 "
+        f"{MIN_SYNC_TIMEOUT_SECONDS}–{MAX_SYNC_TIMEOUT_SECONDS} 秒。"
+    ),
 }
 
 PROJECT_ANALYSIS_COPY = {
