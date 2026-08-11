@@ -670,6 +670,7 @@ class MainWindow(QMainWindow):
         self._litellm_catalog_worker: LiteLLMModelCatalogWorker | None = None
         self._litellm_version_worker: LiteLLMVersionWorker | None = None
         self._litellm_module_warmup_worker: LiteLLMModuleWarmupWorker | None = None
+        self._retired_litellm_warmup_workers: set[LiteLLMModuleWarmupWorker] = set()
         self._litellm_latest_version = ""
         self._litellm_latest_compatible_version = ""
         self._litellm_latest_requires_python = ""
@@ -4493,12 +4494,22 @@ class MainWindow(QMainWindow):
             return ()
         current_doctor = getattr(self, "_doctor_worker", None)
         doctor_is_foreground = bool(getattr(self, "_task_running", False))
+        # The LiteLLM module warmup import is local, not user-cancellable and
+        # fully owned by the settings page; it must not gate window shutdown
+        # with a confirmation dialog.  Retired workers are already detached
+        # and only kept alive until their import finishes.
+        warmup_worker = getattr(self, "_litellm_module_warmup_worker", None)
+        retired_workers = (
+            getattr(self, "_retired_litellm_warmup_workers", None) or set()
+        )
         active: list[QThread] = []
         for thread in threads:
             try:
                 if not thread.isRunning():
                     continue
             except RuntimeError:
+                continue
+            if thread is warmup_worker or thread in retired_workers:
                 continue
             if doctor_is_foreground and thread is current_doctor:
                 continue
@@ -8206,37 +8217,65 @@ class MainWindow(QMainWindow):
         if worker is not None:
             self._litellm_module_warmup_worker = None
             worker.deleteLater()
+        # A worker detached during shutdown finishes in the background; drop
+        # it once the thread is no longer running so teardown stays safe.
+        retired = getattr(self, "_retired_litellm_warmup_workers", None)
+        if retired:
+            for retired_worker in tuple(retired):
+                if not getattr(retired_worker, "isRunning", lambda: False)():
+                    retired.discard(retired_worker)
+                    retired_worker.deleteLater()
         if getattr(self, "_shutdown_requested", False):
             return
-        # Re-read the LiteLLM page with the now-complete reserved set so the
-        # custom-provider table and validation reflect installed LiteLLM
-        # prefixes.  Skip when the user already edited providers unsaved, or
-        # when the page was never opened.
+        # Skip when the user already edited providers unsaved, or when the
+        # page was never opened.
         if getattr(self, "_custom_litellm_providers_modified", False):
             return
         if "litellm" not in self.__dict__.get("_settings_pages_built", ()):
             return
+        # Re-validate the registry with the now-complete reserved set, then
+        # refresh table/dropdowns/status while preserving the current page
+        # selection.  A full _load_config_to_ui would silently reset any
+        # unsaved edits the user made during the ~10s warmup window.
         try:
-            self._load_config_to_ui(refresh_task_gates=False, pages={"litellm"})
+            config = self.state.load_translator_config()
+            sync_config = self._config_section(config, "sync")
+            self._custom_litellm_providers = custom_provider_registry(
+                sync_config.get("custom_litellm_providers"),
+                allow_import=False,
+            )
+            self._custom_litellm_providers_load_error = ""
         except Exception:
-            self._append_log("后台预热 LiteLLM 后刷新设置页失败。")
+            self._custom_litellm_providers = {}
+            self._custom_litellm_providers_load_error = (
+                "后台预热 LiteLLM 后重新校验自定义 Provider 失败，"
+                "请重新加载设置页。"
+            )
+            self._append_log("后台预热 LiteLLM 后重新校验自定义 Provider 失败。")
+        self._after_custom_providers_changed()
 
     def _detach_litellm_module_warmup(self) -> None:
         """Detach a still-running warmup thread from window teardown.
 
         A QThread destroyed while its import is still running aborts the
         process, so on shutdown the worker is released from the window's
-        ownership; the completed signal still fires and cleans it up after the
-        import finishes (the thread ends right before the signal is delivered).
+        ownership but kept alive in the retired set until the import finishes;
+        the completed signal still fires and cleans it up afterwards.
         """
         worker = getattr(self, "_litellm_module_warmup_worker", None)
-        if worker is None or not getattr(worker, "isRunning", lambda: False)():
+        if worker is None:
+            return
+        self._litellm_module_warmup_worker = None
+        if not getattr(worker, "isRunning", lambda: False)():
+            worker.deleteLater()
             return
         try:
             worker.setParent(None)
         except RuntimeError:
             pass
-        self._litellm_module_warmup_worker = None
+        retired = getattr(self, "_retired_litellm_warmup_workers", None)
+        if retired is not None:
+            retired.add(worker)
 
     def _on_litellm_network_progress(
         self,
