@@ -408,6 +408,13 @@ _BATCH_STAGE_RESULT = 2  # 写回 / 结果
 _LOG_FLUSH_INTERVAL_MS = 80
 _LAYOUT_SYNC_DEBOUNCE_MS = 32
 _LITELLM_MODEL_SELECTION_SAVE_DEBOUNCE_MS = 400
+
+# Application-level ownership for warmup workers detached from a closing
+# window: MainWindow teardown must never destroy a QThread whose import is
+# still running (Qt aborts the process).  Workers are removed once their
+# thread finished; entries left behind after the window itself is gone are
+# harmless process-exit cleanup.
+_RETIRED_LITELLM_WARMUP_WORKERS: set[LiteLLMModuleWarmupWorker] = set()
 _UI_PROGRESS_FLUSH_INTERVAL_MS = 100
 _CONTEXT_STATUS_CACHE_TTL_S = 2.0
 
@@ -670,7 +677,6 @@ class MainWindow(QMainWindow):
         self._litellm_catalog_worker: LiteLLMModelCatalogWorker | None = None
         self._litellm_version_worker: LiteLLMVersionWorker | None = None
         self._litellm_module_warmup_worker: LiteLLMModuleWarmupWorker | None = None
-        self._retired_litellm_warmup_workers: set[LiteLLMModuleWarmupWorker] = set()
         self._litellm_latest_version = ""
         self._litellm_latest_compatible_version = ""
         self._litellm_latest_requires_python = ""
@@ -4499,9 +4505,7 @@ class MainWindow(QMainWindow):
         # with a confirmation dialog.  Retired workers are already detached
         # and only kept alive until their import finishes.
         warmup_worker = getattr(self, "_litellm_module_warmup_worker", None)
-        retired_workers = (
-            getattr(self, "_retired_litellm_warmup_workers", None) or set()
-        )
+        retired_workers = _RETIRED_LITELLM_WARMUP_WORKERS
         active: list[QThread] = []
         for thread in threads:
             try:
@@ -8219,12 +8223,10 @@ class MainWindow(QMainWindow):
             worker.deleteLater()
         # A worker detached during shutdown finishes in the background; drop
         # it once the thread is no longer running so teardown stays safe.
-        retired = getattr(self, "_retired_litellm_warmup_workers", None)
-        if retired:
-            for retired_worker in tuple(retired):
-                if not getattr(retired_worker, "isRunning", lambda: False)():
-                    retired.discard(retired_worker)
-                    retired_worker.deleteLater()
+        for retired_worker in tuple(_RETIRED_LITELLM_WARMUP_WORKERS):
+            if not getattr(retired_worker, "isRunning", lambda: False)():
+                _RETIRED_LITELLM_WARMUP_WORKERS.discard(retired_worker)
+                retired_worker.deleteLater()
         if getattr(self, "_shutdown_requested", False):
             return
         # Skip when the user already edited providers unsaved, or when the
@@ -8259,8 +8261,10 @@ class MainWindow(QMainWindow):
 
         A QThread destroyed while its import is still running aborts the
         process, so on shutdown the worker is released from the window's
-        ownership but kept alive in the retired set until the import finishes;
-        the completed signal still fires and cleans it up afterwards.
+        ownership but kept alive in the application-level retired set until
+        the import finishes; the completed signal still fires and cleans it up
+        afterwards.  The set lives at module scope so window destruction can
+        never drop the last reference to a running thread.
         """
         worker = getattr(self, "_litellm_module_warmup_worker", None)
         if worker is None:
@@ -8273,9 +8277,7 @@ class MainWindow(QMainWindow):
             worker.setParent(None)
         except RuntimeError:
             pass
-        retired = getattr(self, "_retired_litellm_warmup_workers", None)
-        if retired is not None:
-            retired.add(worker)
+        _RETIRED_LITELLM_WARMUP_WORKERS.add(worker)
 
     def _on_litellm_network_progress(
         self,

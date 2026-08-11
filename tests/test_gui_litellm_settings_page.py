@@ -10,9 +10,10 @@ try:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QCompleter, QGroupBox, QLineEdit
 
-    from gui_qt.app import MainWindow
+    from gui_qt.app import _RETIRED_LITELLM_WARMUP_WORKERS, MainWindow
 except ImportError as exc:
     MainWindow = None
+    _RETIRED_LITELLM_WARMUP_WORKERS = None
     QApplication = None
     IMPORT_ERROR = exc
 else:
@@ -56,6 +57,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         cls._temp_dir.cleanup()
 
     def setUp(self):
+        _RETIRED_LITELLM_WARMUP_WORKERS.clear()
         self.cache = LiteLLMCatalogCache(
             Path(self._temp_dir.name) / f"{self._testMethodName}.json"
         )
@@ -1302,7 +1304,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window._detach_litellm_module_warmup()
 
         self.assertIsNone(self.window._litellm_module_warmup_worker)
-        self.assertIn(worker, self.window._retired_litellm_warmup_workers)
+        self.assertIn(worker, _RETIRED_LITELLM_WARMUP_WORKERS)
         worker.setParent.assert_called_once_with(None)
         worker.deleteLater.assert_not_called()
 
@@ -1316,7 +1318,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
 
         self.assertIsNone(self.window._litellm_module_warmup_worker)
         worker.deleteLater.assert_called_once_with()
-        self.assertNotIn(worker, self.window._retired_litellm_warmup_workers)
+        self.assertNotIn(worker, _RETIRED_LITELLM_WARMUP_WORKERS)
 
     def test_module_warmup_refreshes_without_full_reload(self):
         """Warmup revalidation must not reset unsaved page selections."""
@@ -1393,7 +1395,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window._ensure_settings_page("litellm")
         retired = mock.Mock()
         retired.isRunning.return_value = False
-        self.window._retired_litellm_warmup_workers = {retired}
+        _RETIRED_LITELLM_WARMUP_WORKERS.add(retired)
         config = {"sync": {"backend": "gemini"}, "batch": {}}
         with (
             mock.patch.object(
@@ -1408,7 +1410,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         ):
             self.window._on_litellm_module_warmed(None)
 
-        self.assertNotIn(retired, self.window._retired_litellm_warmup_workers)
+        self.assertNotIn(retired, _RETIRED_LITELLM_WARMUP_WORKERS)
         retired.deleteLater.assert_called_once_with()
 
     def test_warmup_worker_is_not_a_background_task(self):
@@ -1426,7 +1428,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
 
         # A retired (detached, still importing) worker is excluded as well.
         self.window._litellm_module_warmup_worker = None
-        self.window._retired_litellm_warmup_workers = {worker}
+        _RETIRED_LITELLM_WARMUP_WORKERS.add(worker)
         with mock.patch.object(
             self.window,
             "findChildren",
