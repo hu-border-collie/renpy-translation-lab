@@ -874,6 +874,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             'max_items': runtime.MAX_ITEMS,
             'max_chars': runtime.MAX_CHARS,
             'max_output_tokens': runtime.SYNC_MAX_OUTPUT_TOKENS,
+            'timeout_seconds': runtime.SYNC_TIMEOUT_SECONDS,
             'include_files': runtime.INCLUDE_FILES,
             'include_prefixes': runtime.INCLUDE_PREFIXES,
         }
@@ -893,6 +894,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                             'chunk_size': 7,
                             'max_source_chars': 1234,
                             'max_output_tokens': 5678,
+                            'timeout_seconds': 45,
                         },
                     }),
                     encoding='utf-8',
@@ -907,6 +909,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                     runtime.MAX_ITEMS = 40
                     runtime.MAX_CHARS = 12000
                     runtime.SYNC_MAX_OUTPUT_TOKENS = 24576
+                    runtime.SYNC_TIMEOUT_SECONDS = runtime.DEFAULT_SYNC_TIMEOUT_SECONDS
                     runtime.INCLUDE_FILES = set()
                     runtime.INCLUDE_PREFIXES = set()
                     runtime.load_translator_settings()
@@ -917,6 +920,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 self.assertEqual(runtime.MAX_ITEMS, 7)
                 self.assertEqual(runtime.MAX_CHARS, 1234)
                 self.assertEqual(runtime.SYNC_MAX_OUTPUT_TOKENS, 5678)
+                self.assertEqual(runtime.SYNC_TIMEOUT_SECONDS, 45)
                 self.assertEqual(runtime.INCLUDE_FILES, {'game/tl/schinese/script.rpy'})
                 self.assertEqual(runtime.INCLUDE_PREFIXES, {'game/tl/schinese/chapter1'})
         finally:
@@ -925,6 +929,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             runtime.MAX_ITEMS = old_values['max_items']
             runtime.MAX_CHARS = old_values['max_chars']
             runtime.SYNC_MAX_OUTPUT_TOKENS = old_values['max_output_tokens']
+            runtime.SYNC_TIMEOUT_SECONDS = old_values['timeout_seconds']
             runtime.INCLUDE_FILES = old_values['include_files']
             runtime.INCLUDE_PREFIXES = old_values['include_prefixes']
 

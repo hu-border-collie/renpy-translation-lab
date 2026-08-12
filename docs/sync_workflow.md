@@ -18,7 +18,9 @@
 3. Gemini 后端需要本地 `api_keys.json` 或 `GEMINI_API_KEY*` 环境变量；LiteLLM 后端需要在操作系统凭据管理器或供应商约定的环境变量中保存凭据。
 4. 先备份项目，并用 `include_files` / `include_prefixes` 把第一次运行限制在少量文件。
 
-同步设置来自 `translator_config.json` 的 `sync` 段，主要包括 `backend`、`model`、`chunk_size`、`max_source_chars` 和 `max_output_tokens`。完整字段和模型目录见 [安装与本地配置](setup.md#运行模式)。
+同步设置来自 `translator_config.json` 的 `sync` 段，主要包括 `backend`、`model`、`chunk_size`、`max_source_chars`、`max_output_tokens` 和 `timeout_seconds`。完整字段和模型目录见 [安装与本地配置](setup.md#运行模式)。
+
+`timeout_seconds` 默认 120 秒，可设为 5–600 秒。它是每一次模型请求的等待上限，不是整次任务的总时限；普通同步翻译、项目分析、同步关键词、同步订正、同步修补和翻译 A/B 对比均读取同一字段。Gemini backend 会把秒转换为 SDK 的毫秒级 `http_options.timeout`，LiteLLM backend 则按秒透传。手工配置超出范围时 runtime 会收敛到最近边界，避免异常值形成无界等待。
 
 选择 LiteLLM 后端时，可通过 `sync.custom_litellm_providers` 注册 OpenAI 兼容但 LiteLLM 未内置的服务（OpenCode Go、中转站、本地 vLLM 等）：每项配置 `id` / `label` / `base_url` / `models_url` / `api_key_env`，请求会改写为 `openai/<模型>` 并逐请求透传 `api_base`，密钥优先使用系统凭据管理器。字段与示例见 [安装与本地配置 · 自定义 OpenAI 兼容 Provider](setup.md#自定义-openai-兼容-providerlitellm-同步)。
 

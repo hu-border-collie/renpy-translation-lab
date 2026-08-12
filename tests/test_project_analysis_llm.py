@@ -62,6 +62,19 @@ class MapReduceTests(unittest.TestCase):
         )
         self.assertNotIn("temperature", request.config)
         self.assertEqual(request.config["max_output_tokens"], 2048)
+        self.assertEqual(
+            request.config["timeout"],
+            llm.DEFAULT_SYNC_TIMEOUT_SECONDS,
+        )
+
+    def test_analysis_request_uses_configured_sync_timeout(self):
+        request = llm._build_request(
+            model="fake-model",
+            system="system",
+            user="user",
+            timeout_seconds=45,
+        )
+        self.assertEqual(request.config["timeout"], 45)
 
     def test_mapreduce_refines_labels_routes_brief(self):
         with tempfile.TemporaryDirectory() as tmp:

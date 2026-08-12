@@ -64,7 +64,14 @@ import prompt_context
 import story_memory
 import sync_translation_preview
 import translation_core
-from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
+from sync_model_backend import (
+    DEFAULT_SYNC_TIMEOUT_SECONDS,
+    MAX_SYNC_TIMEOUT_SECONDS,
+    MIN_SYNC_TIMEOUT_SECONDS,
+    GeminiSyncBackend,
+    SyncGenerationRequest,
+    normalize_sync_timeout_seconds,
+)
 
 # Configuration
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -169,6 +176,7 @@ PRESERVE_TERMS = [
 MAX_CHARS = DEFAULT_MAX_CHARS
 MAX_ITEMS = DEFAULT_MAX_ITEMS
 SYNC_MAX_OUTPUT_TOKENS = DEFAULT_SYNC_MAX_OUTPUT_TOKENS
+SYNC_TIMEOUT_SECONDS = DEFAULT_SYNC_TIMEOUT_SECONDS
 SYNC_BACKEND = DEFAULT_SYNC_BACKEND
 # Custom OpenAI-compatible LiteLLM providers parsed from sync.custom_litellm_providers.
 CUSTOM_LITELLM_PROVIDERS: dict[str, object] = {}
@@ -1030,7 +1038,8 @@ def load_rotation_settings(config):
 
 
 def load_sync_translation_settings(config):
-    global MAX_ITEMS, MAX_CHARS, SYNC_MAX_OUTPUT_TOKENS, SYNC_BACKEND
+    global MAX_ITEMS, MAX_CHARS, SYNC_MAX_OUTPUT_TOKENS, SYNC_TIMEOUT_SECONDS
+    global SYNC_BACKEND
     global CUSTOM_LITELLM_PROVIDERS
 
     sync = config.get("sync")
@@ -1100,6 +1109,7 @@ def load_sync_translation_settings(config):
     previous_items = MAX_ITEMS
     previous_chars = MAX_CHARS
     previous_output_tokens = SYNC_MAX_OUTPUT_TOKENS
+    previous_timeout = SYNC_TIMEOUT_SECONDS
 
     MAX_ITEMS = _coerce_positive_int(sync.get("chunk_size"), MAX_ITEMS)
     MAX_CHARS = _coerce_positive_int(
@@ -1110,6 +1120,10 @@ def load_sync_translation_settings(config):
         sync.get("max_output_tokens"),
         SYNC_MAX_OUTPUT_TOKENS,
     )
+    SYNC_TIMEOUT_SECONDS = normalize_sync_timeout_seconds(
+        sync.get("timeout_seconds"),
+        DEFAULT_SYNC_TIMEOUT_SECONDS,
+    )
 
     if MAX_ITEMS != previous_items:
         print(f"Using sync chunk size: {MAX_ITEMS}")
@@ -1117,6 +1131,8 @@ def load_sync_translation_settings(config):
         print(f"Using sync max source chars: {MAX_CHARS}")
     if SYNC_MAX_OUTPUT_TOKENS != previous_output_tokens:
         print(f"Using sync max output tokens: {SYNC_MAX_OUTPUT_TOKENS}")
+    if SYNC_TIMEOUT_SECONDS != previous_timeout:
+        print(f"Using sync request timeout: {SYNC_TIMEOUT_SECONDS} seconds")
 
 
 def coerce_normalized_rel_path_set(value):
@@ -1209,6 +1225,7 @@ class RuntimeConfig:
     max_chars: int = DEFAULT_MAX_CHARS
     max_items: int = DEFAULT_MAX_ITEMS
     sync_max_output_tokens: int = DEFAULT_SYNC_MAX_OUTPUT_TOKENS
+    sync_timeout_seconds: int = DEFAULT_SYNC_TIMEOUT_SECONDS
     sync_backend: str = DEFAULT_SYNC_BACKEND
     custom_litellm_providers: dict = field(default_factory=dict)
 
@@ -1283,6 +1300,7 @@ def default_runtime_config() -> RuntimeConfig:
         max_chars=DEFAULT_MAX_CHARS,
         max_items=DEFAULT_MAX_ITEMS,
         sync_max_output_tokens=DEFAULT_SYNC_MAX_OUTPUT_TOKENS,
+        sync_timeout_seconds=DEFAULT_SYNC_TIMEOUT_SECONDS,
         sync_backend=DEFAULT_SYNC_BACKEND,
         custom_litellm_providers={},
         prep_language=DEFAULT_PREP_LANGUAGE,
@@ -1332,6 +1350,7 @@ def snapshot_runtime_config() -> RuntimeConfig:
         max_chars=MAX_CHARS,
         max_items=MAX_ITEMS,
         sync_max_output_tokens=SYNC_MAX_OUTPUT_TOKENS,
+        sync_timeout_seconds=SYNC_TIMEOUT_SECONDS,
         sync_backend=SYNC_BACKEND,
         custom_litellm_providers=dict(CUSTOM_LITELLM_PROVIDERS),
         include_files=set(INCLUDE_FILES),
@@ -1367,7 +1386,8 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
     global CONTEXT_STORAGE_LOCATION, CONTEXT_STORAGE_GAME_DIR_NAME
     global API_KEYS, MODELS, CURRENT_KEY_INDEX, CURRENT_MODEL_INDEX
     global API_KEY_ROTATION_ENABLED, MODEL_ROTATION_ENABLED, MODEL_ROTATION_MODELS
-    global MAX_CHARS, MAX_ITEMS, SYNC_MAX_OUTPUT_TOKENS, SYNC_BACKEND
+    global MAX_CHARS, MAX_ITEMS, SYNC_MAX_OUTPUT_TOKENS, SYNC_TIMEOUT_SECONDS
+    global SYNC_BACKEND
     global CUSTOM_LITELLM_PROVIDERS
     global INCLUDE_FILES, INCLUDE_PREFIXES
     global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
@@ -1419,6 +1439,11 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
         MAX_CHARS = int(applied.max_chars)
         MAX_ITEMS = int(applied.max_items)
         SYNC_MAX_OUTPUT_TOKENS = int(applied.sync_max_output_tokens)
+        applied.sync_timeout_seconds = normalize_sync_timeout_seconds(
+            applied.sync_timeout_seconds,
+            DEFAULT_SYNC_TIMEOUT_SECONDS,
+        )
+        SYNC_TIMEOUT_SECONDS = applied.sync_timeout_seconds
         SYNC_BACKEND = applied.sync_backend or DEFAULT_SYNC_BACKEND
         CUSTOM_LITELLM_PROVIDERS = dict(applied.custom_litellm_providers or {})
 
@@ -1569,7 +1594,7 @@ def _reset_project_settings_to_defaults():
     global PREP_RENPY_SDK_DIR, PREP_LAUNCHER_PY, PREP_PYTHON_EXE
     global PREP_UNPACK_COMMAND, PREP_TEMPLATE_COMMAND, PREP_ALLOW_SHELL_COMMANDS
     global CONTEXT_STORAGE_LOCATION, CONTEXT_STORAGE_GAME_DIR_NAME
-    global SYNC_BACKEND
+    global SYNC_BACKEND, SYNC_TIMEOUT_SECONDS
     global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
     global SYNC_RAG_QUERY_TASK_TYPE, SYNC_RAG_DOCUMENT_TASK_TYPE
     global SYNC_RAG_OUTPUT_DIMENSIONALITY, SYNC_RAG_TOP_K_HISTORY, SYNC_RAG_TOP_K_TERMS
@@ -1606,6 +1631,7 @@ def _reset_project_settings_to_defaults():
 
     # RAG / story memory always recompute from translator_config.sync defaults.
     SYNC_BACKEND = DEFAULT_SYNC_BACKEND
+    SYNC_TIMEOUT_SECONDS = DEFAULT_SYNC_TIMEOUT_SECONDS
     SYNC_RAG_ENABLED = False
     SYNC_RAG_STORE_DIR = ""
     SYNC_RAG_EMBEDDING_MODEL = DEFAULT_SYNC_RAG_EMBEDDING_MODEL
@@ -4339,6 +4365,7 @@ def call_gemini_sdk(
     generation_config = {
         "temperature": 0.2,
         "max_output_tokens": SYNC_MAX_OUTPUT_TOKENS,
+        "timeout": SYNC_TIMEOUT_SECONDS,
         "response_mime_type": "application/json",
         "response_json_schema": build_response_json_schema(items),
     }

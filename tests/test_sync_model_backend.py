@@ -1,6 +1,14 @@
 import unittest
 
-from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest, SyncModelBackend
+from sync_model_backend import (
+    DEFAULT_SYNC_TIMEOUT_SECONDS,
+    MAX_SYNC_TIMEOUT_SECONDS,
+    MIN_SYNC_TIMEOUT_SECONDS,
+    GeminiSyncBackend,
+    SyncGenerationRequest,
+    SyncModelBackend,
+    normalize_sync_timeout_seconds,
+)
 
 
 class _Models:
@@ -39,7 +47,14 @@ class SyncModelBackendTests(unittest.TestCase):
             model="gemini-test", contents="prompt", config={"temperature": 0.2},
         ))
         self.assertEqual(client.models.calls, [{
-            "model": "gemini-test", "contents": "prompt", "config": {"temperature": 0.2},
+            "model": "gemini-test",
+            "contents": "prompt",
+            "config": {
+                "temperature": 0.2,
+                "http_options": {
+                    "timeout": DEFAULT_SYNC_TIMEOUT_SECONDS * 1000,
+                },
+            },
         }])
         self.assertEqual(result.provider, "gemini")
         self.assertEqual(result.model, "gemini-test")
@@ -60,7 +75,51 @@ class SyncModelBackendTests(unittest.TestCase):
         )
         backend.generate(SyncGenerationRequest("gemini-test", [], config))
         self.assertIsNot(client.models.calls[0]["config"], config)
-        self.assertEqual(client.models.calls[0]["config"], config)
+        self.assertEqual(config, {"nested": {"enabled": True}})
+        self.assertEqual(
+            client.models.calls[0]["config"],
+            {
+                "nested": {"enabled": True},
+                "http_options": {
+                    "timeout": DEFAULT_SYNC_TIMEOUT_SECONDS * 1000,
+                },
+            },
+        )
+
+    def test_gemini_timeout_seconds_becomes_http_options_milliseconds(self):
+        config = {
+            "timeout": 12,
+            "http_options": {"headers": {"X-Test": "yes"}},
+        }
+        client = _Client(_Response())
+        backend = GeminiSyncBackend(
+            client,
+            serialize_response=lambda response: {},
+            extract_text=lambda payload: "",
+            extract_finish_reason=lambda payload: "",
+        )
+
+        backend.generate(SyncGenerationRequest("gemini-test", [], config))
+
+        self.assertEqual(config["timeout"], 12)
+        self.assertEqual(
+            client.models.calls[0]["config"]["http_options"],
+            {"headers": {"X-Test": "yes"}, "timeout": 12_000},
+        )
+        self.assertNotIn("timeout", client.models.calls[0]["config"])
+
+    def test_sync_timeout_normalization_has_finite_bounds(self):
+        self.assertEqual(
+            normalize_sync_timeout_seconds(None),
+            DEFAULT_SYNC_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(
+            normalize_sync_timeout_seconds(True),
+            DEFAULT_SYNC_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(normalize_sync_timeout_seconds(1), MIN_SYNC_TIMEOUT_SECONDS)
+        self.assertEqual(normalize_sync_timeout_seconds(9999), MAX_SYNC_TIMEOUT_SECONDS)
+        self.assertEqual(normalize_sync_timeout_seconds("45"), 45)
 
     def test_new_gemini_model_omits_sampling_before_sdk_call(self):
         config = {
@@ -79,7 +138,12 @@ class SyncModelBackendTests(unittest.TestCase):
         backend.generate(SyncGenerationRequest("gemini-3.5-flash-lite", [], config))
         self.assertEqual(
             client.models.calls[0]["config"],
-            {"max_output_tokens": 1024},
+            {
+                "max_output_tokens": 1024,
+                "http_options": {
+                    "timeout": DEFAULT_SYNC_TIMEOUT_SECONDS * 1000,
+                },
+            },
         )
         self.assertIn("temperature", config)
 

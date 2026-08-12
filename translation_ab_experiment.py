@@ -108,6 +108,7 @@ def summarize_variant_settings() -> dict:
         'macro_setting_preview': _macro_preview(batch_mod.BATCH_MACRO_SETTING),
         'temperature': batch_mod.BATCH_TEMPERATURE,
         'max_output_tokens': batch_mod.BATCH_MAX_OUTPUT_TOKENS,
+        'timeout_seconds': batch_mod.SYNC_TIMEOUT_SECONDS,
         'thinking_level': batch_mod.BATCH_THINKING_LEVEL,
     }
 
@@ -155,6 +156,7 @@ _BATCH_GLOBAL_KEYS = (
     'STORY_MEMORY_TOP_K_TERMS',
     'STORY_MEMORY_INCLUDE_SCENE_SUMMARY',
     'BATCH_NON_CHINESE_RULES',
+    'SYNC_TIMEOUT_SECONDS',
     '_RAG_STORE',
     '_SOURCE_INDEX_STORE',
     '_STORY_GRAPH',

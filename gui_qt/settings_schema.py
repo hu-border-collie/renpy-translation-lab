@@ -24,6 +24,12 @@ from gemini_model_catalog import (
     extras_beyond_builtins,
     filter_gemini_rotation_models,
 )
+from sync_model_backend import (
+    DEFAULT_SYNC_TIMEOUT_SECONDS,
+    MAX_SYNC_TIMEOUT_SECONDS,
+    MIN_SYNC_TIMEOUT_SECONDS,
+)
+from .user_copy import SYNC_TIMEOUT_COPY
 
 
 SettingKind = Literal[
@@ -171,6 +177,17 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         24576,
         "翻译吞吐",
         minimum=1,
+    ),
+    SettingField(
+        "sync_timeout_seconds",
+        ("sync", "timeout_seconds"),
+        SYNC_TIMEOUT_COPY["label"],
+        SYNC_TIMEOUT_COPY["description"],
+        "int",
+        DEFAULT_SYNC_TIMEOUT_SECONDS,
+        "翻译吞吐",
+        minimum=MIN_SYNC_TIMEOUT_SECONDS,
+        maximum=MAX_SYNC_TIMEOUT_SECONDS,
     ),
     SettingField(
         "batch_chunk_size",

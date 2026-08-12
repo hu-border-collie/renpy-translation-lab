@@ -10,6 +10,23 @@ from typing import Any, Callable, Dict, Mapping, Optional, Protocol, runtime_che
 from gemini_model_catalog import filter_gemini_generation_config
 
 SYNC_EXECUTION_MODE = "sync"
+DEFAULT_SYNC_TIMEOUT_SECONDS = 120
+MIN_SYNC_TIMEOUT_SECONDS = 5
+MAX_SYNC_TIMEOUT_SECONDS = 600
+
+
+def normalize_sync_timeout_seconds(
+    value: Any,
+    default: int = DEFAULT_SYNC_TIMEOUT_SECONDS,
+) -> int:
+    """Return a finite per-request timeout constrained to safe sync bounds."""
+    try:
+        if isinstance(value, bool):
+            raise TypeError("boolean is not a timeout")
+        timeout = int(value)
+    except (TypeError, ValueError, OverflowError):
+        timeout = int(default)
+    return max(MIN_SYNC_TIMEOUT_SECONDS, min(MAX_SYNC_TIMEOUT_SECONDS, timeout))
 
 @dataclass(frozen=True)
 class SyncGenerationRequest:
@@ -48,10 +65,23 @@ class GeminiSyncBackend:
         self._extract_usage = extract_usage
 
     def generate(self, request: SyncGenerationRequest) -> SyncGenerationResult:
+        config = filter_gemini_generation_config(request.model, request.config)
+        timeout = config.pop("timeout", DEFAULT_SYNC_TIMEOUT_SECONDS)
+        raw_http_options = config.get("http_options")
+        http_options = (
+            dict(raw_http_options)
+            if isinstance(raw_http_options, Mapping)
+            else {}
+        )
+        # google-genai HttpOptions uses milliseconds; the public sync request
+        # contract and LiteLLM both use seconds. Apply the default here as a
+        # final boundary even if a future caller forgets to set it.
+        http_options["timeout"] = normalize_sync_timeout_seconds(timeout) * 1000
+        config["http_options"] = http_options
         response = self._client.models.generate_content(
             model=request.model,
             contents=request.contents,
-            config=filter_gemini_generation_config(request.model, request.config),
+            config=config,
         )
         payload = self._serialize_response(response)
         usage: Dict[str, Any] = {}

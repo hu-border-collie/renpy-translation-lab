@@ -8,7 +8,12 @@ from litellm_provider_config import (
     CustomLiteLLMProvider,
     provider_from_model,
 )
-from sync_model_backend import SYNC_EXECUTION_MODE, SyncGenerationRequest, SyncGenerationResult
+from sync_model_backend import (
+    SYNC_EXECUTION_MODE,
+    SyncGenerationRequest,
+    SyncGenerationResult,
+    normalize_sync_timeout_seconds,
+)
 
 
 class LiteLLMBackendError(RuntimeError):
@@ -242,8 +247,7 @@ class LiteLLMSyncBackend:
             kwargs["api_key"] = api_key
         if custom is not None:
             kwargs["api_base"] = custom.base_url
-        if "timeout" in config:
-            kwargs["timeout"] = config["timeout"]
+        kwargs["timeout"] = normalize_sync_timeout_seconds(config.get("timeout"))
         if "temperature" in config:
             kwargs["temperature"] = config["temperature"]
         if "max_output_tokens" in config:
