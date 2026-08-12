@@ -5048,7 +5048,6 @@ def collect_result_integrity_issue_keys(manifest):
             processed_keys.add(key)
             chunk = chunk_map[key]
             chunk_items = chunk.get('items') or []
-            item_ids = {item.get('id') for item in chunk_items}
             response_payload = row.get('response') or {}
             finish_reason = extract_finish_reason(response_payload)
 
@@ -5072,7 +5071,6 @@ def collect_result_integrity_issue_keys(manifest):
                 )
                 for reason_code, count in contract.reason_counts().items():
                     bump_counter(reason_counts, reason_code, count)
-                result_items = contract.items
             except Exception as exc:
                 issue_keys.add(key)
                 bump_counter(
@@ -5083,27 +5081,9 @@ def collect_result_integrity_issue_keys(manifest):
                 )
                 continue
 
-            seen_ids = set()
             if contract.retry_ids:
                 issue_keys.add(key)
                 bump_counter(reason_counts, 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_result_items')
-
-            for result_item in result_items:
-                result_id = result_item.get('id')
-                if result_id not in item_ids:
-                    issue_keys.add(key)
-                    bump_counter(reason_counts, 'schema_or_item_mismatch')
-                    continue
-                if result_id in seen_ids:
-                    issue_keys.add(key)
-                    bump_counter(reason_counts, 'duplicate_result_id')
-                    continue
-                seen_ids.add(result_id)
-
-            missing_ids = item_ids - seen_ids
-            if missing_ids:
-                issue_keys.add(key)
-                bump_counter(reason_counts, 'response_missing_item_id', len(missing_ids))
 
     missing_keys = set(chunk_map.keys()) - processed_keys
     if missing_keys:
@@ -6069,6 +6049,9 @@ def record_contract_reasons(summary, report):
     bucket = summary.setdefault('reason_counts', {})
     for reason_code, count in report.reason_counts().items():
         bump_counter(bucket, reason_code, count)
+    diagnostic_bucket = summary.setdefault('diagnostic_counts', {})
+    for reason_code, count in report.diagnostic_counts().items():
+        bump_counter(diagnostic_bucket, reason_code, count)
 
 
 def validate_result_contract(payload, mode, expected_items):
@@ -7550,13 +7533,11 @@ def collect_revision_actions(manifest, validate_sources=False):
                 revised_lines_by_file.setdefault(file_key, set()).add(target_item['line'])
 
             missing_ids = set(item_map.keys()) - seen_ids
-            if missing_ids:
-                bump_counter(summary['reason_counts'], 'response_missing_item_id', len(missing_ids))
             for missing_id in sorted(missing_ids):
                 item = item_map[missing_id]
                 failure_entries.append(make_failure_entry(
                     manifest,
-                    'Response missing item id',
+                    'Response missing expected id',
                     file_rel_path=chunk['file_rel_path'],
                     item_id=item['id'],
                     line=item['line'],
@@ -7564,6 +7545,7 @@ def collect_revision_actions(manifest, validate_sources=False):
                     key=key,
                     finish_reason=finish_reason,
                     usage_metadata=usage_metadata,
+                    reason_code='response_missing_expected_id',
                 ))
 
     missing_keys = set(chunk_map.keys()) - processed_keys
@@ -8208,8 +8190,6 @@ def collect_result_actions(manifest, validate_sources=False):
                 translated_lines_by_file.setdefault(file_key, set()).add(target_item['line'])
 
             missing_ids = set(item_map.keys()) - seen_ids
-            if missing_ids:
-                bump_counter(summary['reason_counts'], 'response_missing_item_id', len(missing_ids))
             for missing_id in sorted(missing_ids):
                 item = item_map[missing_id]
                 failure_entries.append(
@@ -8221,7 +8201,8 @@ def collect_result_actions(manifest, validate_sources=False):
                         'id': item['id'],
                         'line': item['line'],
                         'text': item['text'],
-                        'error': 'Response missing item id',
+                        'error': 'Response missing expected id',
+                        'reason_code': 'response_missing_expected_id',
                         'finish_reason': finish_reason,
                         'usage_metadata': usage_metadata,
                     }
@@ -10091,8 +10072,8 @@ def _contract_from_sync_result(result, chunk, mode):
 
 def _merge_sync_contract_reports(first, retry, chunk, mode):
     if mode == translation_core.MODE_KEYWORD_EXTRACTION:
-        chosen = retry if retry.complete or len(retry.issues) <= len(first.issues) else first
-        merged = copy.deepcopy(chosen)
+        retry_recovered = retry.complete and bool(retry.items)
+        merged = copy.deepcopy(retry if retry_recovered else first)
         merged_items = []
         seen = set()
         for item in [*first.items, *retry.items]:
@@ -10111,6 +10092,35 @@ def _merge_sync_contract_reports(first, retry, chunk, mode):
             for item in merged_items
             for item_id in item.get('source_item_ids', [])
         })
+        first_summary = str(first.metadata.get('chunk_summary') or '')
+        retry_summary = str(retry.metadata.get('chunk_summary') or '')
+        merged.metadata = {
+            'chunk_summary': retry_summary or first_summary,
+            'summary_evidence_item_ids': list(dict.fromkeys([
+                *list(first.metadata.get('summary_evidence_item_ids') or []),
+                *list(retry.metadata.get('summary_evidence_item_ids') or []),
+            ])),
+        }
+        merged.diagnostics = list(dict.fromkeys([
+            *first.diagnostics,
+            *retry.diagnostics,
+        ]))
+        if retry_recovered:
+            merged.issues = list(retry.issues)
+            merged.retry_ids = list(retry.retry_ids)
+        else:
+            merged.issues = list(dict.fromkeys([
+                *first.issues,
+                *retry.issues,
+            ]))
+            merged.retry_ids = [
+                str(item.get('id') or '')
+                for item in chunk.get('items') or []
+                if str(item.get('id') or '')
+            ] if merged.issues else list(dict.fromkeys([
+                *first.retry_ids,
+                *retry.retry_ids,
+            ]))
         return merged
     retry_by_id = {item['id']: item for item in retry.items}
     merged_by_id = {item['id']: item for item in first.items}
@@ -10147,6 +10157,10 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
     result_path = resolve_manifest_result_path(manifest)
     chunk_map = {chunk.get('key'): chunk for chunk in manifest.get('chunks') or []}
     contract_mode = _contract_mode_for_manifest(manifest)
+    requested_chunks = [
+        chunk_map.get(row.get('key')) or {'items': []}
+        for row in request_rows
+    ]
     summary = {
         'request_count': len(request_rows),
         'successful_request_count': 0,
@@ -10156,7 +10170,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
         'contract_expected_items': (
             len(request_rows)
             if contract_mode == translation_core.MODE_KEYWORD_EXTRACTION
-            else sum(len(chunk.get('items') or []) for chunk in chunk_map.values())
+            else sum(len(chunk.get('items') or []) for chunk in requested_chunks)
         ),
         'contract_first_pass_valid_items': 0,
         'contract_final_valid_items': 0,
@@ -10186,7 +10200,6 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
             summary['successful_request_count'] += 1
             result_row['provider_response_attempts'] = [{
                 'kind': 'first_pass',
-                'response': result.get('response_payload') or {},
                 'finish_reason': result.get('finish_reason', ''),
                 'usage_metadata': result.get('usage_metadata') or {},
             }]
@@ -10840,7 +10853,6 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
         missing_ids = set(item_map.keys()) - seen_ids
         if missing_ids:
             summary['missing_item_ids'] += len(missing_ids)
-            bump_counter(reason_counts, 'response_missing_item_id', len(missing_ids))
         for missing_id in sorted(missing_ids):
             item = item_map[missing_id]
             failure_entries.append(
@@ -10850,7 +10862,8 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                     'line': item['line'],
                     'source': item['text'],
                     'id': item['id'],
-                    'error': 'Response missing item id',
+                    'error': 'Response missing expected id',
+                    'reason_code': 'response_missing_expected_id',
                     'finish_reason': finish_reason,
                     'usage_metadata': usage_metadata,
                 }

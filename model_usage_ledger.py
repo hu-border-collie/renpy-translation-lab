@@ -671,10 +671,21 @@ def import_manifest_results(
                     for attempt_index, attempt in enumerate(attempts, start=1):
                         if not isinstance(attempt, Mapping):
                             continue
+                        attempt_kind = str(attempt.get("kind") or "request")
                         response_payload = attempt.get("response")
                         if not isinstance(response_payload, Mapping):
                             response_payload = {}
+                        if attempt_kind == "first_pass" and not response_payload:
+                            response_payload = row.get("response_payload")
+                            if not isinstance(response_payload, Mapping):
+                                response_payload = row.get("response")
+                            if not isinstance(response_payload, Mapping):
+                                response_payload = {}
                         usage = attempt.get("usage_metadata")
+                        if attempt_kind == "first_pass" and not isinstance(
+                            usage, Mapping
+                        ):
+                            usage = row.get("usage_metadata")
                         if not isinstance(usage, Mapping):
                             usage = extract_provider_usage(response_payload)
                         if not response_payload and not usage:
@@ -708,7 +719,7 @@ def import_manifest_results(
                                     "row_key": row_key,
                                     "row_index": row_index,
                                     "attempt_index": attempt_index,
-                                    "attempt_kind": str(attempt.get("kind") or "request"),
+                                    "attempt_kind": attempt_kind,
                                     "item_ids": item_ids,
                                 },
                                 pricing_config=effective_pricing,

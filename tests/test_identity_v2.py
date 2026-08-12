@@ -640,7 +640,10 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
             validate_sources=False,
         )
         self.assertIn(6, replacements[file_rel_path])
-        self.assertEqual(summary["reason_counts"]["response_missing_item_id"], 1)
+        self.assertEqual(
+            summary["reason_counts"]["response_missing_expected_id"],
+            1,
+        )
         missing = [failure for failure in failures if failure.get("id") == id2][0]
         self.assertEqual(missing["line"], 8)
 

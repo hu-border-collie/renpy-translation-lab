@@ -71,6 +71,25 @@ class GuiSyncTranslationReportTests(unittest.TestCase):
         self.assertEqual(update.status, "failed")
         self.assertIn("未完成", update.heading)
 
+    def test_summarize_all_unresolved_partial_preview_warns(self):
+        update = summarize_sync_translation_output(
+            "Found 1 files.\n"
+            "Processing: script.rpy\n"
+            "  Found 3 lines to translate.\n"
+            "  Translated 0/3 items. (Received 0 chars of translation)\n"
+            "Sync preview manifest: logs/sync_runs/demo/manifest.json\n"
+            "Sync preview report: logs/sync_runs/demo/preview.diff\n"
+            "Model contract completeness: 0/3\n"
+            "Unresolved contract items: 3\n"
+            "Preview status: partial\n",
+            0,
+        )
+
+        self.assertEqual(update.status, "warning")
+        self.assertIn("部分完成", update.heading)
+        self.assertIn("结果完整率：0/3", update.facts)
+        self.assertIn("未解决结果：3 个", update.facts)
+
     def test_summarize_partial_translation_warns(self):
         update = summarize_sync_translation_output(
             "Found 1 files.\n"

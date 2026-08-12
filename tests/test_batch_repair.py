@@ -1019,11 +1019,32 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 ],
             }
             request_rows = [batch_mod.build_batch_request(chunk, model='gemini-test')]
+            unselected_chunk = {
+                'key': 'chunk-2',
+                'file_path': str(package_dir / 'extra.rpy'),
+                'file_rel_path': 'extra.rpy',
+                'chunk_index': 2,
+                'context_past': [],
+                'context_future': [],
+                'items': [
+                    {
+                        'id': 'c',
+                        'text': 'Unused',
+                        'file_rel_path': 'extra.rpy',
+                        'line': 0,
+                        'line_number': 1,
+                        'start': 4,
+                        'end': 12,
+                        'prefix': '',
+                        'quote': '"',
+                    },
+                ],
+            }
             manifest_path = batch_mod.make_sync_manifest(
                 package_dir=str(package_dir),
                 mode=batch_mod.MANIFEST_MODE_TRANSLATION,
                 display_name='targeted-retry-test',
-                chunks=[chunk],
+                chunks=[chunk, unselected_chunk],
                 request_rows=request_rows,
                 settings={},
             )
@@ -1072,6 +1093,9 @@ class BatchRepairRegressionTests(unittest.TestCase):
             ['a', 'b'],
         )
         self.assertTrue(result_row['contract_diagnostics']['complete'])
+        self.assertNotIn('response', result_row['provider_response_attempts'][0])
+        self.assertIn('response', result_row['provider_response_attempts'][1])
+        self.assertEqual(manifest['sync_summary']['contract_expected_items'], 2)
         self.assertEqual(manifest['sync_summary']['targeted_retry_requests'], 1)
         self.assertEqual(manifest['sync_summary']['contract_final_completeness'], 1.0)
         self.assertEqual(manifest['job_state'], 'SYNC_COMPLETED')
@@ -1137,6 +1161,61 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(
             [item['source'] for item in merged.items],
             ['Void Gate', 'Moon Key'],
+        )
+        self.assertEqual(merged.metadata['chunk_summary'], 'retry')
+
+    def test_keyword_empty_retry_preserves_first_pass_issue_and_candidates(self):
+        items = [{'id': 'a', 'text': 'Void Gate'}]
+        first = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Void Gate',
+                        'suggested_target': '虚空门',
+                        'category': 'term',
+                        'confidence': 0.9,
+                        'evidence': 'a',
+                        'source_item_ids': ['a'],
+                    },
+                    {
+                        'source': 'Broken',
+                        'suggested_target': '错误',
+                        'category': 'term',
+                        'confidence': 0.5,
+                        'evidence': 'unknown',
+                        'source_item_ids': ['unknown'],
+                    },
+                ],
+                'chunk_summary': 'first summary',
+                'summary_evidence_item_ids': ['a'],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {
+                'candidates': [],
+                'chunk_summary': '',
+                'summary_evidence_item_ids': [],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=items,
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_KEYWORD_EXTRACTION,
+        )
+
+        self.assertFalse(merged.complete)
+        self.assertEqual([item['source'] for item in merged.items], ['Void Gate'])
+        self.assertEqual(merged.metadata['chunk_summary'], 'first summary')
+        self.assertEqual(merged.retry_ids, ['a'])
+        self.assertEqual(
+            merged.reason_counts()['result_unknown_source_id'],
+            1,
         )
 
     def test_sync_unknown_extra_id_is_audited_without_retranslating_valid_ids(self):
@@ -2350,11 +2429,23 @@ class BatchRepairRegressionTests(unittest.TestCase):
             ]
 
         self.assertEqual(checked['last_check_summary']['safety_level'], 'warn')
-        self.assertEqual(checked['last_check_summary']['safety_reasons']['warn']['response_missing_item_id'], 1)
+        self.assertEqual(
+            checked['last_check_summary']['safety_reasons']['warn'][
+                'response_missing_expected_id'
+            ],
+            1,
+        )
+        self.assertNotIn(
+            'response_missing_item_id',
+            checked['last_check_summary']['safety_reasons']['warn'],
+        )
         self.assertEqual(final_script, first_line + second_line)
         update_progress.assert_not_called()
         self.assertEqual(check_failures[0]['status'], 'warn')
-        self.assertEqual(check_failures[0]['reason_code'], 'response_missing_item_id')
+        self.assertEqual(
+            check_failures[0]['reason_code'],
+            'response_missing_expected_id',
+        )
 
     def test_manifest_result_path_must_stay_in_package_dir(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -158,10 +158,13 @@ class ModelUsageLedgerTests(unittest.TestCase):
                         "provider": "litellm",
                         "model": "openai/test",
                         "execution_mode": "sync",
+                        "response": {
+                            "id": "first",
+                            "_hidden_params": {"response_cost": 0.001},
+                        },
                         "provider_response_attempts": [
                             {
                                 "kind": "first_pass",
-                                "response": {"id": "first"},
                                 "usage_metadata": {
                                     "prompt_tokens": 10,
                                     "completion_tokens": 4,
@@ -197,6 +200,7 @@ class ModelUsageLedgerTests(unittest.TestCase):
             self.assertEqual(summary["inserted_records"], 2)
             self.assertEqual(report["totals"]["calls"], 2)
             self.assertEqual(report["totals"]["total_tokens"], 22)
+            self.assertEqual(records[0]["actual_cost"], 0.001)
             self.assertEqual(records[1]["source"]["attempt_kind"], "targeted_retry")
             self.assertEqual(records[1]["source"]["item_ids"], ["b"])
 

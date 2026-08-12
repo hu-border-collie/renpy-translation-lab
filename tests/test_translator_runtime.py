@@ -1474,11 +1474,71 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         finalized = runtime.finalize_sync_contract_diagnostics(diagnostics)
         self.assertEqual(seen_batches, [['file:0:1', 'file:0:10'], ['file:0:10']])
         self.assertEqual(successful, ['task:0:1', 'task:0:10'])
+        self.assertEqual(len(replacements[0]), 2)
         self.assertEqual(finalized['first_pass_valid'], 1)
         self.assertEqual(finalized['targeted_retry_requests'], 1)
         self.assertEqual(finalized['final_completeness'], 1.0)
         self.assertEqual(finalized['unresolved_ids'], [])
         self.assertEqual(failures, [])
+
+    def test_process_batch_with_retry_splits_when_full_batch_makes_no_progress(self):
+        batch = [
+            {
+                'id': 'file:0:1',
+                'text': 'Hello',
+                'line': 0,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:0:1',
+            },
+            {
+                'id': 'file:1:1',
+                'text': 'World',
+                'line': 1,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:1:1',
+            },
+        ]
+        seen_batches = []
+
+        def fake_call(_prompt, items, **_kwargs):
+            seen_batches.append([item['id'] for item in items])
+            translations = []
+            if len(items) == 1:
+                translations = [{
+                    'id': items[0]['id'],
+                    'translation': '你好',
+                }]
+            return translation_core.validate_model_response(
+                {'translations': translations},
+                expected_units=items,
+            )
+
+        replacements = {}
+        diagnostics = runtime.new_sync_contract_diagnostics()
+        with (
+            mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_call),
+            mock.patch.object(runtime, 'get_random_delay', return_value=0),
+            mock.patch.object(runtime.time, 'sleep'),
+        ):
+            successful = runtime.process_batch_with_retry(
+                batch,
+                replacements,
+                contract_diagnostics=diagnostics,
+            )
+
+        self.assertEqual(
+            seen_batches,
+            [['file:0:1', 'file:1:1'], ['file:0:1'], ['file:1:1']],
+        )
+        self.assertEqual(successful, ['task:0:1', 'task:1:1'])
+        self.assertEqual(diagnostics['targeted_retry_requests'], 0)
+        self.assertEqual(diagnostics['split_retry_requests'], 2)
 
     def test_process_batch_stores_normalized_text_for_sync_rag(self):
         old_normalize_map = runtime.NORMALIZE_TRANSLATION_MAP

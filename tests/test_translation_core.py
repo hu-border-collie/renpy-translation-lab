@@ -192,6 +192,44 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertEqual(reasons['result_empty_translation'], 1)
         self.assertEqual(reasons['response_missing_expected_id'], 4)
 
+    def test_translation_contract_reports_envelope_level_reasons(self):
+        expected = [{'id': 'a', 'text': 'Hello'}]
+        missing = translation_core.validate_model_response(
+            {},
+            expected_units=expected,
+        )
+        wrong_type = translation_core.validate_model_response(
+            {'translations': {}},
+            expected_units=expected,
+        )
+
+        self.assertEqual(
+            missing.reason_counts(),
+            {'response_envelope_missing': 1},
+        )
+        self.assertEqual(
+            wrong_type.reason_counts(),
+            {'response_items_not_array': 1},
+        )
+
+    def test_translation_contract_ignores_unexpected_fields_with_diagnostic(self):
+        report = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'a', 'translation': '你好', 'notes': 'extra'},
+                ]
+            },
+            expected_units=[{'id': 'a', 'text': 'Hello'}],
+        )
+
+        self.assertTrue(report.complete)
+        self.assertEqual(report.retry_ids, [])
+        self.assertEqual(report.items, [{'id': 'a', 'translation': '你好'}])
+        self.assertEqual(
+            report.diagnostic_counts(),
+            {'result_unexpected_field': 1},
+        )
+
     def test_translation_contract_keeps_legacy_array_read_compatibility(self):
         report = translation_core.validate_model_response(
             [

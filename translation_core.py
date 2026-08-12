@@ -189,6 +189,7 @@ class ModelContractReport:
     valid_ids: list = field(default_factory=list)
     retry_ids: list = field(default_factory=list)
     issues: list = field(default_factory=list)
+    diagnostics: list = field(default_factory=list)
     legacy_shape: bool = False
     metadata: dict = field(default_factory=dict)
 
@@ -208,6 +209,14 @@ class ModelContractReport:
         counts = {}
         for issue in self.issues:
             counts[issue.reason_code] = counts.get(issue.reason_code, 0) + 1
+        return counts
+
+    def diagnostic_counts(self):
+        counts = {}
+        for diagnostic in self.diagnostics:
+            counts[diagnostic.reason_code] = (
+                counts.get(diagnostic.reason_code, 0) + 1
+            )
         return counts
 
     def to_envelope(self):
@@ -241,7 +250,9 @@ class ModelContractReport:
             'source_item_count': len(self.expected_ids),
             'retry_ids': list(self.retry_ids),
             'reason_counts': self.reason_counts(),
+            'diagnostic_counts': self.diagnostic_counts(),
             'issues': [issue.to_dict() for issue in self.issues],
+            'diagnostics': [item.to_dict() for item in self.diagnostics],
         }
 
 
@@ -1073,14 +1084,13 @@ def _validate_id_results(payload, mode, expected_ids, allow_legacy):
                 item_valid = False
         unexpected = sorted(set(raw_item) - allowed)
         for field_name in unexpected:
-            report.issues.append(_issue(
+            report.diagnostics.append(_issue(
                 CONTRACT_UNEXPECTED_FIELD,
                 item_id=item_id,
                 result_index=index,
                 field_name=field_name,
                 message=f'Unexpected result field: {field_name}.',
             ))
-            item_valid = False
         if not item_valid:
             invalid_ids.add(item_id)
             continue
@@ -1355,8 +1365,10 @@ def parse_model_response_json(text, *, salvage_partial=True):
             if char not in '[{':
                 continue
             try:
-                payload, end = decoder.raw_decode(cleaned[start:])
-                embedded.append((start + end, -start, payload))
+                payload, end = decoder.raw_decode(cleaned, start)
+                embedded.append((end, -start, payload))
+                if not cleaned[end:].strip():
+                    break
             except json.JSONDecodeError:
                 continue
         if embedded:

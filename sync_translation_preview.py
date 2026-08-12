@@ -151,7 +151,11 @@ def create_sync_preview(
     failures: Iterable[dict[str, Any]] = (),
     contract_diagnostics: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Persist source/proposed snapshots, a unified diff, and a bound manifest."""
+    """Persist source/proposed snapshots, a unified diff, and a bound manifest.
+
+    ``contract_diagnostics`` stores final validation, retry, and unresolved-item
+    details in the bound manifest; those details are covered by its fingerprint.
+    """
     created = datetime.now(timezone.utc)
     run_name = created.strftime("%Y%m%dT%H%M%S.%fZ")
     failure_entries = []

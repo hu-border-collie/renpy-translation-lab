@@ -4548,6 +4548,7 @@ def new_sync_contract_diagnostics():
         'targeted_retry_items': 0,
         'split_retry_requests': 0,
         'reason_counts': {},
+        'diagnostic_counts': {},
         'terminal_reason_counts': {},
         'retry_lineage': [],
         '_expected_ids': set(),
@@ -4566,6 +4567,10 @@ def _record_sync_contract_report(diagnostics, report, *, retry_kind):
     for reason_code, count in report.reason_counts().items():
         diagnostics['reason_counts'][reason_code] = (
             diagnostics['reason_counts'].get(reason_code, 0) + count
+        )
+    for reason_code, count in report.diagnostic_counts().items():
+        diagnostics['diagnostic_counts'][reason_code] = (
+            diagnostics['diagnostic_counts'].get(reason_code, 0) + count
         )
 
 
@@ -4606,6 +4611,7 @@ def finalize_sync_contract_diagnostics(diagnostics):
         'final_completeness': final_valid / len(expected_ids) if expected_ids else 1.0,
         'unresolved_ids': unresolved_ids,
         'reason_counts': dict(diagnostics.get('reason_counts') or {}),
+        'diagnostic_counts': dict(diagnostics.get('diagnostic_counts') or {}),
         'terminal_reason_counts': dict(
             diagnostics.get('terminal_reason_counts') or {}
         ),
@@ -4684,6 +4690,18 @@ def process_batch_with_retry(
             ]
             if not targeted_batch:
                 return successful
+            if len(targeted_batch) == len(batch) and not successful:
+                error_str = 'Model response made no progress for this batch.'
+                error_reason_code = (
+                    outcome['contract'].issues[0].reason_code
+                    if outcome['contract'].issues
+                    else 'validation_failed'
+                )
+                print(
+                    '  ! No valid items accepted for this batch.',
+                    flush=True,
+                )
+                break
             if contract_diagnostics is not None:
                 contract_diagnostics['targeted_retry_requests'] = (
                     contract_diagnostics.get('targeted_retry_requests', 0) + 1

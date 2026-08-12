@@ -71,7 +71,13 @@ def summarize_sync_translation_output(
             facts=facts,
         )
 
-    if lines_to_translate > 0 and translated_count == 0:
+    preview_status_safe = "Preview status: safe" in output
+    preview_status_partial = "Preview status: partial" in output
+    if (
+        lines_to_translate > 0
+        and translated_count == 0
+        and not preview_status_partial
+    ):
         return WorkflowUpdate(
             status="failed",
             heading="同步翻译未完成",
@@ -79,8 +85,6 @@ def summarize_sync_translation_output(
             facts=facts,
         )
 
-    preview_status_safe = "Preview status: safe" in output
-    preview_status_partial = "Preview status: partial" in output
     if "Sync preview manifest:" not in output or not (
         preview_status_safe or preview_status_partial
     ):
