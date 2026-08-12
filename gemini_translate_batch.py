@@ -392,6 +392,11 @@ def normalize_batch_safety_settings(value):
 
 
 def load_batch_settings():
+    """Load persisted settings, normalizing sync timeouts to the shared contract.
+
+    ``sync.timeout_seconds`` is a per-model-request limit in seconds. Missing or
+    invalid values default to 120 seconds, and effective values stay within 5-600.
+    """
     global BATCH_MODEL, BATCH_TARGET_SIZE, BATCH_CONTEXT_BEFORE, BATCH_CONTEXT_AFTER
     global BATCH_TARGET_CHARS, BATCH_RETRY_TARGET_SIZE, BATCH_RETRY_TARGET_CHARS
     global BATCH_MAX_OUTPUT_TOKENS, BATCH_TEMPERATURE, BATCH_THINKING_LEVEL

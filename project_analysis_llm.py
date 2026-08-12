@@ -45,6 +45,12 @@ GenerateFn = Callable[[SyncGenerationRequest], SyncGenerationResult]
 
 
 class AnalysisLlmConfig(Protocol):
+    """Project-analysis request settings with a bounded per-request timeout.
+
+    ``timeout_seconds`` follows the shared synchronous contract: it defaults to
+    120 seconds and is normalized to the inclusive 5-600 second range.
+    """
+
     model: str
     thinking_level: str
     max_label_summary_chars: int
@@ -66,6 +72,7 @@ def default_llm_config(
     max_output_tokens: int = 2048,
     timeout_seconds: int = DEFAULT_SYNC_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
+    """Build normalized analysis settings, including the bounded request timeout."""
     return {
         "model": str(model or "").strip(),
         "thinking_level": str(thinking_level or "").strip(),
@@ -79,6 +86,7 @@ def default_llm_config(
 
 
 def merge_llm_config(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Merge partial analysis settings while restoring timeout defaults and bounds."""
     raw = dict(config or {})
     return default_llm_config(
         model=str(raw.get("model") or ""),
@@ -192,6 +200,7 @@ def _build_request(
     max_output_tokens: int = 2048,
     timeout_seconds: int = DEFAULT_SYNC_TIMEOUT_SECONDS,
 ) -> SyncGenerationRequest:
+    """Build one backend request with a normalized per-request timeout in seconds."""
     config: dict[str, Any] = {
         "system_instruction": system,
         "max_output_tokens": max_output_tokens,
@@ -217,7 +226,7 @@ def complete_analysis_text(
     max_output_tokens: int = 2048,
     timeout_seconds: int = DEFAULT_SYNC_TIMEOUT_SECONDS,
 ) -> tuple[str, Mapping[str, Any]]:
-    """Call backend; return (text, usage_metadata)."""
+    """Call the backend with the bounded timeout and return text plus usage metadata."""
     if not model:
         raise ProjectAnalysisError("analysis LLM model is not configured")
     result = generate(
