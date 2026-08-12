@@ -280,6 +280,34 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertEqual(report.retry_ids, ['a'])
         self.assertEqual(report.reason_counts()['result_unknown_source_id'], 1)
 
+    def test_keyword_contract_allows_valid_candidates_to_cover_only_some_lines(self):
+        report = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Void Gate',
+                        'suggested_target': '虚空门',
+                        'category': 'term',
+                        'confidence': 0.9,
+                        'evidence': 'line a',
+                        'source_item_ids': ['a'],
+                    }
+                ],
+                'chunk_summary': 'Only one line contains a glossary candidate.',
+                'summary_evidence_item_ids': ['a'],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=[
+                {'id': 'a', 'text': 'Void Gate'},
+                {'id': 'b', 'text': 'She walks away.'},
+            ],
+        )
+
+        self.assertTrue(report.complete)
+        self.assertEqual(report.valid_ids, ['a'])
+        self.assertEqual(report.retry_ids, [])
+        self.assertEqual(report.completeness, 1.0)
+
     def test_project_analysis_optional_inputs_collect_all_available_layers(self):
         fake_store = mock.Mock()
         fake_store.load_summaries.return_value = [

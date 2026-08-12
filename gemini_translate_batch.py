@@ -10232,11 +10232,21 @@ def _merge_sync_contract_reports(first, retry, chunk, mode):
             if item.get('id') in merged_by_id
         ]
     }
-    return validate_result_contract(
+    merged = validate_result_contract(
         merged_payload,
         mode,
         chunk.get('items') or [],
     )
+    merged.issues = list(dict.fromkeys([
+        *merged.issues,
+        *retry.issues,
+    ]))
+    merged.diagnostics = list(dict.fromkeys([
+        *merged.diagnostics,
+        *first.diagnostics,
+        *retry.diagnostics,
+    ]))
+    return merged
 
 
 def write_request_rows(path, request_rows):

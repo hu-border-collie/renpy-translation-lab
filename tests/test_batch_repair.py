@@ -1563,6 +1563,96 @@ class BatchRepairRegressionTests(unittest.TestCase):
             {'a': '首轮译文', 'b': '重试译文'},
         )
 
+    def test_translation_retry_keeps_rejected_unknown_id_in_final_diagnostics(self):
+        items = [
+            {'id': 'a', 'text': 'Hello'},
+            {'id': 'b', 'text': 'World'},
+        ]
+        first = translation_core.validate_model_response(
+            {'translations': [{'id': 'a', 'translation': '首轮译文'}]},
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'b', 'translation': '重试译文'},
+                    {'id': 'unknown', 'translation': '非法条目'},
+                ],
+            },
+            expected_units=[items[1]],
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_TRANSLATION,
+        )
+
+        self.assertFalse(merged.complete)
+        self.assertEqual(
+            {item['id']: item['translation'] for item in merged.items},
+            {'a': '首轮译文', 'b': '重试译文'},
+        )
+        self.assertEqual(merged.retry_ids, [])
+        self.assertEqual(merged.reason_counts()['result_unknown_id'], 1)
+        self.assertEqual(
+            merged.to_diagnostics()['reason_counts'],
+            {'result_unknown_id': 1},
+        )
+
+    def test_revision_retry_keeps_rejected_unknown_id_in_final_diagnostics(self):
+        items = [
+            {'id': 'a', 'text': 'Hello'},
+            {'id': 'b', 'text': 'World'},
+        ]
+        first = translation_core.validate_model_response(
+            {
+                'revisions': [
+                    {
+                        'id': 'a',
+                        'should_update': False,
+                        'revised_translation': '你好',
+                        'reason': '保持原译',
+                    }
+                ],
+            },
+            mode=translation_core.MODE_REVISION,
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {
+                'revisions': [
+                    {
+                        'id': 'b',
+                        'should_update': True,
+                        'revised_translation': '世界',
+                        'reason': '补齐译文',
+                    },
+                    {
+                        'id': 'unknown',
+                        'should_update': True,
+                        'revised_translation': '非法条目',
+                        'reason': '未知 ID',
+                    },
+                ],
+            },
+            mode=translation_core.MODE_REVISION,
+            expected_units=[items[1]],
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_REVISION,
+        )
+
+        self.assertFalse(merged.complete)
+        self.assertEqual([item['id'] for item in merged.items], ['a', 'b'])
+        self.assertEqual(merged.retry_ids, [])
+        self.assertEqual(merged.reason_counts()['result_unknown_id'], 1)
+
     def test_keyword_retry_progress_drops_superseded_first_pass_issues(self):
         items = [
             {'id': 'a', 'text': 'Void Gate'},
