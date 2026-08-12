@@ -1,6 +1,8 @@
 """Discover ``test_gui_*`` unittest modules for GUI CI."""
 from __future__ import annotations
 
+import os
+import sys
 import unittest
 
 from test_runner_common import ensure_tests_on_path, parse_runner_args, run_discovered_suite
@@ -37,5 +39,12 @@ def main(argv: list[str] | None = None) -> int:
     return 1 if unexpected_dialogs or not runtime_stopped else exit_code
 
 
+def _terminate_process(exit_code: int) -> None:
+    """Exit after flushing output without running unstable Qt finalizers."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(int(exit_code))
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _terminate_process(main())

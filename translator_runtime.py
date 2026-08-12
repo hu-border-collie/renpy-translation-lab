@@ -4488,20 +4488,26 @@ def process_batch(
         )
     results = contract.items
 
-    id_map = {item["id"]: item for item in batch}
+    id_map = {_sync_contract_item_id(item.get("id")): item for item in batch}
     valid_progress_entries = []
     accepted_ids = []
     seen_result_ids = set()
-    retry_ids = set(contract.retry_ids)
+    retry_ids = {
+        normalized_id
+        for item_id in contract.retry_ids
+        if (normalized_id := _sync_contract_item_id(item_id))
+    }
 
     for item in results:
-        entry = id_map.get(item.get("id"))
+        result_id = _sync_contract_item_id(item.get("id"))
+        entry = id_map.get(result_id)
         if not entry:
             continue
-        if entry["id"] in seen_result_ids:
-            print(f"  Warning: Duplicate result id ignored: {entry['id']}")
+        entry_id = _sync_contract_item_id(entry.get("id"))
+        if entry_id in seen_result_ids:
+            print(f"  Warning: Duplicate result id ignored: {entry_id}")
             continue
-        seen_result_ids.add(entry["id"])
+        seen_result_ids.add(entry_id)
 
         translated = item.get("translation", "")
         memory_translation = apply_normalization(translated) if USE_TRANSLATION_MEMORY else translated
@@ -4511,12 +4517,12 @@ def process_batch(
             valid, msg = translation_validator(entry, translated)
 
         if not valid:
-            print(f"  Warning: Validation failed for {entry['id']}: {msg}")
-            retry_ids.add(entry['id'])
+            print(f"  Warning: Validation failed for {entry_id}: {msg}")
+            retry_ids.add(entry_id)
             continue
 
         valid_progress_entries.append(entry["progress_entry"])
-        accepted_ids.append(entry["id"])
+        accepted_ids.append(entry_id)
         entry["translated_text"] = memory_translation
         unit = translation_core.unit_from_sync_task(entry)
         action = translation_core.translation_writeback_action(unit, item)
@@ -4535,7 +4541,9 @@ def process_batch(
             'progress_entries': valid_progress_entries,
             'accepted_ids': accepted_ids,
             'retry_ids': [
-                item['id'] for item in batch if item.get('id') in retry_ids
+                _sync_contract_item_id(item.get('id'))
+                for item in batch
+                if _sync_contract_item_id(item.get('id')) in retry_ids
             ],
             'contract': contract,
         }
@@ -4559,6 +4567,11 @@ def new_sync_contract_diagnostics():
     }
 
 
+def _sync_contract_item_id(value):
+    """Normalize runtime IDs to the string form used by response contracts."""
+    return '' if value is None else str(value)
+
+
 def _record_sync_contract_report(
     diagnostics,
     report,
@@ -4568,7 +4581,11 @@ def _record_sync_contract_report(
 ):
     if diagnostics is None:
         return
-    accepted_ids = set(accepted_ids or ())
+    accepted_ids = {
+        normalized_id
+        for item_id in (accepted_ids or ())
+        if (normalized_id := _sync_contract_item_id(item_id))
+    }
     if retry_kind == 'first_pass':
         diagnostics['first_pass_valid'] += len(accepted_ids)
     elif retry_kind == 'split_retry':
@@ -4586,13 +4603,24 @@ def _record_sync_contract_report(
         )
 
 
+def _record_terminal_contract_report(diagnostics, report):
+    if diagnostics is None:
+        return
+    reason_counts = report.reason_counts()
+    if not reason_counts and not report.complete:
+        reason_counts = {'response_contract_failure': 1}
+    terminal_counts = diagnostics.setdefault('terminal_reason_counts', {})
+    for reason_code, count in reason_counts.items():
+        terminal_counts[reason_code] = terminal_counts.get(reason_code, 0) + count
+
+
 def _record_unresolved_contract_items(failures, batch, reason_code, message):
     if failures is None:
         return
     for item in batch:
         failures.append({
             'relative_path': str(item.get('file_rel_path') or ''),
-            'item_id': str(item.get('id') or ''),
+            'item_id': _sync_contract_item_id(item.get('id')),
             'reason_code': str(reason_code or 'response_contract_failure'),
             'message': str(message or 'Model response contract failed.'),
         })
@@ -4601,8 +4629,16 @@ def _record_unresolved_contract_items(failures, batch, reason_code, message):
 def finalize_sync_contract_diagnostics(diagnostics):
     if diagnostics is None:
         return {}
-    expected_ids = set(diagnostics.get('_expected_ids') or ())
-    valid_ids = set(diagnostics.get('_valid_ids') or ())
+    expected_ids = {
+        normalized_id
+        for item_id in (diagnostics.get('_expected_ids') or ())
+        if (normalized_id := _sync_contract_item_id(item_id))
+    }
+    valid_ids = {
+        normalized_id
+        for item_id in (diagnostics.get('_valid_ids') or ())
+        if (normalized_id := _sync_contract_item_id(item_id))
+    }
     unresolved_ids = sorted(expected_ids - valid_ids)
     first_expected = int(diagnostics.get('first_pass_expected') or 0)
     first_valid = int(diagnostics.get('first_pass_valid') or 0)
@@ -4644,7 +4680,11 @@ def process_batch_with_retry(
     retry_kind='first_pass',
 ):
     if contract_diagnostics is not None and retry_kind == 'first_pass':
-        original_ids = [str(item.get('id') or '') for item in batch if item.get('id')]
+        original_ids = [
+            normalized_id
+            for item in batch
+            if (normalized_id := _sync_contract_item_id(item.get('id')))
+        ]
         contract_diagnostics['first_pass_expected'] += len(original_ids)
         contract_diagnostics['_expected_ids'].update(original_ids)
     if retry_depth >= 5:
@@ -4681,27 +4721,29 @@ def process_batch_with_retry(
                 accepted_ids=outcome['accepted_ids'],
             )
             successful = list(outcome['progress_entries'])
-            retry_ids = set(outcome['retry_ids'])
+            retry_ids = {
+                normalized_id
+                for item_id in outcome['retry_ids']
+                if (normalized_id := _sync_contract_item_id(item_id))
+            }
             if not retry_ids:
-                if (
-                    contract_diagnostics is not None
-                    and not outcome['contract'].complete
-                ):
-                    terminal_counts = contract_diagnostics.setdefault(
-                        'terminal_reason_counts', {}
+                if not outcome['contract'].complete:
+                    _record_terminal_contract_report(
+                        contract_diagnostics,
+                        outcome['contract'],
                     )
-                    for reason_code, count in (
-                        outcome['contract'].reason_counts().items()
-                    ):
-                        terminal_counts[reason_code] = (
-                            terminal_counts.get(reason_code, 0) + count
-                        )
                 return successful
 
             targeted_batch = [
-                item for item in batch if item.get('id') in retry_ids
+                item
+                for item in batch
+                if _sync_contract_item_id(item.get('id')) in retry_ids
             ]
             if not targeted_batch:
+                _record_terminal_contract_report(
+                    contract_diagnostics,
+                    outcome['contract'],
+                )
                 return successful
             if len(targeted_batch) == len(batch) and not successful:
                 error_str = 'Model response made no progress for this batch.'
@@ -4726,7 +4768,10 @@ def process_batch_with_retry(
                 contract_diagnostics.setdefault('retry_lineage', []).append({
                     'kind': 'targeted',
                     'depth': retry_depth + 1,
-                    'item_ids': [item.get('id') for item in targeted_batch],
+                    'item_ids': [
+                        _sync_contract_item_id(item.get('id'))
+                        for item in targeted_batch
+                    ],
                     'reason_counts': outcome['contract'].reason_counts(),
                 })
             print(

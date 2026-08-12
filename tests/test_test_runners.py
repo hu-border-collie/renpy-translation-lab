@@ -11,7 +11,7 @@ if str(_TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(_TESTS_DIR))
 
 import run_gui_tests
-from gui_test_support import GuiTestModalGuard, shutdown_gui_test_runtime
+from gui_test_support import GuiTestModalGuard
 from run_cli_tests import build_suite as build_cli_suite
 from run_gui_tests import build_suite as build_gui_suite
 
@@ -138,6 +138,20 @@ class TestDiscoveryRunners(unittest.TestCase):
         ):
             self.assertEqual(run_gui_tests.main([]), 1)
 
+    def test_gui_script_exit_flushes_output_and_preserves_status(self):
+        stdout = mock.Mock()
+        stderr = mock.Mock()
+        with (
+            mock.patch.object(run_gui_tests.sys, "stdout", stdout),
+            mock.patch.object(run_gui_tests.sys, "stderr", stderr),
+            mock.patch.object(run_gui_tests.os, "_exit") as exit_process,
+        ):
+            run_gui_tests._terminate_process(7)
+
+        stdout.flush.assert_called_once_with()
+        stderr.flush.assert_called_once_with()
+        exit_process.assert_called_once_with(7)
+
 
 class GuiTestModalGuardTests(unittest.TestCase):
     def test_rejects_each_modal_once_without_recording_body(self):
@@ -171,44 +185,6 @@ class GuiTestModalGuardTests(unittest.TestCase):
         first.deleteLater.assert_called_once_with()
         second.hide.assert_called_once_with()
         second.deleteLater.assert_called_once_with()
-
-    @mock.patch("PySide6.QtCore.QCoreApplication.sendPostedEvents")
-    @mock.patch("PySide6.QtCore.QThreadPool.globalInstance")
-    def test_runtime_shutdown_drains_pool_and_deferred_deletes(
-        self,
-        global_pool,
-        send_posted_events,
-    ):
-        pool = global_pool.return_value
-        pool.waitForDone.return_value = True
-        widget = mock.Mock()
-        app = mock.Mock()
-        app.topLevelWidgets.return_value = [widget]
-
-        stopped = shutdown_gui_test_runtime(app, wait_ms=321)
-
-        self.assertTrue(stopped)
-        pool.clear.assert_called_once_with()
-        pool.waitForDone.assert_called_once_with(321)
-        widget.hide.assert_called_once_with()
-        widget.deleteLater.assert_called_once_with()
-        send_posted_events.assert_called_once()
-        app.processEvents.assert_called_once_with()
-        app.shutdown.assert_called_once_with()
-
-    @mock.patch("PySide6.QtCore.QCoreApplication.sendPostedEvents")
-    @mock.patch("PySide6.QtCore.QThreadPool.globalInstance")
-    def test_runtime_shutdown_reports_unfinished_pool(
-        self,
-        global_pool,
-        _send_posted_events,
-    ):
-        global_pool.return_value.waitForDone.return_value = False
-        app = mock.Mock()
-        app.topLevelWidgets.return_value = []
-
-        self.assertFalse(shutdown_gui_test_runtime(app, wait_ms=0))
-
 
 if __name__ == "__main__":
     unittest.main()

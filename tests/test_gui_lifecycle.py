@@ -224,5 +224,45 @@ class CloseMainWindowHelperTests(unittest.TestCase):
         self.assertEqual(app.processEvents.call_count, 3)
 
 
+@gui_test_support.skip_unless_gui(ShutdownCoordinator is None, IMPORT_ERROR)
+class GuiTestRuntimeShutdownTests(unittest.TestCase):
+    @mock.patch("PySide6.QtCore.QCoreApplication.sendPostedEvents")
+    @mock.patch("PySide6.QtCore.QThreadPool.globalInstance")
+    def test_runtime_shutdown_drains_pool_and_deferred_deletes(
+        self,
+        global_pool,
+        send_posted_events,
+    ):
+        pool = global_pool.return_value
+        pool.waitForDone.return_value = True
+        widget = mock.Mock()
+        app = mock.Mock()
+        app.topLevelWidgets.return_value = [widget]
+
+        stopped = gui_test_support.shutdown_gui_test_runtime(app, wait_ms=321)
+
+        self.assertTrue(stopped)
+        pool.clear.assert_called_once_with()
+        pool.waitForDone.assert_called_once_with(321)
+        widget.hide.assert_called_once_with()
+        widget.deleteLater.assert_called_once_with()
+        send_posted_events.assert_called_once()
+        app.processEvents.assert_called_once_with()
+        app.shutdown.assert_called_once_with()
+
+    @mock.patch("PySide6.QtCore.QCoreApplication.sendPostedEvents")
+    @mock.patch("PySide6.QtCore.QThreadPool.globalInstance")
+    def test_runtime_shutdown_reports_unfinished_pool(
+        self,
+        global_pool,
+        _send_posted_events,
+    ):
+        global_pool.return_value.waitForDone.return_value = False
+        app = mock.Mock()
+        app.topLevelWidgets.return_value = []
+
+        self.assertFalse(gui_test_support.shutdown_gui_test_runtime(app, wait_ms=0))
+
+
 if __name__ == "__main__":
     unittest.main()
