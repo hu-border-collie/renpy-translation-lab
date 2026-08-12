@@ -627,6 +627,54 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     1,
                 )
 
+    def test_direct_retry_canonicalization_preserves_complete_normalized_response(self):
+        chunk = {
+            'key': 'chunk-1',
+            'items': [
+                {'id': 'a', 'text': 'Hello'},
+                {'id': 'b', 'text': 'World'},
+            ],
+        }
+        first_pass_response = batch_mod.response_payload_with_text(
+            {},
+            json.dumps(
+                {'translations': [{'id': 'a', 'translation': '你好'}]},
+                ensure_ascii=False,
+            ),
+        )
+        row = {
+            'key': 'chunk-1',
+            'response': first_pass_response,
+            'normalized_response': {
+                'translations': [
+                    {'id': 'a', 'translation': '你好'},
+                    {'id': 'b', 'translation': '世界'},
+                ],
+            },
+            'contract_diagnostics': {'complete': True, 'custom': 'stale'},
+            'response_semantics': {
+                'response': 'first_pass_provider_payload',
+                'normalized_response': 'final_merged_contract',
+            },
+        }
+
+        canonical = batch_mod.canonical_translation_result_row(row, chunk)
+
+        self.assertEqual(canonical['response'], first_pass_response)
+        self.assertEqual(
+            [
+                item['id']
+                for item in canonical['normalized_response']['translations']
+            ],
+            ['a', 'b'],
+        )
+        self.assertTrue(canonical['contract_diagnostics']['complete'])
+        self.assertNotIn('custom', canonical['contract_diagnostics'])
+        self.assertEqual(
+            canonical['response_semantics'],
+            row['response_semantics'],
+        )
+
     def test_create_keyword_package_uses_keyword_mode_manifest(self):
         old_values = {
             'tl_dir': batch_mod.legacy.TL_DIR,

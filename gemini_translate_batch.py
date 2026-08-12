@@ -5276,6 +5276,24 @@ def compact_result_items_for_response(result_items):
 def canonical_translation_result_row(row, chunk):
     """Attach an authoritative named envelope while preserving provider output."""
     canonical = copy.deepcopy(row) if isinstance(row, dict) else {}
+    normalized = canonical.get('normalized_response')
+    if isinstance(normalized, dict):
+        try:
+            contract = validate_result_contract(
+                normalized,
+                translation_core.MODE_TRANSLATION,
+                chunk.get('items') or [],
+            )
+        except Exception:
+            pass
+        else:
+            canonical['normalized_response'] = contract.to_envelope()
+            canonical['contract_diagnostics'] = contract.to_diagnostics()
+            canonical.setdefault('response_semantics', {
+                'response': 'provider_payload',
+                'normalized_response': 'final_merged_contract',
+            })
+            return canonical
     response_text = extract_text_from_response_payload(canonical.get('response', {}))
     if not response_text:
         return canonical
