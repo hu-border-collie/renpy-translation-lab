@@ -214,6 +214,46 @@ class TranslationCoreRegressionTests(unittest.TestCase):
             {'response_items_not_array': 1},
         )
 
+    def test_translation_contract_rejects_results_when_no_ids_were_requested(self):
+        report = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'outside', 'translation': '未知'},
+                ]
+            },
+            expected_units=[],
+        )
+
+        self.assertFalse(report.complete)
+        self.assertEqual(report.items, [])
+        self.assertEqual(report.retry_ids, [])
+        self.assertEqual(report.reason_counts(), {'result_unknown_id': 1})
+
+    def test_keyword_contract_rejects_provenance_when_no_ids_were_requested(self):
+        report = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Void Gate',
+                        'suggested_target': '虚空门',
+                        'category': 'term',
+                        'confidence': 0.9,
+                        'evidence': 'line',
+                        'source_item_ids': ['outside'],
+                    }
+                ],
+                'chunk_summary': '',
+                'summary_evidence_item_ids': [],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=[],
+        )
+
+        self.assertFalse(report.complete)
+        self.assertEqual(report.items, [])
+        self.assertEqual(report.retry_ids, [])
+        self.assertEqual(report.reason_counts(), {'result_unknown_source_id': 1})
+
     def test_translation_contract_ignores_unexpected_fields_with_diagnostic(self):
         report = translation_core.validate_model_response(
             {

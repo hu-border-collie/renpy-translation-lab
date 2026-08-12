@@ -1053,7 +1053,7 @@ def _validate_id_results(payload, mode, expected_ids, allow_legacy):
                 message='Result id must be a non-empty string.',
             ))
             continue
-        if expected_set and item_id not in expected_set:
+        if item_id not in expected_set:
             report.issues.append(_issue(
                 CONTRACT_UNKNOWN_ID,
                 item_id=item_id,
@@ -1189,7 +1189,7 @@ def _validate_string_list(
         cleaned.append(item)
     expected_set = set(expected_ids)
     for item_id in cleaned:
-        if expected_set and item_id not in expected_set:
+        if item_id not in expected_set:
             report.issues.append(_issue(
                 CONTRACT_UNKNOWN_SOURCE_ID,
                 item_id=item_id,
@@ -1197,7 +1197,7 @@ def _validate_string_list(
                 field_name=field_name,
                 message='Evidence id was not present in the request.',
             ))
-    return [item_id for item_id in cleaned if not expected_set or item_id in expected_set]
+    return [item_id for item_id in cleaned if item_id in expected_set]
 
 
 def _validate_keyword_response(payload, expected_ids, allow_legacy):

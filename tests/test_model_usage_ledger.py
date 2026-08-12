@@ -592,6 +592,69 @@ class ModelUsageLedgerTests(unittest.TestCase):
             self.assertEqual(failed_summary["request_errors"], 1)
             failed_recorder.assert_not_called()
 
+    def test_probe_rejects_missing_or_empty_manifest_chunk_before_provider_call(self):
+        request_rows = [
+            {
+                "key": "chunk-1",
+                "request": {"contents": [], "generation_config": {}},
+            }
+        ]
+        invalid_manifests = (
+            (
+                {
+                    "_manifest_path": "manifest.json",
+                    "chunks": [],
+                },
+                "PROBE_REQUEST_CHUNK_MISSING",
+            ),
+            (
+                {
+                    "_manifest_path": "manifest.json",
+                    "chunks": [{"key": "chunk-1", "items": []}],
+                },
+                "PROBE_REQUEST_CHUNK_EMPTY",
+            ),
+        )
+
+        for manifest, code_name in invalid_manifests:
+            with self.subTest(code_name=code_name):
+                with (
+                    mock.patch.object(batch, "load_manifest", return_value=manifest),
+                    mock.patch.object(
+                        batch, "load_request_rows", return_value=request_rows
+                    ),
+                    mock.patch.object(batch, "create_batch_client") as create_client,
+                    self.assertRaises(batch.cli_contract.MachineContractError) as error,
+                ):
+                    batch.probe_requests("unused", limit=1)
+
+                self.assertEqual(error.exception.code_name, code_name)
+                create_client.assert_not_called()
+
+    def test_probe_rejects_request_row_without_key_before_provider_call(self):
+        manifest = {
+            "_manifest_path": "manifest.json",
+            "chunks": [{"key": "chunk-1", "items": [{"id": "item-1"}]}],
+        }
+        request_rows = [
+            {"request": {"contents": [], "generation_config": {}}},
+        ]
+
+        with (
+            mock.patch.object(batch, "load_manifest", return_value=manifest),
+            mock.patch.object(batch, "load_request_rows", return_value=request_rows),
+            mock.patch.object(batch, "create_batch_client") as create_client,
+            self.assertRaises(batch.cli_contract.MachineContractError) as error,
+        ):
+            batch.probe_requests("unused", limit=1)
+
+        self.assertEqual(
+            error.exception.code_name,
+            "PROBE_REQUEST_CHUNK_MISSING",
+        )
+        self.assertEqual(error.exception.details["key"], "")
+        create_client.assert_not_called()
+
     def test_repair_records_only_successful_provider_responses(self):
         with tempfile.TemporaryDirectory() as package:
             report_path = os.path.join(package, "remaining.jsonl")

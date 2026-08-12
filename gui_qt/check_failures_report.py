@@ -19,7 +19,6 @@ WARN_REASON_CODES = {
     "response_missing_expected_id",
     "result_missing_field",
     "result_invalid_field_type",
-    "result_unexpected_field",
     "result_empty_translation",
     "result_unknown_id",
     "result_unknown_source_id",
@@ -92,6 +91,7 @@ REASON_CODE_LABELS = {
     "response_missing_expected_id": "响应缺少请求 ID",
     "result_missing_field": "结果缺少必填字段",
     "result_invalid_field_type": "结果字段类型错误",
+    # Kept for rendering contract diagnostics; diagnostics do not enter WARN safety.
     "result_unexpected_field": "结果包含未知字段",
     "result_empty_translation": "结果译文为空",
     "result_unknown_id": "结果包含未知 ID",
@@ -128,7 +128,6 @@ REASON_CATEGORY_BY_CODE = {
     "response_missing_expected_id": REASON_CATEGORY_RETRY,
     "result_missing_field": REASON_CATEGORY_RETRY,
     "result_invalid_field_type": REASON_CATEGORY_RETRY,
-    "result_unexpected_field": REASON_CATEGORY_RETRY,
     "result_empty_translation": REASON_CATEGORY_RETRY,
     "result_unknown_id": REASON_CATEGORY_RETRY,
     "result_unknown_source_id": REASON_CATEGORY_RETRY,

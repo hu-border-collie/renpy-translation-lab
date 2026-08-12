@@ -209,7 +209,6 @@ CHECK_WARN_REASON_CODES = {
     'response_missing_expected_id',
     'result_missing_field',
     'result_invalid_field_type',
-    'result_unexpected_field',
     'result_empty_translation',
     'result_unknown_id',
     'result_unknown_source_id',
@@ -8404,6 +8403,7 @@ def print_check_summary(summary):
 
 
 def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
+    """Probe only request rows bound to non-empty manifest translation chunks."""
     manifest = load_manifest(target)
     rows = load_request_rows(manifest)
     if offset < 0:
@@ -8413,6 +8413,32 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
     sample = rows[offset:offset + limit]
     if not sample:
         raise SystemExit('No request rows available for the requested probe range.')
+
+    chunks_by_key = {
+        str(chunk.get('key') or ''): chunk
+        for chunk in manifest.get('chunks') or []
+        if isinstance(chunk, dict) and str(chunk.get('key') or '')
+    }
+    sample_chunks = []
+    for index, row in enumerate(sample, start=offset + 1):
+        key = str(row.get('key') or '') if isinstance(row, dict) else ''
+        chunk = chunks_by_key.get(key)
+        if chunk is None:
+            raise cli_contract.MachineContractError(
+                f'Probe request row #{index} has no matching manifest chunk: {key or "(missing)"}',
+                code_name='PROBE_REQUEST_CHUNK_MISSING',
+                suggested_action='rebuild_batch_package',
+                details={'row': index, 'key': key},
+            )
+        items = chunk.get('items')
+        if not isinstance(items, list) or not items:
+            raise cli_contract.MachineContractError(
+                f'Probe request row #{index} references an empty manifest chunk: {key}',
+                code_name='PROBE_REQUEST_CHUNK_EMPTY',
+                suggested_action='rebuild_batch_package',
+                details={'row': index, 'key': key},
+            )
+        sample_chunks.append(chunk)
 
     usage_run_id = model_usage_ledger.new_run_id('probe')
     usage_operation_id = (
@@ -8432,8 +8458,8 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
     }
     probe_results = []
 
-    for index, row in enumerate(sample, start=1):
-        key = row.get('key', f'probe-{index}')
+    for index, (row, chunk) in enumerate(zip(sample, sample_chunks), start=1):
+        key = str(row.get('key') or '')
         request_payload = row.get('request') or {}
         model_name = str(manifest.get('batch_model') or BATCH_MODEL or '')
         config = filter_gemini_generation_config(
@@ -8448,7 +8474,8 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
         if safety_settings:
             config['safety_settings'] = safety_settings
 
-        expected_items = len(((manifest.get('chunks') or []) and next((chunk['items'] for chunk in manifest['chunks'] if chunk['key'] == key), [])) or [])
+        chunk_items = chunk['items']
+        expected_items = len(chunk_items)
         parse_ok = False
         parsed_items = 0
         parse_error = ''
@@ -8496,10 +8523,7 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
                 contract = validate_result_contract(
                     payload,
                     translation_core.MODE_TRANSLATION,
-                    (next(
-                        (chunk.get('items') or [] for chunk in manifest.get('chunks', []) if chunk.get('key') == key),
-                        [],
-                    )),
+                    chunk_items,
                 )
                 parsed_items = len(contract.items)
                 parse_ok = contract.complete
