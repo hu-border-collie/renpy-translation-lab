@@ -1383,6 +1383,28 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 Path(manifest['result_jsonl_path']).read_text(encoding='utf-8').strip()
             )
             retry_prompt = seen_requests[1]['contents'][0]['parts'][0]['text']
+            self.assertEqual(result_row['contract_diagnostics']['reason_counts'], {})
+            result_row['contract_diagnostics']['reason_counts'] = {
+                translation_core.CONTRACT_MISSING_EXPECTED_ID: 1,
+            }
+            result_row['contract_diagnostics']['issues'] = [{
+                'reason_code': translation_core.CONTRACT_MISSING_EXPECTED_ID,
+                'id': 'b',
+            }]
+            Path(manifest['result_jsonl_path']).write_text(
+                json.dumps(result_row, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+            audit_manifest = dict(manifest)
+            audit_manifest['version'] = 1
+            audit_manifest['manifest_version'] = 1
+            audit_manifest['chunks'] = [chunk]
+            integrity_keys, integrity_reasons = (
+                batch_mod.collect_result_integrity_issue_keys(audit_manifest)
+            )
+            _replacements, _translated, failures, check_summary = (
+                batch_mod.collect_result_actions(audit_manifest)
+            )
 
         self.assertEqual(len(seen_requests), 2)
         self.assertEqual(seen_models, ['sync-override', 'sync-override'])
@@ -1434,6 +1456,18 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(manifest['sync_summary']['targeted_retry_requests'], 1)
         self.assertEqual(manifest['sync_summary']['contract_final_completeness'], 1.0)
         self.assertEqual(manifest['job_state'], 'SYNC_COMPLETED')
+        self.assertEqual(integrity_keys, set())
+        self.assertEqual(integrity_reasons, {})
+        self.assertEqual(failures, [])
+        self.assertEqual(check_summary['partial_chunks'], 0)
+        self.assertNotIn(
+            translation_core.CONTRACT_MISSING_EXPECTED_ID,
+            check_summary['reason_counts'],
+        )
+        self.assertEqual(
+            batch_mod.summarize_check_safety(check_summary)['level'],
+            batch_mod.CHECK_SAFETY_SAFE,
+        )
 
     def test_execute_sync_rows_rejects_unknown_request_chunk(self):
         with tempfile.TemporaryDirectory() as tmp:

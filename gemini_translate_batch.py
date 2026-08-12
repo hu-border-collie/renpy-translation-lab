@@ -6214,8 +6214,10 @@ def contract_diagnostics_counts(diagnostics, field_name):
 
 
 def persisted_contract_reason_counts(row):
-    """Return validated issue counts captured before response normalization."""
+    """Return unresolved final issues erased by response normalization."""
     diagnostics = row.get('contract_diagnostics')
+    if not isinstance(diagnostics, dict) or diagnostics.get('complete') is not False:
+        return {}
     return contract_diagnostics_counts(diagnostics, 'reason_counts')
 
 
