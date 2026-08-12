@@ -793,6 +793,10 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertIn('source', candidate_schema['items']['required'])
         self.assertIn('source_item_ids', candidate_schema['items']['required'])
         self.assertIn('source_item_ids', candidate_schema['items']['properties'])
+        self.assertEqual(
+            candidate_schema['items']['properties']['source_item_ids']['minItems'],
+            1,
+        )
         system_text = request_rows[0]['request']['system_instruction']['parts'][0]['text']
         self.assertIn('Existing glossary entries', system_text)
         self.assertIn('chunk_summary', system_text)

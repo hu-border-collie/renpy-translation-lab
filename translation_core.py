@@ -823,11 +823,12 @@ def build_keyword_system_instruction(
         'relationship labels, or recurring phrasing that a human may want to add to glossary.json or story_graph.json.\n'
         f'Return at most {max_candidates} candidates for this chunk. '
         'Avoid generic words, common function words, UI filler, and candidates already covered by existing glossary entries. '
-        'Set source_item_ids to the input id values that support the candidate. '
+        'Set source_item_ids to one or more input id values that support the candidate. '
         'Use concise evidence that cites the relevant input id or phrase.\n'
         'Also write a compact chunk_summary in Chinese that summarizes only the visible story events in this chunk. '
         'Use 1-3 sentences, avoid invented continuity, and leave chunk_summary empty if the lines do not contain usable story content. '
-        'Set summary_evidence_item_ids to the input ids that support the summary. Return JSON only.'
+        'When chunk_summary is non-empty, set summary_evidence_item_ids to one or more input ids that support it; '
+        'otherwise use an empty array. Return JSON only.'
     )
 
 
@@ -854,7 +855,9 @@ def build_keyword_user_prompt(units):
         'TARGET LINES:\n'
         f'{target_payload}\n\n'
         'Return a JSON object with candidates, chunk_summary, and summary_evidence_item_ids. '
-        'Each candidate must include source, suggested_target, category, confidence, evidence, and source_item_ids.'
+        'Each candidate must include source, suggested_target, category, confidence, evidence, and source_item_ids; '
+        'source_item_ids must contain at least one TARGET LINES id. A non-empty chunk_summary must cite at least one '
+        'TARGET LINES id in summary_evidence_item_ids.'
     )
 
 
@@ -927,6 +930,7 @@ def build_keyword_schema(max_candidates_per_chunk=12):
                 'evidence': {'type': 'string'},
                 'source_item_ids': {
                     'type': 'array',
+                    'minItems': 1,
                     'items': {'type': 'string'},
                 },
             },
@@ -1156,21 +1160,40 @@ def _validate_id_results(payload, mode, expected_ids, allow_legacy):
     return report
 
 
-def _validate_string_list(value, *, expected_ids, report, field_name):
+def _validate_string_list(
+    value,
+    *,
+    expected_ids,
+    report,
+    field_name,
+    result_index=-1,
+):
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         report.issues.append(_issue(
             CONTRACT_INVALID_FIELD_TYPE,
+            result_index=result_index,
             field_name=field_name,
             message=f'{field_name} must be an array of strings.',
         ))
         return []
-    cleaned = [item for item in value if item]
+    cleaned = []
+    for item in value:
+        if not item.strip():
+            report.issues.append(_issue(
+                CONTRACT_INVALID_FIELD_TYPE,
+                result_index=result_index,
+                field_name=field_name,
+                message=f'{field_name} must contain non-empty strings.',
+            ))
+            continue
+        cleaned.append(item)
     expected_set = set(expected_ids)
     for item_id in cleaned:
         if expected_set and item_id not in expected_set:
             report.issues.append(_issue(
                 CONTRACT_UNKNOWN_SOURCE_ID,
                 item_id=item_id,
+                result_index=result_index,
                 field_name=field_name,
                 message='Evidence id was not present in the request.',
             ))
@@ -1229,8 +1252,15 @@ def _validate_keyword_response(payload, expected_ids, allow_legacy):
     else:
         summary = summary if isinstance(summary, str) else ''
         summary_ids = evidence_ids if isinstance(evidence_ids, list) else []
+    normalized_summary = compact_text(summary)
+    if not legacy_shape and normalized_summary and not summary_ids:
+        report.issues.append(_issue(
+            CONTRACT_MISSING_FIELD,
+            field_name='summary_evidence_item_ids',
+            message='A non-empty chunk_summary must cite at least one requested id.',
+        ))
     report.metadata = {
-        'chunk_summary': compact_text(summary),
+        'chunk_summary': normalized_summary,
         'summary_evidence_item_ids': summary_ids,
     }
 
@@ -1283,13 +1313,30 @@ def _validate_keyword_response(payload, expected_ids, allow_legacy):
                 message='Candidate source must not be empty.',
             ))
             continue
+        raw_source_ids = raw_item['source_item_ids']
+        if not raw_source_ids and not legacy_shape:
+            report.issues.append(_issue(
+                CONTRACT_MISSING_FIELD,
+                result_index=index,
+                field_name='source_item_ids',
+                message='Candidate source_item_ids must cite at least one requested id.',
+            ))
+            continue
+        if legacy_shape and not raw_source_ids:
+            candidate = dict(raw_item)
+            candidate['source_item_ids'] = []
+            normalized = normalize_keyword_results({'candidates': [candidate]})
+            if normalized:
+                valid_candidates.append(normalized[0])
+            continue
         source_ids = _validate_string_list(
-            raw_item['source_item_ids'],
+            raw_source_ids,
             expected_ids=expected_ids,
             report=report,
             field_name='source_item_ids',
+            result_index=index,
         )
-        if len(source_ids) != len(raw_item['source_item_ids']):
+        if len(source_ids) != len(raw_source_ids):
             continue
         candidate = dict(raw_item)
         candidate['source_item_ids'] = source_ids

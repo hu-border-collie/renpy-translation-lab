@@ -10057,7 +10057,9 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
             raise SystemExit('--api-key-index is only supported by the Gemini sync backend.')
         from litellm_sync_backend import LiteLLMSyncBackend
 
-        result = LiteLLMSyncBackend().generate(SyncGenerationRequest(
+        result = LiteLLMSyncBackend(
+            custom_providers=legacy.CUSTOM_LITELLM_PROVIDERS,
+        ).generate(SyncGenerationRequest(
             model=effective_model,
             contents=request_payload.get('contents') or [],
             config=config,

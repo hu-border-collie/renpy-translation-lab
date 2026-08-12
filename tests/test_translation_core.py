@@ -160,6 +160,8 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertEqual(keyword_schema['properties']['candidates']['maxItems'], 5)
         candidate_schema = keyword_schema['properties']['candidates']['items']
         self.assertNotIn('enum', candidate_schema['properties']['category'])
+        source_ids_schema = candidate_schema['properties']['source_item_ids']
+        self.assertEqual(source_ids_schema['minItems'], 1)
         self.assertIn('chunk_summary', keyword_schema['required'])
 
     def test_translation_contract_reports_stable_id_and_field_reasons(self):
@@ -279,6 +281,90 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertEqual(report.items, [])
         self.assertEqual(report.retry_ids, ['a'])
         self.assertEqual(report.reason_counts()['result_unknown_source_id'], 1)
+
+    def test_keyword_contract_rejects_empty_candidate_provenance(self):
+        report = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Void Gate',
+                        'suggested_target': '虚空门',
+                        'category': 'term',
+                        'confidence': 0.9,
+                        'evidence': 'line a',
+                        'source_item_ids': [],
+                    }
+                ],
+                'chunk_summary': '',
+                'summary_evidence_item_ids': [],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=[{'id': 'a', 'text': 'Void Gate'}],
+        )
+
+        self.assertFalse(report.complete)
+        self.assertEqual(report.items, [])
+        self.assertEqual(report.retry_ids, ['a'])
+        self.assertEqual(report.reason_counts(), {'result_missing_field': 1})
+
+    def test_keyword_contract_keeps_legacy_empty_provenance_read_compatibility(self):
+        report = translation_core.validate_model_response(
+            [
+                {
+                    'source': 'Void Gate',
+                    'suggested_target': '虚空门',
+                    'category': 'term',
+                    'confidence': 0.9,
+                    'evidence': 'legacy artifact',
+                    'source_item_ids': [],
+                }
+            ],
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=[{'id': 'a', 'text': 'Void Gate'}],
+        )
+
+        self.assertTrue(report.complete)
+        self.assertTrue(report.legacy_shape)
+        self.assertEqual(len(report.items), 1)
+        self.assertEqual(report.items[0]['source_item_ids'], [])
+
+    def test_keyword_contract_rejects_summary_without_provenance(self):
+        report = translation_core.validate_model_response(
+            {
+                'candidates': [],
+                'chunk_summary': 'The party opens the Void Gate.',
+                'summary_evidence_item_ids': [],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=[{'id': 'a', 'text': 'Open the Void Gate'}],
+        )
+
+        self.assertFalse(report.complete)
+        self.assertEqual(report.items, [])
+        self.assertEqual(report.retry_ids, ['a'])
+        self.assertEqual(report.reason_counts(), {'result_missing_field': 1})
+
+    def test_keyword_contract_rejects_summary_with_only_unknown_provenance(self):
+        report = translation_core.validate_model_response(
+            {
+                'candidates': [],
+                'chunk_summary': 'The party opens the Void Gate.',
+                'summary_evidence_item_ids': ['outside'],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=[{'id': 'a', 'text': 'Open the Void Gate'}],
+        )
+
+        self.assertFalse(report.complete)
+        self.assertEqual(report.metadata['summary_evidence_item_ids'], [])
+        self.assertEqual(report.retry_ids, ['a'])
+        self.assertEqual(
+            report.reason_counts(),
+            {
+                'result_unknown_source_id': 1,
+                'result_missing_field': 1,
+            },
+        )
 
     def test_keyword_contract_allows_valid_candidates_to_cover_only_some_lines(self):
         report = translation_core.validate_model_response(
