@@ -178,10 +178,14 @@ def _collect_sync_facts(output: str) -> list[str]:
     if run_match:
         facts.insert(0, f"同步输出目录：{run_match.group(1).strip()}")
     completeness = re.search(
-        r"^Model contract completeness:\s*(\d+/\d+)\s*$", output, re.MULTILINE
+        r"^Model contract chunk completeness:\s*(\d+/\d+)\s*$",
+        output,
+        re.MULTILINE,
     )
     if completeness:
-        facts.append(f"{MODEL_CONTRACT_COPY['completeness']}：{completeness.group(1)}")
+        facts.append(
+            f"{MODEL_CONTRACT_COPY['chunk_completeness']}：{completeness.group(1)}"
+        )
     retries = re.search(
         r"^Targeted retries:\s*(\d+) requests / (\d+) items\s*$",
         output,

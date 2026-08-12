@@ -1243,6 +1243,87 @@ class BatchRepairRegressionTests(unittest.TestCase):
             1,
         )
 
+    def test_sync_keyword_summary_uses_chunk_completeness(self):
+        chunk = {
+            'key': 'keyword-1',
+            'file_path': 'script.rpy',
+            'file_rel_path': 'script.rpy',
+            'items': [{'id': 'a', 'text': 'Void Gate'}],
+        }
+        first_payload = {
+            'candidates': [
+                {
+                    'source': 'Void Gate',
+                    'suggested_target': '虚空门',
+                    'category': 'place',
+                    'confidence': 0.9,
+                    'evidence': 'a',
+                    'source_item_ids': ['a'],
+                },
+                {
+                    'source': 'Broken',
+                    'suggested_target': '错误',
+                    'category': 'term',
+                    'confidence': 0.5,
+                    'evidence': 'unknown',
+                    'source_item_ids': ['unknown'],
+                },
+            ],
+        }
+        retry_payload = {'candidates': []}
+        payloads = [first_payload, retry_payload]
+
+        def fake_sync(_request, _model, **_kwargs):
+            payload = payloads.pop(0)
+            text = json.dumps(payload, ensure_ascii=False)
+            return {
+                'response_payload': {
+                    'candidates': [{'content': {'parts': [{'text': text}]}}],
+                },
+                'response_text': text,
+                'finish_reason': 'STOP',
+                'usage_metadata': {},
+                'provider': 'gemini',
+                'model': 'gemini-test',
+                'execution_mode': 'sync',
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            request_rows = [
+                batch_mod.build_keyword_request(
+                    chunk,
+                    max_candidates_per_chunk=5,
+                    model='gemini-test',
+                )
+            ]
+            manifest_path = batch_mod.make_sync_manifest(
+                package_dir=str(package_dir),
+                mode=batch_mod.MANIFEST_MODE_KEYWORD_EXTRACTION,
+                display_name='keyword-completeness-test',
+                chunks=[chunk],
+                request_rows=request_rows,
+                settings={},
+            )
+            with mock.patch.object(
+                batch_mod,
+                'run_sync_request',
+                side_effect=fake_sync,
+            ):
+                manifest = batch_mod.execute_sync_request_rows(
+                    manifest_path,
+                    request_rows,
+                )
+
+        summary = manifest['sync_summary']
+        self.assertEqual(summary['contract_expected_chunks'], 1)
+        self.assertEqual(summary['contract_first_pass_complete_chunks'], 0)
+        self.assertEqual(summary['contract_final_complete_chunks'], 0)
+        self.assertEqual(summary['contract_final_chunk_completeness'], 0.0)
+        self.assertNotIn('contract_expected_items', summary)
+        self.assertNotIn('contract_final_valid_items', summary)
+        self.assertEqual(summary['contract_partial_requests'], 1)
+
     def test_sync_unknown_extra_id_is_audited_without_retranslating_valid_ids(self):
         chunk = {
             'key': 'chunk-1',

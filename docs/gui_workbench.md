@@ -334,7 +334,7 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 ### 同步关键词
 
-选择模式「同步」后点击「提取关键词」，GUI 会调用 `gemini_translate_batch.py sync-keywords`（无额外参数）。适合小范围即时生成报告；完成后同样会把关键词报告复制到 `extracted_keywords/`。若模型结果合同不完整，GUI 显示部分完成以及完整率、定点重试和未解决项，通过校验的候选仍会进入报告。不支持从任务记录恢复。运行前需已配置 API Key。
+选择模式「同步」后点击「提取关键词」，GUI 会调用 `gemini_translate_batch.py sync-keywords`（无额外参数）。适合小范围即时生成报告；完成后同样会把关键词报告复制到 `extracted_keywords/`。关键词没有固定的预期候选数，因此 GUI 显示请求块完整率、定点重试和不完整请求数；若模型结果合同不完整，任务显示部分完成，通过校验的候选仍会进入报告。不支持从任务记录恢复。运行前需已配置 API Key。
 
 ### 合并候选到 glossary
 

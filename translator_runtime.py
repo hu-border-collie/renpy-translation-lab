@@ -4490,6 +4490,7 @@ def process_batch(
 
     id_map = {item["id"]: item for item in batch}
     valid_progress_entries = []
+    accepted_ids = []
     seen_result_ids = set()
     retry_ids = set(contract.retry_ids)
 
@@ -4515,6 +4516,7 @@ def process_batch(
             continue
 
         valid_progress_entries.append(entry["progress_entry"])
+        accepted_ids.append(entry["id"])
         entry["translated_text"] = memory_translation
         unit = translation_core.unit_from_sync_task(entry)
         action = translation_core.translation_writeback_action(unit, item)
@@ -4531,6 +4533,7 @@ def process_batch(
     if return_contract:
         return {
             'progress_entries': valid_progress_entries,
+            'accepted_ids': accepted_ids,
             'retry_ids': [
                 item['id'] for item in batch if item.get('id') in retry_ids
             ],
@@ -4556,14 +4559,23 @@ def new_sync_contract_diagnostics():
     }
 
 
-def _record_sync_contract_report(diagnostics, report, *, retry_kind):
+def _record_sync_contract_report(
+    diagnostics,
+    report,
+    *,
+    retry_kind,
+    accepted_ids=None,
+):
     if diagnostics is None:
         return
+    accepted_ids = set(accepted_ids or ())
     if retry_kind == 'first_pass':
-        diagnostics['first_pass_valid'] += len(report.valid_ids)
+        diagnostics['first_pass_valid'] += len(accepted_ids)
     elif retry_kind == 'split_retry':
         diagnostics['split_retry_requests'] += 1
-    diagnostics['_valid_ids'].update(report.valid_ids)
+    # Contract-valid model output is not yet safe to preview. Only count IDs
+    # accepted by the local/adapter validator as final valid results.
+    diagnostics['_valid_ids'].update(accepted_ids)
     for reason_code, count in report.reason_counts().items():
         diagnostics['reason_counts'][reason_code] = (
             diagnostics['reason_counts'].get(reason_code, 0) + count
@@ -4666,6 +4678,7 @@ def process_batch_with_retry(
                 contract_diagnostics,
                 outcome['contract'],
                 retry_kind=retry_kind,
+                accepted_ids=outcome['accepted_ids'],
             )
             successful = list(outcome['progress_entries'])
             retry_ids = set(outcome['retry_ids'])
@@ -4806,6 +4819,12 @@ def process_batch_with_retry(
         return r1 + r2
 
     log_failure(batch, f"Failed after retries: {error_str}")
+    if contract_diagnostics is not None:
+        terminal_code = error_reason_code or 'request_or_contract_failure'
+        terminal_counts = contract_diagnostics.setdefault(
+            'terminal_reason_counts', {}
+        )
+        terminal_counts[terminal_code] = terminal_counts.get(terminal_code, 0) + 1
     _record_unresolved_contract_items(
         contract_failures,
         batch,

@@ -10170,6 +10170,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
     effective_model = _effective_sync_model(manifest)
     chunk_map = {chunk.get('key'): chunk for chunk in manifest.get('chunks') or []}
     contract_mode = _contract_mode_for_manifest(manifest)
+    keyword_contract = contract_mode == translation_core.MODE_KEYWORD_EXTRACTION
     requested_chunks = [
         chunk_map.get(row.get('key')) or {'items': []}
         for row in request_rows
@@ -10180,18 +10181,25 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
         'failed_request_count': 0,
         'max_tokens_count': 0,
         'missing_text_count': 0,
-        'contract_expected_items': (
-            len(request_rows)
-            if contract_mode == translation_core.MODE_KEYWORD_EXTRACTION
-            else sum(len(chunk.get('items') or []) for chunk in requested_chunks)
-        ),
-        'contract_first_pass_valid_items': 0,
-        'contract_final_valid_items': 0,
         'contract_partial_requests': 0,
         'targeted_retry_requests': 0,
         'targeted_retry_items': 0,
         'reason_counts': {},
     }
+    if keyword_contract:
+        summary.update({
+            'contract_expected_chunks': len(request_rows),
+            'contract_first_pass_complete_chunks': 0,
+            'contract_final_complete_chunks': 0,
+        })
+    else:
+        summary.update({
+            'contract_expected_items': sum(
+                len(chunk.get('items') or []) for chunk in requested_chunks
+            ),
+            'contract_first_pass_valid_items': 0,
+            'contract_final_valid_items': 0,
+        })
     result_rows = []
     for index, row in enumerate(request_rows, start=1):
         key = row.get('key', f'sync-{index}')
@@ -10236,11 +10244,14 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                     chunk,
                     contract_mode,
                 )
-                summary['contract_first_pass_valid_items'] += (
-                    int(first_contract.complete)
-                    if contract_mode == translation_core.MODE_KEYWORD_EXTRACTION
-                    else len(first_contract.valid_ids)
-                )
+                if keyword_contract:
+                    summary['contract_first_pass_complete_chunks'] += int(
+                        first_contract.complete
+                    )
+                else:
+                    summary['contract_first_pass_valid_items'] += len(
+                        first_contract.valid_ids
+                    )
                 record_contract_reasons(summary, first_contract)
             except Exception as exc:
                 first_error = exc
@@ -10327,11 +10338,14 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                 )
                 diagnostics['targeted_retry_count'] = 1 if retry_ids else 0
                 result_row['contract_diagnostics'] = diagnostics
-                summary['contract_final_valid_items'] += (
-                    int(final_contract.complete)
-                    if contract_mode == translation_core.MODE_KEYWORD_EXTRACTION
-                    else len(final_contract.valid_ids)
-                )
+                if keyword_contract:
+                    summary['contract_final_complete_chunks'] += int(
+                        final_contract.complete
+                    )
+                else:
+                    summary['contract_final_valid_items'] += len(
+                        final_contract.valid_ids
+                    )
                 if not final_contract.complete:
                     summary['contract_partial_requests'] += 1
             else:
@@ -10359,14 +10373,26 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
     atomic_write_text(f'{result_path}.sha256', content_sha + '\n')
 
     manifest['sync_completed_at'] = datetime.now().isoformat(timespec='seconds')
-    summary['contract_first_pass_completeness'] = (
-        summary['contract_first_pass_valid_items'] / summary['contract_expected_items']
-        if summary['contract_expected_items'] else 1.0
-    )
-    summary['contract_final_completeness'] = (
-        summary['contract_final_valid_items'] / summary['contract_expected_items']
-        if summary['contract_expected_items'] else 1.0
-    )
+    if keyword_contract:
+        expected = summary['contract_expected_chunks']
+        summary['contract_first_pass_chunk_completeness'] = (
+            summary['contract_first_pass_complete_chunks'] / expected
+            if expected else 1.0
+        )
+        summary['contract_final_chunk_completeness'] = (
+            summary['contract_final_complete_chunks'] / expected
+            if expected else 1.0
+        )
+    else:
+        expected = summary['contract_expected_items']
+        summary['contract_first_pass_completeness'] = (
+            summary['contract_first_pass_valid_items'] / expected
+            if expected else 1.0
+        )
+        summary['contract_final_completeness'] = (
+            summary['contract_final_valid_items'] / expected
+            if expected else 1.0
+        )
     manifest['job_state'] = (
         'SYNC_COMPLETED'
         if summary['failed_request_count'] == 0
@@ -10377,20 +10403,29 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
     manifest['result_jsonl_path'] = result_path
     manifest['result_jsonl_sha256'] = content_sha
     save_manifest(manifest, update_latest=False)
-    unresolved_items = max(
-        0,
-        summary['contract_expected_items'] - summary['contract_final_valid_items'],
-    )
-    print(
-        'Model contract completeness: '
-        f"{summary['contract_final_valid_items']}/{summary['contract_expected_items']}"
-    )
+    if keyword_contract:
+        print(
+            'Model contract chunk completeness: '
+            f"{summary['contract_final_complete_chunks']}/"
+            f"{summary['contract_expected_chunks']}"
+        )
+    else:
+        unresolved_items = max(
+            0,
+            summary['contract_expected_items'] - summary['contract_final_valid_items'],
+        )
+        print(
+            'Model contract completeness: '
+            f"{summary['contract_final_valid_items']}/"
+            f"{summary['contract_expected_items']}"
+        )
     print(
         'Targeted retries: '
         f"{summary['targeted_retry_requests']} requests / "
         f"{summary['targeted_retry_items']} items"
     )
-    print(f'Unresolved contract items: {unresolved_items}')
+    if not keyword_contract:
+        print(f'Unresolved contract items: {unresolved_items}')
     print(f"Contract partial requests: {summary['contract_partial_requests']}")
     import_manifest_usage_best_effort(manifest)
     return manifest

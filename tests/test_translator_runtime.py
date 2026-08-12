@@ -1540,6 +1540,73 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(diagnostics['targeted_retry_requests'], 0)
         self.assertEqual(diagnostics['split_retry_requests'], 2)
 
+    def test_contract_completeness_excludes_adapter_rejected_items(self):
+        batch = [
+            {
+                'id': 'file:0:1',
+                'text': 'Hello',
+                'line': 0,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:0:1',
+            },
+            {
+                'id': 'file:0:10',
+                'text': 'World',
+                'line': 0,
+                'start': 10,
+                'end': 17,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:0:10',
+            },
+        ]
+
+        def fake_call(_prompt, items, **_kwargs):
+            return translation_core.validate_model_response(
+                {
+                    'translations': [
+                        {'id': item['id'], 'translation': '译文'}
+                        for item in items
+                    ]
+                },
+                expected_units=items,
+            )
+
+        def validator(entry, _translated):
+            return (
+                entry['id'] == 'file:0:1',
+                'adapter.validation.block',
+            )
+
+        replacements = {}
+        diagnostics = runtime.new_sync_contract_diagnostics()
+        failures = []
+        with (
+            mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_call),
+            mock.patch.object(runtime, 'get_random_delay', return_value=0),
+            mock.patch.object(runtime.time, 'sleep'),
+            mock.patch.object(runtime, 'log_failure'),
+        ):
+            successful = runtime.process_batch_with_retry(
+                batch,
+                replacements,
+                translation_validator=validator,
+                contract_diagnostics=diagnostics,
+                contract_failures=failures,
+            )
+
+        finalized = runtime.finalize_sync_contract_diagnostics(diagnostics)
+        self.assertEqual(successful, ['task:0:1'])
+        self.assertEqual(finalized['first_pass_valid'], 1)
+        self.assertEqual(finalized['final_valid'], 1)
+        self.assertEqual(finalized['final_completeness'], 0.5)
+        self.assertEqual(finalized['unresolved_ids'], ['file:0:10'])
+        self.assertEqual(finalized['terminal_reason_counts'], {'validation_failed': 1})
+        self.assertEqual([item['item_id'] for item in failures], ['file:0:10'])
+
     def test_process_batch_stores_normalized_text_for_sync_rag(self):
         old_normalize_map = runtime.NORMALIZE_TRANSLATION_MAP
         old_use_memory = runtime.USE_TRANSLATION_MEMORY
