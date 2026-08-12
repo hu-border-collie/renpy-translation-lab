@@ -7882,7 +7882,7 @@ def collect_revision_actions(manifest, validate_sources=False):
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_revision_items'
                 bump_counter(summary['reason_counts'], reason_name)
 
-            failure_entries.extend(result_row_contract_failure_entries(
+            contract_failures = result_row_contract_failure_entries(
                 manifest,
                 chunk,
                 row,
@@ -7891,7 +7891,13 @@ def collect_revision_actions(manifest, validate_sources=False):
                 persisted_reason_deltas,
                 finish_reason,
                 usage_metadata,
-            ))
+            )
+            failure_entries.extend(contract_failures)
+            contract_failure_ids = {
+                str(failure.get('id') or '')
+                for failure in contract_failures
+                if str(failure.get('id') or '') in item_map
+            }
 
             seen_ids = set()
             for result_item in result_items:
@@ -7978,7 +7984,9 @@ def collect_revision_actions(manifest, validate_sources=False):
                 )
                 revised_lines_by_file.setdefault(file_key, set()).add(target_item['line'])
 
-            missing_ids = set(item_map.keys()) - seen_ids
+            missing_ids = (
+                set(item_map.keys()) - seen_ids - contract_failure_ids
+            )
             for missing_id in sorted(missing_ids):
                 item = item_map[missing_id]
                 failure_entries.append(make_failure_entry(
@@ -8573,7 +8581,7 @@ def collect_result_actions(manifest, validate_sources=False):
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_result_items'
                 bump_counter(summary['reason_counts'], reason_name)
 
-            failure_entries.extend(result_row_contract_failure_entries(
+            contract_failures = result_row_contract_failure_entries(
                 manifest,
                 chunk,
                 row,
@@ -8583,7 +8591,13 @@ def collect_result_actions(manifest, validate_sources=False):
                 finish_reason,
                 usage_metadata,
                 ignored_item_ids=relocation_missing_ids,
-            ))
+            )
+            failure_entries.extend(contract_failures)
+            contract_failure_ids = {
+                str(failure.get('id') or '')
+                for failure in contract_failures
+                if str(failure.get('id') or '') in item_map
+            }
 
             seen_ids = set()
             for result_item in result_items:
@@ -8657,7 +8671,9 @@ def collect_result_actions(manifest, validate_sources=False):
                 )
                 translated_lines_by_file.setdefault(file_key, set()).add(target_item['line'])
 
-            missing_ids = set(item_map.keys()) - seen_ids
+            missing_ids = (
+                set(item_map.keys()) - seen_ids - contract_failure_ids
+            )
             for missing_id in sorted(missing_ids):
                 item = item_map[missing_id]
                 failure_entries.append(
