@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 
 from .diagnostics_context import DiagnosticsContext, DiagnosticsPathEntry
-from .user_copy import format_manifest_path_fact
+from .user_copy import PROBE_COPY, format_manifest_path_fact
 
 _MANIFEST_MODE_TRANSLATION = "translation"
 _PROBE_SUMMARY_PREFIX_RE = re.compile(
@@ -88,7 +88,7 @@ def summarize_probe_output(
         return ProbeSummary(
             status="failed",
             heading="样本试跑失败",
-            message="试跑样本请求没有正常完成，请查看诊断日志中的 API 或格式错误。",
+            message=PROBE_COPY["failed"],
             facts=facts,
             findings=[],
             manifest_path=manifest_path,

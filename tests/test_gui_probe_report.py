@@ -85,6 +85,7 @@ class GuiProbeReportTests(unittest.TestCase):
     def test_summarize_probe_output_nonzero_exit_is_failed(self):
         summary = summarize_probe_output(PROBE_OUTPUT_OK, 1)
         self.assertEqual(summary.status, "failed")
+        self.assertIn("重建翻译包", summary.message)
 
     def test_translation_probe_ready_rejects_non_translation_manifest(self):
         ready, message = translation_probe_ready(

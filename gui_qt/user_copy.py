@@ -121,6 +121,13 @@ MODEL_CONTRACT_COPY = {
     "partial_requests": "不完整请求",
 }
 
+PROBE_COPY = {
+    "failed": (
+        "试跑样本请求没有正常完成，请查看诊断日志中的 API、格式或任务记录错误；"
+        "若 request row 与 chunk 不再匹配，请重建翻译包。"
+    ),
+}
+
 PROJECT_ANALYSIS_COPY = {
     "start": "开始分析",
     "generate": "生成项目摘要",

@@ -4983,12 +4983,22 @@ def build_retry_chunks_for_keys(manifest, retry_keys, retry_item_ids_by_key=None
             if item_id
         }
         items = chunk.get('items') or []
+        available_ids = {
+            str(item.get('id') or '')
+            for item in items
+            if str(item.get('id') or '')
+        }
         retry_items = [
             copy.deepcopy(item)
             for item in items
             if str(item.get('id') or '') in requested_ids
         ]
-        if requested_ids and retry_items and len(retry_items) < len(items):
+        if (
+            requested_ids
+            and requested_ids <= available_ids
+            and retry_items
+            and len(retry_items) < len(items)
+        ):
             scoped_chunk = copy.deepcopy(chunk)
             scoped_chunk['items'] = retry_items
             retry_chunks.extend(
@@ -10384,6 +10394,9 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                         first_contract.valid_ids
                     )
                 record_contract_reasons(summary, first_contract)
+                result_row['provider_response_attempts'][0][
+                    'contract_diagnostics'
+                ] = first_contract.to_diagnostics()
             except Exception as exc:
                 first_error = exc
                 bump_counter(
@@ -10437,6 +10450,9 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                         retry_chunk,
                         contract_mode,
                     )
+                    result_row['provider_response_attempts'][-1][
+                        'contract_diagnostics'
+                    ] = retry_contract.to_diagnostics()
                     record_contract_reasons(summary, retry_contract)
                     final_contract = (
                         retry_contract

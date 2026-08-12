@@ -1344,6 +1344,22 @@ class BatchRepairRegressionTests(unittest.TestCase):
         )
         self.assertNotIn('response', result_row['provider_response_attempts'][0])
         self.assertIn('response', result_row['provider_response_attempts'][1])
+        self.assertFalse(
+            result_row['provider_response_attempts'][0][
+                'contract_diagnostics'
+            ]['complete']
+        )
+        self.assertEqual(
+            result_row['provider_response_attempts'][0][
+                'contract_diagnostics'
+            ]['reason_counts'],
+            {'response_missing_expected_id': 1},
+        )
+        self.assertTrue(
+            result_row['provider_response_attempts'][1][
+                'contract_diagnostics'
+            ]['complete']
+        )
         self.assertEqual(manifest['sync_summary']['contract_expected_items'], 2)
         self.assertEqual(manifest['sync_summary']['targeted_retry_requests'], 1)
         self.assertEqual(manifest['sync_summary']['contract_final_completeness'], 1.0)
@@ -1957,6 +1973,31 @@ class BatchRepairRegressionTests(unittest.TestCase):
             ['a', 'b'],
         )
 
+    def test_retry_chunk_falls_back_to_full_chunk_for_stale_item_ids(self):
+        manifest = {
+            'chunks': [
+                {
+                    'key': 'chunk-1',
+                    'items': [
+                        {'id': 'a', 'text': 'Hello'},
+                        {'id': 'b', 'text': 'World'},
+                    ],
+                }
+            ]
+        }
+
+        retry_chunks = batch_mod.build_retry_chunks_for_keys(
+            manifest,
+            {'chunk-1'},
+            {'chunk-1': {'a', 'stale-id'}},
+        )
+
+        self.assertEqual([chunk['key'] for chunk in retry_chunks], ['chunk-1'])
+        self.assertEqual(
+            [item['id'] for item in retry_chunks[0]['items']],
+            ['a', 'b'],
+        )
+
     def test_sync_unknown_extra_id_is_audited_without_retranslating_valid_ids(self):
         chunk = {
             'key': 'chunk-1',
@@ -2005,12 +2046,18 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     str(manifest_path),
                     request_rows,
                 )
+            result_row = json.loads(result_path.read_text(encoding='utf-8'))
 
         run_sync.assert_called_once()
         self.assertEqual(manifest['job_state'], 'SYNC_PARTIAL')
         self.assertEqual(manifest['sync_summary']['contract_final_valid_items'], 2)
         self.assertEqual(manifest['sync_summary']['targeted_retry_requests'], 0)
         self.assertEqual(manifest['sync_summary']['reason_counts']['result_unknown_id'], 1)
+        first_attempt = result_row['provider_response_attempts'][0]
+        self.assertEqual(
+            first_attempt['contract_diagnostics']['reason_counts'],
+            {'result_unknown_id': 1},
+        )
 
     def test_sync_revisions_previews_and_optionally_applies(self):
         old_values = {

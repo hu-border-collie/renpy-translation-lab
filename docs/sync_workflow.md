@@ -32,7 +32,7 @@
 
 终端、GUI 与 manifest 都会显示首次/最终完整率、定点重试次数和未解决项。同步翻译中最终有效的条目数，只统计同时通过模型合同和本地 adapter 校验、可以进入安全 preview 的条目；关键词没有预期候选数量，因此明确显示完整请求块数与请求块完整率，而不把 chunk 数描述成候选条目数。重试后仍不完整时任务标为 `partial`，同时保留通过合同的结果：同步翻译只为这些结果生成安全 preview；同步订正和关键词报告也会明确显示部分完成。`partial` 不是质量认可，写回前仍须人工审查。
 
-同步 `results.jsonl` 会同时保留审计原始数据和最终合同结果：`response` 始终是首轮 Provider 原始响应，供兼容读取与用量核算；定点重试的原始响应记录在 `provider_response_attempts` 中；`normalized_response` 是合并首轮与重试后的权威合同结果，校验、preview、导出和 apply 路径均应优先读取它。每行的 `response_semantics` 会显式记录这两个字段的角色，避免把首轮缺项误判为最终仍不完整。
+同步 `results.jsonl` 会同时保留审计原始数据和最终合同结果：`response` 始终是首轮 Provider 原始响应，供兼容读取与用量核算；`provider_response_attempts` 为首轮及定点重试逐次记录合同诊断，重试项还保留原始响应；`normalized_response` 是合并首轮与重试后的权威合同结果，校验、preview、导出和 apply 路径均应优先读取它。每行的 `response_semantics` 会显式记录这些字段的角色，避免把首轮缺项误判为最终仍不完整，同时保留已恢复违规的逐次审计信息。
 
 供应商能力是显式策略：Gemini 原生使用 JSON schema；已知支持严格 schema 的 LiteLLM Provider 使用 strict JSON schema，只支持 JSON mode 的 Provider 使用 JSON object；未知或不可靠的端点降级为 prompt-only JSON，并继续经过同一校验与重试边界。使用真实凭据做有界冒烟测试时，可运行：
 
