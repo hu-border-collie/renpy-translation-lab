@@ -1902,6 +1902,61 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 self.assertEqual(reasons[expected_reason], 1)
                 self.assertNotIn('failed_to_parse_model_json', reasons)
 
+    def test_integrity_scan_retries_chunk_for_issue_without_target_ids(self):
+        payload = {
+            'translations': [
+                {'id': 'a', 'translation': '你好'},
+                {'id': 'b', 'translation': '世界'},
+                {'id': 'unknown', 'translation': '多余'},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            result_path = Path(tmp) / 'results.jsonl'
+            batch_mod.write_jsonl_file(
+                str(result_path),
+                [
+                    {
+                        'key': 'chunk-1',
+                        'response': batch_mod.response_payload_with_text(
+                            {},
+                            json.dumps(payload, ensure_ascii=False),
+                        ),
+                    }
+                ],
+            )
+            manifest = {
+                '_package_dir': tmp,
+                'result_jsonl_path': str(result_path),
+                'chunks': [
+                    {
+                        'key': 'chunk-1',
+                        'items': [
+                            {'id': 'a', 'text': 'Hello'},
+                            {'id': 'b', 'text': 'World'},
+                        ],
+                    }
+                ],
+            }
+
+            issue_keys, reasons = (
+                batch_mod.collect_result_integrity_issue_keys(manifest)
+            )
+
+        self.assertEqual(issue_keys, {'chunk-1'})
+        self.assertEqual(
+            reasons,
+            {translation_core.CONTRACT_UNKNOWN_ID: 1},
+        )
+        retry_chunks = batch_mod.build_retry_chunks_for_keys(
+            manifest,
+            issue_keys,
+        )
+        self.assertEqual([chunk['key'] for chunk in retry_chunks], ['chunk-1'])
+        self.assertEqual(
+            [item['id'] for item in retry_chunks[0]['items']],
+            ['a', 'b'],
+        )
+
     def test_sync_unknown_extra_id_is_audited_without_retranslating_valid_ids(self):
         chunk = {
             'key': 'chunk-1',

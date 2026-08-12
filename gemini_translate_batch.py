@@ -5109,9 +5109,18 @@ def collect_result_integrity_issue_keys(manifest):
                 )
                 continue
 
-            if contract.retry_ids:
+            # Envelope-level issues such as an extra unknown ID may not map to
+            # any requested retry ID. Retry the whole chunk in that case so a
+            # warn result never becomes impossible to repair.
+            if contract.issues:
                 issue_keys.add(key)
-                bump_counter(reason_counts, 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_result_items')
+                if contract.retry_ids:
+                    bump_counter(
+                        reason_counts,
+                        'truncated_output'
+                        if finish_reason == 'MAX_TOKENS'
+                        else 'partial_result_items',
+                    )
 
     missing_keys = set(chunk_map.keys()) - processed_keys
     if missing_keys:
