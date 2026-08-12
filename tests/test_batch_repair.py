@@ -1053,9 +1053,11 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 {'translations': [{'id': 'b', 'translation': '世界'}]},
             ]
             seen_requests = []
+            seen_models = []
 
-            def fake_sync(request, *_args, **_kwargs):
+            def fake_sync(request, model_name, **_kwargs):
                 seen_requests.append(request)
+                seen_models.append(model_name)
                 payload = responses[len(seen_requests) - 1]
                 text = json.dumps(payload, ensure_ascii=False)
                 return {
@@ -1070,10 +1072,13 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     'execution_mode': 'sync',
                 }
 
-            with mock.patch.object(
-                batch_mod,
-                'run_sync_request',
-                side_effect=fake_sync,
+            with (
+                mock.patch.object(batch_mod, 'SYNC_MODEL', 'sync-override'),
+                mock.patch.object(
+                    batch_mod,
+                    'run_sync_request',
+                    side_effect=fake_sync,
+                ),
             ):
                 manifest = batch_mod.execute_sync_request_rows(
                     manifest_path,
@@ -1086,6 +1091,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
             retry_prompt = seen_requests[1]['contents'][0]['parts'][0]['text']
 
         self.assertEqual(len(seen_requests), 2)
+        self.assertEqual(seen_models, ['sync-override', 'sync-override'])
         self.assertNotIn('"id":"a"', retry_prompt)
         self.assertIn('"id":"b"', retry_prompt)
         self.assertEqual(
@@ -1093,6 +1099,25 @@ class BatchRepairRegressionTests(unittest.TestCase):
             ['a', 'b'],
         )
         self.assertTrue(result_row['contract_diagnostics']['complete'])
+        self.assertEqual(
+            result_row['response_semantics'],
+            {
+                'response': 'first_pass_provider_payload',
+                'normalized_response': 'final_merged_contract',
+            },
+        )
+        first_pass_payload = batch_mod.parse_json_payload(
+            batch_mod.extract_text_from_response_payload(result_row['response'])
+        )
+        self.assertEqual(
+            [item['id'] for item in first_pass_payload['translations']],
+            ['a'],
+        )
+        authoritative_payload = batch_mod.result_row_contract_payload(result_row)
+        self.assertEqual(
+            [item['id'] for item in authoritative_payload['translations']],
+            ['a', 'b'],
+        )
         self.assertNotIn('response', result_row['provider_response_attempts'][0])
         self.assertIn('response', result_row['provider_response_attempts'][1])
         self.assertEqual(manifest['sync_summary']['contract_expected_items'], 2)

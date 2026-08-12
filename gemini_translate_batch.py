@@ -6064,6 +6064,13 @@ def validate_result_contract(payload, mode, expected_items):
 
 
 def result_row_contract_payload(row):
+    """Return the authoritative contract payload from a persisted result row.
+
+    Sync rows retain ``response`` as the raw first-pass provider payload for
+    compatibility and usage accounting. After a targeted retry,
+    ``normalized_response`` is the final merged contract and therefore takes
+    precedence for validation, preview, export, and apply consumers.
+    """
     normalized = row.get('normalized_response')
     if isinstance(normalized, dict):
         return normalized
@@ -10040,7 +10047,12 @@ def _contract_mode_for_manifest(manifest):
     return translation_core.MODE_TRANSLATION
 
 
-def _targeted_sync_request_row(manifest, chunk, item_ids):
+def _effective_sync_model(manifest):
+    """Return the one model used to build and execute every sync attempt."""
+    return str(SYNC_MODEL or manifest.get('batch_model') or BATCH_MODEL or '')
+
+
+def _targeted_sync_request_row(manifest, chunk, item_ids, *, model=None):
     selected_ids = {str(item_id) for item_id in item_ids if str(item_id)}
     targeted = dict(chunk)
     targeted['items'] = [
@@ -10048,7 +10060,7 @@ def _targeted_sync_request_row(manifest, chunk, item_ids):
         if str(item.get('id') or '') in selected_ids
     ]
     targeted['key'] = f"{chunk.get('key', 'sync')}-targeted-001"
-    effective_model = SYNC_MODEL or manifest.get('batch_model') or BATCH_MODEL
+    effective_model = str(model or _effective_sync_model(manifest))
     mode = _contract_mode_for_manifest(manifest)
     if mode == translation_core.MODE_REVISION:
         return build_revision_request(targeted, model=effective_model), targeted
@@ -10155,6 +10167,7 @@ def write_manifest_file(package_dir, manifest, update_latest=True):
 def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
     manifest = load_manifest(manifest_path)
     result_path = resolve_manifest_result_path(manifest)
+    effective_model = _effective_sync_model(manifest)
     chunk_map = {chunk.get('key'): chunk for chunk in manifest.get('chunks') or []}
     contract_mode = _contract_mode_for_manifest(manifest)
     requested_chunks = [
@@ -10188,10 +10201,14 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
         try:
             result = run_sync_request(
                 row.get('request') or {},
-                manifest.get('batch_model') or BATCH_MODEL,
+                effective_model,
                 api_key_index=api_key_index,
             )
             result_row['response'] = result.get('response_payload') or {}
+            result_row['response_semantics'] = {
+                'response': 'first_pass_provider_payload',
+                'normalized_response': 'final_merged_contract',
+            }
             result_row['finish_reason'] = result.get('finish_reason', '')
             result_row['usage_metadata'] = result.get('usage_metadata') or {}
             result_row['provider'] = result.get('provider') or SYNC_BACKEND
@@ -10251,6 +10268,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                     manifest,
                     chunk,
                     retry_ids,
+                    model=effective_model,
                 )
                 summary['targeted_retry_requests'] += 1
                 summary['targeted_retry_items'] += len(retry_chunk.get('items') or [])
@@ -10260,7 +10278,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                 try:
                     retry_result = run_sync_request(
                         retry_row.get('request') or {},
-                        manifest.get('batch_model') or BATCH_MODEL,
+                        effective_model,
                         api_key_index=api_key_index,
                     )
                     result_row['provider_response_attempts'].append({
