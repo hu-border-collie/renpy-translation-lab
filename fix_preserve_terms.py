@@ -102,7 +102,15 @@ def patch_results_manifest(manifest_path: str, failure_path: Path) -> int:
             continue
         source = entry.get('text') or ''
         row = rows_by_key[key]
-        items = batch.result_items_from_row(row, 'patch', allow_empty=True)
+        chunk = chunk_map.get(key)
+        if not chunk:
+            continue
+        items = batch.result_items_from_row(
+            row,
+            'patch',
+            chunk.get('items') or [],
+            allow_empty=True,
+        )
         item_map = {item['id']: item for item in items}
         if item_id not in item_map:
             continue
@@ -111,20 +119,47 @@ def patch_results_manifest(manifest_path: str, failure_path: Path) -> int:
         if new == old:
             continue
         item_map[item_id]['translation'] = new
-        chunk = chunk_map.get(key)
         ordered = []
-        if chunk:
-            for target in chunk.get('items') or []:
-                tid = target.get('id')
-                if tid in item_map:
-                    ordered.append(item_map[tid])
+        for target in chunk.get('items') or []:
+            tid = target.get('id')
+            if tid in item_map:
+                ordered.append(item_map[tid])
+        normalized_payload = {
+            'translations': batch.compact_result_items_for_response(ordered),
+        }
+        if isinstance(row.get('normalized_response'), dict):
+            row['normalized_response'] = normalized_payload
+            contract = batch.validate_result_contract(
+                normalized_payload,
+                batch.translation_core.MODE_TRANSLATION,
+                chunk.get('items') or [],
+            )
+            row['contract_diagnostics'] = batch.merge_terminal_contract_diagnostics(
+                contract,
+                [row.get('contract_diagnostics')],
+            )
         else:
-            ordered = list(item_map.values())
-        text = json.dumps(batch.compact_result_items_for_response(ordered), ensure_ascii=False, indent=2)
-        row['response'] = batch.response_payload_with_text(row.get('response', {}), text)
+            text = json.dumps(
+                normalized_payload['translations'],
+                ensure_ascii=False,
+                indent=2,
+            )
+            row['response'] = batch.response_payload_with_text(
+                row.get('response', {}),
+                text,
+            )
         changed += 1
 
     write_jsonl(result_path, rows)
+    content_sha = batch.file_sha256(str(result_path))
+    batch.atomic_write_text(f'{result_path}.sha256', content_sha + '\n')
+    manifest['result_jsonl_sha256'] = content_sha
+    for key in (
+        'last_check_at',
+        'last_check_summary',
+        'last_check_report_path',
+    ):
+        manifest.pop(key, None)
     batch.save_manifest(manifest, update_latest=False)
     return changed
 
