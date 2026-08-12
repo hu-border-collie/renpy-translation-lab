@@ -5106,7 +5106,14 @@ def collect_result_integrity_issue_keys(manifest):
                     translation_core.MODE_TRANSLATION,
                     chunk_items,
                 )
-                for reason_code, count in contract.reason_counts().items():
+                current_reason_counts = contract.reason_counts()
+                for reason_code, count in current_reason_counts.items():
+                    bump_counter(reason_counts, reason_code, count)
+                persisted_reason_deltas = persisted_contract_reason_deltas(
+                    row,
+                    contract,
+                )
+                for reason_code, count in persisted_reason_deltas.items():
                     bump_counter(reason_counts, reason_code, count)
             except Exception as exc:
                 issue_keys.add(key)
@@ -5121,7 +5128,7 @@ def collect_result_integrity_issue_keys(manifest):
             # Envelope-level issues such as an extra unknown ID may not map to
             # any requested retry ID. Retry the whole chunk in that case so a
             # warn result never becomes impossible to repair.
-            if contract.issues:
+            if contract.issues or persisted_reason_deltas:
                 issue_keys.add(key)
                 if contract.retry_ids:
                     bump_counter(
@@ -5339,6 +5346,7 @@ def compact_result_items_for_response(result_items):
 def canonical_translation_result_row(row, chunk):
     """Attach an authoritative named envelope while preserving provider output."""
     canonical = copy.deepcopy(row) if isinstance(row, dict) else {}
+    persisted_diagnostics = canonical.get('contract_diagnostics')
     normalized = canonical.get('normalized_response')
     if isinstance(normalized, dict):
         contract = validate_result_contract(
@@ -5347,7 +5355,10 @@ def canonical_translation_result_row(row, chunk):
             chunk.get('items') or [],
         )
         canonical['normalized_response'] = contract.to_envelope()
-        canonical['contract_diagnostics'] = contract.to_diagnostics()
+        canonical['contract_diagnostics'] = merge_terminal_contract_diagnostics(
+            contract,
+            [persisted_diagnostics],
+        )
         canonical.setdefault('response_semantics', {
             'response': 'provider_payload',
             'normalized_response': 'final_merged_contract',
@@ -5365,7 +5376,10 @@ def canonical_translation_result_row(row, chunk):
     except Exception:
         return canonical
     canonical['normalized_response'] = contract.to_envelope()
-    canonical['contract_diagnostics'] = contract.to_diagnostics()
+    canonical['contract_diagnostics'] = merge_terminal_contract_diagnostics(
+        contract,
+        [persisted_diagnostics],
+    )
     canonical['response_semantics'] = {
         'response': 'provider_payload',
         'normalized_response': 'final_merged_contract',
@@ -5375,6 +5389,12 @@ def canonical_translation_result_row(row, chunk):
 
 def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks, retry_rows_by_key):
     merged_by_id = {}
+    terminal_retry_diagnostics = []
+    parent_item_ids = {
+        str(item.get('id') or '')
+        for item in parent_chunk.get('items') or []
+        if str(item.get('id') or '')
+    }
     if parent_row:
         for item in result_items_from_row(
             parent_row,
@@ -5391,7 +5411,11 @@ def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks
         retry_row = retry_rows_by_key.get(retry_key)
         if not retry_row:
             raise SystemExit(f'Retry result is missing row for partial chunk: {retry_key}')
-        allowed_ids = {item.get('id') for item in retry_chunk.get('items') or []}
+        allowed_ids = {
+            str(item.get('id') or '')
+            for item in retry_chunk.get('items') or []
+            if str(item.get('id') or '')
+        }
         for item in result_items_from_row(
             retry_row,
             'retry',
@@ -5402,6 +5426,18 @@ def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks
             if item_id in allowed_ids:
                 merged_by_id[item_id] = item
                 replaced_ids.add(item_id)
+        retry_contract = validate_result_contract(
+            result_row_contract_payload(retry_row),
+            translation_core.MODE_TRANSLATION,
+            retry_chunk.get('items') or [],
+        )
+        terminal_retry_diagnostics.append(
+            merge_terminal_contract_diagnostics(
+                retry_contract,
+                [retry_row.get('contract_diagnostics')],
+                ignored_unknown_ids=parent_item_ids - allowed_ids,
+            )
+        )
 
     ordered_items = []
     for target_item in parent_chunk.get('items') or []:
@@ -5421,7 +5457,10 @@ def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks
         parent_chunk.get('items') or [],
     )
     merged_row['normalized_response'] = merged_contract.to_envelope()
-    merged_row['contract_diagnostics'] = merged_contract.to_diagnostics()
+    merged_row['contract_diagnostics'] = merge_terminal_contract_diagnostics(
+        merged_contract,
+        terminal_retry_diagnostics,
+    )
     merged_row['response_semantics'] = {
         'response': 'first_pass_provider_payload',
         'normalized_response': 'final_merged_contract',
@@ -5442,8 +5481,14 @@ def assert_retry_manifest_matches_parent(parent_manifest, retry_manifest):
     if not retry_chunks:
         raise SystemExit('Retry manifest has no chunks.')
 
+    seen_retry_keys = set()
     for chunk in retry_chunks:
         key = chunk.get('key')
+        if not key:
+            raise SystemExit('Retry manifest contains a chunk without a key.')
+        if key in seen_retry_keys:
+            raise SystemExit(f'Retry manifest contains duplicate chunk key: {key}')
+        seen_retry_keys.add(key)
         parent_key = chunk.get('retry_parent_key') or key
         parent_chunk = parent_chunks.get(parent_key)
         if not parent_chunk:
@@ -5462,7 +5507,8 @@ def merge_retry_results(parent_target, retry_target):
     assert_retry_manifest_matches_parent(parent_manifest, retry_manifest)
 
     retry_chunks = retry_manifest.get('chunks') or []
-    retry_keys = [chunk['key'] for chunk in retry_chunks]
+    retry_chunks_by_key = {chunk['key']: chunk for chunk in retry_chunks}
+    retry_keys = list(retry_chunks_by_key)
     retry_key_set = set(retry_keys)
     parent_chunks = {chunk['key']: chunk for chunk in parent_manifest.get('chunks') or []}
     parent_rows, parent_rows_by_key, parent_result_path = load_result_rows_by_key(parent_manifest, 'parent')
@@ -5495,7 +5541,7 @@ def merge_retry_results(parent_target, retry_target):
     for row in parent_rows:
         key = row.get('key')
         if key in direct_retry_key_set:
-            retry_chunk = next((chunk for chunk in retry_chunks if chunk.get('key') == key), {})
+            retry_chunk = retry_chunks_by_key[key]
             merged_rows.append(canonical_translation_result_row(
                 retry_rows_by_key[key], retry_chunk
             ))
@@ -5517,7 +5563,7 @@ def merge_retry_results(parent_target, retry_target):
 
     for key in direct_retry_keys:
         if key not in parent_rows_by_key:
-            retry_chunk = next((chunk for chunk in retry_chunks if chunk.get('key') == key), {})
+            retry_chunk = retry_chunks_by_key[key]
             merged_rows.append(canonical_translation_result_row(
                 retry_rows_by_key[key], retry_chunk
             ))
@@ -6145,6 +6191,215 @@ def record_contract_reasons(summary, report):
     diagnostic_bucket = summary.setdefault('diagnostic_counts', {})
     for reason_code, count in report.diagnostic_counts().items():
         bump_counter(diagnostic_bucket, reason_code, count)
+
+
+def contract_diagnostics_counts(diagnostics, field_name):
+    if not isinstance(diagnostics, dict):
+        return {}
+    raw_counts = diagnostics.get(field_name)
+    if not isinstance(raw_counts, dict):
+        return {}
+
+    counts = {}
+    for reason_code, raw_count in raw_counts.items():
+        if not reason_code or isinstance(raw_count, bool):
+            continue
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            continue
+        if count > 0:
+            counts[str(reason_code)] = count
+    return counts
+
+
+def persisted_contract_reason_counts(row):
+    """Return validated issue counts captured before response normalization."""
+    diagnostics = row.get('contract_diagnostics')
+    return contract_diagnostics_counts(diagnostics, 'reason_counts')
+
+
+def persisted_contract_reason_deltas(row, report):
+    """Return persisted issues erased by the canonical normalized envelope."""
+    current_counts = report.reason_counts()
+    return {
+        reason_code: count - current_counts.get(reason_code, 0)
+        for reason_code, count in persisted_contract_reason_counts(row).items()
+        if count > current_counts.get(reason_code, 0)
+    }
+
+
+def record_result_row_contract_reasons(summary, row, report):
+    """Record current validation plus non-reconstructable persisted issues."""
+    record_contract_reasons(summary, report)
+    deltas = persisted_contract_reason_deltas(row, report)
+    bucket = summary.setdefault('reason_counts', {})
+    for reason_code, count in deltas.items():
+        bump_counter(bucket, reason_code, count)
+    return deltas
+
+
+def persisted_contract_issue_entries(row, reason_deltas):
+    """Expand persisted issue deltas into failure-report entries."""
+    diagnostics = row.get('contract_diagnostics')
+    issues = diagnostics.get('issues') if isinstance(diagnostics, dict) else None
+    remaining = dict(reason_deltas or {})
+    entries = []
+    if isinstance(issues, list):
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            reason_code = str(issue.get('reason_code') or '')
+            if remaining.get(reason_code, 0) <= 0:
+                continue
+            entries.append(dict(issue))
+            remaining[reason_code] -= 1
+    for reason_code, count in remaining.items():
+        for _index in range(max(0, count)):
+            entries.append({
+                'reason_code': reason_code,
+                'message': f'Persisted model contract issue: {reason_code}',
+            })
+    return entries
+
+
+def merge_terminal_contract_diagnostics(
+    report,
+    terminal_diagnostics,
+    ignored_unknown_ids=None,
+):
+    """Preserve terminal issues that canonical envelopes cannot reconstruct."""
+    merged = report.to_diagnostics()
+    ignored_unknown_ids = {
+        str(item_id)
+        for item_id in (ignored_unknown_ids or ())
+        if str(item_id)
+    }
+
+    def remove_ignored_unknown_issues(diagnostics):
+        if not ignored_unknown_ids or not isinstance(diagnostics, dict):
+            return diagnostics
+        issues = diagnostics.get('issues')
+        if not isinstance(issues, list):
+            return diagnostics
+        retained = []
+        removed = 0
+        for issue in issues:
+            if (
+                isinstance(issue, dict)
+                and str(issue.get('reason_code') or '')
+                == translation_core.CONTRACT_UNKNOWN_ID
+                and str(issue.get('id') or '') in ignored_unknown_ids
+            ):
+                removed += 1
+                continue
+            retained.append(issue)
+        if not removed:
+            return diagnostics
+        filtered = copy.deepcopy(diagnostics)
+        filtered['issues'] = retained
+        counts = dict(filtered.get('reason_counts') or {})
+        validated_counts = contract_diagnostics_counts(
+            filtered,
+            'reason_counts',
+        )
+        remaining = max(
+            0,
+            validated_counts.get(translation_core.CONTRACT_UNKNOWN_ID, 0)
+            - removed,
+        )
+        if remaining:
+            counts[translation_core.CONTRACT_UNKNOWN_ID] = remaining
+        else:
+            counts.pop(translation_core.CONTRACT_UNKNOWN_ID, None)
+        filtered['reason_counts'] = counts
+        if not counts and not filtered.get('retry_ids'):
+            filtered['complete'] = True
+        return filtered
+
+    merged = remove_ignored_unknown_issues(merged)
+    source_reason_counts = {}
+    source_diagnostic_counts = {}
+    source_issues = []
+    source_diagnostics_entries = []
+    for diagnostics in terminal_diagnostics or []:
+        if not isinstance(diagnostics, dict):
+            continue
+        diagnostics = remove_ignored_unknown_issues(diagnostics)
+        for reason_code, count in contract_diagnostics_counts(
+            diagnostics,
+            'reason_counts',
+        ).items():
+            bump_counter(source_reason_counts, reason_code, count)
+        for reason_code, count in contract_diagnostics_counts(
+            diagnostics,
+            'diagnostic_counts',
+        ).items():
+            bump_counter(source_diagnostic_counts, reason_code, count)
+        if isinstance(diagnostics.get('issues'), list):
+            source_issues.extend(
+                dict(issue)
+                for issue in diagnostics['issues']
+                if isinstance(issue, dict)
+            )
+        if isinstance(diagnostics.get('diagnostics'), list):
+            source_diagnostics_entries.extend(
+                dict(item)
+                for item in diagnostics['diagnostics']
+                if isinstance(item, dict)
+            )
+
+    def merge_entries(count_field, entry_field, source_counts, source_entries):
+        current_counts = merged.setdefault(count_field, {})
+        current_entries = merged.setdefault(entry_field, [])
+        added = 0
+        for reason_code, source_count in source_counts.items():
+            current_count = current_counts.get(reason_code, 0)
+            target_count = max(current_count, source_count)
+            delta = target_count - current_count
+            if not delta:
+                continue
+            current_counts[reason_code] = target_count
+            matching = [
+                dict(entry)
+                for entry in source_entries
+                if str(entry.get('reason_code') or '') == reason_code
+            ]
+            existing = {
+                stable_json_sha256(entry)
+                for entry in current_entries
+                if isinstance(entry, dict)
+            }
+            additions = []
+            for entry in matching:
+                identity = stable_json_sha256(entry)
+                if identity in existing:
+                    continue
+                existing.add(identity)
+                additions.append(entry)
+                if len(additions) == delta:
+                    break
+            current_entries.extend(additions)
+            for _index in range(max(0, delta - len(additions))):
+                current_entries.append({'reason_code': reason_code})
+            added += delta
+        return added
+
+    added_issues = merge_entries(
+        'reason_counts',
+        'issues',
+        source_reason_counts,
+        source_issues,
+    )
+    merge_entries(
+        'diagnostic_counts',
+        'diagnostics',
+        source_diagnostic_counts,
+        source_diagnostics_entries,
+    )
+    if added_issues:
+        merged['complete'] = False
+    return merged
 
 
 def validate_result_contract(payload, mode, expected_items):
@@ -8154,7 +8409,11 @@ def collect_result_actions(manifest, validate_sources=False):
                     translation_core.MODE_TRANSLATION,
                     chunk_items,
                 )
-                record_contract_reasons(summary, contract)
+                persisted_reason_deltas = record_result_row_contract_reasons(
+                    summary,
+                    row,
+                    contract,
+                )
                 result_items = contract.items
             except Exception as exc:
                 relocation_missing_ids = record_v2_relocation_failures(
@@ -8225,10 +8484,42 @@ def collect_result_actions(manifest, validate_sources=False):
             item_map = {item['id']: item for item in active_chunk_items}
 
             active_retry_ids = set(contract.retry_ids) - relocation_missing_ids
-            if active_retry_ids:
+            if active_retry_ids or contract.issues or persisted_reason_deltas:
                 summary['partial_chunks'] += 1
+            if active_retry_ids:
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_result_items'
                 bump_counter(summary['reason_counts'], reason_name)
+
+            for contract_issue in persisted_contract_issue_entries(
+                row,
+                persisted_reason_deltas,
+            ):
+                issue_id = str(contract_issue.get('id') or '')
+                target_item = item_map.get(issue_id)
+                failure_entry = {
+                    'timestamp': datetime.now().isoformat(timespec='seconds'),
+                    'package': manifest['_package_dir'],
+                    'key': key,
+                    'file_rel_path': chunk['file_rel_path'],
+                    'error': str(
+                        contract_issue.get('message')
+                        or f'Model contract issue: {contract_issue.get("reason_code") or "unknown"}'
+                    ),
+                    'reason_code': str(
+                        contract_issue.get('reason_code') or 'response_contract_error'
+                    ),
+                    'finish_reason': finish_reason,
+                    'usage_metadata': usage_metadata,
+                }
+                if issue_id:
+                    failure_entry['id'] = issue_id
+                if target_item:
+                    failure_entry['line'] = target_item['line']
+                    failure_entry['text'] = target_item['text']
+                for field in ('result_index', 'field'):
+                    if field in contract_issue:
+                        failure_entry[field] = contract_issue[field]
+                failure_entries.append(failure_entry)
 
             seen_ids = set()
             for result_item in result_items:

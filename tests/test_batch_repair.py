@@ -683,6 +683,11 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     diagnostics['reason_counts']['response_missing_expected_id'],
                     1,
                 )
+                if retry_payload.get('translations'):
+                    self.assertEqual(
+                        diagnostics['reason_counts']['result_unknown_id'],
+                        1,
+                    )
 
     def test_direct_retry_canonicalization_preserves_complete_normalized_response(self):
         chunk = {
@@ -731,6 +736,71 @@ class BatchRepairRegressionTests(unittest.TestCase):
             canonical['response_semantics'],
             row['response_semantics'],
         )
+
+    def test_direct_retry_canonicalization_preserves_terminal_unknown_id(self):
+        chunk = {
+            'key': 'chunk-1',
+            'items': [{'id': 'a', 'text': 'Hello'}],
+        }
+        row = {
+            'key': 'chunk-1',
+            'response': batch_mod.response_payload_with_text(
+                {},
+                json.dumps({
+                    'translations': [
+                        {'id': 'a', 'translation': '你好'},
+                        {'id': 'unknown', 'translation': '多余'},
+                    ],
+                }, ensure_ascii=False),
+            ),
+            'normalized_response': {
+                'translations': [{'id': 'a', 'translation': '你好'}],
+            },
+            'contract_diagnostics': {
+                'complete': False,
+                'reason_counts': {'result_unknown_id': 1},
+                'diagnostic_counts': {},
+                'issues': [{
+                    'reason_code': 'result_unknown_id',
+                    'id': 'unknown',
+                    'result_index': 1,
+                }],
+                'diagnostics': [],
+            },
+        }
+
+        canonical = batch_mod.canonical_translation_result_row(row, chunk)
+
+        self.assertFalse(canonical['contract_diagnostics']['complete'])
+        self.assertEqual(
+            canonical['contract_diagnostics']['reason_counts'],
+            {'result_unknown_id': 1},
+        )
+        self.assertEqual(
+            canonical['contract_diagnostics']['issues'][0]['id'],
+            'unknown',
+        )
+
+    def test_retry_manifest_rejects_duplicate_chunk_keys(self):
+        chunk = {
+            'key': 'chunk-1',
+            'file_rel_path': 'script.rpy',
+            'items': [{'id': 'a', 'text': 'Hello'}],
+        }
+        parent_manifest = {
+            '_manifest_path': 'parent.json',
+            'chunks': [chunk],
+        }
+        retry_manifest = {'chunks': [chunk, chunk]}
+
+        with self.assertRaisesRegex(
+            SystemExit,
+            'duplicate chunk key: chunk-1',
+        ):
+            batch_mod.assert_retry_manifest_matches_parent(
+                parent_manifest,
+                retry_manifest,
+            )
 
     def test_create_keyword_package_uses_keyword_mode_manifest(self):
         old_values = {
@@ -2001,7 +2071,27 @@ class BatchRepairRegressionTests(unittest.TestCase):
     def test_sync_unknown_extra_id_is_audited_without_retranslating_valid_ids(self):
         chunk = {
             'key': 'chunk-1',
-            'items': [{'id': 'a', 'text': 'Hello'}, {'id': 'b', 'text': 'World'}],
+            'file_rel_path': 'script.rpy',
+            'items': [
+                {
+                    'id': 'a',
+                    'line': 0,
+                    'start': 0,
+                    'end': 5,
+                    'text': 'Hello',
+                    'prefix': '',
+                    'quote': '"',
+                },
+                {
+                    'id': 'b',
+                    'line': 1,
+                    'start': 0,
+                    'end': 5,
+                    'text': 'World',
+                    'prefix': '',
+                    'quote': '"',
+                },
+            ],
         }
         payload = {
             'translations': [
@@ -2047,6 +2137,15 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     request_rows,
                 )
             result_row = json.loads(result_path.read_text(encoding='utf-8'))
+            audit_manifest = dict(manifest)
+            audit_manifest['version'] = 1
+            audit_manifest['manifest_version'] = 1
+            issue_keys, integrity_reasons = (
+                batch_mod.collect_result_integrity_issue_keys(audit_manifest)
+            )
+            _replacements, _translated, failures, check_summary = (
+                batch_mod.collect_result_actions(audit_manifest)
+            )
 
         run_sync.assert_called_once()
         self.assertEqual(manifest['job_state'], 'SYNC_PARTIAL')
@@ -2057,6 +2156,28 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(
             first_attempt['contract_diagnostics']['reason_counts'],
             {'result_unknown_id': 1},
+        )
+        self.assertEqual(issue_keys, {'chunk-1'})
+        self.assertEqual(integrity_reasons['result_unknown_id'], 1)
+        self.assertEqual(check_summary['reason_counts']['result_unknown_id'], 1)
+        self.assertEqual(check_summary['partial_chunks'], 1)
+        self.assertEqual(check_summary['valid_items'], 2)
+        self.assertEqual(
+            batch_mod.summarize_check_safety(check_summary)['level'],
+            batch_mod.CHECK_SAFETY_WARN,
+        )
+        self.assertEqual(
+            [failure['reason_code'] for failure in failures],
+            ['result_unknown_id'],
+        )
+        retry_chunks = batch_mod.build_retry_chunks_for_keys(
+            audit_manifest,
+            issue_keys,
+            {'chunk-1': {failures[0]['id']}},
+        )
+        self.assertEqual(
+            [item['id'] for item in retry_chunks[0]['items']],
+            ['a', 'b'],
         )
 
     def test_sync_revisions_previews_and_optionally_applies(self):
