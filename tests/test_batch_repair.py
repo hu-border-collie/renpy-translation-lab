@@ -1435,6 +1435,77 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(manifest['sync_summary']['contract_final_completeness'], 1.0)
         self.assertEqual(manifest['job_state'], 'SYNC_COMPLETED')
 
+    def test_execute_sync_rows_rejects_unknown_request_chunk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            manifest_path = package_dir / 'manifest.json'
+            result_path = package_dir / 'results.jsonl'
+            manifest_path.write_text(
+                json.dumps({
+                    'version': 2,
+                    'mode': batch_mod.MANIFEST_MODE_TRANSLATION,
+                    'batch_model': 'gemini-test',
+                    'result_jsonl_path': str(result_path),
+                    'chunks': [
+                        {
+                            'key': 'chunk-1',
+                            'items': [{'id': 'a', 'text': 'Hello'}],
+                        }
+                    ],
+                }),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod, 'run_sync_request') as run_sync,
+                self.assertRaisesRegex(
+                    batch_mod.cli_contract.MachineContractError,
+                    'no matching manifest chunk: stale-chunk',
+                ) as caught,
+            ):
+                batch_mod.execute_sync_request_rows(
+                    str(manifest_path),
+                    [{'key': 'stale-chunk', 'request': {}}],
+                )
+
+        self.assertEqual(caught.exception.code_name, 'SYNC_REQUEST_CHUNK_MISSING')
+        self.assertEqual(
+            caught.exception.suggested_action,
+            'rebuild_sync_package',
+        )
+        run_sync.assert_not_called()
+        self.assertFalse(result_path.exists())
+
+    def test_execute_sync_rows_rejects_empty_request_chunk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            manifest_path = package_dir / 'manifest.json'
+            manifest_path.write_text(
+                json.dumps({
+                    'version': 2,
+                    'mode': batch_mod.MANIFEST_MODE_TRANSLATION,
+                    'batch_model': 'gemini-test',
+                    'result_jsonl_path': str(package_dir / 'results.jsonl'),
+                    'chunks': [{'key': 'chunk-1', 'items': []}],
+                }),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod, 'run_sync_request') as run_sync,
+                self.assertRaisesRegex(
+                    batch_mod.cli_contract.MachineContractError,
+                    'references an empty manifest chunk: chunk-1',
+                ) as caught,
+            ):
+                batch_mod.execute_sync_request_rows(
+                    str(manifest_path),
+                    [{'key': 'chunk-1', 'request': {}}],
+                )
+
+        self.assertEqual(caught.exception.code_name, 'SYNC_REQUEST_CHUNK_EMPTY')
+        run_sync.assert_not_called()
+
     def test_keyword_targeted_retry_preserves_valid_first_pass_candidates(self):
         items = [
             {'id': 'a', 'text': 'Void Gate'},
@@ -1689,6 +1760,76 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(
             merged.to_diagnostics()['reason_counts'],
             {'result_unknown_id': 1},
+        )
+
+    def test_translation_retry_preserves_first_pass_envelope_issue(self):
+        items = [
+            {'id': 'a', 'text': 'Hello'},
+            {'id': 'b', 'text': 'World'},
+        ]
+        first = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'a', 'translation': '首轮译文'},
+                    {'id': 'unknown', 'translation': '非法条目'},
+                ],
+            },
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {'translations': [{'id': 'b', 'translation': '重试译文'}]},
+            expected_units=[items[1]],
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_TRANSLATION,
+        )
+
+        self.assertFalse(merged.complete)
+        self.assertEqual(
+            {item['id']: item['translation'] for item in merged.items},
+            {'a': '首轮译文', 'b': '重试译文'},
+        )
+        self.assertEqual(merged.retry_ids, [])
+        self.assertEqual(
+            merged.reason_counts(),
+            {translation_core.CONTRACT_UNKNOWN_ID: 1},
+        )
+
+    def test_translation_retry_drops_repaired_item_issue(self):
+        items = [
+            {'id': 'a', 'text': 'Hello'},
+            {'id': 'b', 'text': 'World'},
+        ]
+        first = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'a', 'translation': '首轮译文'},
+                    {'id': 'b', 'translation': 42},
+                ],
+            },
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {'translations': [{'id': 'b', 'translation': '重试译文'}]},
+            expected_units=[items[1]],
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_TRANSLATION,
+        )
+
+        self.assertTrue(merged.complete)
+        self.assertEqual(merged.reason_counts(), {})
+        self.assertEqual(
+            {item['id']: item['translation'] for item in merged.items},
+            {'a': '首轮译文', 'b': '重试译文'},
         )
 
     def test_revision_retry_keeps_rejected_unknown_id_in_final_diagnostics(self):

@@ -10573,8 +10573,15 @@ def _merge_sync_contract_reports(first, retry, chunk, mode):
         mode,
         chunk.get('items') or [],
     )
+    retryable_ids = set(first.retry_ids)
+    first_terminal_issues = [
+        issue
+        for issue in first.issues
+        if str(issue.item_id or '') not in retryable_ids
+    ]
     merged.issues = list(dict.fromkeys([
         *merged.issues,
+        *first_terminal_issues,
         *retry.issues,
     ]))
     merged.diagnostics = list(dict.fromkeys([
@@ -10604,10 +10611,27 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
     chunk_map = {chunk.get('key'): chunk for chunk in manifest.get('chunks') or []}
     contract_mode = _contract_mode_for_manifest(manifest)
     keyword_contract = contract_mode == translation_core.MODE_KEYWORD_EXTRACTION
-    requested_chunks = [
-        chunk_map.get(row.get('key')) or {'items': []}
-        for row in request_rows
-    ]
+    requested_chunks = []
+    for index, row in enumerate(request_rows, start=1):
+        key = str(row.get('key') or '') if isinstance(row, dict) else ''
+        chunk = chunk_map.get(key)
+        if chunk is None:
+            raise cli_contract.MachineContractError(
+                f'Sync request row #{index} has no matching manifest chunk: '
+                f'{key or "(missing)"}',
+                code_name='SYNC_REQUEST_CHUNK_MISSING',
+                suggested_action='rebuild_sync_package',
+                details={'row': index, 'key': key},
+            )
+        items = chunk.get('items')
+        if not isinstance(items, list) or not items:
+            raise cli_contract.MachineContractError(
+                f'Sync request row #{index} references an empty manifest chunk: {key}',
+                code_name='SYNC_REQUEST_CHUNK_EMPTY',
+                suggested_action='rebuild_sync_package',
+                details={'row': index, 'key': key},
+            )
+        requested_chunks.append(chunk)
     summary = {
         'request_count': len(request_rows),
         'successful_request_count': 0,
@@ -10636,7 +10660,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
     result_rows = []
     for index, row in enumerate(request_rows, start=1):
         key = row.get('key', f'sync-{index}')
-        chunk = chunk_map.get(key) or {'key': key, 'items': []}
+        chunk = requested_chunks[index - 1]
         print(f'[{index}/{len(request_rows)}] {key}')
         result_row = {'key': key}
         try:
