@@ -1313,32 +1313,11 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 ],
             }
             request_rows = [batch_mod.build_batch_request(chunk, model='gemini-test')]
-            unselected_chunk = {
-                'key': 'chunk-2',
-                'file_path': str(package_dir / 'extra.rpy'),
-                'file_rel_path': 'extra.rpy',
-                'chunk_index': 2,
-                'context_past': [],
-                'context_future': [],
-                'items': [
-                    {
-                        'id': 'c',
-                        'text': 'Unused',
-                        'file_rel_path': 'extra.rpy',
-                        'line': 0,
-                        'line_number': 1,
-                        'start': 4,
-                        'end': 12,
-                        'prefix': '',
-                        'quote': '"',
-                    },
-                ],
-            }
             manifest_path = batch_mod.make_sync_manifest(
                 package_dir=str(package_dir),
                 mode=batch_mod.MANIFEST_MODE_TRANSLATION,
                 display_name='targeted-retry-test',
-                chunks=[chunk, unselected_chunk],
+                chunks=[chunk],
                 request_rows=request_rows,
                 settings={},
             )
@@ -1539,6 +1518,83 @@ class BatchRepairRegressionTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code_name, 'SYNC_REQUEST_CHUNK_EMPTY')
         run_sync.assert_not_called()
+
+    def test_execute_sync_rows_rejects_partial_request_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            manifest_path = package_dir / 'manifest.json'
+            result_path = package_dir / 'results.jsonl'
+            manifest_path.write_text(
+                json.dumps({
+                    'version': 2,
+                    'mode': batch_mod.MANIFEST_MODE_TRANSLATION,
+                    'batch_model': 'gemini-test',
+                    'result_jsonl_path': str(result_path),
+                    'chunks': [
+                        {'key': 'chunk-1', 'items': [{'id': 'a', 'text': 'Hello'}]},
+                        {'key': 'chunk-2', 'items': [{'id': 'b', 'text': 'World'}]},
+                    ],
+                }),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod, 'run_sync_request') as run_sync,
+                self.assertRaisesRegex(
+                    batch_mod.cli_contract.MachineContractError,
+                    'do not cover every manifest chunk: chunk-2',
+                ) as caught,
+            ):
+                batch_mod.execute_sync_request_rows(
+                    str(manifest_path),
+                    [{'key': 'chunk-1', 'request': {}}],
+                )
+
+        self.assertEqual(
+            caught.exception.code_name,
+            'SYNC_REQUEST_CHUNK_INCOMPLETE',
+        )
+        self.assertEqual(caught.exception.details['missing_keys'], ['chunk-2'])
+        run_sync.assert_not_called()
+        self.assertFalse(result_path.exists())
+
+    def test_execute_sync_rows_rejects_duplicate_request_chunk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            manifest_path = package_dir / 'manifest.json'
+            result_path = package_dir / 'results.jsonl'
+            manifest_path.write_text(
+                json.dumps({
+                    'version': 2,
+                    'mode': batch_mod.MANIFEST_MODE_TRANSLATION,
+                    'batch_model': 'gemini-test',
+                    'result_jsonl_path': str(result_path),
+                    'chunks': [
+                        {'key': 'chunk-1', 'items': [{'id': 'a', 'text': 'Hello'}]},
+                    ],
+                }),
+                encoding='utf-8',
+            )
+
+            rows = [
+                {'key': 'chunk-1', 'request': {}},
+                {'key': 'chunk-1', 'request': {}},
+            ]
+            with (
+                mock.patch.object(batch_mod, 'run_sync_request') as run_sync,
+                self.assertRaisesRegex(
+                    batch_mod.cli_contract.MachineContractError,
+                    'duplicate manifest chunk: chunk-1',
+                ) as caught,
+            ):
+                batch_mod.execute_sync_request_rows(str(manifest_path), rows)
+
+        self.assertEqual(
+            caught.exception.code_name,
+            'SYNC_REQUEST_CHUNK_DUPLICATE',
+        )
+        run_sync.assert_not_called()
+        self.assertFalse(result_path.exists())
 
     def test_keyword_targeted_retry_preserves_valid_first_pass_candidates(self):
         items = [

@@ -10685,13 +10685,20 @@ def write_manifest_file(package_dir, manifest, update_latest=True):
 
 
 def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
+    """Execute one complete, unique request row for every manifest chunk.
+
+    Full coverage is validated before any provider call so the rewritten result
+    JSONL and the manifest's terminal sync status always describe the same run.
+    """
     manifest = load_manifest(manifest_path)
     result_path = resolve_manifest_result_path(manifest)
     effective_model = _effective_sync_model(manifest)
-    chunk_map = {chunk.get('key'): chunk for chunk in manifest.get('chunks') or []}
+    manifest_chunks = list(manifest.get('chunks') or [])
+    chunk_map = {chunk.get('key'): chunk for chunk in manifest_chunks}
     contract_mode = _contract_mode_for_manifest(manifest)
     keyword_contract = contract_mode == translation_core.MODE_KEYWORD_EXTRACTION
     requested_chunks = []
+    requested_keys = []
     for index, row in enumerate(request_rows, start=1):
         key = str(row.get('key') or '') if isinstance(row, dict) else ''
         chunk = chunk_map.get(key)
@@ -10703,6 +10710,13 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                 suggested_action='rebuild_sync_package',
                 details={'row': index, 'key': key},
             )
+        if key in requested_keys:
+            raise cli_contract.MachineContractError(
+                f'Sync request rows contain a duplicate manifest chunk: {key}',
+                code_name='SYNC_REQUEST_CHUNK_DUPLICATE',
+                suggested_action='rebuild_sync_package',
+                details={'row': index, 'key': key},
+            )
         items = chunk.get('items')
         if not isinstance(items, list) or not items:
             raise cli_contract.MachineContractError(
@@ -10711,7 +10725,21 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                 suggested_action='rebuild_sync_package',
                 details={'row': index, 'key': key},
             )
+        requested_keys.append(key)
         requested_chunks.append(chunk)
+    manifest_keys = [
+        str(chunk.get('key') or '')
+        for chunk in manifest_chunks
+    ]
+    missing_keys = [key for key in manifest_keys if key not in requested_keys]
+    if missing_keys:
+        raise cli_contract.MachineContractError(
+            'Sync request rows do not cover every manifest chunk: '
+            + ', '.join(missing_keys),
+            code_name='SYNC_REQUEST_CHUNK_INCOMPLETE',
+            suggested_action='rebuild_sync_package',
+            details={'missing_keys': missing_keys},
+        )
     summary = {
         'request_count': len(request_rows),
         'successful_request_count': 0,
