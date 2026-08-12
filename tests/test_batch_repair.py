@@ -1358,6 +1358,111 @@ class BatchRepairRegressionTests(unittest.TestCase):
             1,
         )
 
+    def test_translation_retry_cannot_replace_non_retry_first_pass_ids(self):
+        items = [
+            {'id': 'a', 'text': 'Hello'},
+            {'id': 'b', 'text': 'World'},
+        ]
+        first = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'a', 'translation': '首轮译文'},
+                ],
+            },
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'a', 'translation': '不应覆盖'},
+                    {'id': 'b', 'translation': '重试译文'},
+                ],
+            },
+            expected_units=items,
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_TRANSLATION,
+        )
+
+        self.assertTrue(merged.complete)
+        self.assertEqual(
+            {item['id']: item['translation'] for item in merged.items},
+            {'a': '首轮译文', 'b': '重试译文'},
+        )
+
+    def test_keyword_retry_progress_drops_superseded_first_pass_issues(self):
+        items = [
+            {'id': 'a', 'text': 'Void Gate'},
+            {'id': 'b', 'text': 'Moon Key'},
+        ]
+        first = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Void Gate',
+                        'suggested_target': '虚空门',
+                        'category': 'place',
+                        'confidence': 0.9,
+                        'evidence': 'a',
+                        'source_item_ids': ['a'],
+                    },
+                    {
+                        'source': 'Broken first',
+                        'suggested_target': '错误',
+                        'category': 'term',
+                        'confidence': 0.5,
+                        'evidence': 'unknown',
+                        'source_item_ids': ['unknown'],
+                    },
+                ],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Moon Key',
+                        'suggested_target': '月之钥',
+                        'category': 'item',
+                        'confidence': 0.8,
+                        'evidence': 'b',
+                        'source_item_ids': ['b'],
+                    },
+                    {
+                        'source': 'Broken retry',
+                        'suggested_target': '错误',
+                        'confidence': 0.5,
+                        'evidence': 'b',
+                        'source_item_ids': ['b'],
+                    },
+                ],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=items,
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_KEYWORD_EXTRACTION,
+        )
+
+        self.assertFalse(merged.complete)
+        self.assertEqual(
+            [item['source'] for item in merged.items],
+            ['Void Gate', 'Moon Key'],
+        )
+        self.assertNotIn('result_unknown_source_id', merged.reason_counts())
+        self.assertEqual(merged.reason_counts()['result_missing_field'], 1)
+        self.assertEqual(merged.retry_ids, ['a', 'b'])
+
     def test_sync_keyword_summary_uses_chunk_completeness(self):
         chunk = {
             'key': 'keyword-1',

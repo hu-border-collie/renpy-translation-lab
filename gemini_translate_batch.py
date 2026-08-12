@@ -10093,8 +10093,8 @@ def _contract_from_sync_result(result, chunk, mode):
 
 def _merge_sync_contract_reports(first, retry, chunk, mode):
     if mode == translation_core.MODE_KEYWORD_EXTRACTION:
-        retry_recovered = retry.complete and bool(retry.items)
-        merged = copy.deepcopy(retry if retry_recovered else first)
+        retry_made_progress = bool(retry.items)
+        merged = copy.deepcopy(retry if retry_made_progress else first)
         merged_items = []
         seen = set()
         for item in [*first.items, *retry.items]:
@@ -10126,9 +10126,13 @@ def _merge_sync_contract_reports(first, retry, chunk, mode):
             *first.diagnostics,
             *retry.diagnostics,
         ]))
-        if retry_recovered:
+        if retry_made_progress:
             merged.issues = list(retry.issues)
-            merged.retry_ids = list(retry.retry_ids)
+            merged.retry_ids = [
+                str(item.get('id') or '')
+                for item in chunk.get('items') or []
+                if str(item.get('id') or '')
+            ] if merged.issues else list(retry.retry_ids)
         else:
             merged.issues = list(dict.fromkeys([
                 *first.issues,
@@ -10143,9 +10147,13 @@ def _merge_sync_contract_reports(first, retry, chunk, mode):
                 *retry.retry_ids,
             ]))
         return merged
-    retry_by_id = {item['id']: item for item in retry.items}
     merged_by_id = {item['id']: item for item in first.items}
-    merged_by_id.update(retry_by_id)
+    retryable_ids = set(first.retry_ids)
+    merged_by_id.update({
+        item['id']: item
+        for item in retry.items
+        if item.get('id') in retryable_ids
+    })
     envelope_key = translation_core.MODEL_RESPONSE_ENVELOPE_KEYS[mode]
     merged_payload = {
         envelope_key: [
