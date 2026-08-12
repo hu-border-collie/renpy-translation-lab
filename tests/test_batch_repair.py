@@ -505,12 +505,127 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     merged_text = batch_mod.extract_text_from_response_payload(
                         merged_rows[1]['response']
                     )
-                    self.assertIn('translations', json.loads(merged_text))
+                    self.assertIsInstance(json.loads(merged_text), list)
+                    self.assertIn('translations', merged_rows[1]['normalized_response'])
 
                     rechecked = batch_mod.check_results(str(manifest_path))
                     self.assertEqual(rechecked['last_check_summary']['safety_level'], batch_mod.CHECK_SAFETY_SAFE)
         finally:
             batch_mod.legacy.TL_DIR = old_tl_dir
+
+    def test_partial_retry_merge_preserves_response_and_updates_normalized(self):
+        parent_chunk = {
+            'key': 'parent',
+            'items': [
+                {'id': 'a', 'text': 'Hello'},
+                {'id': 'b', 'text': 'World'},
+            ],
+        }
+        retry_chunk = {
+            'key': 'retry-b',
+            'retry_parent_key': 'parent',
+            'items': [{'id': 'b', 'text': 'World'}],
+        }
+        parent_response = batch_mod.response_payload_with_text(
+            {},
+            json.dumps(
+                {'translations': [{'id': 'a', 'translation': '你好'}]},
+                ensure_ascii=False,
+            ),
+        )
+        retry_response = batch_mod.response_payload_with_text(
+            {},
+            json.dumps(
+                {'translations': [{'id': 'b', 'translation': '世界'}]},
+                ensure_ascii=False,
+            ),
+        )
+        parent_row = {
+            'key': 'parent',
+            'response': parent_response,
+            'normalized_response': {
+                'translations': [{'id': 'a', 'translation': '你好'}],
+            },
+        }
+
+        merged, replaced = batch_mod.merge_parent_row_with_retry_item_rows(
+            parent_row,
+            parent_chunk,
+            [retry_chunk],
+            {'retry-b': {'key': 'retry-b', 'response': retry_response}},
+        )
+
+        self.assertEqual(replaced, 1)
+        self.assertEqual(merged['response'], parent_response)
+        self.assertEqual(
+            [item['id'] for item in merged['normalized_response']['translations']],
+            ['a', 'b'],
+        )
+        self.assertTrue(merged['contract_diagnostics']['complete'])
+        self.assertEqual(
+            [
+                item['id']
+                for item in batch_mod.result_items_from_row(
+                    merged,
+                    'merged',
+                    parent_chunk['items'],
+                )
+            ],
+            ['a', 'b'],
+        )
+
+    def test_partial_retry_merge_audits_empty_or_invalid_results(self):
+        parent_chunk = {
+            'key': 'parent',
+            'items': [
+                {'id': 'a', 'text': 'Hello'},
+                {'id': 'b', 'text': 'World'},
+            ],
+        }
+        retry_chunk = {
+            'key': 'retry-b',
+            'retry_parent_key': 'parent',
+            'items': [{'id': 'b', 'text': 'World'}],
+        }
+        parent_response = batch_mod.response_payload_with_text(
+            {},
+            json.dumps(
+                {'translations': [{'id': 'a', 'translation': '你好'}]},
+                ensure_ascii=False,
+            ),
+        )
+        parent_row = {'key': 'parent', 'response': parent_response}
+        retry_payloads = (
+            {'translations': []},
+            {'translations': [{'id': 'unknown', 'translation': '错误'}]},
+        )
+
+        for retry_payload in retry_payloads:
+            with self.subTest(retry_payload=retry_payload):
+                retry_response = batch_mod.response_payload_with_text(
+                    {},
+                    json.dumps(retry_payload, ensure_ascii=False),
+                )
+                merged, replaced = batch_mod.merge_parent_row_with_retry_item_rows(
+                    parent_row,
+                    parent_chunk,
+                    [retry_chunk],
+                    {'retry-b': {'key': 'retry-b', 'response': retry_response}},
+                )
+
+                self.assertEqual(replaced, 0)
+                self.assertEqual(merged['response'], parent_response)
+                self.assertEqual(
+                    merged['normalized_response'],
+                    {'translations': [{'id': 'a', 'translation': '你好'}]},
+                )
+                diagnostics = merged['contract_diagnostics']
+                self.assertFalse(diagnostics['complete'])
+                self.assertEqual(diagnostics['retry_ids'], ['b'])
+                self.assertEqual(
+                    diagnostics['reason_counts']['response_missing_expected_id'],
+                    1,
+                )
 
     def test_create_keyword_package_uses_keyword_mode_manifest(self):
         old_values = {

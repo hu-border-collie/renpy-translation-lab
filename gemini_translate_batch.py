@@ -5219,15 +5219,20 @@ def load_result_rows_by_key(manifest, label):
 
 
 def result_items_from_row(row, label, expected_items, allow_empty=False):
-    response_payload = row.get('response', {}) if isinstance(row, dict) else {}
-    response_text = extract_text_from_response_payload(response_payload)
-    if not response_text:
-        if allow_empty:
-            return []
-        raise SystemExit(f'Missing text in {label} result row: {row.get("key", "") if isinstance(row, dict) else ""}')
     try:
+        normalized = row.get('normalized_response') if isinstance(row, dict) else None
+        if isinstance(normalized, dict):
+            payload = normalized
+        else:
+            response_payload = row.get('response', {}) if isinstance(row, dict) else {}
+            response_text = extract_text_from_response_payload(response_payload)
+            if not response_text:
+                if allow_empty:
+                    return []
+                raise ValueError('missing response text')
+            payload = parse_json_payload(response_text)
         contract = validate_result_contract(
-            parse_json_payload(response_text),
+            payload,
             translation_core.MODE_TRANSLATION,
             expected_items,
         )
@@ -5269,7 +5274,7 @@ def compact_result_items_for_response(result_items):
 
 
 def canonical_translation_result_row(row, chunk):
-    """Return a retry row rewritten to the current named translation envelope."""
+    """Attach an authoritative named envelope while preserving provider output."""
     canonical = copy.deepcopy(row) if isinstance(row, dict) else {}
     response_text = extract_text_from_response_payload(canonical.get('response', {}))
     if not response_text:
@@ -5282,17 +5287,12 @@ def canonical_translation_result_row(row, chunk):
         )
     except Exception:
         return canonical
-    if not contract.complete:
-        return canonical
-    text = json.dumps(
-        {'translations': compact_result_items_for_response(contract.items)},
-        ensure_ascii=False,
-        indent=2,
-    )
-    canonical['response'] = response_payload_with_text(
-        canonical.get('response', {}),
-        text,
-    )
+    canonical['normalized_response'] = contract.to_envelope()
+    canonical['contract_diagnostics'] = contract.to_diagnostics()
+    canonical['response_semantics'] = {
+        'response': 'provider_payload',
+        'normalized_response': 'final_merged_contract',
+    }
     return canonical
 
 
@@ -5319,6 +5319,7 @@ def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks
             retry_row,
             'retry',
             retry_chunk.get('items') or [],
+            allow_empty=True,
         ):
             item_id = item.get('id')
             if item_id in allowed_ids:
@@ -5334,12 +5335,20 @@ def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks
     merged_row = copy.deepcopy(parent_row) if isinstance(parent_row, dict) else {}
     merged_row['key'] = parent_chunk.get('key')
     merged_row.pop('error', None)
-    merged_text = json.dumps(
-        {'translations': compact_result_items_for_response(ordered_items)},
-        ensure_ascii=False,
-        indent=2,
+    merged_payload = {
+        'translations': compact_result_items_for_response(ordered_items),
+    }
+    merged_contract = validate_result_contract(
+        merged_payload,
+        translation_core.MODE_TRANSLATION,
+        parent_chunk.get('items') or [],
     )
-    merged_row['response'] = response_payload_with_text(merged_row.get('response', {}), merged_text)
+    merged_row['normalized_response'] = merged_contract.to_envelope()
+    merged_row['contract_diagnostics'] = merged_contract.to_diagnostics()
+    merged_row['response_semantics'] = {
+        'response': 'first_pass_provider_payload',
+        'normalized_response': 'final_merged_contract',
+    }
     return merged_row, len(replaced_ids)
 
 
