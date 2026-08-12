@@ -6265,6 +6265,71 @@ def persisted_contract_issue_entries(row, reason_deltas):
     return entries
 
 
+def result_row_contract_failure_entries(
+    manifest,
+    chunk,
+    row,
+    report,
+    item_map,
+    reason_deltas=None,
+    finish_reason='',
+    usage_metadata=None,
+    ignored_item_ids=None,
+):
+    """Return auditable failures for current and persisted contract issues."""
+    ignored_item_ids = {
+        str(item_id)
+        for item_id in (ignored_item_ids or ())
+        if str(item_id)
+    }
+    issue_entries = [
+        issue.to_dict()
+        for issue in report.issues
+        if issue.reason_code != translation_core.CONTRACT_MISSING_EXPECTED_ID
+    ]
+    issue_entries.extend(
+        issue
+        for issue in persisted_contract_issue_entries(row, reason_deltas)
+        if issue.get('reason_code')
+        != translation_core.CONTRACT_MISSING_EXPECTED_ID
+    )
+
+    failures = []
+    for issue in issue_entries:
+        issue_id = str(issue.get('id') or '')
+        if issue_id in ignored_item_ids:
+            continue
+        target_item = item_map.get(issue_id)
+        extra = {
+            'reason_code': str(
+                issue.get('reason_code') or 'response_contract_error'
+            ),
+            'finish_reason': finish_reason,
+            'usage_metadata': usage_metadata or {},
+        }
+        for field in ('result_index', 'field'):
+            if field in issue:
+                extra[field] = issue[field]
+        failures.append(make_failure_entry(
+            manifest,
+            str(
+                issue.get('message')
+                or f'Model contract issue: {extra["reason_code"]}'
+            ),
+            file_rel_path=chunk.get('file_rel_path', ''),
+            item_id=issue_id,
+            line=target_item.get('line') if target_item else None,
+            text=(
+                target_item.get('source') or target_item.get('text', '')
+                if target_item
+                else ''
+            ),
+            key=chunk.get('key', ''),
+            **extra,
+        ))
+    return failures
+
+
 def merge_terminal_contract_diagnostics(
     report,
     terminal_diagnostics,
@@ -7781,7 +7846,11 @@ def collect_revision_actions(manifest, validate_sources=False):
                     translation_core.MODE_REVISION,
                     active_chunk_items,
                 )
-                record_contract_reasons(summary, contract)
+                persisted_reason_deltas = record_result_row_contract_reasons(
+                    summary,
+                    row,
+                    contract,
+                )
                 result_items = contract.items
             except Exception as exc:
                 summary['partial_chunks'] += 1
@@ -7807,10 +7876,22 @@ def collect_revision_actions(manifest, validate_sources=False):
                     ))
                 continue
 
-            if contract.retry_ids:
+            if contract.retry_ids or contract.issues or persisted_reason_deltas:
                 summary['partial_chunks'] += 1
+            if contract.retry_ids:
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_revision_items'
                 bump_counter(summary['reason_counts'], reason_name)
+
+            failure_entries.extend(result_row_contract_failure_entries(
+                manifest,
+                chunk,
+                row,
+                contract,
+                item_map,
+                persisted_reason_deltas,
+                finish_reason,
+                usage_metadata,
+            ))
 
             seen_ids = set()
             for result_item in result_items:
@@ -8492,36 +8573,17 @@ def collect_result_actions(manifest, validate_sources=False):
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_result_items'
                 bump_counter(summary['reason_counts'], reason_name)
 
-            for contract_issue in persisted_contract_issue_entries(
+            failure_entries.extend(result_row_contract_failure_entries(
+                manifest,
+                chunk,
                 row,
+                contract,
+                item_map,
                 persisted_reason_deltas,
-            ):
-                issue_id = str(contract_issue.get('id') or '')
-                target_item = item_map.get(issue_id)
-                failure_entry = {
-                    'timestamp': datetime.now().isoformat(timespec='seconds'),
-                    'package': manifest['_package_dir'],
-                    'key': key,
-                    'file_rel_path': chunk['file_rel_path'],
-                    'error': str(
-                        contract_issue.get('message')
-                        or f'Model contract issue: {contract_issue.get("reason_code") or "unknown"}'
-                    ),
-                    'reason_code': str(
-                        contract_issue.get('reason_code') or 'response_contract_error'
-                    ),
-                    'finish_reason': finish_reason,
-                    'usage_metadata': usage_metadata,
-                }
-                if issue_id:
-                    failure_entry['id'] = issue_id
-                if target_item:
-                    failure_entry['line'] = target_item['line']
-                    failure_entry['text'] = target_item['text']
-                for field in ('result_index', 'field'):
-                    if field in contract_issue:
-                        failure_entry[field] = contract_issue[field]
-                failure_entries.append(failure_entry)
+                finish_reason,
+                usage_metadata,
+                ignored_item_ids=relocation_missing_ids,
+            ))
 
             seen_ids = set()
             for result_item in result_items:

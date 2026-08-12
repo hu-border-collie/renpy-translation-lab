@@ -2685,6 +2685,141 @@ class BatchRepairRegressionTests(unittest.TestCase):
         append_failures.assert_called_once()
         update_progress.assert_not_called()
 
+    def test_collect_revision_actions_audits_unknown_id_as_partial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            result_path = package_dir / 'results.jsonl'
+            item_id = 'script.rpy:0:4:revision:0'
+            response_text = json.dumps(
+                {
+                    'revisions': [
+                        {
+                            'id': item_id,
+                            'should_update': False,
+                            'revised_translation': '你好',
+                            'reason': '保持原译',
+                        },
+                        {
+                            'id': 'unknown',
+                            'should_update': True,
+                            'revised_translation': '多余',
+                            'reason': '未知 ID',
+                        },
+                    ]
+                },
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'rv-1',
+                        'response': batch_mod.response_payload_with_text(
+                            {},
+                            response_text,
+                        ),
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest = {
+                '_package_dir': str(package_dir),
+                'result_jsonl_path': str(result_path),
+                'chunks': [
+                    {
+                        'key': 'rv-1',
+                        'file_rel_path': 'script.rpy',
+                        'items': [
+                            {
+                                'id': item_id,
+                                'line': 0,
+                                'start': 4,
+                                'end': 11,
+                                'text': 'Hello',
+                                'source': 'Hello',
+                                'current_translation': '你好',
+                                'prefix': '',
+                                'quote': '"',
+                            }
+                        ],
+                    }
+                ],
+            }
+
+            _replacements, _lines, failures, summary, _preview = (
+                batch_mod.collect_revision_actions(manifest)
+            )
+
+        self.assertEqual(summary['valid_items'], 0)
+        self.assertEqual(summary['unchanged_items'], 1)
+        self.assertEqual(summary['partial_chunks'], 1)
+        self.assertEqual(summary['reason_counts']['result_unknown_id'], 1)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]['id'], 'unknown')
+        self.assertEqual(failures[0]['reason_code'], 'result_unknown_id')
+        self.assertEqual(failures[0]['result_index'], 1)
+
+    def test_collect_result_actions_audits_unknown_id_with_complete_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            result_path = package_dir / 'results.jsonl'
+            response_text = json.dumps(
+                {
+                    'translations': [
+                        {'id': 'script.rpy:0:4', 'translation': '你好'},
+                        {'id': 'unknown', 'translation': '多余'},
+                    ]
+                },
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'chunk-1',
+                        'response': batch_mod.response_payload_with_text(
+                            {},
+                            response_text,
+                        ),
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest = {
+                '_package_dir': str(package_dir),
+                'result_jsonl_path': str(result_path),
+                'chunks': [
+                    {
+                        'key': 'chunk-1',
+                        'file_rel_path': 'script.rpy',
+                        'items': [
+                            {
+                                'id': 'script.rpy:0:4',
+                                'line': 0,
+                                'start': 4,
+                                'end': 11,
+                                'text': 'Hello',
+                                'prefix': '',
+                                'quote': '"',
+                            }
+                        ],
+                    }
+                ],
+            }
+
+            replacements, _translated, failures, summary = (
+                batch_mod.collect_result_actions(manifest)
+            )
+
+        self.assertEqual(summary['valid_items'], 1)
+        self.assertEqual(summary['partial_chunks'], 1)
+        self.assertEqual(summary['reason_counts']['result_unknown_id'], 1)
+        self.assertIn('script.rpy', replacements)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]['id'], 'unknown')
+        self.assertEqual(failures[0]['reason_code'], 'result_unknown_id')
+        self.assertEqual(failures[0]['result_index'], 1)
+
     def test_collect_result_actions_rejects_duplicate_result_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
             package_dir = Path(tmp)
@@ -2737,7 +2872,11 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(summary['valid_items'], 0)
         self.assertEqual(summary['reason_counts']['result_duplicate_id'], 1)
         self.assertEqual(replacements, {})
-        self.assertEqual(len(failures), 1)
+        self.assertEqual(len(failures), 2)
+        self.assertEqual(
+            [failure['reason_code'] for failure in failures],
+            ['result_duplicate_id', 'response_missing_expected_id'],
+        )
         self.assertEqual(failures[0]['id'], 'script.rpy:0:4')
 
     def test_collect_result_actions_skips_source_mismatch(self):
