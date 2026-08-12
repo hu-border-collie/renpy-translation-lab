@@ -1281,9 +1281,12 @@ def _validate_keyword_response(payload, expected_ids, allow_legacy):
                 message='Keyword candidate must be an object.',
             ))
             continue
+        candidate_input = dict(raw_item)
+        if legacy_shape and 'source_item_ids' not in candidate_input:
+            candidate_input['source_item_ids'] = []
         item_valid = True
         for field_name, expected_type in required.items():
-            if field_name not in raw_item:
+            if field_name not in candidate_input:
                 report.issues.append(_issue(
                     CONTRACT_MISSING_FIELD,
                     result_index=index,
@@ -1292,8 +1295,9 @@ def _validate_keyword_response(payload, expected_ids, allow_legacy):
                 ))
                 item_valid = False
                 continue
-            if not isinstance(raw_item[field_name], expected_type) or (
-                field_name == 'confidence' and isinstance(raw_item[field_name], bool)
+            if not isinstance(candidate_input[field_name], expected_type) or (
+                field_name == 'confidence'
+                and isinstance(candidate_input[field_name], bool)
             ):
                 report.issues.append(_issue(
                     CONTRACT_INVALID_FIELD_TYPE,
@@ -1304,7 +1308,7 @@ def _validate_keyword_response(payload, expected_ids, allow_legacy):
                 item_valid = False
         if not item_valid:
             continue
-        source = compact_text(raw_item['source'])
+        source = compact_text(candidate_input['source'])
         if not source:
             report.issues.append(_issue(
                 CONTRACT_MISSING_FIELD,
@@ -1313,7 +1317,7 @@ def _validate_keyword_response(payload, expected_ids, allow_legacy):
                 message='Candidate source must not be empty.',
             ))
             continue
-        raw_source_ids = raw_item['source_item_ids']
+        raw_source_ids = candidate_input['source_item_ids']
         if not raw_source_ids and not legacy_shape:
             report.issues.append(_issue(
                 CONTRACT_MISSING_FIELD,
@@ -1323,9 +1327,9 @@ def _validate_keyword_response(payload, expected_ids, allow_legacy):
             ))
             continue
         if legacy_shape and not raw_source_ids:
-            candidate = dict(raw_item)
-            candidate['source_item_ids'] = []
-            normalized = normalize_keyword_results({'candidates': [candidate]})
+            normalized = normalize_keyword_results(
+                {'candidates': [candidate_input]}
+            )
             if normalized:
                 valid_candidates.append(normalized[0])
             continue
@@ -1338,7 +1342,7 @@ def _validate_keyword_response(payload, expected_ids, allow_legacy):
         )
         if len(source_ids) != len(raw_source_ids):
             continue
-        candidate = dict(raw_item)
+        candidate = candidate_input
         candidate['source_item_ids'] = source_ids
         normalized = normalize_keyword_results({'candidates': [candidate]})
         if normalized:

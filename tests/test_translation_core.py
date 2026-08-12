@@ -368,6 +368,26 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertEqual(len(report.items), 1)
         self.assertEqual(report.items[0]['source_item_ids'], [])
 
+    def test_keyword_contract_keeps_legacy_missing_provenance_read_compatibility(self):
+        report = translation_core.validate_model_response(
+            [
+                {
+                    'source': 'Void Gate',
+                    'suggested_target': '虚空门',
+                    'category': 'term',
+                    'confidence': 0.9,
+                    'evidence': 'legacy artifact',
+                }
+            ],
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=[{'id': 'a', 'text': 'Void Gate'}],
+        )
+
+        self.assertTrue(report.complete)
+        self.assertTrue(report.legacy_shape)
+        self.assertEqual(report.reason_counts(), {})
+        self.assertEqual(report.items[0]['source_item_ids'], [])
+
     def test_keyword_contract_rejects_summary_without_provenance(self):
         report = translation_core.validate_model_response(
             {
