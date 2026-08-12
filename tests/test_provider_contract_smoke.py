@@ -74,6 +74,21 @@ class ProviderContractSmokeTests(unittest.TestCase):
         self.assertIn("provider=openai", error.getvalue())
         self.assertIn("category=invalid_response", error.getvalue())
 
+    def test_incomplete_json_reports_contract_reason(self):
+        spec = smoke.PROVIDER_BY_NAME["openai"]
+        result = SimpleNamespace(
+            provider="litellm",
+            model=spec.model,
+            response_text='{"translations":[]}',
+            usage_metadata={},
+        )
+
+        with self.assertRaisesRegex(
+            smoke.ContractSmokeError,
+            "response_missing_expected_id",
+        ):
+            smoke.validate_result(spec, result)
+
     def test_error_classification_covers_auth_rate_limit_and_outage(self):
         for status, expected in (
             (401, "authentication"),

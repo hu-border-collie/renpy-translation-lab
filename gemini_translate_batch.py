@@ -4970,12 +4970,37 @@ def split_retry_chunk(chunk):
     ]
 
 
-def build_retry_chunks_for_keys(manifest, retry_keys):
+def build_retry_chunks_for_keys(manifest, retry_keys, retry_item_ids_by_key=None):
     retry_key_set = set(retry_keys)
+    retry_item_ids_by_key = retry_item_ids_by_key or {}
     retry_chunks = []
     for chunk in manifest.get('chunks') or []:
-        if chunk.get('key') in retry_key_set:
-            retry_chunks.extend(split_retry_chunk(chunk))
+        key = chunk.get('key')
+        if key not in retry_key_set:
+            continue
+        requested_ids = {
+            str(item_id)
+            for item_id in retry_item_ids_by_key.get(key, ())
+            if item_id
+        }
+        items = chunk.get('items') or []
+        retry_items = [
+            copy.deepcopy(item)
+            for item in items
+            if str(item.get('id') or '') in requested_ids
+        ]
+        if requested_ids and retry_items and len(retry_items) < len(items):
+            scoped_chunk = copy.deepcopy(chunk)
+            scoped_chunk['items'] = retry_items
+            retry_chunks.extend(
+                build_retry_subchunk(scoped_chunk, start, end, index)
+                for index, (start, end) in enumerate(
+                    iter_retry_item_ranges(retry_items),
+                    start=1,
+                )
+            )
+            continue
+        retry_chunks.extend(split_retry_chunk(chunk))
     return retry_chunks
 
 
@@ -5125,7 +5150,18 @@ def build_retry_package(target=None, display_name_override=''):
         return None
 
 
-    retry_chunks = build_retry_chunks_for_keys(manifest, retry_keys)
+    retry_key_set = set(retry_keys)
+    retry_item_ids_by_key = {}
+    for entry in failure_entries:
+        key = entry.get('key')
+        item_id = entry.get('id')
+        if key in retry_key_set and item_id:
+            retry_item_ids_by_key.setdefault(key, set()).add(str(item_id))
+    retry_chunks = build_retry_chunks_for_keys(
+        manifest,
+        retry_keys,
+        retry_item_ids_by_key,
+    )
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     retry_root = retry_root_for_manifest(manifest)
     retry_dir = create_unique_child_dir(retry_root, f'{timestamp}_retry')
@@ -5219,6 +5255,12 @@ def load_result_rows_by_key(manifest, label):
 
 
 def result_items_from_row(row, label, expected_items, allow_empty=False):
+    """Return validated translation items from one persisted result row.
+
+    ``normalized_response`` takes precedence over the raw provider payload.
+    ``expected_items`` defines the required validation scope; ``allow_empty``
+    permits an empty result, while the default requires at least one valid item.
+    """
     try:
         normalized = row.get('normalized_response') if isinstance(row, dict) else None
         if isinstance(normalized, dict):
@@ -5278,22 +5320,18 @@ def canonical_translation_result_row(row, chunk):
     canonical = copy.deepcopy(row) if isinstance(row, dict) else {}
     normalized = canonical.get('normalized_response')
     if isinstance(normalized, dict):
-        try:
-            contract = validate_result_contract(
-                normalized,
-                translation_core.MODE_TRANSLATION,
-                chunk.get('items') or [],
-            )
-        except Exception:
-            pass
-        else:
-            canonical['normalized_response'] = contract.to_envelope()
-            canonical['contract_diagnostics'] = contract.to_diagnostics()
-            canonical.setdefault('response_semantics', {
-                'response': 'provider_payload',
-                'normalized_response': 'final_merged_contract',
-            })
-            return canonical
+        contract = validate_result_contract(
+            normalized,
+            translation_core.MODE_TRANSLATION,
+            chunk.get('items') or [],
+        )
+        canonical['normalized_response'] = contract.to_envelope()
+        canonical['contract_diagnostics'] = contract.to_diagnostics()
+        canonical.setdefault('response_semantics', {
+            'response': 'provider_payload',
+            'normalized_response': 'final_merged_contract',
+        })
+        return canonical
     response_text = extract_text_from_response_payload(canonical.get('response', {}))
     if not response_text:
         return canonical

@@ -158,7 +158,7 @@ def validate_result(spec: ProviderSpec, result: Any) -> dict[str, Any]:
         expected_units=[{"id": "smoke-1", "text": "Hello"}],
     )
     if not report.complete:
-        reasons = ",".join(sorted(report.reason_counts)) or "unknown"
+        reasons = ",".join(sorted(report.reason_counts())) or "unknown"
         raise ContractSmokeError(
             f"response JSON does not satisfy the translation contract: {reasons}"
         )

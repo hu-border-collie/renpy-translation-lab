@@ -333,7 +333,8 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 target_file = tl_dir / 'script.rpy'
                 target_file.write_text(
                     '    "Hello"\n'
-                    '    "World"\n',
+                    '    "World"\n'
+                    '    "Again"\n',
                     encoding='utf-8',
                 )
                 batch_mod.legacy.TL_DIR = str(tl_dir)
@@ -374,6 +375,15 @@ class BatchRepairRegressionTests(unittest.TestCase):
                                 'end': 11,
                                 'prefix': '',
                                 'quote': '"',
+                            },
+                            {
+                                'id': 'script.rpy:2:4:11:again',
+                                'text': 'Again',
+                                'line': 2,
+                                'start': 4,
+                                'end': 11,
+                                'prefix': '',
+                                'quote': '"',
                             }
                         ],
                     },
@@ -408,7 +418,21 @@ class BatchRepairRegressionTests(unittest.TestCase):
                             'response': {
                                 'candidates': [
                                     {
-                                        'content': {'parts': [{'text': '[]'}]},
+                                        'content': {
+                                            'parts': [
+                                                {
+                                                    'text': json.dumps(
+                                                        [
+                                                            {
+                                                                'id': 'script.rpy:1:4:11:world',
+                                                                'translation': '世界',
+                                                            }
+                                                        ],
+                                                        ensure_ascii=False,
+                                                    )
+                                                }
+                                            ]
+                                        },
                                         'finishReason': 'STOP',
                                     }
                                 ]
@@ -429,8 +453,8 @@ class BatchRepairRegressionTests(unittest.TestCase):
                             'input_jsonl_path': str(package_dir / 'requests.jsonl'),
                             'result_jsonl_path': 'results.jsonl',
                             'settings': {'target_size': 2},
-                            'files': {'script.rpy': {'path': str(target_file), 'task_count': 2}},
-                            'summary': {'file_count': 1, 'chunk_count': 2, 'item_count': 2},
+                            'files': {'script.rpy': {'path': str(target_file), 'task_count': 3}},
+                            'summary': {'file_count': 1, 'chunk_count': 2, 'item_count': 3},
                             'source_index_enabled': True,
                             'source_index_store_path': str(root / 'source_index'),
                             'source_index_settings': {'top_k': 4},
@@ -451,12 +475,19 @@ class BatchRepairRegressionTests(unittest.TestCase):
 
                     retry_manifest_path = batch_mod.build_retry_package(str(manifest_path))
                     retry_manifest = json.loads(Path(retry_manifest_path).read_text(encoding='utf-8'))
-                    self.assertEqual([chunk['key'] for chunk in retry_manifest['chunks']], ['chunk-bad'])
+                    self.assertEqual(
+                        [chunk['key'] for chunk in retry_manifest['chunks']],
+                        ['chunk-bad-retry-001'],
+                    )
                     self.assertEqual(retry_manifest['summary']['item_count'], 1)
+                    self.assertEqual(
+                        retry_manifest['chunks'][0]['retry_item_ids'],
+                        ['script.rpy:2:4:11:again'],
+                    )
                     self.assertTrue(retry_manifest['source_index_enabled'])
                     self.assertEqual(latest_path.read_text(encoding='utf-8'), retry_manifest_path)
                     retry_request = json.loads(Path(retry_manifest['input_jsonl_path']).read_text(encoding='utf-8').splitlines()[0])
-                    self.assertEqual(retry_request['key'], 'chunk-bad')
+                    self.assertEqual(retry_request['key'], 'chunk-bad-retry-001')
                     self.assertIn(
                         'copy that exact source substring verbatim',
                         retry_request['request']['system_instruction']['parts'][0]['text'],
@@ -467,7 +498,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                         str(retry_result_path),
                         [
                             {
-                                'key': 'chunk-bad',
+                                'key': 'chunk-bad-retry-001',
                                 'response': {
                                     'candidates': [
                                         {
@@ -475,7 +506,12 @@ class BatchRepairRegressionTests(unittest.TestCase):
                                                 'parts': [
                                                     {
                                                         'text': json.dumps(
-                                                            [{'id': 'script.rpy:1:4:11:world', 'translation': '世界'}],
+                                                            [
+                                                                {
+                                                                    'id': 'script.rpy:2:4:11:again',
+                                                                    'translation': '再次',
+                                                                }
+                                                            ],
                                                             ensure_ascii=False,
                                                         )
                                                     }
@@ -502,6 +538,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     ]
                     self.assertEqual([row['key'] for row in merged_rows], ['chunk-ok', 'chunk-bad'])
                     self.assertIn('世界', json.dumps(merged_rows[1], ensure_ascii=False))
+                    self.assertIn('再次', json.dumps(merged_rows[1], ensure_ascii=False))
                     merged_text = batch_mod.extract_text_from_response_payload(
                         merged_rows[1]['response']
                     )
@@ -536,7 +573,12 @@ class BatchRepairRegressionTests(unittest.TestCase):
         retry_response = batch_mod.response_payload_with_text(
             {},
             json.dumps(
-                {'translations': [{'id': 'b', 'translation': '世界'}]},
+                {
+                    'translations': [
+                        {'id': 'a', 'translation': '不应覆盖'},
+                        {'id': 'b', 'translation': '世界'},
+                    ]
+                },
                 ensure_ascii=False,
             ),
         )
@@ -558,8 +600,11 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(replaced, 1)
         self.assertEqual(merged['response'], parent_response)
         self.assertEqual(
-            [item['id'] for item in merged['normalized_response']['translations']],
-            ['a', 'b'],
+            {
+                item['id']: item['translation']
+                for item in merged['normalized_response']['translations']
+            },
+            {'a': '你好', 'b': '世界'},
         )
         self.assertTrue(merged['contract_diagnostics']['complete'])
         self.assertEqual(
