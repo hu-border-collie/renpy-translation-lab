@@ -5084,7 +5084,10 @@ def collect_result_integrity_issue_keys(manifest):
             response_text = extract_text_from_response_payload(response_payload)
             if not response_text and not isinstance(row.get('normalized_response'), dict):
                 issue_keys.add(key)
-                bump_counter(reason_counts, 'missing_response_text')
+                bump_counter(
+                    reason_counts,
+                    translation_core.CONTRACT_EMPTY_RESPONSE_TEXT,
+                )
                 continue
 
             try:
@@ -5102,7 +5105,7 @@ def collect_result_integrity_issue_keys(manifest):
                     reason_counts,
                     'truncated_output'
                     if finish_reason == 'MAX_TOKENS'
-                    else getattr(exc, 'reason_code', '') or 'failed_to_parse_model_json',
+                    else contract_error_reason(exc, 'failed_to_parse_model_json'),
                 )
                 continue
 
@@ -6110,6 +6113,13 @@ def bump_counter(bucket, name, amount=1):
     bucket[name] = bucket.get(name, 0) + amount
 
 
+def contract_error_reason(exc, fallback):
+    """Return a stable contract reason for parse and validation failures."""
+    if isinstance(exc, json.JSONDecodeError):
+        return translation_core.CONTRACT_INVALID_JSON
+    return str(getattr(exc, 'reason_code', '') or fallback)
+
+
 def record_contract_reasons(summary, report):
     bucket = summary.setdefault('reason_counts', {})
     for reason_code, count in report.reason_counts().items():
@@ -6448,7 +6458,10 @@ def export_keyword_candidates(
             if not response_text and not isinstance(row.get('normalized_response'), dict):
                 summary['parse_errors'] += 1
                 summary['missing_response_chunks'] += 1
-                bump_counter(summary['reason_counts'], 'missing_response_text')
+                bump_counter(
+                    summary['reason_counts'],
+                    translation_core.CONTRACT_EMPTY_RESPONSE_TEXT,
+                )
                 continue
             try:
                 payload = result_row_contract_payload(row)
@@ -6464,7 +6477,7 @@ def export_keyword_candidates(
                 summary['parse_errors'] += 1
                 bump_counter(
                     summary['reason_counts'],
-                    getattr(exc, 'reason_code', '') or 'failed_to_parse_keyword_json',
+                    contract_error_reason(exc, 'failed_to_parse_keyword_json'),
                 )
                 continue
 
@@ -7467,11 +7480,15 @@ def collect_revision_actions(manifest, validate_sources=False):
             response_text = extract_text_from_response_payload(response_payload)
             if not response_text and not isinstance(row.get('normalized_response'), dict):
                 summary['missing_response_chunks'] += 1
-                bump_counter(summary['reason_counts'], 'missing_response_text')
+                bump_counter(
+                    summary['reason_counts'],
+                    translation_core.CONTRACT_EMPTY_RESPONSE_TEXT,
+                )
                 for item in active_chunk_items:
                     failure_entries.append(make_failure_entry(
                         manifest,
                         'Missing text in response payload',
+                        reason_code=translation_core.CONTRACT_EMPTY_RESPONSE_TEXT,
                         file_rel_path=chunk['file_rel_path'],
                         item_id=item['id'],
                         line=item['line'],
@@ -7496,13 +7513,14 @@ def collect_revision_actions(manifest, validate_sources=False):
                 reason_name = (
                     'truncated_output'
                     if finish_reason == 'MAX_TOKENS'
-                    else getattr(exc, 'reason_code', '') or 'failed_to_parse_revision_json'
+                    else contract_error_reason(exc, 'failed_to_parse_revision_json')
                 )
                 bump_counter(summary['reason_counts'], reason_name)
                 for item in active_chunk_items:
                     failure_entries.append(make_failure_entry(
                         manifest,
                         f'Failed to parse revision JSON: {exc}',
+                        reason_code=reason_name,
                         file_rel_path=chunk['file_rel_path'],
                         item_id=item['id'],
                         line=item['line'],
@@ -8089,7 +8107,10 @@ def collect_result_actions(manifest, validate_sources=False):
                 if relocation_missing_ids and not active_chunk_items:
                     continue
                 summary['missing_response_chunks'] += 1
-                bump_counter(summary['reason_counts'], 'missing_response_text')
+                bump_counter(
+                    summary['reason_counts'],
+                    translation_core.CONTRACT_EMPTY_RESPONSE_TEXT,
+                )
                 for item in active_chunk_items:
                     failure_entries.append(
                         {
@@ -8101,6 +8122,7 @@ def collect_result_actions(manifest, validate_sources=False):
                             'line': item['line'],
                             'text': item['text'],
                             'error': 'Missing text in response payload',
+                            'reason_code': translation_core.CONTRACT_EMPTY_RESPONSE_TEXT,
                             'finish_reason': finish_reason,
                             'usage_metadata': usage_metadata,
                         }
@@ -8135,7 +8157,7 @@ def collect_result_actions(manifest, validate_sources=False):
                 reason_name = (
                     'truncated_output'
                     if finish_reason == 'MAX_TOKENS'
-                    else getattr(exc, 'reason_code', '') or 'failed_to_parse_model_json'
+                    else contract_error_reason(exc, 'failed_to_parse_model_json')
                 )
                 bump_counter(summary['reason_counts'], reason_name)
                 for item in active_chunk_items:
@@ -8149,6 +8171,7 @@ def collect_result_actions(manifest, validate_sources=False):
                             'line': item['line'],
                             'text': item['text'],
                             'error': f'Failed to parse model JSON: {exc}',
+                            'reason_code': reason_name,
                             'response_preview': response_text[:500],
                             'finish_reason': finish_reason,
                             'usage_metadata': usage_metadata,
@@ -10150,7 +10173,6 @@ def _contract_from_sync_result(result, chunk, mode):
 def _merge_sync_contract_reports(first, retry, chunk, mode):
     if mode == translation_core.MODE_KEYWORD_EXTRACTION:
         retry_made_progress = bool(retry.items)
-        merged = copy.deepcopy(retry if retry_made_progress else first)
         merged_items = []
         seen = set()
         for item in [*first.items, *retry.items]:
@@ -10163,45 +10185,37 @@ def _merge_sync_contract_reports(first, retry, chunk, mode):
                 continue
             seen.add(identity)
             merged_items.append(item)
-        merged.items = merged_items
-        merged.valid_ids = sorted({
-            item_id
-            for item in merged_items
-            for item_id in item.get('source_item_ids', [])
-        })
         first_summary = str(first.metadata.get('chunk_summary') or '')
         retry_summary = str(retry.metadata.get('chunk_summary') or '')
-        merged.metadata = {
+        merged_payload = {
+            translation_core.MODEL_RESPONSE_ENVELOPE_KEYS[mode]: merged_items,
             'chunk_summary': retry_summary or first_summary,
             'summary_evidence_item_ids': list(dict.fromkeys([
                 *list(first.metadata.get('summary_evidence_item_ids') or []),
                 *list(retry.metadata.get('summary_evidence_item_ids') or []),
             ])),
         }
+        merged = validate_result_contract(
+            merged_payload,
+            mode,
+            chunk.get('items') or [],
+        )
         merged.diagnostics = list(dict.fromkeys([
+            *merged.diagnostics,
             *first.diagnostics,
             *retry.diagnostics,
         ]))
-        if retry_made_progress:
-            merged.issues = list(retry.issues)
+        terminal_reports = [retry] if retry_made_progress else [first, retry]
+        merged.issues = list(dict.fromkeys([
+            *merged.issues,
+            *(issue for report in terminal_reports for issue in report.issues),
+        ]))
+        if merged.issues:
             merged.retry_ids = [
                 str(item.get('id') or '')
                 for item in chunk.get('items') or []
                 if str(item.get('id') or '')
-            ] if merged.issues else list(retry.retry_ids)
-        else:
-            merged.issues = list(dict.fromkeys([
-                *first.issues,
-                *retry.issues,
-            ]))
-            merged.retry_ids = [
-                str(item.get('id') or '')
-                for item in chunk.get('items') or []
-                if str(item.get('id') or '')
-            ] if merged.issues else list(dict.fromkeys([
-                *first.retry_ids,
-                *retry.retry_ids,
-            ]))
+            ]
         return merged
     merged_by_id = {item['id']: item for item in first.items}
     retryable_ids = set(first.retry_ids)
@@ -10306,7 +10320,6 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                 bump_counter(summary['reason_counts'], 'max_tokens')
             if not result.get('response_text'):
                 summary['missing_text_count'] += 1
-                bump_counter(summary['reason_counts'], 'missing_response_text')
             print(f"  finish_reason: {result.get('finish_reason') or '(none)'}")
 
             first_contract = None
@@ -10330,7 +10343,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                 first_error = exc
                 bump_counter(
                     summary['reason_counts'],
-                    getattr(exc, 'reason_code', '') or 'response_contract_error',
+                    contract_error_reason(exc, 'response_contract_error'),
                 )
 
             retry_ids = (
@@ -10400,7 +10413,10 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                     })
                     bump_counter(
                         summary['reason_counts'],
-                        getattr(exc, 'reason_code', '') or 'targeted_retry_contract_error',
+                        contract_error_reason(
+                            exc,
+                            'targeted_retry_contract_error',
+                        ),
                     )
 
             if final_contract is not None:
@@ -10430,8 +10446,10 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                     'valid_count': 0,
                     'retry_ids': retry_ids,
                     'reason_counts': {
-                        getattr(first_error, 'reason_code', '')
-                        or 'response_contract_error': 1
+                        contract_error_reason(
+                            first_error,
+                            'response_contract_error',
+                        ): 1
                     },
                 }
         except Exception as exc:
@@ -10896,12 +10914,15 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                 summary['parse_errors'] += 1
                 bump_counter(
                     reason_counts,
-                    getattr(exc, 'reason_code', '') or 'parse_error',
+                    contract_error_reason(exc, 'parse_error'),
                 )
         else:
             parse_error = 'Missing text in response payload'
             summary['parse_errors'] += 1
-            bump_counter(reason_counts, 'missing_response_text')
+            bump_counter(
+                reason_counts,
+                translation_core.CONTRACT_EMPTY_RESPONSE_TEXT,
+            )
 
         if not parse_ok:
             for item in job['items']:
