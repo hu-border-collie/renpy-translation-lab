@@ -1657,6 +1657,15 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(successful, ['task:0:1', 'task:1:1'])
         self.assertEqual(diagnostics['targeted_retry_requests'], 0)
         self.assertEqual(diagnostics['split_retry_requests'], 2)
+        self.assertEqual(diagnostics['retry_lineage'], [{
+            'kind': 'split',
+            'depth': 1,
+            'item_ids': ['file:0:1', 'file:1:1'],
+            'child_item_ids': [['file:0:1'], ['file:1:1']],
+            'reason_counts': {
+                translation_core.CONTRACT_MISSING_EXPECTED_ID: 2,
+            },
+        }])
 
     def test_contract_completeness_excludes_adapter_rejected_items(self):
         batch = [

@@ -4699,6 +4699,7 @@ def process_batch_with_retry(
 
     error_str = "" # Initialize variable to be safe
     error_reason_code = ''
+    split_reason_counts = {}
 
     for attempt in range(1, BATCH_RETRIES + 1):
         try:
@@ -4752,6 +4753,7 @@ def process_batch_with_retry(
                     if outcome['contract'].issues
                     else 'validation_failed'
                 )
+                split_reason_counts = outcome['contract'].reason_counts()
                 print(
                     '  ! No valid items accepted for this batch.',
                     flush=True,
@@ -4795,6 +4797,12 @@ def process_batch_with_retry(
         except Exception as e:
             error_str = str(e)
             error_reason_code = str(getattr(e, 'reason_code', '') or '')
+            split_reason_code = error_reason_code
+            if not split_reason_code and 'Finish reason: 2' in error_str:
+                split_reason_code = 'truncated_output'
+            split_reason_counts = {
+                split_reason_code or 'request_or_contract_failure': 1
+            }
             print(f"  [Attempt {attempt}] Error: {error_str[:100]}...", flush=True)
 
             # Handle Specific Errors
@@ -4841,8 +4849,30 @@ def process_batch_with_retry(
     if len(batch) > 1:
         print("  > Splitting batch...", flush=True)
         mid = len(batch) // 2
+        left_batch = batch[:mid]
+        right_batch = batch[mid:]
+        if contract_diagnostics is not None:
+            contract_diagnostics.setdefault('retry_lineage', []).append({
+                'kind': 'split',
+                'depth': retry_depth + 1,
+                'item_ids': [
+                    _sync_contract_item_id(item.get('id'))
+                    for item in batch
+                ],
+                'child_item_ids': [
+                    [
+                        _sync_contract_item_id(item.get('id'))
+                        for item in child_batch
+                    ]
+                    for child_batch in (left_batch, right_batch)
+                ],
+                'reason_counts': dict(
+                    split_reason_counts
+                    or {error_reason_code or 'request_or_contract_failure': 1}
+                ),
+            })
         r1 = process_batch_with_retry(
-            batch[:mid], replacements, retry_depth + 1,
+            left_batch, replacements, retry_depth + 1,
             usage_run_id=usage_run_id,
             usage_buffer=usage_buffer,
             usage_operation_id=usage_operation_id,
@@ -4852,7 +4882,7 @@ def process_batch_with_retry(
             retry_kind='split_retry',
         )
         r2 = process_batch_with_retry(
-            batch[mid:], replacements, retry_depth + 1,
+            right_batch, replacements, retry_depth + 1,
             usage_run_id=usage_run_id,
             usage_buffer=usage_buffer,
             usage_operation_id=usage_operation_id,
