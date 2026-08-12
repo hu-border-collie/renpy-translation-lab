@@ -7793,7 +7793,10 @@ def collect_revision_actions(manifest, validate_sources=False):
             ]
             if relocation_missing_ids and not active_chunk_items:
                 continue
-            item_map = {item['id']: item for item in active_chunk_items}
+            item_map = {
+                str(item.get('id') or ''): item
+                for item in active_chunk_items
+            }
             response_payload = row.get('response', {})
             finish_reason = extract_finish_reason(response_payload)
             usage_metadata = summarize_usage_metadata(extract_usage_metadata(response_payload))
@@ -8572,7 +8575,10 @@ def collect_result_actions(manifest, validate_sources=False):
             ]
             if relocation_missing_ids and not active_chunk_items:
                 continue
-            item_map = {item['id']: item for item in active_chunk_items}
+            item_map = {
+                str(item.get('id') or ''): item
+                for item in active_chunk_items
+            }
 
             active_retry_ids = set(contract.retry_ids) - relocation_missing_ids
             if active_retry_ids or contract.issues or persisted_reason_deltas:
@@ -10633,19 +10639,23 @@ def _merge_sync_contract_reports(first, retry, chunk, mode):
                 if str(item.get('id') or '')
             ]
         return merged
-    merged_by_id = {item['id']: item for item in first.items}
-    retryable_ids = set(first.retry_ids)
+    merged_by_id = {
+        str(item.get('id') or ''): item
+        for item in first.items
+        if str(item.get('id') or '')
+    }
+    retryable_ids = {str(item_id) for item_id in first.retry_ids}
     merged_by_id.update({
-        item['id']: item
+        str(item.get('id') or ''): item
         for item in retry.items
-        if item.get('id') in retryable_ids
+        if str(item.get('id') or '') in retryable_ids
     })
     envelope_key = translation_core.MODEL_RESPONSE_ENVELOPE_KEYS[mode]
     merged_payload = {
         envelope_key: [
-            merged_by_id[item.get('id')]
+            merged_by_id[str(item.get('id') or '')]
             for item in chunk.get('items') or []
-            if item.get('id') in merged_by_id
+            if str(item.get('id') or '') in merged_by_id
         ]
     }
     merged = validate_result_contract(
@@ -10653,7 +10663,7 @@ def _merge_sync_contract_reports(first, retry, chunk, mode):
         mode,
         chunk.get('items') or [],
     )
-    retryable_ids = set(first.retry_ids)
+    retryable_ids = {str(item_id) for item_id in first.retry_ids}
     first_terminal_issues = [
         issue
         for issue in first.issues

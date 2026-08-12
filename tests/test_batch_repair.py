@@ -1814,6 +1814,34 @@ class BatchRepairRegressionTests(unittest.TestCase):
             {'a': '首轮译文', 'b': '重试译文'},
         )
 
+    def test_translation_retry_normalizes_legacy_manifest_ids(self):
+        items = [
+            {'id': 1, 'text': 'Hello'},
+            {'id': 2, 'text': 'World'},
+        ]
+        first = translation_core.validate_model_response(
+            {'translations': [{'id': '1', 'translation': '首轮译文'}]},
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {'translations': [{'id': '2', 'translation': '重试译文'}]},
+            expected_units=[items[1]],
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_TRANSLATION,
+        )
+
+        self.assertTrue(merged.complete)
+        self.assertEqual(merged.retry_ids, [])
+        self.assertEqual(
+            {item['id']: item['translation'] for item in merged.items},
+            {'1': '首轮译文', '2': '重试译文'},
+        )
+
     def test_translation_retry_keeps_rejected_unknown_id_in_final_diagnostics(self):
         items = [
             {'id': 'a', 'text': 'Hello'},
