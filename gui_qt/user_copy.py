@@ -103,6 +103,22 @@ SYNC_TIMEOUT_COPY = {
     ),
 }
 
+MODEL_CONTRACT_COPY = {
+    "partial_translation": (
+        "部分模型结果未通过完整性合同，其余安全预览已生成。"
+    ),
+    "partial_keyword": (
+        "部分模型结果缺失或无效；已保留通过合同的关键词候选，请查看完整率和未解决项。"
+    ),
+    "partial_revision": (
+        "部分模型结果缺失或无效；已保留通过合同的订正项，请查看完整率和未解决项。"
+    ),
+    "completeness": "结果完整率",
+    "targeted_retries": "定点重试",
+    "unresolved_items": "未解决结果",
+    "partial_requests": "不完整请求",
+}
+
 PROJECT_ANALYSIS_COPY = {
     "start": "开始分析",
     "generate": "生成项目摘要",

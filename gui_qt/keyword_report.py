@@ -5,6 +5,7 @@ import re
 
 from .check_report import WritebackSummary
 from .translation_workflow import WorkflowUpdate
+from .user_copy import MODEL_CONTRACT_COPY
 
 
 def summarize_keyword_export_output(output: str, exit_code: int) -> WorkflowUpdate:
@@ -125,6 +126,14 @@ def summarize_sync_keyword_output(output: str, exit_code: int) -> WorkflowUpdate
         f"同步关键词提取已完成，导出 {deduped} 个去重候选（原始 {raw} 个）。"
         "报告不修改游戏脚本，完整路径可在诊断与工具复制。"
     )
+    unresolved = _contract_unresolved_count(output)
+    if unresolved > 0 or _contract_partial_request_count(output) > 0:
+        return WorkflowUpdate(
+            status="warning",
+            heading="同步关键词提取部分完成",
+            message=f"{MODEL_CONTRACT_COPY['partial_keyword']}{message}",
+            facts=facts,
+        )
     return WorkflowUpdate(
         status="done",
         heading="同步关键词提取完成",
@@ -168,4 +177,41 @@ def _collect_sync_facts(output: str) -> list[str]:
     run_match = re.search(r"^Sync keyword run:\s*(.+?)\s*$", output, re.MULTILINE)
     if run_match:
         facts.insert(0, f"同步输出目录：{run_match.group(1).strip()}")
+    completeness = re.search(
+        r"^Model contract completeness:\s*(\d+/\d+)\s*$", output, re.MULTILINE
+    )
+    if completeness:
+        facts.append(f"{MODEL_CONTRACT_COPY['completeness']}：{completeness.group(1)}")
+    retries = re.search(
+        r"^Targeted retries:\s*(\d+) requests / (\d+) items\s*$",
+        output,
+        re.MULTILINE,
+    )
+    if retries:
+        facts.append(
+            f"{MODEL_CONTRACT_COPY['targeted_retries']}："
+            f"{retries.group(1)} 次请求 / {retries.group(2)} 项"
+        )
+    unresolved = _contract_unresolved_count(output)
+    if unresolved >= 0:
+        facts.append(f"{MODEL_CONTRACT_COPY['unresolved_items']}：{unresolved} 个")
+    partial_requests = _contract_partial_request_count(output)
+    if partial_requests >= 0:
+        facts.append(
+            f"{MODEL_CONTRACT_COPY['partial_requests']}：{partial_requests} 个"
+        )
     return facts
+
+
+def _contract_unresolved_count(output: str) -> int:
+    match = re.search(
+        r"^Unresolved contract items:\s*(\d+)\s*$", output, re.MULTILINE
+    )
+    return int(match.group(1)) if match else -1
+
+
+def _contract_partial_request_count(output: str) -> int:
+    match = re.search(
+        r"^Contract partial requests:\s*(\d+)\s*$", output, re.MULTILINE
+    )
+    return int(match.group(1)) if match else -1

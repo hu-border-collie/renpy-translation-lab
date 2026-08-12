@@ -110,6 +110,28 @@ class GuiSyncTranslationReportTests(unittest.TestCase):
         self.assertIn("其余安全预览", update.message)
         self.assertTrue(any("预览失败文件" in fact for fact in update.facts))
 
+    def test_summarize_partial_contract_explains_completeness_and_retry(self):
+        update = summarize_sync_translation_output(
+            "Found 1 files.\n"
+            "Processing: script.rpy\n"
+            "  Found 3 lines to translate.\n"
+            "  Translated 2/3 items. (Received 12 chars of translation)\n"
+            "  Previewed script.rpy.\n"
+            "Sync preview manifest: logs/sync_runs/demo/manifest.json\n"
+            "Sync preview report: logs/sync_runs/demo/preview.diff\n"
+            "Model contract completeness: 2/3\n"
+            "Targeted retries: 1 requests / 1 items\n"
+            "Unresolved contract items: 1\n"
+            "Preview status: partial\n",
+            0,
+        )
+
+        self.assertEqual(update.status, "warning")
+        self.assertIn("完整性合同", update.message)
+        self.assertIn("结果完整率：2/3", update.facts)
+        self.assertIn("定点重试：1 次请求 / 1 项", update.facts)
+        self.assertIn("未解决结果：1 个", update.facts)
+
 
 if __name__ == "__main__":
     unittest.main()

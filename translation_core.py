@@ -22,6 +22,27 @@ MODE_TRANSLATION = 'translation'
 MODE_KEYWORD_EXTRACTION = 'keyword_extraction'
 MODE_REVISION = 'revision'
 
+MODEL_RESPONSE_ENVELOPE_KEYS = {
+    MODE_TRANSLATION: 'translations',
+    MODE_REVISION: 'revisions',
+    MODE_KEYWORD_EXTRACTION: 'candidates',
+}
+
+CONTRACT_EMPTY_RESPONSE_TEXT = 'empty_response_text'
+CONTRACT_INVALID_JSON = 'invalid_json'
+CONTRACT_ENVELOPE_MISSING = 'response_envelope_missing'
+CONTRACT_ITEMS_NOT_ARRAY = 'response_items_not_array'
+CONTRACT_ITEM_NOT_OBJECT = 'result_item_not_object'
+CONTRACT_MISSING_ID = 'result_missing_id'
+CONTRACT_UNKNOWN_ID = 'result_unknown_id'
+CONTRACT_DUPLICATE_ID = 'result_duplicate_id'
+CONTRACT_MISSING_FIELD = 'result_missing_field'
+CONTRACT_INVALID_FIELD_TYPE = 'result_invalid_field_type'
+CONTRACT_UNEXPECTED_FIELD = 'result_unexpected_field'
+CONTRACT_EMPTY_TRANSLATION = 'result_empty_translation'
+CONTRACT_MISSING_EXPECTED_ID = 'response_missing_expected_id'
+CONTRACT_UNKNOWN_SOURCE_ID = 'result_unknown_source_id'
+
 KEYWORD_CATEGORY_ORDER = [
     'term',
     'character',
@@ -124,6 +145,104 @@ class ModelResult:
                 'source_item_ids': list(self.source_item_ids),
             }
         return {'id': self.id, 'translation': self.translation}
+
+
+class ModelResponseContractError(ValueError):
+    """A stable, provider-neutral parse or response-contract failure."""
+
+    def __init__(self, reason_code, message):
+        super().__init__(message)
+        self.reason_code = str(reason_code or 'response_contract_error')
+
+
+@dataclass(frozen=True)
+class ModelContractIssue:
+    """One rejected response fragment with a stable machine-readable reason."""
+
+    reason_code: str
+    item_id: str = ''
+    result_index: int = -1
+    field: str = ''
+    message: str = ''
+
+    def to_dict(self):
+        payload = {'reason_code': self.reason_code}
+        if self.item_id:
+            payload['id'] = self.item_id
+        if self.result_index >= 0:
+            payload['result_index'] = self.result_index
+        if self.field:
+            payload['field'] = self.field
+        if self.message:
+            payload['message'] = self.message
+        return payload
+
+
+@dataclass
+class ModelContractReport:
+    """Normalized valid results plus completeness and targeted-retry diagnostics."""
+
+    mode: str
+    envelope_key: str
+    items: list = field(default_factory=list)
+    expected_ids: list = field(default_factory=list)
+    valid_ids: list = field(default_factory=list)
+    retry_ids: list = field(default_factory=list)
+    issues: list = field(default_factory=list)
+    legacy_shape: bool = False
+    metadata: dict = field(default_factory=dict)
+
+    @property
+    def complete(self):
+        return not self.issues and not self.retry_ids
+
+    @property
+    def completeness(self):
+        if self.mode == MODE_KEYWORD_EXTRACTION:
+            return 1.0 if self.complete else 0.0
+        if not self.expected_ids:
+            return 1.0 if self.complete else 0.0
+        return len(self.valid_ids) / len(self.expected_ids)
+
+    def reason_counts(self):
+        counts = {}
+        for issue in self.issues:
+            counts[issue.reason_code] = counts.get(issue.reason_code, 0) + 1
+        return counts
+
+    def to_envelope(self):
+        if self.mode == MODE_KEYWORD_EXTRACTION:
+            return {
+                self.envelope_key: list(self.items),
+                'chunk_summary': str(self.metadata.get('chunk_summary') or ''),
+                'summary_evidence_item_ids': list(
+                    self.metadata.get('summary_evidence_item_ids') or []
+                ),
+            }
+        return {self.envelope_key: list(self.items)}
+
+    def to_diagnostics(self):
+        if self.mode == MODE_KEYWORD_EXTRACTION:
+            expected_count = 1
+            valid_count = int(self.complete)
+        else:
+            expected_count = len(self.expected_ids)
+            valid_count = len(self.valid_ids)
+        return {
+            'mode': self.mode,
+            'envelope_key': self.envelope_key,
+            'legacy_shape': self.legacy_shape,
+            'complete': self.complete,
+            'expected_count': expected_count,
+            'valid_count': valid_count,
+            'missing_count': len(self.retry_ids),
+            'completeness': self.completeness,
+            'valid_ids': list(self.valid_ids),
+            'source_item_count': len(self.expected_ids),
+            'retry_ids': list(self.retry_ids),
+            'reason_counts': self.reason_counts(),
+            'issues': [issue.to_dict() for issue in self.issues],
+        }
 
 
 @dataclass
@@ -507,7 +626,7 @@ def build_translation_system_instruction(preserve_terms, macro_setting=''):
         'must be copied exactly; never replace it with a literal visible name.\n'
         'Return one result for every TARGET id even when the text is hard to translate; never omit an item.\n'
         'When TARGET items include speaker_id or speaker_name, use them only to identify the speaker and voice.\n'
-        'Return JSON only. Preserve every id exactly. Item count must match. '
+        'Return one JSON object with a translations array. Preserve every id exactly. Item count must match. '
         'translation must contain only the translated Chinese text.'
     )
 
@@ -589,7 +708,8 @@ def build_sync_translation_prompt(
         'never turn them into literal names.\n'
         '2.1 If an input item includes speaker_id or speaker_name, use it only to identify who is speaking and their voice.\n'
         '3. Output plain Chinese text. No markdown, no Pinyin, no explanations.\n'
-        '4. Return ONLY a JSON array matching the requested id/translation structure.\n'
+        '4. Return ONLY one JSON object shaped as '
+        '{"translations":[{"id":"...","translation":"..."}]}.\n'
         f'{reference_blocks}'
         f'Input JSON:\n{payload}'
     )
@@ -609,7 +729,8 @@ def build_revision_system_instruction(preserve_terms, macro_setting=''):
         'including honorifics, apostrophes, numbers, and spacing. '
         'If the current translation is already acceptable, set should_update=false and repeat it as revised_translation. '
         'If it needs a change, set should_update=true and provide only the revised Chinese translation. '
-        'Return JSON only. Preserve every id exactly. Item count must match.'
+        'Return one JSON object with a revisions array. Preserve every id exactly. '
+        'Item count must match.'
     )
 
 
@@ -653,7 +774,7 @@ def build_revision_user_prompt(
             f'CONTEXT BEFORE:\n{format_revision_context_block(context_window.before, "(none)")}\n\n',
             f'TARGET:\n{target_payload}\n\n',
             f'CONTEXT AFTER:\n{format_revision_context_block(context_window.after, "(none)")}\n\n',
-            'Return objects with id, should_update, revised_translation, and reason.',
+            'Return {"revisions":[...]} with id, should_update, revised_translation, and reason.',
         ]
     )
 
@@ -729,16 +850,23 @@ def build_keyword_user_prompt(units):
 def build_translation_schema(units):
     units = units_from_items(units, MODE_TRANSLATION)
     return {
-        'type': 'array',
-        'minItems': len(units),
-        'maxItems': len(units),
-        'items': {
-            'type': 'object',
-            'required': ['id', 'translation'],
-            'additionalProperties': False,
-            'properties': {
-                'id': {'type': 'string'},
-                'translation': {'type': 'string'},
+        'type': 'object',
+        'required': ['translations'],
+        'additionalProperties': False,
+        'properties': {
+            'translations': {
+                'type': 'array',
+                'minItems': len(units),
+                'maxItems': len(units),
+                'items': {
+                    'type': 'object',
+                    'required': ['id', 'translation'],
+                    'additionalProperties': False,
+                    'properties': {
+                        'id': {'type': 'string'},
+                        'translation': {'type': 'string'},
+                    },
+                },
             },
         },
     }
@@ -747,18 +875,25 @@ def build_translation_schema(units):
 def build_revision_schema(units):
     units = units_from_items(units, MODE_REVISION)
     return {
-        'type': 'array',
-        'minItems': len(units),
-        'maxItems': len(units),
-        'items': {
-            'type': 'object',
-            'required': ['id', 'should_update', 'revised_translation', 'reason'],
-            'additionalProperties': False,
-            'properties': {
-                'id': {'type': 'string'},
-                'should_update': {'type': 'boolean'},
-                'revised_translation': {'type': 'string'},
-                'reason': {'type': 'string'},
+        'type': 'object',
+        'required': ['revisions'],
+        'additionalProperties': False,
+        'properties': {
+            'revisions': {
+                'type': 'array',
+                'minItems': len(units),
+                'maxItems': len(units),
+                'items': {
+                    'type': 'object',
+                    'required': ['id', 'should_update', 'revised_translation', 'reason'],
+                    'additionalProperties': False,
+                    'properties': {
+                        'id': {'type': 'string'},
+                        'should_update': {'type': 'boolean'},
+                        'revised_translation': {'type': 'string'},
+                        'reason': {'type': 'string'},
+                    },
+                },
             },
         },
     }
@@ -807,6 +942,448 @@ def build_response_json_schema(units=None, mode=MODE_TRANSLATION, max_candidates
     if mode == MODE_KEYWORD_EXTRACTION:
         return build_keyword_schema(max_candidates_per_chunk)
     return build_translation_schema(units or [])
+
+
+def _contract_expected_ids(units, mode):
+    normalized = units_from_items(units or [], mode)
+    return [str(unit.id) for unit in normalized if str(unit.id)]
+
+
+def _contract_items(payload, mode, allow_legacy):
+    envelope_key = MODEL_RESPONSE_ENVELOPE_KEYS.get(mode, 'items')
+    legacy_shape = False
+    data = None
+    if isinstance(payload, dict):
+        if envelope_key in payload:
+            data = payload.get(envelope_key)
+        elif allow_legacy:
+            aliases = {
+                MODE_TRANSLATION: ('items',),
+                MODE_REVISION: ('items', 'results'),
+                MODE_KEYWORD_EXTRACTION: ('items', 'keywords'),
+            }.get(mode, ('items',))
+            for alias in aliases:
+                if alias in payload:
+                    data = payload.get(alias)
+                    legacy_shape = True
+                    break
+    elif isinstance(payload, list) and allow_legacy:
+        data = payload
+        legacy_shape = True
+    return envelope_key, data, legacy_shape
+
+
+def _issue(reason_code, *, item_id='', result_index=-1, field_name='', message=''):
+    return ModelContractIssue(
+        reason_code=reason_code,
+        item_id=str(item_id or ''),
+        result_index=result_index,
+        field=field_name,
+        message=message,
+    )
+
+
+def _validate_id_results(payload, mode, expected_ids, allow_legacy):
+    envelope_key, data, legacy_shape = _contract_items(payload, mode, allow_legacy)
+    report = ModelContractReport(
+        mode=mode,
+        envelope_key=envelope_key,
+        expected_ids=list(expected_ids),
+        legacy_shape=legacy_shape,
+    )
+    if data is None:
+        report.issues.append(_issue(
+            CONTRACT_ENVELOPE_MISSING,
+            field_name=envelope_key,
+            message=f'Response must contain a {envelope_key} array.',
+        ))
+        report.retry_ids = list(expected_ids)
+        return report
+    if not isinstance(data, list):
+        report.issues.append(_issue(
+            CONTRACT_ITEMS_NOT_ARRAY,
+            field_name=envelope_key,
+            message=f'{envelope_key} must be an array.',
+        ))
+        report.retry_ids = list(expected_ids)
+        return report
+
+    if mode == MODE_REVISION:
+        required = ('id', 'should_update', 'revised_translation', 'reason')
+        allowed = set(required)
+    else:
+        required = ('id', 'translation')
+        allowed = set(required)
+    expected_set = set(expected_ids)
+    valid_by_id = {}
+    invalid_ids = set()
+    seen_ids = set()
+
+    for index, raw_item in enumerate(data):
+        if not isinstance(raw_item, dict):
+            report.issues.append(_issue(
+                CONTRACT_ITEM_NOT_OBJECT,
+                result_index=index,
+                message='Result item must be an object.',
+            ))
+            continue
+        raw_id = raw_item.get('id')
+        item_id = raw_id if isinstance(raw_id, str) else ''
+        if not item_id:
+            reason = CONTRACT_MISSING_ID if raw_id is None else CONTRACT_INVALID_FIELD_TYPE
+            report.issues.append(_issue(
+                reason,
+                result_index=index,
+                field_name='id',
+                message='Result id must be a non-empty string.',
+            ))
+            continue
+        if expected_set and item_id not in expected_set:
+            report.issues.append(_issue(
+                CONTRACT_UNKNOWN_ID,
+                item_id=item_id,
+                result_index=index,
+                field_name='id',
+                message='Result id was not requested.',
+            ))
+            continue
+        if item_id in seen_ids:
+            report.issues.append(_issue(
+                CONTRACT_DUPLICATE_ID,
+                item_id=item_id,
+                result_index=index,
+                field_name='id',
+                message='Each requested id must appear exactly once.',
+            ))
+            invalid_ids.add(item_id)
+            valid_by_id.pop(item_id, None)
+            continue
+        seen_ids.add(item_id)
+
+        item_valid = True
+        for field_name in required:
+            if field_name not in raw_item:
+                report.issues.append(_issue(
+                    CONTRACT_MISSING_FIELD,
+                    item_id=item_id,
+                    result_index=index,
+                    field_name=field_name,
+                    message=f'Missing required field: {field_name}.',
+                ))
+                item_valid = False
+        unexpected = sorted(set(raw_item) - allowed)
+        for field_name in unexpected:
+            report.issues.append(_issue(
+                CONTRACT_UNEXPECTED_FIELD,
+                item_id=item_id,
+                result_index=index,
+                field_name=field_name,
+                message=f'Unexpected result field: {field_name}.',
+            ))
+            item_valid = False
+        if not item_valid:
+            invalid_ids.add(item_id)
+            continue
+
+        if mode == MODE_REVISION:
+            field_types = {
+                'should_update': bool,
+                'revised_translation': str,
+                'reason': str,
+            }
+            output = {
+                'id': item_id,
+                'should_update': raw_item['should_update'],
+                'revised_translation': raw_item['revised_translation'],
+                'reason': raw_item['reason'],
+            }
+            translated = raw_item['revised_translation']
+        else:
+            field_types = {'translation': str}
+            output = {'id': item_id, 'translation': raw_item['translation']}
+            translated = raw_item['translation']
+        for field_name, expected_type in field_types.items():
+            if not isinstance(raw_item[field_name], expected_type):
+                report.issues.append(_issue(
+                    CONTRACT_INVALID_FIELD_TYPE,
+                    item_id=item_id,
+                    result_index=index,
+                    field_name=field_name,
+                    message=f'{field_name} must be {expected_type.__name__}.',
+                ))
+                item_valid = False
+        if isinstance(translated, str) and not translated.strip():
+            report.issues.append(_issue(
+                CONTRACT_EMPTY_TRANSLATION,
+                item_id=item_id,
+                result_index=index,
+                field_name='revised_translation' if mode == MODE_REVISION else 'translation',
+                message='Translation text must not be empty.',
+            ))
+            item_valid = False
+        if item_valid:
+            valid_by_id[item_id] = output
+        else:
+            invalid_ids.add(item_id)
+
+    retry_ids = []
+    for item_id in expected_ids:
+        if item_id not in valid_by_id or item_id in invalid_ids:
+            retry_ids.append(item_id)
+            report.issues.append(_issue(
+                CONTRACT_MISSING_EXPECTED_ID,
+                item_id=item_id,
+                field_name='id',
+                message='Requested id has no valid result.',
+            ))
+    report.retry_ids = retry_ids
+    report.valid_ids = [item_id for item_id in expected_ids if item_id in valid_by_id]
+    if expected_ids:
+        report.items = [valid_by_id[item_id] for item_id in report.valid_ids]
+    else:
+        report.valid_ids = list(valid_by_id)
+        report.items = list(valid_by_id.values())
+    return report
+
+
+def _validate_string_list(value, *, expected_ids, report, field_name):
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        report.issues.append(_issue(
+            CONTRACT_INVALID_FIELD_TYPE,
+            field_name=field_name,
+            message=f'{field_name} must be an array of strings.',
+        ))
+        return []
+    cleaned = [item for item in value if item]
+    expected_set = set(expected_ids)
+    for item_id in cleaned:
+        if expected_set and item_id not in expected_set:
+            report.issues.append(_issue(
+                CONTRACT_UNKNOWN_SOURCE_ID,
+                item_id=item_id,
+                field_name=field_name,
+                message='Evidence id was not present in the request.',
+            ))
+    return [item_id for item_id in cleaned if not expected_set or item_id in expected_set]
+
+
+def _validate_keyword_response(payload, expected_ids, allow_legacy):
+    envelope_key, data, legacy_shape = _contract_items(
+        payload,
+        MODE_KEYWORD_EXTRACTION,
+        allow_legacy,
+    )
+    report = ModelContractReport(
+        mode=MODE_KEYWORD_EXTRACTION,
+        envelope_key=envelope_key,
+        expected_ids=list(expected_ids),
+        legacy_shape=legacy_shape,
+    )
+    if data is None:
+        report.issues.append(_issue(
+            CONTRACT_ENVELOPE_MISSING,
+            field_name=envelope_key,
+            message='Response must contain a candidates array.',
+        ))
+        report.retry_ids = list(expected_ids)
+        return report
+    if not isinstance(data, list):
+        report.issues.append(_issue(
+            CONTRACT_ITEMS_NOT_ARRAY,
+            field_name=envelope_key,
+            message='candidates must be an array.',
+        ))
+        report.retry_ids = list(expected_ids)
+        return report
+
+    if isinstance(payload, dict):
+        summary = payload.get('chunk_summary')
+        evidence_ids = payload.get('summary_evidence_item_ids')
+    else:
+        summary = ''
+        evidence_ids = []
+    if not legacy_shape:
+        if not isinstance(summary, str):
+            report.issues.append(_issue(
+                CONTRACT_INVALID_FIELD_TYPE,
+                field_name='chunk_summary',
+                message='chunk_summary must be a string.',
+            ))
+            summary = ''
+        summary_ids = _validate_string_list(
+            evidence_ids,
+            expected_ids=expected_ids,
+            report=report,
+            field_name='summary_evidence_item_ids',
+        )
+    else:
+        summary = summary if isinstance(summary, str) else ''
+        summary_ids = evidence_ids if isinstance(evidence_ids, list) else []
+    report.metadata = {
+        'chunk_summary': compact_text(summary),
+        'summary_evidence_item_ids': summary_ids,
+    }
+
+    required = {
+        'source': str,
+        'suggested_target': str,
+        'category': str,
+        'confidence': (int, float),
+        'evidence': str,
+        'source_item_ids': list,
+    }
+    valid_candidates = []
+    for index, raw_item in enumerate(data):
+        if not isinstance(raw_item, dict):
+            report.issues.append(_issue(
+                CONTRACT_ITEM_NOT_OBJECT,
+                result_index=index,
+                message='Keyword candidate must be an object.',
+            ))
+            continue
+        item_valid = True
+        for field_name, expected_type in required.items():
+            if field_name not in raw_item:
+                report.issues.append(_issue(
+                    CONTRACT_MISSING_FIELD,
+                    result_index=index,
+                    field_name=field_name,
+                    message=f'Missing required field: {field_name}.',
+                ))
+                item_valid = False
+                continue
+            if not isinstance(raw_item[field_name], expected_type) or (
+                field_name == 'confidence' and isinstance(raw_item[field_name], bool)
+            ):
+                report.issues.append(_issue(
+                    CONTRACT_INVALID_FIELD_TYPE,
+                    result_index=index,
+                    field_name=field_name,
+                    message=f'Invalid field type: {field_name}.',
+                ))
+                item_valid = False
+        if not item_valid:
+            continue
+        source = compact_text(raw_item['source'])
+        if not source:
+            report.issues.append(_issue(
+                CONTRACT_MISSING_FIELD,
+                result_index=index,
+                field_name='source',
+                message='Candidate source must not be empty.',
+            ))
+            continue
+        source_ids = _validate_string_list(
+            raw_item['source_item_ids'],
+            expected_ids=expected_ids,
+            report=report,
+            field_name='source_item_ids',
+        )
+        if len(source_ids) != len(raw_item['source_item_ids']):
+            continue
+        candidate = dict(raw_item)
+        candidate['source_item_ids'] = source_ids
+        normalized = normalize_keyword_results({'candidates': [candidate]})
+        if normalized:
+            valid_candidates.append(normalized[0])
+    report.items = valid_candidates
+    report.valid_ids = sorted({
+        item_id
+        for candidate in valid_candidates
+        for item_id in candidate.get('source_item_ids', [])
+    })
+    if report.issues:
+        implicated = {
+            issue.item_id for issue in report.issues if issue.item_id in set(expected_ids)
+        }
+        report.retry_ids = [
+            item_id for item_id in expected_ids if item_id in implicated
+        ] or list(expected_ids)
+    return report
+
+
+def validate_model_response(payload, *, mode=MODE_TRANSLATION, expected_units=None, allow_legacy=True):
+    """Validate one model response and return ordered valid items plus retry IDs.
+
+    New requests use a named top-level object envelope. ``allow_legacy`` keeps
+    historical bare-array artifacts readable, while every item is still checked
+    for required fields, exact IDs, duplicates, types, and empty translations.
+    """
+    expected_ids = _contract_expected_ids(expected_units or [], mode)
+    if mode == MODE_KEYWORD_EXTRACTION:
+        return _validate_keyword_response(payload, expected_ids, allow_legacy)
+    return _validate_id_results(payload, mode, expected_ids, allow_legacy)
+
+
+def _salvage_partial_json_array(text):
+    start = text.find('[')
+    if start < 0:
+        return []
+    decoder = json.JSONDecoder()
+    index = start + 1
+    items = []
+    while index < len(text):
+        while index < len(text) and text[index] in ' \r\n\t,':
+            index += 1
+        if index >= len(text) or text[index] == ']':
+            return items
+        try:
+            item, index = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            break
+        items.append(item)
+    return items
+
+
+def parse_model_response_json(text, *, salvage_partial=True):
+    """Parse provider text without echoing it and expose stable failure codes."""
+    if not isinstance(text, str) or not text.strip():
+        raise ModelResponseContractError(
+            CONTRACT_EMPTY_RESPONSE_TEXT,
+            'Model response text is empty.',
+        )
+    cleaned = text.strip()
+    if cleaned.startswith('```'):
+        cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
+        cleaned = re.sub(r'\s*```$', '', cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as original_error:
+        decoder = json.JSONDecoder()
+        embedded = []
+        for start, char in enumerate(cleaned):
+            if char not in '[{':
+                continue
+            try:
+                payload, end = decoder.raw_decode(cleaned[start:])
+                embedded.append((start + end, -start, payload))
+            except json.JSONDecodeError:
+                continue
+        if embedded:
+            _end, neg_start, payload = max(
+                embedded,
+                key=lambda item: (item[0], item[1]),
+            )
+            start = -neg_start
+            previous_index = start - 1
+            while previous_index >= 0 and cleaned[previous_index].isspace():
+                previous_index -= 1
+            salvaged = _salvage_partial_json_array(cleaned) if salvage_partial else []
+            if (
+                salvaged
+                and previous_index >= 0
+                and cleaned[previous_index] in '[,'
+            ):
+                return salvaged
+            return payload
+        if salvage_partial:
+            salvaged = _salvage_partial_json_array(cleaned)
+            if salvaged:
+                return salvaged
+        raise ModelResponseContractError(
+            CONTRACT_INVALID_JSON,
+            'Model response is not valid JSON.',
+        ) from original_error
 
 
 def normalize_translation_results(payload):

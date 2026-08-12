@@ -31,7 +31,9 @@ class ProviderContractSmokeTests(unittest.TestCase):
         result = SimpleNamespace(
             provider="litellm",
             model=spec.model,
-            response_text='{"ok":true}',
+            response_text=(
+                '{"translations":[{"id":"smoke-1","translation":"你好"}]}'
+            ),
             usage_metadata={"total_tokens": 9},
         )
         backend = mock.Mock()
@@ -49,6 +51,7 @@ class ProviderContractSmokeTests(unittest.TestCase):
             request.config["timeout"],
             smoke.REQUEST_TIMEOUT_SECONDS,
         )
+        self.assertIn("translations", request.config["response_json_schema"]["properties"])
 
     def test_invalid_response_fails_with_provider_name_and_category(self):
         spec = smoke.PROVIDER_BY_NAME["openai"]

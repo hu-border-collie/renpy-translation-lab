@@ -148,6 +148,58 @@ class ModelUsageLedgerTests(unittest.TestCase):
             self.assertEqual(record["stage"], "sync_revision")
             self.assertEqual(record["execution_mode"], "sync")
 
+    def test_sync_targeted_retry_attempts_are_counted_separately(self):
+        with tempfile.TemporaryDirectory() as game_root, tempfile.TemporaryDirectory() as package:
+            result_path = self._write_jsonl(
+                package,
+                [
+                    {
+                        "key": "chunk-1",
+                        "provider": "litellm",
+                        "model": "openai/test",
+                        "execution_mode": "sync",
+                        "provider_response_attempts": [
+                            {
+                                "kind": "first_pass",
+                                "response": {"id": "first"},
+                                "usage_metadata": {
+                                    "prompt_tokens": 10,
+                                    "completion_tokens": 4,
+                                    "total_tokens": 14,
+                                },
+                            },
+                            {
+                                "kind": "targeted_retry",
+                                "item_ids": ["b"],
+                                "response": {"id": "retry"},
+                                "usage_metadata": {
+                                    "prompt_tokens": 6,
+                                    "completion_tokens": 2,
+                                    "total_tokens": 8,
+                                },
+                            },
+                        ],
+                    }
+                ],
+            )
+            manifest = self._manifest(
+                game_root,
+                result_path,
+                execution="sync",
+                provider="litellm",
+                model="openai/test",
+            )
+
+            summary = usage.import_manifest_results(manifest, result_path=result_path)
+            report = usage.query_usage(game_root)
+            records = usage.UsageLedger(game_root).load()["records"]
+
+            self.assertEqual(summary["inserted_records"], 2)
+            self.assertEqual(report["totals"]["calls"], 2)
+            self.assertEqual(report["totals"]["total_tokens"], 22)
+            self.assertEqual(records[1]["source"]["attempt_kind"], "targeted_retry")
+            self.assertEqual(records[1]["source"]["item_ids"], ["b"])
+
     def test_litellm_fixture_maps_snake_case_cache_reasoning_and_actual_cost(self):
         with tempfile.TemporaryDirectory() as game_root, tempfile.TemporaryDirectory() as package:
             result_path = self._write_jsonl(

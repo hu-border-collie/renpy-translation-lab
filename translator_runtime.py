@@ -4328,22 +4328,7 @@ def build_response_json_schema(items):
 
 
 def parse_json_payload(text):
-    if not text:
-        raise ValueError("Empty response text")
-
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        start = cleaned.find("[")
-        end = cleaned.rfind("]")
-        if start >= 0 and end > start:
-            return json.loads(cleaned[start:end + 1])
-        raise
+    return translation_core.parse_model_response_json(text)
 
 
 def normalize_result_items(payload):
@@ -4359,6 +4344,7 @@ def call_gemini_sdk(
     usage_run_id='',
     usage_buffer=None,
     usage_operation_id='',
+    return_contract=False,
 ):
     """Calls the explicitly configured synchronous backend."""
     model_name = get_current_model()
@@ -4426,10 +4412,28 @@ def call_gemini_sdk(
                 flush=True,
             )
 
+    payload = None
     if result.parsed is not None:
-        return normalize_result_items(serialize_unknown(result.parsed))
-    if result.response_text:
-        return normalize_result_items(parse_json_payload(result.response_text))
+        payload = serialize_unknown(result.parsed)
+    elif result.response_text:
+        payload = parse_json_payload(result.response_text)
+
+    if payload is not None:
+        report = translation_core.validate_model_response(
+            payload,
+            mode=translation_core.MODE_TRANSLATION,
+            expected_units=items,
+            allow_legacy=True,
+        )
+        if return_contract:
+            return report
+        if not report.items and report.expected_ids:
+            reason = report.issues[0].reason_code if report.issues else 'response_contract_error'
+            raise translation_core.ModelResponseContractError(
+                reason,
+                'Model response did not contain any valid requested translations.',
+            )
+        return report.items
 
     prompt_feedback = extract_prompt_feedback(result.response_payload)
     diagnostics = []
@@ -4438,7 +4442,10 @@ def call_gemini_sdk(
     if result.finish_reason:
         diagnostics.append(f"Finish reason: {result.finish_reason}")
     detail = f" ({'; '.join(diagnostics)})" if diagnostics else ""
-    raise ValueError(f"Invalid response from API. Missing structured text{detail}.")
+    raise translation_core.ModelResponseContractError(
+        translation_core.CONTRACT_EMPTY_RESPONSE_TEXT,
+        f"Invalid response from API. Missing structured text{detail}.",
+    )
 
 def process_batch(
     batch,
@@ -4447,6 +4454,7 @@ def process_batch(
     usage_buffer=None,
     usage_operation_id='',
     translation_validator=None,
+    return_contract=False,
 ):
     glossary_hits = retrieve_sync_glossary_hits(batch) if SYNC_RAG_ENABLED else []
     history_hits, rag_stats = retrieve_sync_history_hits(batch) if SYNC_RAG_ENABLED else ([], {})
@@ -4461,20 +4469,29 @@ def process_batch(
     )
 
     # Call API (SDK handles connection details)
-    results = call_gemini_sdk(
+    contract = call_gemini_sdk(
         prompt,
         batch,
         usage_run_id=usage_run_id,
         usage_buffer=usage_buffer,
         usage_operation_id=usage_operation_id,
+        return_contract=True,
     )
-
-    if not isinstance(results, list):
-        raise RuntimeError(f"API returned {type(results)} instead of list")
+    if isinstance(contract, list):
+        # Compatibility for injected/test callables that still return the
+        # historical normalized list instead of a contract report.
+        contract = translation_core.validate_model_response(
+            {'translations': contract},
+            mode=translation_core.MODE_TRANSLATION,
+            expected_units=batch,
+            allow_legacy=True,
+        )
+    results = contract.items
 
     id_map = {item["id"]: item for item in batch}
     valid_progress_entries = []
     seen_result_ids = set()
+    retry_ids = set(contract.retry_ids)
 
     for item in results:
         entry = id_map.get(item.get("id"))
@@ -4494,6 +4511,7 @@ def process_batch(
 
         if not valid:
             print(f"  Warning: Validation failed for {entry['id']}: {msg}")
+            retry_ids.add(entry['id'])
             continue
 
         valid_progress_entries.append(entry["progress_entry"])
@@ -4504,13 +4522,95 @@ def process_batch(
             translation_core.writeback_tuple(action, include_expected=False)
         )
 
-    if not valid_progress_entries:
+    if not valid_progress_entries and not return_contract:
         raise RuntimeError("No valid translations in batch (all items rejected; consider expanding non-translatable rules or switching model)")
 
     # Calculate total chars to show valid data receipt without spoilers
     total_chars = sum(len(item.get("translation", "")) for item in results)
     print(f"  Translated {len(valid_progress_entries)}/{len(batch)} items. (Received {total_chars} chars of translation)", flush=True)
+    if return_contract:
+        return {
+            'progress_entries': valid_progress_entries,
+            'retry_ids': [
+                item['id'] for item in batch if item.get('id') in retry_ids
+            ],
+            'contract': contract,
+        }
     return valid_progress_entries
+
+
+def new_sync_contract_diagnostics():
+    """Return mutable per-preview response-contract counters."""
+    return {
+        'first_pass_expected': 0,
+        'first_pass_valid': 0,
+        'targeted_retry_requests': 0,
+        'targeted_retry_items': 0,
+        'split_retry_requests': 0,
+        'reason_counts': {},
+        'terminal_reason_counts': {},
+        'retry_lineage': [],
+        '_expected_ids': set(),
+        '_valid_ids': set(),
+    }
+
+
+def _record_sync_contract_report(diagnostics, report, *, retry_kind):
+    if diagnostics is None:
+        return
+    if retry_kind == 'first_pass':
+        diagnostics['first_pass_valid'] += len(report.valid_ids)
+    elif retry_kind == 'split_retry':
+        diagnostics['split_retry_requests'] += 1
+    diagnostics['_valid_ids'].update(report.valid_ids)
+    for reason_code, count in report.reason_counts().items():
+        diagnostics['reason_counts'][reason_code] = (
+            diagnostics['reason_counts'].get(reason_code, 0) + count
+        )
+
+
+def _record_unresolved_contract_items(failures, batch, reason_code, message):
+    if failures is None:
+        return
+    for item in batch:
+        failures.append({
+            'relative_path': str(item.get('file_rel_path') or ''),
+            'item_id': str(item.get('id') or ''),
+            'reason_code': str(reason_code or 'response_contract_failure'),
+            'message': str(message or 'Model response contract failed.'),
+        })
+
+
+def finalize_sync_contract_diagnostics(diagnostics):
+    if diagnostics is None:
+        return {}
+    expected_ids = set(diagnostics.get('_expected_ids') or ())
+    valid_ids = set(diagnostics.get('_valid_ids') or ())
+    unresolved_ids = sorted(expected_ids - valid_ids)
+    first_expected = int(diagnostics.get('first_pass_expected') or 0)
+    first_valid = int(diagnostics.get('first_pass_valid') or 0)
+    final_valid = len(expected_ids & valid_ids)
+    return {
+        'first_pass_expected': first_expected,
+        'first_pass_valid': first_valid,
+        'first_pass_completeness': (
+            first_valid / first_expected if first_expected else 1.0
+        ),
+        'targeted_retry_requests': int(
+            diagnostics.get('targeted_retry_requests') or 0
+        ),
+        'targeted_retry_items': int(diagnostics.get('targeted_retry_items') or 0),
+        'split_retry_requests': int(diagnostics.get('split_retry_requests') or 0),
+        'final_expected': len(expected_ids),
+        'final_valid': final_valid,
+        'final_completeness': final_valid / len(expected_ids) if expected_ids else 1.0,
+        'unresolved_ids': unresolved_ids,
+        'reason_counts': dict(diagnostics.get('reason_counts') or {}),
+        'terminal_reason_counts': dict(
+            diagnostics.get('terminal_reason_counts') or {}
+        ),
+        'retry_lineage': list(diagnostics.get('retry_lineage') or []),
+    }
 
 
 def process_batch_with_retry(
@@ -4521,29 +4621,104 @@ def process_batch_with_retry(
     usage_buffer=None,
     usage_operation_id='',
     translation_validator=None,
+    contract_diagnostics=None,
+    contract_failures=None,
+    retry_kind='first_pass',
 ):
+    if contract_diagnostics is not None and retry_kind == 'first_pass':
+        original_ids = [str(item.get('id') or '') for item in batch if item.get('id')]
+        contract_diagnostics['first_pass_expected'] += len(original_ids)
+        contract_diagnostics['_expected_ids'].update(original_ids)
     if retry_depth >= 5:
         log_failure(batch, "Max retry depth reached")
+        _record_unresolved_contract_items(
+            contract_failures,
+            batch,
+            'max_retry_depth',
+            'Model response could not be completed within the retry depth limit.',
+        )
         return []
 
     error_str = "" # Initialize variable to be safe
+    error_reason_code = ''
 
     for attempt in range(1, BATCH_RETRIES + 1):
         try:
             # Respect rate limits
             time.sleep(get_random_delay())
 
-            return process_batch(
+            outcome = process_batch(
                 batch,
                 replacements,
                 translation_validator=translation_validator,
                 usage_run_id=usage_run_id,
                 usage_buffer=usage_buffer,
                 usage_operation_id=usage_operation_id,
+                return_contract=True,
             )
+            _record_sync_contract_report(
+                contract_diagnostics,
+                outcome['contract'],
+                retry_kind=retry_kind,
+            )
+            successful = list(outcome['progress_entries'])
+            retry_ids = set(outcome['retry_ids'])
+            if not retry_ids:
+                if (
+                    contract_diagnostics is not None
+                    and not outcome['contract'].complete
+                ):
+                    terminal_counts = contract_diagnostics.setdefault(
+                        'terminal_reason_counts', {}
+                    )
+                    for reason_code, count in (
+                        outcome['contract'].reason_counts().items()
+                    ):
+                        terminal_counts[reason_code] = (
+                            terminal_counts.get(reason_code, 0) + count
+                        )
+                return successful
+
+            targeted_batch = [
+                item for item in batch if item.get('id') in retry_ids
+            ]
+            if not targeted_batch:
+                return successful
+            if contract_diagnostics is not None:
+                contract_diagnostics['targeted_retry_requests'] = (
+                    contract_diagnostics.get('targeted_retry_requests', 0) + 1
+                )
+                contract_diagnostics['targeted_retry_items'] = (
+                    contract_diagnostics.get('targeted_retry_items', 0)
+                    + len(targeted_batch)
+                )
+                contract_diagnostics.setdefault('retry_lineage', []).append({
+                    'kind': 'targeted',
+                    'depth': retry_depth + 1,
+                    'item_ids': [item.get('id') for item in targeted_batch],
+                    'reason_counts': outcome['contract'].reason_counts(),
+                })
+            print(
+                f"  > Targeted retry for {len(targeted_batch)}/{len(batch)} items...",
+                flush=True,
+            )
+            retried = process_batch_with_retry(
+                targeted_batch,
+                replacements,
+                retry_depth + 1,
+                usage_run_id=usage_run_id,
+                usage_buffer=usage_buffer,
+                usage_operation_id=usage_operation_id,
+                translation_validator=translation_validator,
+                contract_diagnostics=contract_diagnostics,
+                contract_failures=contract_failures,
+                retry_kind='targeted_retry',
+            )
+            return successful + retried
 
         except Exception as e:
             error_str = str(e)
+            error_reason_code = str(getattr(e, 'reason_code', '') or '')
             print(f"  [Attempt {attempt}] Error: {error_str[:100]}...", flush=True)
 
             # Handle Specific Errors
@@ -4596,6 +4771,9 @@ def process_batch_with_retry(
             usage_buffer=usage_buffer,
             usage_operation_id=usage_operation_id,
             translation_validator=translation_validator,
+            contract_diagnostics=contract_diagnostics,
+            contract_failures=contract_failures,
+            retry_kind='split_retry',
         )
         r2 = process_batch_with_retry(
             batch[mid:], replacements, retry_depth + 1,
@@ -4603,10 +4781,19 @@ def process_batch_with_retry(
             usage_buffer=usage_buffer,
             usage_operation_id=usage_operation_id,
             translation_validator=translation_validator,
+            contract_diagnostics=contract_diagnostics,
+            contract_failures=contract_failures,
+            retry_kind='split_retry',
         )
         return r1 + r2
 
     log_failure(batch, f"Failed after retries: {error_str}")
+    _record_unresolved_contract_items(
+        contract_failures,
+        batch,
+        error_reason_code or 'request_or_contract_failure',
+        error_str or 'Model request failed after retries.',
+    )
     return []
 
 
@@ -5210,6 +5397,8 @@ def run_translation(*, prepare=False):
         global_progress = _upgrade_legacy_progress_keys(load_progress(), files_to_process)
         preview_files = []
         preview_failures = []
+        contract_failures = []
+        contract_diagnostics = new_sync_contract_diagnostics()
         for document in source_documents:
             file_path = document.file_path
             filename = os.path.basename(file_path)
@@ -5255,6 +5444,8 @@ def run_translation(*, prepare=False):
                         translation_validator=validate_sync_translation,
                         usage_buffer=usage_buffer,
                         usage_operation_id=usage_operation_id,
+                        contract_diagnostics=contract_diagnostics,
+                        contract_failures=contract_failures,
                     ))
                     batch = []
                     current_batch_chars = 0
@@ -5268,6 +5459,8 @@ def run_translation(*, prepare=False):
                     translation_validator=validate_sync_translation,
                     usage_buffer=usage_buffer,
                     usage_operation_id=usage_operation_id,
+                    contract_diagnostics=contract_diagnostics,
+                    contract_failures=contract_failures,
                 ))
 
             if any(replacements.values()):
@@ -5306,12 +5499,15 @@ def run_translation(*, prepare=False):
                 )
             print(f"  Previewed {filename}.")
 
+        preview_failures.extend(contract_failures)
+        finalized_contract = finalize_sync_contract_diagnostics(contract_diagnostics)
         manifest_path, manifest = sync_translation_preview.create_sync_preview(
             log_dir=LOG_DIR,
             project_root=BASE_DIR,
             tl_dir=TL_DIR,
             files=preview_files,
             failures=preview_failures,
+            contract_diagnostics=finalized_contract,
         )
         try:
             export_coverage_package(
@@ -5330,8 +5526,27 @@ def run_translation(*, prepare=False):
         print(f"Sync preview report: {report_path}")
         print(f"Preview files: {int(summary.get('files_changed') or 0)}")
         print(f"Preview translations: {int(summary.get('translated_items') or 0)}")
+        print(
+            "Model contract completeness: "
+            f"{finalized_contract.get('final_valid', 0)}/"
+            f"{finalized_contract.get('final_expected', 0)}"
+        )
+        print(
+            "Targeted retries: "
+            f"{finalized_contract.get('targeted_retry_requests', 0)} requests / "
+            f"{finalized_contract.get('targeted_retry_items', 0)} items"
+        )
+        print(
+            "Unresolved contract items: "
+            f"{len(finalized_contract.get('unresolved_ids') or [])}"
+        )
+        contract_partial = bool(
+            finalized_contract.get('unresolved_ids')
+            or finalized_contract.get('terminal_reason_counts')
+        )
         if preview_failures:
             print(f"Preview failures: {len(preview_failures)}")
+        if preview_failures or contract_partial:
             print("Preview status: partial")
         else:
             print("Preview status: safe")

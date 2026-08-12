@@ -16,6 +16,14 @@ WARN_REASON_CODES = {
     "schema_or_item_mismatch",
     "validation_failed",
     "missing_chunk_rows",
+    "response_missing_expected_id",
+    "result_missing_field",
+    "result_invalid_field_type",
+    "result_unexpected_field",
+    "result_empty_translation",
+    "result_unknown_id",
+    "result_unknown_source_id",
+    "result_duplicate_id",
 }
 
 BLOCK_REASON_CODES = {
@@ -32,6 +40,12 @@ BLOCK_REASON_CODES = {
     "target_file_missing",
     "target_file_path_escaped",
     "v2_relocation_missing",
+    "empty_response_text",
+    "invalid_json",
+    "response_envelope_missing",
+    "response_items_not_array",
+    "result_item_not_object",
+    "result_missing_id",
 }
 
 REASON_CATEGORY_RETRY = "retry"
@@ -75,6 +89,20 @@ REASON_CODE_LABELS = {
     "target_file_path_escaped": "目标路径越界",
     "v2_relocation_missing": "重定位失败",
     "unclassified_failure": "未分类失败",
+    "response_missing_expected_id": "响应缺少请求 ID",
+    "result_missing_field": "结果缺少必填字段",
+    "result_invalid_field_type": "结果字段类型错误",
+    "result_unexpected_field": "结果包含未知字段",
+    "result_empty_translation": "结果译文为空",
+    "result_unknown_id": "结果包含未知 ID",
+    "result_unknown_source_id": "结果引用未知来源 ID",
+    "result_duplicate_id": "结果 ID 重复",
+    "empty_response_text": "模型正文为空",
+    "invalid_json": "模型正文不是有效 JSON",
+    "response_envelope_missing": "响应缺少顶层结果字段",
+    "response_items_not_array": "顶层结果字段不是数组",
+    "result_item_not_object": "结果条目不是对象",
+    "result_missing_id": "结果条目缺少 ID",
 }
 
 REASON_CATEGORY_BY_CODE = {
@@ -97,6 +125,20 @@ REASON_CATEGORY_BY_CODE = {
     "target_file_path_escaped": REASON_CATEGORY_MANUAL,
     "v2_relocation_missing": REASON_CATEGORY_MANUAL,
     "unclassified_failure": "unknown",
+    "response_missing_expected_id": REASON_CATEGORY_RETRY,
+    "result_missing_field": REASON_CATEGORY_RETRY,
+    "result_invalid_field_type": REASON_CATEGORY_RETRY,
+    "result_unexpected_field": REASON_CATEGORY_RETRY,
+    "result_empty_translation": REASON_CATEGORY_RETRY,
+    "result_unknown_id": REASON_CATEGORY_RETRY,
+    "result_unknown_source_id": REASON_CATEGORY_RETRY,
+    "result_duplicate_id": REASON_CATEGORY_RETRY,
+    "empty_response_text": REASON_CATEGORY_RETRY,
+    "invalid_json": REASON_CATEGORY_RETRY,
+    "response_envelope_missing": REASON_CATEGORY_RETRY,
+    "response_items_not_array": REASON_CATEGORY_RETRY,
+    "result_item_not_object": REASON_CATEGORY_RETRY,
+    "result_missing_id": REASON_CATEGORY_RETRY,
 }
 
 CATEGORY_SUGGESTIONS = {

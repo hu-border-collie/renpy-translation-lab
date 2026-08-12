@@ -81,6 +81,30 @@ OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
 AuthStyle = Literal["none", "bearer", "x-api-key"]
 CatalogPayloadStyle = Literal["openai", "openrouter", "ollama"]
+StructuredOutputMode = Literal[
+    "strict_json_schema",
+    "json_object",
+    "prompt_only_json",
+]
+
+
+@dataclass(frozen=True)
+class StructuredOutputCapability:
+    """Provider-level structured-output strategy used by the sync adapter."""
+
+    mode: StructuredOutputMode
+    source: str
+
+
+_BUILTIN_STRUCTURED_OUTPUT_CAPABILITIES: dict[str, StructuredOutputCapability] = {
+    "openai": StructuredOutputCapability("strict_json_schema", "builtin"),
+    "azure": StructuredOutputCapability("strict_json_schema", "builtin"),
+    "anthropic": StructuredOutputCapability("json_object", "builtin"),
+    "deepseek": StructuredOutputCapability("json_object", "builtin"),
+    "openrouter": StructuredOutputCapability("json_object", "builtin"),
+    "xai": StructuredOutputCapability("json_object", "builtin"),
+    "ollama": StructuredOutputCapability("json_object", "builtin"),
+}
 
 
 @dataclass(frozen=True)
@@ -499,6 +523,25 @@ def provider_from_model(model: str) -> str:
     if "/" not in text:
         return ""
     return text.split("/", 1)[0].strip().lower()
+
+
+def structured_output_capability(
+    provider: str,
+    custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+) -> StructuredOutputCapability:
+    """Resolve strict-schema, JSON-object, or prompt-only behavior explicitly.
+
+    Custom providers are declared OpenAI-compatible by their configuration, so
+    their conservative default is JSON object mode. Unknown LiteLLM providers
+    use prompt-only JSON instead of receiving an unsupported response_format.
+    """
+    provider = str(provider or "").strip().lower()
+    if _custom_registry_lookup(custom_providers, provider) is not None:
+        return StructuredOutputCapability("json_object", "custom_openai_compatible")
+    return _BUILTIN_STRUCTURED_OUTPUT_CAPABILITIES.get(
+        provider,
+        StructuredOutputCapability("prompt_only_json", "conservative_default"),
+    )
 
 
 def provider_display_label(

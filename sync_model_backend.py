@@ -66,6 +66,10 @@ class GeminiSyncBackend:
 
     def generate(self, request: SyncGenerationRequest) -> SyncGenerationResult:
         config = filter_gemini_generation_config(request.model, request.config)
+        # Internal provider-neutral hint; Gemini consumes response_json_schema
+        # directly and must not receive this LiteLLM adapter option.
+        config.pop("structured_output_mode", None)
+        config.pop("response_schema_name", None)
         timeout = config.pop("timeout", DEFAULT_SYNC_TIMEOUT_SECONDS)
         raw_http_options = config.get("http_options")
         http_options = (

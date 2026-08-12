@@ -6,7 +6,7 @@ import re
 from .check_report import WritebackSummary
 from .summary_helpers import extend_facts_with_notices
 from .translation_workflow import WorkflowUpdate
-from .user_copy import format_manifest_path_fact
+from .user_copy import MODEL_CONTRACT_COPY, format_manifest_path_fact
 
 
 def _parse_int_field(output: str, prefix: str) -> int | None:
@@ -190,10 +190,34 @@ def summarize_sync_revision_output(output: str, exit_code: int) -> WorkflowUpdat
         facts = extend_facts_with_notices(facts, findings)
 
     if valid_items == 0:
+        unresolved = _contract_unresolved_count(output)
+        contract_partial = (
+            unresolved > 0 or _contract_partial_request_count(output) > 0
+        )
         return WorkflowUpdate(
-            status="done",
-            heading="同步订正预览完成",
-            message="同步订正预览已完成，但没有可写回的订正项；请查看预览报告了解详情。",
+            status="warning" if contract_partial else "done",
+            heading=(
+                "同步订正预览部分完成"
+                if contract_partial
+                else "同步订正预览完成"
+            ),
+            message=(
+                MODEL_CONTRACT_COPY["partial_revision"]
+                if contract_partial
+                else "同步订正预览已完成，但没有可写回的订正项；请查看预览报告了解详情。"
+            ),
+            facts=facts,
+        )
+
+    unresolved = _contract_unresolved_count(output)
+    if unresolved > 0 or _contract_partial_request_count(output) > 0:
+        return WorkflowUpdate(
+            status="warning",
+            heading="同步订正预览部分完成",
+            message=(
+                f"{MODEL_CONTRACT_COPY['partial_revision']}"
+                "确认后只能写回已通过合同并进入预览的订正项。"
+            ),
             facts=facts,
         )
 
@@ -327,4 +351,41 @@ def _collect_sync_revision_facts(
     run_match = re.search(r"^Sync revision run:\s*(.+?)\s*$", output, re.MULTILINE)
     if run_match:
         facts.insert(0, f"同步输出目录：{run_match.group(1).strip()}")
+    completeness = re.search(
+        r"^Model contract completeness:\s*(\d+/\d+)\s*$", output, re.MULTILINE
+    )
+    if completeness:
+        facts.append(f"{MODEL_CONTRACT_COPY['completeness']}：{completeness.group(1)}")
+    retries = re.search(
+        r"^Targeted retries:\s*(\d+) requests / (\d+) items\s*$",
+        output,
+        re.MULTILINE,
+    )
+    if retries:
+        facts.append(
+            f"{MODEL_CONTRACT_COPY['targeted_retries']}："
+            f"{retries.group(1)} 次请求 / {retries.group(2)} 项"
+        )
+    unresolved = _contract_unresolved_count(output)
+    if unresolved >= 0:
+        facts.append(f"{MODEL_CONTRACT_COPY['unresolved_items']}：{unresolved} 个")
+    partial_requests = _contract_partial_request_count(output)
+    if partial_requests >= 0:
+        facts.append(
+            f"{MODEL_CONTRACT_COPY['partial_requests']}：{partial_requests} 个"
+        )
     return facts
+
+
+def _contract_unresolved_count(output: str) -> int:
+    match = re.search(
+        r"^Unresolved contract items:\s*(\d+)\s*$", output, re.MULTILINE
+    )
+    return int(match.group(1)) if match else -1
+
+
+def _contract_partial_request_count(output: str) -> int:
+    match = re.search(
+        r"^Contract partial requests:\s*(\d+)\s*$", output, re.MULTILINE
+    )
+    return int(match.group(1)) if match else -1

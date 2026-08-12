@@ -159,6 +159,8 @@ python gemini_translate_batch.py doctor
 
 当前更推荐优先使用 Gemini Batch 模式；同步模式可显式选择 Gemini 原生调用或可选 LiteLLM 后端。同步模式的 `backend/model/chunk_size/max_source_chars/max_output_tokens/timeout_seconds` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。`timeout_seconds` 默认 120，允许 5–600 秒，表示单次模型请求上限而非整次任务总时限，并统一用于同步翻译、项目分析、关键词、订正、修补和 A/B 对比。LiteLLM 未安装或未启用时，不影响 Gemini Batch、doctor 或 GUI 启动。
 
+同步翻译、订正和关键词请求使用统一的命名对象合同（`translations` / `revisions` / `candidates`），并在 Provider 返回后统一校验 ID、字段与非空内容。已有裸数组结果仍可读取；新请求只生成命名对象。Gemini 原生使用 JSON schema；LiteLLM 根据显式 Provider 能力选择 strict JSON schema、JSON object 或 prompt-only JSON，所有策略最后都经过同一校验。缺失或无效 ID 只做定点重试，最终完整率与未解决项写入运行 manifest。完整行为见 [同步翻译工作流 · 模型结果合同与定点重试](sync_workflow.md#模型结果合同与定点重试)。
+
 ### 自定义 OpenAI 兼容 Provider（LiteLLM 同步）
 
 LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提供 OpenAI 兼容 API 的服务（OpenCode Go、各类中转站、本地 vLLM / LocalAI 网关等）都可以通过 `sync.custom_litellm_providers` 注册，无需修改代码：
@@ -201,6 +203,7 @@ LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提
 - `requires_key=true` 且 keyring 与 `api_key_env` 均无密钥时，请求会在发送前失败，杜绝 `OPENAI_API_KEY` 被静默发送到第三方端点。
 - 非法 `base_url`、非法字符或与内置前缀冲突的 `id` 会被拒绝；GUI 保存或 CLI 加载配置时均会报错。
 - CLI 与 GUI 读取同一份 `translator_config.json` 配置。
+- 自定义 OpenAI 兼容 Provider 默认使用 JSON object 模式；若端点忽略该参数，提示词仍要求 JSON，响应仍须通过统一合同校验。未知的非自定义 Provider 则保守降级为 prompt-only JSON，不会被假定支持严格 schema。
 
 默认切块策略：
 

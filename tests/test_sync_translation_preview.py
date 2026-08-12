@@ -105,6 +105,32 @@ class SyncTranslationPreviewTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "manifest changed"):
                 preview.load_sync_preview(manifest_path)
 
+    def test_recovered_contract_keeps_retry_history_without_partial_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / "game" / "tl" / "schinese"
+            tl_dir.mkdir(parents=True)
+
+            _manifest_path, manifest = preview.create_sync_preview(
+                log_dir=root / "logs",
+                project_root=root,
+                tl_dir=tl_dir,
+                files=(),
+                contract_diagnostics={
+                    "first_pass_expected": 2,
+                    "first_pass_valid": 1,
+                    "final_expected": 2,
+                    "final_valid": 2,
+                    "unresolved_ids": [],
+                    "targeted_retry_requests": 1,
+                    "reason_counts": {"response_missing_expected_id": 1},
+                    "terminal_reason_counts": {},
+                },
+            )
+
+            self.assertEqual(manifest["summary"]["model_contract_status"], "pass")
+            self.assertEqual(manifest["model_contract"]["targeted_retry_requests"], 1)
+
     def test_build_sync_adapter_preview_isolates_plan_failure(self):
         error = runtime.WritebackPlanError("common.locator.unresolved", "ambiguous")
         with mock.patch.object(runtime, "build_sync_adapter_writeback_plan", side_effect=error):

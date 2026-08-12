@@ -24,6 +24,23 @@
 
 选择 LiteLLM 后端时，可通过 `sync.custom_litellm_providers` 注册 OpenAI 兼容但 LiteLLM 未内置的服务（OpenCode Go、中转站、本地 vLLM 等）：每项配置 `id` / `label` / `base_url` / `models_url` / `api_key_env`，请求会改写为 `openai/<模型>` 并逐请求透传 `api_base`，密钥优先使用系统凭据管理器。字段与示例见 [安装与本地配置 · 自定义 OpenAI 兼容 Provider](setup.md#自定义-openai-兼容-providerlitellm-同步)。
 
+## 模型结果合同与定点重试
+
+同步翻译、同步订正和关键词提取共用同一条 provider-neutral 校验边界。新请求要求模型返回带名称的 JSON 对象：翻译为 `{"translations":[...]}`，订正为 `{"revisions":[...]}`，关键词为 `{"candidates":[...]}`。旧任务中的裸数组结果仍可读取，但只作为迁移兼容；新提示词和 schema 不再生成裸数组合同。
+
+校验会稳定记录无效 JSON、缺失或重复 ID、未知 ID、缺失字段、字段类型错误、空译文及关键词证据引用未知源 ID等原因。翻译与订正要求每个请求 ID 恰好出现一次；先返回的有效项会保留，只对缺失或无效 ID 发起定点重试，不会重译已经通过合同的项。关键词没有一对一输出数量，但候选证据 ID 必须属于当前请求；合同失败时会只重试当前关键词 chunk。
+
+终端、GUI 与 manifest 都会显示首次/最终完整率、定点重试次数和未解决项。重试后仍不完整时任务标为 `partial`，同时保留通过合同的结果：同步翻译只为这些结果生成安全 preview；同步订正和关键词报告也会明确显示部分完成。`partial` 不是质量认可，写回前仍须人工审查。
+
+供应商能力是显式策略：Gemini 原生使用 JSON schema；已知支持严格 schema 的 LiteLLM Provider 使用 strict JSON schema，只支持 JSON mode 的 Provider 使用 JSON object；未知或不可靠的端点降级为 prompt-only JSON，并继续经过同一校验与重试边界。使用真实凭据做有界冒烟测试时，可运行：
+
+```powershell
+python scripts/run_provider_contract_smoke.py --provider gemini
+python scripts/run_provider_contract_smoke.py --provider deepseek
+```
+
+脚本每个 Provider 最多发送一次、限制输出 token 和超时；未配置对应凭据会跳过，不会修改项目文件。正式项目仍应先用小范围同步任务验证实际翻译/订正 envelope。
+
 ## 预览后写回
 
 ### 1. 生成预览
@@ -38,7 +55,7 @@ python gemini_translate.py
 - `preview.diff`：供人工逐项审查的差异；
 - 预览候选文件与只读 coverage 证据。
 
-默认命令不会修改 `.rpy`，终端会打印本次 manifest 和 diff 的绝对路径。若部分文件未通过 adapter 写回计划校验，运行结果会标为 `partial`，这些文件不会进入可写回预览。
+默认命令不会修改 `.rpy`，终端会打印本次 manifest 和 diff 的绝对路径。若模型结果合同仍有未解决项，或部分文件未通过 adapter 写回计划校验，运行结果会标为 `partial`；无效项不会进入可写回预览，已经通过合同与 adapter 校验的项仍会保留。
 
 只有明确需要运行配置中的 prepare 步骤时才使用：
 

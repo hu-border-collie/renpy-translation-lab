@@ -116,8 +116,10 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertIn('Noah (n): Before line', translation_prompt)
         self.assertIn('"speaker_id":"e"', translation_prompt)
         self.assertIn('"speaker_name":"Eileen"', translation_prompt)
-        self.assertEqual(translation_schema['items']['required'], ['id', 'translation'])
-        self.assertNotIn('enum', translation_schema['items']['properties']['id'])
+        translation_items = translation_schema['properties']['translations']['items']
+        self.assertEqual(translation_schema['required'], ['translations'])
+        self.assertEqual(translation_items['required'], ['id', 'translation'])
+        self.assertNotIn('enum', translation_items['properties']['id'])
 
         revision_chunk = {
             'file_rel_path': 'script.rpy',
@@ -141,10 +143,13 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertIn('current_translation', revision_prompt)
         self.assertIn('should_update', revision_prompt)
         self.assertEqual(
-            revision_schema['items']['required'],
+            revision_schema['properties']['revisions']['items']['required'],
             ['id', 'should_update', 'revised_translation', 'reason'],
         )
-        self.assertNotIn('enum', revision_schema['items']['properties']['id'])
+        self.assertNotIn(
+            'enum',
+            revision_schema['properties']['revisions']['items']['properties']['id'],
+        )
 
         keyword_prompt = batch_mod.build_keyword_user_prompt(
             [{'id': 'script.rpy:2:keyword:0', 'text': 'Void Gate', 'line_number': 2}]
@@ -156,6 +161,86 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         candidate_schema = keyword_schema['properties']['candidates']['items']
         self.assertNotIn('enum', candidate_schema['properties']['category'])
         self.assertIn('chunk_summary', keyword_schema['required'])
+
+    def test_translation_contract_reports_stable_id_and_field_reasons(self):
+        expected = [
+            {'id': 'a', 'text': 'Hello'},
+            {'id': 'b', 'text': 'World'},
+            {'id': 'c', 'text': 'Again'},
+            {'id': 'd', 'text': 'Empty'},
+        ]
+        report = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'a', 'translation': '你好'},
+                    {'id': 'a', 'translation': '重复'},
+                    {'id': 'unknown', 'translation': '未知'},
+                    {'id': 'b'},
+                    {'id': 'd', 'translation': ''},
+                ]
+            },
+            expected_units=expected,
+        )
+
+        self.assertFalse(report.complete)
+        self.assertEqual(report.items, [])
+        self.assertEqual(report.retry_ids, ['a', 'b', 'c', 'd'])
+        reasons = report.reason_counts()
+        self.assertEqual(reasons['result_duplicate_id'], 1)
+        self.assertEqual(reasons['result_unknown_id'], 1)
+        self.assertEqual(reasons['result_missing_field'], 1)
+        self.assertEqual(reasons['result_empty_translation'], 1)
+        self.assertEqual(reasons['response_missing_expected_id'], 4)
+
+    def test_translation_contract_keeps_legacy_array_read_compatibility(self):
+        report = translation_core.validate_model_response(
+            [
+                {'id': 'b', 'translation': '世界'},
+                {'id': 'a', 'translation': '你好'},
+            ],
+            expected_units=[
+                {'id': 'a', 'text': 'Hello'},
+                {'id': 'b', 'text': 'World'},
+            ],
+        )
+
+        self.assertTrue(report.complete)
+        self.assertTrue(report.legacy_shape)
+        self.assertEqual([item['id'] for item in report.items], ['a', 'b'])
+        self.assertEqual(
+            report.to_envelope(),
+            {
+                'translations': [
+                    {'id': 'a', 'translation': '你好'},
+                    {'id': 'b', 'translation': '世界'},
+                ]
+            },
+        )
+
+    def test_keyword_contract_rejects_unknown_provenance_ids(self):
+        report = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Void Gate',
+                        'suggested_target': '虚空门',
+                        'category': 'term',
+                        'confidence': 0.9,
+                        'evidence': 'line',
+                        'source_item_ids': ['outside'],
+                    }
+                ],
+                'chunk_summary': '',
+                'summary_evidence_item_ids': [],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=[{'id': 'a', 'text': 'Void Gate'}],
+        )
+
+        self.assertFalse(report.complete)
+        self.assertEqual(report.items, [])
+        self.assertEqual(report.retry_ids, ['a'])
+        self.assertEqual(report.reason_counts()['result_unknown_source_id'], 1)
 
     def test_project_analysis_optional_inputs_collect_all_available_layers(self):
         fake_store = mock.Mock()

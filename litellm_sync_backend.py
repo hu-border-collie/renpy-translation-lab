@@ -7,6 +7,7 @@ from gemini_model_catalog import filter_gemini_generation_config
 from litellm_provider_config import (
     CustomLiteLLMProvider,
     provider_from_model,
+    structured_output_capability,
 )
 from sync_model_backend import (
     SYNC_EXECUTION_MODE,
@@ -253,21 +254,42 @@ class LiteLLMSyncBackend:
         if "max_output_tokens" in config:
             kwargs["max_tokens"] = config["max_output_tokens"]
         schema = config.get("response_json_schema")
+        schema_properties = schema.get("properties") if isinstance(schema, Mapping) else {}
+        envelope_key = next(
+            (
+                key
+                for key in ("translations", "revisions", "candidates")
+                if isinstance(schema_properties, Mapping) and key in schema_properties
+            ),
+            "model",
+        )
+        schema_name = f"{envelope_key}_response"
         if schema:
-            # DeepSeek rejects json_schema even though it supports JSON mode.
-            # Custom OpenAI-compatible providers usually target OpenAI-compatible
-            # gateways, many of which reject strict schemas; the capability
-            # decision therefore uses the *original* id, before the rewrite.
-            if provider in {"openai", "azure"}:
+            capability = structured_output_capability(
+                provider,
+                self._custom_providers,
+            )
+            requested_mode = str(
+                config.get("structured_output_mode") or capability.mode
+            ).strip()
+            if requested_mode not in {
+                "strict_json_schema",
+                "json_object",
+                "prompt_only_json",
+            }:
+                raise LiteLLMCapabilityError(
+                    f"Unsupported structured output mode: {requested_mode}"
+                )
+            if requested_mode == "strict_json_schema":
                 kwargs["response_format"] = {
                     "type": "json_schema",
                     "json_schema": {
-                        "name": "translation_response",
+                        "name": schema_name,
                         "schema": schema,
                         "strict": True,
                     },
                 }
-            else:
+            elif requested_mode == "json_object":
                 kwargs["response_format"] = {"type": "json_object"}
         return kwargs
 

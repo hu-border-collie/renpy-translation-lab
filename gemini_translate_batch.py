@@ -206,6 +206,14 @@ CHECK_WARN_REASON_CODES = {
     'schema_or_item_mismatch',
     'validation_failed',
     'missing_chunk_rows',
+    'response_missing_expected_id',
+    'result_missing_field',
+    'result_invalid_field_type',
+    'result_unexpected_field',
+    'result_empty_translation',
+    'result_unknown_id',
+    'result_unknown_source_id',
+    'result_duplicate_id',
 }
 CHECK_BLOCK_REASON_CODES = {
     'invalid_result_jsonl_row',
@@ -222,6 +230,12 @@ CHECK_BLOCK_REASON_CODES = {
     'target_file_path_escaped',
     'v2_relocation_missing',
     'adapter_writeback_block',
+    'empty_response_text',
+    'invalid_json',
+    'response_envelope_missing',
+    'response_items_not_array',
+    'result_item_not_object',
+    'result_missing_id',
 }
 
 RAG_ENABLED = False
@@ -5044,21 +5058,33 @@ def collect_result_integrity_issue_keys(manifest):
                 continue
 
             response_text = extract_text_from_response_payload(response_payload)
-            if not response_text:
+            if not response_text and not isinstance(row.get('normalized_response'), dict):
                 issue_keys.add(key)
                 bump_counter(reason_counts, 'missing_response_text')
                 continue
 
             try:
-                payload = parse_json_payload(response_text)
-                result_items = normalize_result_items(payload)
-            except Exception:
+                payload = result_row_contract_payload(row)
+                contract = validate_result_contract(
+                    payload,
+                    translation_core.MODE_TRANSLATION,
+                    chunk_items,
+                )
+                for reason_code, count in contract.reason_counts().items():
+                    bump_counter(reason_counts, reason_code, count)
+                result_items = contract.items
+            except Exception as exc:
                 issue_keys.add(key)
-                bump_counter(reason_counts, 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'failed_to_parse_model_json')
+                bump_counter(
+                    reason_counts,
+                    'truncated_output'
+                    if finish_reason == 'MAX_TOKENS'
+                    else getattr(exc, 'reason_code', '') or 'failed_to_parse_model_json',
+                )
                 continue
 
             seen_ids = set()
-            if len(result_items) < len(chunk_items):
+            if contract.retry_ids:
                 issue_keys.add(key)
                 bump_counter(reason_counts, 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_result_items')
 
@@ -5212,7 +5238,7 @@ def load_result_rows_by_key(manifest, label):
     return rows, rows_by_key, result_path
 
 
-def result_items_from_row(row, label, allow_empty=False):
+def result_items_from_row(row, label, expected_items, allow_empty=False):
     response_payload = row.get('response', {}) if isinstance(row, dict) else {}
     response_text = extract_text_from_response_payload(response_payload)
     if not response_text:
@@ -5220,7 +5246,15 @@ def result_items_from_row(row, label, allow_empty=False):
             return []
         raise SystemExit(f'Missing text in {label} result row: {row.get("key", "") if isinstance(row, dict) else ""}')
     try:
-        return normalize_result_items(parse_json_payload(response_text))
+        contract = validate_result_contract(
+            parse_json_payload(response_text),
+            translation_core.MODE_TRANSLATION,
+            expected_items,
+        )
+        if not contract.items and not allow_empty:
+            reasons = ', '.join(sorted(contract.reason_counts())) or 'no valid items'
+            raise ValueError(f'translation response contract failed: {reasons}')
+        return contract.items
     except Exception as exc:
         if allow_empty:
             return []
@@ -5254,10 +5288,43 @@ def compact_result_items_for_response(result_items):
     return compacted
 
 
+def canonical_translation_result_row(row, chunk):
+    """Return a retry row rewritten to the current named translation envelope."""
+    canonical = copy.deepcopy(row) if isinstance(row, dict) else {}
+    response_text = extract_text_from_response_payload(canonical.get('response', {}))
+    if not response_text:
+        return canonical
+    try:
+        contract = validate_result_contract(
+            parse_json_payload(response_text),
+            translation_core.MODE_TRANSLATION,
+            chunk.get('items') or [],
+        )
+    except Exception:
+        return canonical
+    if not contract.complete:
+        return canonical
+    text = json.dumps(
+        {'translations': compact_result_items_for_response(contract.items)},
+        ensure_ascii=False,
+        indent=2,
+    )
+    canonical['response'] = response_payload_with_text(
+        canonical.get('response', {}),
+        text,
+    )
+    return canonical
+
+
 def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks, retry_rows_by_key):
     merged_by_id = {}
     if parent_row:
-        for item in result_items_from_row(parent_row, 'parent', allow_empty=True):
+        for item in result_items_from_row(
+            parent_row,
+            'parent',
+            parent_chunk.get('items') or [],
+            allow_empty=True,
+        ):
             if item.get('id'):
                 merged_by_id[item['id']] = item
 
@@ -5268,7 +5335,11 @@ def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks
         if not retry_row:
             raise SystemExit(f'Retry result is missing row for partial chunk: {retry_key}')
         allowed_ids = {item.get('id') for item in retry_chunk.get('items') or []}
-        for item in result_items_from_row(retry_row, 'retry'):
+        for item in result_items_from_row(
+            retry_row,
+            'retry',
+            retry_chunk.get('items') or [],
+        ):
             item_id = item.get('id')
             if item_id in allowed_ids:
                 merged_by_id[item_id] = item
@@ -5283,7 +5354,11 @@ def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks
     merged_row = copy.deepcopy(parent_row) if isinstance(parent_row, dict) else {}
     merged_row['key'] = parent_chunk.get('key')
     merged_row.pop('error', None)
-    merged_text = json.dumps(compact_result_items_for_response(ordered_items), ensure_ascii=False, indent=2)
+    merged_text = json.dumps(
+        {'translations': compact_result_items_for_response(ordered_items)},
+        ensure_ascii=False,
+        indent=2,
+    )
     merged_row['response'] = response_payload_with_text(merged_row.get('response', {}), merged_text)
     return merged_row, len(replaced_ids)
 
@@ -5354,9 +5429,11 @@ def merge_retry_results(parent_target, retry_target):
     for row in parent_rows:
         key = row.get('key')
         if key in direct_retry_key_set:
-            merged_rows.append(retry_rows_by_key[key])
-            replaced_keys.add(key)
             retry_chunk = next((chunk for chunk in retry_chunks if chunk.get('key') == key), {})
+            merged_rows.append(canonical_translation_result_row(
+                retry_rows_by_key[key], retry_chunk
+            ))
+            replaced_keys.add(key)
             replaced_item_count += len(retry_chunk.get('items') or [])
         elif key in partial_chunks_by_parent:
             parent_chunk = parent_chunks.get(key)
@@ -5374,9 +5451,11 @@ def merge_retry_results(parent_target, retry_target):
 
     for key in direct_retry_keys:
         if key not in parent_rows_by_key:
-            merged_rows.append(retry_rows_by_key[key])
-            replaced_keys.add(key)
             retry_chunk = next((chunk for chunk in retry_chunks if chunk.get('key') == key), {})
+            merged_rows.append(canonical_translation_result_row(
+                retry_rows_by_key[key], retry_chunk
+            ))
+            replaced_keys.add(key)
             replaced_item_count += len(retry_chunk.get('items') or [])
 
     for parent_key, partial_chunks in partial_chunks_by_parent.items():
@@ -5986,6 +6065,29 @@ def bump_counter(bucket, name, amount=1):
     bucket[name] = bucket.get(name, 0) + amount
 
 
+def record_contract_reasons(summary, report):
+    bucket = summary.setdefault('reason_counts', {})
+    for reason_code, count in report.reason_counts().items():
+        bump_counter(bucket, reason_code, count)
+
+
+def validate_result_contract(payload, mode, expected_items):
+    return translation_core.validate_model_response(
+        payload,
+        mode=mode,
+        expected_units=expected_items,
+        allow_legacy=True,
+    )
+
+
+def result_row_contract_payload(row):
+    normalized = row.get('normalized_response')
+    if isinstance(normalized, dict):
+        return normalized
+    response_text = extract_text_from_response_payload(row.get('response', {}))
+    return parse_json_payload(response_text)
+
+
 def salvage_partial_json_array(text):
     start = text.find('[')
     if start < 0:
@@ -6010,53 +6112,7 @@ def salvage_partial_json_array(text):
 
 
 def parse_json_payload(text):
-    if not text:
-        raise ValueError('Empty response text')
-
-    cleaned = text.strip()
-    if cleaned.startswith('```'):
-        cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
-        cleaned = re.sub(r'\s*```$', '', cleaned)
-
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        decoder = json.JSONDecoder()
-        embedded_payloads = []
-        for start, char in enumerate(cleaned):
-            if char not in '[{':
-                continue
-            try:
-                payload, end = decoder.raw_decode(cleaned[start:])
-                embedded_payloads.append((start + end, -start, payload))
-            except json.JSONDecodeError:
-                continue
-        if embedded_payloads:
-            _end, neg_start, payload = max(embedded_payloads, key=lambda item: (item[0], item[1]))
-            start = -neg_start
-            previous_index = start - 1
-            while previous_index >= 0 and cleaned[previous_index].isspace():
-                previous_index -= 1
-            salvaged = salvage_partial_json_array(cleaned)
-            if (
-                salvaged
-                and previous_index >= 0
-                and cleaned[previous_index] in '[,'
-            ):
-                return salvaged
-            return payload
-
-        start = cleaned.find('[')
-        end = cleaned.rfind(']')
-        if start >= 0 and end > start:
-            try:
-                return json.loads(cleaned[start:end + 1])
-            except json.JSONDecodeError:
-                pass
-        salvaged = salvage_partial_json_array(cleaned)
-        if salvaged:
-            return salvaged
-        raise
+    return translation_core.parse_model_response_json(text)
 
 
 def normalize_result_items(payload):
@@ -6334,17 +6390,27 @@ def export_keyword_candidates(
                 bump_counter(summary['reason_counts'], 'row_error')
                 continue
             response_text = extract_text_from_response_payload(row.get('response', {}))
-            if not response_text:
+            if not response_text and not isinstance(row.get('normalized_response'), dict):
                 summary['parse_errors'] += 1
                 summary['missing_response_chunks'] += 1
                 bump_counter(summary['reason_counts'], 'missing_response_text')
                 continue
             try:
-                keyword_payload = normalize_keyword_extraction_payload(parse_json_payload(response_text))
-                candidates = keyword_payload['candidates']
-            except Exception:
+                payload = result_row_contract_payload(row)
+                contract = validate_result_contract(
+                    payload,
+                    translation_core.MODE_KEYWORD_EXTRACTION,
+                    chunk.get('items') or [],
+                )
+                record_contract_reasons(summary, contract)
+                keyword_payload = contract.to_envelope()
+                candidates = contract.items
+            except Exception as exc:
                 summary['parse_errors'] += 1
-                bump_counter(summary['reason_counts'], 'failed_to_parse_keyword_json')
+                bump_counter(
+                    summary['reason_counts'],
+                    getattr(exc, 'reason_code', '') or 'failed_to_parse_keyword_json',
+                )
                 continue
 
             summary['parsed_chunks'] += 1
@@ -7344,7 +7410,7 @@ def collect_revision_actions(manifest, validate_sources=False):
                 continue
 
             response_text = extract_text_from_response_payload(response_payload)
-            if not response_text:
+            if not response_text and not isinstance(row.get('normalized_response'), dict):
                 summary['missing_response_chunks'] += 1
                 bump_counter(summary['reason_counts'], 'missing_response_text')
                 for item in active_chunk_items:
@@ -7362,11 +7428,21 @@ def collect_revision_actions(manifest, validate_sources=False):
                 continue
 
             try:
-                payload = parse_json_payload(response_text)
-                result_items = normalize_revision_items(payload)
+                payload = result_row_contract_payload(row)
+                contract = validate_result_contract(
+                    payload,
+                    translation_core.MODE_REVISION,
+                    active_chunk_items,
+                )
+                record_contract_reasons(summary, contract)
+                result_items = contract.items
             except Exception as exc:
                 summary['partial_chunks'] += 1
-                reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'failed_to_parse_revision_json'
+                reason_name = (
+                    'truncated_output'
+                    if finish_reason == 'MAX_TOKENS'
+                    else getattr(exc, 'reason_code', '') or 'failed_to_parse_revision_json'
+                )
                 bump_counter(summary['reason_counts'], reason_name)
                 for item in active_chunk_items:
                     failure_entries.append(make_failure_entry(
@@ -7383,7 +7459,7 @@ def collect_revision_actions(manifest, validate_sources=False):
                     ))
                 continue
 
-            if len(result_items) < len(active_chunk_items):
+            if contract.retry_ids:
                 summary['partial_chunks'] += 1
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_revision_items'
                 bump_counter(summary['reason_counts'], reason_name)
@@ -7943,7 +8019,7 @@ def collect_result_actions(manifest, validate_sources=False):
                 continue
 
             response_text = extract_text_from_response_payload(response_payload)
-            if not response_text:
+            if not response_text and not isinstance(row.get('normalized_response'), dict):
                 relocation_missing_ids = record_v2_relocation_failures(
                     manifest,
                     chunk,
@@ -7978,8 +8054,14 @@ def collect_result_actions(manifest, validate_sources=False):
                 continue
 
             try:
-                payload = parse_json_payload(response_text)
-                result_items = normalize_result_items(payload)
+                payload = result_row_contract_payload(row)
+                contract = validate_result_contract(
+                    payload,
+                    translation_core.MODE_TRANSLATION,
+                    chunk_items,
+                )
+                record_contract_reasons(summary, contract)
+                result_items = contract.items
             except Exception as exc:
                 relocation_missing_ids = record_v2_relocation_failures(
                     manifest,
@@ -7996,7 +8078,11 @@ def collect_result_actions(manifest, validate_sources=False):
                 if relocation_missing_ids and not active_chunk_items:
                     continue
                 summary['partial_chunks'] += 1
-                reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'failed_to_parse_model_json'
+                reason_name = (
+                    'truncated_output'
+                    if finish_reason == 'MAX_TOKENS'
+                    else getattr(exc, 'reason_code', '') or 'failed_to_parse_model_json'
+                )
                 bump_counter(summary['reason_counts'], reason_name)
                 for item in active_chunk_items:
                     failure_entries.append(
@@ -8043,7 +8129,8 @@ def collect_result_actions(manifest, validate_sources=False):
                 continue
             item_map = {item['id']: item for item in active_chunk_items}
 
-            if len(result_items) < len(active_chunk_items):
+            active_retry_ids = set(contract.retry_ids) - relocation_missing_ids
+            if active_retry_ids:
                 summary['partial_chunks'] += 1
                 reason_name = 'truncated_output' if finish_reason == 'MAX_TOKENS' else 'partial_result_items'
                 bump_counter(summary['reason_counts'], reason_name)
@@ -8321,9 +8408,18 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
         if response_text:
             try:
                 payload = parse_json_payload(response_text)
-                result_items = normalize_result_items(payload)
-                parsed_items = len(result_items)
-                parse_ok = True
+                contract = validate_result_contract(
+                    payload,
+                    translation_core.MODE_TRANSLATION,
+                    (next(
+                        (chunk.get('items') or [] for chunk in manifest.get('chunks', []) if chunk.get('key') == key),
+                        [],
+                    )),
+                )
+                parsed_items = len(contract.items)
+                parse_ok = contract.complete
+                if contract.issues:
+                    parse_error = ', '.join(sorted(contract.reason_counts()))
             except Exception as exc:
                 parse_error = str(exc)
         else:
@@ -9954,6 +10050,86 @@ def select_chunk_window(chunks, limit=0, offset=0):
     return chunks[offset:]
 
 
+def _contract_mode_for_manifest(manifest):
+    mode = manifest_mode(manifest)
+    if mode == MANIFEST_MODE_REVISION:
+        return translation_core.MODE_REVISION
+    if mode == MANIFEST_MODE_KEYWORD_EXTRACTION:
+        return translation_core.MODE_KEYWORD_EXTRACTION
+    return translation_core.MODE_TRANSLATION
+
+
+def _targeted_sync_request_row(manifest, chunk, item_ids):
+    selected_ids = {str(item_id) for item_id in item_ids if str(item_id)}
+    targeted = dict(chunk)
+    targeted['items'] = [
+        item for item in chunk.get('items') or []
+        if str(item.get('id') or '') in selected_ids
+    ]
+    targeted['key'] = f"{chunk.get('key', 'sync')}-targeted-001"
+    effective_model = SYNC_MODEL or manifest.get('batch_model') or BATCH_MODEL
+    mode = _contract_mode_for_manifest(manifest)
+    if mode == translation_core.MODE_REVISION:
+        return build_revision_request(targeted, model=effective_model), targeted
+    if mode == translation_core.MODE_KEYWORD_EXTRACTION:
+        max_candidates = int(
+            (manifest.get('keyword_settings') or {}).get('max_candidates_per_chunk')
+            or KEYWORD_MAX_CANDIDATES_PER_CHUNK
+        )
+        return build_keyword_request(
+            targeted,
+            max_candidates,
+            model=effective_model,
+        ), targeted
+    return build_batch_request(targeted, model=effective_model), targeted
+
+
+def _contract_from_sync_result(result, chunk, mode):
+    payload = parse_json_payload(result.get('response_text') or '')
+    return validate_result_contract(payload, mode, chunk.get('items') or [])
+
+
+def _merge_sync_contract_reports(first, retry, chunk, mode):
+    if mode == translation_core.MODE_KEYWORD_EXTRACTION:
+        chosen = retry if retry.complete or len(retry.issues) <= len(first.issues) else first
+        merged = copy.deepcopy(chosen)
+        merged_items = []
+        seen = set()
+        for item in [*first.items, *retry.items]:
+            identity = (
+                compact_text(item.get('source', '')).casefold(),
+                compact_text(item.get('suggested_target', '')).casefold(),
+                compact_text(item.get('category', '')).casefold(),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            merged_items.append(item)
+        merged.items = merged_items
+        merged.valid_ids = sorted({
+            item_id
+            for item in merged_items
+            for item_id in item.get('source_item_ids', [])
+        })
+        return merged
+    retry_by_id = {item['id']: item for item in retry.items}
+    merged_by_id = {item['id']: item for item in first.items}
+    merged_by_id.update(retry_by_id)
+    envelope_key = translation_core.MODEL_RESPONSE_ENVELOPE_KEYS[mode]
+    merged_payload = {
+        envelope_key: [
+            merged_by_id[item.get('id')]
+            for item in chunk.get('items') or []
+            if item.get('id') in merged_by_id
+        ]
+    }
+    return validate_result_contract(
+        merged_payload,
+        mode,
+        chunk.get('items') or [],
+    )
+
+
 def write_request_rows(path, request_rows):
     atomic_write_jsonl(path, request_rows, ensure_ascii=False)
 
@@ -9969,17 +10145,30 @@ def write_manifest_file(package_dir, manifest, update_latest=True):
 def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
     manifest = load_manifest(manifest_path)
     result_path = resolve_manifest_result_path(manifest)
+    chunk_map = {chunk.get('key'): chunk for chunk in manifest.get('chunks') or []}
+    contract_mode = _contract_mode_for_manifest(manifest)
     summary = {
         'request_count': len(request_rows),
         'successful_request_count': 0,
         'failed_request_count': 0,
         'max_tokens_count': 0,
         'missing_text_count': 0,
+        'contract_expected_items': (
+            len(request_rows)
+            if contract_mode == translation_core.MODE_KEYWORD_EXTRACTION
+            else sum(len(chunk.get('items') or []) for chunk in chunk_map.values())
+        ),
+        'contract_first_pass_valid_items': 0,
+        'contract_final_valid_items': 0,
+        'contract_partial_requests': 0,
+        'targeted_retry_requests': 0,
+        'targeted_retry_items': 0,
         'reason_counts': {},
     }
     result_rows = []
     for index, row in enumerate(request_rows, start=1):
         key = row.get('key', f'sync-{index}')
+        chunk = chunk_map.get(key) or {'key': key, 'items': []}
         print(f'[{index}/{len(request_rows)}] {key}')
         result_row = {'key': key}
         try:
@@ -9995,6 +10184,12 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
             result_row['model'] = result.get('model') or SYNC_MODEL or BATCH_MODEL
             result_row['execution_mode'] = result.get('execution_mode') or 'sync'
             summary['successful_request_count'] += 1
+            result_row['provider_response_attempts'] = [{
+                'kind': 'first_pass',
+                'response': result.get('response_payload') or {},
+                'finish_reason': result.get('finish_reason', ''),
+                'usage_metadata': result.get('usage_metadata') or {},
+            }]
             if result.get('finish_reason') == 'MAX_TOKENS':
                 summary['max_tokens_count'] += 1
                 bump_counter(summary['reason_counts'], 'max_tokens')
@@ -10002,6 +10197,125 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                 summary['missing_text_count'] += 1
                 bump_counter(summary['reason_counts'], 'missing_response_text')
             print(f"  finish_reason: {result.get('finish_reason') or '(none)'}")
+
+            first_contract = None
+            first_error = None
+            try:
+                first_contract = _contract_from_sync_result(
+                    result,
+                    chunk,
+                    contract_mode,
+                )
+                summary['contract_first_pass_valid_items'] += (
+                    int(first_contract.complete)
+                    if contract_mode == translation_core.MODE_KEYWORD_EXTRACTION
+                    else len(first_contract.valid_ids)
+                )
+                record_contract_reasons(summary, first_contract)
+            except Exception as exc:
+                first_error = exc
+                bump_counter(
+                    summary['reason_counts'],
+                    getattr(exc, 'reason_code', '') or 'response_contract_error',
+                )
+
+            retry_ids = (
+                list(first_contract.retry_ids)
+                if first_contract is not None
+                else [str(item.get('id') or '') for item in chunk.get('items') or []]
+            )
+            if contract_mode == translation_core.MODE_KEYWORD_EXTRACTION and (
+                first_error is not None
+                or (first_contract is not None and first_contract.issues)
+            ):
+                retry_ids = [
+                    str(item.get('id') or '') for item in chunk.get('items') or []
+                ]
+
+            final_contract = first_contract
+            if retry_ids:
+                retry_row, retry_chunk = _targeted_sync_request_row(
+                    manifest,
+                    chunk,
+                    retry_ids,
+                )
+                summary['targeted_retry_requests'] += 1
+                summary['targeted_retry_items'] += len(retry_chunk.get('items') or [])
+                print(
+                    f"  targeted retry: {len(retry_chunk.get('items') or [])} items"
+                )
+                try:
+                    retry_result = run_sync_request(
+                        retry_row.get('request') or {},
+                        manifest.get('batch_model') or BATCH_MODEL,
+                        api_key_index=api_key_index,
+                    )
+                    result_row['provider_response_attempts'].append({
+                        'kind': 'targeted_retry',
+                        'item_ids': [
+                            item.get('id') for item in retry_chunk.get('items') or []
+                        ],
+                        'response': retry_result.get('response_payload') or {},
+                        'finish_reason': retry_result.get('finish_reason', ''),
+                        'usage_metadata': retry_result.get('usage_metadata') or {},
+                    })
+                    retry_contract = _contract_from_sync_result(
+                        retry_result,
+                        retry_chunk,
+                        contract_mode,
+                    )
+                    record_contract_reasons(summary, retry_contract)
+                    final_contract = (
+                        retry_contract
+                        if first_contract is None
+                        else _merge_sync_contract_reports(
+                            first_contract,
+                            retry_contract,
+                            chunk,
+                            contract_mode,
+                        )
+                    )
+                except Exception as exc:
+                    result_row['provider_response_attempts'].append({
+                        'kind': 'targeted_retry',
+                        'item_ids': [
+                            item.get('id') for item in retry_chunk.get('items') or []
+                        ],
+                        'error': str(exc),
+                    })
+                    bump_counter(
+                        summary['reason_counts'],
+                        getattr(exc, 'reason_code', '') or 'targeted_retry_contract_error',
+                    )
+
+            if final_contract is not None:
+                result_row['normalized_response'] = final_contract.to_envelope()
+                diagnostics = final_contract.to_diagnostics()
+                diagnostics['first_pass_valid_count'] = (
+                    len(first_contract.valid_ids) if first_contract is not None else 0
+                )
+                diagnostics['targeted_retry_count'] = 1 if retry_ids else 0
+                result_row['contract_diagnostics'] = diagnostics
+                summary['contract_final_valid_items'] += (
+                    int(final_contract.complete)
+                    if contract_mode == translation_core.MODE_KEYWORD_EXTRACTION
+                    else len(final_contract.valid_ids)
+                )
+                if not final_contract.complete:
+                    summary['contract_partial_requests'] += 1
+            else:
+                summary['contract_partial_requests'] += 1
+                result_row['contract_diagnostics'] = {
+                    'mode': contract_mode,
+                    'complete': False,
+                    'expected_count': len(chunk.get('items') or []),
+                    'valid_count': 0,
+                    'retry_ids': retry_ids,
+                    'reason_counts': {
+                        getattr(first_error, 'reason_code', '')
+                        or 'response_contract_error': 1
+                    },
+                }
         except Exception as exc:
             summary['failed_request_count'] += 1
             bump_counter(summary['reason_counts'], 'request_error')
@@ -10014,11 +10328,39 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
     atomic_write_text(f'{result_path}.sha256', content_sha + '\n')
 
     manifest['sync_completed_at'] = datetime.now().isoformat(timespec='seconds')
-    manifest['job_state'] = 'SYNC_COMPLETED' if summary['failed_request_count'] == 0 else 'SYNC_PARTIAL'
+    summary['contract_first_pass_completeness'] = (
+        summary['contract_first_pass_valid_items'] / summary['contract_expected_items']
+        if summary['contract_expected_items'] else 1.0
+    )
+    summary['contract_final_completeness'] = (
+        summary['contract_final_valid_items'] / summary['contract_expected_items']
+        if summary['contract_expected_items'] else 1.0
+    )
+    manifest['job_state'] = (
+        'SYNC_COMPLETED'
+        if summary['failed_request_count'] == 0
+        and summary['contract_partial_requests'] == 0
+        else 'SYNC_PARTIAL'
+    )
     manifest['sync_summary'] = summary
     manifest['result_jsonl_path'] = result_path
     manifest['result_jsonl_sha256'] = content_sha
     save_manifest(manifest, update_latest=False)
+    unresolved_items = max(
+        0,
+        summary['contract_expected_items'] - summary['contract_final_valid_items'],
+    )
+    print(
+        'Model contract completeness: '
+        f"{summary['contract_final_valid_items']}/{summary['contract_expected_items']}"
+    )
+    print(
+        'Targeted retries: '
+        f"{summary['targeted_retry_requests']} requests / "
+        f"{summary['targeted_retry_items']} items"
+    )
+    print(f'Unresolved contract items: {unresolved_items}')
+    print(f"Contract partial requests: {summary['contract_partial_requests']}")
     import_manifest_usage_best_effort(manifest)
     return manifest
 
@@ -10050,6 +10392,12 @@ def make_sync_manifest(
         'provider': SYNC_BACKEND,
         'model': SYNC_MODEL or BATCH_MODEL,
         'execution_mode': 'sync',
+        'model_response_contract': {
+            'version': 1,
+            'mode': mode,
+            'envelope_key': translation_core.MODEL_RESPONSE_ENVELOPE_KEYS.get(mode, ''),
+            'legacy_bare_array_readable': True,
+        },
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
@@ -10396,12 +10744,21 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
         if response_text:
             try:
                 payload = parse_json_payload(response_text)
-                result_items = normalize_result_items(payload)
-                parse_ok = True
+                contract = validate_result_contract(
+                    payload,
+                    translation_core.MODE_TRANSLATION,
+                    job['items'],
+                )
+                record_contract_reasons(summary, contract)
+                result_items = contract.items
+                parse_ok = bool(result_items) or not job['items']
             except Exception as exc:
                 parse_error = str(exc)
                 summary['parse_errors'] += 1
-                bump_counter(reason_counts, 'parse_error')
+                bump_counter(
+                    reason_counts,
+                    getattr(exc, 'reason_code', '') or 'parse_error',
+                )
         else:
             parse_error = 'Missing text in response payload'
             summary['parse_errors'] += 1
