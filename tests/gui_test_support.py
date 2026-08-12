@@ -119,6 +119,43 @@ def _modal_guard_enabled() -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def shutdown_gui_test_runtime(app: Any = None, *, wait_ms: int = 30000) -> bool:
+    """Drain test-owned Qt work and destroy the application deterministically."""
+    try:
+        from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool
+        from PySide6.QtWidgets import QApplication
+    except ImportError:
+        return True
+
+    app = app or QApplication.instance()
+    if app is None:
+        return True
+
+    pool = QThreadPool.globalInstance()
+    try:
+        pool.clear()
+        pool_finished = bool(pool.waitForDone(max(0, int(wait_ms))))
+    except RuntimeError:
+        pool_finished = True
+
+    try:
+        for widget in tuple(app.topLevelWidgets()):
+            try:
+                widget.hide()
+                widget.deleteLater()
+            except RuntimeError:
+                continue
+        QCoreApplication.sendPostedEvents(
+            None,
+            QEvent.Type.DeferredDelete,
+        )
+        app.processEvents()
+        app.shutdown()
+    except RuntimeError:
+        pass
+    return pool_finished
+
+
 def guarded_test_result_class(guard: GuiTestModalGuard | None):
     """Build a unittest result class that tells the guard which test is active."""
 
@@ -157,13 +194,13 @@ def guarded_gui_test_environment():
     finally:
         if guard is not None:
             guard.reject_active_modal()
+            guard.stop()
             guard.cleanup_top_levels()
         try:
             app.processEvents()
         except RuntimeError:
             pass
         if guard is not None:
-            guard.stop()
             if guard.rejected_dialogs:
                 summary = "\n".join(
                     f"  - {label}" for label in guard.rejected_dialogs

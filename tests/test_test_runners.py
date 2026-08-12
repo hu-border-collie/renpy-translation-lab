@@ -11,7 +11,7 @@ if str(_TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(_TESTS_DIR))
 
 import run_gui_tests
-from gui_test_support import GuiTestModalGuard
+from gui_test_support import GuiTestModalGuard, shutdown_gui_test_runtime
 from run_cli_tests import build_suite as build_cli_suite
 from run_gui_tests import build_suite as build_gui_suite
 
@@ -55,6 +55,10 @@ class TestDiscoveryRunners(unittest.TestCase):
             ),
             mock.patch.object(run_gui_tests, "build_suite", return_value=unittest.TestSuite()),
             mock.patch.object(run_gui_tests, "run_discovered_suite", return_value=0),
+            mock.patch(
+                "gui_test_support.shutdown_gui_test_runtime",
+                return_value=True,
+            ),
         ):
             self.assertEqual(run_gui_tests.main([]), 1)
 
@@ -72,6 +76,58 @@ class TestDiscoveryRunners(unittest.TestCase):
             mock.patch(
                 "gui_test_support.guarded_gui_test_environment",
                 return_value=manager,
+            ),
+            mock.patch.object(
+                run_gui_tests,
+                "build_suite",
+                return_value=unittest.TestSuite(),
+            ),
+            mock.patch.object(run_gui_tests, "run_discovered_suite", return_value=0),
+            mock.patch(
+                "gui_test_support.shutdown_gui_test_runtime",
+                return_value=True,
+            ),
+        ):
+            self.assertEqual(run_gui_tests.main([]), 1)
+
+    def test_gui_runner_shuts_down_qt_runtime(self):
+        guard = mock.Mock(rejected_dialogs=())
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = guard
+        manager.__exit__.return_value = False
+        with (
+            mock.patch(
+                "gui_test_support.guarded_gui_test_environment",
+                return_value=manager,
+            ),
+            mock.patch(
+                "gui_test_support.shutdown_gui_test_runtime",
+                return_value=True,
+            ) as shutdown,
+            mock.patch.object(
+                run_gui_tests,
+                "build_suite",
+                return_value=unittest.TestSuite(),
+            ),
+            mock.patch.object(run_gui_tests, "run_discovered_suite", return_value=0),
+        ):
+            self.assertEqual(run_gui_tests.main([]), 0)
+
+        shutdown.assert_called_once_with()
+
+    def test_gui_runner_fails_when_qt_pool_does_not_stop(self):
+        guard = mock.Mock(rejected_dialogs=())
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = guard
+        manager.__exit__.return_value = False
+        with (
+            mock.patch(
+                "gui_test_support.guarded_gui_test_environment",
+                return_value=manager,
+            ),
+            mock.patch(
+                "gui_test_support.shutdown_gui_test_runtime",
+                return_value=False,
             ),
             mock.patch.object(
                 run_gui_tests,
@@ -115,6 +171,43 @@ class GuiTestModalGuardTests(unittest.TestCase):
         first.deleteLater.assert_called_once_with()
         second.hide.assert_called_once_with()
         second.deleteLater.assert_called_once_with()
+
+    @mock.patch("PySide6.QtCore.QCoreApplication.sendPostedEvents")
+    @mock.patch("PySide6.QtCore.QThreadPool.globalInstance")
+    def test_runtime_shutdown_drains_pool_and_deferred_deletes(
+        self,
+        global_pool,
+        send_posted_events,
+    ):
+        pool = global_pool.return_value
+        pool.waitForDone.return_value = True
+        widget = mock.Mock()
+        app = mock.Mock()
+        app.topLevelWidgets.return_value = [widget]
+
+        stopped = shutdown_gui_test_runtime(app, wait_ms=321)
+
+        self.assertTrue(stopped)
+        pool.clear.assert_called_once_with()
+        pool.waitForDone.assert_called_once_with(321)
+        widget.hide.assert_called_once_with()
+        widget.deleteLater.assert_called_once_with()
+        send_posted_events.assert_called_once()
+        app.processEvents.assert_called_once_with()
+        app.shutdown.assert_called_once_with()
+
+    @mock.patch("PySide6.QtCore.QCoreApplication.sendPostedEvents")
+    @mock.patch("PySide6.QtCore.QThreadPool.globalInstance")
+    def test_runtime_shutdown_reports_unfinished_pool(
+        self,
+        global_pool,
+        _send_posted_events,
+    ):
+        global_pool.return_value.waitForDone.return_value = False
+        app = mock.Mock()
+        app.topLevelWidgets.return_value = []
+
+        self.assertFalse(shutdown_gui_test_runtime(app, wait_ms=0))
 
 
 if __name__ == "__main__":
