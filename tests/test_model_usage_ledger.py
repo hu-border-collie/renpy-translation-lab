@@ -219,7 +219,10 @@ class ModelUsageLedgerTests(unittest.TestCase):
                             "completion_tokens": 4,
                             "total_tokens": 12,
                             "prompt_tokens_details": {"cached_tokens": 3},
-                            "completion_tokens_details": {"reasoning_tokens": 2},
+                            "completion_tokens_details": {
+                                "reasoning_tokens": 2,
+                                "text_tokens": 2,
+                            },
                         },
                         "response": {
                             "id": "chatcmpl-fixture-1",
@@ -243,6 +246,8 @@ class ModelUsageLedgerTests(unittest.TestCase):
 
             self.assertEqual(report["totals"]["prompt_tokens"], 8)
             self.assertEqual(report["totals"]["completion_tokens"], 4)
+            self.assertEqual(report["totals"]["reasoning_tokens"], 2)
+            self.assertEqual(report["totals"]["text_output_tokens"], 2)
             self.assertEqual(report["totals"]["thoughts_tokens"], 2)
             self.assertEqual(report["totals"]["cached_tokens"], 3)
             self.assertEqual(
@@ -252,6 +257,116 @@ class ModelUsageLedgerTests(unittest.TestCase):
             self.assertIsNone(record["estimated_cost"])
             self.assertEqual(record["actual_cost_source"], "_hidden_params.response_cost")
             self.assertEqual(record["stage"], "sync_keyword")
+
+    def test_reasoning_budget_diagnostics_detect_empty_exhausted_output(self):
+        diagnostics = usage.response_budget_diagnostics(
+            response_text="",
+            finish_reason="length",
+            usage_metadata={
+                "completion_tokens": 64,
+                "completion_tokens_details": {
+                    "reasoning_tokens": 64,
+                    "text_tokens": 0,
+                },
+            },
+            max_output_tokens=64,
+        )
+
+        self.assertTrue(diagnostics["empty_text"])
+        self.assertTrue(diagnostics["truncated"])
+        self.assertTrue(diagnostics["reasoning_budget_pressure"])
+        self.assertEqual(diagnostics["reason_code"], "reasoning_budget_exhausted")
+
+        record = usage.build_usage_record(
+            game_root="C:/fixture",
+            task_mode="translation",
+            stage="sync_translation",
+            provider="litellm",
+            model="openai/test",
+            usage_metadata={
+                "completion_tokens": 64,
+                "completion_tokens_details": {
+                    "reasoning_tokens": 64,
+                    "text_tokens": 0,
+                },
+            },
+            response_diagnostics=diagnostics,
+        )
+        totals = usage.aggregate_usage_records([record])
+        lines = usage.format_usage_report(
+            {
+                "project": {"game_root": "C:/fixture"},
+                "ledger_path": "C:/fixture/usage.json",
+                "totals": totals,
+            }
+        )
+        self.assertTrue(any("Reasoning share" in line and "100.0%" in line for line in lines))
+        self.assertTrue(
+            any("reasoning_budget_pressure=1" in line for line in lines)
+        )
+
+    def test_visible_text_is_not_derived_for_ambiguous_provider_counters(self):
+        normalized = usage.normalize_usage_metadata(
+            {
+                "completion_tokens": 20,
+                "completion_tokens_details": {"reasoning_tokens": 5},
+            }
+        )
+
+        self.assertEqual(normalized["completion_tokens"], 20)
+        self.assertEqual(normalized["reasoning_tokens"], 5)
+        self.assertIsNone(normalized["text_output_tokens"])
+
+    def test_snake_case_gemini_usage_includes_thoughts_in_output_budget(self):
+        normalized = usage.normalize_usage_metadata(
+            {
+                "prompt_token_count": 10,
+                "candidates_token_count": 4,
+                "thoughts_token_count": 6,
+            }
+        )
+
+        self.assertEqual(normalized["completion_tokens"], 4)
+        self.assertEqual(normalized["reasoning_tokens"], 6)
+        self.assertEqual(normalized["text_output_tokens"], 4)
+        self.assertEqual(normalized["billable_output_tokens"], 10)
+        self.assertEqual(normalized["total_tokens"], 20)
+
+    def test_safe_diagnostic_metadata_rejects_unstructured_or_secret_fields(self):
+        self.assertEqual(
+            usage.normalize_response_diagnostics(
+                {"reason_code": "provider said secret value"}
+            ),
+            {},
+        )
+        self.assertEqual(
+            usage.normalize_response_diagnostics({"reason_code": "secret-value"}),
+            {},
+        )
+        normalized = usage.normalize_request_metadata(
+            {
+                "provider": "openai",
+                "credential_identity": "raw-secret-key",
+                "credential_source": "secret-value",
+                "credential_attempts": [
+                    "openai#1:****1234",
+                    "openai#2:key:785abd44b6",
+                    "raw-secret-key",
+                ],
+                "ignored_provider_options": ["thinking_config", "secret-value"],
+            }
+        )
+        self.assertEqual(normalized["provider"], "openai")
+        self.assertNotIn("credential_identity", normalized)
+        self.assertNotIn("credential_source", normalized)
+        self.assertEqual(
+            normalized["credential_attempts"],
+            ["openai#1:****1234", "openai#2:key:785abd44b6"],
+        )
+        self.assertEqual(
+            normalized["ignored_provider_options"],
+            ["thinking_config"],
+        )
 
     def test_usage_response_cost_without_currency_stays_unknown_currency(self):
         with tempfile.TemporaryDirectory() as game_root, tempfile.TemporaryDirectory() as package:
@@ -916,6 +1031,70 @@ class ModelUsageLedgerTests(unittest.TestCase):
             finally:
                 runtime.BASE_DIR = previous_base
                 runtime.SYNC_BACKEND = previous_backend
+
+    def test_runtime_sync_usage_summary_preserves_unknown_text_tokens(self):
+        import translator_runtime as runtime
+
+        records = [
+            usage.build_usage_record(
+                game_root="C:/fixture",
+                task_mode="translation",
+                stage="sync_translation",
+                provider="litellm",
+                model="openai/test",
+                usage_metadata={
+                    "prompt_tokens": 3,
+                    "completion_tokens": 23,
+                    "completion_tokens_details": {"reasoning_tokens": 17},
+                    "total_tokens": 26,
+                },
+                response_diagnostics={
+                    "completion_tokens": 23,
+                    "reasoning_tokens": 17,
+                    "empty_text": False,
+                    "truncated": False,
+                    "reasoning_budget_pressure": False,
+                },
+            )
+        ]
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            runtime.print_sync_usage_summary(records)
+
+        self.assertIn(
+            "Sync output tokens: completion=23 reasoning=17 text=unknown",
+            output.getvalue(),
+        )
+
+    def test_format_sync_output_lines_is_stable_contract(self):
+        self.assertEqual(
+            usage.format_sync_output_lines(
+                completion="23",
+                reasoning="17",
+                text_output="unknown",
+                reasoning_budget_pressure=1,
+                truncated=2,
+            ),
+            [
+                "Sync output tokens: completion=23 reasoning=17 text=unknown",
+                "Reasoning budget warnings: 1",
+                "Truncated sync responses: 2",
+            ],
+        )
+        self.assertEqual(
+            usage.format_sync_output_lines(
+                completion=0,
+                reasoning=0,
+                text_output=0,
+                reasoning_budget_pressure=0,
+                truncated=0,
+            ),
+            [
+                "Sync output tokens: completion=0 reasoning=0 text=0",
+                "Reasoning budget warnings: 0",
+                "Truncated sync responses: 0",
+            ],
+        )
 
     def test_import_best_effort_does_not_swallow_system_exit(self):
         with self.assertRaises(SystemExit):

@@ -23,12 +23,18 @@
 - `stage`：例如 `batch_translation`、`sync_revision`、`compare_variants`、`label`、`route`、`brief`
 - `provider` / `model` / `thinking_level` / `execution_mode`
 - `calls`
-- `prompt_tokens` / `completion_tokens` / `total_tokens` / `thoughts_tokens` / `cached_tokens`
+- `prompt_tokens` / `completion_tokens` / `reasoning_tokens` / `text_output_tokens` / `total_tokens` / `cached_tokens`
+- `output_diagnostics`：只保存空正文、截断、输出预算耗尽、reasoning 预算压力与稳定原因码等安全摘要
+- `request_metadata`：只保存 Provider、能力降级和脱敏后的凭据后缀；不保存 API Key
 - `provider_usage`：provider 返回的原始 usage 摘要，不保存响应正文
 - `estimated_cost` 与 `actual_cost`
 - `recorded_at` / `dedupe_key` / 响应与来源 identity
 
 缺失 token 或 cost 保持 `null`。聚合报告同时给出 `*_known_records` 与 `*_unknown_records`，不会把未知值伪造成 0。
+
+`completion_tokens` 沿用 Provider 的完成/输出计数；`reasoning_tokens` 是 Provider 明确报告的推理计数；`text_output_tokens` 只在 Provider 明确给出正文计数时记录。不同 OpenAI-compatible Provider 对 `completion_tokens` 是否包含 reasoning 的定义并不一致，因此账本不会用 `completion - reasoning` 猜测正文 Token。Gemini 的 `candidatesTokenCount` 是明确的正文计数，可以直接归入 `text_output_tokens`；无法确认时 GUI 与 CLI 显示 `unknown`。
+
+当正文为空或 finish reason 表示长度截断时，账本会结合 `max_output_tokens`、completion/reasoning/正文计数判断 `reasoning_budget_exhausted`、`reasoning_without_text_output` 或 `truncated_output`。该诊断不保存响应正文，也不会把单纯“模型返回空文本”自动归因给 reasoning；只有 Provider 计数与输出预算证据同时支持时才标记 reasoning 预算压力。
 
 ## 数据来源与自动记录
 
@@ -89,6 +95,8 @@ python gemini_translate_batch.py usage-report --group-by task,stage,provider,mod
 「诊断与运行日志」的任务上下文会显示：
 
 - 当前项目累计调用数和已知 total token
+- completion、reasoning 与 Provider 可提供时的正文输出 Token；未知字段明确显示 `unknown`
+- reasoning 占已知输出的比例，以及 reasoning 预算压力/截断响应计数
 - token 不完整时的未知记录数
 - 最近一次运行的 task / stage / provider / model 与 token 摘要
 - 存在时的估算成本和 provider 报告成本
@@ -107,7 +115,7 @@ python gemini_translate_batch.py usage-report --group-by task,stage,provider,mod
 
 ## 隐私与版本控制
 
-账本保存 provider usage 摘要、模型/阶段 identity 和响应 fingerprint，不保存 prompt、译文或完整响应正文。它仍属于项目本地运行数据；不要把真实游戏项目账本、Batch 结果或日志提交到公开仓库。
+账本保存 provider usage 摘要、模型/阶段 identity、稳定输出诊断、脱敏凭据 identity 和响应 fingerprint，不保存 prompt、译文、完整响应正文或 API Key。它仍属于项目本地运行数据；不要把真实游戏项目账本、Batch 结果或日志提交到公开仓库。
 
 ## 设计来源
 

@@ -6,8 +6,13 @@ from sync_model_backend import (
     MIN_SYNC_TIMEOUT_SECONDS,
     GeminiSyncBackend,
     SyncGenerationRequest,
+    SyncBackendError,
     SyncModelBackend,
     normalize_sync_timeout_seconds,
+    sync_error_detail,
+    sync_error_category,
+    sync_error_summary,
+    sync_recovery_decision,
 )
 
 
@@ -136,6 +141,48 @@ class SyncModelBackendTests(unittest.TestCase):
         )
         self.assertNotIn("timeout", client.models.calls[0]["config"])
 
+    def test_gemini_provider_failure_is_classified_without_secret_text(self):
+        client = _Client(_Response())
+        error = RuntimeError("provider echoed fake-secret-value")
+        error.status_code = 401
+
+        def fail(**_kwargs):
+            raise error
+
+        client.models.generate_content = fail
+        backend = GeminiSyncBackend(
+            client,
+            serialize_response=lambda response: {},
+            extract_text=lambda payload: "",
+            extract_finish_reason=lambda payload: "",
+        )
+
+        with self.assertRaises(SyncBackendError) as captured:
+            backend.generate(SyncGenerationRequest("gemini-test", [], {}))
+
+        self.assertEqual(captured.exception.category, "authentication")
+        self.assertEqual(
+            captured.exception.request_metadata,
+            {"provider": "gemini"},
+        )
+        self.assertNotIn("fake-secret-value", str(captured.exception))
+
+    def test_gemini_response_extraction_failure_is_invalid_response(self):
+        backend = GeminiSyncBackend(
+            _Client(_Response()),
+            serialize_response=lambda _response: (_ for _ in ()).throw(
+                ValueError("provider response contained fake-secret-value")
+            ),
+            extract_text=lambda payload: "",
+            extract_finish_reason=lambda payload: "",
+        )
+
+        with self.assertRaises(SyncBackendError) as captured:
+            backend.generate(SyncGenerationRequest("gemini-test", [], {}))
+
+        self.assertEqual(captured.exception.category, "invalid_response")
+        self.assertNotIn("fake-secret-value", str(captured.exception))
+
     def test_sync_timeout_normalization_has_finite_bounds(self):
         self.assertEqual(
             normalize_sync_timeout_seconds(None),
@@ -174,6 +221,96 @@ class SyncModelBackendTests(unittest.TestCase):
             },
         )
         self.assertIn("temperature", config)
+
+    def test_recovery_decisions_are_category_driven(self):
+        cases = (
+            (401, "authentication", False, False),
+            (429, "rate_limit", True, False),
+            (408, "timeout", True, False),
+            (503, "service_unavailable", True, False),
+        )
+        for status, category, retry, split in cases:
+            with self.subTest(status=status):
+                error = RuntimeError("provider details")
+                error.status_code = status
+                decision = sync_recovery_decision(error)
+                self.assertEqual(decision.category, category)
+                self.assertEqual(decision.retry_same_request, retry)
+                self.assertEqual(decision.split_request, split)
+
+        invalid = RuntimeError("bad payload")
+        invalid.reason_code = "empty_response_text"
+        decision = sync_recovery_decision(invalid)
+        self.assertEqual(decision.category, "invalid_response")
+        self.assertTrue(decision.split_request)
+        self.assertFalse(decision.retry_same_request)
+
+    def test_explicit_category_wins_and_safe_summary_hides_details(self):
+        error = RuntimeError("provider echoed secret-value")
+        error.category = "authentication"
+        error.status_code = 429
+
+        self.assertEqual(sync_error_category(error), "authentication")
+        summary = sync_error_summary(error)
+        self.assertIn("authentication", summary)
+        self.assertNotIn("secret-value", summary)
+
+        error.category = "secret-value"
+        self.assertEqual(sync_error_category(error), "rate_limit")
+
+    def test_gemini_invalid_api_key_text_is_authentication(self):
+        for message in (
+            "400 API key not valid. Please pass a valid API key.",
+            "API key invalid: 400 INVALID_ARGUMENT",
+            "Invalid API key provided.",
+        ):
+            with self.subTest(message=message):
+                error = RuntimeError(message)
+                error.status_code = 400
+                self.assertEqual(sync_error_category(error), "authentication")
+                self.assertEqual(
+                    sync_error_summary(error),
+                    "authentication failed [authentication]",
+                )
+
+    def test_sync_backend_error_keeps_original_exception_chain(self):
+        original = RuntimeError("provider echoed secret-value")
+        original.status_code = 400
+        client = _Client(_Response())
+
+        def fail(**_kwargs):
+            raise original
+
+        client.models.generate_content = fail
+        backend = GeminiSyncBackend(
+            client,
+            serialize_response=lambda response: {},
+            extract_text=lambda payload: "",
+            extract_finish_reason=lambda payload: "",
+        )
+
+        with self.assertRaises(SyncBackendError) as captured:
+            backend.generate(SyncGenerationRequest("gemini-test", [], {}))
+
+        self.assertIs(captured.exception.__cause__, original)
+        self.assertEqual(captured.exception.category, "provider_error")
+        self.assertNotIn("secret-value", str(captured.exception))
+        self.assertEqual(sync_error_detail(captured.exception), "provider echoed secret-value")
+
+    def test_sync_error_detail_prefers_explicit_detail_then_chain(self):
+        error = RuntimeError("raw provider text")
+        self.assertEqual(sync_error_detail(error), "raw provider text")
+
+        wrapped = SyncBackendError("authentication")
+        try:
+            raise wrapped from error
+        except SyncBackendError:
+            pass
+        self.assertEqual(sync_error_detail(wrapped), "raw provider text")
+
+        with_detail = RuntimeError("detail wins")
+        with_detail.detail = "kept for local logs"
+        self.assertEqual(sync_error_detail(with_detail), "kept for local logs")
 
 
 if __name__ == "__main__":

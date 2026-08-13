@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from .translation_workflow import WorkflowUpdate
+from .sync_usage_report import collect_sync_usage_facts
 from .user_copy import MODEL_CONTRACT_COPY
 
 
@@ -173,4 +174,5 @@ def _collect_facts(output: str) -> list[str]:
             f"{MODEL_CONTRACT_COPY['targeted_retries']}："
             f"{retry_match.group(1)} 次请求 / {retry_match.group(2)} 项"
         )
+    facts.extend(collect_sync_usage_facts(output))
     return facts

@@ -15,7 +15,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from litellm_provider_config import DEFAULT_MODELS, SUPPORTED_PROVIDERS
-from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
+import model_usage_ledger
+from sync_model_backend import (
+    GeminiSyncBackend,
+    SyncGenerationRequest,
+    sync_error_category,
+    sync_error_summary,
+)
 from translation_core import MODE_TRANSLATION, build_translation_schema, validate_model_response
 
 
@@ -88,12 +94,11 @@ def contract_request(spec: ProviderSpec) -> SyncGenerationRequest:
     config: dict[str, Any] = {
         "temperature": 0,
         "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "timeout": REQUEST_TIMEOUT_SECONDS,
         "response_json_schema": schema,
     }
     if spec.backend == "gemini":
         config["response_mime_type"] = "application/json"
-    else:
-        config["timeout"] = REQUEST_TIMEOUT_SECONDS
     return SyncGenerationRequest(
         model=spec.model,
         contents=(
@@ -166,29 +171,32 @@ def validate_result(spec: ProviderSpec, result: Any) -> dict[str, Any]:
 
 
 def classify_error(exc: Exception) -> str:
-    category = str(getattr(exc, "category", "") or "").strip()
-    if category:
-        return category
-    status = getattr(exc, "status_code", None)
-    if status in {401, 403}:
-        return "authentication"
-    if status == 429:
-        return "rate_limit"
-    if status in {408, 502, 503, 504} or isinstance(exc, TimeoutError):
-        return "service_unavailable"
-    return "provider_error"
+    return sync_error_category(exc)
 
 
 def run_provider(spec: ProviderSpec, api_key: str, backend: Any = None) -> None:
     backend = backend or create_backend(spec, api_key)
     result = backend.generate(contract_request(spec))
     validate_result(spec, result)
-    usage = dict(result.usage_metadata or {})
+    diagnostics = model_usage_ledger.response_budget_diagnostics(
+        response_text=result.response_text,
+        finish_reason=getattr(result, "finish_reason", ""),
+        usage_metadata=result.usage_metadata or {},
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+    )
+
+    def token_value(field: str) -> str:
+        value = diagnostics.get(field)
+        return "unknown" if value is None else str(int(value))
+
     print(
         "PASS "
         f"provider={spec.name} backend={spec.backend} model={spec.model} "
         f"requests={MAX_REQUESTS_PER_PROVIDER} "
-        f"max_output_tokens={MAX_OUTPUT_TOKENS} usage={json.dumps(usage, sort_keys=True)}"
+        f"max_output_tokens={MAX_OUTPUT_TOKENS} "
+        f"completion_tokens={token_value('completion_tokens')} "
+        f"reasoning_tokens={token_value('reasoning_tokens')} "
+        f"text_output_tokens={token_value('text_output_tokens')}"
     )
 
 
@@ -213,7 +221,8 @@ def run_selected(
         except Exception as exc:
             failed += 1
             print(
-                f"FAIL provider={spec.name} category={classify_error(exc)}: {exc}",
+                f"FAIL provider={spec.name} category={classify_error(exc)}: "
+                f"{sync_error_summary(exc)}",
                 file=sys.stderr,
             )
     print(

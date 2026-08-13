@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
+from litellm_sync_backend import LiteLLMBackendError
 
 
 class LiteLLMSyncIntegrationTests(unittest.TestCase):
@@ -106,6 +107,49 @@ class LiteLLMSyncIntegrationTests(unittest.TestCase):
             manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
 
         self.assertEqual(manifest["settings"]["timeout_seconds"], 45)
+
+    def test_litellm_authentication_failure_is_not_retried(self):
+        fake_backend = mock.Mock()
+        fake_backend.generate.side_effect = LiteLLMBackendError(
+            "provider echoed secret-value",
+            category="authentication",
+        )
+        with (
+            mock.patch.object(batch_mod, "SYNC_BACKEND", "litellm"),
+            mock.patch.object(batch_mod, "SYNC_MODEL", "openai/test"),
+            mock.patch(
+                "litellm_sync_backend.LiteLLMSyncBackend",
+                return_value=fake_backend,
+            ),
+        ):
+            with self.assertRaises(LiteLLMBackendError):
+                batch_mod.run_sync_request({"contents": []}, "gemini-default")
+
+        self.assertEqual(fake_backend.generate.call_count, 1)
+
+    def test_litellm_timeout_retry_is_bounded(self):
+        fake_backend = mock.Mock()
+        fake_backend.generate.side_effect = [
+            LiteLLMBackendError("timeout one", category="timeout"),
+            LiteLLMBackendError("timeout two", category="timeout"),
+            self._fake_result(),
+        ]
+        with (
+            mock.patch.object(batch_mod, "SYNC_BACKEND", "litellm"),
+            mock.patch.object(batch_mod, "SYNC_MODEL", "openai/test"),
+            mock.patch.object(batch_mod.time, "sleep"),
+            mock.patch(
+                "litellm_sync_backend.LiteLLMSyncBackend",
+                return_value=fake_backend,
+            ),
+        ):
+            result = batch_mod.run_sync_request(
+                {"contents": []},
+                "gemini-default",
+            )
+
+        self.assertEqual(fake_backend.generate.call_count, 3)
+        self.assertEqual(result["provider"], "litellm")
 
 
 if __name__ == "__main__":

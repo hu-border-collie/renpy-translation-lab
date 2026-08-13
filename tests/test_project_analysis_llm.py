@@ -76,6 +76,39 @@ class MapReduceTests(unittest.TestCase):
         )
         self.assertEqual(request.config["timeout"], 45)
 
+    def test_empty_reasoning_exhausted_response_has_stable_reason_code(self):
+        def generate(_request):
+            return SyncGenerationResult(
+                provider="fake",
+                model="fake-model",
+                execution_mode=SYNC_EXECUTION_MODE,
+                response_payload={},
+                response_text="",
+                finish_reason="length",
+                usage_metadata={
+                    "completion_tokens": 64,
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 64,
+                        "text_tokens": 0,
+                    },
+                },
+            )
+
+        with self.assertRaises(llm.ProjectAnalysisResponseError) as captured:
+            llm.complete_analysis_text(
+                generate,
+                model="fake-model",
+                system="system",
+                user="user",
+                max_output_tokens=64,
+            )
+
+        self.assertEqual(captured.exception.category, "invalid_response")
+        self.assertEqual(
+            captured.exception.reason_code,
+            "reasoning_budget_exhausted",
+        )
+
     def test_mapreduce_refines_labels_routes_brief(self):
         with tempfile.TemporaryDirectory() as tmp:
             store_dir = os.path.join(tmp, "pa")
@@ -141,6 +174,58 @@ class MapReduceTests(unittest.TestCase):
             self.assertGreaterEqual(result["labels_refined"], 1)
             self.assertGreaterEqual(result["routes_refined"], 1)
             self.assertGreater(len(backend.calls), 0)
+
+    def test_usage_summary_derives_reasoning_diagnostics_from_bare_backend(self):
+        class ReasoningBackend(FakeBackend):
+            def generate(self, request):
+                base = super().generate(request)
+                return SyncGenerationResult(
+                    provider=base.provider,
+                    model=base.model,
+                    execution_mode=base.execution_mode,
+                    response_payload=base.response_payload,
+                    response_text=base.response_text,
+                    finish_reason="length",
+                    usage_metadata={
+                        "prompt_tokens": 10,
+                        "completion_tokens": 8,
+                        "total_tokens": 18,
+                        "completion_tokens_details": {
+                            "reasoning_tokens": 6,
+                            "text_tokens": 2,
+                        },
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            gen.ingest_keyword_summaries(str(KEYWORDS), store_dir=store_dir)
+            gen.build_structure_drafts(
+                store_dir=store_dir,
+                base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)],
+                entry_labels=["start"],
+            )
+            events = []
+            result = llm.run_mapreduce_drafts(
+                store_dir=store_dir,
+                backend=ReasoningBackend(),
+                config={"model": "fake-model", "max_output_tokens": 8},
+                force=True,
+                usage_recorder=events.append,
+            )
+
+        self.assertEqual(
+            result["usage"]["reasoning_budget_pressure_count"],
+            result["usage"]["requests"],
+        )
+        self.assertEqual(result["usage"]["truncated_output_count"], result["usage"]["requests"])
+        self.assertTrue(
+            all(
+                event["output_diagnostics"]["reasoning_budget_pressure"]
+                for event in events
+            )
+        )
 
     def test_optional_inputs_are_prompted_persisted_and_invalidate_cache(self):
         with tempfile.TemporaryDirectory() as tmp:

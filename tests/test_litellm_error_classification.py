@@ -1,13 +1,12 @@
-import sys
-import types
 import unittest
-from unittest import mock
 
-from litellm_sync_backend import _error_category
+from sync_model_backend import sync_error_category
 
 
 class LiteLLMErrorClassificationTests(unittest.TestCase):
-    def test_prefers_litellm_typed_exceptions(self):
+    def test_litellm_typed_exception_names_classify_via_shared_category(self):
+        """LiteLLM typed errors are covered by the shared type-name fallback."""
+
         class RateLimitError(Exception):
             pass
 
@@ -17,17 +16,18 @@ class LiteLLMErrorClassificationTests(unittest.TestCase):
         class AuthenticationError(Exception):
             pass
 
-        fake_litellm = types.SimpleNamespace(
-            RateLimitError=RateLimitError,
-            ServiceUnavailableError=ServiceUnavailableError,
-            AuthenticationError=AuthenticationError,
+        self.assertEqual(
+            sync_error_category(RateLimitError()),
+            "rate_limit",
         )
-        with mock.patch.dict(sys.modules, {"litellm": fake_litellm}):
-            self.assertEqual(_error_category(RateLimitError()), "rate_limit")
-            self.assertEqual(
-                _error_category(ServiceUnavailableError()), "service_unavailable"
-            )
-            self.assertEqual(_error_category(AuthenticationError()), "authentication")
+        self.assertEqual(
+            sync_error_category(ServiceUnavailableError()),
+            "service_unavailable",
+        )
+        self.assertEqual(
+            sync_error_category(AuthenticationError()),
+            "authentication",
+        )
 
 
 if __name__ == "__main__":

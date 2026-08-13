@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,10 +53,18 @@ GROUP_FIELD_ALIASES = {
 TOKEN_FIELDS = (
     "prompt_tokens",
     "completion_tokens",
+    "reasoning_tokens",
+    "text_output_tokens",
     "total_tokens",
     "thoughts_tokens",
     "cached_tokens",
 )
+OUTPUT_DIAGNOSTIC_REASON_CODES = frozenset({
+    "reasoning_budget_exhausted",
+    "reasoning_without_text_output",
+    "truncated_output",
+    "empty_response_text",
+})
 
 
 class UsageLedgerError(RuntimeError):
@@ -217,6 +226,24 @@ def normalize_usage_metadata(usage_metadata: Mapping[str, Any] | None) -> dict[s
             ("output_tokens_details", "reasoning_tokens"),
         ),
     )
+    text_output = _first_int(
+        usage,
+        (
+            # Gemini reports visible candidate tokens separately from thoughts.
+            ("candidatesTokenCount",),
+            ("candidates_token_count",),
+            # Provider-neutral / Responses-style explicit visible-output fields.
+            ("text_output_tokens",),
+            ("output_text_tokens",),
+            ("completion_tokens_details", "text_tokens"),
+            ("output_tokens_details", "text_tokens"),
+        ),
+    )
+    # Do not derive visible text by subtracting reasoning from completion:
+    # OpenAI-compatible providers disagree on whether completion already
+    # includes reasoning (xAI is one counterexample). LiteLLM often emits an
+    # explicit details.text_tokens value; otherwise the honest value is unknown.
+    text_output_derived = False
     cached = _first_int(
         usage,
         (
@@ -236,10 +263,13 @@ def normalize_usage_metadata(usage_metadata: Mapping[str, Any] | None) -> dict[s
             ("total_tokens",),
         ),
     )
+    gemini_candidate_counter = any(
+        key in usage for key in ("candidatesTokenCount", "candidates_token_count")
+    )
     total_derived = False
     if total is None and prompt is not None and completion is not None:
         total = prompt + completion
-        if "candidatesTokenCount" in usage and thoughts is not None:
+        if gemini_candidate_counter and thoughts is not None:
             total += thoughts
         total_derived = True
 
@@ -248,18 +278,182 @@ def normalize_usage_metadata(usage_metadata: Mapping[str, Any] | None) -> dict[s
         billable_output = max(0, total - prompt)
     elif completion is not None:
         billable_output = completion
-        if "candidatesTokenCount" in usage and thoughts is not None:
+        if gemini_candidate_counter and thoughts is not None:
             billable_output += thoughts
 
     return {
         "prompt_tokens": prompt,
         "completion_tokens": completion,
+        "reasoning_tokens": thoughts,
+        "text_output_tokens": text_output,
+        "text_output_tokens_derived": text_output_derived,
         "total_tokens": total,
         "thoughts_tokens": thoughts,
         "cached_tokens": cached,
         "billable_output_tokens": billable_output,
         "total_tokens_derived": total_derived,
     }
+
+
+def response_budget_diagnostics(
+    *,
+    response_text: Any,
+    finish_reason: Any,
+    usage_metadata: Mapping[str, Any] | None,
+    max_output_tokens: Any = None,
+) -> dict[str, Any]:
+    """Describe visible output, reasoning pressure, and truncation safely.
+
+    The result contains counters and stable reason codes only; it never embeds
+    provider response text. Unknown provider counters remain ``None``.
+    """
+    normalized = normalize_usage_metadata(usage_metadata)
+    completion = normalized["completion_tokens"]
+    reasoning = normalized["reasoning_tokens"]
+    text_output = normalized["text_output_tokens"]
+    try:
+        output_limit = int(max_output_tokens)
+        if output_limit <= 0:
+            output_limit = None
+    except (TypeError, ValueError, OverflowError):
+        output_limit = None
+
+    empty_text = not bool(str(response_text or "").strip())
+    normalized_finish = str(finish_reason or "").strip().upper()
+    truncated = normalized_finish in {
+        "MAX_TOKENS",
+        "MAX_TOKEN",
+        "LENGTH",
+        "TOKEN_LIMIT",
+        "OUTPUT_TOKEN_LIMIT",
+    }
+    output_budget_used = normalized["billable_output_tokens"]
+    budget_exhausted = bool(
+        output_limit is not None
+        and output_budget_used is not None
+        and output_budget_used >= output_limit
+    )
+    reasoning_ratio = None
+    if reasoning is not None and output_budget_used:
+        reasoning_ratio = reasoning / output_budget_used
+
+    reason_code = ""
+    reasoning_budget_pressure = False
+    if empty_text and reasoning and (text_output in {None, 0}):
+        reasoning_budget_pressure = bool(budget_exhausted or truncated)
+        reason_code = (
+            "reasoning_budget_exhausted"
+            if reasoning_budget_pressure
+            else "reasoning_without_text_output"
+        )
+    elif truncated:
+        reason_code = "truncated_output"
+        reasoning_budget_pressure = bool(
+            reasoning_ratio is not None and reasoning_ratio >= 0.5
+        )
+    elif empty_text:
+        reason_code = "empty_response_text"
+
+    return {
+        "completion_tokens": completion,
+        "reasoning_tokens": reasoning,
+        "text_output_tokens": text_output,
+        "text_output_tokens_derived": bool(
+            normalized["text_output_tokens_derived"]
+        ),
+        "max_output_tokens": output_limit,
+        "output_budget_used": output_budget_used,
+        "reasoning_ratio": reasoning_ratio,
+        "empty_text": empty_text,
+        "truncated": truncated,
+        "budget_exhausted": budget_exhausted,
+        "reasoning_budget_pressure": reasoning_budget_pressure,
+        "reason_code": reason_code,
+    }
+
+
+def normalize_response_diagnostics(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Keep only safe, provider-neutral output diagnostic fields."""
+    raw = dict(value or {})
+    normalized: dict[str, Any] = {}
+    for key in (
+        "completion_tokens",
+        "reasoning_tokens",
+        "text_output_tokens",
+        "max_output_tokens",
+        "output_budget_used",
+    ):
+        parsed = _nonnegative_int(raw.get(key))
+        if parsed is not None:
+            normalized[key] = parsed
+    ratio = _nonnegative_float(raw.get("reasoning_ratio"))
+    if ratio is not None:
+        normalized["reasoning_ratio"] = min(1.0, ratio)
+    for key in (
+        "text_output_tokens_derived",
+        "empty_text",
+        "truncated",
+        "budget_exhausted",
+        "reasoning_budget_pressure",
+    ):
+        if isinstance(raw.get(key), bool):
+            normalized[key] = raw[key]
+    reason_code = str(raw.get("reason_code") or "").strip()
+    if reason_code in OUTPUT_DIAGNOSTIC_REASON_CODES:
+        normalized["reason_code"] = reason_code
+    return normalized
+
+
+def normalize_request_metadata(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Keep only non-secret request routing/capability audit fields."""
+    raw = dict(value or {})
+    normalized: dict[str, Any] = {}
+    provider = str(raw.get("provider") or "").strip().lower()
+    if re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", provider):
+        normalized["provider"] = provider
+    credential_count = _nonnegative_int(raw.get("credential_count"))
+    if credential_count is not None:
+        normalized["credential_count"] = credential_count
+    identity = _safe_credential_identity(raw.get("credential_identity"))
+    if identity:
+        normalized["credential_identity"] = identity
+    source = str(raw.get("credential_source") or "").strip()
+    if source in {"explicit", "keyring"} or re.fullmatch(
+        r"env:[A-Z_][A-Z0-9_]{0,63}", source
+    ):
+        normalized["credential_source"] = source
+    attempts = raw.get("credential_attempts")
+    if isinstance(attempts, list):
+        normalized["credential_attempts"] = [
+            identity
+            for item in attempts
+            if (identity := _safe_credential_identity(item))
+        ]
+    ignored = raw.get("ignored_provider_options")
+    if isinstance(ignored, list):
+        normalized["ignored_provider_options"] = [
+            option
+            for item in ignored
+            if (option := str(item).strip()) in {"thinking_config"}
+        ]
+    return normalized
+
+
+def _safe_credential_identity(value: Any) -> str:
+    """Accept only the adapter's masked identity forms, never a raw secret.
+
+    Two forms are accepted: the current non-reversible digest
+    (``provider#n:key:<hex>``) and the legacy masked suffix form
+    (``provider#n:****abcd``) so previously persisted records stay readable.
+    """
+    identity = str(value or "").strip()
+    if not re.fullmatch(
+        r"[a-z0-9][a-z0-9._-]*(?:#\d+)?:(?:\*{4}\S{0,4}|key:[a-f0-9]{10})",
+        identity,
+        flags=re.IGNORECASE,
+    ):
+        return ""
+    return identity
 
 
 def _nonnegative_float(value: Any) -> float | None:
@@ -345,6 +539,8 @@ def build_usage_record(
     execution_mode: str = "",
     source_key: str = "",
     source: Mapping[str, Any] | None = None,
+    response_diagnostics: Mapping[str, Any] | None = None,
+    request_metadata: Mapping[str, Any] | None = None,
     pricing_config: Mapping[str, Any] | None = None,
     estimated_cost: float | None = None,
     estimated_cost_currency: str = "",
@@ -408,11 +604,18 @@ def build_usage_record(
         "calls": 1,
         "prompt_tokens": normalized["prompt_tokens"],
         "completion_tokens": normalized["completion_tokens"],
+        "reasoning_tokens": normalized["reasoning_tokens"],
+        "text_output_tokens": normalized["text_output_tokens"],
+        "text_output_tokens_derived": bool(
+            normalized["text_output_tokens_derived"]
+        ),
         "total_tokens": normalized["total_tokens"],
         "thoughts_tokens": normalized["thoughts_tokens"],
         "cached_tokens": normalized["cached_tokens"],
         "total_tokens_derived": bool(normalized["total_tokens_derived"]),
         "provider_usage": raw_usage,
+        "output_diagnostics": normalize_response_diagnostics(response_diagnostics),
+        "request_metadata": normalize_request_metadata(request_metadata),
         "estimated_cost": computed_estimate,
         "estimated_cost_currency": estimate_currency if computed_estimate is not None else None,
         "estimated_cost_basis": estimate_basis,
@@ -722,6 +925,34 @@ def import_manifest_results(
                                     "attempt_kind": attempt_kind,
                                     "item_ids": item_ids,
                                 },
+                                response_diagnostics=(
+                                    attempt.get("output_diagnostics")
+                                    if isinstance(
+                                        attempt.get("output_diagnostics"), Mapping
+                                    )
+                                    else (
+                                        row.get("output_diagnostics")
+                                        if attempt_kind == "first_pass"
+                                        and isinstance(
+                                            row.get("output_diagnostics"), Mapping
+                                        )
+                                        else None
+                                    )
+                                ),
+                                request_metadata=(
+                                    attempt.get("request_metadata")
+                                    if isinstance(
+                                        attempt.get("request_metadata"), Mapping
+                                    )
+                                    else (
+                                        row.get("request_metadata")
+                                        if attempt_kind == "first_pass"
+                                        and isinstance(
+                                            row.get("request_metadata"), Mapping
+                                        )
+                                        else None
+                                    )
+                                ),
                                 pricing_config=effective_pricing,
                             )
                         )
@@ -764,6 +995,16 @@ def import_manifest_results(
                             "row_key": row_key,
                             "row_index": row_index,
                         },
+                        response_diagnostics=(
+                            row.get("output_diagnostics")
+                            if isinstance(row.get("output_diagnostics"), Mapping)
+                            else None
+                        ),
+                        request_metadata=(
+                            row.get("request_metadata")
+                            if isinstance(row.get("request_metadata"), Mapping)
+                            else None
+                        ),
                         pricing_config=effective_pricing,
                     )
                 )
@@ -797,6 +1038,8 @@ def record_generation_usage(
     execution_mode: str = "sync",
     source_key: str = "",
     source: Mapping[str, Any] | None = None,
+    response_diagnostics: Mapping[str, Any] | None = None,
+    request_metadata: Mapping[str, Any] | None = None,
     pricing_config: Mapping[str, Any] | None = None,
     ledger: UsageLedger | None = None,
 ) -> dict[str, Any]:
@@ -814,6 +1057,8 @@ def record_generation_usage(
         execution_mode=execution_mode,
         source_key=source_key,
         source=source,
+        response_diagnostics=response_diagnostics,
+        request_metadata=request_metadata,
         pricing_config=pricing_config,
     )
     store = ledger or UsageLedger(game_root)
@@ -871,14 +1116,68 @@ def aggregate_usage_records(records: Sequence[Mapping[str, Any]]) -> dict[str, A
         values = [
             parsed
             for record in records
-            if (parsed := _nonnegative_int(record.get(field))) is not None
+            if (parsed := _record_token_value(record, field)) is not None
         ]
         totals[field] = sum(values) if values else None
         totals[f"{field}_known_records"] = len(values)
         totals[f"{field}_unknown_records"] = len(records) - len(values)
+    reasoning_component = 0
+    text_component = 0
+    reasoning_share_records = 0
+    diagnostic_reason_counts: dict[str, int] = {}
+    empty_text_records = 0
+    truncated_records = 0
+    reasoning_pressure_records = 0
+    for record in records:
+        reasoning = _record_token_value(record, "reasoning_tokens")
+        text_output = _record_token_value(record, "text_output_tokens")
+        if reasoning is not None and text_output is not None:
+            reasoning_component += reasoning
+            text_component += text_output
+            reasoning_share_records += 1
+        diagnostics = record.get("output_diagnostics")
+        if not isinstance(diagnostics, Mapping):
+            continue
+        reason_code = str(diagnostics.get("reason_code") or "").strip()
+        if reason_code:
+            diagnostic_reason_counts[reason_code] = (
+                diagnostic_reason_counts.get(reason_code, 0) + 1
+            )
+        empty_text_records += int(diagnostics.get("empty_text") is True)
+        truncated_records += int(diagnostics.get("truncated") is True)
+        reasoning_pressure_records += int(
+            diagnostics.get("reasoning_budget_pressure") is True
+        )
+    denominator = reasoning_component + text_component
+    totals["reasoning_share"] = (
+        reasoning_component / denominator if denominator else None
+    )
+    totals["reasoning_share_known_records"] = reasoning_share_records
+    totals["output_diagnostics"] = {
+        "reason_counts": dict(sorted(diagnostic_reason_counts.items())),
+        "empty_text_records": empty_text_records,
+        "truncated_records": truncated_records,
+        "reasoning_budget_pressure_records": reasoning_pressure_records,
+    }
     totals["estimated_cost"] = _aggregate_cost(records, "estimated")
     totals["actual_cost"] = _aggregate_cost(records, "actual")
     return totals
+
+
+def _record_token_value(record: Mapping[str, Any], field: str) -> int | None:
+    """Read an additive token field while supporting pre-#340 records."""
+    direct = _nonnegative_int(record.get(field))
+    if direct is not None:
+        return direct
+    if field == "reasoning_tokens":
+        legacy = _nonnegative_int(record.get("thoughts_tokens"))
+        if legacy is not None:
+            return legacy
+    provider_usage = record.get("provider_usage")
+    if isinstance(provider_usage, Mapping):
+        normalized = normalize_usage_metadata(provider_usage)
+        return _nonnegative_int(normalized.get(field))
+    return None
 
 
 def _record_matches(record: Mapping[str, Any], field: str, expected: str) -> bool:
@@ -990,6 +1289,17 @@ def _format_cost_metric(metric: Mapping[str, Any]) -> str:
 def format_usage_report(report: Mapping[str, Any]) -> list[str]:
     totals = report.get("totals") if isinstance(report.get("totals"), Mapping) else {}
     project = report.get("project") if isinstance(report.get("project"), Mapping) else {}
+    reasoning_share = totals.get("reasoning_share")
+    reasoning_share_text = (
+        "unknown"
+        if reasoning_share is None
+        else f"{float(reasoning_share):.1%} "
+        f"({int(totals.get('reasoning_share_known_records') or 0)} record(s))"
+    )
+    output_diagnostics = totals.get("output_diagnostics")
+    output_diagnostics = (
+        output_diagnostics if isinstance(output_diagnostics, Mapping) else {}
+    )
     lines = [
         "Model usage ledger:",
         f"- Project: {project.get('game_root') or '(unknown)'}",
@@ -997,8 +1307,17 @@ def format_usage_report(report: Mapping[str, Any]) -> list[str]:
         f"- Records / calls: {int(totals.get('records') or 0)} / {int(totals.get('calls') or 0)}",
         f"- Prompt tokens: {_format_token_metric(totals, 'prompt_tokens')}",
         f"- Completion tokens: {_format_token_metric(totals, 'completion_tokens')}",
+        f"- Reasoning tokens: {_format_token_metric(totals, 'reasoning_tokens')}",
+        f"- Text output tokens: {_format_token_metric(totals, 'text_output_tokens')}",
+        f"- Reasoning share of known output: {reasoning_share_text}",
+        (
+            "- Output diagnostics: "
+            f"empty={int(output_diagnostics.get('empty_text_records') or 0)}, "
+            f"truncated={int(output_diagnostics.get('truncated_records') or 0)}, "
+            "reasoning_budget_pressure="
+            f"{int(output_diagnostics.get('reasoning_budget_pressure_records') or 0)}"
+        ),
         f"- Total tokens: {_format_token_metric(totals, 'total_tokens')}",
-        f"- Thoughts tokens: {_format_token_metric(totals, 'thoughts_tokens')}",
         f"- Cached tokens: {_format_token_metric(totals, 'cached_tokens')}",
         (
             "- Estimated cost (configured pricing, not provider billing): "
@@ -1034,3 +1353,25 @@ def format_usage_report(report: Mapping[str, Any]) -> list[str]:
             f"{_format_token_metric(recent_totals, 'total_tokens')} total tokens"
         )
     return lines
+
+
+def format_sync_output_lines(
+    *,
+    completion: str | int,
+    reasoning: str | int,
+    text_output: str | int,
+    reasoning_budget_pressure: int,
+    truncated: int,
+) -> list[str]:
+    """Return the stable CLI output-diagnostic lines consumed by the GUI.
+
+    Both synchronous consumers (ledger-backed runtime summaries and manifest
+    request summaries) resolve their workflow-specific totals and print these
+    identical lines so the GUI parser sees one contract.
+    """
+    return [
+        f"Sync output tokens: completion={completion} "
+        f"reasoning={reasoning} text={text_output}",
+        f"Reasoning budget warnings: {int(reasoning_budget_pressure)}",
+        f"Truncated sync responses: {int(truncated)}",
+    ]

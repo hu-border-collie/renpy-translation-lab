@@ -71,12 +71,19 @@ class ProjectAnalysisWorkflowTests(unittest.TestCase):
             'PROJECT_ANALYSIS_PROGRESS '
             '{"stage":"complete","completed":1,"total":1,'
             '"usage":{"requests":4,"input_tokens":40,"output_tokens":16,'
+            '"completion_tokens":16,"reasoning_tokens":10,'
+            '"text_output_tokens":6,"completion_tokens_known_requests":4,'
+            '"reasoning_tokens_known_requests":4,'
+            '"text_output_tokens_known_requests":4,'
             '"estimated_cost":0.000104,"currency":"USD"}}\n'
         )
         facts = generation_facts_from_output(output)
 
         self.assertIn("全部完成 1/1", facts[0])
         self.assertIn("模型请求：4", facts[1])
+        self.assertIn("completion 16", facts[1])
+        self.assertIn("reasoning 10", facts[1])
+        self.assertIn("正文 6", facts[1])
         self.assertIn("0.000104 USD", facts[2])
 
         unknown = generation_facts_from_output(

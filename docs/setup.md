@@ -199,6 +199,7 @@ LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提
 
 - 界面与配置中模型保持 `<id>/<模型>` 形式（如 `opencode-go/gpt-4o-mini`）；实际请求改写为 `openai/<模型>` + `api_base`，按请求传参，不使用进程级 `OPENAI_API_KEY` / `OPENAI_API_BASE` 环境变量。
 - 密钥优先使用系统凭据管理器（GUI「管理密钥…」多 Key 对话框），与内置 provider 一致。
+- 同步请求遇到 429 时可在**同一 Provider** 的已保存 Key 集合内有界尝试下一把，并只记录脱敏后缀；401/403 不轮换。该机制与 Gemini keyring 完全分离。
 - 模型列表走 `GET {models_url}`（Bearer 认证），解析 OpenAI 风格 `{data:[{id:...}]}` 响应。
 - `requires_key=true` 且 keyring 与 `api_key_env` 均无密钥时，请求会在发送前失败，杜绝 `OPENAI_API_KEY` 被静默发送到第三方端点。
 - 非法 `base_url`、非法字符或与内置前缀冲突的 `id` 会被拒绝；GUI 保存或 CLI 加载配置时均会报错。

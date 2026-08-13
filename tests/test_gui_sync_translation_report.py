@@ -151,6 +151,22 @@ class GuiSyncTranslationReportTests(unittest.TestCase):
         self.assertIn("定点重试：1 次请求 / 1 项", update.facts)
         self.assertIn("未解决结果：1 个", update.facts)
 
+    def test_summarize_surfaces_reasoning_and_text_output_diagnostics(self):
+        update = summarize_sync_translation_output(
+            SUCCESS_OUTPUT
+            + "Sync output tokens: completion=23 reasoning=17 text=6\n"
+            + "Reasoning budget warnings: 1\n"
+            + "Truncated sync responses: 2\n",
+            0,
+        )
+
+        self.assertIn(
+            "输出 Token：completion 23 / reasoning 17 / 正文 6",
+            update.facts,
+        )
+        self.assertIn("Reasoning 预算告警：1 次", update.facts)
+        self.assertIn("输出截断：2 次", update.facts)
+
 
 if __name__ == "__main__":
     unittest.main()

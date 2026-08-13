@@ -15,6 +15,7 @@ from typing import Callable
 import model_usage_ledger
 import story_memory
 import translator_runtime as legacy
+from sync_model_backend import sync_error_category, sync_error_summary
 
 _TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 EXPERIMENTS_DIR = os.path.join(_TOOL_DIR, 'logs', 'experiments')
@@ -339,11 +340,25 @@ def extract_translation_map(response_text: str, items: list[dict]) -> tuple[dict
 
 @dataclass
 class VariantRunResult:
+    """Store one variant result and its safe synchronization metadata.
+
+    ``output_diagnostics`` holds provider-neutral response-budget facts
+    normalized via ``model_usage_ledger.normalize_response_diagnostics`` and is
+    empty when no response was produced. ``request_metadata`` holds normalized
+    non-secret routing metadata (provider, masked credential identity) and is
+    empty when unavailable. ``error_category`` is set only for categorized
+    request or response failures and is empty on success; the JSONL result
+    contract persists these fields with the same empty-value semantics.
+    """
+
     variant_name: str
     settings: dict
     translations: dict[str, str] = field(default_factory=dict)
     usage_metadata: dict = field(default_factory=dict)
+    output_diagnostics: dict = field(default_factory=dict)
+    request_metadata: dict = field(default_factory=dict)
     finish_reason: str = ''
+    error_category: str = ''
     error: str = ''
     dry_run: bool = False
 
@@ -444,6 +459,13 @@ def render_markdown_report(
                 f'finish_reason={result.finish_reason or "(none)"}',
                 f'usage={json.dumps(result.usage_metadata, ensure_ascii=False)}',
             ]
+            if result.output_diagnostics:
+                meta_bits.append(
+                    'output_diagnostics='
+                    + json.dumps(result.output_diagnostics, ensure_ascii=False)
+                )
+            if result.error_category:
+                meta_bits.append(f'error_category={result.error_category}')
             if result.error:
                 meta_bits.append(f'error={result.error}')
             if result.dry_run:
@@ -499,7 +521,10 @@ def write_experiment_outputs(
                                 'settings': result.settings,
                                 'translations': result.translations,
                                 'usage_metadata': result.usage_metadata,
+                                'output_diagnostics': result.output_diagnostics,
+                                'request_metadata': result.request_metadata,
                                 'finish_reason': result.finish_reason,
+                                'error_category': result.error_category,
                                 'error': result.error,
                                 'dry_run': result.dry_run,
                             }
@@ -546,6 +571,13 @@ def run_variant_for_chunk(
 
         runner = sync_runner or _batch().run_sync_request
         response = runner(request_payload, model_name, api_key_index=api_key_index)
+        output_diagnostics = _batch().sync_output_diagnostics(
+            response,
+            request_payload,
+        )
+        request_metadata = model_usage_ledger.normalize_request_metadata(
+            response.get('request_metadata') or {}
+        )
         game_root = str((usage_context or {}).get('game_root') or legacy.BASE_DIR or '')
         if usage_context and game_root:
             try:
@@ -569,6 +601,8 @@ def run_variant_for_chunk(
                         'chunk_key': str(chunk.get('key') or ''),
                         'variant': variant_name,
                     },
+                    response_diagnostics=output_diagnostics,
+                    request_metadata=request_metadata,
                 )
             except Exception as exc:
                 # Accounting must not turn a successful variant into a failure.
@@ -582,14 +616,21 @@ def run_variant_for_chunk(
             settings=settings,
             translations=translations,
             usage_metadata=response.get('usage_metadata') or {},
+            output_diagnostics=output_diagnostics,
+            request_metadata=request_metadata,
             finish_reason=response.get('finish_reason') or '',
             error=parse_error,
+            error_category='invalid_response' if parse_error else '',
         )
     except Exception as exc:
         return VariantRunResult(
             variant_name=variant_name,
             settings=settings,
-            error=str(exc),
+            error=sync_error_summary(exc),
+            error_category=sync_error_category(exc),
+            request_metadata=model_usage_ledger.normalize_request_metadata(
+                getattr(exc, 'request_metadata', None) or {}
+            ),
         )
 
 
@@ -680,6 +721,25 @@ def run_translation_ab_experiment(
         'dry_run': dry_run,
         **output_paths,
     }
+    output_summary = {
+        'completion_tokens': 0,
+        'completion_tokens_known_requests': 0,
+        'reasoning_tokens': 0,
+        'reasoning_tokens_known_requests': 0,
+        'text_output_tokens': 0,
+        'text_output_tokens_known_requests': 0,
+        'reasoning_budget_pressure_count': 0,
+        'truncated_output_count': 0,
+        'output_reason_counts': {},
+    }
+    for chunk_result in chunk_results:
+        for variant_result in chunk_result.variant_results:
+            if variant_result.output_diagnostics:
+                batch_mod.record_sync_output_summary(
+                    output_summary,
+                    variant_result.output_diagnostics,
+                )
+    result['output_summary'] = output_summary
     if experiment_error:
         result['experiment_error'] = experiment_error
     if usage_context.get('errors'):

@@ -70,10 +70,14 @@ from gemini_model_catalog import (
 )
 from project_version import __version__
 from sync_model_backend import (
+    DEFAULT_SYNC_RETRY_ATTEMPTS,
     DEFAULT_SYNC_TIMEOUT_SECONDS,
     GeminiSyncBackend,
     SyncGenerationRequest,
     normalize_sync_timeout_seconds,
+    sync_recovery_decision,
+    sync_error_category,
+    sync_error_summary,
 )
 
 try:
@@ -6162,6 +6166,8 @@ def record_generation_usage_best_effort(
             execution_mode=str(result.get('execution_mode') or 'sync'),
             source_key=source_key,
             source=source or {},
+            response_diagnostics=result.get('output_diagnostics') or {},
+            request_metadata=result.get('request_metadata') or {},
             pricing_config=pricing_config,
         )
     except (OSError, ValueError, model_usage_ledger.UsageLedgerError) as exc:
@@ -6191,6 +6197,63 @@ def record_contract_reasons(summary, report):
     diagnostic_bucket = summary.setdefault('diagnostic_counts', {})
     for reason_code, count in report.diagnostic_counts().items():
         bump_counter(diagnostic_bucket, reason_code, count)
+
+
+def sync_output_diagnostics(result, request_payload=None):
+    """Return safe output-budget diagnostics for one synchronous response."""
+    diagnostics = result.get('output_diagnostics')
+    if isinstance(diagnostics, dict) and diagnostics:
+        return model_usage_ledger.normalize_response_diagnostics(diagnostics)
+    request_payload = request_payload if isinstance(request_payload, dict) else {}
+    generation_config = request_payload.get('generation_config')
+    generation_config = generation_config if isinstance(generation_config, dict) else {}
+    return model_usage_ledger.response_budget_diagnostics(
+        response_text=result.get('response_text') or '',
+        finish_reason=result.get('finish_reason') or '',
+        usage_metadata=result.get('usage_metadata') or {},
+        max_output_tokens=generation_config.get('max_output_tokens'),
+    )
+
+
+def record_sync_output_summary(summary, diagnostics):
+    """Add one safe response diagnostic to a sync manifest summary."""
+    diagnostics = model_usage_ledger.normalize_response_diagnostics(diagnostics)
+    for field in ('completion_tokens', 'reasoning_tokens', 'text_output_tokens'):
+        value = diagnostics.get(field)
+        if isinstance(value, int) and not isinstance(value, bool):
+            summary[field] = int(summary.get(field) or 0) + value
+            known_key = f'{field}_known_requests'
+            summary[known_key] = int(summary.get(known_key) or 0) + 1
+    summary['reasoning_budget_pressure_count'] = int(
+        summary.get('reasoning_budget_pressure_count') or 0
+    ) + int(diagnostics.get('reasoning_budget_pressure') is True)
+    summary['truncated_output_count'] = int(
+        summary.get('truncated_output_count') or 0
+    ) + int(diagnostics.get('truncated') is True)
+    reason_code = str(diagnostics.get('reason_code') or '').strip()
+    if reason_code:
+        bump_counter(summary.setdefault('output_reason_counts', {}), reason_code)
+
+
+def _sync_token_summary_value(summary, field):
+    """Format an aggregate only when at least one provider reported it."""
+    if int(summary.get(f'{field}_known_requests') or 0) <= 0:
+        return 'unknown'
+    return str(int(summary.get(field) or 0))
+
+
+def print_sync_output_summary(summary):
+    """Print the stable CLI token/diagnostic contract consumed by the GUI."""
+    for line in model_usage_ledger.format_sync_output_lines(
+        completion=_sync_token_summary_value(summary, 'completion_tokens'),
+        reasoning=_sync_token_summary_value(summary, 'reasoning_tokens'),
+        text_output=_sync_token_summary_value(summary, 'text_output_tokens'),
+        reasoning_budget_pressure=int(
+            summary.get('reasoning_budget_pressure_count') or 0
+        ),
+        truncated=int(summary.get('truncated_output_count') or 0),
+    ):
+        print(line)
 
 
 def contract_diagnostics_counts(diagnostics, field_name):
@@ -10449,7 +10512,7 @@ def build_repair_request(job, model=None):
     }
 
 def _sync_result_to_dict(result):
-    return {
+    response = {
         'response_payload': result.response_payload,
         'response_text': result.response_text,
         'finish_reason': result.finish_reason,
@@ -10458,6 +10521,37 @@ def _sync_result_to_dict(result):
         'model': result.model,
         'execution_mode': result.execution_mode,
     }
+    request_metadata = dict(getattr(result, 'request_metadata', None) or {})
+    if request_metadata:
+        response['request_metadata'] = request_metadata
+    output_diagnostics = dict(getattr(result, 'output_diagnostics', None) or {})
+    if output_diagnostics:
+        response['output_diagnostics'] = output_diagnostics
+    return response
+
+
+def _run_sync_backend_with_retry(
+    backend,
+    request,
+    *,
+    attempts=DEFAULT_SYNC_RETRY_ATTEMPTS,
+):
+    """Retry only transient structured categories on the same backend."""
+    limit = max(1, int(attempts or 1))
+    for attempt in range(1, limit + 1):
+        try:
+            return backend.generate(request)
+        except Exception as exc:
+            decision = sync_recovery_decision(exc)
+            if not decision.retry_same_request or attempt >= limit:
+                raise
+            print(
+                f'Sync request {decision.category}; retrying '
+                f'({attempt}/{limit})...',
+            )
+            if decision.backoff:
+                time.sleep(min(attempt, 2))
+    raise RuntimeError('Sync request failed without a captured exception.')
 
 
 def run_sync_request(request_payload, model_name, api_key_index=None):
@@ -10477,21 +10571,30 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
             raise SystemExit('--api-key-index is only supported by the Gemini sync backend.')
         from litellm_sync_backend import LiteLLMSyncBackend
 
-        result = LiteLLMSyncBackend(
+        backend = LiteLLMSyncBackend(
             custom_providers=legacy.CUSTOM_LITELLM_PROVIDERS,
-        ).generate(SyncGenerationRequest(
+        )
+        request = SyncGenerationRequest(
             model=effective_model,
             contents=request_payload.get('contents') or [],
             config=config,
-        ))
-        return _sync_result_to_dict(result)
+        )
+        result = _run_sync_backend_with_retry(backend, request)
+        response = _sync_result_to_dict(result)
+        response['output_diagnostics'] = model_usage_ledger.response_budget_diagnostics(
+            response_text=result.response_text,
+            finish_reason=result.finish_reason,
+            usage_metadata=result.usage_metadata,
+            max_output_tokens=config.get('max_output_tokens'),
+        )
+        return response
 
-    if api_key_index is not None:
-        attempts = 1
-    elif hasattr(legacy, 'api_key_rotation_attempts'):
-        attempts = legacy.api_key_rotation_attempts()
-    else:
-        attempts = max(1, len(getattr(legacy, 'API_KEYS', []) or []))
+    key_attempts = (
+        legacy.api_key_rotation_attempts()
+        if api_key_index is None and hasattr(legacy, 'api_key_rotation_attempts')
+        else 1
+    )
+    attempts = max(DEFAULT_SYNC_RETRY_ATTEMPTS, key_attempts)
     last_error = None
 
     for attempt in range(1, attempts + 1):
@@ -10509,15 +10612,32 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
                 contents=request_payload.get('contents') or [],
                 config=config,
             ))
-            return _sync_result_to_dict(result)
+            response = _sync_result_to_dict(result)
+            response['output_diagnostics'] = model_usage_ledger.response_budget_diagnostics(
+                response_text=result.response_text,
+                finish_reason=result.finish_reason,
+                usage_metadata=result.usage_metadata,
+                max_output_tokens=config.get('max_output_tokens'),
+            )
+            return response
 
         except Exception as exc:
             last_error = exc
-            retryable = is_quota_error(exc) or is_unavailable_error(exc)
-            if api_key_index is None and retryable and attempt < attempts and legacy.rotate_api_key():
-                label = 'quota' if is_quota_error(exc) else 'service unavailable'
-                print(f'Sync request hit {label}. Retrying with next API key ({attempt}/{attempts})...')
-                time.sleep(min(attempt, 2))
+            decision = sync_recovery_decision(exc)
+            if decision.retry_same_request and attempt < attempts:
+                rotated = bool(
+                    decision.rotate_credentials
+                    and api_key_index is None
+                    and legacy.rotate_api_key()
+                )
+                label = decision.category.replace('_', ' ')
+                key_action = 'next API key' if rotated else 'same API key'
+                print(
+                    f'Sync request hit {label}. Retrying with {key_action} '
+                    f'({attempt}/{attempts})...'
+                )
+                if decision.backoff:
+                    time.sleep(min(attempt, 2))
                 continue
             raise
 
@@ -10759,6 +10879,16 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
         'contract_partial_requests': 0,
         'targeted_retry_requests': 0,
         'targeted_retry_items': 0,
+        'completion_tokens': 0,
+        'completion_tokens_known_requests': 0,
+        'reasoning_tokens': 0,
+        'reasoning_tokens_known_requests': 0,
+        'text_output_tokens': 0,
+        'text_output_tokens_known_requests': 0,
+        'reasoning_budget_pressure_count': 0,
+        'truncated_output_count': 0,
+        'output_reason_counts': {},
+        'error_category_counts': {},
         'reason_counts': {},
     }
     if keyword_contract:
@@ -10794,6 +10924,17 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
             }
             result_row['finish_reason'] = result.get('finish_reason', '')
             result_row['usage_metadata'] = result.get('usage_metadata') or {}
+            result_row['output_diagnostics'] = sync_output_diagnostics(
+                result,
+                row.get('request') or {},
+            )
+            record_sync_output_summary(summary, result_row['output_diagnostics'])
+            if result.get('request_metadata'):
+                result_row['request_metadata'] = (
+                    model_usage_ledger.normalize_request_metadata(
+                        result.get('request_metadata') or {}
+                    )
+                )
             result_row['provider'] = result.get('provider') or SYNC_BACKEND
             result_row['model'] = result.get('model') or SYNC_MODEL or BATCH_MODEL
             result_row['execution_mode'] = result.get('execution_mode') or 'sync'
@@ -10802,6 +10943,8 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                 'kind': 'first_pass',
                 'finish_reason': result.get('finish_reason', ''),
                 'usage_metadata': result.get('usage_metadata') or {},
+                'output_diagnostics': result_row['output_diagnostics'],
+                'request_metadata': result_row.get('request_metadata') or {},
             }]
             if result.get('finish_reason') == 'MAX_TOKENS':
                 summary['max_tokens_count'] += 1
@@ -10877,7 +11020,22 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                         'response': retry_result.get('response_payload') or {},
                         'finish_reason': retry_result.get('finish_reason', ''),
                         'usage_metadata': retry_result.get('usage_metadata') or {},
+                        'output_diagnostics': sync_output_diagnostics(
+                            retry_result,
+                            retry_row.get('request') or {},
+                        ),
+                        'request_metadata': (
+                            model_usage_ledger.normalize_request_metadata(
+                                retry_result.get('request_metadata') or {}
+                            )
+                        ),
                     })
+                    record_sync_output_summary(
+                        summary,
+                        result_row['provider_response_attempts'][-1][
+                            'output_diagnostics'
+                        ],
+                    )
                     retry_contract = _contract_from_sync_result(
                         retry_result,
                         retry_chunk,
@@ -10898,13 +11056,24 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                         )
                     )
                 except Exception as exc:
+                    error_category = sync_error_category(exc)
                     result_row['provider_response_attempts'].append({
                         'kind': 'targeted_retry',
                         'item_ids': [
                             item.get('id') for item in retry_chunk.get('items') or []
                         ],
-                        'error': str(exc),
+                        'error_category': error_category,
+                        'error': sync_error_summary(exc),
+                        'request_metadata': (
+                            model_usage_ledger.normalize_request_metadata(
+                                getattr(exc, 'request_metadata', None) or {}
+                            )
+                        ),
                     })
+                    bump_counter(
+                        summary['error_category_counts'],
+                        error_category,
+                    )
                     bump_counter(
                         summary['reason_counts'],
                         contract_error_reason(
@@ -10947,10 +11116,18 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                     },
                 }
         except Exception as exc:
+            error_category = sync_error_category(exc)
             summary['failed_request_count'] += 1
-            bump_counter(summary['reason_counts'], 'request_error')
-            result_row['error'] = str(exc)
-            print(f'  error: {str(exc)[:160]}')
+            bump_counter(summary['reason_counts'], error_category)
+            bump_counter(summary['error_category_counts'], error_category)
+            result_row['error_category'] = error_category
+            result_row['error'] = sync_error_summary(exc)
+            request_metadata = model_usage_ledger.normalize_request_metadata(
+                getattr(exc, 'request_metadata', None) or {}
+            )
+            if request_metadata:
+                result_row['request_metadata'] = request_metadata
+            print(f"  error: {result_row['error']}")
         result_rows.append(result_row)
 
     atomic_write_jsonl(result_path, result_rows, ensure_ascii=False)
@@ -11012,6 +11189,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
     if not keyword_contract:
         print(f'Unresolved contract items: {unresolved_items}')
     print(f"Contract partial requests: {summary['contract_partial_requests']}")
+    print_sync_output_summary(summary)
     import_manifest_usage_best_effort(manifest)
     return manifest
 
@@ -11244,6 +11422,7 @@ def print_repair_summary(summary):
     print(f"Validation failures: {summary['validation_failures']}")
     print(f"Missing item ids: {summary['missing_item_ids']}")
     print(f"Unresolved items: {summary['unresolved_items']}")
+    print_sync_output_summary(summary)
     if summary.get('story_memory_enabled'):
         story_summary = summary.get('story_memory_summary') or {}
         print(
@@ -11309,6 +11488,16 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
         'story_memory_enabled': STORY_MEMORY_ENABLED,
         'story_memory_graph_file': STORY_MEMORY_GRAPH_FILE if STORY_MEMORY_ENABLED else '',
         'story_memory_summary': summarize_batch_story_memory(jobs) if STORY_MEMORY_ENABLED else {},
+        'completion_tokens': 0,
+        'completion_tokens_known_requests': 0,
+        'reasoning_tokens': 0,
+        'reasoning_tokens_known_requests': 0,
+        'text_output_tokens': 0,
+        'text_output_tokens_known_requests': 0,
+        'reasoning_budget_pressure_count': 0,
+        'truncated_output_count': 0,
+        'output_reason_counts': {},
+        'error_category_counts': {},
         'reason_counts': reason_counts,
     }
 
@@ -11333,6 +11522,8 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
         usage_metadata = {}
         response_text = ''
         parse_error = ''
+        output_diagnostics = {}
+        request_metadata = {}
         result_items = []
         parse_ok = False
         try:
@@ -11344,10 +11535,23 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
             finish_reason = response_data['finish_reason']
             usage_metadata = response_data['usage_metadata']
             response_text = response_data['response_text']
+            output_diagnostics = sync_output_diagnostics(
+                response_data,
+                request_row.get('request') or {},
+            )
+            request_metadata = model_usage_ledger.normalize_request_metadata(
+                response_data.get('request_metadata') or {}
+            )
+            record_sync_output_summary(summary, output_diagnostics)
         except Exception as exc:
+            error_category = sync_error_category(exc)
             summary['request_errors'] += 1
-            bump_counter(reason_counts, 'request_error')
-            parse_error = str(exc)
+            bump_counter(reason_counts, error_category)
+            bump_counter(summary['error_category_counts'], error_category)
+            parse_error = sync_error_summary(exc)
+            request_metadata = model_usage_ledger.normalize_request_metadata(
+                getattr(exc, 'request_metadata', None) or {}
+            )
             for item in job['items']:
                 failure_entries.append(
                     {
@@ -11357,6 +11561,8 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                         'source': item['text'],
                         'id': item['id'],
                         'error': parse_error,
+                        'error_category': error_category,
+                        'request_metadata': request_metadata,
                     }
                 )
             result_entries.append(
@@ -11368,8 +11574,10 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                     'parsed_items': 0,
                     'parse_ok': False,
                     'parse_error': parse_error,
+                    'error_category': error_category,
                     'finish_reason': finish_reason,
                     'usage_metadata': usage_metadata,
+                    'request_metadata': request_metadata,
                     'response_preview': '',
                 }
             )
@@ -11411,12 +11619,13 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                     contract_error_reason(exc, 'parse_error'),
                 )
         else:
-            parse_error = 'Missing text in response payload'
-            summary['parse_errors'] += 1
-            bump_counter(
-                reason_counts,
-                translation_core.CONTRACT_EMPTY_RESPONSE_TEXT,
+            reason_code = str(
+                output_diagnostics.get('reason_code')
+                or translation_core.CONTRACT_EMPTY_RESPONSE_TEXT
             )
+            parse_error = f'Missing text in response payload [{reason_code}]'
+            summary['parse_errors'] += 1
+            bump_counter(reason_counts, reason_code)
 
         if not parse_ok:
             for item in job['items']:
@@ -11430,6 +11639,8 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                         'error': parse_error,
                         'finish_reason': finish_reason,
                         'usage_metadata': usage_metadata,
+                        'output_diagnostics': output_diagnostics,
+                        'request_metadata': request_metadata,
                         'response_preview': response_text[:500],
                     }
                 )
@@ -11444,6 +11655,8 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                     'parse_error': parse_error,
                     'finish_reason': finish_reason,
                     'usage_metadata': usage_metadata,
+                    'output_diagnostics': output_diagnostics,
+                    'request_metadata': request_metadata,
                     'response_preview': response_text[:500],
                 }
             )
@@ -11521,6 +11734,8 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                 'parse_error': '',
                 'finish_reason': finish_reason,
                 'usage_metadata': usage_metadata,
+                'output_diagnostics': output_diagnostics,
+                'request_metadata': request_metadata,
                 'response_preview': response_text[:500],
             }
         )
@@ -13840,6 +14055,8 @@ def dispatch_command(parser, args):
                         response_text=str(raw.get('response_text') or ''),
                         finish_reason=str(raw.get('finish_reason') or ''),
                         usage_metadata=dict(raw.get('usage_metadata') or {}),
+                        output_diagnostics=dict(raw.get('output_diagnostics') or {}),
+                        request_metadata=dict(raw.get('request_metadata') or {}),
                     )
 
                 pricing_config = batch_cost_estimate.load_pricing_config(
@@ -13853,10 +14070,17 @@ def dispatch_command(parser, args):
                     result = event.get('result')
                     if result is None:
                         return
+                    usage_result = _sync_result_to_dict(result)
+                    usage_result['output_diagnostics'] = (
+                        event.get('output_diagnostics') or {}
+                    )
+                    usage_result['request_metadata'] = (
+                        event.get('request_metadata') or {}
+                    )
                     record_generation_usage_best_effort(
                         task_mode='analysis',
                         stage=str(event.get('stage') or 'project_analysis'),
-                        result=_sync_result_to_dict(result),
+                        result=usage_result,
                         operation_id=analysis_usage_operation_id,
                         run_id=analysis_usage_run_id,
                         source_key=str(event.get('artifact_id') or ''),
@@ -14203,6 +14427,7 @@ def dispatch_command(parser, args):
         print(f"- dry_run: {summary['dry_run']}")
         print(f"- report: {summary['report_path']}")
         print(f"- results: {summary['results_path']}")
+        print_sync_output_summary(summary.get('output_summary') or {})
         return
 
     if command == 'preview-revisions':

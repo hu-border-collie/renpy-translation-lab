@@ -13,6 +13,206 @@ SYNC_EXECUTION_MODE = "sync"
 DEFAULT_SYNC_TIMEOUT_SECONDS = 120
 MIN_SYNC_TIMEOUT_SECONDS = 5
 MAX_SYNC_TIMEOUT_SECONDS = 600
+DEFAULT_SYNC_RETRY_ATTEMPTS = 3
+SYNC_ERROR_CATEGORIES = frozenset({
+    "authentication",
+    "rate_limit",
+    "service_unavailable",
+    "timeout",
+    "invalid_response",
+    "unsupported_capability",
+    "missing_dependency",
+    "provider_error",
+})
+_SYNC_SAFE_ERROR_MESSAGES = {
+    "authentication": "authentication failed",
+    "rate_limit": "rate limited or quota exhausted",
+    "service_unavailable": "service temporarily unavailable",
+    "timeout": "request timed out",
+    "invalid_response": "provider returned an invalid response",
+    "unsupported_capability": "provider does not support this capability",
+    "missing_dependency": "optional provider dependency is unavailable",
+    "provider_error": "provider request failed",
+}
+
+
+class SyncBackendError(RuntimeError):
+    """Provider-neutral failure that never stores the raw provider message."""
+
+    def __init__(
+        self,
+        category: str = "provider_error",
+        *,
+        request_metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        normalized = str(category or "provider_error").strip().lower()
+        if normalized not in SYNC_ERROR_CATEGORIES:
+            normalized = "provider_error"
+        self.category = normalized
+        self.request_metadata = dict(request_metadata or {})
+        super().__init__(_SYNC_SAFE_ERROR_MESSAGES[normalized])
+
+
+@dataclass(frozen=True)
+class SyncRecoveryDecision:
+    """Provider-neutral recovery action derived from a structured category."""
+
+    category: str
+    retry_same_request: bool = False
+    split_request: bool = False
+    backoff: bool = False
+    rotate_credentials: bool = False
+
+
+def sync_error_category(exc: BaseException) -> str:
+    """Classify a synchronous request failure without overriding provider data.
+
+    ``LiteLLMBackendError.category`` (and any future backend category) is the
+    authoritative source. Status/type/text fallbacks exist for SDK exceptions
+    that do not expose the shared category contract yet.
+
+    google-genai reports invalid API keys as ``400 + "API key not valid..."``
+    without a typed exception, so the text fallback also recognizes key-related
+    markers as ``authentication`` instead of a generic provider error.
+    """
+    explicit = str(getattr(exc, "category", "") or "").strip().lower()
+    if explicit in SYNC_ERROR_CATEGORIES:
+        return explicit
+
+    reason_code = str(getattr(exc, "reason_code", "") or "").strip().lower()
+    if reason_code and (
+        reason_code in {
+            "empty_response_text",
+            "invalid_json",
+            "truncated_output",
+            "reasoning_budget_exhausted",
+            "reasoning_without_text_output",
+        }
+        or reason_code.startswith(("response_", "result_"))
+    ):
+        return "invalid_response"
+
+    status = getattr(exc, "status_code", getattr(exc, "code", None))
+    try:
+        status = int(status)
+    except (TypeError, ValueError, OverflowError):
+        status = None
+    if status in {401, 403}:
+        return "authentication"
+    if status == 408:
+        return "timeout"
+    if status == 429:
+        return "rate_limit"
+    if status in {500, 502, 503, 504}:
+        return "service_unavailable"
+    if status == 404:
+        return "unsupported_capability"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+
+    type_name = type(exc).__name__.lower()
+    if any(marker in type_name for marker in ("authentication", "permissiondenied")):
+        return "authentication"
+    if any(marker in type_name for marker in ("ratelimit", "resourceexhausted")):
+        return "rate_limit"
+    if "timeout" in type_name:
+        return "timeout"
+    if any(
+        marker in type_name
+        for marker in ("serviceunavailable", "apiconnection", "connecterror", "readerror")
+    ):
+        return "service_unavailable"
+    if "notfound" in type_name:
+        return "unsupported_capability"
+
+    # google-genai does not consistently expose typed categories/status across
+    # versions. Keep this fallback narrow and use it only after structured data.
+    text = str(exc).upper()
+    if "RESOURCE_EXHAUSTED" in text or "429" in text:
+        return "rate_limit"
+    if any(marker in text for marker in ("CONNECTTIMEOUT", "READTIMEOUT", "TIMED OUT")):
+        return "timeout"
+    if any(
+        marker in text
+        for marker in (
+            "UNAVAILABLE",
+            "UNEXPECTED_EOF_WHILE_READING",
+            "REMOTEPROTOCOLERROR",
+            " 502",
+            " 503",
+            " 504",
+        )
+    ):
+        return "service_unavailable"
+    if any(
+        marker in text
+        for marker in (
+            "UNAUTHENTICATED",
+            "PERMISSION_DENIED",
+            "API KEY NOT VALID",
+            "API KEY INVALID",
+            "INVALID API KEY",
+        )
+    ):
+        return "authentication"
+    return "provider_error"
+
+
+def sync_recovery_decision(exc: BaseException) -> SyncRecoveryDecision:
+    """Return the only retry/split actions allowed for *exc*."""
+    category = sync_error_category(exc)
+    if category == "rate_limit":
+        return SyncRecoveryDecision(
+            category,
+            retry_same_request=True,
+            backoff=True,
+            rotate_credentials=True,
+        )
+    if category in {"service_unavailable", "timeout"}:
+        return SyncRecoveryDecision(
+            category,
+            retry_same_request=True,
+            backoff=True,
+        )
+    if category == "invalid_response":
+        return SyncRecoveryDecision(category, split_request=True)
+    return SyncRecoveryDecision(category)
+
+
+def sync_error_summary(exc: BaseException) -> str:
+    """Return a log-safe summary that never includes provider exception text."""
+    category = sync_error_category(exc)
+    message = _SYNC_SAFE_ERROR_MESSAGES.get(
+        category,
+        _SYNC_SAFE_ERROR_MESSAGES["provider_error"],
+    )
+    return f"{message} [{category}]"
+
+
+def sync_error_detail(exc: BaseException, limit: int = 300) -> str:
+    """Return the original provider message for local logs only.
+
+    Backend errors intentionally hide provider text behind safe summaries, so
+    the original message is recovered by walking the ``__cause__``/``__context__``
+    chain (or the explicit ``detail`` attribute) and returning the first
+    non-backend message. Callers must never render this value in UI or result
+    files; it exists so local logs keep a diagnosable trail.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        explicit_detail = str(getattr(current, "detail", "") or "")
+        if explicit_detail:
+            return explicit_detail[:limit]
+        if isinstance(current, SyncBackendError):
+            current = current.__cause__ or current.__context__
+            continue
+        text = str(current).strip()
+        if text:
+            return text[:limit]
+        current = current.__cause__ or current.__context__
+    return ""
 
 
 def normalize_sync_timeout_seconds(
@@ -28,11 +228,13 @@ def normalize_sync_timeout_seconds(
         timeout = int(default)
     return max(MIN_SYNC_TIMEOUT_SECONDS, min(MAX_SYNC_TIMEOUT_SECONDS, timeout))
 
+
 @dataclass(frozen=True)
 class SyncGenerationRequest:
     model: str
     contents: Any
     config: Mapping[str, Any] = field(default_factory=dict)
+
 
 @dataclass(frozen=True)
 class SyncGenerationResult:
@@ -44,11 +246,16 @@ class SyncGenerationResult:
     parsed: Any = None
     finish_reason: str = ""
     usage_metadata: Mapping[str, Any] = field(default_factory=dict)
+    output_diagnostics: Mapping[str, Any] = field(default_factory=dict)
+    request_metadata: Mapping[str, Any] = field(default_factory=dict)
+
 
 @runtime_checkable
 class SyncModelBackend(Protocol):
     provider: str
+
     def generate(self, request: SyncGenerationRequest) -> SyncGenerationResult: ...
+
 
 class GeminiSyncBackend:
     """Adapter for the existing google-genai synchronous client."""
@@ -82,19 +289,35 @@ class GeminiSyncBackend:
         # final boundary even if a future caller forgets to set it.
         http_options["timeout"] = normalize_sync_timeout_seconds(timeout) * 1000
         config["http_options"] = http_options
-        response = self._client.models.generate_content(
-            model=request.model,
-            contents=request.contents,
-            config=config,
-        )
-        payload = self._serialize_response(response)
-        usage: Dict[str, Any] = {}
-        if self._extract_usage is not None:
-            usage = dict(self._extract_usage(payload) or {})
+        try:
+            response = self._client.models.generate_content(
+                model=request.model,
+                contents=request.contents,
+                config=config,
+            )
+        except Exception as exc:
+            raise SyncBackendError(
+                sync_error_category(exc),
+                request_metadata={"provider": self.provider},
+            ) from exc
+        try:
+            payload = self._serialize_response(response)
+            usage: Dict[str, Any] = {}
+            if self._extract_usage is not None:
+                usage = dict(self._extract_usage(payload) or {})
+            response_text = self._extract_text(payload) or ""
+            finish_reason = self._extract_finish_reason(payload) or ""
+            parsed = getattr(response, "parsed", None)
+        except Exception as exc:
+            raise SyncBackendError(
+                "invalid_response",
+                request_metadata={"provider": self.provider},
+            ) from exc
         return SyncGenerationResult(
             provider=self.provider, model=request.model,
             execution_mode=SYNC_EXECUTION_MODE, response_payload=payload,
-            response_text=self._extract_text(payload) or "",
-            parsed=getattr(response, "parsed", None),
-            finish_reason=self._extract_finish_reason(payload) or "",
-            usage_metadata=usage)
+            response_text=response_text,
+            parsed=parsed,
+            finish_reason=finish_reason,
+            usage_metadata=usage,
+            request_metadata={"provider": self.provider})
