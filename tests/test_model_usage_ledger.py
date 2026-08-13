@@ -148,6 +148,62 @@ class ModelUsageLedgerTests(unittest.TestCase):
             self.assertEqual(record["stage"], "sync_revision")
             self.assertEqual(record["execution_mode"], "sync")
 
+    def test_sync_targeted_retry_attempts_are_counted_separately(self):
+        with tempfile.TemporaryDirectory() as game_root, tempfile.TemporaryDirectory() as package:
+            result_path = self._write_jsonl(
+                package,
+                [
+                    {
+                        "key": "chunk-1",
+                        "provider": "litellm",
+                        "model": "openai/test",
+                        "execution_mode": "sync",
+                        "response": {
+                            "id": "first",
+                            "_hidden_params": {"response_cost": 0.001},
+                        },
+                        "provider_response_attempts": [
+                            {
+                                "kind": "first_pass",
+                                "usage_metadata": {
+                                    "prompt_tokens": 10,
+                                    "completion_tokens": 4,
+                                    "total_tokens": 14,
+                                },
+                            },
+                            {
+                                "kind": "targeted_retry",
+                                "item_ids": ["b"],
+                                "response": {"id": "retry"},
+                                "usage_metadata": {
+                                    "prompt_tokens": 6,
+                                    "completion_tokens": 2,
+                                    "total_tokens": 8,
+                                },
+                            },
+                        ],
+                    }
+                ],
+            )
+            manifest = self._manifest(
+                game_root,
+                result_path,
+                execution="sync",
+                provider="litellm",
+                model="openai/test",
+            )
+
+            summary = usage.import_manifest_results(manifest, result_path=result_path)
+            report = usage.query_usage(game_root)
+            records = usage.UsageLedger(game_root).load()["records"]
+
+            self.assertEqual(summary["inserted_records"], 2)
+            self.assertEqual(report["totals"]["calls"], 2)
+            self.assertEqual(report["totals"]["total_tokens"], 22)
+            self.assertEqual(records[0]["actual_cost"], 0.001)
+            self.assertEqual(records[1]["source"]["attempt_kind"], "targeted_retry")
+            self.assertEqual(records[1]["source"]["item_ids"], ["b"])
+
     def test_litellm_fixture_maps_snake_case_cache_reasoning_and_actual_cost(self):
         with tempfile.TemporaryDirectory() as game_root, tempfile.TemporaryDirectory() as package:
             result_path = self._write_jsonl(
@@ -535,6 +591,69 @@ class ModelUsageLedgerTests(unittest.TestCase):
 
             self.assertEqual(failed_summary["request_errors"], 1)
             failed_recorder.assert_not_called()
+
+    def test_probe_rejects_missing_or_empty_manifest_chunk_before_provider_call(self):
+        request_rows = [
+            {
+                "key": "chunk-1",
+                "request": {"contents": [], "generation_config": {}},
+            }
+        ]
+        invalid_manifests = (
+            (
+                {
+                    "_manifest_path": "manifest.json",
+                    "chunks": [],
+                },
+                "PROBE_REQUEST_CHUNK_MISSING",
+            ),
+            (
+                {
+                    "_manifest_path": "manifest.json",
+                    "chunks": [{"key": "chunk-1", "items": []}],
+                },
+                "PROBE_REQUEST_CHUNK_EMPTY",
+            ),
+        )
+
+        for manifest, code_name in invalid_manifests:
+            with self.subTest(code_name=code_name):
+                with (
+                    mock.patch.object(batch, "load_manifest", return_value=manifest),
+                    mock.patch.object(
+                        batch, "load_request_rows", return_value=request_rows
+                    ),
+                    mock.patch.object(batch, "create_batch_client") as create_client,
+                    self.assertRaises(batch.cli_contract.MachineContractError) as error,
+                ):
+                    batch.probe_requests("unused", limit=1)
+
+                self.assertEqual(error.exception.code_name, code_name)
+                create_client.assert_not_called()
+
+    def test_probe_rejects_request_row_without_key_before_provider_call(self):
+        manifest = {
+            "_manifest_path": "manifest.json",
+            "chunks": [{"key": "chunk-1", "items": [{"id": "item-1"}]}],
+        }
+        request_rows = [
+            {"request": {"contents": [], "generation_config": {}}},
+        ]
+
+        with (
+            mock.patch.object(batch, "load_manifest", return_value=manifest),
+            mock.patch.object(batch, "load_request_rows", return_value=request_rows),
+            mock.patch.object(batch, "create_batch_client") as create_client,
+            self.assertRaises(batch.cli_contract.MachineContractError) as error,
+        ):
+            batch.probe_requests("unused", limit=1)
+
+        self.assertEqual(
+            error.exception.code_name,
+            "PROBE_REQUEST_CHUNK_MISSING",
+        )
+        self.assertEqual(error.exception.details["key"], "")
+        create_client.assert_not_called()
 
     def test_repair_records_only_successful_provider_responses(self):
         with tempfile.TemporaryDirectory() as package:

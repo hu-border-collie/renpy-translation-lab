@@ -80,6 +80,18 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertIsInstance(payload, list)
         self.assertEqual(payload, [{'id': 'line-1', 'translation': '第一行'}])
 
+    def test_parse_json_payload_preserves_fenced_json_compatibility(self):
+        payload = batch_mod.parse_json_payload(
+            '```json\n'
+            '{"translations":[{"id":"line-1","translation":"第一行"}]}\n'
+            '```'
+        )
+
+        self.assertEqual(
+            payload,
+            {'translations': [{'id': 'line-1', 'translation': '第一行'}]},
+        )
+
     def test_split_manifest_keeps_first_child_latest_and_context_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -333,7 +345,8 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 target_file = tl_dir / 'script.rpy'
                 target_file.write_text(
                     '    "Hello"\n'
-                    '    "World"\n',
+                    '    "World"\n'
+                    '    "Again"\n',
                     encoding='utf-8',
                 )
                 batch_mod.legacy.TL_DIR = str(tl_dir)
@@ -374,6 +387,15 @@ class BatchRepairRegressionTests(unittest.TestCase):
                                 'end': 11,
                                 'prefix': '',
                                 'quote': '"',
+                            },
+                            {
+                                'id': 'script.rpy:2:4:11:again',
+                                'text': 'Again',
+                                'line': 2,
+                                'start': 4,
+                                'end': 11,
+                                'prefix': '',
+                                'quote': '"',
                             }
                         ],
                     },
@@ -408,7 +430,21 @@ class BatchRepairRegressionTests(unittest.TestCase):
                             'response': {
                                 'candidates': [
                                     {
-                                        'content': {'parts': [{'text': '[]'}]},
+                                        'content': {
+                                            'parts': [
+                                                {
+                                                    'text': json.dumps(
+                                                        [
+                                                            {
+                                                                'id': 'script.rpy:1:4:11:world',
+                                                                'translation': '世界',
+                                                            }
+                                                        ],
+                                                        ensure_ascii=False,
+                                                    )
+                                                }
+                                            ]
+                                        },
                                         'finishReason': 'STOP',
                                     }
                                 ]
@@ -429,8 +465,8 @@ class BatchRepairRegressionTests(unittest.TestCase):
                             'input_jsonl_path': str(package_dir / 'requests.jsonl'),
                             'result_jsonl_path': 'results.jsonl',
                             'settings': {'target_size': 2},
-                            'files': {'script.rpy': {'path': str(target_file), 'task_count': 2}},
-                            'summary': {'file_count': 1, 'chunk_count': 2, 'item_count': 2},
+                            'files': {'script.rpy': {'path': str(target_file), 'task_count': 3}},
+                            'summary': {'file_count': 1, 'chunk_count': 2, 'item_count': 3},
                             'source_index_enabled': True,
                             'source_index_store_path': str(root / 'source_index'),
                             'source_index_settings': {'top_k': 4},
@@ -451,12 +487,19 @@ class BatchRepairRegressionTests(unittest.TestCase):
 
                     retry_manifest_path = batch_mod.build_retry_package(str(manifest_path))
                     retry_manifest = json.loads(Path(retry_manifest_path).read_text(encoding='utf-8'))
-                    self.assertEqual([chunk['key'] for chunk in retry_manifest['chunks']], ['chunk-bad'])
+                    self.assertEqual(
+                        [chunk['key'] for chunk in retry_manifest['chunks']],
+                        ['chunk-bad-retry-001'],
+                    )
                     self.assertEqual(retry_manifest['summary']['item_count'], 1)
+                    self.assertEqual(
+                        retry_manifest['chunks'][0]['retry_item_ids'],
+                        ['script.rpy:2:4:11:again'],
+                    )
                     self.assertTrue(retry_manifest['source_index_enabled'])
                     self.assertEqual(latest_path.read_text(encoding='utf-8'), retry_manifest_path)
                     retry_request = json.loads(Path(retry_manifest['input_jsonl_path']).read_text(encoding='utf-8').splitlines()[0])
-                    self.assertEqual(retry_request['key'], 'chunk-bad')
+                    self.assertEqual(retry_request['key'], 'chunk-bad-retry-001')
                     self.assertIn(
                         'copy that exact source substring verbatim',
                         retry_request['request']['system_instruction']['parts'][0]['text'],
@@ -467,7 +510,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                         str(retry_result_path),
                         [
                             {
-                                'key': 'chunk-bad',
+                                'key': 'chunk-bad-retry-001',
                                 'response': {
                                     'candidates': [
                                         {
@@ -475,7 +518,12 @@ class BatchRepairRegressionTests(unittest.TestCase):
                                                 'parts': [
                                                     {
                                                         'text': json.dumps(
-                                                            [{'id': 'script.rpy:1:4:11:world', 'translation': '世界'}],
+                                                            [
+                                                                {
+                                                                    'id': 'script.rpy:2:4:11:again',
+                                                                    'translation': '再次',
+                                                                }
+                                                            ],
                                                             ensure_ascii=False,
                                                         )
                                                     }
@@ -502,11 +550,257 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     ]
                     self.assertEqual([row['key'] for row in merged_rows], ['chunk-ok', 'chunk-bad'])
                     self.assertIn('世界', json.dumps(merged_rows[1], ensure_ascii=False))
+                    self.assertIn('再次', json.dumps(merged_rows[1], ensure_ascii=False))
+                    merged_text = batch_mod.extract_text_from_response_payload(
+                        merged_rows[1]['response']
+                    )
+                    self.assertIsInstance(json.loads(merged_text), list)
+                    self.assertIn('translations', merged_rows[1]['normalized_response'])
 
                     rechecked = batch_mod.check_results(str(manifest_path))
                     self.assertEqual(rechecked['last_check_summary']['safety_level'], batch_mod.CHECK_SAFETY_SAFE)
         finally:
             batch_mod.legacy.TL_DIR = old_tl_dir
+
+    def test_partial_retry_merge_preserves_response_and_updates_normalized(self):
+        parent_chunk = {
+            'key': 'parent',
+            'items': [
+                {'id': 'a', 'text': 'Hello'},
+                {'id': 'b', 'text': 'World'},
+            ],
+        }
+        retry_chunk = {
+            'key': 'retry-b',
+            'retry_parent_key': 'parent',
+            'items': [{'id': 'b', 'text': 'World'}],
+        }
+        parent_response = batch_mod.response_payload_with_text(
+            {},
+            json.dumps(
+                {'translations': [{'id': 'a', 'translation': '你好'}]},
+                ensure_ascii=False,
+            ),
+        )
+        retry_response = batch_mod.response_payload_with_text(
+            {},
+            json.dumps(
+                {
+                    'translations': [
+                        {'id': 'a', 'translation': '不应覆盖'},
+                        {'id': 'b', 'translation': '世界'},
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+        )
+        parent_row = {
+            'key': 'parent',
+            'response': parent_response,
+            'normalized_response': {
+                'translations': [{'id': 'a', 'translation': '你好'}],
+            },
+        }
+
+        merged, replaced = batch_mod.merge_parent_row_with_retry_item_rows(
+            parent_row,
+            parent_chunk,
+            [retry_chunk],
+            {'retry-b': {'key': 'retry-b', 'response': retry_response}},
+        )
+
+        self.assertEqual(replaced, 1)
+        self.assertEqual(merged['response'], parent_response)
+        self.assertEqual(
+            {
+                item['id']: item['translation']
+                for item in merged['normalized_response']['translations']
+            },
+            {'a': '你好', 'b': '世界'},
+        )
+        self.assertTrue(merged['contract_diagnostics']['complete'])
+        self.assertEqual(
+            [
+                item['id']
+                for item in batch_mod.result_items_from_row(
+                    merged,
+                    'merged',
+                    parent_chunk['items'],
+                )
+            ],
+            ['a', 'b'],
+        )
+
+    def test_partial_retry_merge_audits_empty_or_invalid_results(self):
+        parent_chunk = {
+            'key': 'parent',
+            'items': [
+                {'id': 'a', 'text': 'Hello'},
+                {'id': 'b', 'text': 'World'},
+            ],
+        }
+        retry_chunk = {
+            'key': 'retry-b',
+            'retry_parent_key': 'parent',
+            'items': [{'id': 'b', 'text': 'World'}],
+        }
+        parent_response = batch_mod.response_payload_with_text(
+            {},
+            json.dumps(
+                {'translations': [{'id': 'a', 'translation': '你好'}]},
+                ensure_ascii=False,
+            ),
+        )
+        parent_row = {'key': 'parent', 'response': parent_response}
+        retry_payloads = (
+            {'translations': []},
+            {'translations': [{'id': 'unknown', 'translation': '错误'}]},
+        )
+
+        for retry_payload in retry_payloads:
+            with self.subTest(retry_payload=retry_payload):
+                retry_response = batch_mod.response_payload_with_text(
+                    {},
+                    json.dumps(retry_payload, ensure_ascii=False),
+                )
+                merged, replaced = batch_mod.merge_parent_row_with_retry_item_rows(
+                    parent_row,
+                    parent_chunk,
+                    [retry_chunk],
+                    {'retry-b': {'key': 'retry-b', 'response': retry_response}},
+                )
+
+                self.assertEqual(replaced, 0)
+                self.assertEqual(merged['response'], parent_response)
+                self.assertEqual(
+                    merged['normalized_response'],
+                    {'translations': [{'id': 'a', 'translation': '你好'}]},
+                )
+                diagnostics = merged['contract_diagnostics']
+                self.assertFalse(diagnostics['complete'])
+                self.assertEqual(diagnostics['retry_ids'], ['b'])
+                self.assertEqual(
+                    diagnostics['reason_counts']['response_missing_expected_id'],
+                    1,
+                )
+                if retry_payload.get('translations'):
+                    self.assertEqual(
+                        diagnostics['reason_counts']['result_unknown_id'],
+                        1,
+                    )
+
+    def test_direct_retry_canonicalization_preserves_complete_normalized_response(self):
+        chunk = {
+            'key': 'chunk-1',
+            'items': [
+                {'id': 'a', 'text': 'Hello'},
+                {'id': 'b', 'text': 'World'},
+            ],
+        }
+        first_pass_response = batch_mod.response_payload_with_text(
+            {},
+            json.dumps(
+                {'translations': [{'id': 'a', 'translation': '你好'}]},
+                ensure_ascii=False,
+            ),
+        )
+        row = {
+            'key': 'chunk-1',
+            'response': first_pass_response,
+            'normalized_response': {
+                'translations': [
+                    {'id': 'a', 'translation': '你好'},
+                    {'id': 'b', 'translation': '世界'},
+                ],
+            },
+            'contract_diagnostics': {'complete': True, 'custom': 'stale'},
+            'response_semantics': {
+                'response': 'first_pass_provider_payload',
+                'normalized_response': 'final_merged_contract',
+            },
+        }
+
+        canonical = batch_mod.canonical_translation_result_row(row, chunk)
+
+        self.assertEqual(canonical['response'], first_pass_response)
+        self.assertEqual(
+            [
+                item['id']
+                for item in canonical['normalized_response']['translations']
+            ],
+            ['a', 'b'],
+        )
+        self.assertTrue(canonical['contract_diagnostics']['complete'])
+        self.assertNotIn('custom', canonical['contract_diagnostics'])
+        self.assertEqual(
+            canonical['response_semantics'],
+            row['response_semantics'],
+        )
+
+    def test_direct_retry_canonicalization_preserves_terminal_unknown_id(self):
+        chunk = {
+            'key': 'chunk-1',
+            'items': [{'id': 'a', 'text': 'Hello'}],
+        }
+        row = {
+            'key': 'chunk-1',
+            'response': batch_mod.response_payload_with_text(
+                {},
+                json.dumps({
+                    'translations': [
+                        {'id': 'a', 'translation': '你好'},
+                        {'id': 'unknown', 'translation': '多余'},
+                    ],
+                }, ensure_ascii=False),
+            ),
+            'normalized_response': {
+                'translations': [{'id': 'a', 'translation': '你好'}],
+            },
+            'contract_diagnostics': {
+                'complete': False,
+                'reason_counts': {'result_unknown_id': 1},
+                'diagnostic_counts': {},
+                'issues': [{
+                    'reason_code': 'result_unknown_id',
+                    'id': 'unknown',
+                    'result_index': 1,
+                }],
+                'diagnostics': [],
+            },
+        }
+
+        canonical = batch_mod.canonical_translation_result_row(row, chunk)
+
+        self.assertFalse(canonical['contract_diagnostics']['complete'])
+        self.assertEqual(
+            canonical['contract_diagnostics']['reason_counts'],
+            {'result_unknown_id': 1},
+        )
+        self.assertEqual(
+            canonical['contract_diagnostics']['issues'][0]['id'],
+            'unknown',
+        )
+
+    def test_retry_manifest_rejects_duplicate_chunk_keys(self):
+        chunk = {
+            'key': 'chunk-1',
+            'file_rel_path': 'script.rpy',
+            'items': [{'id': 'a', 'text': 'Hello'}],
+        }
+        parent_manifest = {
+            '_manifest_path': 'parent.json',
+            'chunks': [chunk],
+        }
+        retry_manifest = {'chunks': [chunk, chunk]}
+
+        with self.assertRaisesRegex(
+            SystemExit,
+            'duplicate chunk key: chunk-1',
+        ):
+            batch_mod.assert_retry_manifest_matches_parent(
+                parent_manifest,
+                retry_manifest,
+            )
 
     def test_create_keyword_package_uses_keyword_mode_manifest(self):
         old_values = {
@@ -569,6 +863,10 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertIn('source', candidate_schema['items']['required'])
         self.assertIn('source_item_ids', candidate_schema['items']['required'])
         self.assertIn('source_item_ids', candidate_schema['items']['properties'])
+        self.assertEqual(
+            candidate_schema['items']['properties']['source_item_ids']['minItems'],
+            1,
+        )
         system_text = request_rows[0]['request']['system_instruction']['parts'][0]['text']
         self.assertIn('Existing glossary entries', system_text)
         self.assertIn('chunk_summary', system_text)
@@ -595,6 +893,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                             'category': 'term',
                             'confidence': 0.9,
                             'evidence': 'script.rpy:3',
+                            'source_item_ids': ['script.rpy:3:keyword:1'],
                         },
                     ],
                     'chunk_summary': '一行提到虚空门，另一行提到其他术语。',
@@ -681,8 +980,11 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(rows[0]['source'], 'Void Gate')
         self.assertEqual(rows[0]['confidence'], 0.9)
         self.assertEqual(rows[0]['occurrences'], 2)
-        self.assertEqual(rows[0]['source_lines'], [2])
-        self.assertEqual(rows[0]['source_item_ids'], ['script.rpy:2:keyword:0'])
+        self.assertEqual(rows[0]['source_lines'], [2, 3])
+        self.assertEqual(
+            rows[0]['source_item_ids'],
+            ['script.rpy:2:keyword:0', 'script.rpy:3:keyword:1'],
+        )
         self.assertEqual(summary_rows[0]['chunk_summary'], '一行提到虚空门，另一行提到其他术语。')
         self.assertEqual(summary_rows[0]['source_lines'], [2, 3])
         self.assertEqual(export['summary']['missing_chunk_rows'], 1)
@@ -879,7 +1181,10 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(manifest['summary']['item_count'], 1)
         self.assertIn('build_warnings', manifest)
         self.assertNotIn('warnings', manifest)
-        self.assertIn('should_update', schema['items']['required'])
+        self.assertIn(
+            'should_update',
+            schema['properties']['revisions']['items']['required'],
+        )
         self.assertIn('current_translation', target_text)
 
     def test_sync_keyword_candidates_runs_requests_and_exports_reports(self):
@@ -970,6 +1275,1169 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertEqual(rows[0]['suggested_target'], '虚空门')
         self.assertEqual(summary_rows[0]['chunk_summary'], '这里提到了虚空门。')
         self.assertEqual(latest_after, str(previous_latest))
+
+    def test_execute_sync_rows_targeted_retry_merges_only_missing_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp) / 'sync-run'
+            package_dir.mkdir()
+            chunk = {
+                'key': 'chunk-1',
+                'file_path': str(package_dir / 'script.rpy'),
+                'file_rel_path': 'script.rpy',
+                'chunk_index': 1,
+                'context_past': [],
+                'context_future': [],
+                'items': [
+                    {
+                        'id': 'a',
+                        'text': 'Hello',
+                        'file_rel_path': 'script.rpy',
+                        'line': 0,
+                        'line_number': 1,
+                        'start': 4,
+                        'end': 11,
+                        'prefix': '',
+                        'quote': '"',
+                    },
+                    {
+                        'id': 'b',
+                        'text': 'World',
+                        'file_rel_path': 'script.rpy',
+                        'line': 1,
+                        'line_number': 2,
+                        'start': 4,
+                        'end': 11,
+                        'prefix': '',
+                        'quote': '"',
+                    },
+                ],
+            }
+            request_rows = [batch_mod.build_batch_request(chunk, model='gemini-test')]
+            manifest_path = batch_mod.make_sync_manifest(
+                package_dir=str(package_dir),
+                mode=batch_mod.MANIFEST_MODE_TRANSLATION,
+                display_name='targeted-retry-test',
+                chunks=[chunk],
+                request_rows=request_rows,
+                settings={},
+            )
+            responses = [
+                {'translations': [{'id': 'a', 'translation': '你好'}]},
+                {'translations': [{'id': 'b', 'translation': '世界'}]},
+            ]
+            seen_requests = []
+            seen_models = []
+
+            def fake_sync(request, model_name, **_kwargs):
+                seen_requests.append(request)
+                seen_models.append(model_name)
+                payload = responses[len(seen_requests) - 1]
+                text = json.dumps(payload, ensure_ascii=False)
+                return {
+                    'response_payload': {
+                        'candidates': [{'content': {'parts': [{'text': text}]}}],
+                    },
+                    'response_text': text,
+                    'finish_reason': 'STOP',
+                    'usage_metadata': {'totalTokenCount': 1},
+                    'provider': 'gemini',
+                    'model': 'gemini-test',
+                    'execution_mode': 'sync',
+                }
+
+            with (
+                mock.patch.object(batch_mod, 'SYNC_MODEL', 'sync-override'),
+                mock.patch.object(
+                    batch_mod,
+                    'run_sync_request',
+                    side_effect=fake_sync,
+                ),
+            ):
+                manifest = batch_mod.execute_sync_request_rows(
+                    manifest_path,
+                    request_rows,
+                )
+
+            result_row = json.loads(
+                Path(manifest['result_jsonl_path']).read_text(encoding='utf-8').strip()
+            )
+            retry_prompt = seen_requests[1]['contents'][0]['parts'][0]['text']
+            self.assertEqual(result_row['contract_diagnostics']['reason_counts'], {})
+            result_row['contract_diagnostics']['reason_counts'] = {
+                translation_core.CONTRACT_MISSING_EXPECTED_ID: 1,
+            }
+            result_row['contract_diagnostics']['issues'] = [{
+                'reason_code': translation_core.CONTRACT_MISSING_EXPECTED_ID,
+                'id': 'b',
+            }]
+            Path(manifest['result_jsonl_path']).write_text(
+                json.dumps(result_row, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+            audit_manifest = dict(manifest)
+            audit_manifest['version'] = 1
+            audit_manifest['manifest_version'] = 1
+            audit_manifest['chunks'] = [chunk]
+            integrity_keys, integrity_reasons = (
+                batch_mod.collect_result_integrity_issue_keys(audit_manifest)
+            )
+            _replacements, _translated, failures, check_summary = (
+                batch_mod.collect_result_actions(audit_manifest)
+            )
+
+        self.assertEqual(len(seen_requests), 2)
+        self.assertEqual(seen_models, ['sync-override', 'sync-override'])
+        self.assertNotIn('"id":"a"', retry_prompt)
+        self.assertIn('"id":"b"', retry_prompt)
+        self.assertEqual(
+            [item['id'] for item in result_row['normalized_response']['translations']],
+            ['a', 'b'],
+        )
+        self.assertTrue(result_row['contract_diagnostics']['complete'])
+        self.assertEqual(
+            result_row['response_semantics'],
+            {
+                'response': 'first_pass_provider_payload',
+                'normalized_response': 'final_merged_contract',
+            },
+        )
+        first_pass_payload = batch_mod.parse_json_payload(
+            batch_mod.extract_text_from_response_payload(result_row['response'])
+        )
+        self.assertEqual(
+            [item['id'] for item in first_pass_payload['translations']],
+            ['a'],
+        )
+        authoritative_payload = batch_mod.result_row_contract_payload(result_row)
+        self.assertEqual(
+            [item['id'] for item in authoritative_payload['translations']],
+            ['a', 'b'],
+        )
+        self.assertNotIn('response', result_row['provider_response_attempts'][0])
+        self.assertIn('response', result_row['provider_response_attempts'][1])
+        self.assertFalse(
+            result_row['provider_response_attempts'][0][
+                'contract_diagnostics'
+            ]['complete']
+        )
+        self.assertEqual(
+            result_row['provider_response_attempts'][0][
+                'contract_diagnostics'
+            ]['reason_counts'],
+            {'response_missing_expected_id': 1},
+        )
+        self.assertTrue(
+            result_row['provider_response_attempts'][1][
+                'contract_diagnostics'
+            ]['complete']
+        )
+        self.assertEqual(manifest['sync_summary']['contract_expected_items'], 2)
+        self.assertEqual(manifest['sync_summary']['targeted_retry_requests'], 1)
+        self.assertEqual(manifest['sync_summary']['contract_final_completeness'], 1.0)
+        self.assertEqual(manifest['job_state'], 'SYNC_COMPLETED')
+        self.assertEqual(integrity_keys, set())
+        self.assertEqual(integrity_reasons, {})
+        self.assertEqual(failures, [])
+        self.assertEqual(check_summary['partial_chunks'], 0)
+        self.assertNotIn(
+            translation_core.CONTRACT_MISSING_EXPECTED_ID,
+            check_summary['reason_counts'],
+        )
+        self.assertEqual(
+            batch_mod.summarize_check_safety(check_summary)['level'],
+            batch_mod.CHECK_SAFETY_SAFE,
+        )
+
+    def test_execute_sync_rows_rejects_unknown_request_chunk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            manifest_path = package_dir / 'manifest.json'
+            result_path = package_dir / 'results.jsonl'
+            manifest_path.write_text(
+                json.dumps({
+                    'version': 2,
+                    'mode': batch_mod.MANIFEST_MODE_TRANSLATION,
+                    'batch_model': 'gemini-test',
+                    'result_jsonl_path': str(result_path),
+                    'chunks': [
+                        {
+                            'key': 'chunk-1',
+                            'items': [{'id': 'a', 'text': 'Hello'}],
+                        }
+                    ],
+                }),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod, 'run_sync_request') as run_sync,
+                self.assertRaisesRegex(
+                    batch_mod.cli_contract.MachineContractError,
+                    'no matching manifest chunk: stale-chunk',
+                ) as caught,
+            ):
+                batch_mod.execute_sync_request_rows(
+                    str(manifest_path),
+                    [{'key': 'stale-chunk', 'request': {}}],
+                )
+
+        self.assertEqual(caught.exception.code_name, 'SYNC_REQUEST_CHUNK_MISSING')
+        self.assertEqual(
+            caught.exception.suggested_action,
+            'rebuild_sync_package',
+        )
+        run_sync.assert_not_called()
+        self.assertFalse(result_path.exists())
+
+    def test_execute_sync_rows_rejects_empty_request_chunk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            manifest_path = package_dir / 'manifest.json'
+            manifest_path.write_text(
+                json.dumps({
+                    'version': 2,
+                    'mode': batch_mod.MANIFEST_MODE_TRANSLATION,
+                    'batch_model': 'gemini-test',
+                    'result_jsonl_path': str(package_dir / 'results.jsonl'),
+                    'chunks': [{'key': 'chunk-1', 'items': []}],
+                }),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod, 'run_sync_request') as run_sync,
+                self.assertRaisesRegex(
+                    batch_mod.cli_contract.MachineContractError,
+                    'references an empty manifest chunk: chunk-1',
+                ) as caught,
+            ):
+                batch_mod.execute_sync_request_rows(
+                    str(manifest_path),
+                    [{'key': 'chunk-1', 'request': {}}],
+                )
+
+        self.assertEqual(caught.exception.code_name, 'SYNC_REQUEST_CHUNK_EMPTY')
+        run_sync.assert_not_called()
+
+    def test_execute_sync_rows_rejects_partial_request_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            manifest_path = package_dir / 'manifest.json'
+            result_path = package_dir / 'results.jsonl'
+            manifest_path.write_text(
+                json.dumps({
+                    'version': 2,
+                    'mode': batch_mod.MANIFEST_MODE_TRANSLATION,
+                    'batch_model': 'gemini-test',
+                    'result_jsonl_path': str(result_path),
+                    'chunks': [
+                        {'key': 'chunk-1', 'items': [{'id': 'a', 'text': 'Hello'}]},
+                        {'key': 'chunk-2', 'items': [{'id': 'b', 'text': 'World'}]},
+                    ],
+                }),
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod, 'run_sync_request') as run_sync,
+                self.assertRaisesRegex(
+                    batch_mod.cli_contract.MachineContractError,
+                    'do not cover every manifest chunk: chunk-2',
+                ) as caught,
+            ):
+                batch_mod.execute_sync_request_rows(
+                    str(manifest_path),
+                    [{'key': 'chunk-1', 'request': {}}],
+                )
+
+        self.assertEqual(
+            caught.exception.code_name,
+            'SYNC_REQUEST_CHUNK_INCOMPLETE',
+        )
+        self.assertEqual(caught.exception.details['missing_keys'], ['chunk-2'])
+        run_sync.assert_not_called()
+        self.assertFalse(result_path.exists())
+
+    def test_execute_sync_rows_rejects_duplicate_request_chunk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            manifest_path = package_dir / 'manifest.json'
+            result_path = package_dir / 'results.jsonl'
+            manifest_path.write_text(
+                json.dumps({
+                    'version': 2,
+                    'mode': batch_mod.MANIFEST_MODE_TRANSLATION,
+                    'batch_model': 'gemini-test',
+                    'result_jsonl_path': str(result_path),
+                    'chunks': [
+                        {'key': 'chunk-1', 'items': [{'id': 'a', 'text': 'Hello'}]},
+                    ],
+                }),
+                encoding='utf-8',
+            )
+
+            rows = [
+                {'key': 'chunk-1', 'request': {}},
+                {'key': 'chunk-1', 'request': {}},
+            ]
+            with (
+                mock.patch.object(batch_mod, 'run_sync_request') as run_sync,
+                self.assertRaisesRegex(
+                    batch_mod.cli_contract.MachineContractError,
+                    'duplicate manifest chunk: chunk-1',
+                ) as caught,
+            ):
+                batch_mod.execute_sync_request_rows(str(manifest_path), rows)
+
+        self.assertEqual(
+            caught.exception.code_name,
+            'SYNC_REQUEST_CHUNK_DUPLICATE',
+        )
+        run_sync.assert_not_called()
+        self.assertFalse(result_path.exists())
+
+    def test_keyword_targeted_retry_preserves_valid_first_pass_candidates(self):
+        items = [
+            {'id': 'a', 'text': 'Void Gate'},
+            {'id': 'b', 'text': 'Moon Key'},
+        ]
+        first = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Void Gate',
+                        'suggested_target': '虚空门',
+                        'category': 'place',
+                        'confidence': 0.9,
+                        'evidence': 'a',
+                        'source_item_ids': ['a'],
+                    },
+                    {
+                        'source': 'Broken',
+                        'suggested_target': '错误',
+                        'category': 'term',
+                        'confidence': 0.5,
+                        'evidence': 'unknown',
+                        'source_item_ids': ['unknown'],
+                    },
+                ],
+                'chunk_summary': 'first',
+                'summary_evidence_item_ids': ['a'],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Moon Key',
+                        'suggested_target': '月之钥',
+                        'category': 'item',
+                        'confidence': 0.8,
+                        'evidence': 'b',
+                        'source_item_ids': ['b'],
+                    },
+                ],
+                'chunk_summary': 'retry',
+                'summary_evidence_item_ids': ['b'],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=items,
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_KEYWORD_EXTRACTION,
+        )
+
+        self.assertTrue(merged.complete)
+        self.assertEqual(
+            [item['source'] for item in merged.items],
+            ['Void Gate', 'Moon Key'],
+        )
+        self.assertEqual(merged.metadata['chunk_summary'], 'retry')
+
+    def test_keyword_merge_revalidates_combined_candidate_provenance(self):
+        items = [
+            {'id': 'a', 'text': 'Void Gate'},
+            {'id': 'b', 'text': 'Moon Key'},
+        ]
+        first = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Void Gate',
+                        'suggested_target': '虚空门',
+                        'category': 'place',
+                        'confidence': 0.9,
+                        'evidence': 'a',
+                        'source_item_ids': ['a'],
+                    },
+                ],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=items,
+        )
+        first.items.append({
+            'source': 'Injected invalid candidate',
+            'suggested_target': '非法候选',
+            'category': 'term',
+            'confidence': 0.5,
+            'evidence': 'outside',
+            'source_item_ids': ['outside'],
+        })
+        retry = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Moon Key',
+                        'suggested_target': '月之钥',
+                        'category': 'item',
+                        'confidence': 0.8,
+                        'evidence': 'b',
+                        'source_item_ids': ['b'],
+                    },
+                ],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=items,
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_KEYWORD_EXTRACTION,
+        )
+
+        self.assertFalse(merged.complete)
+        self.assertEqual(
+            [item['source'] for item in merged.items],
+            ['Void Gate', 'Moon Key'],
+        )
+        self.assertEqual(
+            merged.reason_counts()['result_unknown_source_id'],
+            1,
+        )
+        self.assertEqual(merged.retry_ids, ['a', 'b'])
+
+    def test_keyword_empty_retry_preserves_first_pass_issue_and_candidates(self):
+        items = [{'id': 'a', 'text': 'Void Gate'}]
+        first = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Void Gate',
+                        'suggested_target': '虚空门',
+                        'category': 'term',
+                        'confidence': 0.9,
+                        'evidence': 'a',
+                        'source_item_ids': ['a'],
+                    },
+                    {
+                        'source': 'Broken',
+                        'suggested_target': '错误',
+                        'category': 'term',
+                        'confidence': 0.5,
+                        'evidence': 'unknown',
+                        'source_item_ids': ['unknown'],
+                    },
+                ],
+                'chunk_summary': 'first summary',
+                'summary_evidence_item_ids': ['a'],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {
+                'candidates': [],
+                'chunk_summary': '',
+                'summary_evidence_item_ids': [],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=items,
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_KEYWORD_EXTRACTION,
+        )
+
+        self.assertFalse(merged.complete)
+        self.assertEqual([item['source'] for item in merged.items], ['Void Gate'])
+        self.assertEqual(merged.metadata['chunk_summary'], 'first summary')
+        self.assertEqual(merged.retry_ids, ['a'])
+        self.assertEqual(
+            merged.reason_counts()['result_unknown_source_id'],
+            1,
+        )
+
+    def test_translation_retry_cannot_replace_non_retry_first_pass_ids(self):
+        items = [
+            {'id': 'a', 'text': 'Hello'},
+            {'id': 'b', 'text': 'World'},
+        ]
+        first = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'a', 'translation': '首轮译文'},
+                ],
+            },
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'a', 'translation': '不应覆盖'},
+                    {'id': 'b', 'translation': '重试译文'},
+                ],
+            },
+            expected_units=items,
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_TRANSLATION,
+        )
+
+        self.assertTrue(merged.complete)
+        self.assertEqual(
+            {item['id']: item['translation'] for item in merged.items},
+            {'a': '首轮译文', 'b': '重试译文'},
+        )
+
+    def test_translation_retry_normalizes_legacy_manifest_ids(self):
+        items = [
+            {'id': 1, 'text': 'Hello'},
+            {'id': 2, 'text': 'World'},
+        ]
+        first = translation_core.validate_model_response(
+            {'translations': [{'id': '1', 'translation': '首轮译文'}]},
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {'translations': [{'id': '2', 'translation': '重试译文'}]},
+            expected_units=[items[1]],
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_TRANSLATION,
+        )
+
+        self.assertTrue(merged.complete)
+        self.assertEqual(merged.retry_ids, [])
+        self.assertEqual(
+            {item['id']: item['translation'] for item in merged.items},
+            {'1': '首轮译文', '2': '重试译文'},
+        )
+
+    def test_translation_retry_keeps_rejected_unknown_id_in_final_diagnostics(self):
+        items = [
+            {'id': 'a', 'text': 'Hello'},
+            {'id': 'b', 'text': 'World'},
+        ]
+        first = translation_core.validate_model_response(
+            {'translations': [{'id': 'a', 'translation': '首轮译文'}]},
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'b', 'translation': '重试译文'},
+                    {'id': 'unknown', 'translation': '非法条目'},
+                ],
+            },
+            expected_units=[items[1]],
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_TRANSLATION,
+        )
+
+        self.assertFalse(merged.complete)
+        self.assertEqual(
+            {item['id']: item['translation'] for item in merged.items},
+            {'a': '首轮译文', 'b': '重试译文'},
+        )
+        self.assertEqual(merged.retry_ids, [])
+        self.assertEqual(merged.reason_counts()['result_unknown_id'], 1)
+        self.assertEqual(
+            merged.to_diagnostics()['reason_counts'],
+            {'result_unknown_id': 1},
+        )
+
+    def test_translation_retry_preserves_first_pass_envelope_issue(self):
+        items = [
+            {'id': 'a', 'text': 'Hello'},
+            {'id': 'b', 'text': 'World'},
+        ]
+        first = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'a', 'translation': '首轮译文'},
+                    {'id': 'unknown', 'translation': '非法条目'},
+                ],
+            },
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {'translations': [{'id': 'b', 'translation': '重试译文'}]},
+            expected_units=[items[1]],
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_TRANSLATION,
+        )
+
+        self.assertFalse(merged.complete)
+        self.assertEqual(
+            {item['id']: item['translation'] for item in merged.items},
+            {'a': '首轮译文', 'b': '重试译文'},
+        )
+        self.assertEqual(merged.retry_ids, [])
+        self.assertEqual(
+            merged.reason_counts(),
+            {translation_core.CONTRACT_UNKNOWN_ID: 1},
+        )
+
+    def test_translation_retry_drops_repaired_item_issue(self):
+        items = [
+            {'id': 'a', 'text': 'Hello'},
+            {'id': 'b', 'text': 'World'},
+        ]
+        first = translation_core.validate_model_response(
+            {
+                'translations': [
+                    {'id': 'a', 'translation': '首轮译文'},
+                    {'id': 'b', 'translation': 42},
+                ],
+            },
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {'translations': [{'id': 'b', 'translation': '重试译文'}]},
+            expected_units=[items[1]],
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_TRANSLATION,
+        )
+
+        self.assertTrue(merged.complete)
+        self.assertEqual(merged.reason_counts(), {})
+        self.assertEqual(
+            {item['id']: item['translation'] for item in merged.items},
+            {'a': '首轮译文', 'b': '重试译文'},
+        )
+
+    def test_revision_retry_keeps_rejected_unknown_id_in_final_diagnostics(self):
+        items = [
+            {'id': 'a', 'text': 'Hello'},
+            {'id': 'b', 'text': 'World'},
+        ]
+        first = translation_core.validate_model_response(
+            {
+                'revisions': [
+                    {
+                        'id': 'a',
+                        'should_update': False,
+                        'revised_translation': '你好',
+                        'reason': '保持原译',
+                    }
+                ],
+            },
+            mode=translation_core.MODE_REVISION,
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {
+                'revisions': [
+                    {
+                        'id': 'b',
+                        'should_update': True,
+                        'revised_translation': '世界',
+                        'reason': '补齐译文',
+                    },
+                    {
+                        'id': 'unknown',
+                        'should_update': True,
+                        'revised_translation': '非法条目',
+                        'reason': '未知 ID',
+                    },
+                ],
+            },
+            mode=translation_core.MODE_REVISION,
+            expected_units=[items[1]],
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_REVISION,
+        )
+
+        self.assertFalse(merged.complete)
+        self.assertEqual([item['id'] for item in merged.items], ['a', 'b'])
+        self.assertEqual(merged.retry_ids, [])
+        self.assertEqual(merged.reason_counts()['result_unknown_id'], 1)
+
+    def test_keyword_retry_progress_drops_superseded_first_pass_issues(self):
+        items = [
+            {'id': 'a', 'text': 'Void Gate'},
+            {'id': 'b', 'text': 'Moon Key'},
+        ]
+        first = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Void Gate',
+                        'suggested_target': '虚空门',
+                        'category': 'place',
+                        'confidence': 0.9,
+                        'evidence': 'a',
+                        'source_item_ids': ['a'],
+                    },
+                    {
+                        'source': 'Broken first',
+                        'suggested_target': '错误',
+                        'category': 'term',
+                        'confidence': 0.5,
+                        'evidence': 'unknown',
+                        'source_item_ids': ['unknown'],
+                    },
+                ],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=items,
+        )
+        retry = translation_core.validate_model_response(
+            {
+                'candidates': [
+                    {
+                        'source': 'Moon Key',
+                        'suggested_target': '月之钥',
+                        'category': 'item',
+                        'confidence': 0.8,
+                        'evidence': 'b',
+                        'source_item_ids': ['b'],
+                    },
+                    {
+                        'source': 'Broken retry',
+                        'suggested_target': '错误',
+                        'confidence': 0.5,
+                        'evidence': 'b',
+                        'source_item_ids': ['b'],
+                    },
+                ],
+            },
+            mode=translation_core.MODE_KEYWORD_EXTRACTION,
+            expected_units=items,
+        )
+
+        merged = batch_mod._merge_sync_contract_reports(
+            first,
+            retry,
+            {'items': items},
+            translation_core.MODE_KEYWORD_EXTRACTION,
+        )
+
+        self.assertFalse(merged.complete)
+        self.assertEqual(
+            [item['source'] for item in merged.items],
+            ['Void Gate', 'Moon Key'],
+        )
+        self.assertNotIn('result_unknown_source_id', merged.reason_counts())
+        self.assertEqual(merged.reason_counts()['result_missing_field'], 1)
+        self.assertEqual(merged.retry_ids, ['a', 'b'])
+
+    def test_sync_keyword_summary_uses_chunk_completeness(self):
+        chunk = {
+            'key': 'keyword-1',
+            'file_path': 'script.rpy',
+            'file_rel_path': 'script.rpy',
+            'items': [{'id': 'a', 'text': 'Void Gate'}],
+        }
+        first_payload = {
+            'candidates': [
+                {
+                    'source': 'Void Gate',
+                    'suggested_target': '虚空门',
+                    'category': 'place',
+                    'confidence': 0.9,
+                    'evidence': 'a',
+                    'source_item_ids': ['a'],
+                },
+                {
+                    'source': 'Broken',
+                    'suggested_target': '错误',
+                    'category': 'term',
+                    'confidence': 0.5,
+                    'evidence': 'unknown',
+                    'source_item_ids': ['unknown'],
+                },
+            ],
+        }
+        retry_payload = {'candidates': []}
+        payloads = [first_payload, retry_payload]
+
+        def fake_sync(_request, _model, **_kwargs):
+            payload = payloads.pop(0)
+            text = json.dumps(payload, ensure_ascii=False)
+            return {
+                'response_payload': {
+                    'candidates': [{'content': {'parts': [{'text': text}]}}],
+                },
+                'response_text': text,
+                'finish_reason': 'STOP',
+                'usage_metadata': {},
+                'provider': 'gemini',
+                'model': 'gemini-test',
+                'execution_mode': 'sync',
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            request_rows = [
+                batch_mod.build_keyword_request(
+                    chunk,
+                    max_candidates_per_chunk=5,
+                    model='gemini-test',
+                )
+            ]
+            manifest_path = batch_mod.make_sync_manifest(
+                package_dir=str(package_dir),
+                mode=batch_mod.MANIFEST_MODE_KEYWORD_EXTRACTION,
+                display_name='keyword-completeness-test',
+                chunks=[chunk],
+                request_rows=request_rows,
+                settings={},
+            )
+            with mock.patch.object(
+                batch_mod,
+                'run_sync_request',
+                side_effect=fake_sync,
+            ):
+                manifest = batch_mod.execute_sync_request_rows(
+                    manifest_path,
+                    request_rows,
+                )
+
+        summary = manifest['sync_summary']
+        self.assertEqual(summary['contract_expected_chunks'], 1)
+        self.assertEqual(summary['contract_first_pass_complete_chunks'], 0)
+        self.assertEqual(summary['contract_final_complete_chunks'], 0)
+        self.assertEqual(summary['contract_final_chunk_completeness'], 0.0)
+        self.assertNotIn('contract_expected_items', summary)
+        self.assertNotIn('contract_final_valid_items', summary)
+        self.assertEqual(summary['contract_partial_requests'], 1)
+
+    def test_sync_contract_parse_failures_use_stable_reason_codes(self):
+        cases = (
+            ('', translation_core.CONTRACT_EMPTY_RESPONSE_TEXT),
+            ('not-json', translation_core.CONTRACT_INVALID_JSON),
+        )
+        for response_text, expected_reason in cases:
+            with self.subTest(expected_reason=expected_reason):
+                chunk = {
+                    'key': 'chunk-1',
+                    'file_path': 'script.rpy',
+                    'file_rel_path': 'script.rpy',
+                    'context_past': [],
+                    'context_future': [],
+                    'items': [{'id': 'a', 'text': 'Hello'}],
+                }
+                result = {
+                    'response_payload': batch_mod.response_payload_with_text(
+                        {},
+                        response_text,
+                    ) if response_text else {},
+                    'response_text': response_text,
+                    'finish_reason': 'STOP',
+                    'usage_metadata': {},
+                    'provider': 'gemini',
+                    'model': 'gemini-test',
+                    'execution_mode': 'sync',
+                }
+                with tempfile.TemporaryDirectory() as tmp:
+                    package_dir = Path(tmp)
+                    manifest_path = package_dir / 'manifest.json'
+                    result_path = package_dir / 'results.jsonl'
+                    manifest_path.write_text(
+                        json.dumps({
+                            'version': 2,
+                            'mode': batch_mod.MANIFEST_MODE_TRANSLATION,
+                            'batch_model': 'gemini-test',
+                            'result_jsonl_path': str(result_path),
+                            'chunks': [chunk],
+                        }),
+                        encoding='utf-8',
+                    )
+                    with mock.patch.object(
+                        batch_mod,
+                        'run_sync_request',
+                        return_value=result,
+                    ):
+                        manifest = batch_mod.execute_sync_request_rows(
+                            str(manifest_path),
+                            [{'key': 'chunk-1', 'request': {}}],
+                        )
+                    row = json.loads(result_path.read_text(encoding='utf-8'))
+
+                reasons = manifest['sync_summary']['reason_counts']
+                self.assertEqual(reasons[expected_reason], 2)
+                self.assertNotIn('response_contract_error', reasons)
+                self.assertNotIn('targeted_retry_contract_error', reasons)
+                self.assertEqual(
+                    row['contract_diagnostics']['reason_counts'],
+                    {expected_reason: 1},
+                )
+
+    def test_integrity_scan_uses_stable_contract_parse_reasons(self):
+        cases = (
+            ({}, translation_core.CONTRACT_EMPTY_RESPONSE_TEXT),
+            (
+                batch_mod.response_payload_with_text({}, 'not-json'),
+                translation_core.CONTRACT_INVALID_JSON,
+            ),
+        )
+        for response, expected_reason in cases:
+            with self.subTest(expected_reason=expected_reason):
+                with tempfile.TemporaryDirectory() as tmp:
+                    result_path = Path(tmp) / 'results.jsonl'
+                    batch_mod.write_jsonl_file(
+                        str(result_path),
+                        [{'key': 'chunk-1', 'response': response}],
+                    )
+                    manifest = {
+                        '_package_dir': tmp,
+                        'result_jsonl_path': str(result_path),
+                        'chunks': [
+                            {
+                                'key': 'chunk-1',
+                                'items': [{'id': 'a', 'text': 'Hello'}],
+                            }
+                        ],
+                    }
+                    issue_keys, reasons = (
+                        batch_mod.collect_result_integrity_issue_keys(manifest)
+                    )
+
+                self.assertEqual(issue_keys, {'chunk-1'})
+                self.assertEqual(reasons[expected_reason], 1)
+                self.assertNotIn('failed_to_parse_model_json', reasons)
+
+    def test_integrity_scan_retries_chunk_for_issue_without_target_ids(self):
+        payload = {
+            'translations': [
+                {'id': 'a', 'translation': '你好'},
+                {'id': 'b', 'translation': '世界'},
+                {'id': 'unknown', 'translation': '多余'},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            result_path = Path(tmp) / 'results.jsonl'
+            batch_mod.write_jsonl_file(
+                str(result_path),
+                [
+                    {
+                        'key': 'chunk-1',
+                        'response': batch_mod.response_payload_with_text(
+                            {},
+                            json.dumps(payload, ensure_ascii=False),
+                        ),
+                    }
+                ],
+            )
+            manifest = {
+                '_package_dir': tmp,
+                'result_jsonl_path': str(result_path),
+                'chunks': [
+                    {
+                        'key': 'chunk-1',
+                        'items': [
+                            {'id': 'a', 'text': 'Hello'},
+                            {'id': 'b', 'text': 'World'},
+                        ],
+                    }
+                ],
+            }
+
+            issue_keys, reasons = (
+                batch_mod.collect_result_integrity_issue_keys(manifest)
+            )
+
+        self.assertEqual(issue_keys, {'chunk-1'})
+        self.assertEqual(
+            reasons,
+            {translation_core.CONTRACT_UNKNOWN_ID: 1},
+        )
+        retry_chunks = batch_mod.build_retry_chunks_for_keys(
+            manifest,
+            issue_keys,
+        )
+        self.assertEqual([chunk['key'] for chunk in retry_chunks], ['chunk-1'])
+        self.assertEqual(
+            [item['id'] for item in retry_chunks[0]['items']],
+            ['a', 'b'],
+        )
+
+    def test_retry_chunk_falls_back_to_full_chunk_for_stale_item_ids(self):
+        manifest = {
+            'chunks': [
+                {
+                    'key': 'chunk-1',
+                    'items': [
+                        {'id': 'a', 'text': 'Hello'},
+                        {'id': 'b', 'text': 'World'},
+                    ],
+                }
+            ]
+        }
+
+        retry_chunks = batch_mod.build_retry_chunks_for_keys(
+            manifest,
+            {'chunk-1'},
+            {'chunk-1': {'a', 'stale-id'}},
+        )
+
+        self.assertEqual([chunk['key'] for chunk in retry_chunks], ['chunk-1'])
+        self.assertEqual(
+            [item['id'] for item in retry_chunks[0]['items']],
+            ['a', 'b'],
+        )
+
+    def test_sync_unknown_extra_id_is_audited_without_retranslating_valid_ids(self):
+        chunk = {
+            'key': 'chunk-1',
+            'file_rel_path': 'script.rpy',
+            'items': [
+                {
+                    'id': 'a',
+                    'line': 0,
+                    'start': 0,
+                    'end': 5,
+                    'text': 'Hello',
+                    'prefix': '',
+                    'quote': '"',
+                },
+                {
+                    'id': 'b',
+                    'line': 1,
+                    'start': 0,
+                    'end': 5,
+                    'text': 'World',
+                    'prefix': '',
+                    'quote': '"',
+                },
+            ],
+        }
+        payload = {
+            'translations': [
+                {'id': 'a', 'translation': '你好'},
+                {'id': 'b', 'translation': '世界'},
+                {'id': 'unknown', 'translation': '多余'},
+            ]
+        }
+        text = json.dumps(payload, ensure_ascii=False)
+        result = {
+            'response_payload': {
+                'candidates': [{'content': {'parts': [{'text': text}]}}],
+            },
+            'response_text': text,
+            'finish_reason': 'STOP',
+            'usage_metadata': {},
+            'provider': 'gemini',
+            'model': 'gemini-test',
+            'execution_mode': 'sync',
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            manifest_path = package_dir / 'manifest.json'
+            result_path = package_dir / 'results.jsonl'
+            manifest_path.write_text(
+                json.dumps({
+                    'version': 2,
+                    'mode': batch_mod.MANIFEST_MODE_TRANSLATION,
+                    'batch_model': 'gemini-test',
+                    'result_jsonl_path': str(result_path),
+                    'chunks': [chunk],
+                }),
+                encoding='utf-8',
+            )
+            request_rows = [{'key': 'chunk-1', 'request': {}}]
+            with mock.patch.object(
+                batch_mod,
+                'run_sync_request',
+                return_value=result,
+            ) as run_sync:
+                manifest = batch_mod.execute_sync_request_rows(
+                    str(manifest_path),
+                    request_rows,
+                )
+            result_row = json.loads(result_path.read_text(encoding='utf-8'))
+            audit_manifest = dict(manifest)
+            audit_manifest['version'] = 1
+            audit_manifest['manifest_version'] = 1
+            issue_keys, integrity_reasons = (
+                batch_mod.collect_result_integrity_issue_keys(audit_manifest)
+            )
+            _replacements, _translated, failures, check_summary = (
+                batch_mod.collect_result_actions(audit_manifest)
+            )
+
+        run_sync.assert_called_once()
+        self.assertEqual(manifest['job_state'], 'SYNC_PARTIAL')
+        self.assertEqual(manifest['sync_summary']['contract_final_valid_items'], 2)
+        self.assertEqual(manifest['sync_summary']['targeted_retry_requests'], 0)
+        self.assertEqual(manifest['sync_summary']['reason_counts']['result_unknown_id'], 1)
+        first_attempt = result_row['provider_response_attempts'][0]
+        self.assertEqual(
+            first_attempt['contract_diagnostics']['reason_counts'],
+            {'result_unknown_id': 1},
+        )
+        self.assertEqual(issue_keys, {'chunk-1'})
+        self.assertEqual(integrity_reasons['result_unknown_id'], 1)
+        self.assertEqual(check_summary['reason_counts']['result_unknown_id'], 1)
+        self.assertEqual(check_summary['partial_chunks'], 1)
+        self.assertEqual(check_summary['valid_items'], 2)
+        self.assertEqual(
+            batch_mod.summarize_check_safety(check_summary)['level'],
+            batch_mod.CHECK_SAFETY_WARN,
+        )
+        self.assertEqual(
+            [failure['reason_code'] for failure in failures],
+            ['result_unknown_id'],
+        )
+        retry_chunks = batch_mod.build_retry_chunks_for_keys(
+            audit_manifest,
+            issue_keys,
+            {'chunk-1': {failures[0]['id']}},
+        )
+        self.assertEqual(
+            [item['id'] for item in retry_chunks[0]['items']],
+            ['a', 'b'],
+        )
 
     def test_sync_revisions_previews_and_optionally_applies(self):
         old_values = {
@@ -1301,7 +2769,269 @@ class BatchRepairRegressionTests(unittest.TestCase):
         append_failures.assert_called_once()
         update_progress.assert_not_called()
 
-    def test_collect_result_actions_ignores_duplicate_result_ids(self):
+    def test_collect_revision_actions_audits_unknown_id_as_partial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            result_path = package_dir / 'results.jsonl'
+            item_id = 'script.rpy:0:4:revision:0'
+            response_text = json.dumps(
+                {
+                    'revisions': [
+                        {
+                            'id': item_id,
+                            'should_update': False,
+                            'revised_translation': '你好',
+                            'reason': '保持原译',
+                        },
+                        {
+                            'id': 'unknown',
+                            'should_update': True,
+                            'revised_translation': '多余',
+                            'reason': '未知 ID',
+                        },
+                    ]
+                },
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'rv-1',
+                        'response': batch_mod.response_payload_with_text(
+                            {},
+                            response_text,
+                        ),
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest = {
+                '_package_dir': str(package_dir),
+                'result_jsonl_path': str(result_path),
+                'chunks': [
+                    {
+                        'key': 'rv-1',
+                        'file_rel_path': 'script.rpy',
+                        'items': [
+                            {
+                                'id': item_id,
+                                'line': 0,
+                                'start': 4,
+                                'end': 11,
+                                'text': 'Hello',
+                                'source': 'Hello',
+                                'current_translation': '你好',
+                                'prefix': '',
+                                'quote': '"',
+                            }
+                        ],
+                    }
+                ],
+            }
+
+            _replacements, _lines, failures, summary, _preview = (
+                batch_mod.collect_revision_actions(manifest)
+            )
+
+        self.assertEqual(summary['valid_items'], 0)
+        self.assertEqual(summary['unchanged_items'], 1)
+        self.assertEqual(summary['partial_chunks'], 1)
+        self.assertEqual(summary['reason_counts']['result_unknown_id'], 1)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]['id'], 'unknown')
+        self.assertEqual(failures[0]['reason_code'], 'result_unknown_id')
+        self.assertEqual(failures[0]['result_index'], 1)
+
+    def test_collect_result_actions_audits_unknown_id_with_complete_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            result_path = package_dir / 'results.jsonl'
+            response_text = json.dumps(
+                {
+                    'translations': [
+                        {'id': 'script.rpy:0:4', 'translation': '你好'},
+                        {'id': 'unknown', 'translation': '多余'},
+                    ]
+                },
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'chunk-1',
+                        'response': batch_mod.response_payload_with_text(
+                            {},
+                            response_text,
+                        ),
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest = {
+                '_package_dir': str(package_dir),
+                'result_jsonl_path': str(result_path),
+                'chunks': [
+                    {
+                        'key': 'chunk-1',
+                        'file_rel_path': 'script.rpy',
+                        'items': [
+                            {
+                                'id': 'script.rpy:0:4',
+                                'line': 0,
+                                'start': 4,
+                                'end': 11,
+                                'text': 'Hello',
+                                'prefix': '',
+                                'quote': '"',
+                            }
+                        ],
+                    }
+                ],
+            }
+
+            replacements, _translated, failures, summary = (
+                batch_mod.collect_result_actions(manifest)
+            )
+
+        self.assertEqual(summary['valid_items'], 1)
+        self.assertEqual(summary['partial_chunks'], 1)
+        self.assertEqual(summary['reason_counts']['result_unknown_id'], 1)
+        self.assertIn('script.rpy', replacements)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]['id'], 'unknown')
+        self.assertEqual(failures[0]['reason_code'], 'result_unknown_id')
+        self.assertEqual(failures[0]['result_index'], 1)
+
+    def test_collect_result_actions_preserves_empty_translation_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            result_path = package_dir / 'results.jsonl'
+            item_id = 'script.rpy:0:4'
+            response_text = json.dumps(
+                {'translations': [{'id': item_id, 'translation': ''}]},
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'chunk-1',
+                        'response': batch_mod.response_payload_with_text(
+                            {},
+                            response_text,
+                        ),
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest = {
+                '_package_dir': str(package_dir),
+                'result_jsonl_path': str(result_path),
+                'chunks': [
+                    {
+                        'key': 'chunk-1',
+                        'file_rel_path': 'script.rpy',
+                        'items': [
+                            {
+                                'id': item_id,
+                                'line': 0,
+                                'start': 4,
+                                'end': 11,
+                                'text': 'Hello',
+                                'prefix': '',
+                                'quote': '"',
+                            }
+                        ],
+                    }
+                ],
+            }
+
+            replacements, _translated, failures, summary = (
+                batch_mod.collect_result_actions(manifest)
+            )
+
+        self.assertEqual(replacements, {})
+        self.assertEqual(summary['partial_chunks'], 1)
+        self.assertEqual(
+            summary['reason_counts']['result_empty_translation'],
+            1,
+        )
+        self.assertEqual(
+            [failure['reason_code'] for failure in failures],
+            ['result_empty_translation'],
+        )
+        self.assertEqual(failures[0]['id'], item_id)
+
+    def test_collect_revision_actions_preserves_missing_field_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            result_path = package_dir / 'results.jsonl'
+            item_id = 'script.rpy:0:4:revision:0'
+            response_text = json.dumps(
+                {
+                    'revisions': [
+                        {
+                            'id': item_id,
+                            'should_update': True,
+                            'revised_translation': '您好',
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+            result_path.write_text(
+                json.dumps(
+                    {
+                        'key': 'rv-1',
+                        'response': batch_mod.response_payload_with_text(
+                            {},
+                            response_text,
+                        ),
+                    },
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            manifest = {
+                '_package_dir': str(package_dir),
+                'result_jsonl_path': str(result_path),
+                'chunks': [
+                    {
+                        'key': 'rv-1',
+                        'file_rel_path': 'script.rpy',
+                        'items': [
+                            {
+                                'id': item_id,
+                                'line': 0,
+                                'start': 4,
+                                'end': 11,
+                                'text': 'Hello',
+                                'source': 'Hello',
+                                'current_translation': '你好',
+                                'prefix': '',
+                                'quote': '"',
+                            }
+                        ],
+                    }
+                ],
+            }
+
+            _replacements, _lines, failures, summary, _preview = (
+                batch_mod.collect_revision_actions(manifest)
+            )
+
+        self.assertEqual(summary['partial_chunks'], 1)
+        self.assertEqual(summary['reason_counts']['result_missing_field'], 1)
+        self.assertEqual(
+            [failure['reason_code'] for failure in failures],
+            ['result_missing_field'],
+        )
+        self.assertEqual(failures[0]['id'], item_id)
+        self.assertEqual(failures[0]['field'], 'reason')
+
+    def test_collect_result_actions_rejects_duplicate_result_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
             package_dir = Path(tmp)
             result_path = package_dir / 'results.jsonl'
@@ -1350,10 +3080,15 @@ class BatchRepairRegressionTests(unittest.TestCase):
 
             replacements, _translated, failures, summary = batch_mod.collect_result_actions(manifest)
 
-        self.assertEqual(summary['valid_items'], 1)
-        self.assertEqual(summary['reason_counts']['duplicate_result_id'], 1)
-        self.assertEqual(len(replacements['script.rpy'][0]), 1)
-        self.assertEqual(failures, [])
+        self.assertEqual(summary['valid_items'], 0)
+        self.assertEqual(summary['reason_counts']['result_duplicate_id'], 1)
+        self.assertEqual(replacements, {})
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(
+            [failure['reason_code'] for failure in failures],
+            ['result_duplicate_id'],
+        )
+        self.assertEqual(failures[0]['id'], 'script.rpy:0:4')
 
     def test_collect_result_actions_skips_source_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2126,11 +3861,23 @@ class BatchRepairRegressionTests(unittest.TestCase):
             ]
 
         self.assertEqual(checked['last_check_summary']['safety_level'], 'warn')
-        self.assertEqual(checked['last_check_summary']['safety_reasons']['warn']['response_missing_item_id'], 1)
+        self.assertEqual(
+            checked['last_check_summary']['safety_reasons']['warn'][
+                'response_missing_expected_id'
+            ],
+            1,
+        )
+        self.assertNotIn(
+            'response_missing_item_id',
+            checked['last_check_summary']['safety_reasons']['warn'],
+        )
         self.assertEqual(final_script, first_line + second_line)
         update_progress.assert_not_called()
         self.assertEqual(check_failures[0]['status'], 'warn')
-        self.assertEqual(check_failures[0]['reason_code'], 'response_missing_item_id')
+        self.assertEqual(
+            check_failures[0]['reason_code'],
+            'response_missing_expected_id',
+        )
 
     def test_manifest_result_path_must_stay_in_package_dir(self):
         with tempfile.TemporaryDirectory() as tmp:

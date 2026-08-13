@@ -71,6 +71,8 @@ def _fingerprint_payload(manifest: dict[str, Any]) -> dict[str, Any]:
     }
     if "failures" in manifest:
         payload["failures"] = manifest.get("failures")
+    if "model_contract" in manifest:
+        payload["model_contract"] = manifest.get("model_contract")
     return payload
 
 
@@ -147,18 +149,26 @@ def create_sync_preview(
     tl_dir: str | os.PathLike[str],
     files: Iterable[dict[str, Any]],
     failures: Iterable[dict[str, Any]] = (),
+    contract_diagnostics: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Persist source/proposed snapshots, a unified diff, and a bound manifest."""
+    """Persist source/proposed snapshots, a unified diff, and a bound manifest.
+
+    ``contract_diagnostics`` stores final validation, retry, and unresolved-item
+    details in the bound manifest; those details are covered by its fingerprint.
+    """
     created = datetime.now(timezone.utc)
     run_name = created.strftime("%Y%m%dT%H%M%S.%fZ")
-    failure_entries = [
-        {
+    failure_entries = []
+    for item in failures:
+        entry = {
             "relative_path": str(item.get("relative_path") or ""),
             "reason_code": str(item.get("reason_code") or "adapter.writeback.block"),
             "message": str(item.get("message") or ""),
         }
-        for item in failures
-    ]
+        if item.get("item_id"):
+            entry["item_id"] = str(item.get("item_id"))
+        failure_entries.append(entry)
+    contract = dict(contract_diagnostics or {})
     package_dir = Path(log_dir) / "sync_runs" / run_name
     package_dir.mkdir(parents=True, exist_ok=False)
 
@@ -228,9 +238,27 @@ def create_sync_preview(
             "translated_items": total_items,
             "failure_files": len(failure_entries),
             "adapter_writeback_status": "partial" if failure_entries else "pass",
+            "model_contract_status": (
+                "partial"
+                if (
+                    contract.get("unresolved_ids")
+                    or contract.get("terminal_reason_counts")
+                )
+                else "pass"
+            ),
+            "model_contract_first_pass_valid": int(
+                contract.get("first_pass_valid") or 0
+            ),
+            "model_contract_expected": int(contract.get("final_expected") or 0),
+            "model_contract_final_valid": int(contract.get("final_valid") or 0),
+            "model_contract_targeted_retries": int(
+                contract.get("targeted_retry_requests") or 0
+            ),
+            "model_contract_unresolved": len(contract.get("unresolved_ids") or []),
         },
         "files": entries,
         "failures": failure_entries,
+        "model_contract": contract,
     }
     manifest["preview_fingerprint"] = _fingerprint(manifest)
     manifest_path = package_dir / "manifest.json"

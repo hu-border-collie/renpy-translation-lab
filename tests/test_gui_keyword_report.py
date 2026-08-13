@@ -68,6 +68,32 @@ class GuiKeywordReportTests(unittest.TestCase):
         self.assertEqual(update.status, "failed")
         self.assertIn("中断", update.heading)
 
+    def test_summarize_sync_partial_contract_warns_and_keeps_report(self):
+        update = summarize_sync_keyword_output(
+            SYNC_OUTPUT
+            + "Model contract chunk completeness: 1/2\n"
+            + "Targeted retries: 1 requests / 1 items\n"
+            + "Contract partial requests: 1\n",
+            0,
+        )
+
+        self.assertEqual(update.status, "warning")
+        self.assertIn("部分完成", update.heading)
+        self.assertIn("请求块完整率：1/2", update.facts)
+        self.assertIn("不完整请求：1 个", update.facts)
+
+    def test_summarize_sync_contract_issue_without_missing_items_still_warns(self):
+        update = summarize_sync_keyword_output(
+            SYNC_OUTPUT
+            + "Model contract chunk completeness: 2/2\n"
+            + "Unresolved contract items: 0\n"
+            + "Contract partial requests: 1\n",
+            0,
+        )
+
+        self.assertEqual(update.status, "warning")
+        self.assertIn("不完整请求：1 个", update.facts)
+
     def test_summarize_keyword_result_from_manifest_shows_completed_report_paths(self):
         summary = summarize_keyword_result_from_manifest({
             "_manifest_path": "C:\\package\\manifest.json",

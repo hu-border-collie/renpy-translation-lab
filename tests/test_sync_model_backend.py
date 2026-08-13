@@ -86,6 +86,34 @@ class SyncModelBackendTests(unittest.TestCase):
             },
         )
 
+    def test_gemini_adapter_keeps_named_schema_and_removes_internal_mode_hint(self):
+        schema = {
+            "type": "object",
+            "properties": {"translations": {"type": "array"}},
+        }
+        client = _Client(_Response())
+        backend = GeminiSyncBackend(
+            client,
+            serialize_response=lambda response: {},
+            extract_text=lambda payload: "",
+            extract_finish_reason=lambda payload: "",
+        )
+
+        backend.generate(
+            SyncGenerationRequest(
+                "gemini-test",
+                [],
+                {
+                    "response_json_schema": schema,
+                    "structured_output_mode": "strict_json_schema",
+                },
+            )
+        )
+
+        sent = client.models.calls[0]["config"]
+        self.assertEqual(sent["response_json_schema"], schema)
+        self.assertNotIn("structured_output_mode", sent)
+
     def test_gemini_timeout_seconds_becomes_http_options_milliseconds(self):
         config = {
             "timeout": 12,

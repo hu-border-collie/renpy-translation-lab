@@ -14,7 +14,8 @@
     "chunk_summary_count": 2,
     "ambiguous_summary_chunks": 0,
     "parse_errors": 0,
-    "reason_counts": {}
+    "reason_counts": {},
+    "diagnostic_counts": {}
   },
   "candidate_rows": [
     {

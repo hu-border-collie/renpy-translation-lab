@@ -174,7 +174,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 工具栏提供「刷新上下文」「翻译 A/B 对比」与「清空日志」。术语合并主入口在工作台 **关键词 / 术语** 结果区。打开「诊断与运行日志」时会重新读取最近任务记录；流程进行中会优先展示当前活动的记录。
 
-**试跑样本请求（probe）**：入口位于 **批量翻译 · 翻译进度 · 高级工具**，用于对 package 内少量请求做同步 `generate_content` 冒烟测试（默认 `--limit 3`）。不会提交批量任务或修改项目文件；适合在 `submit` 前排障 API、模型与请求格式。
+**试跑样本请求（probe）**：入口位于 **批量翻译 · 翻译进度 · 高级工具**，用于对 package 内少量请求做同步 `generate_content` 冒烟测试（默认 `--limit 3`）。不会提交批量任务或修改项目文件；适合在 `submit` 前排障 API、模型与请求格式。抽样 request row 必须仍能对应当前任务记录中的非空 chunk；若 package 已过期或损坏，命令会在调用 Provider 前失败并提示重建，避免无效请求产生费用或被误报为成功。
 
 **拆分翻译包（split）**：同在 **批量翻译 · 翻译进度 · 高级工具**，可按上限生成多个子包（默认 `--max-chunks 600`）。拆分后 RAG 为静态快照，各子包需分别 submit；主按钮行「提交剩余包」用于拆分场景。
 
@@ -270,7 +270,9 @@ build -> submit -> status -> download -> check
 
 ### 同步翻译
 
-在左导航选择 **同步翻译**，点击「**开始同步翻译**」。GUI 先无参数调用 `gemini_translate.py`，在 `logs/sync_runs/` 生成绑定当前项目的 manifest、源文件快照、候选文件和 `preview.diff`，此时不会修改项目脚本。预览包含变更时，页面启用「**确认并写回预览**」；若部分文件未通过 adapter 写回计划校验，GUI 显示「部分完成」警告，只允许写回 manifest 中其余已生成的安全预览。用户确认后 GUI 调用 `gemini_translate.py --apply MANIFEST`，写回前重新核对当前项目、翻译目录、manifest 中所有预览文件对应的源快照哈希和预览制品哈希。任何项目切换、源文件变化或制品篡改都会阻止写回。配置仍来自 `translator_config.json` 的 `sync.*` 段；其中 `timeout_seconds` 是单请求上限并会写入同步 manifest 的设置诊断。Gemini 后端使用现有 Gemini API Key，LiteLLM 后端使用「设置 → LiteLLM」中保存的供应商凭据或 LiteLLM 约定的环境变量。
+在左导航选择 **同步翻译**，点击「**开始同步翻译**」。GUI 先无参数调用 `gemini_translate.py`，在 `logs/sync_runs/` 生成绑定当前项目的 manifest、源文件快照、候选文件和 `preview.diff`，此时不会修改项目脚本。预览包含变更时，页面启用「**确认并写回预览**」；若模型结果仍有缺失/无效 ID，或部分文件未通过 adapter 写回计划校验，GUI 显示「部分完成」警告和结果完整率、定点重试、未解决项，只允许写回 manifest 中其余已生成的安全预览。用户确认后 GUI 调用 `gemini_translate.py --apply MANIFEST`，写回前重新核对当前项目、翻译目录、manifest 中所有预览文件对应的源快照哈希和预览制品哈希。任何项目切换、源文件变化或制品篡改都会阻止写回。配置仍来自 `translator_config.json` 的 `sync.*` 段；其中 `timeout_seconds` 是单请求上限并会写入同步 manifest 的设置诊断。Gemini 后端使用现有 Gemini API Key，LiteLLM 后端使用「设置 → LiteLLM」中保存的供应商凭据或 LiteLLM 约定的环境变量。
+
+模型返回先经过统一命名对象合同（翻译 `translations`、订正 `revisions`、关键词 `candidates`）。旧任务中的裸数组可继续读取；新请求只使用命名对象。有效结果会立即保留，只对缺失或无效 ID 做定点重试；重试仍不完整时 GUI 明确显示部分完成，不会把不完整结果误报为全部成功。详细合同与 Provider 降级策略见 [同步翻译工作流](sync_workflow.md#模型结果合同与定点重试)。
 
 #### LiteLLM 同步替代边界
 
@@ -300,7 +302,7 @@ python gemini_translate_batch.py download <manifest>
 python gemini_translate_batch.py preview-revisions <manifest>
 ```
 
-**同步订正**只调用 `sync-revisions`（**不带 `--apply`**），生成预览报告后停止；适合小范围试跑。
+**同步订正**只调用 `sync-revisions`（**不带 `--apply`**），生成预览报告后停止；适合小范围试跑。GUI 会同时显示结果完整率、定点重试与未解决项；部分结果无效时保留通过合同的订正项，并把任务标为部分完成。
 
 确认预览后，批量与同步订正均通过「**写回订正**」按钮调用 `apply-revisions <manifest>`，对**已预览的任务记录**写回，而不是重新跑 `sync-revisions --apply`。
 
@@ -332,7 +334,7 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 ### 同步关键词
 
-选择模式「同步」后点击「提取关键词」，GUI 会调用 `gemini_translate_batch.py sync-keywords`（无额外参数）。适合小范围即时生成报告；完成后同样会把关键词报告复制到 `extracted_keywords/`。不支持从任务记录恢复。运行前需已配置 API Key。
+选择模式「同步」后点击「提取关键词」，GUI 会调用 `gemini_translate_batch.py sync-keywords`（无额外参数）。适合小范围即时生成报告；完成后同样会把关键词报告复制到 `extracted_keywords/`。关键词没有固定的预期候选数，因此 GUI 显示请求块完整率、定点重试和不完整请求数；若模型结果合同不完整，任务显示部分完成，通过校验的候选仍会进入报告。不支持从任务记录恢复。运行前需已配置 API Key。
 
 ### 合并候选到 glossary
 

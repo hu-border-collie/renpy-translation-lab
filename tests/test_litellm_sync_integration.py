@@ -24,13 +24,22 @@ class LiteLLMSyncIntegrationTests(unittest.TestCase):
         fake_result = self._fake_result()
         fake_backend = mock.Mock()
         fake_backend.generate.return_value = fake_result
+        custom_providers = {"opencode-go": object()}
 
         with (
             mock.patch.object(batch_mod, "SYNC_BACKEND", "litellm"),
             mock.patch.object(batch_mod, "SYNC_MODEL", "openai/test"),
             mock.patch.object(batch_mod, "SYNC_TIMEOUT_SECONDS", 45),
+            mock.patch.object(
+                batch_mod.legacy,
+                "CUSTOM_LITELLM_PROVIDERS",
+                custom_providers,
+            ),
             mock.patch.object(batch_mod, "create_batch_client") as create_client,
-            mock.patch("litellm_sync_backend.LiteLLMSyncBackend", return_value=fake_backend),
+            mock.patch(
+                "litellm_sync_backend.LiteLLMSyncBackend",
+                return_value=fake_backend,
+            ) as backend_cls,
         ):
             result = batch_mod.run_sync_request(
                 {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
@@ -38,6 +47,10 @@ class LiteLLMSyncIntegrationTests(unittest.TestCase):
             )
 
         create_client.assert_not_called()
+        self.assertEqual(
+            backend_cls.call_args.kwargs["custom_providers"],
+            custom_providers,
+        )
         request = fake_backend.generate.call_args.args[0]
         self.assertEqual(request.model, "openai/test")
         self.assertEqual(request.config["timeout"], 45)

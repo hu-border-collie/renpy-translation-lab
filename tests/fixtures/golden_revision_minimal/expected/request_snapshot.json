@@ -16,8 +16,8 @@
         "chapter01/revisions.rpy:chapter01_terms:2:6010c123",
         "chapter01/revisions.rpy:chapter01_terms:3:f9326bcb"
       ],
-      "system_instruction_sha256": "e09a37995500b5fe3c1630a3d6257f3dcce92c57966bd34c8464c17482736c04",
-      "user_prompt_sha256": "c014365c962d78edc09b77b113a96446ba3cd24e7d3ee129f376f115c1462d32",
+      "system_instruction_sha256": "00b4bc7b1300c3090883b671cf9e80b9d697f589175ad197ef94d8e6ab6cf730",
+      "user_prompt_sha256": "62cf90d0de1c8f5fc125b428ae12f761c4d9c81e6ef023d7632250b9391a2fdd",
       "generation_config": {
         "keys": [
           "max_output_tokens",
@@ -33,30 +33,39 @@
           "thinking_level": "MINIMAL"
         },
         "response_json_schema": {
-          "type": "array",
-          "minItems": 3,
-          "maxItems": 3,
-          "items": {
-            "type": "object",
-            "required": [
-              "id",
-              "should_update",
-              "revised_translation",
-              "reason"
-            ],
-            "additionalProperties": false,
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "should_update": {
-                "type": "boolean"
-              },
-              "revised_translation": {
-                "type": "string"
-              },
-              "reason": {
-                "type": "string"
+          "type": "object",
+          "required": [
+            "revisions"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "revisions": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "should_update",
+                  "revised_translation",
+                  "reason"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "should_update": {
+                    "type": "boolean"
+                  },
+                  "revised_translation": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }

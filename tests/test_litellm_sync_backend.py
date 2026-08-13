@@ -276,6 +276,38 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         # Capability decision uses the original custom id → json_object.
         self.assertEqual(calls[0]["response_format"], {"type": "json_object"})
 
+    def test_unknown_provider_uses_prompt_only_json_capability(self):
+        calls = []
+        backend = LiteLLMSyncBackend(
+            completion=lambda **kwargs: calls.append(kwargs) or {"choices": []},
+        )
+        backend.generate(SyncGenerationRequest(
+            "future-provider/model-x",
+            "Translate this",
+            {"response_json_schema": {"type": "object"}},
+        ))
+
+        self.assertNotIn("response_format", calls[0])
+
+    def test_schema_name_comes_from_named_envelope(self):
+        calls = []
+        backend = LiteLLMSyncBackend(
+            completion=lambda **kwargs: calls.append(kwargs) or {"choices": []},
+        )
+        backend.generate(SyncGenerationRequest(
+            "openai/gpt-test",
+            "Translate this",
+            {
+                "response_json_schema": {
+                    "type": "object",
+                    "properties": {"revisions": {"type": "array"}},
+                }
+            },
+        ))
+
+        schema = calls[0]["response_format"]["json_schema"]
+        self.assertEqual(schema["name"], "revisions_response")
+
     def test_custom_provider_env_key_fallback_when_keyring_empty(self):
         calls = []
         backend = LiteLLMSyncBackend(

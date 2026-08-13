@@ -15,8 +15,8 @@
         "chapter01/keywords.rpy:2:keyword:0",
         "chapter01/keywords.rpy:5:keyword:1"
       ],
-      "system_instruction_sha256": "4ba09fb166d966c6fa69eb0d206807627a9dbdd5b894c292b5168c5f5ef10c36",
-      "user_prompt_sha256": "f43ad090ffe3634f8fec06e6818d103109873b52fb04ec1c52618ac3d26d2f5c",
+      "system_instruction_sha256": "9f4020722b63940d1daea0b040cbecdb871c8a778382ae57a625501e9ff323c7",
+      "user_prompt_sha256": "ab4618f1b8f0dfbb92bc15792aab8ee1a9f9256e34fe464abd162b9b5e9bbf55",
       "generation_config": {
         "keys": [
           "max_output_tokens",
@@ -72,6 +72,7 @@
                   },
                   "source_item_ids": {
                     "type": "array",
+                    "minItems": 1,
                     "items": {
                       "type": "string"
                     }
@@ -107,8 +108,8 @@
         "chapter01/keywords.rpy:9:keyword:2",
         "chapter01/keywords.rpy:12:keyword:3"
       ],
-      "system_instruction_sha256": "4ba09fb166d966c6fa69eb0d206807627a9dbdd5b894c292b5168c5f5ef10c36",
-      "user_prompt_sha256": "cf2b0379021530f50669ddfa6bddc15a1419cb5653070e29aabddbe96ed12725",
+      "system_instruction_sha256": "9f4020722b63940d1daea0b040cbecdb871c8a778382ae57a625501e9ff323c7",
+      "user_prompt_sha256": "8bd3c09c4a53077e2ead44a57f3e36c869cf9e2918db6f305a4e87bc6eaf2e7e",
       "generation_config": {
         "keys": [
           "max_output_tokens",
@@ -164,6 +165,7 @@
                   },
                   "source_item_ids": {
                     "type": "array",
+                    "minItems": 1,
                     "items": {
                       "type": "string"
                     }

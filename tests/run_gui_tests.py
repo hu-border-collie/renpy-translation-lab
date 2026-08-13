@@ -1,6 +1,8 @@
 """Discover ``test_gui_*`` unittest modules for GUI CI."""
 from __future__ import annotations
 
+import os
+import sys
 import unittest
 
 from test_runner_common import ensure_tests_on_path, parse_runner_args, run_discovered_suite
@@ -21,6 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     from gui_test_support import (
         guarded_gui_test_environment,
         guarded_test_result_class,
+        shutdown_gui_test_runtime,
     )
 
     guard = None
@@ -32,8 +35,16 @@ def main(argv: list[str] | None = None) -> int:
             resultclass=guarded_test_result_class(guard),
         )
     unexpected_dialogs = bool(guard and guard.rejected_dialogs)
-    return 1 if unexpected_dialogs else exit_code
+    runtime_stopped = shutdown_gui_test_runtime()
+    return 1 if unexpected_dialogs or not runtime_stopped else exit_code
+
+
+def _terminate_process(exit_code: int) -> None:
+    """Exit after flushing output without running unstable Qt finalizers."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(int(exit_code))
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _terminate_process(main())

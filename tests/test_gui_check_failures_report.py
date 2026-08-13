@@ -6,11 +6,13 @@ from gui_qt.check_failures_report import (
     REASON_CATEGORY_REBUILD,
     REASON_CATEGORY_REPAIR,
     REASON_CATEGORY_RETRY,
+    WARN_REASON_CODES,
     build_check_issues_report,
     classify_reason_category,
     group_failure_items,
     normalize_failure_entry,
     parse_check_failures_jsonl,
+    reason_code_label,
     resolve_check_report_path,
 )
 
@@ -89,6 +91,17 @@ class GuiCheckFailuresReportTests(unittest.TestCase):
         self.assertEqual(
             classify_reason_category("missing_manifest_file"),
             REASON_CATEGORY_REBUILD,
+        )
+
+    def test_unexpected_field_remains_a_labeled_diagnostic_not_warn_reason(self):
+        self.assertEqual(
+            reason_code_label("result_unexpected_field"),
+            "结果包含未知字段",
+        )
+        self.assertNotIn("result_unexpected_field", WARN_REASON_CODES)
+        self.assertEqual(
+            classify_reason_category("result_unexpected_field"),
+            "unknown",
         )
 
     def test_classify_validation_preserve_term_failures_as_retry(self):

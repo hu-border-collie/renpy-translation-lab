@@ -664,6 +664,70 @@ def import_manifest_results(
                 if not isinstance(row, Mapping):
                     skipped_rows += 1
                     continue
+                row_key = str(row.get("key") or row.get("custom_id") or row_index)
+                attempts = row.get("provider_response_attempts")
+                if isinstance(attempts, list) and attempts:
+                    appended_attempt = False
+                    for attempt_index, attempt in enumerate(attempts, start=1):
+                        if not isinstance(attempt, Mapping):
+                            continue
+                        attempt_kind = str(attempt.get("kind") or "request")
+                        response_payload = attempt.get("response")
+                        if not isinstance(response_payload, Mapping):
+                            response_payload = {}
+                        if attempt_kind == "first_pass" and not response_payload:
+                            response_payload = row.get("response_payload")
+                            if not isinstance(response_payload, Mapping):
+                                response_payload = row.get("response")
+                            if not isinstance(response_payload, Mapping):
+                                response_payload = {}
+                        usage = attempt.get("usage_metadata")
+                        if attempt_kind == "first_pass" and not isinstance(
+                            usage, Mapping
+                        ):
+                            usage = row.get("usage_metadata")
+                        if not isinstance(usage, Mapping):
+                            usage = extract_provider_usage(response_payload)
+                        if not response_payload and not usage:
+                            continue
+                        raw_item_ids = attempt.get("item_ids")
+                        item_ids = (
+                            [str(item) for item in raw_item_ids]
+                            if isinstance(raw_item_ids, list)
+                            else []
+                        )
+                        attempt_key = f"{row_key}:attempt:{attempt_index}"
+                        candidates.append(
+                            build_usage_record(
+                                game_root=game_root,
+                                task_mode=task_mode,
+                                stage=str(row.get("pipeline_stage") or stage),
+                                provider=str(row.get("provider") or default_provider),
+                                model=str(row.get("model") or default_model),
+                                usage_metadata=usage,
+                                response_payload=response_payload,
+                                operation_id=operation_id,
+                                run_id=run_id,
+                                manifest_id=manifest_id,
+                                thinking_level=thinking_level,
+                                execution_mode=str(row.get("execution_mode") or execution),
+                                source_key=attempt_key,
+                                source={
+                                    "kind": "manifest_result_attempt",
+                                    "manifest_path": str(manifest.get("_manifest_path") or ""),
+                                    "result_path": path,
+                                    "row_key": row_key,
+                                    "row_index": row_index,
+                                    "attempt_index": attempt_index,
+                                    "attempt_kind": attempt_kind,
+                                    "item_ids": item_ids,
+                                },
+                                pricing_config=effective_pricing,
+                            )
+                        )
+                        appended_attempt = True
+                    if appended_attempt:
+                        continue
                 response_payload = row.get("response_payload")
                 if not isinstance(response_payload, Mapping):
                     response_payload = row.get("response")
@@ -678,7 +742,6 @@ def import_manifest_results(
                 if not response_payload and not usage:
                     skipped_rows += 1
                     continue
-                row_key = str(row.get("key") or row.get("custom_id") or row_index)
                 candidates.append(
                     build_usage_record(
                         game_root=game_root,

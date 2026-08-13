@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from litellm_provider_config import DEFAULT_MODELS, SUPPORTED_PROVIDERS
 from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
+from translation_core import MODE_TRANSLATION, build_translation_schema, validate_model_response
 
 
 REQUEST_TIMEOUT_SECONDS = 30
@@ -83,12 +84,7 @@ def api_key_for(
 
 
 def contract_request(spec: ProviderSpec) -> SyncGenerationRequest:
-    schema = {
-        "type": "object",
-        "properties": {"ok": {"type": "boolean"}},
-        "required": ["ok"],
-        "additionalProperties": False,
-    }
+    schema = build_translation_schema([{"id": "smoke-1", "text": "Hello"}])
     config: dict[str, Any] = {
         "temperature": 0,
         "max_output_tokens": MAX_OUTPUT_TOKENS,
@@ -101,8 +97,9 @@ def contract_request(spec: ProviderSpec) -> SyncGenerationRequest:
     return SyncGenerationRequest(
         model=spec.model,
         contents=(
-            'Return only the compact JSON object {"ok":true}. '
-            "Do not add prose or markdown."
+            'Return only the compact JSON object '
+            '{"translations":[{"id":"smoke-1","translation":"你好"}]}. '
+            "Keep the id exact. Do not add prose or markdown."
         ),
         config=config,
     )
@@ -155,9 +152,17 @@ def validate_result(spec: ProviderSpec, result: Any) -> dict[str, Any]:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
         raise ContractSmokeError("response text is not valid JSON") from exc
-    if not isinstance(parsed, dict) or parsed.get("ok") is not True:
-        raise ContractSmokeError("response JSON does not satisfy the smoke schema")
-    return parsed
+    report = validate_model_response(
+        parsed,
+        mode=MODE_TRANSLATION,
+        expected_units=[{"id": "smoke-1", "text": "Hello"}],
+    )
+    if not report.complete:
+        reasons = ",".join(sorted(report.reason_counts())) or "unknown"
+        raise ContractSmokeError(
+            f"response JSON does not satisfy the translation contract: {reasons}"
+        )
+    return report.to_envelope()
 
 
 def classify_error(exc: Exception) -> str:

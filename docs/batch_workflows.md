@@ -78,7 +78,7 @@ Discovery schema 与核心结果 envelope 当前都使用 `schema_version=1`，�
 - `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出。
 - Batch 产物默认写到 `logs/batch_jobs/<package>/`。
 - `doctor` 只检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，不调用 Gemini，也不会写回 `.rpy`。
-- `probe` 会用同步请求做最小 smoke test。
+- `probe` 会用同步请求做最小 smoke test；每个被抽样的 request row 必须能对应当前 manifest 中的非空 chunk，否则会在调用 Provider 前拒绝并提示重建 package，避免把过期或损坏的请求误判为成功。
 - `check` 是干跑校验，不会修改 `.rpy`；它会把当前 manifest、results、目标 item 形状和 check contract version 写入 `last_check_summary.check_fingerprint`，输出 `safe / warn / block` 安全等级，并在包目录写入 `check_failures.jsonl`。
 - `apply` 默认要求最近一次 `check` 对应当前 manifest/results，且安全等级必须是 `safe`；未 check、results 变化、manifest item 变化、`warn` 或 `block` 都会拒绝写回。
 - `--force` 只绕过“manifest 已经 apply 过”的重复写回保护，不会绕过 stale check、source snapshot 校验或 `block`。

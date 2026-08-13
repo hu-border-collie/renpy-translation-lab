@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from .translation_workflow import WorkflowUpdate
+from .user_copy import MODEL_CONTRACT_COPY
 
 
 def summarize_sync_translation_output(
@@ -70,7 +71,13 @@ def summarize_sync_translation_output(
             facts=facts,
         )
 
-    if lines_to_translate > 0 and translated_count == 0:
+    preview_status_safe = "Preview status: safe" in output
+    preview_status_partial = "Preview status: partial" in output
+    if (
+        lines_to_translate > 0
+        and translated_count == 0
+        and not preview_status_partial
+    ):
         return WorkflowUpdate(
             status="failed",
             heading="同步翻译未完成",
@@ -78,8 +85,6 @@ def summarize_sync_translation_output(
             facts=facts,
         )
 
-    preview_status_safe = "Preview status: safe" in output
-    preview_status_partial = "Preview status: partial" in output
     if "Sync preview manifest:" not in output or not (
         preview_status_safe or preview_status_partial
     ):
@@ -97,7 +102,10 @@ def summarize_sync_translation_output(
         lines_to_translate > 0 and translated_count < lines_to_translate
     )
     if preview_status_partial:
-        message = f"部分文件未通过写回计划校验，其余安全预览已生成。{message}"  # noqa: RUF001
+        if re.search(r"^Unresolved contract items:\s*[1-9]\d*\s*$", output, re.MULTILINE):
+            message = f"{MODEL_CONTRACT_COPY['partial_translation']}{message}"
+        else:
+            message = f"部分文件未通过写回计划或结果合同校验，其余安全预览已生成。{message}"  # noqa: RUF001
     if translation_is_partial:
         message = (
             f"部分完成（已翻译 {translated_count}/{lines_to_translate} 行）。{message}"  # noqa: RUF001
@@ -138,12 +146,31 @@ def _collect_facts(output: str) -> list[str]:
         (r"^Sync preview manifest: (.+)$", "预览清单"),
         (r"^Sync preview report: (.+)$", "差异报告"),
         (r"^Preview failures: (\d+)$", "预览失败文件"),
+        (r"^Model contract completeness: (\d+/\d+)$", MODEL_CONTRACT_COPY["completeness"]),
+        (r"^Unresolved contract items: (\d+)$", MODEL_CONTRACT_COPY["unresolved_items"]),
+        (r"^Contract partial requests: (\d+)$", MODEL_CONTRACT_COPY["partial_requests"]),
         (r"^Applied files: (\d+)$", "已写回文件"),
     ):
         match = re.search(pattern, output, re.MULTILINE)
         if match:
-            if label in {"待处理文件", "预览失败文件", "已写回文件"}:
+            if label in {
+                "待处理文件",
+                "预览失败文件",
+                "未解决结果",
+                "不完整请求",
+                "已写回文件",
+            }:
                 facts.append(f"{label}：{match.group(1)} 个")
             else:
                 facts.append(f"{label}：{match.group(1).strip()}")
+    retry_match = re.search(
+        r"^Targeted retries: (\d+) requests / (\d+) items$",
+        output,
+        re.MULTILINE,
+    )
+    if retry_match:
+        facts.append(
+            f"{MODEL_CONTRACT_COPY['targeted_retries']}："
+            f"{retry_match.group(1)} 次请求 / {retry_match.group(2)} 项"
+        )
     return facts

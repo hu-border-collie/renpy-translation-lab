@@ -1412,6 +1412,328 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(successful, ['task:0:10'])
         self.assertEqual(validator.call_count, 2)
 
+    def test_process_batch_with_retry_only_retries_missing_ids(self):
+        batch = [
+            {
+                'id': 'file:0:1',
+                'text': 'Hello',
+                'line': 0,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:0:1',
+            },
+            {
+                'id': 'file:0:10',
+                'text': 'World',
+                'line': 0,
+                'start': 10,
+                'end': 17,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:0:10',
+            },
+        ]
+        seen_batches = []
+
+        def fake_call(_prompt, items, **_kwargs):
+            seen_batches.append([item['id'] for item in items])
+            if len(seen_batches) == 1:
+                payload = {
+                    'translations': [
+                        {'id': 'file:0:1', 'translation': '你好'},
+                    ]
+                }
+            else:
+                payload = {
+                    'translations': [
+                        {'id': 'file:0:10', 'translation': '世界'},
+                    ]
+                }
+            return translation_core.validate_model_response(
+                payload,
+                expected_units=items,
+            )
+
+        replacements = {}
+        diagnostics = runtime.new_sync_contract_diagnostics()
+        failures = []
+        with (
+            mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_call),
+            mock.patch.object(runtime, 'get_random_delay', return_value=0),
+            mock.patch.object(runtime.time, 'sleep'),
+        ):
+            successful = runtime.process_batch_with_retry(
+                batch,
+                replacements,
+                contract_diagnostics=diagnostics,
+                contract_failures=failures,
+            )
+
+        finalized = runtime.finalize_sync_contract_diagnostics(diagnostics)
+        self.assertEqual(seen_batches, [['file:0:1', 'file:0:10'], ['file:0:10']])
+        self.assertEqual(successful, ['task:0:1', 'task:0:10'])
+        self.assertEqual(len(replacements[0]), 2)
+        self.assertEqual(finalized['first_pass_valid'], 1)
+        self.assertEqual(finalized['targeted_retry_requests'], 1)
+        self.assertEqual(finalized['final_completeness'], 1.0)
+        self.assertEqual(finalized['unresolved_ids'], [])
+        self.assertEqual(failures, [])
+
+    def test_process_batch_with_retry_normalizes_integer_ids(self):
+        batch = [
+            {
+                'id': 101,
+                'text': 'Hello',
+                'line': 0,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:101',
+            },
+            {
+                'id': 102,
+                'text': 'World',
+                'line': 0,
+                'start': 10,
+                'end': 17,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:102',
+            },
+        ]
+        seen_batches = []
+
+        def fake_call(_prompt, items, **_kwargs):
+            seen_batches.append([item['id'] for item in items])
+            returned = items if len(seen_batches) > 1 else items[:1]
+            return translation_core.validate_model_response(
+                {
+                    'translations': [
+                        {
+                            'id': str(item['id']),
+                            'translation': '译文',
+                        }
+                        for item in returned
+                    ]
+                },
+                expected_units=items,
+            )
+
+        replacements = {}
+        diagnostics = runtime.new_sync_contract_diagnostics()
+        with (
+            mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_call),
+            mock.patch.object(runtime, 'get_random_delay', return_value=0),
+            mock.patch.object(runtime.time, 'sleep'),
+        ):
+            successful = runtime.process_batch_with_retry(
+                batch,
+                replacements,
+                contract_diagnostics=diagnostics,
+            )
+
+        finalized = runtime.finalize_sync_contract_diagnostics(diagnostics)
+        self.assertEqual(seen_batches, [[101, 102], [102]])
+        self.assertEqual(successful, ['task:101', 'task:102'])
+        self.assertEqual(len(replacements[0]), 2)
+        self.assertEqual(finalized['first_pass_valid'], 1)
+        self.assertEqual(finalized['final_valid'], 2)
+        self.assertEqual(finalized['final_completeness'], 1.0)
+        self.assertEqual(finalized['unresolved_ids'], [])
+
+    def test_process_batch_with_retry_audits_unmatched_retry_ids(self):
+        batch = [
+            {
+                'id': 'file:0:1',
+                'text': 'Hello',
+                'line': 0,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:0:1',
+            },
+        ]
+        report = translation_core.ModelContractReport(
+            mode=translation_core.MODE_TRANSLATION,
+            envelope_key='translations',
+            expected_ids=['file:0:1'],
+            valid_ids=['file:0:1'],
+            retry_ids=['unknown'],
+            issues=[
+                translation_core.ModelContractIssue(
+                    translation_core.CONTRACT_UNKNOWN_ID,
+                    item_id='unknown',
+                )
+            ],
+        )
+        diagnostics = runtime.new_sync_contract_diagnostics()
+        with (
+            mock.patch.object(
+                runtime,
+                'process_batch',
+                return_value={
+                    'progress_entries': ['task:0:1'],
+                    'accepted_ids': ['file:0:1'],
+                    'retry_ids': ['unknown'],
+                    'contract': report,
+                },
+            ),
+            mock.patch.object(runtime, 'get_random_delay', return_value=0),
+            mock.patch.object(runtime.time, 'sleep'),
+        ):
+            successful = runtime.process_batch_with_retry(
+                batch,
+                {},
+                contract_diagnostics=diagnostics,
+            )
+
+        finalized = runtime.finalize_sync_contract_diagnostics(diagnostics)
+        self.assertEqual(successful, ['task:0:1'])
+        self.assertEqual(finalized['final_completeness'], 1.0)
+        self.assertEqual(
+            finalized['terminal_reason_counts'],
+            {translation_core.CONTRACT_UNKNOWN_ID: 1},
+        )
+
+    def test_process_batch_with_retry_splits_when_full_batch_makes_no_progress(self):
+        batch = [
+            {
+                'id': 'file:0:1',
+                'text': 'Hello',
+                'line': 0,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:0:1',
+            },
+            {
+                'id': 'file:1:1',
+                'text': 'World',
+                'line': 1,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:1:1',
+            },
+        ]
+        seen_batches = []
+
+        def fake_call(_prompt, items, **_kwargs):
+            seen_batches.append([item['id'] for item in items])
+            translations = []
+            if len(items) == 1:
+                translations = [{
+                    'id': items[0]['id'],
+                    'translation': '你好',
+                }]
+            return translation_core.validate_model_response(
+                {'translations': translations},
+                expected_units=items,
+            )
+
+        replacements = {}
+        diagnostics = runtime.new_sync_contract_diagnostics()
+        with (
+            mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_call),
+            mock.patch.object(runtime, 'get_random_delay', return_value=0),
+            mock.patch.object(runtime.time, 'sleep'),
+        ):
+            successful = runtime.process_batch_with_retry(
+                batch,
+                replacements,
+                contract_diagnostics=diagnostics,
+            )
+
+        self.assertEqual(
+            seen_batches,
+            [['file:0:1', 'file:1:1'], ['file:0:1'], ['file:1:1']],
+        )
+        self.assertEqual(successful, ['task:0:1', 'task:1:1'])
+        self.assertEqual(diagnostics['targeted_retry_requests'], 0)
+        self.assertEqual(diagnostics['split_retry_requests'], 2)
+        self.assertEqual(diagnostics['retry_lineage'], [{
+            'kind': 'split',
+            'depth': 1,
+            'item_ids': ['file:0:1', 'file:1:1'],
+            'child_item_ids': [['file:0:1'], ['file:1:1']],
+            'reason_counts': {
+                translation_core.CONTRACT_MISSING_EXPECTED_ID: 2,
+            },
+        }])
+
+    def test_contract_completeness_excludes_adapter_rejected_items(self):
+        batch = [
+            {
+                'id': 'file:0:1',
+                'text': 'Hello',
+                'line': 0,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:0:1',
+            },
+            {
+                'id': 'file:0:10',
+                'text': 'World',
+                'line': 0,
+                'start': 10,
+                'end': 17,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': 'task:0:10',
+            },
+        ]
+
+        def fake_call(_prompt, items, **_kwargs):
+            return translation_core.validate_model_response(
+                {
+                    'translations': [
+                        {'id': item['id'], 'translation': '译文'}
+                        for item in items
+                    ]
+                },
+                expected_units=items,
+            )
+
+        def validator(entry, _translated):
+            return (
+                entry['id'] == 'file:0:1',
+                'adapter.validation.block',
+            )
+
+        replacements = {}
+        diagnostics = runtime.new_sync_contract_diagnostics()
+        failures = []
+        with (
+            mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_call),
+            mock.patch.object(runtime, 'get_random_delay', return_value=0),
+            mock.patch.object(runtime.time, 'sleep'),
+            mock.patch.object(runtime, 'log_failure'),
+        ):
+            successful = runtime.process_batch_with_retry(
+                batch,
+                replacements,
+                translation_validator=validator,
+                contract_diagnostics=diagnostics,
+                contract_failures=failures,
+            )
+
+        finalized = runtime.finalize_sync_contract_diagnostics(diagnostics)
+        self.assertEqual(successful, ['task:0:1'])
+        self.assertEqual(finalized['first_pass_valid'], 1)
+        self.assertEqual(finalized['final_valid'], 1)
+        self.assertEqual(finalized['final_completeness'], 0.5)
+        self.assertEqual(finalized['unresolved_ids'], ['file:0:10'])
+        self.assertEqual(finalized['terminal_reason_counts'], {'validation_failed': 1})
+        self.assertEqual([item['item_id'] for item in failures], ['file:0:10'])
+
     def test_process_batch_stores_normalized_text_for_sync_rag(self):
         old_normalize_map = runtime.NORMALIZE_TRANSLATION_MAP
         old_use_memory = runtime.USE_TRANSLATION_MEMORY
