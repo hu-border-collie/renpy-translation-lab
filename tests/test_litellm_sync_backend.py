@@ -295,14 +295,17 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         self.assertEqual([call["api_key"] for call in calls], list(store.keys))
         self.assertEqual(
             result.request_metadata["credential_attempts"],
-            ["openai#1:****1111", "openai#2:****2222"],
+            ["openai#1:key:c8c5267554", "openai#2:key:785abd44b6"],
         )
         self.assertEqual(
             result.request_metadata["credential_identity"],
-            "openai#2:****2222",
+            "openai#2:key:785abd44b6",
         )
-        self.assertNotIn("first-key-1111", repr(result.request_metadata))
-        self.assertNotIn("second-key-2222", repr(result.request_metadata))
+        metadata_repr = repr(result.request_metadata)
+        self.assertNotIn("first-key-1111", metadata_repr)
+        self.assertNotIn("second-key-2222", metadata_repr)
+        self.assertNotIn("1111", metadata_repr)
+        self.assertNotIn("2222", metadata_repr)
 
     def test_authentication_failure_does_not_retry_or_rotate(self):
         calls = []
@@ -337,7 +340,45 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         self.assertNotIn("stored-secret", str(captured.exception))
         self.assertEqual(
             captured.exception.request_metadata["credential_attempts"],
-            ["openai#1:****1111"],
+            ["openai#1:key:fc1a1e7ee5"],
+        )
+
+    def test_credential_identity_is_non_reversible_and_stable(self):
+        from litellm_sync_backend import _masked_key_identity
+
+        identity = _masked_key_identity("openai", "first-key-1111", index=0)
+        self.assertEqual(identity, "openai#1:key:c8c5267554")
+        self.assertNotIn("first-key", identity)
+        self.assertNotIn("1111", identity)
+        self.assertEqual(
+            _masked_key_identity("openai", "first-key-1111", index=0),
+            identity,
+        )
+        self.assertNotEqual(
+            _masked_key_identity("openai", "second-key-2222", index=1),
+            identity,
+        )
+        self.assertEqual(
+            _masked_key_identity("openai", "second-key-2222", index=1),
+            "openai#2:key:785abd44b6",
+        )
+        self.assertEqual(
+            _masked_key_identity("openai", ""),
+            "openai:key:empty",
+        )
+
+    def test_serialize_failure_keeps_request_metadata(self):
+        backend = LiteLLMSyncBackend(
+            completion=lambda **_kwargs: object(),
+        )
+        with self.assertRaises(LiteLLMBackendError) as captured:
+            backend.generate(SyncGenerationRequest("openai/test", "hello"))
+
+        self.assertEqual(captured.exception.category, "invalid_response")
+        self.assertEqual(captured.exception.request_metadata["provider"], "openai")
+        self.assertEqual(
+            captured.exception.request_metadata["credential_count"],
+            0,
         )
 
     def test_backend_error_keeps_chain_and_detail_for_local_logs(self):

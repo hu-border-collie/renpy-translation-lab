@@ -348,7 +348,11 @@ class ModelUsageLedgerTests(unittest.TestCase):
                 "provider": "openai",
                 "credential_identity": "raw-secret-key",
                 "credential_source": "secret-value",
-                "credential_attempts": ["openai#1:****1234", "raw-secret-key"],
+                "credential_attempts": [
+                    "openai#1:****1234",
+                    "openai#2:key:785abd44b6",
+                    "raw-secret-key",
+                ],
                 "ignored_provider_options": ["thinking_config", "secret-value"],
             }
         )
@@ -357,7 +361,7 @@ class ModelUsageLedgerTests(unittest.TestCase):
         self.assertNotIn("credential_source", normalized)
         self.assertEqual(
             normalized["credential_attempts"],
-            ["openai#1:****1234"],
+            ["openai#1:****1234", "openai#2:key:785abd44b6"],
         )
         self.assertEqual(
             normalized["ignored_provider_options"],

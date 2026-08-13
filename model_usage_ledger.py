@@ -440,10 +440,15 @@ def normalize_request_metadata(value: Mapping[str, Any] | None) -> dict[str, Any
 
 
 def _safe_credential_identity(value: Any) -> str:
-    """Accept only the adapter's masked identity form, never a raw secret."""
+    """Accept only the adapter's masked identity forms, never a raw secret.
+
+    Two forms are accepted: the current non-reversible digest
+    (``provider#n:key:<hex>``) and the legacy masked suffix form
+    (``provider#n:****abcd``) so previously persisted records stay readable.
+    """
     identity = str(value or "").strip()
     if not re.fullmatch(
-        r"[a-z0-9][a-z0-9._-]*(?:#\d+)?:\*{4}\S{0,4}",
+        r"[a-z0-9][a-z0-9._-]*(?:#\d+)?:(?:\*{4}\S{0,4}|key:[a-f0-9]{10})",
         identity,
         flags=re.IGNORECASE,
     ):

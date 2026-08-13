@@ -43,7 +43,7 @@
 | `unsupported_capability` / `missing_dependency` | 立即失败，由用户修正 Provider、模型或依赖 |
 | 未分类 Provider 错误（`provider_error`） | 不重试，但保留拆包兜底：多行 batch 失败时拆成两半继续，把可能由单行引起的问题隔离，健康行仍可产出；单行仍未解决时按既有合同记录失败 |
 
-LiteLLM 多 Key 轮换只发生在当前 Provider 的凭据集合内，记录形如 `openai#2:****abcd` 的脱敏 identity；不会调用或修改 Gemini keyring。401/403 不会尝试下一把 Key。所有退避与重试均受固定次数和单请求 `timeout_seconds` 约束。
+LiteLLM 多 Key 轮换只发生在当前 Provider 的凭据集合内，记录形如 `openai#2:key:3f9a2c1b4e` 的**不可逆** identity（密钥 SHA-256 摘要前缀，不含任何原始密钥字符）；不会调用或修改 Gemini keyring。401/403 不会尝试下一把 Key。所有退避与重试均受固定次数和单请求 `timeout_seconds` 约束。
 
 后端错误在 UI 与结果文件中只显示安全摘要（如 `provider request failed [provider_error]`），不回显 Provider 异常正文或凭据。为保留排障线索，backend 会以 `raise ... from exc` 保留原始异常链，翻译流程的本地失败日志（`logs/`）会在未分类 Provider 错误时附上截断的原始消息；这些原始文本不会进入 GUI 或任何结果/manifest 文件。
 

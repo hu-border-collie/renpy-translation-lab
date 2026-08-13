@@ -1,6 +1,7 @@
 """Optional LiteLLM implementation of the synchronous model backend."""
 
 import os
+import hashlib
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional
@@ -95,7 +96,11 @@ def _safe_backend_error(
     )
 
 
-def _serialize_response(response: Any) -> Mapping[str, Any]:
+def _serialize_response(
+    response: Any,
+    *,
+    request_metadata: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any]:
     payload: Dict[str, Any] | None = None
     if isinstance(response, Mapping):
         payload = dict(response)
@@ -111,6 +116,7 @@ def _serialize_response(response: Any) -> Mapping[str, Any]:
         raise LiteLLMBackendError(
             f"LiteLLM returned unsupported response type: {type(response).__name__}",
             category="invalid_response",
+            request_metadata=request_metadata,
             internal=True,
         )
     hidden = getattr(response, "_hidden_params", None)
@@ -155,10 +161,17 @@ def _messages(contents: Any, config: Mapping[str, Any]) -> List[Dict[str, str]]:
 
 
 def _masked_key_identity(provider: str, key: str, index: int | None = None) -> str:
-    """Return a log-safe provider/key identity without exposing the secret."""
-    suffix = str(key or "")[-4:] if len(str(key or "")) >= 4 else ""
+    """Return a non-reversible provider/key identity for logs and metadata.
+
+    Uses a SHA-256 digest prefix of the key instead of any raw key material
+    (including a final-character suffix), so the value cannot be reversed into
+    the secret while still identifying the same key across runs. The ordinal
+    (when known) keeps rotation attempts distinguishable within one provider.
+    """
+    raw = str(key or "")
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10] if raw else "empty"
     ordinal = f"#{index + 1}" if index is not None else ""
-    return f"{provider}{ordinal}:****{suffix}"
+    return f"{provider}{ordinal}:key:{digest}"
 
 
 @dataclass(frozen=True)
@@ -257,6 +270,14 @@ class LiteLLMSyncBackend:
         provider: str,
         custom: CustomLiteLLMProvider | None,
     ) -> tuple[_ResolvedCredential, ...]:
+        """Resolve credentials in precedence order for one provider.
+
+        Precedence: the explicit constructor API key first; otherwise the
+        provider keyring with the active key ordered first (rotation only
+        considers keys belonging to this provider); then the custom-provider
+        environment variable; otherwise no credentials. Every ``identity`` is a
+        non-reversible digest, so metadata and logs never contain key material.
+        """
         if self._api_key:
             return (
                 _ResolvedCredential(
@@ -543,7 +564,7 @@ class LiteLLMSyncBackend:
         *,
         request_metadata: Mapping[str, Any] | None = None,
     ) -> SyncGenerationResult:
-        payload = _serialize_response(response)
+        payload = _serialize_response(response, request_metadata=request_metadata)
         choices = payload.get("choices") or []
         choice = choices[0] if choices and isinstance(choices[0], Mapping) else {}
         message = choice.get("message") or {}
