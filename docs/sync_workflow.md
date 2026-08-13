@@ -24,6 +24,28 @@
 
 选择 LiteLLM 后端时，可通过 `sync.custom_litellm_providers` 注册 OpenAI 兼容但 LiteLLM 未内置的服务（OpenCode Go、中转站、本地 vLLM 等）：每项配置 `id` / `label` / `base_url` / `models_url` / `api_key_env`，请求会改写为 `openai/<模型>` 并逐请求透传 `api_base`，密钥优先使用系统凭据管理器。字段与示例见 [安装与本地配置 · 自定义 OpenAI 兼容 Provider](setup.md#自定义-openai-兼容-providerlitellm-同步)。
 
+## Reasoning 与输出预算诊断
+
+同步结果和实际模型用量账本会分别记录 Provider 可提供的 `completion_tokens`、`reasoning_tokens` 与正文输出 Token。正文计数缺失时显示 `unknown`，不会跨 Provider 假定 `completion - reasoning` 就是正文。若空正文/截断同时伴随 reasoning 计数和输出预算耗尽，结果会记录稳定原因码（例如 `reasoning_budget_exhausted`），GUI 摘要会显示 reasoning 预算告警和截断次数。结果、日志和 GUI 只显示计数与原因码，不回显 Provider 异常正文或凭据。
+
+项目没有增加伪装成通用能力的 reasoning 配置。`thinking_level` / `thinking_config` 仍是 Gemini 专属语义：Gemini 原生后端可消费它；LiteLLM 后端不会把该字段发送给 OpenAI-compatible Provider，而是在安全的 `request_metadata.ignored_provider_options` 中记录该能力未应用。未来某个 Provider 若要支持专属 reasoning 参数，应通过显式 capability/provider options 接入并独立测试。
+
+## 错误分类与有界恢复
+
+生产同步入口优先读取 backend 提供的结构化错误分类；只有 Google SDK 未提供分类时才使用状态码、异常类型和窄化的兼容判断。恢复规则固定为：
+
+| 分类 | 行为 |
+|---|---|
+| `authentication` | 立即失败；不重试、不拆包、不轮换模型 |
+| `rate_limit` | 有界退避；Gemini 只使用 Gemini 自己的轮换策略，LiteLLM 可在同一 Provider 的保存密钥集合内尝试下一把 Key |
+| `service_unavailable` / `timeout` | 在同一请求上有界重试；耗尽后失败，不用拆包制造更多请求 |
+| `invalid_response` | 翻译请求可按现有合同做定点重试/拆包；不会当作网络故障无限重试 |
+| `unsupported_capability` / `missing_dependency` / 未分类 Provider 错误 | 立即失败，由用户修正 Provider、模型或依赖 |
+
+LiteLLM 多 Key 轮换只发生在当前 Provider 的凭据集合内，记录形如 `openai#2:****abcd` 的脱敏 identity；不会调用或修改 Gemini keyring。401/403 不会尝试下一把 Key。所有退避与重试均受固定次数和单请求 `timeout_seconds` 约束。
+
+GUI 的停止操作会使当前 CLI 任务以失败/取消状态收尾；即使子进程在终止竞态中返回 0，也不会接受其迟到成功状态或继续进入 preview/apply 流程。
+
 ## 模型结果合同与定点重试
 
 同步翻译、同步订正和关键词提取共用同一条 provider-neutral 校验边界。新请求要求模型返回带名称的 JSON 对象：翻译为 `{"translations":[...]}`，订正为 `{"revisions":[...]}`，关键词为 `{"candidates":[...]}`。旧任务中的裸数组结果仍可读取，但只作为迁移兼容；新提示词和 schema 不再生成裸数组合同。
@@ -41,7 +63,7 @@ python scripts/run_provider_contract_smoke.py --provider gemini
 python scripts/run_provider_contract_smoke.py --provider deepseek
 ```
 
-脚本每个 Provider 最多发送一次、限制输出 token 和超时；未配置对应凭据会跳过，不会修改项目文件。正式项目仍应先用小范围同步任务验证实际翻译/订正 envelope。
+脚本每个 Provider 最多发送一次、限制输出 token 和超时；通过后只打印 completion/reasoning/正文 Token 的安全摘要，失败时只打印分类与安全错误文案。未配置对应凭据会跳过，不会修改项目文件。正式项目仍应先用小范围同步任务验证实际翻译/订正 envelope。
 
 ## 预览后写回
 

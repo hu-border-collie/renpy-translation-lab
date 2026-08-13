@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
+import model_usage_ledger
+
 from project_analysis import (
     KIND_LABEL,
     KIND_PROJECT_BRIEF,
@@ -42,6 +44,39 @@ from sync_model_backend import (
 PROMPT_SCHEMA_VERSION = "project-analysis-llm-v2"
 
 GenerateFn = Callable[[SyncGenerationRequest], SyncGenerationResult]
+
+
+class ProjectAnalysisResponseError(ProjectAnalysisError):
+    """A provider response failed the analysis text contract."""
+
+    category = "invalid_response"
+
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = str(reason_code or "empty_response_text")
+        super().__init__(
+            "analysis LLM returned no usable text "
+            f"[{self.reason_code}]"
+        )
+
+
+def _result_output_diagnostics(
+    result: SyncGenerationResult,
+    *,
+    max_output_tokens: Any,
+) -> dict[str, Any]:
+    """Return complete safe diagnostics even for a bare backend result."""
+    diagnostics = model_usage_ledger.response_budget_diagnostics(
+        response_text=getattr(result, "response_text", ""),
+        finish_reason=getattr(result, "finish_reason", ""),
+        usage_metadata=getattr(result, "usage_metadata", None) or {},
+        max_output_tokens=max_output_tokens,
+    )
+    diagnostics.update(
+        model_usage_ledger.normalize_response_diagnostics(
+            getattr(result, "output_diagnostics", None) or {}
+        )
+    )
+    return model_usage_ledger.normalize_response_diagnostics(diagnostics)
 
 
 class AnalysisLlmConfig(Protocol):
@@ -241,7 +276,13 @@ def complete_analysis_text(
     )
     text = str(getattr(result, "response_text", "") or "").strip()
     if not text:
-        raise ProjectAnalysisError("analysis LLM returned empty text")
+        diagnostics = _result_output_diagnostics(
+            result,
+            max_output_tokens=max_output_tokens,
+        )
+        raise ProjectAnalysisResponseError(
+            str(diagnostics.get("reason_code") or "empty_response_text")
+        )
     usage = dict(getattr(result, "usage_metadata", None) or {})
     return text, usage
 
@@ -558,50 +599,99 @@ def run_mapreduce_drafts(
         "requests": 0,
         "input_tokens": 0,
         "output_tokens": 0,
+        "completion_tokens": 0,
+        "reasoning_tokens": 0,
+        "reasoning_tokens_known_requests": 0,
+        "text_output_tokens": 0,
+        "text_output_tokens_known_requests": 0,
+        "completion_tokens_known_requests": 0,
+        "reasoning_budget_pressure_count": 0,
+        "truncated_output_count": 0,
         "total_tokens": 0,
         "by_stage": {},
     }
     current_request = {"stage": "", "artifact_id": ""}
     raw_generate = generate
 
-    def _usage_int(metadata: Mapping[str, Any], *keys: str) -> int:
-        for key in keys:
-            try:
-                value = int(metadata.get(key) or 0)
-            except (TypeError, ValueError):
-                continue
-            if value:
-                return value
-        return 0
-
     def _tracked_generate(request: SyncGenerationRequest) -> SyncGenerationResult:
         result = raw_generate(request)
         metadata = dict(getattr(result, "usage_metadata", None) or {})
-        input_tokens = _usage_int(
-            metadata, "promptTokenCount", "prompt_token_count", "prompt_tokens", "input_tokens"
+        normalized = model_usage_ledger.normalize_usage_metadata(metadata)
+        input_tokens = int(normalized.get("prompt_tokens") or 0)
+        completion_tokens = int(normalized.get("completion_tokens") or 0)
+        reasoning_tokens = int(normalized.get("reasoning_tokens") or 0)
+        text_output_tokens = int(normalized.get("text_output_tokens") or 0)
+        output_tokens = int(
+            normalized.get("billable_output_tokens") or completion_tokens
         )
-        output_tokens = _usage_int(
-            metadata,
-            "candidatesTokenCount", "candidates_token_count",
-            "completion_tokens", "output_tokens",
-        )
-        total_tokens = _usage_int(
-            metadata, "totalTokenCount", "total_token_count", "total_tokens"
-        )
+        total_tokens = int(normalized.get("total_tokens") or 0)
         if not total_tokens:
             total_tokens = input_tokens + output_tokens
         usage_summary["requests"] += 1
         usage_summary["input_tokens"] += input_tokens
         usage_summary["output_tokens"] += output_tokens
+        usage_summary["completion_tokens"] += completion_tokens
+        usage_summary["reasoning_tokens"] += reasoning_tokens
+        usage_summary["text_output_tokens"] += text_output_tokens
+        usage_summary["completion_tokens_known_requests"] += int(
+            normalized.get("completion_tokens") is not None
+        )
+        usage_summary["reasoning_tokens_known_requests"] += int(
+            normalized.get("reasoning_tokens") is not None
+        )
+        usage_summary["text_output_tokens_known_requests"] += int(
+            normalized.get("text_output_tokens") is not None
+        )
+        diagnostics = _result_output_diagnostics(
+            result,
+            max_output_tokens=(request.config or {}).get("max_output_tokens"),
+        )
+        usage_summary["reasoning_budget_pressure_count"] += int(
+            diagnostics.get("reasoning_budget_pressure") is True
+        )
+        usage_summary["truncated_output_count"] += int(
+            diagnostics.get("truncated") is True
+        )
         usage_summary["total_tokens"] += total_tokens
         stage = current_request["stage"] or "unknown"
         stage_usage = usage_summary["by_stage"].setdefault(
             stage,
-            {"requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            {
+                "requests": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "completion_tokens": 0,
+                "completion_tokens_known_requests": 0,
+                "reasoning_tokens": 0,
+                "reasoning_tokens_known_requests": 0,
+                "text_output_tokens": 0,
+                "text_output_tokens_known_requests": 0,
+                "reasoning_budget_pressure_count": 0,
+                "truncated_output_count": 0,
+                "total_tokens": 0,
+            },
         )
         stage_usage["requests"] += 1
         stage_usage["input_tokens"] += input_tokens
         stage_usage["output_tokens"] += output_tokens
+        stage_usage["completion_tokens"] += completion_tokens
+        stage_usage["reasoning_tokens"] += reasoning_tokens
+        stage_usage["text_output_tokens"] += text_output_tokens
+        stage_usage["completion_tokens_known_requests"] += int(
+            normalized.get("completion_tokens") is not None
+        )
+        stage_usage["reasoning_tokens_known_requests"] += int(
+            normalized.get("reasoning_tokens") is not None
+        )
+        stage_usage["text_output_tokens_known_requests"] += int(
+            normalized.get("text_output_tokens") is not None
+        )
+        stage_usage["reasoning_budget_pressure_count"] += int(
+            diagnostics.get("reasoning_budget_pressure") is True
+        )
+        stage_usage["truncated_output_count"] += int(
+            diagnostics.get("truncated") is True
+        )
         stage_usage["total_tokens"] += total_tokens
         if usage_recorder is not None:
             try:
@@ -611,6 +701,10 @@ def run_mapreduce_drafts(
                         "artifact_id": current_request["artifact_id"],
                         "result": result,
                         "usage_metadata": metadata,
+                        "output_diagnostics": diagnostics,
+                        "request_metadata": dict(
+                            getattr(result, "request_metadata", None) or {}
+                        ),
                     }
                 )
             except Exception:

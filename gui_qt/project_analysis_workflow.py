@@ -36,13 +36,30 @@ def generation_facts_from_output(output: str) -> list[str]:
     usage = latest.get("usage") if isinstance(latest.get("usage"), dict) else {}
     if not latest:
         return []
+    def token_value(field: str, *, legacy_field: str = "") -> str:
+        known_key = f"{field}_known_requests"
+        if known_key in usage and int(usage.get(known_key) or 0) <= 0:
+            return "unknown"
+        value = usage.get(field)
+        if value is None and legacy_field:
+            value = usage.get(legacy_field)
+        return "unknown" if value is None else str(int(value or 0))
+
     facts = [
         f"生成进度：{_generation_stage_label(str(latest.get('stage') or ''))} "
         f"{latest.get('completed', 0)}/{latest.get('total', 0)}",
         f"模型请求：{usage.get('requests', 0)} · "
         f"输入 Token {usage.get('input_tokens', 0)} · "
-        f"输出 Token {usage.get('output_tokens', 0)}",
+        f"completion {token_value('completion_tokens', legacy_field='output_tokens')} · "
+        f"reasoning {token_value('reasoning_tokens')} · "
+        f"正文 {token_value('text_output_tokens')}",
     ]
+    reasoning_warnings = int(usage.get("reasoning_budget_pressure_count") or 0)
+    truncated = int(usage.get("truncated_output_count") or 0)
+    if reasoning_warnings:
+        facts.append(f"Reasoning 预算告警：{reasoning_warnings} 次")
+    if truncated:
+        facts.append(f"输出截断：{truncated} 次")
     if usage.get("estimated_cost") is not None:
         facts.append(
             f"估算成本：{float(usage.get('estimated_cost') or 0.0):.6f} "

@@ -34,12 +34,22 @@ class ProviderContractSmokeTests(unittest.TestCase):
             response_text=(
                 '{"translations":[{"id":"smoke-1","translation":"你好"}]}'
             ),
-            usage_metadata={"total_tokens": 9},
+            usage_metadata={
+                "prompt_tokens": 3,
+                "completion_tokens": 6,
+                "completion_tokens_details": {
+                    "reasoning_tokens": 2,
+                    "text_tokens": 4,
+                },
+                "total_tokens": 9,
+            },
         )
         backend = mock.Mock()
         backend.generate.return_value = result
 
-        smoke.run_provider(spec, "secret", backend=backend)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            smoke.run_provider(spec, "secret", backend=backend)
 
         request = backend.generate.call_args.args[0]
         self.assertEqual(request.model, spec.model)
@@ -52,6 +62,9 @@ class ProviderContractSmokeTests(unittest.TestCase):
             smoke.REQUEST_TIMEOUT_SECONDS,
         )
         self.assertIn("translations", request.config["response_json_schema"]["properties"])
+        self.assertIn("completion_tokens=6", output.getvalue())
+        self.assertIn("reasoning_tokens=2", output.getvalue())
+        self.assertIn("text_output_tokens=4", output.getvalue())
 
     def test_invalid_response_fails_with_provider_name_and_category(self):
         spec = smoke.PROVIDER_BY_NAME["openai"]
@@ -93,11 +106,31 @@ class ProviderContractSmokeTests(unittest.TestCase):
         for status, expected in (
             (401, "authentication"),
             (429, "rate_limit"),
+            (408, "timeout"),
             (503, "service_unavailable"),
         ):
             error = RuntimeError("provider failed")
             error.status_code = status
             self.assertEqual(smoke.classify_error(error), expected)
+
+    def test_failure_output_does_not_echo_provider_exception_text(self):
+        spec = smoke.PROVIDER_BY_NAME["openai"]
+        backend = mock.Mock()
+        error = RuntimeError("provider echoed secret-value")
+        error.status_code = 401
+        backend.generate.side_effect = error
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(smoke, "create_backend", return_value=backend),
+            redirect_stderr(stderr),
+            redirect_stdout(io.StringIO()),
+        ):
+            code = smoke.run_selected([spec], {"OPENAI_API_KEY": "secret"})
+
+        self.assertEqual(code, 1)
+        self.assertIn("category=authentication", stderr.getvalue())
+        self.assertNotIn("secret-value", stderr.getvalue())
+        self.assertNotIn("provider echoed", stderr.getvalue())
 
     def test_workflow_is_scheduled_manual_and_not_a_pr_gate(self):
         workflow = (

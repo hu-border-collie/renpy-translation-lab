@@ -10,7 +10,7 @@ from litellm_sync_backend import (
     LiteLLMSyncBackend,
     LiteLLMUnavailableError,
 )
-from litellm_provider_config import custom_provider_registry
+from litellm_provider_config import ProviderApiKeyStore, custom_provider_registry
 from sync_model_backend import SyncGenerationRequest, SyncModelBackend
 
 
@@ -253,6 +253,112 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         with self.assertRaises(LiteLLMBackendError) as captured:
             backend.generate(SyncGenerationRequest("openai/test", "hello"))
         self.assertEqual(captured.exception.category, "rate_limit")
+
+    def test_rate_limit_rotates_only_within_same_provider_keyring(self):
+        calls = []
+
+        class RateLimitError(RuntimeError):
+            category = "rate_limit"
+
+        def completion(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise RateLimitError("provider echoed first-key-1111")
+            return {
+                "choices": [{"message": {"content": "OK"}}],
+                "usage": {},
+            }
+
+        backend = LiteLLMSyncBackend(completion=completion, sleep=lambda _delay: None)
+        store = ProviderApiKeyStore(
+            keys=("first-key-1111", "second-key-2222"),
+            active_index=0,
+        )
+        with (
+            mock.patch(
+                "litellm_provider_config.load_provider_api_key",
+                return_value="first-key-1111",
+            ),
+            mock.patch(
+                "litellm_provider_config.load_provider_key_store",
+                return_value=store,
+            ) as load_store,
+            mock.patch.object(
+                __import__("translator_runtime"),
+                "rotate_api_key",
+                side_effect=AssertionError("must not touch Gemini keyring"),
+            ),
+        ):
+            result = backend.generate(SyncGenerationRequest("openai/test", "hello"))
+
+        load_store.assert_called_once_with("openai")
+        self.assertEqual([call["api_key"] for call in calls], list(store.keys))
+        self.assertEqual(
+            result.request_metadata["credential_attempts"],
+            ["openai#1:****1111", "openai#2:****2222"],
+        )
+        self.assertEqual(
+            result.request_metadata["credential_identity"],
+            "openai#2:****2222",
+        )
+        self.assertNotIn("first-key-1111", repr(result.request_metadata))
+        self.assertNotIn("second-key-2222", repr(result.request_metadata))
+
+    def test_authentication_failure_does_not_retry_or_rotate(self):
+        calls = []
+
+        class AuthenticationError(RuntimeError):
+            category = "authentication"
+
+        def completion(**kwargs):
+            calls.append(kwargs)
+            raise AuthenticationError("provider echoed stored-secret-1111")
+
+        backend = LiteLLMSyncBackend(completion=completion, sleep=lambda _delay: None)
+        store = ProviderApiKeyStore(
+            keys=("stored-secret-1111", "stored-secret-2222"),
+            active_index=0,
+        )
+        with (
+            mock.patch(
+                "litellm_provider_config.load_provider_api_key",
+                return_value="stored-secret-1111",
+            ),
+            mock.patch(
+                "litellm_provider_config.load_provider_key_store",
+                return_value=store,
+            ),
+        ):
+            with self.assertRaises(LiteLLMBackendError) as captured:
+                backend.generate(SyncGenerationRequest("openai/test", "hello"))
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(captured.exception.category, "authentication")
+        self.assertNotIn("stored-secret", str(captured.exception))
+        self.assertEqual(
+            captured.exception.request_metadata["credential_attempts"],
+            ["openai#1:****1111"],
+        )
+
+    def test_gemini_thinking_config_is_not_forwarded_to_litellm(self):
+        calls = []
+        backend = LiteLLMSyncBackend(
+            completion=lambda **kwargs: calls.append(kwargs) or {"choices": []}
+        )
+
+        result = backend.generate(
+            SyncGenerationRequest(
+                "openai/test",
+                "hello",
+                {"thinking_config": {"thinking_level": "high"}},
+            )
+        )
+
+        self.assertNotIn("thinking_config", calls[0])
+        self.assertEqual(
+            result.request_metadata["ignored_provider_options"],
+            ["thinking_config"],
+        )
 
     def test_custom_provider_rewrites_model_and_passes_api_base(self):
         calls = []

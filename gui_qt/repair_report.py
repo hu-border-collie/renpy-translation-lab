@@ -20,6 +20,7 @@ from .check_failures_report import (
 from .diagnostics_context import DiagnosticsContext, DiagnosticsPathEntry, resolve_package_dir
 from .diagnostics_context import manifest_check_safety_level
 from .user_copy import format_manifest_path_fact
+from .sync_usage_report import collect_sync_usage_facts
 
 _DERIVED_REPAIR_REPORT_NAME = "repair_from_check_failures.jsonl"
 _REPAIR_RUN_DIR_RE = re.compile(r"^\s*Repair run dir:\s*(.+?)\s*$", re.MULTILINE)
@@ -317,6 +318,7 @@ def summarize_repair_output(
         facts.append(format_manifest_path_fact(manifest_path))
     if report_path:
         facts.append(f"修补报告：{report_path}")
+    facts.extend(collect_sync_usage_facts(output))
 
     if exit_code != 0:
         return RepairSummary(

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from .bootstrap_report import coerce_bool
 from .diagnostics_context import DiagnosticsContext, DiagnosticsPathEntry
 from .user_copy import format_manifest_path_fact
+from .sync_usage_report import collect_sync_usage_facts
 
 _MANIFEST_MODE_TRANSLATION = "translation"
 _COMPARE_VARIANTS_LINE_RE = re.compile(
@@ -307,6 +308,7 @@ def summarize_compare_variants_output(
         facts.append(format_manifest_path_fact(manifest_path))
     if variant_names:
         facts.append(f"对比变体：{variant_names}")
+    facts.extend(collect_sync_usage_facts(output))
 
     if exit_code != 0:
         return AbExperimentSummary(

@@ -261,7 +261,8 @@ LITELLM_CONNECTION_TEST_COPY = {
     "errors": {
         "authentication": "身份验证失败，请检查供应商密钥。",
         "rate_limit": "供应商限流或配额不足，请稍后重试。",
-        "service_unavailable": "供应商服务暂时不可用或请求超时。",
+        "service_unavailable": "供应商服务暂时不可用，请稍后重试。",
+        "timeout": "连接测试已达到单请求超时上限。",
         "missing_dependency": "LiteLLM 尚未正确安装。",
         "invalid_response": (
             "模型未返回预期的 JSON 结果；请检查模型兼容性或 reasoning 输出预算。"
@@ -497,6 +498,34 @@ def format_usage_ledger_facts(report: Any) -> list[str]:
     facts = [
         f"{USAGE_LEDGER_COPY['total']}：累计 {calls} 次调用；{token_text}",
     ]
+
+    def token_metric(field: str) -> str:
+        value = totals.get(field)
+        unknown = int(totals.get(f"{field}_unknown_records") or 0)
+        text = "unknown" if value is None else f"{int(value):,}"
+        if unknown:
+            text += f"（{unknown} 条未知）"
+        return text
+
+    facts.append(
+        "输出 Token："
+        f"completion {token_metric('completion_tokens')} / "
+        f"reasoning {token_metric('reasoning_tokens')} / "
+        f"正文 {token_metric('text_output_tokens')}"
+    )
+    reasoning_share = totals.get("reasoning_share")
+    if reasoning_share is not None:
+        facts.append(f"Reasoning 占已知输出：{float(reasoning_share):.1%}")
+    diagnostics = totals.get("output_diagnostics")
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    reasoning_warnings = int(
+        diagnostics.get("reasoning_budget_pressure_records") or 0
+    )
+    truncated = int(diagnostics.get("truncated_records") or 0)
+    if reasoning_warnings:
+        facts.append(f"Reasoning 预算告警：{reasoning_warnings} 条响应")
+    if truncated:
+        facts.append(f"输出截断：{truncated} 条响应")
 
     recent = report.get("recent_run")
     if isinstance(recent, dict):

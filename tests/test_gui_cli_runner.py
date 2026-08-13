@@ -186,6 +186,39 @@ class CliRunnerChannelTests(unittest.TestCase):
         self.runner._force_kill()
         self.assertEqual(process.kill_count, 1)
 
+    def test_stop_discards_racing_zero_exit(self):
+        process = _LifecycleFakeProcess(state=QProcess.ProcessState.Running)
+        self.runner._proc = process
+        self.runner._start_timeout_timer = _FakeTimer()
+        self.runner._stop_timeout_timer = _FakeTimer()
+
+        self.assertTrue(self.runner.request_stop())
+        process._state = QProcess.ProcessState.NotRunning
+        self.runner._on_process_finished(
+            process,
+            0,
+            QProcess.ExitStatus.NormalExit,
+        )
+
+        self.assertEqual(self.finished_codes, [-1])
+        self.assertIsNone(self.runner._proc)
+
+    def test_stop_wins_when_process_is_already_not_running(self):
+        process = _LifecycleFakeProcess(
+            state=QProcess.ProcessState.NotRunning,
+            stdout=(b"Sync preview manifest: stale.json",),
+        )
+        self.runner._proc = process
+        self.runner._start_timeout_timer = _FakeTimer()
+        self.runner._stop_timeout_timer = _FakeTimer()
+
+        self.assertTrue(self.runner.request_stop())
+
+        self.assertEqual(self.finished_codes, [-1])
+        self.assertEqual(self.stdout_lines, ["Sync preview manifest: stale.json"])
+        self.assertIsNone(self.runner._proc)
+        self.assertEqual(process.terminate_count, 0)
+
     def test_stale_process_completion_cannot_finish_current_process(self):
         stale = _LifecycleFakeProcess(state=QProcess.ProcessState.NotRunning)
         current = _LifecycleFakeProcess(state=QProcess.ProcessState.Running)

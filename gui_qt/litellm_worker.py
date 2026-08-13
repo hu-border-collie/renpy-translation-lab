@@ -29,7 +29,7 @@ from litellm_provider_config import (
     warm_litellm_module,
 )
 from litellm_sync_backend import LiteLLMBackendError, LiteLLMSyncBackend
-from sync_model_backend import SyncGenerationRequest
+from sync_model_backend import SyncGenerationRequest, sync_error_category
 from .user_copy import CUSTOM_LITELLM_PROVIDER_COPY, LITELLM_CONNECTION_TEST_COPY
 
 
@@ -69,7 +69,7 @@ class BudgetExhausted(TimeoutError):
 
 
 def _connection_error_message(exc: Exception) -> str:
-    category = str(getattr(exc, "category", "provider_error") or "provider_error")
+    category = sync_error_category(exc)
     details = LITELLM_CONNECTION_TEST_COPY["errors"]
     return f"连接失败 [{category}]: {details.get(category, details['provider_error'])}"
 

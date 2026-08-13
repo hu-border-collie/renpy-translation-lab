@@ -127,7 +127,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 - **密钥**：
   - **Gemini**：读取 / 保存 `api_keys.json`；可添加多把 Key；环境变量 Key 只读提示。
   - **LiteLLM Provider**：按供应商保存在操作系统凭据管理器（与 Gemini 分离）。密钥页 Provider 列表含常用供应商（OpenAI / Anthropic / Gemini / OpenRouter / DeepSeek / xAI / Azure / Vertex 等），并合并 LiteLLM 页**已联网加载**的供应商；可搜索或手填自定义 id。每个 Provider 可用与 Gemini 相同的多 Key 对话框管理（添加 / 删除 / 显示明文核对 / **设为当前使用**），状态显示全部脱敏后缀与当前 Key。
-- **LiteLLM**：按“联网加载供应商 → 选择 Provider → **在密钥页或凭据区管理并保存 API Key** → 联网加载模型 → 选择模型 → 保存设置”配置同步替代后端。DeepSeek / OpenAI / Anthropic / xAI 等官方模型列表需要**先保存至少一把 API Key**；未保存时会提示，可取消或显式选择仅用 LiteLLM 子集目录（可能依赖 GitHub）。加载供应商 / 模型、检查更新、测试连接运行中可**再次点击同一按钮停止**；过程中状态栏会显示阶段（如「正在请求官方列表」「官方失败，正在改用子集」）。连接测试使用有界的最小 JSON 请求，只有收到非空且符合合同的响应才会成功；空正文、不可解析 JSON 或字段不匹配均会报告失败。模型列表整次操作有约 **35 秒**总时限，单次 HTTP 约 **20 秒**上限，避免官方+回退叠成近一分钟无反馈。首次打开不会默认选择 OpenAI 或模型，也不会静默联网；Provider 下拉列表优先显示常用供应商，输入任意片段可搜索，也可手动填写自定义 Provider / 模型。
+- **LiteLLM**：按“联网加载供应商 → 选择 Provider → **在密钥页或凭据区管理并保存 API Key** → 联网加载模型 → 选择模型 → 保存设置”配置同步替代后端。DeepSeek / OpenAI / Anthropic / xAI 等官方模型列表需要**先保存至少一把 API Key**；未保存时会提示，可取消或显式选择仅用 LiteLLM 子集目录（可能依赖 GitHub）。加载供应商 / 模型、检查更新、测试连接运行中可**再次点击同一按钮停止**；过程中状态栏会显示阶段（如「正在请求官方列表」「官方失败，正在改用子集」）。连接测试使用 64 Token 上限、有界 timeout 与最小 JSON 合同，只有收到非空且精确匹配 `{"ok":true}` 的响应才会成功；空正文、不可解析 JSON 或字段不匹配均会报告失败，结果和错误文案不回显 Provider 原始异常或凭据。模型列表整次操作有约 **35 秒**总时限，单次 HTTP 约 **20 秒**上限，避免官方+回退叠成近一分钟无反馈。首次打开不会默认选择 OpenAI 或模型，也不会静默联网；Provider 下拉列表优先显示常用供应商，输入任意片段可搜索，也可手动填写自定义 Provider / 模型。
 - **自定义 OpenAI 兼容 Provider**：LiteLLM 设置页的「自定义 OpenAI 兼容 Provider」区域可**添加 / 编辑 / 删除** OpenCode Go、中转站、本地 vLLM 等 LiteLLM 未内置但兼容 OpenAI 的服务，持久化到 `translator_config.json` 的 `sync.custom_litellm_providers`。添加时填写 `id`（创建后不可改，同时用作模型前缀与密钥用户名）、显示名称、API Base、模型列表 URL（可留空）、可选密钥环境变量，以及「需要 API Key」开关（默认开启；本地无鉴权网关可关闭）。非法 URL 或与内置前缀冲突的 id 会被拒绝。注册后 Provider 下拉与密钥页列表自动合并该条目，选择后即可像内置 provider 一样保存密钥、加载模型与测试连接。实际请求改写为 `openai/<模型>` + `api_base`，`api_key_env` 仅在系统凭据为空时生效；需要密钥但两者均缺失时请求会直接失败，不会把 `OPENAI_API_KEY` 静默发给第三方端点。
 - **扩展**：按需安装 / 修复 / 更新关系分析器的独立依赖。安装状态来自当前 Python 环境，不另存“已启用”开关；安装在后台运行，普通翻译不会加载这些科学计算与图像依赖。关系分析器的运行入口和边界见 [关系与语义分析](relation_analysis.md)。
 - **项目**：术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。Ren'Py SDK 须显式配置： **查找 SDK**（用户点击后才扫描附近）、**浏览…**，或确认后 **下载推荐 SDK…**（官方固定版本）；留空不会自动搜其它目录或联网。结果写入 `prepare.renpy_sdk_dir`，保存设置后生效。当前 `game_root` 只读展示；需换项目请用「项目与环境」或「项目列表」。
@@ -168,7 +168,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 - **任务上下文**：任务记录路径、翻译包、云端任务状态、最近检查结果、是否已写回；报告路径逐行展示并支持复制。
 - **命令参考**：按当前任务记录生成可复制的手动命令（`doctor`、`submit`、`status`、`download`、`check`、`apply` 等）；提交 journal 已记录远端 job、但 manifest 尚未落盘时会显示 `recover-submit`。#265 P3 还提供 `export-project-snapshot` 与 `reconcile-project-snapshots` 模板，用于导出 source-only 版本快照和只读版本差异；P6 之前这里只提供高级命令，不提供快照浏览或匹配确认界面。GUI 保留人类可读文本模式；Agent、脚本或 CI 可在这些核心命令后追加 `--output json`，让 stdout 只返回版本化结果 envelope，并可再追加 `--strict-exit-codes` 获得稳定的语义退出码。需要禁止 stdin 与 latest-manifest 回退时，Agent 可使用 `--non-interactive`；只禁止 target 回退时使用 `--require-explicit-target`。机器结果还可用 `--compact`、`--fields` 和 `--output-file` 限制终端上下文或原子落盘。Agent 可通过 `capabilities` 和 `schema <command>` 直接读取当前 argparse 生成的机器命令索引、参数 schema 和这些能力标记，GUI 不复制维护另一份命令定义。批量翻译任务记录还会显示 `compare-variants` 试跑命令模板。当最近一次检查为「需处理」时，也会补出补译相关命令（底层为 `build-retry`、`merge-retry` 等）。提交前的 `estimate-cost` 与异常恢复语义见 [Batch 工作流](batch_workflows.md#提交前估算与异常恢复)。
 - **任务记录**：只读 JSON 预览（省略 `chunks` / `files` 大字段）。
-- **实际模型用量**：任务上下文显示当前项目累计调用、已知 token、未知记录数、最近运行及可用成本摘要；命令参考提供 `usage-import` 和 `usage-report`。缺失 usage 不显示成 0，完整字段与成本语义见 [实际模型用量账本](model_usage_ledger.md)。
+- **实际模型用量**：任务上下文显示当前项目累计调用、completion / reasoning / 正文输出 Token、reasoning 占已知输出比例、空正文/截断告警、未知记录数、最近运行及可用成本摘要；命令参考提供 `usage-import` 和 `usage-report`。Provider 没有明确正文计数时显示 `unknown`，不会用 completion 减 reasoning 猜测，也不会把缺失 usage 显示成 0。完整字段与成本语义见 [实际模型用量账本](model_usage_ledger.md)。
 
 **下方（原始输出）**：始终可见，显示 CLI 的 stdout/stderr。
 
@@ -270,7 +270,7 @@ build -> submit -> status -> download -> check
 
 ### 同步翻译
 
-在左导航选择 **同步翻译**，点击「**开始同步翻译**」。GUI 先无参数调用 `gemini_translate.py`，在 `logs/sync_runs/` 生成绑定当前项目的 manifest、源文件快照、候选文件和 `preview.diff`，此时不会修改项目脚本。预览包含变更时，页面启用「**确认并写回预览**」；若模型结果仍有缺失/无效 ID，或部分文件未通过 adapter 写回计划校验，GUI 显示「部分完成」警告和结果完整率、定点重试、未解决项，只允许写回 manifest 中其余已生成的安全预览。用户确认后 GUI 调用 `gemini_translate.py --apply MANIFEST`，写回前重新核对当前项目、翻译目录、manifest 中所有预览文件对应的源快照哈希和预览制品哈希。任何项目切换、源文件变化或制品篡改都会阻止写回。配置仍来自 `translator_config.json` 的 `sync.*` 段；其中 `timeout_seconds` 是单请求上限并会写入同步 manifest 的设置诊断。Gemini 后端使用现有 Gemini API Key，LiteLLM 后端使用「设置 → LiteLLM」中保存的供应商凭据或 LiteLLM 约定的环境变量。
+在左导航选择 **同步翻译**，点击「**开始同步翻译**」。GUI 先无参数调用 `gemini_translate.py`，在 `logs/sync_runs/` 生成绑定当前项目的 manifest、源文件快照、候选文件和 `preview.diff`，此时不会修改项目脚本。预览包含变更时，页面启用「**确认并写回预览**」；若模型结果仍有缺失/无效 ID，或部分文件未通过 adapter 写回计划校验，GUI 显示「部分完成」警告和结果完整率、定点重试、未解决项，只允许写回 manifest 中其余已生成的安全预览。同步摘要还区分 completion、reasoning 和 Provider 可提供时的正文输出 Token；reasoning 吃满输出预算造成空正文或截断时会显示告警。用户确认后 GUI 调用 `gemini_translate.py --apply MANIFEST`，写回前重新核对当前项目、翻译目录、manifest 中所有预览文件对应的源快照哈希和预览制品哈希。任何项目切换、源文件变化或制品篡改都会阻止写回。配置仍来自 `translator_config.json` 的 `sync.*` 段；其中 `timeout_seconds` 是单请求上限并会写入同步 manifest 的设置诊断。Gemini 后端使用现有 Gemini API Key，LiteLLM 后端使用「设置 → LiteLLM」中保存的供应商凭据或 LiteLLM 约定的环境变量。
 
 模型返回先经过统一命名对象合同（翻译 `translations`、订正 `revisions`、关键词 `candidates`）。旧任务中的裸数组可继续读取；新请求只使用命名对象。有效结果会立即保留，只对缺失或无效 ID 做定点重试；重试仍不完整时 GUI 明确显示部分完成，不会把不完整结果误报为全部成功。详细合同与 Provider 降级策略见 [同步翻译工作流](sync_workflow.md#模型结果合同与定点重试)。
 
@@ -279,6 +279,8 @@ build -> submit -> status -> download -> check
 - **默认与回退**：Gemini Batch 始终是推荐的批量主路径。要停止使用 LiteLLM，在「设置 → LiteLLM」把同步执行后端切回「Gemini 同步（推荐）」并保存；这不会改动 Batch 模型或 RAG Embedding 配置。
 - **目录与运行配置**：用户级目录缓存只帮助恢复 GUI 选择；项目实际运行仍以 `translator_config.json` 的 `sync.backend` / `sync.litellm_model` 为准，已保存模型优先于 GUI 历史。只选择 Provider 而不选择模型时不能保存为可运行的 LiteLLM 配置。取消 Provider 不会清除目录缓存或系统凭据。
 - **费用与吞吐**：LiteLLM 同步请求按所选供应商和模型计费，不具有 Gemini Batch 的远程排队、恢复或 Batch 折扣语义；大项目可能更贵且吞吐量更低。工具不为任意供应商提供统一价格保证，正式运行前应查看供应商定价并先做小样本。
+- **Reasoning 参数**：项目不把 Gemini 的 `thinking_level` / `thinking_config` 伪装成跨 Provider 通用选项；LiteLLM 请求会忽略该 Gemini 专属字段并留下安全能力诊断。需要供应商专属 reasoning 参数时，应等待显式 capability/provider options 支持。
+- **恢复与多 Key**：429 可在当前 LiteLLM Provider 已保存的 Key 中按脱敏后缀有界轮换；401/403 不重试，timeout/503 只做有界退避，同步恢复不会触碰 Gemini keyring。点击停止后，迟到的子进程成功不会继续进入 preview 或写回。
 - **隐私**：本项目直接调用 LiteLLM Python SDK，不经过本项目自建代理。待译文本、提示词和必要上下文会发送给所选模型供应商；应按该供应商的日志、训练和数据保留政策评估敏感内容。供应商密钥保存到操作系统凭据管理器或由环境变量提供，不写入 `translator_config.json`。
 - **安全边界**：同步翻译默认只生成预览，显式 apply 才会写入当前项目；仍应先备份并小范围验证。同步 manifest 使用独立的项目绑定、源文件快照和制品哈希复核，不复用 Batch manifest 的 `check=safe` 状态。
 
@@ -391,7 +393,7 @@ bootstrap-source-index
 project-analysis-status
 ```
 
-预建和项目分析结果以普通语言摘要显示；项目分析生成完成后还会显示场景摘要 / 路线摘要进度、请求数、输入/输出 Token 和按当前价格表估算的成本。失败细节可在「诊断与运行日志」的原始输出查看。任务运行中，上下文库内其他动作会禁用并提供与当前任务对应的停止按钮，避免叠跑。项目分析状态还会明确显示功能是否启用，以及当前发布摘要是否实际用于翻译。
+预建和项目分析结果以普通语言摘要显示；项目分析生成完成后还会显示场景摘要 / 路线摘要进度、请求数、输入 Token、completion / reasoning / 正文输出 Token 和按当前价格表估算的成本；Provider 未提供的正文计数显示 `unknown`。失败细节可在「诊断与运行日志」的原始输出查看。任务运行中，上下文库内其他动作会禁用并提供与当前任务对应的停止按钮，避免叠跑。项目分析状态还会明确显示功能是否启用，以及当前发布摘要是否实际用于翻译。
 
 若开启了 build 时自动补建，后续 `build` 仍可能自动补建；图形预建入口适合在首次翻译前手动确认 store 状态。
 

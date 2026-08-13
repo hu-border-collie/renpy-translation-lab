@@ -135,7 +135,7 @@ class CliRunner(QObject):
     def request_stop(self, *, grace_ms: int = 2000) -> bool:
         """Ask the child to terminate, then asynchronously fall back to kill."""
         process = self._proc
-        if process is None or process.state() == QProcess.ProcessState.NotRunning:
+        if process is None:
             return False
         if self._stop_requested:
             return True
@@ -143,6 +143,16 @@ class CliRunner(QObject):
         self._start_timeout_timer.stop()
         self.line_ready.emit("\n[GUI] 正在停止本地进程...\n")
         self.stopping.emit()
+        if process.state() == QProcess.ProcessState.NotRunning:
+            # Qt can expose NotRunning before the queued finished signal. The
+            # user stop still wins in that ownership window; drain/finalize now
+            # and ignore the later stale signal.
+            self._on_process_finished(
+                process,
+                -1,
+                QProcess.ExitStatus.CrashExit,
+            )
+            return True
         self._stop_timeout_timer.start(max(1, int(grace_ms)))
         process.terminate()
         return True
@@ -225,6 +235,7 @@ class CliRunner(QObject):
     ) -> None:
         if process is not self._proc:
             return
+        stop_requested = self._stop_requested
         self._start_timeout_timer.stop()
         self._stop_timeout_timer.stop()
         # QProcess may still hold final bytes when finished is delivered.
@@ -248,7 +259,11 @@ class CliRunner(QObject):
             delete_later()
         # Clear ownership before notifying consumers: workflow callbacks may
         # synchronously start the next process from ``finished``.
-        self.finished.emit(exit_code)
+        # Once the user requested stop, a racing zero exit must not be accepted
+        # as success by a workflow or enable a newly written preview. Use one
+        # stable non-zero terminal code even when the child exits cleanly while
+        # handling terminate().
+        self.finished.emit(-1 if stop_requested else exit_code)
 
     def _on_error(self, error: QProcess.ProcessError):
         process = self._proc

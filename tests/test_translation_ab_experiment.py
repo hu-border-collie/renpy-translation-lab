@@ -348,7 +348,15 @@ class TranslationAbExperimentTests(unittest.TestCase):
             self.assertEqual(len(row['variants']), 2)
             errors = {variant['name']: variant.get('error', '') for variant in row['variants']}
             self.assertEqual(errors['baseline'], '')
-            self.assertIn('sync failed', errors['story_memory'])
+            self.assertEqual(
+                errors['story_memory'],
+                'provider request failed [provider_error]',
+            )
+            categories = {
+                variant['name']: variant.get('error_category', '')
+                for variant in row['variants']
+            }
+            self.assertEqual(categories['story_memory'], 'provider_error')
 
     def test_run_translation_ab_experiment_writes_partial_outputs_on_experiment_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

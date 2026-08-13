@@ -5,6 +5,7 @@ import re
 
 from .check_report import WritebackSummary
 from .translation_workflow import WorkflowUpdate
+from .sync_usage_report import collect_sync_usage_facts
 from .user_copy import MODEL_CONTRACT_COPY
 
 
@@ -204,6 +205,7 @@ def _collect_sync_facts(output: str) -> list[str]:
         facts.append(
             f"{MODEL_CONTRACT_COPY['partial_requests']}：{partial_requests} 个"
         )
+    facts.extend(collect_sync_usage_facts(output))
     return facts
 
 

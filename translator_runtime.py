@@ -71,6 +71,8 @@ from sync_model_backend import (
     GeminiSyncBackend,
     SyncGenerationRequest,
     normalize_sync_timeout_seconds,
+    sync_error_summary,
+    sync_recovery_decision,
 )
 
 # Configuration
@@ -4360,13 +4362,9 @@ def call_gemini_sdk(
     if SYNC_BACKEND == "litellm":
         from litellm_sync_backend import LiteLLMSyncBackend
 
-        result = LiteLLMSyncBackend(
+        backend = LiteLLMSyncBackend(
             custom_providers=CUSTOM_LITELLM_PROVIDERS
-        ).generate(SyncGenerationRequest(
-            model=model_name,
-            contents=prompt,
-            config=generation_config,
-        ))
+        )
     else:
         configure_genai()
         backend = GeminiSyncBackend(
@@ -4376,11 +4374,18 @@ def call_gemini_sdk(
             extract_finish_reason=extract_finish_reason,
             extract_usage=model_usage_ledger.extract_provider_usage,
         )
-        result = backend.generate(SyncGenerationRequest(
+    request = SyncGenerationRequest(
             model=model_name,
             contents=prompt,
             config=generation_config,
-        ))
+        )
+    result = backend.generate(request)
+    output_diagnostics = model_usage_ledger.response_budget_diagnostics(
+        response_text=getattr(result, 'response_text', ''),
+        finish_reason=getattr(result, 'finish_reason', ''),
+        usage_metadata=getattr(result, 'usage_metadata', None) or {},
+        max_output_tokens=generation_config.get("max_output_tokens"),
+    )
 
     if usage_run_id and BASE_DIR:
         item_ids = [str(item.get('id') or '') for item in items]
@@ -4391,7 +4396,7 @@ def call_gemini_sdk(
                 stage='sync_translation',
                 provider=result.provider,
                 model=result.model,
-                usage_metadata=result.usage_metadata,
+                usage_metadata=getattr(result, 'usage_metadata', None) or {},
                 response_payload=result.response_payload,
                 operation_id=usage_operation_id or usage_run_id,
                 run_id=usage_run_id,
@@ -4401,6 +4406,10 @@ def call_gemini_sdk(
                     'kind': 'sync_translation_response',
                     'item_ids': item_ids,
                 },
+                response_diagnostics=output_diagnostics,
+                request_metadata=dict(
+                    getattr(result, 'request_metadata', None) or {}
+                ),
             )
             if usage_buffer is not None:
                 usage_buffer.append(record)
@@ -4442,8 +4451,12 @@ def call_gemini_sdk(
     if result.finish_reason:
         diagnostics.append(f"Finish reason: {result.finish_reason}")
     detail = f" ({'; '.join(diagnostics)})" if diagnostics else ""
+    reason_code = str(
+        output_diagnostics.get('reason_code')
+        or translation_core.CONTRACT_EMPTY_RESPONSE_TEXT
+    )
     raise translation_core.ModelResponseContractError(
-        translation_core.CONTRACT_EMPTY_RESPONSE_TEXT,
+        reason_code,
         f"Invalid response from API. Missing structured text{detail}.",
     )
 
@@ -4667,6 +4680,33 @@ def finalize_sync_contract_diagnostics(diagnostics):
     }
 
 
+def print_sync_usage_summary(records):
+    """Print the stable usage facts consumed by synchronous GUI reports."""
+    totals = model_usage_ledger.aggregate_usage_records(list(records or ()))
+
+    def token_value(field):
+        if int(totals.get(f'{field}_known_records') or 0) <= 0:
+            return 'unknown'
+        return str(int(totals.get(field) or 0))
+
+    print(
+        'Sync output tokens: '
+        f"completion={token_value('completion_tokens')} "
+        f"reasoning={token_value('reasoning_tokens')} "
+        f"text={token_value('text_output_tokens')}"
+    )
+    diagnostics = totals.get('output_diagnostics')
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    print(
+        'Reasoning budget warnings: '
+        f"{int(diagnostics.get('reasoning_budget_pressure_records') or 0)}"
+    )
+    print(
+        'Truncated sync responses: '
+        f"{int(diagnostics.get('truncated_records') or 0)}"
+    )
+
+
 def process_batch_with_retry(
     batch,
     replacements,
@@ -4700,6 +4740,7 @@ def process_batch_with_retry(
     error_str = "" # Initialize variable to be safe
     error_reason_code = ''
     split_reason_counts = {}
+    allow_split = True
 
     for attempt in range(1, BATCH_RETRIES + 1):
         try:
@@ -4795,8 +4836,20 @@ def process_batch_with_retry(
             return successful + retried
 
         except Exception as e:
-            error_str = str(e)
+            recovery = sync_recovery_decision(e)
+            is_structured_provider_failure = bool(
+                getattr(e, 'category', '')
+                or getattr(e, 'status_code', None) is not None
+                or recovery.category != 'provider_error'
+            )
+            error_str = (
+                sync_error_summary(e)
+                if is_structured_provider_failure
+                else str(e)
+            )
             error_reason_code = str(getattr(e, 'reason_code', '') or '')
+            if not error_reason_code and recovery.category != 'provider_error':
+                error_reason_code = recovery.category
             split_reason_code = error_reason_code
             if not split_reason_code and 'Finish reason: 2' in error_str:
                 split_reason_code = 'truncated_output'
@@ -4805,48 +4858,44 @@ def process_batch_with_retry(
             }
             print(f"  [Attempt {attempt}] Error: {error_str[:100]}...", flush=True)
 
-            # Handle Specific Errors
-
-            # 1. 429 Resource Exhausted -> Rotate Key AND Model if needed
-            if "429" in error_str or "ResourceExhausted" in error_str:
+            # Handle provider failures by structured recovery category.
+            if recovery.category == 'rate_limit':
                 print("  ! Rate limit hit.")
-
-                # First try rotating key
-                key_rotated = rotate_api_key()
-
-                # If we have retried multiple times (meaning keys are likely all exhausted for this model)
-                # OR we only have 1 key, switch the model.
-                if attempt > 1 or not key_rotated:
-                    print("  ! Persistent rate limit. Switching model...")
-                    if rotate_model():
+                if SYNC_BACKEND == 'gemini':
+                    key_rotated = rotate_api_key()
+                    if attempt > 1 or not key_rotated:
+                        print("  ! Persistent rate limit. Switching model...")
+                        if rotate_model():
+                            continue
+                    if key_rotated:
                         continue
-
-                if key_rotated:
+                if attempt < BATCH_RETRIES:
+                    time.sleep(min(2 ** attempt, 10))
                     continue
-                else:
-                    # No more keys, wait longer
-                    time.sleep(10)
-
-            # 2. 404 Not Found -> Rotate Model (Invalid model name)
-            elif "404" in error_str or "NotFound" in error_str:
-                print("  ! Model not found.")
-                if rotate_model():
+                allow_split = False
+                break
+            if recovery.category in {'service_unavailable', 'timeout'}:
+                if attempt < BATCH_RETRIES:
+                    time.sleep(min(2 ** attempt, 5))
                     continue
-
-            # 3. 500/503 Server Errors -> Just wait
-            elif "500" in error_str or "503" in error_str:
-                time.sleep(5)
-
-            # 4. Truncated/Finish Reason 2 -> Break loop to split batch immediately
-            elif "Finish reason: 2" in error_str:
-                print("  ! Output truncated. Splitting batch...")
-                break # Break retry loop to trigger batch splitting
-
-            # Generic retry backoff
-            time.sleep(2 ** attempt)
+                allow_split = False
+                break
+            if recovery.split_request or error_reason_code == 'truncated_output':
+                print("  ! Invalid or truncated output. Splitting batch...")
+                break
+            # Authentication, unsupported capability, and unknown provider
+            # errors are not made safer by repeating or splitting the request.
+            if recovery.category in {
+                'authentication',
+                'unsupported_capability',
+                'missing_dependency',
+                'provider_error',
+            }:
+                allow_split = False
+                break
 
     # If batch failed after retries, try splitting
-    if len(batch) > 1:
+    if allow_split and len(batch) > 1:
         print("  > Splitting batch...", flush=True)
         mid = len(batch) // 2
         left_batch = batch[:mid]
@@ -5652,6 +5701,7 @@ def run_translation(*, prepare=False):
             "Unresolved contract items: "
             f"{len(finalized_contract.get('unresolved_ids') or [])}"
         )
+        print_sync_usage_summary(usage_buffer)
         contract_partial = bool(
             finalized_contract.get('unresolved_ids')
             or finalized_contract.get('terminal_reason_counts')
