@@ -14,6 +14,8 @@ Sync preview manifest: logs/sync_runs/demo/manifest.json
 Sync preview report: logs/sync_runs/demo/preview.diff
 Preview files: 1
 Preview translations: 3
+Sync local context: before=30, after=10, batches=2, truncated=1
+Sync macro setting: file=macro_setting.md, applied=True, fingerprint=abc123
 Preview status: safe
 """
 
@@ -25,6 +27,13 @@ class GuiSyncTranslationReportTests(unittest.TestCase):
         self.assertEqual(update.status, "done")
         self.assertIn("预览", update.heading)
         self.assertTrue(any("待处理文件" in fact for fact in update.facts))
+        self.assertTrue(any("局部上下文" in fact for fact in update.facts))
+        self.assertTrue(
+            any("前文 30 / 后文 10，2 个批次，截断 1 个" in fact for fact in update.facts)
+        )
+        self.assertTrue(
+            any("风格设定：macro_setting.md（已应用）" in fact for fact in update.facts)
+        )
 
     def test_summarize_no_work_marks_done_without_files(self):
         update = summarize_sync_translation_output(

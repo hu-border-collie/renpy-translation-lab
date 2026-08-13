@@ -64,6 +64,78 @@ class SyncTranslationPreviewTests(unittest.TestCase):
 
             self.assertNotIn("failures", loaded)
 
+    def test_prompt_context_is_recorded_and_covered_by_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / "game" / "tl" / "schinese"
+            tl_dir.mkdir(parents=True)
+            rows = [
+                {
+                    "relative_path": "a.rpy",
+                    "source_text": '    "Hello 1"\n',
+                    "source_sha256": "x",
+                    "preview_text": '    "你好 1"\n',
+                    "progress_entries": ["id:1"],
+                    "prompt_context": {
+                        "batches": [
+                            {
+                                "context_before_limit": 30,
+                                "context_after_limit": 10,
+                                "context_before_items": 2,
+                                "context_after_items": 0,
+                                "context_truncated": False,
+                                "block_bounded_before": True,
+                                "block_bounded_after": False,
+                            }
+                        ]
+                    },
+                }
+            ]
+            raw_manifest_path, manifest = preview.create_sync_preview(
+                log_dir=root / "logs",
+                project_root=root,
+                tl_dir=tl_dir,
+                files=rows,
+                prompt_context={
+                    "context_before": 30,
+                    "context_after": 10,
+                    "macro_setting_file": "macro_setting.md",
+                    "macro_fingerprint": "abc123",
+                    "macro_applied": True,
+                    "batches": 1,
+                    "truncated_batches": 0,
+                },
+            )
+            manifest_path = Path(raw_manifest_path)
+
+            self.assertEqual(manifest["prompt_context"]["macro_fingerprint"], "abc123")
+            self.assertEqual(manifest["files"][0]["prompt_context"]["batches"][0]["context_before_items"], 2)
+            preview.load_sync_preview(manifest_path)
+
+            # Changing the macro identity must invalidate the bound manifest:
+            # the persisted fingerprint no longer matches, so apply is blocked.
+            manifest["prompt_context"]["macro_fingerprint"] = "changed"
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                preview.load_sync_preview(manifest_path)
+
+    def test_legacy_manifest_without_prompt_context_still_loads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _tl_dir, manifest_path, manifest = self._create_preview(root)
+            manifest.pop("prompt_context", None)
+            manifest["preview_fingerprint"] = preview._fingerprint(manifest)
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            loaded = preview.load_sync_preview(manifest_path)
+            self.assertNotIn("prompt_context", loaded)
+
 
     def test_create_preview_records_partial_adapter_failures(self):
         with tempfile.TemporaryDirectory() as tmp:

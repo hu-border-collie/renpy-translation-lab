@@ -76,6 +76,9 @@ class GuiSettingsSchemaTests(unittest.TestCase):
 
         self.assertEqual(values["sync_chunk_size"], 40)
         self.assertEqual(values["sync_timeout_seconds"], 120)
+        self.assertEqual(values["sync_context_before"], 30)
+        self.assertEqual(values["sync_context_after"], 10)
+        self.assertEqual(values["sync_macro_setting_file"], "macro_setting.md")
         self.assertEqual(values["batch_chunk_size"], 60)
         self.assertEqual(values["batch_temperature"], 0.2)
         self.assertEqual(values["batch_source_index_min_similarity"], 0.72)
@@ -88,6 +91,9 @@ class GuiSettingsSchemaTests(unittest.TestCase):
                 "sync": {
                     "chunk_size": "7",
                     "timeout_seconds": "45",
+                    "context_before": "12",
+                    "context_after": "0",
+                    "macro_setting_file": "project_style.md",
                     "rag": {
                         "enabled": True,
                         "min_similarity": "0.5",
@@ -104,6 +110,9 @@ class GuiSettingsSchemaTests(unittest.TestCase):
 
         self.assertEqual(values["sync_chunk_size"], 7)
         self.assertEqual(values["sync_timeout_seconds"], 45)
+        self.assertEqual(values["sync_context_before"], 12)
+        self.assertEqual(values["sync_context_after"], 0)
+        self.assertEqual(values["sync_macro_setting_file"], "project_style.md")
         self.assertTrue(values["sync_rag_enabled"])
         self.assertEqual(values["sync_rag_min_similarity"], 0.5)
         self.assertEqual(values["sync_rag_store_dir"], "logs/sync_rag")
@@ -212,6 +221,18 @@ class GuiSettingsSchemaTests(unittest.TestCase):
         self.assertEqual(
             ADVANCED_SETTING_FIELD_BY_KEY["sync_story_memory_graph_file"].path,
             ("sync", "story_memory", "graph_file"),
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["sync_context_before"].path,
+            ("sync", "context_before"),
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["sync_context_after"].path,
+            ("sync", "context_after"),
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["sync_macro_setting_file"].path,
+            ("sync", "macro_setting_file"),
         )
         self.assertEqual(
             ADVANCED_SETTING_FIELD_BY_KEY["model_rotation_models"].kind,

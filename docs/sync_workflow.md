@@ -18,7 +18,7 @@
 3. Gemini 后端需要本地 `api_keys.json` 或 `GEMINI_API_KEY*` 环境变量；LiteLLM 后端需要在操作系统凭据管理器或供应商约定的环境变量中保存凭据。
 4. 先备份项目，并用 `include_files` / `include_prefixes` 把第一次运行限制在少量文件。
 
-同步设置来自 `translator_config.json` 的 `sync` 段，主要包括 `backend`、`model`、`chunk_size`、`max_source_chars`、`max_output_tokens` 和 `timeout_seconds`。完整字段和模型目录见 [安装与本地配置](setup.md#运行模式)。
+同步设置来自 `translator_config.json` 的 `sync` 段，主要包括 `backend`、`model`、`chunk_size`、`max_source_chars`、`max_output_tokens`、`timeout_seconds`、`context_before`、`context_after` 和 `macro_setting_file`。完整字段和模型目录见 [安装与本地配置](setup.md#运行模式)。
 
 `timeout_seconds` 默认 120 秒，可设为 5–600 秒。它是每一次模型请求的等待上限，不是整次任务的总时限；普通同步翻译、项目分析、同步关键词、同步订正、同步修补和翻译 A/B 对比均读取同一字段。Gemini backend 会把秒转换为 SDK 的毫秒级 `http_options.timeout`，LiteLLM backend 则按秒透传。手工配置超出范围时 runtime 会收敛到最近边界，避免异常值形成无界等待。
 
@@ -68,6 +68,21 @@ python scripts/run_provider_contract_smoke.py --provider deepseek
 
 脚本每个 Provider 最多发送一次、限制输出 token 和超时；通过后只打印 completion/reasoning/正文 Token 的安全摘要，失败时只打印分类与安全错误文案。未配置对应凭据会跳过，不会修改项目文件。正式项目仍应先用小范围同步任务验证实际翻译/订正 envelope。
 
+## 局部上下文、Macro 与术语命中
+
+同步初译提示词包含三类基础上下文，全部只作参考，模型仍只能返回 TARGET 条目的 ID 与译文：
+
+- **局部前后文**：`sync.context_before`（默认 30）与 `sync.context_after`（默认 10）控制每个请求附带的 `CONTEXT BEFORE/AFTER` 条目预算，与 Batch 默认对齐。窗口只取当前文件内的待译条目，并在可识别的 translate block 边界处提前截断——不会静默跨越场景；没有 block 信息时退化为纯预算截断。设为 0 可关闭对应方向。
+- **项目风格设定**：`sync.macro_setting_file`（默认 `macro_setting.md`，相对当前 work）存在时，其文本会进入提示词的 `Setting` 段；文件不存在或未配置时保持向后兼容，提示词不含该段。
+- **词法术语命中**：`normalize_map`、`preserve_terms` 与 `non_translatable_exact` 的本地命中不再依赖 `sync.rag.enabled`。即使 RAG 关闭，当前批次实际命中的固定译法与保留/不可翻译规则也会进入提示词；RAG 开启时检索命中照常附加。
+
+每次运行的上下文构造事实会写入 manifest 与预览制品：
+
+- manifest 顶层 `prompt_context`：前后文设置、macro 文件与内容指纹、是否实际注入 macro、批次总数与截断批次数；
+- 每个文件的 `prompt_context.batches`：该文件各请求实际的前后文条目数/字符数、预算截断与 block 边界截断标记。
+
+`prompt_context` 与文件级上下文诊断都纳入 manifest 指纹。macro 文件内容变化、源文件变化或预览制品被修改都会使旧 manifest 无法通过写前校验——不要强行复用旧预览，应基于当前文件重新生成并审查。
+
 ## 预览后写回
 
 ### 1. 生成预览
@@ -81,6 +96,8 @@ python gemini_translate.py
 - `manifest.json`：绑定当前项目、TL 目录、源文件快照、预览制品哈希和 adapter 写回计划；
 - `preview.diff`：供人工逐项审查的差异；
 - 预览候选文件与只读 coverage 证据。
+
+manifest 同时记录本次运行的局部上下文、macro 与术语命中诊断（见[局部上下文、Macro 与术语命中](#局部上下文macro-与术语命中)），用于复现和解释每个请求的上下文构造。
 
 默认命令不会修改 `.rpy`，终端会打印本次 manifest 和 diff 的绝对路径。若模型结果合同仍有未解决项，或部分文件未通过 adapter 写回计划校验，运行结果会标为 `partial`；无效项不会进入可写回预览，已经通过合同与 adapter 校验的项仍会保留。
 

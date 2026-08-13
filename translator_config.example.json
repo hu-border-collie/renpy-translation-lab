@@ -50,6 +50,9 @@
     "max_source_chars": 12000,
     "max_output_tokens": 24576,
     "timeout_seconds": 120,
+    "context_before": 30,
+    "context_after": 10,
+    "macro_setting_file": "macro_setting.md",
     "rag": {
       "enabled": false,
       "embedding_model": "gemini-embedding-001",

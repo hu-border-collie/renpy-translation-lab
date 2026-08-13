@@ -1950,6 +1950,180 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertIn('Input JSON:', prompt)
         self.assertNotIn('CONTEXT BEFORE:', prompt)
 
+    def test_sync_prompt_injects_context_window_macro_and_glossary(self):
+        prompt = runtime.build_prompt(
+            [{'id': 'file:0:1', 'text': 'Open the Void Gate'}],
+            context_window=translation_core.ContextWindow(
+                before=['Eve: Are you ready?'],
+                after=['Eve: Welcome back.'],
+            ),
+            macro_setting='Keep the heroine formal.',
+            normalize_map={'Void Gate': '\u865a\u7a7a\u95e8'},
+            non_translatable_terms=['Ebon'],
+        )
+
+        self.assertIn('CONTEXT BEFORE:', prompt)
+        self.assertIn('- Eve: Are you ready?', prompt)
+        self.assertIn('CONTEXT AFTER:', prompt)
+        self.assertIn('- Eve: Welcome back.', prompt)
+        self.assertIn('Setting:', prompt)
+        self.assertIn('Keep the heroine formal.', prompt)
+        self.assertIn('Existing glossary entries:', prompt)
+        self.assertIn('- Existing mapping: Void Gate -> \u865a\u7a7a\u95e8', prompt)
+        self.assertIn('- Non-translatable: Ebon', prompt)
+
+    def test_sync_glossary_hits_reach_prompt_without_rag(self):
+        old_rag = runtime.SYNC_RAG_ENABLED
+        old_normalize = runtime.NORMALIZE_TRANSLATION_MAP
+        old_preserve = runtime.PRESERVE_TERMS
+        old_non_translatable = runtime.NON_TRANSLATABLE_EXACT
+        old_use_memory = runtime.USE_TRANSLATION_MEMORY
+        captured = {}
+        try:
+            runtime.SYNC_RAG_ENABLED = False
+            runtime.NORMALIZE_TRANSLATION_MAP = {'Void Gate': '\u865a\u7a7a\u95e8'}
+            runtime.PRESERVE_TERMS = ['Alice']
+            runtime.NON_TRANSLATABLE_EXACT = {'Ebon'}
+            runtime.USE_TRANSLATION_MEMORY = False
+
+            def fake_sdk(prompt, items, **_kwargs):
+                captured['prompt'] = prompt
+                return translation_core.validate_model_response(
+                    {
+                        'translations': [
+                            {'id': 'file:0:1', 'translation': '\u4f60\u597d'},
+                        ]
+                    },
+                    expected_units=items,
+                )
+
+            with (
+                mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_sdk),
+                mock.patch.object(
+                    runtime,
+                    'validate_translation',
+                    return_value=(True, 'OK'),
+                ),
+            ):
+                runtime.process_batch(
+                    [
+                        {
+                            'id': 'file:0:1',
+                            'text': 'Open the Void Gate, Alice. Ebon is near.',
+                            'progress_entry': 'task:0:1',
+                        }
+                    ],
+                    {},
+                )
+        finally:
+            runtime.SYNC_RAG_ENABLED = old_rag
+            runtime.NORMALIZE_TRANSLATION_MAP = old_normalize
+            runtime.PRESERVE_TERMS = old_preserve
+            runtime.NON_TRANSLATABLE_EXACT = old_non_translatable
+            runtime.USE_TRANSLATION_MEMORY = old_use_memory
+
+        prompt = captured.get('prompt') or ''
+        self.assertIn('- Existing mapping: Void Gate -> \u865a\u7a7a\u95e8', prompt)
+        self.assertIn('- Non-translatable: Ebon', prompt)
+        self.assertIn('1. Preserve these terms exactly (do not translate): Alice', prompt)
+
+    def test_sync_local_context_respects_block_boundary_and_budget(self):
+        tasks = [
+            {'id': 'a1', 'text': 'One', 'block_name': 'scene1'},
+            {'id': 'a2', 'text': 'Two', 'block_name': 'scene1'},
+            {'id': 'a3', 'text': 'Three', 'block_name': 'scene1'},
+            {'id': 'b1', 'text': 'Four', 'block_name': 'scene2'},
+            {'id': 'b2', 'text': 'Five', 'block_name': 'scene2'},
+            {'id': 'b3', 'text': 'Six', 'block_name': 'scene2'},
+            {'id': 'b4', 'text': 'Seven', 'block_name': 'scene2'},
+        ]
+        # Batch is [b1]; the preceding item belongs to scene1, so before is
+        # intentionally empty (no silent cross-scene context). After is
+        # budget-truncated to 2 of the remaining scene2 items.
+        window, stats = runtime.build_sync_local_context(
+            tasks, 3, 4, before_limit=5, after_limit=2,
+        )
+
+        self.assertEqual([item['id'] for item in window.before], [])
+        self.assertEqual([item['id'] for item in window.after], ['b2', 'b3'])
+        self.assertEqual(stats['context_before_items'], 0)
+        self.assertEqual(stats['context_after_items'], 2)
+        self.assertTrue(stats['block_bounded_before'])
+        self.assertTrue(stats['context_truncated'])
+        self.assertEqual(stats['context_before_chars'], 0)
+
+    def test_sync_local_context_without_block_metadata_uses_budget_only(self):
+        tasks = [
+            {'id': 'a1', 'text': 'One'},
+            {'id': 'a2', 'text': 'Two'},
+            {'id': 'a3', 'text': 'Three'},
+            {'id': 'a4', 'text': 'Four'},
+            {'id': 'a5', 'text': 'Five'},
+        ]
+        window, stats = runtime.build_sync_local_context(
+            tasks, 2, 3, before_limit=2, after_limit=1,
+        )
+
+        self.assertEqual([item['id'] for item in window.before], ['a1', 'a2'])
+        self.assertEqual([item['id'] for item in window.after], ['a4'])
+        self.assertTrue(stats['context_truncated'])
+        self.assertFalse(stats['block_bounded_before'])
+
+    def test_sync_config_loads_context_and_macro_settings(self):
+        snapshot = {
+            'base': runtime.BASE_DIR,
+            'context_before': runtime.SYNC_CONTEXT_BEFORE,
+            'context_after': runtime.SYNC_CONTEXT_AFTER,
+            'macro_file': runtime.SYNC_MACRO_SETTING_FILE,
+            'macro_setting': runtime.SYNC_MACRO_SETTING,
+            'macro_fingerprint': runtime.SYNC_MACRO_FINGERPRINT,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                workspace = Path(tmp)
+                base = workspace / 'game'
+                base.mkdir()
+                macro_path = base / 'macro.md'
+                macro_path.write_text('Keep the tone warm.\n', encoding='utf-8')
+                config_path = workspace / 'translator_config.json'
+                config_path.write_text(
+                    json.dumps(
+                        {
+                            'game_root': str(base),
+                            'sync': {
+                                'context_before': 12,
+                                'context_after': 4,
+                                'macro_setting_file': 'macro.md',
+                            },
+                        }
+                    ),
+                    encoding='utf-8',
+                )
+
+                with (
+                    mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                    mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'tool')),
+                    mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'tool')),
+                    mock.patch.dict(os.environ, {}, clear=True),
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    runtime.load_translator_settings()
+                    self.assertEqual(runtime.SYNC_CONTEXT_BEFORE, 12)
+                    self.assertEqual(runtime.SYNC_CONTEXT_AFTER, 4)
+                    self.assertEqual(runtime.SYNC_MACRO_SETTING_FILE, 'macro.md')
+                    self.assertEqual(runtime.SYNC_MACRO_SETTING, 'Keep the tone warm.')
+                    self.assertEqual(
+                        runtime.SYNC_MACRO_FINGERPRINT,
+                        hashlib.sha256('Keep the tone warm.'.encode('utf-8')).hexdigest(),
+                    )
+        finally:
+            runtime.BASE_DIR = snapshot['base']
+            runtime.SYNC_CONTEXT_BEFORE = snapshot['context_before']
+            runtime.SYNC_CONTEXT_AFTER = snapshot['context_after']
+            runtime.SYNC_MACRO_SETTING_FILE = snapshot['macro_file']
+            runtime.SYNC_MACRO_SETTING = snapshot['macro_setting']
+            runtime.SYNC_MACRO_FINGERPRINT = snapshot['macro_fingerprint']
+
     def test_sync_rag_prompt_includes_retrieved_memory_when_enabled(self):
         old_enabled = runtime.SYNC_RAG_ENABLED
         try:

@@ -13,11 +13,13 @@
 - 增加按项目归集 Batch、同步、订正、关键词与分析调用的实际模型用量账本。
 - 增加 Ren'Py Engine Adapter 的稳定扫描/occurrence/coverage 产物和写回计划校验。
 - 增加提交恢复、成本估算、翻译 A/B 对比、同步预览写回与订正预览写回等完整工作流。
+- 同步初译增加局部前后文（`sync.context_before` / `context_after`，默认 30/10，限定同文件与 translate block 边界）、`macro_setting_file` 风格设定注入，以及不依赖 RAG 开关的术语命中（`normalize_map` / 保留词 / 不可翻译词）；上下文构造事实与 macro 指纹写入 manifest 并纳入预览指纹。
 
 ### 变更
 
 - GUI 改为统一侧边导航与任务页自有状态，项目列表、上下文库、关键词、订正、同步翻译和批量翻译各自展示当前任务结果。
 - 同步翻译默认只生成 diff 与 manifest 预览，必须显式确认后才写回；写回时重新校验项目、源快照和预览制品。
+- 同步 manifest 增加 `prompt_context` 诊断（局部上下文设置、macro 身份、批次截断统计）；macro 内容变化会使旧预览无法写回。
 - `doctor` 保持只读；初始化工作副本与生成 TL 模板分别使用 `bootstrap-work`、`generate-template`。
 - Settings 增加项目列表、扩展、LiteLLM 供应商/凭据与模型目录等分区，并改进未保存设置和项目切换保护。
 - CI 增加依赖锁、质量/类型/依赖审计、可选依赖安装、真实 Ren'Py SDK 和 provider 契约检查；PR-Agent 自动审查使用受限权限与固定 action commit。
