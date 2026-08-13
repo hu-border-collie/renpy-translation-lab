@@ -1348,3 +1348,25 @@ def format_usage_report(report: Mapping[str, Any]) -> list[str]:
             f"{_format_token_metric(recent_totals, 'total_tokens')} total tokens"
         )
     return lines
+
+
+def format_sync_output_lines(
+    *,
+    completion: str | int,
+    reasoning: str | int,
+    text_output: str | int,
+    reasoning_budget_pressure: int,
+    truncated: int,
+) -> list[str]:
+    """Return the stable CLI output-diagnostic lines consumed by the GUI.
+
+    Both synchronous consumers (ledger-backed runtime summaries and manifest
+    request summaries) resolve their workflow-specific totals and print these
+    identical lines so the GUI parser sees one contract.
+    """
+    return [
+        f"Sync output tokens: completion={completion} "
+        f"reasoning={reasoning} text={text_output}",
+        f"Reasoning budget warnings: {int(reasoning_budget_pressure)}",
+        f"Truncated sync responses: {int(truncated)}",
+    ]

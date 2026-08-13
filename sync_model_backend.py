@@ -70,6 +70,10 @@ def sync_error_category(exc: BaseException) -> str:
     ``LiteLLMBackendError.category`` (and any future backend category) is the
     authoritative source. Status/type/text fallbacks exist for SDK exceptions
     that do not expose the shared category contract yet.
+
+    google-genai reports invalid API keys as ``400 + "API key not valid..."``
+    without a typed exception, so the text fallback also recognizes key-related
+    markers as ``authentication`` instead of a generic provider error.
     """
     explicit = str(getattr(exc, "category", "") or "").strip().lower()
     if explicit in SYNC_ERROR_CATEGORIES:
@@ -140,7 +144,16 @@ def sync_error_category(exc: BaseException) -> str:
         )
     ):
         return "service_unavailable"
-    if "UNAUTHENTICATED" in text or "PERMISSION_DENIED" in text:
+    if any(
+        marker in text
+        for marker in (
+            "UNAUTHENTICATED",
+            "PERMISSION_DENIED",
+            "API KEY NOT VALID",
+            "API KEY INVALID",
+            "INVALID API KEY",
+        )
+    ):
         return "authentication"
     return "provider_error"
 
@@ -174,6 +187,32 @@ def sync_error_summary(exc: BaseException) -> str:
         _SYNC_SAFE_ERROR_MESSAGES["provider_error"],
     )
     return f"{message} [{category}]"
+
+
+def sync_error_detail(exc: BaseException, limit: int = 300) -> str:
+    """Return the original provider message for local logs only.
+
+    Backend errors intentionally hide provider text behind safe summaries, so
+    the original message is recovered by walking the ``__cause__``/``__context__``
+    chain (or the explicit ``detail`` attribute) and returning the first
+    non-backend message. Callers must never render this value in UI or result
+    files; it exists so local logs keep a diagnosable trail.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        explicit_detail = str(getattr(current, "detail", "") or "")
+        if explicit_detail:
+            return explicit_detail[:limit]
+        if isinstance(current, SyncBackendError):
+            current = current.__cause__ or current.__context__
+            continue
+        text = str(current).strip()
+        if text:
+            return text[:limit]
+        current = current.__cause__ or current.__context__
+    return ""
 
 
 def normalize_sync_timeout_seconds(
@@ -260,7 +299,7 @@ class GeminiSyncBackend:
             raise SyncBackendError(
                 sync_error_category(exc),
                 request_metadata={"provider": self.provider},
-            ) from None
+            ) from exc
         try:
             payload = self._serialize_response(response)
             usage: Dict[str, Any] = {}
@@ -269,11 +308,11 @@ class GeminiSyncBackend:
             response_text = self._extract_text(payload) or ""
             finish_reason = self._extract_finish_reason(payload) or ""
             parsed = getattr(response, "parsed", None)
-        except Exception:
+        except Exception as exc:
             raise SyncBackendError(
                 "invalid_response",
                 request_metadata={"provider": self.provider},
-            ) from None
+            ) from exc
         return SyncGenerationResult(
             provider=self.provider, model=request.model,
             execution_mode=SYNC_EXECUTION_MODE, response_payload=payload,

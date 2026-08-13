@@ -340,6 +340,48 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
             ["openai#1:****1111"],
         )
 
+    def test_backend_error_keeps_chain_and_detail_for_local_logs(self):
+        original = RuntimeError("provider echoed stored-secret-1111")
+        original.status_code = 400
+
+        def completion(**_kwargs):
+            raise original
+
+        backend = LiteLLMSyncBackend(completion=completion)
+        with self.assertRaises(LiteLLMBackendError) as captured:
+            backend.generate(SyncGenerationRequest("openai/test", "hello"))
+
+        self.assertIs(captured.exception.__cause__, original)
+        self.assertEqual(captured.exception.category, "provider_error")
+        self.assertEqual(str(captured.exception), "LiteLLM provider request failed.")
+        self.assertNotIn("stored-secret", str(captured.exception))
+        self.assertEqual(captured.exception.detail, str(original))
+
+    def test_litellm_backend_error_whitelists_non_internal_messages(self):
+        error = LiteLLMBackendError(
+            "provider echoed arbitrary text",
+            category="authentication",
+        )
+        self.assertEqual(
+            str(error),
+            "LiteLLM authentication failed.",
+        )
+        self.assertEqual(error.category, "authentication")
+
+        internal = LiteLLMBackendError(
+            "intentional user-facing message",
+            category="invalid_response",
+            internal=True,
+        )
+        self.assertEqual(str(internal), "intentional user-facing message")
+
+    def test_litellm_backend_error_normalizes_unknown_category(self):
+        error = LiteLLMBackendError(
+            "LiteLLM provider request failed.",
+            category="not-a-real-category",
+        )
+        self.assertEqual(error.category, "provider_error")
+
     def test_gemini_thinking_config_is_not_forwarded_to_litellm(self):
         calls = []
         backend = LiteLLMSyncBackend(

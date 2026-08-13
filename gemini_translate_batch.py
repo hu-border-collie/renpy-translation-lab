@@ -6244,20 +6244,16 @@ def _sync_token_summary_value(summary, field):
 
 def print_sync_output_summary(summary):
     """Print the stable CLI token/diagnostic contract consumed by the GUI."""
-    print(
-        'Sync output tokens: '
-        f"completion={_sync_token_summary_value(summary, 'completion_tokens')} "
-        f"reasoning={_sync_token_summary_value(summary, 'reasoning_tokens')} "
-        f"text={_sync_token_summary_value(summary, 'text_output_tokens')}"
-    )
-    print(
-        'Reasoning budget warnings: '
-        f"{int(summary.get('reasoning_budget_pressure_count') or 0)}"
-    )
-    print(
-        'Truncated sync responses: '
-        f"{int(summary.get('truncated_output_count') or 0)}"
-    )
+    for line in model_usage_ledger.format_sync_output_lines(
+        completion=_sync_token_summary_value(summary, 'completion_tokens'),
+        reasoning=_sync_token_summary_value(summary, 'reasoning_tokens'),
+        text_output=_sync_token_summary_value(summary, 'text_output_tokens'),
+        reasoning_budget_pressure=int(
+            summary.get('reasoning_budget_pressure_count') or 0
+        ),
+        truncated=int(summary.get('truncated_output_count') or 0),
+    ):
+        print(line)
 
 
 def contract_diagnostics_counts(diagnostics, field_name):

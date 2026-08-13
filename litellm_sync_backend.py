@@ -17,30 +17,55 @@ from sync_model_backend import (
     SyncGenerationRequest,
     SyncGenerationResult,
     normalize_sync_timeout_seconds,
+    sync_error_category,
 )
 
 
 class LiteLLMBackendError(RuntimeError):
+    """Backend failure whose message is whitelisted or explicitly internal.
+
+    ``message`` must be one of the safe per-category messages unless the caller
+    explicitly opts in with ``internal=True`` for intentional user-facing text.
+    Provider-derived text is never accepted as the message; it may only travel
+    in ``detail``, which is never rendered by :meth:`__str__` and exists for
+    local logs.
+    """
+
     def __init__(
         self,
         message: str,
         *,
         category: str = "provider_error",
         request_metadata: Mapping[str, Any] | None = None,
+        internal: bool = False,
+        detail: str | None = None,
     ) -> None:
+        normalized = str(category or "provider_error").strip().lower()
+        if normalized not in SYNC_ERROR_CATEGORIES:
+            normalized = "provider_error"
+        safe_message = _SAFE_ERROR_MESSAGES.get(
+            normalized,
+            _SAFE_ERROR_MESSAGES["provider_error"],
+        )
+        if not internal and message != safe_message:
+            # Whitelist enforcement: only known safe text may become the
+            # user-visible message; anything else is replaced by the category
+            # summary so a missed sanitization point cannot echo provider text.
+            message = safe_message
         super().__init__(message)
-        self.category = category
+        self.category = normalized
         self.request_metadata = dict(request_metadata or {})
+        self.detail = str(detail or "")[:500]
 
 
 class LiteLLMUnavailableError(LiteLLMBackendError):
     def __init__(self, message: str) -> None:
-        super().__init__(message, category="missing_dependency")
+        super().__init__(message, category="missing_dependency", internal=True)
 
 
 class LiteLLMCapabilityError(LiteLLMBackendError):
     def __init__(self, message: str) -> None:
-        super().__init__(message, category="unsupported_capability")
+        super().__init__(message, category="unsupported_capability", internal=True)
 
 
 _SAFE_ERROR_MESSAGES = {
@@ -50,6 +75,7 @@ _SAFE_ERROR_MESSAGES = {
     "timeout": "LiteLLM request timed out.",
     "invalid_response": "LiteLLM returned an invalid response.",
     "unsupported_capability": "LiteLLM provider does not support this request.",
+    "missing_dependency": "LiteLLM optional dependency is unavailable.",
     "provider_error": "LiteLLM provider request failed.",
 }
 
@@ -60,11 +86,12 @@ def _safe_backend_error(
     request_metadata: Mapping[str, Any] | None = None,
 ) -> LiteLLMBackendError:
     """Convert arbitrary provider failures without echoing provider text."""
-    category = _error_category(exc)
+    category = sync_error_category(exc)
     return LiteLLMBackendError(
         _SAFE_ERROR_MESSAGES.get(category, _SAFE_ERROR_MESSAGES["provider_error"]),
         category=category,
         request_metadata=request_metadata,
+        detail=str(exc),
     )
 
 
@@ -84,6 +111,7 @@ def _serialize_response(response: Any) -> Mapping[str, Any]:
         raise LiteLLMBackendError(
             f"LiteLLM returned unsupported response type: {type(response).__name__}",
             category="invalid_response",
+            internal=True,
         )
     hidden = getattr(response, "_hidden_params", None)
     if isinstance(hidden, Mapping) and "_hidden_params" not in payload:
@@ -124,52 +152,6 @@ def _messages(contents: Any, config: Mapping[str, Any]) -> List[Dict[str, str]]:
             ),
         })
     return messages
-
-
-def _error_category(exc: Exception) -> str:
-    explicit = str(getattr(exc, "category", "") or "").strip().lower()
-    if explicit in SYNC_ERROR_CATEGORIES:
-        return explicit
-    try:
-        import litellm
-
-        typed_categories = (
-            ("rate_limit", (getattr(litellm, "RateLimitError", None),)),
-            ("service_unavailable", (
-                getattr(litellm, "ServiceUnavailableError", None),
-                getattr(litellm, "APIConnectionError", None),
-            )),
-            ("timeout", (getattr(litellm, "Timeout", None),)),
-            ("authentication", (
-                getattr(litellm, "AuthenticationError", None),
-                getattr(litellm, "PermissionDeniedError", None),
-            )),
-        )
-        for category, candidates in typed_categories:
-            exception_types = tuple(
-                candidate for candidate in candidates if isinstance(candidate, type)
-            )
-            if exception_types and isinstance(exc, exception_types):
-                return category
-    except ImportError:
-        pass
-
-    status = getattr(exc, "status_code", getattr(exc, "code", None))
-    try:
-        status = int(status)
-    except (TypeError, ValueError, OverflowError):
-        status = None
-    if status == 429:
-        return "rate_limit"
-    if status == 408 or isinstance(exc, TimeoutError):
-        return "timeout"
-    if status in {500, 502, 503, 504}:
-        return "service_unavailable"
-    if status in {401, 403}:
-        return "authentication"
-    if status == 404:
-        return "unsupported_capability"
-    return "provider_error"
 
 
 def _masked_key_identity(provider: str, key: str, index: int | None = None) -> str:
@@ -381,7 +363,7 @@ class LiteLLMSyncBackend:
                 response = completion(**request_kwargs)
                 return response, credential, tuple(attempted_identities)
             except Exception as exc:
-                category = _error_category(exc)
+                category = sync_error_category(exc)
                 if category == "rate_limit" and index + 1 < len(attempts):
                     self._sleep(min(index + 1, 2))
                     continue
@@ -393,10 +375,11 @@ class LiteLLMSyncBackend:
                 raise _safe_backend_error(
                     exc,
                     request_metadata=failure_metadata,
-                ) from None
+                ) from exc
         raise LiteLLMBackendError(
             "LiteLLM request failed without a captured exception.",
             category="provider_error",
+            internal=True,
         )
 
     async def _run_with_credentials_async(
@@ -417,7 +400,7 @@ class LiteLLMSyncBackend:
                 response = await completion(**request_kwargs)
                 return response, credential, tuple(attempted_identities)
             except Exception as exc:
-                category = _error_category(exc)
+                category = sync_error_category(exc)
                 if category == "rate_limit" and index + 1 < len(attempts):
                     import asyncio
 
@@ -431,10 +414,11 @@ class LiteLLMSyncBackend:
                 raise _safe_backend_error(
                     exc,
                     request_metadata=failure_metadata,
-                ) from None
+                ) from exc
         raise LiteLLMBackendError(
             "LiteLLM request failed without a captured exception.",
             category="provider_error",
+            internal=True,
         )
 
     def _build_request_context(
@@ -503,6 +487,7 @@ class LiteLLMSyncBackend:
                 f"自定义 Provider {custom.label} 需要 API Key，"
                 "但系统凭据与 api_key_env 环境变量均未提供。",
                 category="authentication",
+                internal=True,
             )
         if custom is not None:
             kwargs["api_base"] = custom.base_url

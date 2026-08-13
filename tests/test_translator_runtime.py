@@ -1741,6 +1741,102 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(call.call_count, runtime.BATCH_RETRIES)
         self.assertEqual(diagnostics['split_retry_requests'], 0)
 
+    def test_provider_error_splits_batch_to_rescue_healthy_rows(self):
+        batch = [
+            {
+                'id': f'file:{index}:1',
+                'text': 'Hello',
+                'line': index,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': f'task:{index}:1',
+            }
+            for index in range(2)
+        ]
+        seen_batches = []
+
+        def fake_call(_prompt, items, **_kwargs):
+            seen_batches.append([item['id'] for item in items])
+            if len(items) > 1:
+                error = RuntimeError('provider content-policy detail')
+                error.status_code = 400
+                raise error
+            return translation_core.validate_model_response(
+                {'translations': [{
+                    'id': items[0]['id'],
+                    'translation': '你好',
+                }]},
+                expected_units=items,
+            )
+
+        diagnostics = runtime.new_sync_contract_diagnostics()
+        failures = []
+        with (
+            mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_call),
+            mock.patch.object(runtime, 'get_random_delay', return_value=0),
+            mock.patch.object(runtime.time, 'sleep'),
+            mock.patch.object(runtime, 'log_failure'),
+        ):
+            successful = runtime.process_batch_with_retry(
+                batch,
+                {},
+                contract_diagnostics=diagnostics,
+                contract_failures=failures,
+            )
+
+        self.assertEqual(
+            seen_batches,
+            [['file:0:1', 'file:1:1'], ['file:0:1'], ['file:1:1']],
+        )
+        self.assertEqual(successful, ['task:0:1', 'task:1:1'])
+        self.assertEqual(failures, [])
+        self.assertEqual(diagnostics['split_retry_requests'], 2)
+        self.assertEqual(diagnostics['terminal_reason_counts'], {})
+
+    def test_provider_error_single_row_keeps_safe_manifest_and_log_detail(self):
+        batch = [{
+            'id': 'file:0:1',
+            'text': 'Hello',
+            'line': 0,
+            'start': 1,
+            'end': 8,
+            'prefix': '',
+            'quote': '"',
+            'progress_entry': 'task:0:1',
+        }]
+        error = RuntimeError('provider echoed fixable-detail')
+        error.status_code = 400
+        diagnostics = runtime.new_sync_contract_diagnostics()
+        failures = []
+        with (
+            mock.patch.object(runtime, 'call_gemini_sdk', side_effect=error) as call,
+            mock.patch.object(runtime, 'get_random_delay', return_value=0),
+            mock.patch.object(runtime.time, 'sleep'),
+            mock.patch.object(runtime, 'log_failure') as log_failure,
+        ):
+            successful = runtime.process_batch_with_retry(
+                batch,
+                {},
+                contract_diagnostics=diagnostics,
+                contract_failures=failures,
+            )
+
+        self.assertEqual(successful, [])
+        self.assertEqual(call.call_count, 1)
+        self.assertEqual(diagnostics['split_retry_requests'], 0)
+        self.assertEqual(
+            diagnostics['terminal_reason_counts'],
+            {'request_or_contract_failure': 1},
+        )
+        self.assertTrue(
+            all(item['reason_code'] == 'request_or_contract_failure' for item in failures)
+        )
+        self.assertTrue(all('fixable-detail' not in item['message'] for item in failures))
+        self.assertIn('provider request failed [provider_error]', log_failure.call_args.args[1])
+        self.assertIn('fixable-detail', log_failure.call_args.args[1])
+
     def test_contract_completeness_excludes_adapter_rejected_items(self):
         batch = [
             {

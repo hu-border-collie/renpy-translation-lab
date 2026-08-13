@@ -71,6 +71,7 @@ from sync_model_backend import (
     GeminiSyncBackend,
     SyncGenerationRequest,
     normalize_sync_timeout_seconds,
+    sync_error_detail,
     sync_error_summary,
     sync_recovery_decision,
 )
@@ -4689,22 +4690,18 @@ def print_sync_usage_summary(records):
             return 'unknown'
         return str(int(totals.get(field) or 0))
 
-    print(
-        'Sync output tokens: '
-        f"completion={token_value('completion_tokens')} "
-        f"reasoning={token_value('reasoning_tokens')} "
-        f"text={token_value('text_output_tokens')}"
-    )
     diagnostics = totals.get('output_diagnostics')
     diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
-    print(
-        'Reasoning budget warnings: '
-        f"{int(diagnostics.get('reasoning_budget_pressure_records') or 0)}"
-    )
-    print(
-        'Truncated sync responses: '
-        f"{int(diagnostics.get('truncated_records') or 0)}"
-    )
+    for line in model_usage_ledger.format_sync_output_lines(
+        completion=token_value('completion_tokens'),
+        reasoning=token_value('reasoning_tokens'),
+        text_output=token_value('text_output_tokens'),
+        reasoning_budget_pressure=int(
+            diagnostics.get('reasoning_budget_pressure_records') or 0
+        ),
+        truncated=int(diagnostics.get('truncated_records') or 0),
+    ):
+        print(line)
 
 
 def process_batch_with_retry(
@@ -4740,6 +4737,7 @@ def process_batch_with_retry(
     error_str = "" # Initialize variable to be safe
     error_reason_code = ''
     split_reason_counts = {}
+    error_detail = ''
     allow_split = True
 
     for attempt in range(1, BATCH_RETRIES + 1):
@@ -4850,6 +4848,10 @@ def process_batch_with_retry(
             error_reason_code = str(getattr(e, 'reason_code', '') or '')
             if not error_reason_code and recovery.category != 'provider_error':
                 error_reason_code = recovery.category
+            if recovery.category == 'provider_error':
+                # Unknown provider failures keep the original message in the
+                # local failure log; the printed/manifest text stays safe.
+                error_detail = sync_error_detail(e)
             split_reason_code = error_reason_code
             if not split_reason_code and 'Finish reason: 2' in error_str:
                 split_reason_code = 'truncated_output'
@@ -4883,15 +4885,21 @@ def process_batch_with_retry(
             if recovery.split_request or error_reason_code == 'truncated_output':
                 print("  ! Invalid or truncated output. Splitting batch...")
                 break
-            # Authentication, unsupported capability, and unknown provider
-            # errors are not made safer by repeating or splitting the request.
+            # Authentication, unsupported capability, and missing dependency
+            # errors are deterministic; repeating or splitting cannot help.
             if recovery.category in {
                 'authentication',
                 'unsupported_capability',
                 'missing_dependency',
-                'provider_error',
             }:
                 allow_split = False
+                break
+            # Unknown provider errors may be caused by a single problematic
+            # row (400 content policy, gateway hiccup). Splitting isolates the
+            # failing row so healthy lines can still produce output; this
+            # preserves the pre-#340 split rescue for unclassified failures.
+            if recovery.category == 'provider_error':
+                allow_split = True
                 break
 
     # If batch failed after retries, try splitting
@@ -4942,7 +4950,10 @@ def process_batch_with_retry(
         )
         return r1 + r2
 
-    log_failure(batch, f"Failed after retries: {error_str}")
+    log_message = f"Failed after retries: {error_str}"
+    if error_detail and error_detail != error_str:
+        log_message = f"{log_message} | original: {error_detail}"
+    log_failure(batch, log_message)
     if contract_diagnostics is not None:
         terminal_code = error_reason_code or 'request_or_contract_failure'
         terminal_counts = contract_diagnostics.setdefault(

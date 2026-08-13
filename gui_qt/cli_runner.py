@@ -133,7 +133,17 @@ class CliRunner(QObject):
         self.request_stop()
 
     def request_stop(self, *, grace_ms: int = 2000) -> bool:
-        """Ask the child to terminate, then asynchronously fall back to kill."""
+        """Ask the child to terminate, then asynchronously fall back to kill.
+
+        Returns ``True`` when a stop was issued or already requested for the
+        owned process; returns ``False`` when there is no owned process.
+
+        An owned process that is already in the ``NotRunning`` state is
+        finalized immediately (drained and emitted as finished) so the user
+        stop wins over a queued stale exit. A user stop always produces the
+        terminal ``finished`` signal with exit code ``-1``; any later stale
+        process result is ignored by the ownership check.
+        """
         process = self._proc
         if process is None:
             return False

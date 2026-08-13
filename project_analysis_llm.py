@@ -613,10 +613,18 @@ def run_mapreduce_drafts(
     current_request = {"stage": "", "artifact_id": ""}
     raw_generate = generate
 
-    def _tracked_generate(request: SyncGenerationRequest) -> SyncGenerationResult:
-        result = raw_generate(request)
-        metadata = dict(getattr(result, "usage_metadata", None) or {})
-        normalized = model_usage_ledger.normalize_usage_metadata(metadata)
+    def _accumulate_usage(
+        target: dict[str, Any],
+        *,
+        normalized: Mapping[str, Any],
+        diagnostics: Mapping[str, Any],
+        total_tokens: int,
+    ) -> None:
+        """Add one request's normalized usage fields to an aggregate mapping.
+
+        Keeps per-stage and aggregate accumulators identical; request counting
+        stays with the caller because aggregate and per-stage handling differ.
+        """
         input_tokens = int(normalized.get("prompt_tokens") or 0)
         completion_tokens = int(normalized.get("completion_tokens") or 0)
         reasoning_tokens = int(normalized.get("reasoning_tokens") or 0)
@@ -624,35 +632,50 @@ def run_mapreduce_drafts(
         output_tokens = int(
             normalized.get("billable_output_tokens") or completion_tokens
         )
-        total_tokens = int(normalized.get("total_tokens") or 0)
-        if not total_tokens:
-            total_tokens = input_tokens + output_tokens
-        usage_summary["requests"] += 1
-        usage_summary["input_tokens"] += input_tokens
-        usage_summary["output_tokens"] += output_tokens
-        usage_summary["completion_tokens"] += completion_tokens
-        usage_summary["reasoning_tokens"] += reasoning_tokens
-        usage_summary["text_output_tokens"] += text_output_tokens
-        usage_summary["completion_tokens_known_requests"] += int(
+        target["input_tokens"] += input_tokens
+        target["output_tokens"] += output_tokens
+        target["completion_tokens"] += completion_tokens
+        target["reasoning_tokens"] += reasoning_tokens
+        target["text_output_tokens"] += text_output_tokens
+        target["completion_tokens_known_requests"] += int(
             normalized.get("completion_tokens") is not None
         )
-        usage_summary["reasoning_tokens_known_requests"] += int(
+        target["reasoning_tokens_known_requests"] += int(
             normalized.get("reasoning_tokens") is not None
         )
-        usage_summary["text_output_tokens_known_requests"] += int(
+        target["text_output_tokens_known_requests"] += int(
             normalized.get("text_output_tokens") is not None
         )
+        target["reasoning_budget_pressure_count"] += int(
+            diagnostics.get("reasoning_budget_pressure") is True
+        )
+        target["truncated_output_count"] += int(
+            diagnostics.get("truncated") is True
+        )
+        target["total_tokens"] += total_tokens
+
+    def _tracked_generate(request: SyncGenerationRequest) -> SyncGenerationResult:
+        result = raw_generate(request)
+        metadata = dict(getattr(result, "usage_metadata", None) or {})
+        normalized = model_usage_ledger.normalize_usage_metadata(metadata)
+        completion_tokens = int(normalized.get("completion_tokens") or 0)
+        output_tokens = int(
+            normalized.get("billable_output_tokens") or completion_tokens
+        )
+        total_tokens = int(normalized.get("total_tokens") or 0)
+        if not total_tokens:
+            total_tokens = int(normalized.get("prompt_tokens") or 0) + output_tokens
         diagnostics = _result_output_diagnostics(
             result,
             max_output_tokens=(request.config or {}).get("max_output_tokens"),
         )
-        usage_summary["reasoning_budget_pressure_count"] += int(
-            diagnostics.get("reasoning_budget_pressure") is True
+        usage_summary["requests"] += 1
+        _accumulate_usage(
+            usage_summary,
+            normalized=normalized,
+            diagnostics=diagnostics,
+            total_tokens=total_tokens,
         )
-        usage_summary["truncated_output_count"] += int(
-            diagnostics.get("truncated") is True
-        )
-        usage_summary["total_tokens"] += total_tokens
         stage = current_request["stage"] or "unknown"
         stage_usage = usage_summary["by_stage"].setdefault(
             stage,
@@ -672,27 +695,12 @@ def run_mapreduce_drafts(
             },
         )
         stage_usage["requests"] += 1
-        stage_usage["input_tokens"] += input_tokens
-        stage_usage["output_tokens"] += output_tokens
-        stage_usage["completion_tokens"] += completion_tokens
-        stage_usage["reasoning_tokens"] += reasoning_tokens
-        stage_usage["text_output_tokens"] += text_output_tokens
-        stage_usage["completion_tokens_known_requests"] += int(
-            normalized.get("completion_tokens") is not None
+        _accumulate_usage(
+            stage_usage,
+            normalized=normalized,
+            diagnostics=diagnostics,
+            total_tokens=total_tokens,
         )
-        stage_usage["reasoning_tokens_known_requests"] += int(
-            normalized.get("reasoning_tokens") is not None
-        )
-        stage_usage["text_output_tokens_known_requests"] += int(
-            normalized.get("text_output_tokens") is not None
-        )
-        stage_usage["reasoning_budget_pressure_count"] += int(
-            diagnostics.get("reasoning_budget_pressure") is True
-        )
-        stage_usage["truncated_output_count"] += int(
-            diagnostics.get("truncated") is True
-        )
-        stage_usage["total_tokens"] += total_tokens
         if usage_recorder is not None:
             try:
                 usage_recorder(

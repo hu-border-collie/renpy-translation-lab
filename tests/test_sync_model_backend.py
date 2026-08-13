@@ -9,6 +9,7 @@ from sync_model_backend import (
     SyncBackendError,
     SyncModelBackend,
     normalize_sync_timeout_seconds,
+    sync_error_detail,
     sync_error_category,
     sync_error_summary,
     sync_recovery_decision,
@@ -256,6 +257,60 @@ class SyncModelBackendTests(unittest.TestCase):
 
         error.category = "secret-value"
         self.assertEqual(sync_error_category(error), "rate_limit")
+
+    def test_gemini_invalid_api_key_text_is_authentication(self):
+        for message in (
+            "400 API key not valid. Please pass a valid API key.",
+            "API key invalid: 400 INVALID_ARGUMENT",
+            "Invalid API key provided.",
+        ):
+            with self.subTest(message=message):
+                error = RuntimeError(message)
+                error.status_code = 400
+                self.assertEqual(sync_error_category(error), "authentication")
+                self.assertEqual(
+                    sync_error_summary(error),
+                    "authentication failed [authentication]",
+                )
+
+    def test_sync_backend_error_keeps_original_exception_chain(self):
+        original = RuntimeError("provider echoed secret-value")
+        original.status_code = 400
+        client = _Client(_Response())
+
+        def fail(**_kwargs):
+            raise original
+
+        client.models.generate_content = fail
+        backend = GeminiSyncBackend(
+            client,
+            serialize_response=lambda response: {},
+            extract_text=lambda payload: "",
+            extract_finish_reason=lambda payload: "",
+        )
+
+        with self.assertRaises(SyncBackendError) as captured:
+            backend.generate(SyncGenerationRequest("gemini-test", [], {}))
+
+        self.assertIs(captured.exception.__cause__, original)
+        self.assertEqual(captured.exception.category, "provider_error")
+        self.assertNotIn("secret-value", str(captured.exception))
+        self.assertEqual(sync_error_detail(captured.exception), "provider echoed secret-value")
+
+    def test_sync_error_detail_prefers_explicit_detail_then_chain(self):
+        error = RuntimeError("raw provider text")
+        self.assertEqual(sync_error_detail(error), "raw provider text")
+
+        wrapped = SyncBackendError("authentication")
+        try:
+            raise wrapped from error
+        except SyncBackendError:
+            pass
+        self.assertEqual(sync_error_detail(wrapped), "raw provider text")
+
+        with_detail = RuntimeError("detail wins")
+        with_detail.detail = "kept for local logs"
+        self.assertEqual(sync_error_detail(with_detail), "kept for local logs")
 
 
 if __name__ == "__main__":

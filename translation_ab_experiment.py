@@ -340,6 +340,17 @@ def extract_translation_map(response_text: str, items: list[dict]) -> tuple[dict
 
 @dataclass
 class VariantRunResult:
+    """Store one variant result and its safe synchronization metadata.
+
+    ``output_diagnostics`` holds provider-neutral response-budget facts
+    normalized via ``model_usage_ledger.normalize_response_diagnostics`` and is
+    empty when no response was produced. ``request_metadata`` holds normalized
+    non-secret routing metadata (provider, masked credential identity) and is
+    empty when unavailable. ``error_category`` is set only for categorized
+    request or response failures and is empty on success; the JSONL result
+    contract persists these fields with the same empty-value semantics.
+    """
+
     variant_name: str
     settings: dict
     translations: dict[str, str] = field(default_factory=dict)

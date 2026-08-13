@@ -1062,6 +1062,36 @@ class ModelUsageLedgerTests(unittest.TestCase):
             output.getvalue(),
         )
 
+    def test_format_sync_output_lines_is_stable_contract(self):
+        self.assertEqual(
+            usage.format_sync_output_lines(
+                completion="23",
+                reasoning="17",
+                text_output="unknown",
+                reasoning_budget_pressure=1,
+                truncated=2,
+            ),
+            [
+                "Sync output tokens: completion=23 reasoning=17 text=unknown",
+                "Reasoning budget warnings: 1",
+                "Truncated sync responses: 2",
+            ],
+        )
+        self.assertEqual(
+            usage.format_sync_output_lines(
+                completion=0,
+                reasoning=0,
+                text_output=0,
+                reasoning_budget_pressure=0,
+                truncated=0,
+            ),
+            [
+                "Sync output tokens: completion=0 reasoning=0 text=0",
+                "Reasoning budget warnings: 0",
+                "Truncated sync responses: 0",
+            ],
+        )
+
     def test_import_best_effort_does_not_swallow_system_exit(self):
         with self.assertRaises(SystemExit):
             with mock.patch.object(
