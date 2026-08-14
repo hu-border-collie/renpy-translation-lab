@@ -32,6 +32,89 @@ UPDATE_GOLDEN_REVISION_ENV = 'UPDATE_GOLDEN_REVISION'
 UPDATE_GOLDEN_KEYWORD_ENV = 'UPDATE_GOLDEN_KEYWORD'
 
 
+def _snapshot_translator_runtime_state():
+    """Snapshot globals mutated by ``load_translator_settings`` for restore.
+
+    The loader starts from ``_reset_project_settings_to_defaults`` and then
+    rewrites path/prepare/sync/rotation globals from the patched config, so a
+    test that calls it must restore every affected global or later tests can
+    inherit paths into a deleted temporary directory.
+    """
+    return {
+        'BASE_DIR': runtime.BASE_DIR,
+        'TL_DIR': runtime.TL_DIR,
+        'TL_SUBDIR': runtime.TL_SUBDIR,
+        'ENV_GAME_ROOT': runtime.ENV_GAME_ROOT,
+        'WORK_GAME_DIR': runtime.WORK_GAME_DIR,
+        'SOURCE_GAME_DIR': runtime.SOURCE_GAME_DIR,
+        'GLOSSARY_FILE': runtime.GLOSSARY_FILE,
+        'PREP_ENABLED': runtime.PREP_ENABLED,
+        'PREP_UNPACK_RPA': runtime.PREP_UNPACK_RPA,
+        'PREP_GENERATE_TEMPLATE': runtime.PREP_GENERATE_TEMPLATE,
+        'PREP_REFRESH_EXISTING_TEMPLATE': runtime.PREP_REFRESH_EXISTING_TEMPLATE,
+        'PREP_LANGUAGE': runtime.PREP_LANGUAGE,
+        'PREP_RENPY_SDK_DIR': runtime.PREP_RENPY_SDK_DIR,
+        'PREP_LAUNCHER_PY': runtime.PREP_LAUNCHER_PY,
+        'PREP_PYTHON_EXE': runtime.PREP_PYTHON_EXE,
+        'PREP_UNPACK_COMMAND': runtime.PREP_UNPACK_COMMAND,
+        'PREP_TEMPLATE_COMMAND': runtime.PREP_TEMPLATE_COMMAND,
+        'PREP_ALLOW_SHELL_COMMANDS': runtime.PREP_ALLOW_SHELL_COMMANDS,
+        'CONTEXT_STORAGE_LOCATION': runtime.CONTEXT_STORAGE_LOCATION,
+        'CONTEXT_STORAGE_GAME_DIR_NAME': runtime.CONTEXT_STORAGE_GAME_DIR_NAME,
+        'API_KEY_ROTATION_ENABLED': runtime.API_KEY_ROTATION_ENABLED,
+        'MODEL_ROTATION_ENABLED': runtime.MODEL_ROTATION_ENABLED,
+        'MODEL_ROTATION_MODELS': list(runtime.MODEL_ROTATION_MODELS),
+        'SYNC_BACKEND': runtime.SYNC_BACKEND,
+        'SYNC_TIMEOUT_SECONDS': runtime.SYNC_TIMEOUT_SECONDS,
+        'SYNC_RAG_ENABLED': runtime.SYNC_RAG_ENABLED,
+        'SYNC_RAG_STORE_DIR': runtime.SYNC_RAG_STORE_DIR,
+        'SYNC_RAG_EMBEDDING_MODEL': runtime.SYNC_RAG_EMBEDDING_MODEL,
+        'SYNC_RAG_QUERY_TASK_TYPE': runtime.SYNC_RAG_QUERY_TASK_TYPE,
+        'SYNC_RAG_DOCUMENT_TASK_TYPE': runtime.SYNC_RAG_DOCUMENT_TASK_TYPE,
+        'SYNC_RAG_OUTPUT_DIMENSIONALITY': runtime.SYNC_RAG_OUTPUT_DIMENSIONALITY,
+        'SYNC_RAG_TOP_K_HISTORY': runtime.SYNC_RAG_TOP_K_HISTORY,
+        'SYNC_RAG_TOP_K_TERMS': runtime.SYNC_RAG_TOP_K_TERMS,
+        'SYNC_RAG_MIN_SIMILARITY': runtime.SYNC_RAG_MIN_SIMILARITY,
+        'SYNC_RAG_SEGMENT_LINES': runtime.SYNC_RAG_SEGMENT_LINES,
+        'SYNC_RAG_HISTORY_CHAR_LIMIT': runtime.SYNC_RAG_HISTORY_CHAR_LIMIT,
+        'SYNC_RAG_UPDATE_ON_SUCCESS': runtime.SYNC_RAG_UPDATE_ON_SUCCESS,
+        '_SYNC_RAG_STORE': runtime._SYNC_RAG_STORE,
+        'SYNC_STORY_MEMORY_ENABLED': runtime.SYNC_STORY_MEMORY_ENABLED,
+        'SYNC_STORY_MEMORY_GRAPH_FILE': runtime.SYNC_STORY_MEMORY_GRAPH_FILE,
+        'SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS': (
+            runtime.SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS
+        ),
+        'SYNC_STORY_MEMORY_TOP_K_RELATIONS': (
+            runtime.SYNC_STORY_MEMORY_TOP_K_RELATIONS
+        ),
+        'SYNC_STORY_MEMORY_TOP_K_TERMS': runtime.SYNC_STORY_MEMORY_TOP_K_TERMS,
+        'SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY': (
+            runtime.SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY
+        ),
+        '_SYNC_STORY_GRAPH': runtime._SYNC_STORY_GRAPH,
+        '_SYNC_STORY_GRAPH_PATH': runtime._SYNC_STORY_GRAPH_PATH,
+        'MAX_ITEMS': runtime.MAX_ITEMS,
+        'MAX_CHARS': runtime.MAX_CHARS,
+        'SYNC_MAX_OUTPUT_TOKENS': runtime.SYNC_MAX_OUTPUT_TOKENS,
+        'SYNC_CONTEXT_BEFORE': runtime.SYNC_CONTEXT_BEFORE,
+        'SYNC_CONTEXT_AFTER': runtime.SYNC_CONTEXT_AFTER,
+        'SYNC_MACRO_SETTING_FILE': runtime.SYNC_MACRO_SETTING_FILE,
+        'SYNC_MACRO_SETTING': runtime.SYNC_MACRO_SETTING,
+        'SYNC_MACRO_FINGERPRINT': runtime.SYNC_MACRO_FINGERPRINT,
+        'CUSTOM_LITELLM_PROVIDERS': dict(runtime.CUSTOM_LITELLM_PROVIDERS),
+        'INCLUDE_FILES': set(runtime.INCLUDE_FILES),
+        'INCLUDE_PREFIXES': set(runtime.INCLUDE_PREFIXES),
+        'MODELS': list(runtime.MODELS),
+        'CURRENT_MODEL_INDEX': runtime.CURRENT_MODEL_INDEX,
+        '_active_runtime_config': runtime._active_runtime_config,
+    }
+
+
+def _restore_translator_runtime_state(snapshot):
+    for key, value in snapshot.items():
+        setattr(runtime, key, value)
+
+
 
 class TranslatorRuntimeRegressionTests(unittest.TestCase):
     def test_batch_module_import_has_no_stdout_or_directory_side_effects(self):
@@ -2281,14 +2364,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertFalse(stats['block_bounded_before'])
 
     def test_sync_config_loads_context_and_macro_settings(self):
-        snapshot = {
-            'base': runtime.BASE_DIR,
-            'context_before': runtime.SYNC_CONTEXT_BEFORE,
-            'context_after': runtime.SYNC_CONTEXT_AFTER,
-            'macro_file': runtime.SYNC_MACRO_SETTING_FILE,
-            'macro_setting': runtime.SYNC_MACRO_SETTING,
-            'macro_fingerprint': runtime.SYNC_MACRO_FINGERPRINT,
-        }
+        snapshot = _snapshot_translator_runtime_state()
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 workspace = Path(tmp)
@@ -2328,20 +2404,10 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                         hashlib.sha256('Keep the tone warm.'.encode('utf-8')).hexdigest(),
                     )
         finally:
-            runtime.BASE_DIR = snapshot['base']
-            runtime.SYNC_CONTEXT_BEFORE = snapshot['context_before']
-            runtime.SYNC_CONTEXT_AFTER = snapshot['context_after']
-            runtime.SYNC_MACRO_SETTING_FILE = snapshot['macro_file']
-            runtime.SYNC_MACRO_SETTING = snapshot['macro_setting']
-            runtime.SYNC_MACRO_FINGERPRINT = snapshot['macro_fingerprint']
+            _restore_translator_runtime_state(snapshot)
 
     def test_sync_config_ignores_macro_file_outside_project(self):
-        snapshot = {
-            'base': runtime.BASE_DIR,
-            'macro_file': runtime.SYNC_MACRO_SETTING_FILE,
-            'macro_setting': runtime.SYNC_MACRO_SETTING,
-            'macro_fingerprint': runtime.SYNC_MACRO_FINGERPRINT,
-        }
+        snapshot = _snapshot_translator_runtime_state()
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 workspace = Path(tmp)
@@ -2374,10 +2440,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                     self.assertEqual(runtime.SYNC_MACRO_SETTING, '')
                     self.assertEqual(runtime.SYNC_MACRO_FINGERPRINT, '')
         finally:
-            runtime.BASE_DIR = snapshot['base']
-            runtime.SYNC_MACRO_SETTING_FILE = snapshot['macro_file']
-            runtime.SYNC_MACRO_SETTING = snapshot['macro_setting']
-            runtime.SYNC_MACRO_FINGERPRINT = snapshot['macro_fingerprint']
+            _restore_translator_runtime_state(snapshot)
 
     def test_sync_rag_prompt_includes_retrieved_memory_when_enabled(self):
         old_enabled = runtime.SYNC_RAG_ENABLED
