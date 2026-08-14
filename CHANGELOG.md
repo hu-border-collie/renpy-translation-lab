@@ -13,7 +13,7 @@
 - 增加按项目归集 Batch、同步、订正、关键词与分析调用的实际模型用量账本。
 - 增加 Ren'Py Engine Adapter 的稳定扫描/occurrence/coverage 产物和写回计划校验。
 - 增加提交恢复、成本估算、翻译 A/B 对比、同步预览写回与订正预览写回等完整工作流。
-- 同步初译增加局部前后文（`sync.context_before` / `context_after`，默认 30/10，限定同文件与 translate block 边界）、`macro_setting_file` 风格设定注入，以及不依赖 RAG 开关的术语命中（`normalize_map` / 保留词 / 不可翻译词）；上下文构造事实与 macro 指纹写入 manifest 并纳入预览指纹。
+- 同步初译增加局部前后文（`sync.context_before` / `sync.context_after`，默认 30/10，限定同文件与 translate block 边界）、`sync.macro_setting_file` 风格设定注入，以及不依赖 RAG 开关的术语命中（`normalize_map` / 保留词 / 不可翻译词）；上下文构造事实与 macro 指纹写入 manifest 并纳入预览指纹。
 
 ### 变更
 

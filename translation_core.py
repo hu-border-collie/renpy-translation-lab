@@ -689,6 +689,15 @@ def build_sync_translation_prompt(
     normalize_map=None,
     non_translatable_terms=None,
 ):
+    """Build the reference-only sync translation prompt for one batch.
+
+    ``context_window`` (before/after) is injected as ``CONTEXT BEFORE/AFTER``
+    and is strictly reference material: the model must only translate the
+    ``Input JSON`` items. ``macro_setting`` is prepended as a ``Setting``
+    block when non-empty. ``normalize_map`` and ``non_translatable_terms`` are
+    the current batch's lexical glossary hits; when provided they are rendered
+    as ``Existing glossary entries`` alongside ``preserve_terms``.
+    """
     units = units_from_items(units, MODE_TRANSLATION)
     glossary = ', '.join(str(term) for term in preserve_terms or [])
     payload = json.dumps(

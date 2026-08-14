@@ -602,6 +602,20 @@ def _resolve_path(base_dir, value):
     return _canonical_abs_path(os.path.join(base_dir, text))
 
 
+def _canonical_path_within(base_dir, candidate):
+    """Return True when *candidate* resolves inside *base_dir* (symlink-safe)."""
+    if not base_dir or not candidate:
+        return False
+    try:
+        base = os.path.realpath(os.path.abspath(base_dir))
+        path = os.path.realpath(os.path.abspath(candidate))
+    except OSError:
+        return False
+    base_norm = os.path.normcase(base).rstrip("\\/")
+    path_norm = os.path.normcase(path)
+    return path_norm == base_norm or path_norm.startswith(base_norm + os.sep)
+
+
 def _resolve_preferred_path_from_bases(value, base_dirs):
     if value is None:
         return ""
@@ -1165,6 +1179,13 @@ def load_sync_translation_settings(config):
         SYNC_MACRO_SETTING_FILE = DEFAULT_SYNC_MACRO_SETTING_FILE
     resolved_macro = _resolve_path(BASE_DIR, SYNC_MACRO_SETTING_FILE)
     macro_text = ''
+    if resolved_macro and not _canonical_path_within(BASE_DIR, resolved_macro):
+        print(
+            f"Warning: Sync macro setting file {resolved_macro} is outside the "
+            "project; ignoring it (macro_setting.md must live under game_root).",
+            flush=True,
+        )
+        resolved_macro = ''
     if resolved_macro and os.path.isfile(resolved_macro):
         try:
             with open(resolved_macro, 'r', encoding='utf-8-sig') as handle:
@@ -1292,6 +1313,7 @@ class RuntimeConfig:
     sync_context_before: int = DEFAULT_SYNC_CONTEXT_BEFORE
     sync_context_after: int = DEFAULT_SYNC_CONTEXT_AFTER
     sync_macro_setting_file: str = DEFAULT_SYNC_MACRO_SETTING_FILE
+    sync_macro_setting: str = ""
     sync_macro_fingerprint: str = ""
     custom_litellm_providers: dict = field(default_factory=dict)
 
@@ -1371,6 +1393,7 @@ def default_runtime_config() -> RuntimeConfig:
         sync_context_before=DEFAULT_SYNC_CONTEXT_BEFORE,
         sync_context_after=DEFAULT_SYNC_CONTEXT_AFTER,
         sync_macro_setting_file=DEFAULT_SYNC_MACRO_SETTING_FILE,
+        sync_macro_setting="",
         sync_macro_fingerprint="",
         custom_litellm_providers={},
         prep_language=DEFAULT_PREP_LANGUAGE,
@@ -1425,6 +1448,7 @@ def snapshot_runtime_config() -> RuntimeConfig:
         sync_context_before=SYNC_CONTEXT_BEFORE,
         sync_context_after=SYNC_CONTEXT_AFTER,
         sync_macro_setting_file=SYNC_MACRO_SETTING_FILE,
+        sync_macro_setting=SYNC_MACRO_SETTING,
         sync_macro_fingerprint=SYNC_MACRO_FINGERPRINT,
         custom_litellm_providers=dict(CUSTOM_LITELLM_PROVIDERS),
         include_files=set(INCLUDE_FILES),
@@ -1462,6 +1486,8 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
     global API_KEY_ROTATION_ENABLED, MODEL_ROTATION_ENABLED, MODEL_ROTATION_MODELS
     global MAX_CHARS, MAX_ITEMS, SYNC_MAX_OUTPUT_TOKENS, SYNC_TIMEOUT_SECONDS
     global SYNC_BACKEND
+    global SYNC_CONTEXT_BEFORE, SYNC_CONTEXT_AFTER
+    global SYNC_MACRO_SETTING_FILE, SYNC_MACRO_SETTING, SYNC_MACRO_FINGERPRINT
     global CUSTOM_LITELLM_PROVIDERS
     global INCLUDE_FILES, INCLUDE_PREFIXES
     global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
@@ -1519,6 +1545,11 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
         )
         SYNC_TIMEOUT_SECONDS = applied.sync_timeout_seconds
         SYNC_BACKEND = applied.sync_backend or DEFAULT_SYNC_BACKEND
+        SYNC_CONTEXT_BEFORE = applied.sync_context_before
+        SYNC_CONTEXT_AFTER = applied.sync_context_after
+        SYNC_MACRO_SETTING_FILE = applied.sync_macro_setting_file or DEFAULT_SYNC_MACRO_SETTING_FILE
+        SYNC_MACRO_SETTING = applied.sync_macro_setting or ""
+        SYNC_MACRO_FINGERPRINT = applied.sync_macro_fingerprint or ""
         CUSTOM_LITELLM_PROVIDERS = dict(applied.custom_litellm_providers or {})
 
         INCLUDE_FILES = set(applied.include_files)
@@ -4368,10 +4399,18 @@ def build_prompt(
     history_hits=None,
     story_hits=None,
     context_window=None,
-    macro_setting='',
+    macro_setting=None,
     normalize_map=None,
     non_translatable_terms=None,
 ):
+    """Build the sync translation prompt for one batch.
+
+    ``context_window`` is a reference-only local context window bounded to the
+    current file; ``macro_setting`` overrides the loaded ``SYNC_MACRO_SETTING``
+    when explicitly provided, and falls back to the loaded value when omitted.
+    ``normalize_map`` / ``non_translatable_terms`` are the current batch's
+    lexical glossary hits and are injected independently of the RAG switch.
+    """
     units = translation_core.units_from_items(
         items,
         translation_core.MODE_TRANSLATION,
@@ -5001,6 +5040,10 @@ def process_batch_with_retry(
                 contract_diagnostics=contract_diagnostics,
                 contract_failures=contract_failures,
                 retry_kind='targeted_retry',
+                # Targeted retries stay within the original batch's local
+                # context window; reuse it so missing items keep the same
+                # surrounding context as the first request.
+                context_window=context_window,
             )
             return successful + retried
 
@@ -5656,6 +5699,17 @@ def apply_sync_translation_preview(manifest_path):
         maybe_update_sync_rag_store(translated_path, full_file=True)
 
     try:
+        manifest = sync_translation_preview.load_sync_preview(manifest_path)
+    except ValueError as exc:
+        raise SystemExit(f"Sync apply blocked: {exc}") from exc
+    prompt_context = manifest.get("prompt_context") or {}
+    manifest_macro_fingerprint = str(prompt_context.get("macro_fingerprint") or "")
+    if manifest_macro_fingerprint and manifest_macro_fingerprint != SYNC_MACRO_FINGERPRINT:
+        raise SystemExit(
+            "Sync apply blocked: the macro setting file changed since this "
+            "preview was generated. Regenerate and review a new preview."
+        )
+    try:
         manifest = sync_translation_preview.apply_sync_preview(
             manifest_path,
             active_project_root=BASE_DIR,
@@ -5745,6 +5799,7 @@ def run_translation(*, prepare=False):
         preview_failures = []
         contract_failures = []
         contract_diagnostics = new_sync_contract_diagnostics()
+        attempted_file_contexts = []
         for document in source_documents:
             file_path = document.file_path
             filename = os.path.basename(file_path)
@@ -5829,6 +5884,14 @@ def run_translation(*, prepare=False):
                     contract_failures=contract_failures,
                     context_window=context_window,
                 ))
+            # Persist attempted-batch diagnostics even when the file produced
+            # no preview (all items rejected or adapter writeback blocked), so
+            # the manifest can still explain the context construction.
+            if file_context_batches:
+                attempted_file_contexts.append({
+                    "relative_path": progress_key,
+                    "batches": file_context_batches,
+                })
 
             if any(replacements.values()):
                 normalized_entries = _normalize_progress_entries(successful_entries)
@@ -5872,13 +5935,13 @@ def run_translation(*, prepare=False):
         preview_failures.extend(contract_failures)
         finalized_contract = finalize_sync_contract_diagnostics(contract_diagnostics)
         context_batch_count = sum(
-            len((file_entry.get("prompt_context") or {}).get("batches") or [])
-            for file_entry in preview_files
+            len(file_entry.get("batches") or [])
+            for file_entry in attempted_file_contexts
         )
         context_truncated_batches = sum(
             1
-            for file_entry in preview_files
-            for batch_stats in (file_entry.get("prompt_context") or {}).get("batches") or []
+            for file_entry in attempted_file_contexts
+            for batch_stats in file_entry.get("batches") or []
             if batch_stats.get("context_truncated")
         )
         macro_path = _resolve_path(BASE_DIR, SYNC_MACRO_SETTING_FILE)
@@ -5891,6 +5954,7 @@ def run_translation(*, prepare=False):
             "macro_applied": bool(SYNC_MACRO_SETTING),
             "batches": context_batch_count,
             "truncated_batches": context_truncated_batches,
+            "files": attempted_file_contexts,
         }
         manifest_path, manifest = sync_translation_preview.create_sync_preview(
             log_dir=LOG_DIR,

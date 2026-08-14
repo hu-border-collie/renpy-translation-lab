@@ -2027,6 +2027,98 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertIn('- Non-translatable: Ebon', prompt)
         self.assertIn('1. Preserve these terms exactly (do not translate): Alice', prompt)
 
+    def test_sync_process_batch_injects_loaded_macro_by_default(self):
+        old_macro = runtime.SYNC_MACRO_SETTING
+        old_use_memory = runtime.USE_TRANSLATION_MEMORY
+        captured = {}
+        try:
+            runtime.SYNC_MACRO_SETTING = 'Keep the tone warm.'
+            runtime.USE_TRANSLATION_MEMORY = False
+
+            def fake_sdk(prompt, items, **_kwargs):
+                captured['prompt'] = prompt
+                return translation_core.validate_model_response(
+                    {
+                        'translations': [
+                            {'id': 'file:0:1', 'translation': '\u4f60\u597d'},
+                        ]
+                    },
+                    expected_units=items,
+                )
+
+            with (
+                mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_sdk),
+                mock.patch.object(
+                    runtime,
+                    'validate_translation',
+                    return_value=(True, 'OK'),
+                ),
+            ):
+                runtime.process_batch(
+                    [
+                        {
+                            'id': 'file:0:1',
+                            'text': 'Hello',
+                            'progress_entry': 'task:0:1',
+                        }
+                    ],
+                    {},
+                )
+        finally:
+            runtime.SYNC_MACRO_SETTING = old_macro
+            runtime.USE_TRANSLATION_MEMORY = old_use_memory
+
+        prompt = captured.get('prompt') or ''
+        self.assertIn('Setting:', prompt)
+        self.assertIn('Keep the tone warm.', prompt)
+
+    def test_sync_apply_blocks_when_macro_changed_since_preview(self):
+        old_macro = runtime.SYNC_MACRO_SETTING
+        old_fingerprint = runtime.SYNC_MACRO_FINGERPRINT
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'game' / 'tl' / 'schinese'
+                tl_dir.mkdir(parents=True)
+                source = '    "Hello 1"\n'
+                (tl_dir / 'a.rpy').write_text(source, encoding='utf-8')
+                manifest_path, manifest = runtime.sync_translation_preview.create_sync_preview(
+                    log_dir=root / 'logs',
+                    project_root=root,
+                    tl_dir=tl_dir,
+                    files=[
+                        {
+                            'relative_path': 'a.rpy',
+                            'source_text': source,
+                            'source_sha256': hashlib.sha256(source.encode('utf-8')).hexdigest(),
+                            'preview_text': '    "\u4f60\u597d 1"\n',
+                            'progress_entries': ['id:1'],
+                        }
+                    ],
+                    prompt_context={
+                        'macro_setting_file': 'macro_setting.md',
+                        'macro_fingerprint': 'preview-fingerprint',
+                        'macro_applied': True,
+                        'batches': 1,
+                        'truncated_batches': 0,
+                    },
+                )
+                runtime.SYNC_MACRO_SETTING = 'changed since preview'
+                runtime.SYNC_MACRO_FINGERPRINT = 'changed-fingerprint'
+
+                with (
+                    mock.patch.object(runtime, 'load_config'),
+                    mock.patch.object(runtime, 'load_translator_settings'),
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    with self.assertRaises(SystemExit) as ctx:
+                        runtime.apply_sync_translation_preview(manifest_path)
+                self.assertIn('macro setting file changed', str(ctx.exception))
+                self.assertEqual((tl_dir / 'a.rpy').read_text(encoding='utf-8'), source)
+        finally:
+            runtime.SYNC_MACRO_SETTING = old_macro
+            runtime.SYNC_MACRO_FINGERPRINT = old_fingerprint
+
     def test_sync_local_context_respects_block_boundary_and_budget(self):
         tasks = [
             {'id': 'a1', 'text': 'One', 'block_name': 'scene1'},
@@ -2120,6 +2212,50 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             runtime.BASE_DIR = snapshot['base']
             runtime.SYNC_CONTEXT_BEFORE = snapshot['context_before']
             runtime.SYNC_CONTEXT_AFTER = snapshot['context_after']
+            runtime.SYNC_MACRO_SETTING_FILE = snapshot['macro_file']
+            runtime.SYNC_MACRO_SETTING = snapshot['macro_setting']
+            runtime.SYNC_MACRO_FINGERPRINT = snapshot['macro_fingerprint']
+
+    def test_sync_config_ignores_macro_file_outside_project(self):
+        snapshot = {
+            'base': runtime.BASE_DIR,
+            'macro_file': runtime.SYNC_MACRO_SETTING_FILE,
+            'macro_setting': runtime.SYNC_MACRO_SETTING,
+            'macro_fingerprint': runtime.SYNC_MACRO_FINGERPRINT,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                workspace = Path(tmp)
+                base = workspace / 'game'
+                outside = workspace / 'outside'
+                base.mkdir()
+                outside.mkdir()
+                (outside / 'macro.md').write_text('outside macro', encoding='utf-8')
+                config_path = workspace / 'translator_config.json'
+                config_path.write_text(
+                    json.dumps(
+                        {
+                            'game_root': str(base),
+                            'sync': {
+                                'macro_setting_file': str(outside / 'macro.md'),
+                            },
+                        }
+                    ),
+                    encoding='utf-8',
+                )
+
+                with (
+                    mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                    mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'tool')),
+                    mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'tool')),
+                    mock.patch.dict(os.environ, {}, clear=True),
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    runtime.load_translator_settings()
+                    self.assertEqual(runtime.SYNC_MACRO_SETTING, '')
+                    self.assertEqual(runtime.SYNC_MACRO_FINGERPRINT, '')
+        finally:
+            runtime.BASE_DIR = snapshot['base']
             runtime.SYNC_MACRO_SETTING_FILE = snapshot['macro_file']
             runtime.SYNC_MACRO_SETTING = snapshot['macro_setting']
             runtime.SYNC_MACRO_FINGERPRINT = snapshot['macro_fingerprint']
