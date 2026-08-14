@@ -668,6 +668,67 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertIn('[Gil_name!t]', sync_text)
         self.assertIn('never turn them into literal names', sync_text)
 
+    def test_sync_prompt_includes_bounded_local_context_when_window_given(self):
+        prompt = translation_core.build_sync_translation_prompt(
+            [{'id': 'line-1', 'text': 'Hello Alice'}],
+            ['Alice'],
+            context_window=translation_core.ContextWindow(
+                before=['Eve: Are you ready?', 'Eve: Then we go.'],
+                after=['Eve: Welcome back.'],
+            ),
+        )
+
+        self.assertIn('CONTEXT BEFORE:', prompt)
+        self.assertIn('- Eve: Are you ready?', prompt)
+        self.assertIn('CONTEXT AFTER:', prompt)
+        self.assertIn('- Eve: Welcome back.', prompt)
+        self.assertIn('CONTEXT BEFORE/AFTER lines are reference only', prompt)
+        # CONTEXT entries are never part of the TARGET payload.
+        self.assertIn('Input JSON:', prompt)
+        self.assertNotIn('"Are you ready?"', prompt)
+
+    def test_sync_prompt_omits_local_context_when_window_omitted(self):
+        prompt = translation_core.build_sync_translation_prompt(
+            [{'id': 'line-1', 'text': 'Hello Alice'}],
+            ['Alice'],
+        )
+        self.assertNotIn('CONTEXT BEFORE:', prompt)
+        self.assertNotIn('CONTEXT AFTER:', prompt)
+
+    def test_sync_prompt_injects_macro_setting_when_present(self):
+        prompt = translation_core.build_sync_translation_prompt(
+            [{'id': 'line-1', 'text': 'Hello'}],
+            [],
+            macro_setting='  Keep the heroine formal and distant.\n',
+        )
+        self.assertIn('Setting:', prompt)
+        self.assertIn('Keep the heroine formal and distant.', prompt)
+        self.assertNotIn('Setting:', prompt.replace('Setting:', '', 1))
+
+        without_macro = translation_core.build_sync_translation_prompt(
+            [{'id': 'line-1', 'text': 'Hello'}],
+            [],
+        )
+        self.assertNotIn('Setting:', without_macro)
+
+    def test_sync_prompt_injects_normalize_and_non_translatable_glossary(self):
+        prompt = translation_core.build_sync_translation_prompt(
+            [{'id': 'line-1', 'text': 'Open the Void Gate'}],
+            ['Void Gate'],
+            normalize_map={'Void Gate': '虚空门'},
+            non_translatable_terms=['Ebon'],
+        )
+        self.assertIn('Existing glossary entries:', prompt)
+        self.assertIn('- Preserve: Void Gate', prompt)
+        self.assertIn('- Existing mapping: Void Gate -> 虚空门', prompt)
+        self.assertIn('- Non-translatable: Ebon', prompt)
+
+        without_glossary = translation_core.build_sync_translation_prompt(
+            [{'id': 'line-1', 'text': 'Open the Void Gate'}],
+            ['Void Gate'],
+        )
+        self.assertNotIn('Existing glossary entries:', without_glossary)
+
     def test_core_result_parsers_and_writeback_actions_are_mode_aware(self):
         translation_results = translation_core.normalize_model_results(
             {'translations': [{'id': 'a', 'translation': '\u4f60\u597d'}]},

@@ -103,6 +103,30 @@ SYNC_TIMEOUT_COPY = {
     ),
 }
 
+SYNC_CONTEXT_BEFORE_COPY = {
+    "label": "同步前文条目数",
+    "description": (
+        "同步请求附带的局部前文条目数量；上下文限定在同文件、同翻译块内，"
+        "超过预算会被截断并记录诊断。0 表示关闭局部前文。"
+    ),
+}
+
+SYNC_CONTEXT_AFTER_COPY = {
+    "label": "同步后文条目数",
+    "description": (
+        "同步请求附带的局部后文条目数量；上下文限定在同文件、同翻译块内，"
+        "超过预算会被截断并记录诊断。0 表示关闭局部后文。"
+    ),
+}
+
+SYNC_MACRO_SETTING_FILE_COPY = {
+    "label": "同步风格设定文件",
+    "description": (
+        "注入同步提示词的 macro_setting.md 路径。相对路径相对当前 work；"
+        "切换项目时会同步到当前 work。留空则使用当前 work 下的 macro_setting.md。"
+    ),
+}
+
 MODEL_CONTRACT_COPY = {
     "partial_translation": (
         "部分模型结果未通过完整性合同，其余安全预览已生成。"
@@ -119,6 +143,11 @@ MODEL_CONTRACT_COPY = {
     "targeted_retries": "定点重试",
     "unresolved_items": "未解决结果",
     "partial_requests": "不完整请求",
+}
+
+PROMPT_CONTEXT_COPY = {
+    "local_context": "局部上下文",
+    "macro_setting": "风格设定",
 }
 
 PROBE_COPY = {

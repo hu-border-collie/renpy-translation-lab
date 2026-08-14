@@ -32,7 +32,7 @@ def locked_runtime_state():
     with _runtime_state_lock:
         yield
 
-from atomic_io import atomic_write_json, atomic_write_lines
+from atomic_io import atomic_write_json, atomic_write_lines, sha256_text
 import cli_contract
 from engine_adapters.contracts import ProjectDiscoveryRequest, ValidatedTranslation
 from engine_adapters.coverage import export_coverage_package
@@ -100,6 +100,9 @@ DEFAULT_MAX_ITEMS = 40
 DEFAULT_SYNC_MAX_OUTPUT_TOKENS = 24576
 DEFAULT_SYNC_BACKEND = "gemini"
 DEFAULT_SYNC_RAG_EMBEDDING_MODEL = DEFAULT_GEMINI_EMBEDDING_MODEL
+DEFAULT_SYNC_CONTEXT_BEFORE = 30
+DEFAULT_SYNC_CONTEXT_AFTER = 10
+DEFAULT_SYNC_MACRO_SETTING_FILE = "macro_setting.md"
 # Rotation policy defaults: multi-key failover stays on; model hopping is off.
 DEFAULT_API_KEY_ROTATION_ENABLED = True
 DEFAULT_MODEL_ROTATION_ENABLED = False
@@ -181,6 +184,11 @@ MAX_ITEMS = DEFAULT_MAX_ITEMS
 SYNC_MAX_OUTPUT_TOKENS = DEFAULT_SYNC_MAX_OUTPUT_TOKENS
 SYNC_TIMEOUT_SECONDS = DEFAULT_SYNC_TIMEOUT_SECONDS
 SYNC_BACKEND = DEFAULT_SYNC_BACKEND
+SYNC_CONTEXT_BEFORE = DEFAULT_SYNC_CONTEXT_BEFORE
+SYNC_CONTEXT_AFTER = DEFAULT_SYNC_CONTEXT_AFTER
+SYNC_MACRO_SETTING_FILE = DEFAULT_SYNC_MACRO_SETTING_FILE
+SYNC_MACRO_SETTING = ''
+SYNC_MACRO_FINGERPRINT = ''
 # Custom OpenAI-compatible LiteLLM providers parsed from sync.custom_litellm_providers.
 CUSTOM_LITELLM_PROVIDERS: dict[str, object] = {}
 MIN_DELAY = 1.0  # Reduced delay for SDK
@@ -501,6 +509,15 @@ def _coerce_positive_int(value, default):
     return number if number > 0 else default
 
 
+def _coerce_non_negative_int(value, default):
+    """Coerce an integer that may be zero (0 disables the feature)."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number >= 0 else default
+
+
 def _coerce_float(value, default):
     try:
         return float(value)
@@ -583,6 +600,20 @@ def _resolve_path(base_dir, value):
     if not base_dir:
         return ""
     return _canonical_abs_path(os.path.join(base_dir, text))
+
+
+def _canonical_path_within(base_dir, candidate):
+    """Return True when *candidate* resolves inside *base_dir* (symlink-safe)."""
+    if not base_dir or not candidate:
+        return False
+    try:
+        base = os.path.realpath(os.path.abspath(base_dir))
+        path = os.path.realpath(os.path.abspath(candidate))
+    except OSError:
+        return False
+    base_norm = os.path.normcase(base).rstrip("\\/")
+    path_norm = os.path.normcase(path)
+    return path_norm == base_norm or path_norm.startswith(base_norm + os.sep)
 
 
 def _resolve_preferred_path_from_bases(value, base_dirs):
@@ -1041,9 +1072,18 @@ def load_rotation_settings(config):
 
 
 def load_sync_translation_settings(config):
+    """Load sync translation settings and project-bound Macro content.
+
+    Context limits accept non-negative integers and default to 30/10 when
+    omitted. Macro files must resolve under ``BASE_DIR``; missing, unreadable,
+    or rejected files clear the Macro text and its fingerprint while keeping
+    the configured file name for diagnostics.
+    """
     global MAX_ITEMS, MAX_CHARS, SYNC_MAX_OUTPUT_TOKENS, SYNC_TIMEOUT_SECONDS
     global SYNC_BACKEND
     global CUSTOM_LITELLM_PROVIDERS
+    global SYNC_CONTEXT_BEFORE, SYNC_CONTEXT_AFTER
+    global SYNC_MACRO_SETTING_FILE, SYNC_MACRO_SETTING, SYNC_MACRO_FINGERPRINT
 
     sync = config.get("sync")
     if not isinstance(sync, dict):
@@ -1113,6 +1153,9 @@ def load_sync_translation_settings(config):
     previous_chars = MAX_CHARS
     previous_output_tokens = SYNC_MAX_OUTPUT_TOKENS
     previous_timeout = SYNC_TIMEOUT_SECONDS
+    previous_context_before = SYNC_CONTEXT_BEFORE
+    previous_context_after = SYNC_CONTEXT_AFTER
+    previous_macro_file = SYNC_MACRO_SETTING_FILE
 
     MAX_ITEMS = _coerce_positive_int(sync.get("chunk_size"), MAX_ITEMS)
     MAX_CHARS = _coerce_positive_int(
@@ -1127,6 +1170,40 @@ def load_sync_translation_settings(config):
         sync.get("timeout_seconds"),
         DEFAULT_SYNC_TIMEOUT_SECONDS,
     )
+    SYNC_CONTEXT_BEFORE = _coerce_non_negative_int(
+        sync.get("context_before"),
+        DEFAULT_SYNC_CONTEXT_BEFORE,
+    )
+    SYNC_CONTEXT_AFTER = _coerce_non_negative_int(
+        sync.get("context_after"),
+        DEFAULT_SYNC_CONTEXT_AFTER,
+    )
+
+    macro_setting_file = sync.get("macro_setting_file")
+    if isinstance(macro_setting_file, str) and macro_setting_file.strip():
+        SYNC_MACRO_SETTING_FILE = macro_setting_file.strip()
+    else:
+        SYNC_MACRO_SETTING_FILE = DEFAULT_SYNC_MACRO_SETTING_FILE
+    resolved_macro = _resolve_path(BASE_DIR, SYNC_MACRO_SETTING_FILE)
+    macro_text = ''
+    if resolved_macro and not _canonical_path_within(BASE_DIR, resolved_macro):
+        print(
+            f"Warning: Sync macro setting file {resolved_macro} is outside the "
+            "project; ignoring it (macro_setting.md must live under game_root).",
+            flush=True,
+        )
+        resolved_macro = ''
+    if resolved_macro and os.path.isfile(resolved_macro):
+        try:
+            with open(resolved_macro, 'r', encoding='utf-8-sig') as handle:
+                macro_text = handle.read()
+        except OSError as exc:
+            print(
+                f"Warning: Failed to read sync macro setting file {resolved_macro}: {exc}",
+                flush=True,
+            )
+    SYNC_MACRO_SETTING = macro_text.strip() if macro_text else ''
+    SYNC_MACRO_FINGERPRINT = sha256_text(SYNC_MACRO_SETTING) if SYNC_MACRO_SETTING else ''
 
     if MAX_ITEMS != previous_items:
         print(f"Using sync chunk size: {MAX_ITEMS}")
@@ -1136,6 +1213,16 @@ def load_sync_translation_settings(config):
         print(f"Using sync max output tokens: {SYNC_MAX_OUTPUT_TOKENS}")
     if SYNC_TIMEOUT_SECONDS != previous_timeout:
         print(f"Using sync request timeout: {SYNC_TIMEOUT_SECONDS} seconds")
+    if SYNC_CONTEXT_BEFORE != previous_context_before or SYNC_CONTEXT_AFTER != previous_context_after:
+        print(
+            f"Using sync context window: before={SYNC_CONTEXT_BEFORE}, after={SYNC_CONTEXT_AFTER}",
+            flush=True,
+        )
+    if SYNC_MACRO_SETTING_FILE != previous_macro_file:
+        print(
+            f"Using sync macro setting file: {SYNC_MACRO_SETTING_FILE}",
+            flush=True,
+        )
 
 
 def coerce_normalized_rel_path_set(value):
@@ -1230,6 +1317,11 @@ class RuntimeConfig:
     sync_max_output_tokens: int = DEFAULT_SYNC_MAX_OUTPUT_TOKENS
     sync_timeout_seconds: int = DEFAULT_SYNC_TIMEOUT_SECONDS
     sync_backend: str = DEFAULT_SYNC_BACKEND
+    sync_context_before: int = DEFAULT_SYNC_CONTEXT_BEFORE
+    sync_context_after: int = DEFAULT_SYNC_CONTEXT_AFTER
+    sync_macro_setting_file: str = DEFAULT_SYNC_MACRO_SETTING_FILE
+    sync_macro_setting: str = ""
+    sync_macro_fingerprint: str = ""
     custom_litellm_providers: dict = field(default_factory=dict)
 
     include_files: set = field(default_factory=set)
@@ -1305,6 +1397,11 @@ def default_runtime_config() -> RuntimeConfig:
         sync_max_output_tokens=DEFAULT_SYNC_MAX_OUTPUT_TOKENS,
         sync_timeout_seconds=DEFAULT_SYNC_TIMEOUT_SECONDS,
         sync_backend=DEFAULT_SYNC_BACKEND,
+        sync_context_before=DEFAULT_SYNC_CONTEXT_BEFORE,
+        sync_context_after=DEFAULT_SYNC_CONTEXT_AFTER,
+        sync_macro_setting_file=DEFAULT_SYNC_MACRO_SETTING_FILE,
+        sync_macro_setting="",
+        sync_macro_fingerprint="",
         custom_litellm_providers={},
         prep_language=DEFAULT_PREP_LANGUAGE,
         context_storage_location=DEFAULT_CONTEXT_STORAGE_LOCATION,
@@ -1355,6 +1452,11 @@ def snapshot_runtime_config() -> RuntimeConfig:
         sync_max_output_tokens=SYNC_MAX_OUTPUT_TOKENS,
         sync_timeout_seconds=SYNC_TIMEOUT_SECONDS,
         sync_backend=SYNC_BACKEND,
+        sync_context_before=SYNC_CONTEXT_BEFORE,
+        sync_context_after=SYNC_CONTEXT_AFTER,
+        sync_macro_setting_file=SYNC_MACRO_SETTING_FILE,
+        sync_macro_setting=SYNC_MACRO_SETTING,
+        sync_macro_fingerprint=SYNC_MACRO_FINGERPRINT,
         custom_litellm_providers=dict(CUSTOM_LITELLM_PROVIDERS),
         include_files=set(INCLUDE_FILES),
         include_prefixes=set(INCLUDE_PREFIXES),
@@ -1391,6 +1493,8 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
     global API_KEY_ROTATION_ENABLED, MODEL_ROTATION_ENABLED, MODEL_ROTATION_MODELS
     global MAX_CHARS, MAX_ITEMS, SYNC_MAX_OUTPUT_TOKENS, SYNC_TIMEOUT_SECONDS
     global SYNC_BACKEND
+    global SYNC_CONTEXT_BEFORE, SYNC_CONTEXT_AFTER
+    global SYNC_MACRO_SETTING_FILE, SYNC_MACRO_SETTING, SYNC_MACRO_FINGERPRINT
     global CUSTOM_LITELLM_PROVIDERS
     global INCLUDE_FILES, INCLUDE_PREFIXES
     global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
@@ -1448,6 +1552,11 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
         )
         SYNC_TIMEOUT_SECONDS = applied.sync_timeout_seconds
         SYNC_BACKEND = applied.sync_backend or DEFAULT_SYNC_BACKEND
+        SYNC_CONTEXT_BEFORE = applied.sync_context_before
+        SYNC_CONTEXT_AFTER = applied.sync_context_after
+        SYNC_MACRO_SETTING_FILE = applied.sync_macro_setting_file or DEFAULT_SYNC_MACRO_SETTING_FILE
+        SYNC_MACRO_SETTING = applied.sync_macro_setting or ""
+        SYNC_MACRO_FINGERPRINT = applied.sync_macro_fingerprint or ""
         CUSTOM_LITELLM_PROVIDERS = dict(applied.custom_litellm_providers or {})
 
         INCLUDE_FILES = set(applied.include_files)
@@ -3127,8 +3236,15 @@ def embed_sync_query_text(query_text):
 
 
 def retrieve_sync_glossary_hits(target_items):
-    if not SYNC_RAG_ENABLED:
-        return []
+    """Return every lexical glossary hit for the current TARGET batch.
+
+    Matches ``normalize_map``, ``preserve_terms`` and ``non_translatable_exact``
+    against the batch text and returns all actual hits. The list is deliberately
+    not truncated by ``SYNC_RAG_TOP_K_TERMS``: that cap applies only to the RAG
+    ``LOCKED TERMS`` reference list, while the lexical injection required by
+    issue #338 must always carry the batch's real hits (otherwise normalize hits
+    could evict non-translatable terms and cause names to be mistranslated).
+    """
     combined_text = "\n".join(item.get("text", "") for item in target_items if item.get("text"))
     if not combined_text:
         return []
@@ -3144,7 +3260,77 @@ def retrieve_sync_glossary_hits(target_items):
         if term in combined_text and term not in seen:
             hits.append({"source": term, "target": term, "kind": "preserve"})
             seen.add(term)
-    return hits[:SYNC_RAG_TOP_K_TERMS]
+    for term in NON_TRANSLATABLE_EXACT:
+        if not isinstance(term, str) or not term.strip():
+            continue
+        if term in combined_text and term not in seen:
+            hits.append({"source": term, "target": "", "kind": "non_translatable"})
+            seen.add(term)
+    return hits
+
+
+def _sync_task_text_len(item):
+    text = (item or {}).get("text")
+    return len(text) if isinstance(text, str) else 0
+
+
+def build_sync_local_context(tasks, start, end, before_limit, after_limit):
+    """Build a file-bounded ContextWindow for one sync batch (issue #338).
+
+    The window is limited to the current file's pending task sequence (the
+    caller passes one file at a time) and stops at translate-block boundaries
+    so context cannot silently cross scenes when a block is identifiable.
+
+    Returns ``(ContextWindow, diagnostics)`` where diagnostics records the
+    applied limits, actual item/character counts, block bounding, and whether
+    the budget truncated the context.
+    """
+    before = []
+    after = []
+    before_truncated = False
+    after_truncated = False
+    block_bounded_before = False
+    block_bounded_after = False
+
+    if before_limit > 0 and start > 0:
+        batch_block = tasks[start].get("block_name")
+        index = start - 1
+        while index >= 0 and len(before) < before_limit:
+            item = tasks[index]
+            if item.get("block_name") != batch_block:
+                block_bounded_before = True
+                break
+            before.append(item)
+            index -= 1
+        if index >= 0 and len(before) >= before_limit:
+            before_truncated = True
+        before.reverse()
+
+    if after_limit > 0 and end < len(tasks):
+        batch_block = tasks[end - 1].get("block_name")
+        index = end
+        while index < len(tasks) and len(after) < after_limit:
+            item = tasks[index]
+            if item.get("block_name") != batch_block:
+                block_bounded_after = True
+                break
+            after.append(item)
+            index += 1
+        if index < len(tasks) and len(after) >= after_limit:
+            after_truncated = True
+
+    diagnostics = {
+        "context_before_limit": before_limit,
+        "context_after_limit": after_limit,
+        "context_before_items": len(before),
+        "context_after_items": len(after),
+        "context_before_chars": sum(_sync_task_text_len(item) for item in before),
+        "context_after_chars": sum(_sync_task_text_len(item) for item in after),
+        "context_truncated": before_truncated or after_truncated,
+        "block_bounded_before": block_bounded_before,
+        "block_bounded_after": block_bounded_after,
+    }
+    return translation_core.ContextWindow(before, after), diagnostics
 
 
 def format_sync_glossary_hits_block(hits, empty_label="(none)"):
@@ -4223,7 +4409,24 @@ def log_failure(batch, error):
         print(f"  Warning: Could not log failure: {e}")
 
 
-def build_prompt(items, glossary_hits=None, history_hits=None, story_hits=None):
+def build_prompt(
+    items,
+    glossary_hits=None,
+    history_hits=None,
+    story_hits=None,
+    context_window=None,
+    macro_setting=None,
+    normalize_map=None,
+    non_translatable_terms=None,
+):
+    """Build the sync translation prompt for one batch.
+
+    ``context_window`` is a reference-only local context window bounded to the
+    current file; ``macro_setting`` overrides the loaded ``SYNC_MACRO_SETTING``
+    when explicitly provided, and falls back to the loaded value when omitted.
+    ``normalize_map`` / ``non_translatable_terms`` are the current batch's
+    lexical glossary hits and are injected independently of the RAG switch.
+    """
     units = translation_core.units_from_items(
         items,
         translation_core.MODE_TRANSLATION,
@@ -4240,6 +4443,10 @@ def build_prompt(items, glossary_hits=None, history_hits=None, story_hits=None):
         history_char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
         story_char_limit=SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
         include_translation_memory=SYNC_RAG_ENABLED,
+        context_window=context_window,
+        macro_setting=macro_setting if macro_setting is not None else SYNC_MACRO_SETTING,
+        normalize_map=normalize_map,
+        non_translatable_terms=non_translatable_terms,
     )
 
 def get_nested(source, *candidates):
@@ -4468,18 +4675,41 @@ def process_batch(
     usage_buffer=None,
     usage_operation_id='',
     translation_validator=None,
+    context_window=None,
     return_contract=False,
 ):
-    glossary_hits = retrieve_sync_glossary_hits(batch) if SYNC_RAG_ENABLED else []
+    # Local glossary matches are lexical and must not depend on the RAG
+    # switch: normalize_map / preserve / non-translatable hits always reach
+    # the prompt for the current TARGET batch (issue #338).
+    glossary_hits = retrieve_sync_glossary_hits(batch)
+    normalize_map = {
+        str(hit.get('source') or ''): str(hit.get('target') or '')
+        for hit in glossary_hits
+        if hit.get('kind') == 'normalize' and hit.get('source')
+    }
+    non_translatable_terms = [
+        str(hit.get('source') or '')
+        for hit in glossary_hits
+        if hit.get('kind') == 'non_translatable' and hit.get('source')
+    ]
+    # The lexical injection above is always complete; only the RAG-enabled
+    # LOCKED TERMS reference list keeps the configured top_k budget so RAG-on
+    # prompts do not grow unbounded with a large glossary.
+    locked_glossary_hits = (
+        glossary_hits[: max(1, SYNC_RAG_TOP_K_TERMS)] if SYNC_RAG_ENABLED else []
+    )
     history_hits, rag_stats = retrieve_sync_history_hits(batch) if SYNC_RAG_ENABLED else ([], {})
     story_hits = retrieve_sync_story_hits(batch) if SYNC_STORY_MEMORY_ENABLED else None
     if rag_stats.get("hit_count"):
         print(f"  Sync RAG memory hits: {rag_stats['hit_count']}", flush=True)
     prompt = build_prompt(
         batch,
-        glossary_hits=glossary_hits,
+        glossary_hits=locked_glossary_hits,
         history_hits=history_hits,
         story_hits=story_hits,
+        context_window=context_window,
+        normalize_map=normalize_map,
+        non_translatable_terms=non_translatable_terms,
     )
 
     # Call API (SDK handles connection details)
@@ -4715,6 +4945,7 @@ def process_batch_with_retry(
     contract_diagnostics=None,
     contract_failures=None,
     retry_kind='first_pass',
+    context_window=None,
 ):
     if contract_diagnostics is not None and retry_kind == 'first_pass':
         original_ids = [
@@ -4752,6 +4983,7 @@ def process_batch_with_retry(
                 usage_run_id=usage_run_id,
                 usage_buffer=usage_buffer,
                 usage_operation_id=usage_operation_id,
+                context_window=context_window,
                 return_contract=True,
             )
             _record_sync_contract_report(
@@ -4830,6 +5062,10 @@ def process_batch_with_retry(
                 contract_diagnostics=contract_diagnostics,
                 contract_failures=contract_failures,
                 retry_kind='targeted_retry',
+                # Targeted retries stay within the original batch's local
+                # context window; reuse it so missing items keep the same
+                # surrounding context as the first request.
+                context_window=context_window,
             )
             return successful + retried
 
@@ -4937,6 +5173,8 @@ def process_batch_with_retry(
             contract_diagnostics=contract_diagnostics,
             contract_failures=contract_failures,
             retry_kind='split_retry',
+            # Split children no longer line up with the original local context
+            # window, so it is intentionally omitted (issue #338).
         )
         r2 = process_batch_with_retry(
             right_batch, replacements, retry_depth + 1,
@@ -4947,6 +5185,7 @@ def process_batch_with_retry(
             contract_diagnostics=contract_diagnostics,
             contract_failures=contract_failures,
             retry_kind='split_retry',
+            # See the split-left call above: context window is not reused.
         )
         return r1 + r2
 
@@ -5482,6 +5721,21 @@ def apply_sync_translation_preview(manifest_path):
         maybe_update_sync_rag_store(translated_path, full_file=True)
 
     try:
+        manifest = sync_translation_preview.load_sync_preview(manifest_path)
+    except ValueError as exc:
+        raise SystemExit(f"Sync apply blocked: {exc}") from exc
+    prompt_context = manifest.get("prompt_context") or {}
+    manifest_macro_fingerprint = str(prompt_context.get("macro_fingerprint") or "")
+    # Legacy manifests without prompt_context keep applying; every manifest
+    # recorded by the current preview flow carries a macro fingerprint, so any
+    # difference (macro added, removed, or changed since preview) blocks
+    # writeback.
+    if "prompt_context" in manifest and manifest_macro_fingerprint != SYNC_MACRO_FINGERPRINT:
+        raise SystemExit(
+            "Sync apply blocked: the macro setting file changed since this "
+            "preview was generated. Regenerate and review a new preview."
+        )
+    try:
         manifest = sync_translation_preview.apply_sync_preview(
             manifest_path,
             active_project_root=BASE_DIR,
@@ -5571,6 +5825,7 @@ def run_translation(*, prepare=False):
         preview_failures = []
         contract_failures = []
         contract_diagnostics = new_sync_contract_diagnostics()
+        attempted_file_contexts = []
         for document in source_documents:
             file_path = document.file_path
             filename = os.path.basename(file_path)
@@ -5603,12 +5858,22 @@ def run_translation(*, prepare=False):
             replacements = {}
             successful_entries = []
             batch = []
+            batch_start = 0
             current_batch_chars = 0
-            for task in tasks:
+            file_context_batches = []
+            for batch_index, task in enumerate(tasks):
                 task_len = len(task["text"])
                 if batch and (
                     len(batch) >= MAX_ITEMS or current_batch_chars + task_len > MAX_CHARS
                 ):
+                    context_window, context_stats = build_sync_local_context(
+                        tasks,
+                        batch_start,
+                        batch_index,
+                        SYNC_CONTEXT_BEFORE,
+                        SYNC_CONTEXT_AFTER,
+                    )
+                    file_context_batches.append(context_stats)
                     successful_entries.extend(process_batch_with_retry(
                         batch,
                         replacements,
@@ -5618,12 +5883,22 @@ def run_translation(*, prepare=False):
                         usage_operation_id=usage_operation_id,
                         contract_diagnostics=contract_diagnostics,
                         contract_failures=contract_failures,
+                        context_window=context_window,
                     ))
                     batch = []
+                    batch_start = batch_index
                     current_batch_chars = 0
                 batch.append(task)
                 current_batch_chars += task_len
             if batch:
+                context_window, context_stats = build_sync_local_context(
+                    tasks,
+                    batch_start,
+                    len(tasks),
+                    SYNC_CONTEXT_BEFORE,
+                    SYNC_CONTEXT_AFTER,
+                )
+                file_context_batches.append(context_stats)
                 successful_entries.extend(process_batch_with_retry(
                     batch,
                     replacements,
@@ -5633,7 +5908,16 @@ def run_translation(*, prepare=False):
                     usage_operation_id=usage_operation_id,
                     contract_diagnostics=contract_diagnostics,
                     contract_failures=contract_failures,
+                    context_window=context_window,
                 ))
+            # Persist attempted-batch diagnostics even when the file produced
+            # no preview (all items rejected or adapter writeback blocked), so
+            # the manifest can still explain the context construction.
+            if file_context_batches:
+                attempted_file_contexts.append({
+                    "relative_path": progress_key,
+                    "batches": file_context_batches,
+                })
 
             if any(replacements.values()):
                 normalized_entries = _normalize_progress_entries(successful_entries)
@@ -5667,12 +5951,37 @@ def run_translation(*, prepare=False):
                         "progress_entries": normalized_entries,
                         "translated_items": len(normalized_entries),
                         "writeback_plan": adapter_plan.to_dict(),
+                        "prompt_context": {
+                            "batches": file_context_batches,
+                        },
                     }
                 )
             print(f"  Previewed {filename}.")
 
         preview_failures.extend(contract_failures)
         finalized_contract = finalize_sync_contract_diagnostics(contract_diagnostics)
+        context_batch_count = sum(
+            len(file_entry.get("batches") or [])
+            for file_entry in attempted_file_contexts
+        )
+        context_truncated_batches = sum(
+            1
+            for file_entry in attempted_file_contexts
+            for batch_stats in file_entry.get("batches") or []
+            if batch_stats.get("context_truncated")
+        )
+        macro_path = _resolve_path(BASE_DIR, SYNC_MACRO_SETTING_FILE)
+        prompt_context = {
+            "context_before": SYNC_CONTEXT_BEFORE,
+            "context_after": SYNC_CONTEXT_AFTER,
+            "macro_setting_file": SYNC_MACRO_SETTING_FILE,
+            "macro_setting_path": macro_path,
+            "macro_fingerprint": SYNC_MACRO_FINGERPRINT,
+            "macro_applied": bool(SYNC_MACRO_SETTING),
+            "batches": context_batch_count,
+            "truncated_batches": context_truncated_batches,
+            "files": attempted_file_contexts,
+        }
         manifest_path, manifest = sync_translation_preview.create_sync_preview(
             log_dir=LOG_DIR,
             project_root=BASE_DIR,
@@ -5680,6 +5989,7 @@ def run_translation(*, prepare=False):
             files=preview_files,
             failures=preview_failures,
             contract_diagnostics=finalized_contract,
+            prompt_context=prompt_context,
         )
         try:
             export_coverage_package(
@@ -5702,6 +6012,17 @@ def run_translation(*, prepare=False):
             "Model contract completeness: "
             f"{finalized_contract.get('final_valid', 0)}/"
             f"{finalized_contract.get('final_expected', 0)}"
+        )
+        print(
+            f"Sync local context: before={SYNC_CONTEXT_BEFORE}, after={SYNC_CONTEXT_AFTER}, "
+            f"batches={context_batch_count}, truncated={context_truncated_batches}",
+            flush=True,
+        )
+        print(
+            f"Sync macro setting: file={SYNC_MACRO_SETTING_FILE}, "
+            f"applied={bool(SYNC_MACRO_SETTING)}, "
+            f"fingerprint={SYNC_MACRO_FINGERPRINT or '(none)'}",
+            flush=True,
         )
         print(
             "Targeted retries: "

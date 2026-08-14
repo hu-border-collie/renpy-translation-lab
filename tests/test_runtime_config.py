@@ -34,11 +34,19 @@ def _snapshot_sensitive_runtime():
         "SYNC_MAX_OUTPUT_TOKENS": runtime.SYNC_MAX_OUTPUT_TOKENS,
         "SYNC_TIMEOUT_SECONDS": runtime.SYNC_TIMEOUT_SECONDS,
         "SYNC_BACKEND": runtime.SYNC_BACKEND,
+        "SYNC_CONTEXT_BEFORE": runtime.SYNC_CONTEXT_BEFORE,
+        "SYNC_CONTEXT_AFTER": runtime.SYNC_CONTEXT_AFTER,
+        "SYNC_MACRO_SETTING_FILE": runtime.SYNC_MACRO_SETTING_FILE,
+        "SYNC_MACRO_SETTING": runtime.SYNC_MACRO_SETTING,
+        "SYNC_MACRO_FINGERPRINT": runtime.SYNC_MACRO_FINGERPRINT,
         "INCLUDE_FILES": set(runtime.INCLUDE_FILES),
         "INCLUDE_PREFIXES": set(runtime.INCLUDE_PREFIXES),
         "SYNC_RAG_ENABLED": runtime.SYNC_RAG_ENABLED,
         "SYNC_STORY_MEMORY_ENABLED": runtime.SYNC_STORY_MEMORY_ENABLED,
         "ENV_GAME_ROOT": runtime.ENV_GAME_ROOT,
+        # apply_runtime_config caches the applied config; restore it too so a
+        # later get_runtime_config() cannot observe test-applied values.
+        "_active_runtime_config": runtime._active_runtime_config,
     }
 
 
@@ -108,6 +116,33 @@ class RuntimeConfigObjectTests(unittest.TestCase):
                 runtime.get_runtime_config().sync_timeout_seconds,
                 runtime.MAX_SYNC_TIMEOUT_SECONDS,
             )
+        finally:
+            _restore_sensitive_runtime(snapshot)
+
+    def test_apply_runtime_config_publishes_sync_context_and_macro(self):
+        snapshot = _snapshot_sensitive_runtime()
+        try:
+            cfg = runtime.default_runtime_config()
+            cfg.sync_context_before = 12
+            cfg.sync_context_after = 4
+            cfg.sync_macro_setting_file = "project_style.md"
+            cfg.sync_macro_setting = "Keep the tone warm."
+            cfg.sync_macro_fingerprint = "abc123"
+
+            runtime.apply_runtime_config(cfg)
+
+            self.assertEqual(runtime.SYNC_CONTEXT_BEFORE, 12)
+            self.assertEqual(runtime.SYNC_CONTEXT_AFTER, 4)
+            self.assertEqual(runtime.SYNC_MACRO_SETTING_FILE, "project_style.md")
+            self.assertEqual(runtime.SYNC_MACRO_SETTING, "Keep the tone warm.")
+            self.assertEqual(runtime.SYNC_MACRO_FINGERPRINT, "abc123")
+
+            snapped = runtime.snapshot_runtime_config()
+            self.assertEqual(snapped.sync_context_before, 12)
+            self.assertEqual(snapped.sync_context_after, 4)
+            self.assertEqual(snapped.sync_macro_setting_file, "project_style.md")
+            self.assertEqual(snapped.sync_macro_setting, "Keep the tone warm.")
+            self.assertEqual(snapped.sync_macro_fingerprint, "abc123")
         finally:
             _restore_sensitive_runtime(snapshot)
 

@@ -157,7 +157,9 @@ python gemini_translate_batch.py doctor
 
 ## 运行模式
 
-当前更推荐优先使用 Gemini Batch 模式；同步模式可显式选择 Gemini 原生调用或可选 LiteLLM 后端。同步模式的 `backend/model/chunk_size/max_source_chars/max_output_tokens/timeout_seconds` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。`timeout_seconds` 默认 120，允许 5–600 秒，表示单次模型请求上限而非整次任务总时限，并统一用于同步翻译、项目分析、关键词、订正、修补和 A/B 对比。LiteLLM 未安装或未启用时，不影响 Gemini Batch、doctor 或 GUI 启动。
+当前更推荐优先使用 Gemini Batch 模式；同步模式可显式选择 Gemini 原生调用或可选 LiteLLM 后端。同步模式的 `backend/model/chunk_size/max_source_chars/max_output_tokens/timeout_seconds/context_before/context_after/macro_setting_file` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。`timeout_seconds` 默认 120，允许 5–600 秒，表示单次模型请求上限而非整次任务总时限，并统一用于同步翻译、项目分析、关键词、订正、修补和 A/B 对比。LiteLLM 未安装或未启用时，不影响 Gemini Batch、doctor 或 GUI 启动。
+
+`context_before`（默认 30）与 `context_after`（默认 10）是同步初译的局部前后文预算，与 Batch 默认对齐；上下文只取当前文件内的待译条目，并在可识别的 translate block 边界处提前截断，避免跨场景串扰。`macro_setting_file`（默认 `macro_setting.md`，相对当前 work）存在时会把项目风格设定注入同步提示词；文件内容变化会反映到 manifest 指纹，旧预览将无法写回。
 
 同步翻译、订正和关键词请求使用统一的命名对象合同（`translations` / `revisions` / `candidates`），并在 Provider 返回后统一校验 ID、字段与非空内容。已有裸数组结果仍可读取；新请求只生成命名对象。Gemini 原生使用 JSON schema；LiteLLM 根据显式 Provider 能力选择 strict JSON schema、JSON object 或 prompt-only JSON，所有策略最后都经过同一校验。缺失或无效 ID 只做定点重试，最终完整率与未解决项写入运行 manifest。完整行为见 [同步翻译工作流 · 模型结果合同与定点重试](sync_workflow.md#模型结果合同与定点重试)。
 

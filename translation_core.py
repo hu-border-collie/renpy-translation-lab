@@ -684,13 +684,35 @@ def build_sync_translation_prompt(
     history_char_limit=220,
     story_char_limit=1200,
     include_translation_memory=True,
+    context_window=None,
+    macro_setting='',
+    normalize_map=None,
+    non_translatable_terms=None,
 ):
+    """Build the reference-only sync translation prompt for one batch.
+
+    ``context_window`` (before/after) is injected as ``CONTEXT BEFORE/AFTER``
+    and is strictly reference material: the model must only translate the
+    ``Input JSON`` items. ``macro_setting`` is prepended as a ``Setting``
+    block when non-empty. ``normalize_map`` and ``non_translatable_terms`` are
+    the current batch's lexical glossary hits; when provided they are rendered
+    as ``Existing glossary entries`` alongside ``preserve_terms``.
+    """
     units = units_from_items(units, MODE_TRANSLATION)
     glossary = ', '.join(str(term) for term in preserve_terms or [])
     payload = json.dumps(
         [translation_target_payload_item(unit) for unit in units],
         ensure_ascii=False,
     )
+    setting_block = ''
+    if isinstance(macro_setting, str) and macro_setting.strip():
+        setting_block = f"Setting:\n{macro_setting.strip()}\n\n"
+    glossary_block = ''
+    if normalize_map or non_translatable_terms:
+        glossary_block = (
+            'Existing glossary entries:\n'
+            f'{build_keyword_glossary_block(preserve_terms, normalize_map, non_translatable_terms)}\n\n'
+        )
     reference_body = build_reference_blocks(
         context_bundle,
         history_char_limit=history_char_limit,
@@ -707,7 +729,26 @@ def build_sync_translation_prompt(
             'Use reference blocks only as style, terminology, and continuity reference; '
             'ignore them when unrelated.\n'
         )
+    context_note = ''
+    context_before_block = ''
+    context_after_block = ''
+    if context_window is not None:
+        context_note = (
+            '\nCONTEXT BEFORE/AFTER lines are reference only. '
+            'Use them to keep speaker voice, pronoun references, and continuity consistent, '
+            'but never translate or return them.\n'
+        )
+        context_before_block = (
+            '\nCONTEXT BEFORE:\n'
+            f'{format_context_block(list(context_window.before or []), "(none)")}\n'
+        )
+        context_after_block = (
+            '\nCONTEXT AFTER:\n'
+            f'{format_context_block(list(context_window.after or []), "(none)")}\n'
+        )
     return (
+        f'{setting_block}'
+        f'{glossary_block}'
         "You are translating a Ren'Py visual novel into Simplified Chinese (zh-CN).\n"
         'Rules:\n'
         f'1. Preserve these terms exactly (do not translate): {glossary}\n'
@@ -722,7 +763,10 @@ def build_sync_translation_prompt(
         '4. Return ONLY one JSON object shaped as '
         '{"translations":[{"id":"...","translation":"..."}]}.\n'
         f'{reference_blocks}'
+        f'{context_note}'
+        f'{context_before_block}'
         f'Input JSON:\n{payload}'
+        f'{context_after_block}'
     )
 
 

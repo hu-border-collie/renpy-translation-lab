@@ -29,7 +29,12 @@ from sync_model_backend import (
     MAX_SYNC_TIMEOUT_SECONDS,
     MIN_SYNC_TIMEOUT_SECONDS,
 )
-from .user_copy import SYNC_TIMEOUT_COPY
+from .user_copy import (
+    SYNC_CONTEXT_AFTER_COPY,
+    SYNC_CONTEXT_BEFORE_COPY,
+    SYNC_MACRO_SETTING_FILE_COPY,
+    SYNC_TIMEOUT_COPY,
+)
 
 
 SettingKind = Literal[
@@ -188,6 +193,36 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "翻译吞吐",
         minimum=MIN_SYNC_TIMEOUT_SECONDS,
         maximum=MAX_SYNC_TIMEOUT_SECONDS,
+    ),
+    SettingField(
+        "sync_context_before",
+        ("sync", "context_before"),
+        SYNC_CONTEXT_BEFORE_COPY["label"],
+        SYNC_CONTEXT_BEFORE_COPY["description"],
+        "int",
+        30,
+        "翻译吞吐",
+        minimum=0,
+    ),
+    SettingField(
+        "sync_context_after",
+        ("sync", "context_after"),
+        SYNC_CONTEXT_AFTER_COPY["label"],
+        SYNC_CONTEXT_AFTER_COPY["description"],
+        "int",
+        10,
+        "翻译吞吐",
+        minimum=0,
+    ),
+    SettingField(
+        "sync_macro_setting_file",
+        ("sync", "macro_setting_file"),
+        SYNC_MACRO_SETTING_FILE_COPY["label"],
+        SYNC_MACRO_SETTING_FILE_COPY["description"],
+        "str",
+        "macro_setting.md",
+        "术语与风格",
+        allow_empty=True,
     ),
     SettingField(
         "batch_chunk_size",

@@ -69,6 +69,8 @@ def _fingerprint_payload(manifest: dict[str, Any]) -> dict[str, Any]:
         "summary": manifest.get("summary"),
         "files": manifest.get("files"),
     }
+    if "prompt_context" in manifest:
+        payload["prompt_context"] = manifest.get("prompt_context")
     if "failures" in manifest:
         payload["failures"] = manifest.get("failures")
     if "model_contract" in manifest:
@@ -150,11 +152,16 @@ def create_sync_preview(
     files: Iterable[dict[str, Any]],
     failures: Iterable[dict[str, Any]] = (),
     contract_diagnostics: dict[str, Any] | None = None,
+    prompt_context: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Persist source/proposed snapshots, a unified diff, and a bound manifest.
 
     ``contract_diagnostics`` stores final validation, retry, and unresolved-item
     details in the bound manifest; those details are covered by its fingerprint.
+    ``prompt_context`` records the local-context settings, macro identity, and
+    per-batch context construction facts used for the run; when present it is
+    also covered by the fingerprint so a changed macro/settings file invalidates
+    an old preview at apply time.
     """
     created = datetime.now(timezone.utc)
     run_name = created.strftime("%Y%m%dT%H%M%S.%fZ")
@@ -210,6 +217,8 @@ def create_sync_preview(
         )
         if raw.get("writeback_plan") is not None:
             entries[-1]["writeback_plan"] = raw.get("writeback_plan")
+        if raw.get("prompt_context") is not None:
+            entries[-1]["prompt_context"] = raw.get("prompt_context")
         report_lines.extend(
             difflib.unified_diff(
                 source_text.splitlines(keepends=True),
@@ -260,6 +269,8 @@ def create_sync_preview(
         "failures": failure_entries,
         "model_contract": contract,
     }
+    if prompt_context is not None:
+        manifest["prompt_context"] = dict(prompt_context)
     manifest["preview_fingerprint"] = _fingerprint(manifest)
     manifest_path = package_dir / "manifest.json"
     atomic_write_json(manifest_path, manifest, ensure_ascii=False, indent=2)

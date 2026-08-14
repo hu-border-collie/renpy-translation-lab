@@ -5,7 +5,7 @@ import re
 
 from .translation_workflow import WorkflowUpdate
 from .sync_usage_report import collect_sync_usage_facts
-from .user_copy import MODEL_CONTRACT_COPY
+from .user_copy import MODEL_CONTRACT_COPY, PROMPT_CONTEXT_COPY
 
 
 def summarize_sync_translation_output(
@@ -173,6 +173,28 @@ def _collect_facts(output: str) -> list[str]:
         facts.append(
             f"{MODEL_CONTRACT_COPY['targeted_retries']}："
             f"{retry_match.group(1)} 次请求 / {retry_match.group(2)} 项"
+        )
+    context_match = re.search(
+        r"^Sync local context: before=(\d+), after=(\d+), batches=(\d+), truncated=(\d+)$",
+        output,
+        re.MULTILINE,
+    )
+    if context_match:
+        facts.append(
+            f"{PROMPT_CONTEXT_COPY['local_context']}："
+            f"前文 {context_match.group(1)} / 后文 {context_match.group(2)}，"
+            f"{context_match.group(3)} 个批次，截断 {context_match.group(4)} 个"
+        )
+    macro_match = re.search(
+        r"^Sync macro setting: file=(.+), applied=(True|False), fingerprint=(.+)$",
+        output,
+        re.MULTILINE,
+    )
+    if macro_match:
+        applied = "已应用" if macro_match.group(2) == "True" else "未应用"
+        facts.append(
+            f"{PROMPT_CONTEXT_COPY['macro_setting']}："
+            f"{macro_match.group(1).strip()}（{applied}）"
         )
     facts.extend(collect_sync_usage_facts(output))
     return facts

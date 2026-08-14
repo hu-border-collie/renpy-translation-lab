@@ -125,6 +125,11 @@ def sync_project_asset_paths_in_config(
         batch = {}
         config["batch"] = batch
     batch["macro_setting_file"] = expected["macro_setting_file"]
+    sync = config.get("sync")
+    if not isinstance(sync, dict):
+        sync = {}
+        config["sync"] = sync
+    sync["macro_setting_file"] = expected["macro_setting_file"]
     return config
 
 
@@ -162,6 +167,16 @@ def normalize_relative_project_assets_in_config(
     if macro_text and not os.path.isabs(macro_text):
         batch["macro_setting_file"] = resolve_macro_setting_path(
             macro_text, game_root=root
+        )
+
+    sync = config.get("sync")
+    if not isinstance(sync, dict):
+        sync = {}
+        config["sync"] = sync
+    sync_macro_text = str(sync.get("macro_setting_file") or "").strip()
+    if sync_macro_text and not os.path.isabs(sync_macro_text):
+        sync["macro_setting_file"] = resolve_macro_setting_path(
+            sync_macro_text, game_root=root
         )
     return config
 
