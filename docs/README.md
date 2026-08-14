@@ -23,6 +23,7 @@
 | 查看版本变化 | [未发布与发行变化](../CHANGELOG.md) · [v1.0.0 发行说明](releases/v1.0.0.md) |
 | 参与开发 / AI 协作 | 根目录 [AGENTS.md](../AGENTS.md) → [CONTRIBUTING.md](../CONTRIBUTING.md)（含 **CLI / GUI 同步**） |
 | 理解 PR 门禁与定时集成 | [CI 与定时集成检查](ci.md)（含 lint / type / audit） |
+| 在 Codex 沙箱内跑 GUI 测试卡住 | [GUI 测试沙箱环境说明](gui_tests_sandbox_notes.md) |
 | 理解依赖所有权与哈希锁 | [依赖输入与哈希锁](dependencies.md) |
 
 ## 文档分组
@@ -53,6 +54,7 @@
 
 - [关系与语义分析](relation_analysis.md)
 - [CI 与定时集成检查](ci.md)
+- [GUI 测试沙箱环境说明](gui_tests_sandbox_notes.md)：GUI 测试写入 `%LOCALAPPDATA%` 缓存，Codex 沙箱内会被拦截导致卡住。
 - [依赖输入与哈希锁](dependencies.md)
 - [项目说明](project_notes.md)
 - [项目沿革](project_history.md)
