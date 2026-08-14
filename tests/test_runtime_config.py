@@ -136,6 +136,9 @@ class RuntimeConfigObjectTests(unittest.TestCase):
 
             snapped = runtime.snapshot_runtime_config()
             self.assertEqual(snapped.sync_context_before, 12)
+            self.assertEqual(snapped.sync_context_after, 4)
+            self.assertEqual(snapped.sync_macro_setting_file, "project_style.md")
+            self.assertEqual(snapped.sync_macro_setting, "Keep the tone warm.")
             self.assertEqual(snapped.sync_macro_fingerprint, "abc123")
         finally:
             _restore_sensitive_runtime(snapshot)

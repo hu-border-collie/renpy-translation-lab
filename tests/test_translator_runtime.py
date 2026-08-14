@@ -2082,7 +2082,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 tl_dir.mkdir(parents=True)
                 source = '    "Hello 1"\n'
                 (tl_dir / 'a.rpy').write_text(source, encoding='utf-8')
-                manifest_path, manifest = runtime.sync_translation_preview.create_sync_preview(
+                manifest_path, _manifest = runtime.sync_translation_preview.create_sync_preview(
                     log_dir=root / 'logs',
                     project_root=root,
                     tl_dir=tl_dir,

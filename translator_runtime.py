@@ -1072,6 +1072,13 @@ def load_rotation_settings(config):
 
 
 def load_sync_translation_settings(config):
+    """Load sync translation settings and project-bound Macro content.
+
+    Context limits accept non-negative integers and default to 30/10 when
+    omitted. Macro files must resolve under ``BASE_DIR``; missing, unreadable,
+    or rejected files clear the Macro text and its fingerprint while keeping
+    the configured file name for diagnostics.
+    """
     global MAX_ITEMS, MAX_CHARS, SYNC_MAX_OUTPUT_TOKENS, SYNC_TIMEOUT_SECONDS
     global SYNC_BACKEND
     global CUSTOM_LITELLM_PROVIDERS
