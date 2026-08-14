@@ -3236,6 +3236,15 @@ def embed_sync_query_text(query_text):
 
 
 def retrieve_sync_glossary_hits(target_items):
+    """Return every lexical glossary hit for the current TARGET batch.
+
+    Matches ``normalize_map``, ``preserve_terms`` and ``non_translatable_exact``
+    against the batch text and returns all actual hits. The list is deliberately
+    not truncated by ``SYNC_RAG_TOP_K_TERMS``: that cap applies only to the RAG
+    ``LOCKED TERMS`` reference list, while the lexical injection required by
+    issue #338 must always carry the batch's real hits (otherwise normalize hits
+    could evict non-translatable terms and cause names to be mistranslated).
+    """
     combined_text = "\n".join(item.get("text", "") for item in target_items if item.get("text"))
     if not combined_text:
         return []
@@ -3257,7 +3266,7 @@ def retrieve_sync_glossary_hits(target_items):
         if term in combined_text and term not in seen:
             hits.append({"source": term, "target": "", "kind": "non_translatable"})
             seen.add(term)
-    return hits[: max(1, SYNC_RAG_TOP_K_TERMS)]
+    return hits
 
 
 def _sync_task_text_len(item):
@@ -4683,13 +4692,19 @@ def process_batch(
         for hit in glossary_hits
         if hit.get('kind') == 'non_translatable' and hit.get('source')
     ]
+    # The lexical injection above is always complete; only the RAG-enabled
+    # LOCKED TERMS reference list keeps the configured top_k budget so RAG-on
+    # prompts do not grow unbounded with a large glossary.
+    locked_glossary_hits = (
+        glossary_hits[: max(1, SYNC_RAG_TOP_K_TERMS)] if SYNC_RAG_ENABLED else []
+    )
     history_hits, rag_stats = retrieve_sync_history_hits(batch) if SYNC_RAG_ENABLED else ([], {})
     story_hits = retrieve_sync_story_hits(batch) if SYNC_STORY_MEMORY_ENABLED else None
     if rag_stats.get("hit_count"):
         print(f"  Sync RAG memory hits: {rag_stats['hit_count']}", flush=True)
     prompt = build_prompt(
         batch,
-        glossary_hits=glossary_hits,
+        glossary_hits=locked_glossary_hits,
         history_hits=history_hits,
         story_hits=story_hits,
         context_window=context_window,
@@ -5711,7 +5726,11 @@ def apply_sync_translation_preview(manifest_path):
         raise SystemExit(f"Sync apply blocked: {exc}") from exc
     prompt_context = manifest.get("prompt_context") or {}
     manifest_macro_fingerprint = str(prompt_context.get("macro_fingerprint") or "")
-    if manifest_macro_fingerprint and manifest_macro_fingerprint != SYNC_MACRO_FINGERPRINT:
+    # Legacy manifests without prompt_context keep applying; every manifest
+    # recorded by the current preview flow carries a macro fingerprint, so any
+    # difference (macro added, removed, or changed since preview) blocks
+    # writeback.
+    if "prompt_context" in manifest and manifest_macro_fingerprint != SYNC_MACRO_FINGERPRINT:
         raise SystemExit(
             "Sync apply blocked: the macro setting file changed since this "
             "preview was generated. Regenerate and review a new preview."

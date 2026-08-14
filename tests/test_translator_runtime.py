@@ -2027,6 +2027,66 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertIn('- Non-translatable: Ebon', prompt)
         self.assertIn('1. Preserve these terms exactly (do not translate): Alice', prompt)
 
+    def test_sync_lexical_glossary_hits_ignore_rag_top_k_cap(self):
+        old_rag = runtime.SYNC_RAG_ENABLED
+        old_top_k = runtime.SYNC_RAG_TOP_K_TERMS
+        old_normalize = runtime.NORMALIZE_TRANSLATION_MAP
+        old_non_translatable = runtime.NON_TRANSLATABLE_EXACT
+        old_use_memory = runtime.USE_TRANSLATION_MEMORY
+        captured = {}
+        try:
+            # A top_k of 1 must not evict lexical hits: every actual
+            # normalize / non-translatable match still reaches the prompt.
+            runtime.SYNC_RAG_ENABLED = False
+            runtime.SYNC_RAG_TOP_K_TERMS = 1
+            runtime.NORMALIZE_TRANSLATION_MAP = {
+                'Void Gate': '\u865a\u7a7a\u95e8',
+                'Aether Seal': '\u4e59\u592a\u5c01\u5370',
+            }
+            runtime.NON_TRANSLATABLE_EXACT = {'Ebon'}
+            runtime.USE_TRANSLATION_MEMORY = False
+
+            def fake_sdk(prompt, items, **_kwargs):
+                captured['prompt'] = prompt
+                return translation_core.validate_model_response(
+                    {
+                        'translations': [
+                            {'id': 'file:0:1', 'translation': '\u4f60\u597d'},
+                        ]
+                    },
+                    expected_units=items,
+                )
+
+            with (
+                mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_sdk),
+                mock.patch.object(
+                    runtime,
+                    'validate_translation',
+                    return_value=(True, 'OK'),
+                ),
+            ):
+                runtime.process_batch(
+                    [
+                        {
+                            'id': 'file:0:1',
+                            'text': 'Open the Void Gate with the Aether Seal. Ebon is near.',
+                            'progress_entry': 'task:0:1',
+                        }
+                    ],
+                    {},
+                )
+        finally:
+            runtime.SYNC_RAG_ENABLED = old_rag
+            runtime.SYNC_RAG_TOP_K_TERMS = old_top_k
+            runtime.NORMALIZE_TRANSLATION_MAP = old_normalize
+            runtime.NON_TRANSLATABLE_EXACT = old_non_translatable
+            runtime.USE_TRANSLATION_MEMORY = old_use_memory
+
+        prompt = captured.get('prompt') or ''
+        self.assertIn('- Existing mapping: Void Gate -> \u865a\u7a7a\u95e8', prompt)
+        self.assertIn('- Existing mapping: Aether Seal -> \u4e59\u592a\u5c01\u5370', prompt)
+        self.assertIn('- Non-translatable: Ebon', prompt)
+
     def test_sync_process_batch_injects_loaded_macro_by_default(self):
         old_macro = runtime.SYNC_MACRO_SETTING
         old_use_memory = runtime.USE_TRANSLATION_MEMORY
@@ -2105,6 +2165,57 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 )
                 runtime.SYNC_MACRO_SETTING = 'changed since preview'
                 runtime.SYNC_MACRO_FINGERPRINT = 'changed-fingerprint'
+
+                with (
+                    mock.patch.object(runtime, 'load_config'),
+                    mock.patch.object(runtime, 'load_translator_settings'),
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    with self.assertRaises(SystemExit) as ctx:
+                        runtime.apply_sync_translation_preview(manifest_path)
+                self.assertIn('macro setting file changed', str(ctx.exception))
+                self.assertEqual((tl_dir / 'a.rpy').read_text(encoding='utf-8'), source)
+        finally:
+            runtime.SYNC_MACRO_SETTING = old_macro
+            runtime.SYNC_MACRO_FINGERPRINT = old_fingerprint
+
+    def test_sync_apply_blocks_when_macro_added_after_preview(self):
+        old_macro = runtime.SYNC_MACRO_SETTING
+        old_fingerprint = runtime.SYNC_MACRO_FINGERPRINT
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'game' / 'tl' / 'schinese'
+                tl_dir.mkdir(parents=True)
+                source = '    "Hello 1"\n'
+                (tl_dir / 'a.rpy').write_text(source, encoding='utf-8')
+                # Preview was generated while no macro file existed, so the
+                # manifest records an empty fingerprint.
+                manifest_path, _manifest = runtime.sync_translation_preview.create_sync_preview(
+                    log_dir=root / 'logs',
+                    project_root=root,
+                    tl_dir=tl_dir,
+                    files=[
+                        {
+                            'relative_path': 'a.rpy',
+                            'source_text': source,
+                            'source_sha256': hashlib.sha256(source.encode('utf-8')).hexdigest(),
+                            'preview_text': '    "\u4f60\u597d 1"\n',
+                            'progress_entries': ['id:1'],
+                        }
+                    ],
+                    prompt_context={
+                        'macro_setting_file': 'macro_setting.md',
+                        'macro_fingerprint': '',
+                        'macro_applied': False,
+                        'batches': 1,
+                        'truncated_batches': 0,
+                    },
+                )
+                # A macro file appears before apply; the old preview must not
+                # write back anymore (fingerprint differs: '' -> non-empty).
+                runtime.SYNC_MACRO_SETTING = 'new macro text'
+                runtime.SYNC_MACRO_FINGERPRINT = 'added-fingerprint'
 
                 with (
                     mock.patch.object(runtime, 'load_config'),

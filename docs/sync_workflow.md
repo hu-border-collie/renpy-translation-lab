@@ -74,14 +74,14 @@ python scripts/run_provider_contract_smoke.py --provider deepseek
 
 - **局部前后文**：`sync.context_before`（默认 30）与 `sync.context_after`（默认 10）控制每个请求附带的 `CONTEXT BEFORE/AFTER` 条目预算，与 Batch 默认对齐。窗口只取当前文件内的待译条目，并在可识别的 translate block 边界处提前截断——不会静默跨越场景；没有 block 信息时退化为纯预算截断。设为 0 可关闭对应方向。
 - **项目风格设定**：`sync.macro_setting_file`（默认 `macro_setting.md`，相对当前 work）存在时，其文本会进入提示词的 `Setting` 段；文件不存在或未配置时保持向后兼容，提示词不含该段。
-- **词法术语命中**：`normalize_map`、`preserve_terms` 与 `non_translatable_exact` 的本地命中不再依赖 `sync.rag.enabled`。即使 RAG 关闭，当前批次实际命中的固定译法与保留/不可翻译规则也会进入提示词；RAG 开启时检索命中照常附加。
+- **词法术语命中**：`normalize_map`、`preserve_terms` 与 `non_translatable_exact` 的本地命中不再依赖 `sync.rag.enabled`。即使 RAG 关闭，当前批次实际命中的固定译法与保留/不可翻译规则也会进入提示词；命中不受 `sync.rag.top_k_terms` 截断，全部注入（该配额在 RAG 开启时仍限制 `LOCKED TERMS` 检索列表）。RAG 开启时检索命中照常附加。
 
 每次运行的上下文构造事实会写入 manifest 与预览制品：
 
 - manifest 顶层 `prompt_context`：前后文设置、macro 文件与内容指纹、是否实际注入 macro、批次总数与截断批次数；
 - 每个文件的 `prompt_context.batches`：该文件各请求实际的前后文条目数/字符数、预算截断与 block 边界截断标记。
 
-`prompt_context` 与文件级上下文诊断都纳入 manifest 指纹。源文件变化或预览制品被修改会直接使旧 manifest 无法通过写前校验；`--apply` 会把当前 macro 文件指纹与 manifest 记录的指纹比对，**仅在两者不同时拦截**写回——不要强行复用旧预览，应基于当前文件重新生成并审查。macro 路径限定在当前项目（`game_root`）内，配置指向项目外时会被忽略。
+`prompt_context` 与文件级上下文诊断都纳入 manifest 指纹。源文件变化或预览制品被修改会直接使旧 manifest 无法通过写前校验；`--apply` 会把当前 macro 文件指纹与 manifest 记录的指纹比对，任一方向不一致（macro 文件新增、删除或内容变化）即拦截写回——不要强行复用旧预览，应基于当前文件重新生成并审查。未记录 `prompt_context` 的旧 manifest 保持可用。macro 路径限定在当前项目（`game_root`）内，配置指向项目外时会被忽略。
 
 ## 预览后写回
 
