@@ -2033,11 +2033,12 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         old_normalize = runtime.NORMALIZE_TRANSLATION_MAP
         old_non_translatable = runtime.NON_TRANSLATABLE_EXACT
         old_use_memory = runtime.USE_TRANSLATION_MEMORY
+        old_story_memory = runtime.SYNC_STORY_MEMORY_ENABLED
         captured = {}
         try:
             # A top_k of 1 must not evict lexical hits: every actual
             # normalize / non-translatable match still reaches the prompt.
-            runtime.SYNC_RAG_ENABLED = False
+            runtime.SYNC_RAG_ENABLED = True
             runtime.SYNC_RAG_TOP_K_TERMS = 1
             runtime.NORMALIZE_TRANSLATION_MAP = {
                 'Void Gate': '\u865a\u7a7a\u95e8',
@@ -2045,6 +2046,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             }
             runtime.NON_TRANSLATABLE_EXACT = {'Ebon'}
             runtime.USE_TRANSLATION_MEMORY = False
+            runtime.SYNC_STORY_MEMORY_ENABLED = False
 
             def fake_sdk(prompt, items, **_kwargs):
                 captured['prompt'] = prompt
@@ -2059,6 +2061,11 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
 
             with (
                 mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_sdk),
+                mock.patch.object(
+                    runtime,
+                    'retrieve_sync_history_hits',
+                    return_value=([], {}),
+                ),
                 mock.patch.object(
                     runtime,
                     'validate_translation',
@@ -2081,6 +2088,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             runtime.NORMALIZE_TRANSLATION_MAP = old_normalize
             runtime.NON_TRANSLATABLE_EXACT = old_non_translatable
             runtime.USE_TRANSLATION_MEMORY = old_use_memory
+            runtime.SYNC_STORY_MEMORY_ENABLED = old_story_memory
 
         prompt = captured.get('prompt') or ''
         self.assertIn('- Existing mapping: Void Gate -> \u865a\u7a7a\u95e8', prompt)

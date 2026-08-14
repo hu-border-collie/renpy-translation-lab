@@ -81,7 +81,7 @@ python scripts/run_provider_contract_smoke.py --provider deepseek
 - manifest 顶层 `prompt_context`：前后文设置、macro 文件与内容指纹、是否实际注入 macro、批次总数与截断批次数；
 - 每个文件的 `prompt_context.batches`：该文件各请求实际的前后文条目数/字符数、预算截断与 block 边界截断标记。
 
-`prompt_context` 与文件级上下文诊断都纳入 manifest 指纹。源文件变化或预览制品被修改会直接使旧 manifest 无法通过写前校验；`--apply` 会把当前 macro 文件指纹与 manifest 记录的指纹比对，任一方向不一致（macro 文件新增、删除或内容变化）即拦截写回——不要强行复用旧预览，应基于当前文件重新生成并审查。未记录 `prompt_context` 的旧 manifest 保持可用。macro 路径限定在当前项目（`game_root`）内，配置指向项目外时会被忽略。
+`prompt_context` 与文件级上下文诊断都纳入 manifest 指纹。源文件变化或预览制品被修改会直接使旧 manifest 无法通过写前校验；`--apply` 会把当前 macro 文件指纹与 manifest 记录的指纹比对，两者不一致（macro 文件新增、删除或内容变化）即拦截写回——不要强行复用旧预览，应基于当前文件重新生成并审查。未记录 `prompt_context` 的旧 manifest 保持可用。macro 路径限定在当前项目（`game_root`）内，配置指向项目外时会被忽略。
 
 ## 预览后写回
 
