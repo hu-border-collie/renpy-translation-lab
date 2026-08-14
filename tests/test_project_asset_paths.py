@@ -104,6 +104,10 @@ class ProjectAssetPathsTests(unittest.TestCase):
                     "model": "gemini-test",
                     "macro_setting_file": shared_macro,
                 },
+                "sync": {
+                    "model": "gemini-test",
+                    "macro_setting_file": "project_style.md",
+                },
             }
 
             normalize_relative_project_assets_in_config(config, work_dir)
@@ -121,6 +125,15 @@ class ProjectAssetPathsTests(unittest.TestCase):
                 )
             )
             self.assertEqual(config["batch"]["model"], "gemini-test")
+            # A relative sync macro keeps its custom name but is re-homed
+            # under the current work; an absolute one (batch) is preserved.
+            self.assertTrue(
+                paths_match_project(
+                    config["sync"]["macro_setting_file"],
+                    os.path.join(work_dir, "project_style.md"),
+                )
+            )
+            self.assertEqual(config["sync"]["model"], "gemini-test")
 
     def test_normalize_relative_project_assets_leaves_empty_entries_alone(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -132,6 +145,7 @@ class ProjectAssetPathsTests(unittest.TestCase):
 
             self.assertNotIn("glossary_file", config)
             self.assertEqual(config["batch"], {})
+            self.assertEqual(config["sync"], {})
 
     def test_resolve_glossary_path_without_bases_canonicalizes_relative_value(self):
         resolved = resolve_glossary_path("glossary.json")
@@ -148,6 +162,10 @@ class ProjectAssetPathsTests(unittest.TestCase):
                 "model": "gemini-test",
                 "macro_setting_file": "C:/Games/Other/work/macro_setting.md",
             },
+            "sync": {
+                "model": "gemini-test",
+                "macro_setting_file": "C:/Games/Other/work/macro_setting.md",
+            },
         }
 
         synced = sync_project_asset_paths_in_config(config, work_dir)
@@ -161,6 +179,11 @@ class ProjectAssetPathsTests(unittest.TestCase):
             expected_project_asset_paths(work_dir)["macro_setting_file"],
         )
         self.assertEqual(synced["batch"]["model"], "gemini-test")
+        self.assertEqual(
+            synced["sync"]["macro_setting_file"],
+            expected_project_asset_paths(work_dir)["macro_setting_file"],
+        )
+        self.assertEqual(synced["sync"]["model"], "gemini-test")
 
     def test_doctor_relative_glossary_matches_project_when_tool_has_same_name(self):
         with tempfile.TemporaryDirectory() as tmp:
