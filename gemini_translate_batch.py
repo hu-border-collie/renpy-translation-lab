@@ -15220,9 +15220,135 @@ def run_machine_command(parser, args):
     return 0
 
 
+def _machine_output_requested(argv):
+    """Return whether raw CLI arguments explicitly request JSON output."""
+
+    tokens = [str(value) for value in argv]
+    for index, token in enumerate(tokens):
+        if token == '--output=json':
+            return True
+        if (
+            token == '--output'
+            and index + 1 < len(tokens)
+            and tokens[index + 1] == 'json'
+        ):
+            return True
+    return False
+
+
+def _parser_command_choices(parser):
+    """Return current root parser subcommand names without duplicating them."""
+
+    for action in getattr(parser, '_actions', []):
+        if getattr(action, 'dest', '') != 'command':
+            continue
+        choices = getattr(action, 'choices', None)
+        if isinstance(choices, dict):
+            return set(choices)
+    return set()
+
+
+def _infer_machine_parse_command(parser, argv):
+    """Identify the requested command when argparse failed before a Namespace exists."""
+
+    choices = _parser_command_choices(parser)
+    for raw_value in argv:
+        value = str(raw_value)
+        if value == '--':
+            break
+        if value in choices:
+            return value
+    return 'cli'
+
+
+def _argparse_error_message(diagnostics):
+    """Extract argparse's concise error line for the machine envelope."""
+
+    for line in reversed(str(diagnostics or '').splitlines()):
+        marker = 'error:'
+        marker_index = line.lower().find(marker)
+        if marker_index >= 0:
+            message = line[marker_index + len(marker):].strip()
+            if message:
+                return message
+    return 'Invalid command-line arguments.'
+
+
+def _machine_parse_error_args(parser, argv):
+    """Build the minimal output options available before argparse succeeds."""
+
+    tokens = {str(value) for value in argv}
+    return argparse.Namespace(
+        command=_infer_machine_parse_command(parser, argv),
+        output='json',
+        strict_exit_codes='--strict-exit-codes' in tokens,
+        compact='--compact' in tokens,
+        fields=[],
+        # Parser failure happens before output-file safety checks. Always use
+        # stdout so an untrusted or incomplete argument list cannot overwrite
+        # a path while reporting its own syntax error.
+        output_file='',
+    )
+
+
+def _write_machine_parse_error(parser, argv, exc, diagnostics):
+    """Emit a schema-v1 usage envelope after a machine-mode parse failure."""
+
+    if diagnostics:
+        sys.stderr.write(diagnostics)
+        sys.stderr.flush()
+
+    args = _machine_parse_error_args(parser, argv)
+    exit_code = exc.code if isinstance(exc.code, int) else cli_contract.EXIT_USAGE
+    envelope = cli_contract.error_envelope(
+        args.command,
+        code='ARGUMENT_PARSE_ERROR',
+        message=_argparse_error_message(diagnostics),
+        suggested_action='fix_command_arguments',
+        details={
+            'parser': parser.prog,
+            'exit_code': exit_code,
+            'semantic_exit_code': cli_contract.EXIT_USAGE,
+            'workflow_started': False,
+            'command_completed': False,
+        },
+    )
+    _write_machine_document(
+        envelope,
+        args,
+        record_output_artifact=False,
+        command_completed=False,
+        workflow_started=False,
+    )
+    return cli_contract.EXIT_USAGE
+
+
 def main(argv=None):
     parser = build_arg_parser()
-    args = parser.parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    machine_output_requested = _machine_output_requested(raw_argv)
+    parser_diagnostics = io.StringIO()
+    try:
+        if machine_output_requested:
+            with contextlib.redirect_stderr(parser_diagnostics):
+                args = parser.parse_args(raw_argv)
+        else:
+            args = parser.parse_args(raw_argv)
+    except SystemExit as exc:
+        if not machine_output_requested:
+            raise
+        if exc.code in (None, 0):
+            diagnostics = parser_diagnostics.getvalue()
+            if diagnostics:
+                sys.stderr.write(diagnostics)
+                sys.stderr.flush()
+            raise
+        return _write_machine_parse_error(
+            parser,
+            raw_argv,
+            exc,
+            parser_diagnostics.getvalue(),
+        )
     output = getattr(args, 'output', 'text')
     json_only_options = []
     if getattr(args, 'strict_exit_codes', False):
