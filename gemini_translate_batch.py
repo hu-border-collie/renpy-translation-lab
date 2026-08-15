@@ -4196,8 +4196,7 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
     }
     manifest_path = os.path.join(package_dir, 'manifest.json')
     atomic_write_json(manifest_path, manifest, ensure_ascii=False, indent=2)
-    remember_latest_manifest(manifest_path)
-    previewed = preview_revisions(manifest_path)
+    previewed = preview_revisions(manifest_path, update_latest=False)
     preview_summary = dict((previewed.get('last_revision_preview') or {}).get('summary') or {})
     failures = int(preview_summary.get('failure_items') or 0)
     candidates = int(preview_summary.get('valid_items') or 0)
@@ -4228,7 +4227,10 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
         ),
     })
     _write_proposal_import_report(package_dir, report)
-    save_manifest(previewed, update_latest=True)
+    save_manifest(
+        previewed,
+        update_latest=final_status in {'previewed', 'no_op'},
+    )
     print(f'Revision proposal import status: {final_status}')
     print(f'Manifest: {manifest_path}')
     return {
@@ -8643,7 +8645,14 @@ def write_revision_markdown(path, entries, summary):
         handle.write('\n'.join(lines) + '\n')
 
 
-def preview_revisions(target=None, output_jsonl='', output_markdown=''):
+def preview_revisions(
+    target=None,
+    output_jsonl='',
+    output_markdown='',
+    *,
+    update_latest=None,
+):
+    """Build a revision preview and optionally control the latest pointer."""
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_REVISION, 'preview-revisions')
     _replacements, _lines, _failure_entries, summary, preview_entries = collect_revision_actions(
@@ -8696,7 +8705,12 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
     manifest.pop('revision_applied_at', None)
     manifest.pop('revision_apply_summary', None)
     manifest.pop('last_revision_apply_summary', None)
-    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    should_update_latest = (
+        manifest.get('execution') != 'sync'
+        if update_latest is None
+        else bool(update_latest)
+    )
+    save_manifest(manifest, update_latest=should_update_latest)
     if manifest.get('final_review_source'):
         import final_review as fr
         import final_review_revision

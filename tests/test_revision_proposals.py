@@ -88,6 +88,25 @@ class RevisionProposalContractTests(unittest.TestCase):
         )
         self.assertIn("IDENTITY_MISMATCH", {x["code"] for x in result.diagnostics})
 
+    def test_reason_is_required_for_selected_proposals(self):
+        result = proposals.validate(
+            [self.row(reason="  ")],
+            self.live,
+            live_snapshot_digest=self.corpus_digest,
+        )
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.selected_count, 0)
+        self.assertIn("MISSING_REASON", {x["code"] for x in result.diagnostics})
+
+    def test_file_path_separator_style_is_normalized(self):
+        self.live["occ-1"]["file_rel_path"] = "chapter/scene.rpy"
+        result = proposals.validate(
+            [self.row(file_rel_path=r"chapter\scene.rpy")],
+            self.live,
+            live_snapshot_digest=self.corpus_digest,
+        )
+        self.assertEqual(result.status, "imported")
+
     def test_corpus_snapshot_mismatch_is_stale(self):
         result = proposals.validate(
             [self.row(corpus_snapshot_digest="b" * 64)],
@@ -300,6 +319,10 @@ class RevisionProposalImportTests(unittest.TestCase):
         manifest = result["manifest"]
         self.assertEqual(manifest["mode"], batch.MANIFEST_MODE_REVISION)
         self.assertTrue(manifest["proposal_import"]["writeback_eligible"])
+        self.assertEqual(
+            Path(batch.LATEST_MANIFEST_FILE).read_text(encoding="utf-8"),
+            result["paths"]["manifest"],
+        )
 
     def test_empty_proposal_file_is_rejected_before_artifacts_are_created(self):
         proposal_path = self.root / "empty.jsonl"
@@ -321,11 +344,16 @@ class RevisionProposalImportTests(unittest.TestCase):
 
     def test_broken_interpolation_token_is_blocked_and_never_writes(self):
         before = self.rpy.read_bytes()
+        latest_path = Path(batch.LATEST_MANIFEST_FILE)
+        latest_path.parent.mkdir(parents=True, exist_ok=True)
+        previous_manifest = self.root / "previous" / "manifest.json"
+        latest_path.write_text(str(previous_manifest), encoding="utf-8")
         result = batch.import_revision_proposals(
             str(self._write_proposal(self._proposal(proposed="您好")))
         )
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(self.rpy.read_bytes(), before)
+        self.assertEqual(latest_path.read_text(encoding="utf-8"), str(previous_manifest))
         self.assertFalse(result["manifest"]["proposal_import"]["writeback_eligible"])
         with self.assertRaisesRegex(SystemExit, "proposal import"):
             batch.apply_revisions(result["paths"]["manifest"], force=True)

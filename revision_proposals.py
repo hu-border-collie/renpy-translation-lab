@@ -105,6 +105,11 @@ def _normalized_project_path(value: Any) -> str:
     return os.path.normcase(os.path.abspath(text)) if text else ""
 
 
+def _normalized_relative_path(value: Any) -> str:
+    """Normalize proposal file separators without weakening identity checks."""
+    return os.path.normpath(str(value or "").replace("\\", "/")).replace("\\", "/")
+
+
 def validate(
     rows: Sequence[Mapping[str, Any]],
     live_items: Mapping[str, Mapping[str, Any]],
@@ -203,19 +208,26 @@ def validate(
         if live is None:
             diagnostics.append(_diag("UNKNOWN_OCCURRENCE_ID", row, "occurrence is not present in the live project"))
             continue
-        expected_pairs = (
-            ("file_rel_path", str(live.get("file_rel_path") or ""), "FILE_PATH_MISMATCH"),
+        mismatch = row_invalid
+        if _normalized_relative_path(row.get("file_rel_path")) != _normalized_relative_path(
+            live.get("file_rel_path")
+        ):
+            diagnostics.append(_diag("FILE_PATH_MISMATCH", row, "file_rel_path does not match the live occurrence"))
+            mismatch = True
+        for field, expected, code in (
             ("source", str(live.get("source") or ""), "SOURCE_MISMATCH"),
             ("current_translation", str(live.get("current_translation") or ""), "CURRENT_TRANSLATION_STALE"),
-        )
-        mismatch = row_invalid
-        for field, expected, code in expected_pairs:
+        ):
             if str(row.get(field) or "") != expected:
                 diagnostics.append(_diag(code, row, f"{field} does not match the live occurrence"))
                 mismatch = True
         proposed = str(row.get("proposed_translation") or "").strip()
         if not proposed:
             diagnostics.append(_diag("EMPTY_PROPOSED_TRANSLATION", row, "proposed_translation must not be empty"))
+            mismatch = True
+        reason = str(row.get("reason") or "").strip()
+        if not reason:
+            diagnostics.append(_diag("MISSING_REASON", row, "reason is required for every selected proposal"))
             mismatch = True
         item_digest = str(row.get("snapshot_digest") or row.get("item_snapshot_digest") or "")
         expected_item_digest = revision_corpus.item_snapshot_digest(
@@ -239,6 +251,7 @@ def validate(
             row["occurrence_id"] = identity
             row["identity_v2"] = identity
             row["proposed_translation"] = proposed
+            row["reason"] = reason
             selected.append(row)
 
     status = (
