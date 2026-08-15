@@ -172,6 +172,10 @@ python gemini_translate_batch.py export-reuse-results <decided-reuse-report> <ta
 - `build-translation-records` 只接受 translation 模式且已下载完成的 Batch 包；
   每个 unit 的译文经过现有响应合同校验后，连同来源（默认 `model_initial`）、
   provenance 和快照 occurrence 绑定写入 `translation_records.jsonl`。
+  可选 `--previous-records <PATH>` 指向同一快照的上一份记录产物：译文发生
+  变化的 unit 会确定性追加记录级 revision history（旧译文、旧来源、旧记录
+  ID），重新冻结的历史可累积且不引入时间戳等非确定性输入；跨版本或跨快照
+  的旧记录会被拒绝，不能用这条路径伪造历史。
 - `build-reuse-candidates` 消费保存的 P3 快照、reconciliation 报告和译文记录，
   生成 `reuse_candidates.jsonl`、机器可读 `reuse_report.json`、人工 / Agent
   审核表 `reuse_review.md` 与决策模板 `reuse_decisions_template.jsonl`。

@@ -104,6 +104,7 @@ class TranslationInput:
     translation_text: str
     source_text: str = ""
     origin: str = "model_initial"
+    revision_history: tuple[Mapping[str, Any], ...] = ()
     chunk_key: str = ""
     row_key: str = ""
     source_manifest: str = ""
@@ -374,6 +375,7 @@ def build_translation_records(
             translation_text=item.translation_text,
             target_language=snapshot.target_language,
             origin=origin,
+            revision_history=item.revision_history,
             provenance={
                 "origin": origin,
                 "chunk_key": str(item.chunk_key or ""),
@@ -398,6 +400,37 @@ def build_translation_records(
         provisional,
         record_set_digest=digest_json(provisional.stable_payload()),
     )
+
+
+def derive_revision_history(
+    previous_record: TranslationRecord,
+    *,
+    new_translation: str,
+    new_origin: str,
+) -> tuple[Mapping[str, Any], ...]:
+    """Derive a deterministic record-level revision history for a re-freeze.
+
+    Only content-derived evidence enters the history (previous translation,
+    origin, and record identity); timestamps and environment details stay out
+    so identical inputs keep producing identical record digests.
+    """
+
+    history = [dict(item) for item in previous_record.revision_history]
+    if _normalize_text(previous_record.translation_text) != _normalize_text(
+        new_translation
+    ):
+        history.append(
+            {
+                "origin": previous_record.origin,
+                "translation_text": previous_record.translation_text,
+                "previous_record_id": previous_record.record_id,
+                "superseded_by_origin": _required_text(
+                    new_origin,
+                    field_name="input.origin",
+                ),
+            }
+        )
+    return tuple(history)
 
 
 @dataclass(frozen=True)

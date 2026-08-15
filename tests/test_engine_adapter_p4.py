@@ -681,6 +681,80 @@ class TestEngineAdapterP4(unittest.TestCase):
         self.assertEqual(entry.provenance["reviewer_name"], "bob")
         self.assertEqual(entry.provenance["override_reviewers"], ["bob"])
 
+    def test_revision_history_accumulates_deterministically(self):
+        base, _target, records, _report = self._scenario()
+        first = reuse.build_translation_records(
+            base,
+            [
+                reuse.TranslationInput(
+                    unit_id=record.unit_id,
+                    translation_text=record.translation_text,
+                    source_text=record.source_text,
+                    origin=record.origin,
+                )
+                for record in records.records
+            ],
+            generated_at="2026-08-15T00:00:00+00:00",
+        )
+        stable_input = next(
+            item for item in first.records if item.translation_text == "稳定"
+        )
+
+        # Same translation: history stays empty; changed translation: exactly
+        # one deterministic entry pointing at the previous record.
+        unchanged_history = reuse.derive_revision_history(
+            stable_input,
+            new_translation="稳定",
+            new_origin="revision_applied",
+        )
+        self.assertEqual(unchanged_history, ())
+        changed_history = reuse.derive_revision_history(
+            stable_input,
+            new_translation="稳定（修）",
+            new_origin="revision_applied",
+        )
+        self.assertEqual(len(changed_history), 1)
+        self.assertEqual(
+            changed_history[0]["previous_record_id"],
+            stable_input.record_id,
+        )
+        self.assertEqual(changed_history[0]["translation_text"], "稳定")
+
+        rebuilt = reuse.build_translation_records(
+            base,
+            [
+                reuse.TranslationInput(
+                    unit_id=stable_input.unit_id,
+                    translation_text="稳定（修）",
+                    source_text=stable_input.source_text,
+                    origin="revision_applied",
+                    revision_history=changed_history,
+                )
+            ],
+            generated_at="2026-08-16T00:00:00+00:00",
+        )
+        self.assertEqual(
+            rebuilt.records[0].revision_history,
+            changed_history,
+        )
+        again = reuse.build_translation_records(
+            base,
+            [
+                reuse.TranslationInput(
+                    unit_id=stable_input.unit_id,
+                    translation_text="稳定（修）",
+                    source_text=stable_input.source_text,
+                    origin="revision_applied",
+                    revision_history=changed_history,
+                )
+            ],
+            generated_at="2026-08-17T00:00:00+00:00",
+        )
+        self.assertEqual(
+            rebuilt.record_set_digest,
+            again.record_set_digest,
+        )
+
     def test_ambiguous_accept_rejects_changed_source_target_at_import(self):
         base = self._snapshot(
             "1.0",

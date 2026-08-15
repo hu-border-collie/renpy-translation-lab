@@ -222,6 +222,71 @@ class TranslationReuseWorkflowTests(unittest.TestCase):
             for key in ("last_check_at", "last_check_summary"):
                 self.assertNotIn(key, updated_manifest)
 
+    def test_translation_records_chain_revision_history(self):
+        base = self.fixture._snapshot(
+            "1.0",
+            [
+                {
+                    "key": "stable",
+                    "source": "Stable line",
+                    "locator": "stable-locator",
+                    "content": "stable-content",
+                },
+            ],
+        )
+        items = [{"id": "unit-1.0-stable", "source": "Stable line"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            snapshot_paths = self.fixture.versioning.export_project_snapshot(
+                base,
+                tmp_path / "snapshot",
+            )
+            manifest_path = self._write_manifest(
+                tmp_path / "package",
+                version="1.0",
+                items=items,
+                with_results=True,
+            )
+            first = batch.run_translation_records_export(
+                snapshot_paths.snapshot_path,
+                str(manifest_path),
+                output_dir=str(tmp_path / "records-v1"),
+            )
+            self.assertEqual(first["record_count"], 1)
+
+            # Revise the translation, then re-freeze against the same package.
+            results_path = tmp_path / "package" / "results.jsonl"
+            results_path.write_text(
+                json.dumps(
+                    {
+                        "key": "chunk-1",
+                        "normalized_response": {
+                            "translations": [
+                                {"id": "unit-1.0-stable", "translation": "稳定（修）"}
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            second = batch.run_translation_records_export(
+                snapshot_paths.snapshot_path,
+                str(manifest_path),
+                origin="revision_applied",
+                previous_records_path=first["paths"]["manifest"],
+                output_dir=str(tmp_path / "records-v2"),
+            )
+            from engine_adapters.reuse import load_translation_records
+
+            record_set = load_translation_records(second["paths"]["manifest"])
+            self.assertEqual(len(record_set.records), 1)
+            history = record_set.records[0].revision_history
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]["translation_text"], "译-unit-1.0-stable")
+            self.assertEqual(history[0]["superseded_by_origin"], "revision_applied")
+
 
 if __name__ == "__main__":
     unittest.main()

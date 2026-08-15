@@ -3717,6 +3717,7 @@ def run_translation_records_export(
     manifest_target,
     *,
     origin='model_initial',
+    previous_records_path='',
     output_dir=None,
 ):
     """Freeze one Batch package's validated translations as P4 records."""
@@ -3735,6 +3736,25 @@ def run_translation_records_export(
         'manifest_path': _canonical_abs_path(manifest['_manifest_path']),
         'result_path': _canonical_abs_path(result_path),
         'project_identity': manifest_project_identity(manifest),
+    }
+    previous_records = None
+    if previous_records_path and str(previous_records_path).strip():
+        previous_records = engine_reuse.load_translation_records(
+            str(previous_records_path).strip()
+        )
+        if previous_records.version_id != snapshot.game_version.version_id:
+            raise SystemExit(
+                'Previous translation records version does not match the '
+                'snapshot version.'
+            )
+        if previous_records.snapshot_digest != snapshot.snapshot_digest:
+            raise SystemExit(
+                'Previous translation records do not match this snapshot '
+                'digest; revision history cannot be chained across versions.'
+            )
+    previous_by_unit = {
+        record.unit_id: record
+        for record in (previous_records.records if previous_records else ())
     }
     inputs = []
     for chunk in manifest.get('chunks') or []:
@@ -3759,12 +3779,23 @@ def run_translation_records_export(
             translation = str(item.get('translation') or '')
             if not translation.strip():
                 raise SystemExit(f'Empty translation for unit: {unit_id}')
+            previous_record = previous_by_unit.get(unit_id)
+            revision_history = (
+                engine_reuse.derive_revision_history(
+                    previous_record,
+                    new_translation=translation,
+                    new_origin=origin,
+                )
+                if previous_record is not None
+                else ()
+            )
             inputs.append(
                 engine_reuse.TranslationInput(
                     unit_id=unit_id,
                     translation_text=translation,
                     source_text=str(unit.get('source', unit.get('text', '')) or ''),
                     origin=origin,
+                    revision_history=revision_history,
                     chunk_key=chunk_key,
                     row_key=str(row.get('key') or chunk_key),
                     extra={'manifest_identity': manifest_identity},
@@ -13638,6 +13669,15 @@ def build_arg_parser():
         help='Translation provenance recorded for every exported row.',
     )
     build_translation_records_parser.add_argument(
+        '--previous-records',
+        default='',
+        metavar='PATH',
+        help=(
+            'Previous translation-records package for the same snapshot; '
+            'carries record-level revision history into the new export.'
+        ),
+    )
+    build_translation_records_parser.add_argument(
         '--output-dir',
         default='',
         metavar='DIR',
@@ -14903,6 +14943,7 @@ def dispatch_command(parser, args):
                 getattr(args, 'snapshot', ''),
                 getattr(args, 'manifest', ''),
                 origin=getattr(args, 'origin', 'model_initial'),
+                previous_records_path=getattr(args, 'previous_records', '') or '',
                 output_dir=getattr(args, 'output_dir', '') or None,
             )
         except ValueError as exc:
