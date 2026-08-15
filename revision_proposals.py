@@ -16,6 +16,12 @@ PROPOSAL_SCHEMA_VERSION = 1
 IMPORT_REPORT_SCHEMA_VERSION = 1
 SUPPORTED_PRODUCERS = frozenset({"human", "agent"})
 SELECTED_DISPOSITIONS = frozenset({"accepted", "approve", "approved", "proposed", "selected"})
+STALE_DIAGNOSTIC_CODES = frozenset(
+    {
+        "CORPUS_SNAPSHOT_INCONSISTENT",
+        "LIVE_SOURCE_CHANGED_DURING_IMPORT",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -81,6 +87,15 @@ def _diag(code: str, row: Mapping[str, Any] | None, message: str, **details: Any
     }
     result.update(details)
     return result
+
+
+def diagnostics_are_stale(diagnostics: Sequence[Mapping[str, Any]]) -> bool:
+    """Return whether diagnostics require re-exporting/reloading source state."""
+    return any(
+        str(item.get("code") or "").endswith("STALE")
+        or str(item.get("code") or "") in STALE_DIAGNOSTIC_CODES
+        for item in diagnostics
+    )
 
 
 def validate(
@@ -191,7 +206,13 @@ def validate(
             row["proposed_translation"] = proposed
             selected.append(row)
 
-    status = "no_op" if not selected and not diagnostics else "stale" if any(
-        str(item.get("code") or "").endswith("STALE") for item in diagnostics
-    ) else "blocked" if diagnostics else "imported"
+    status = (
+        "no_op"
+        if not selected and not diagnostics
+        else "stale"
+        if diagnostics_are_stale(diagnostics)
+        else "blocked"
+        if diagnostics
+        else "imported"
+    )
     return ProposalValidation(tuple(selected), tuple(diagnostics), len(rows), len(seen), status)

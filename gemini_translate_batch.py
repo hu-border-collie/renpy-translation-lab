@@ -4080,10 +4080,7 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
         f'{stamp}_{guess_project_slug()}_revision_proposals'
     )
     status = validation.status
-    if any(item.get('code') in {
-        'CORPUS_SNAPSHOT_STALE', 'ITEM_SNAPSHOT_STALE',
-        'CURRENT_TRANSLATION_STALE', 'LIVE_SOURCE_CHANGED_DURING_IMPORT',
-    } for item in diagnostics):
+    if revision_proposals.diagnostics_are_stale(diagnostics):
         status = 'stale'
     elif diagnostics:
         status = 'blocked'
@@ -8479,9 +8476,14 @@ def _revision_manifest_identity(manifest):
         'base_dir', 'tl_dir', 'target_language', 'language',
         'input_jsonl_path', 'result_jsonl_path',
         'settings', 'revision_settings',
-        'summary', 'files', 'chunks', 'final_review_source', 'proposal_import',
+        'summary', 'files', 'chunks', 'final_review_source',
     )
     payload = {key: manifest.get(key) for key in keys}
+    # Preserve the v1 fingerprint for pre-proposal revision/final-review
+    # packages.  Proposal manifests bind their immutable import provenance and
+    # eligibility state without adding a null field to every legacy payload.
+    if isinstance(manifest.get('proposal_import'), dict):
+        payload['proposal_import'] = manifest['proposal_import']
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
     ).hexdigest()

@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import tempfile
 import unittest
@@ -94,6 +95,73 @@ class RevisionProposalContractTests(unittest.TestCase):
         )
         self.assertEqual(result.status, "stale")
         self.assertIn("CORPUS_SNAPSHOT_STALE", {x["code"] for x in result.diagnostics})
+
+    def test_inconsistent_corpus_export_is_stale(self):
+        result = proposals.validate(
+            [self.row()],
+            self.live,
+            live_snapshot_digest=self.corpus_digest,
+            corpus_manifest={
+                "source": {
+                    "snapshot_digest": self.corpus_digest,
+                    "source_changed_during_scan": True,
+                }
+            },
+        )
+        self.assertEqual(result.status, "stale")
+        self.assertIn(
+            "CORPUS_SNAPSHOT_INCONSISTENT",
+            {x["code"] for x in result.diagnostics},
+        )
+
+    def test_legacy_revision_identity_keeps_pre_proposal_fingerprint(self):
+        manifest = {
+            "mode": "revision",
+            "manifest_version": 2,
+            "version": 2,
+            "core_schema_version": 2,
+            "display_name": "legacy",
+            "summary": {"item_count": 1},
+            "files": {"chapter.rpy": {"task_count": 1}},
+            "chunks": [{"key": "rv-1"}],
+        }
+        legacy_keys = (
+            "mode", "manifest_version", "version", "core_schema_version",
+            "display_name", "job_name", "created_at", "execution",
+            "batch_model", "model", "base_dir", "tl_dir",
+            "target_language", "language", "input_jsonl_path",
+            "result_jsonl_path", "settings", "revision_settings", "summary",
+            "files", "chunks", "final_review_source",
+        )
+        payload = {key: manifest.get(key) for key in legacy_keys}
+        expected = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(batch._revision_manifest_identity(manifest), expected)
+        self.assertEqual(
+            batch._revision_manifest_identity({**manifest, "proposal_import": None}),
+            expected,
+        )
+
+    def test_proposal_import_state_is_bound_by_manifest_identity(self):
+        manifest = {
+            "mode": "revision",
+            "proposal_import": {
+                "status": "previewed",
+                "writeback_eligible": True,
+            },
+        }
+        previewed = batch._revision_manifest_identity(manifest)
+        blocked = batch._revision_manifest_identity(
+            {
+                **manifest,
+                "proposal_import": {
+                    "status": "blocked",
+                    "writeback_eligible": False,
+                },
+            }
+        )
+        self.assertNotEqual(previewed, blocked)
 
     def test_unselected_rows_produce_no_op(self):
         result = proposals.validate(
