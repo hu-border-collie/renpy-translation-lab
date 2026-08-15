@@ -8955,13 +8955,15 @@ def collect_quality_subjects(manifest, replacements_by_file, stats=None):
                 if chunk is None or item is None:
                     counters['quality_unmatched_items'] += 1
                     continue
-                unit = translation_core.unit_from_manifest_item(
-                    item,
-                    mode=translation_core.MODE_TRANSLATION,
-                    chunk=chunk,
-                )
-                subjects.append(
-                    {
+                try:
+                    unit = translation_core.unit_from_manifest_item(
+                        item,
+                        mode=translation_core.MODE_TRANSLATION,
+                        chunk=chunk,
+                    )
+                    if unit is None:
+                        raise ValueError('unit_from_manifest_item returned None')
+                    subject = {
                         'item_id': item_id,
                         'file_rel_path': str(file_key),
                         'line': unit.line,
@@ -8973,7 +8975,13 @@ def collect_quality_subjects(manifest, replacements_by_file, stats=None):
                         'speaker_id': unit.speaker_id,
                         'speaker_name': unit.speaker_name,
                     }
-                )
+                except (AttributeError, TypeError, ValueError):
+                    # Quality inspection is additive; a malformed item must not
+                    # take down the structural check workflow.  Count it and
+                    # let the existing failure contract own diagnostics.
+                    counters['quality_unmatched_items'] += 1
+                    continue
+                subjects.append(subject)
     counters['quality_subject_items'] = len(subjects)
     if isinstance(stats, dict):
         stats.update(counters)
@@ -9289,6 +9297,15 @@ def check_results(target=None):
         )
     summary['quality_findings_count'] = len(quality_findings)
     summary.update(quality_collection_stats)
+    summary['quality_policy_source'] = 'runtime'
+    summary['quality_policy_runtime_digest'] = translation_quality.policy_digest(
+        BATCH_QUALITY_POLICY
+    )
+    manifest_policy = manifest.get('quality_policy')
+    if isinstance(manifest_policy, dict):
+        summary['quality_policy_manifest_digest'] = translation_quality.policy_digest(
+            manifest_policy
+        )
     summary['quality_reason_counts'] = quality_reason_counts
     summary['quality_findings_path'] = quality_report_path
     attach_check_contract(manifest, summary, quality_findings=quality_findings)

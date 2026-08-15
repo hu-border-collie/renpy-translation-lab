@@ -566,6 +566,42 @@ class QualitySubjectCollectionTests(unittest.TestCase):
         self.assertEqual(subjects[0]['translation'], '你好')
         self.assertEqual(subjects[0]['speaker_name'], 'Church Knight')
 
+    def test_collect_quality_subjects_guards_against_malformed_units(self):
+        manifest = {
+            'chunks': [
+                {
+                    'key': 'chunk-1',
+                    'file_rel_path': 'script.rpy',
+                    'items': [
+                        {
+                            'id': 'item-1',
+                            'text': 'Hello',
+                            'line': 0,
+                            'start': 8,
+                            'end': 13,
+                        }
+                    ],
+                }
+            ]
+        }
+        replacements = {
+            'script.rpy': {
+                0: [(8, 13, '你好', '', '"', 'Hello', 'item-1', 'chunk-1')]
+            }
+        }
+        stats = {}
+
+        with mock.patch.object(
+            batch.translation_core,
+            'unit_from_manifest_item',
+            side_effect=AttributeError('missing field'),
+        ):
+            subjects = batch.collect_quality_subjects(manifest, replacements, stats)
+
+        self.assertEqual(subjects, [])
+        self.assertEqual(stats['quality_action_items'], 1)
+        self.assertEqual(stats['quality_unmatched_items'], 1)
+
     def test_collect_quality_subjects_counts_unmatched_actions(self):
         manifest = {
             'chunks': [
