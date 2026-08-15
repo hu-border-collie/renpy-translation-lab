@@ -44,7 +44,7 @@
 
 ## 安全说明
 
-执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。推荐先跑 `doctor`，再走 `build -> submit -> status -> download -> check -> apply`；只有 `check` 输出 `safe` 时才继续 `apply`。如果出现 `warn` / `block`，先查看失败报告并通过 retry / repair / revision 等流程处理。`safe` 只说明结构性写回合同成立，不代表译文质量合格；交付前仍须机械质量检查与人工/LLM 语义审校。
+执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。推荐先跑 `doctor`，再走 `build -> submit -> status -> download -> check -> apply`；只有 `check` 输出 `writeback_gate.decision=allow` 时才继续 `apply`。如果写回门禁为 `deny`，先查看失败报告并通过 retry / repair / revision 等流程处理；`quality_gate` 报警默认不阻止写回，但交付前仍须处理机械报警并做人工/LLM 语义审校。
 
 本地保存 API Key 不代表待译文本留在本机。Gemini 与 LiteLLM 调用会把认证信息、待译文本、提示词和启用上下文发送给对应供应商；免费/付费账号的数据使用与保留政策可能不同。完整说明见 [安装与本地配置 · 数据与凭据边界](setup.md#数据与凭据边界)。
 

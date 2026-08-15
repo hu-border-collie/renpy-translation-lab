@@ -18,6 +18,20 @@ SAFETY_LEVEL_LABELS = {
     "block": "禁止写回",
 }
 
+CHECK_STATUS_LABELS = {
+    "ready": "可写回（无质量报警）",
+    "ready_with_warnings": "可写回，有质量报警",
+    "blocked": "禁止写回",
+}
+
+QUALITY_GATE_LABELS = {
+    "pass": "无质量报警",
+    "needs_review": "需人工复核",
+    "acknowledged": "质量报警已确认",
+}
+
+QUALITY_DELIVERY_NOTICE = "可写回 ≠ 可交付：写回门禁只证明结构安全，质量报警处理完前不建议交付。"
+
 DOCTOR_MODE_LABELS = {
     "can_generate_template": "可生成翻译模板",
     "existing_tl_only": "已有翻译模板",
@@ -457,6 +471,16 @@ def safety_level_label(level: str) -> str:
     return SAFETY_LEVEL_LABELS.get(text, level or "未知")
 
 
+def check_status_label(status: str) -> str:
+    text = str(status or "").strip().lower()
+    return CHECK_STATUS_LABELS.get(text, status or "未知")
+
+
+def quality_gate_label(decision: str) -> str:
+    text = str(decision or "").strip().lower()
+    return QUALITY_GATE_LABELS.get(text, decision or "未知")
+
+
 def doctor_mode_label(mode: str) -> str:
     text = str(mode or "").strip()
     return DOCTOR_MODE_LABELS.get(text, text or "未知")
@@ -490,6 +514,15 @@ def format_job_state_fact(state: str) -> str:
 
 def format_safety_fact(level: str, *, prefix: str = "检查结果") -> str:
     return f"{prefix}：{safety_level_label(level)}"
+
+
+def format_quality_gate_fact(gate: Any, *, prefix: str = "质量检查") -> str:
+    if not isinstance(gate, dict):
+        return f"{prefix}：未知"
+    warning_count = gate.get("warning_count", 0)
+    blocker_count = gate.get("blocker_count", 0)
+    decision = quality_gate_label(str(gate.get("decision") or ""))
+    return f"{prefix}：{decision}（报警 {warning_count}，阻断 {blocker_count}）"
 
 
 def _format_usage_cost_values(metric: Any) -> str:

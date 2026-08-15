@@ -26,8 +26,10 @@ from .batch_workflow_support import (
     uncertain_submit_failure_message,
 )
 from .user_copy import (
+    check_status_label,
     format_job_state_fact,
     format_manifest_path_fact,
+    format_quality_gate_fact,
     format_safety_fact,
     job_state_label,
     safety_level_label,
@@ -108,6 +110,65 @@ def extract_safety_status(output: str) -> str:
         if isinstance(status, str):
             return status.strip()
     return _extract_line_value(output, "Safety status:")
+
+
+def extract_check_status(output: str) -> str:
+    envelope = _result_envelope(output)
+    if envelope:
+        check = envelope.get("result")
+        if isinstance(check, Mapping):
+            check = check.get("check")
+        if isinstance(check, Mapping):
+            status = check.get("check_status") or check.get("safety_level")
+            if isinstance(status, str) and status.strip():
+                return status.strip()
+        status = envelope.get("status")
+        if isinstance(status, str) and status.strip():
+            return status.strip()
+    return _extract_line_value(output, "Check status:") or extract_safety_status(output)
+
+
+def extract_writeback_gate(output: str) -> str:
+    envelope = _result_envelope(output)
+    if envelope:
+        check = envelope.get("result")
+        if isinstance(check, Mapping):
+            check = check.get("check")
+        if isinstance(check, Mapping):
+            gate = check.get("writeback_gate")
+            if isinstance(gate, Mapping):
+                decision = gate.get("decision")
+                if isinstance(decision, str):
+                    return decision.strip()
+    return _extract_line_value(output, "Writeback gate:")
+
+
+def extract_quality_gate(output: str) -> dict[str, object]:
+    envelope = _result_envelope(output)
+    if envelope:
+        check = envelope.get("result")
+        if isinstance(check, Mapping):
+            check = check.get("check")
+        if isinstance(check, Mapping):
+            gate = check.get("quality_gate")
+            if isinstance(gate, Mapping):
+                return dict(gate)
+
+    gate: dict[str, object] = {}
+    decision = _extract_line_value(output, "Quality gate:")
+    if decision:
+        gate["decision"] = decision
+    for prefix, key in (
+        ("Quality warnings:", "warning_count"),
+        ("Quality blockers:", "blocker_count"),
+        ("Acknowledged warnings:", "acknowledged_count"),
+    ):
+        value = _extract_line_value(output, prefix)
+        try:
+            gate[key] = int(value)
+        except (TypeError, ValueError):
+            pass
+    return gate
 
 
 def extract_error_message(output: str) -> str:
@@ -399,19 +460,36 @@ class TranslationWorkflow:
         )
 
     def _finish_check(self, output: str) -> WorkflowUpdate:
-        safety = extract_safety_status(output)
-        if safety == "safe":
+        status = extract_check_status(output)
+        writeback_gate = extract_writeback_gate(output)
+        quality_gate = extract_quality_gate(output)
+        safety = extract_safety_status(output) or status
+        can_apply = writeback_gate == "allow" or (
+            not writeback_gate and status in {"safe", "ready", "ready_with_warnings"}
+        )
+        facts = [format_safety_fact(safety, prefix="检查结果")]
+        if quality_gate.get("warning_count"):
+            facts.append(format_quality_gate_fact(quality_gate))
+
+        if can_apply:
             if self.retry_parent_manifest_path:
                 self._pending_steps[:] = ["merge-retry", "check-parent"]
                 return self._continue_or_finish(
                     extra_facts=[format_safety_fact(safety, prefix="补译检查结果")],
                 )
-            heading = "翻译结果检查通过"
-            message = "检查结果为可写回，可以进入写回前确认。"
-        elif safety in {"warn", "block"}:
+            if status == "ready_with_warnings" or quality_gate.get("warning_count"):
+                heading = "翻译结果可写回，但有质量报警"
+                message = (
+                    "检查结果为可写回，但发现需要人工关注的质量问题。"
+                    "可先写回，再按规则、文件或严重程度筛选报警并处理。"
+                )
+            else:
+                heading = "翻译结果检查通过"
+                message = "检查结果为可写回，可以进入写回前确认。"
+        elif status in {"warn", "block", "blocked"} or writeback_gate == "deny":
             heading = "补译结果仍需处理" if self.retry_parent_manifest_path else "翻译结果需要处理"
             message = (
-                f"检查结果为 {safety_level_label(safety)}，普通流程不应写回；"
+                f"检查结果为 {check_status_label(status)}，普通流程不应写回；"
                 "请先查看问题并重试或修复。"
             )
             if self.retry_parent_manifest_path:
@@ -424,8 +502,7 @@ class TranslationWorkflow:
             message = "未能识别安全状态，请查看原始输出。"
 
         self._pending_steps.clear()
-        facts = self._facts([format_safety_fact(safety or "", prefix="检查结果")])
-        return WorkflowUpdate(status="done", heading=heading, message=message, facts=facts)
+        return WorkflowUpdate(status="done", heading=heading, message=message, facts=self._facts(facts))
 
     def _continue_or_finish(self, extra_facts: list[str] | None = None) -> WorkflowUpdate:
         next_step = self.current_step()

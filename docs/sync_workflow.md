@@ -118,7 +118,7 @@ python gemini_translate.py --prepare
 - 没有未理解的 `preview_failures`；
 - 译文已经过必要的术语、语气和机械质量检查。
 
-同步预览通过结构校验也不代表内容质量合格。与 Batch 的 `check=safe` 一样，结构安全和翻译质量是两件事。
+同步预览通过结构校验也不代表内容质量合格。与 Batch 的 `writeback_gate=allow` 一样，结构安全和翻译质量是两件事。
 
 ### 3. 显式写回
 
@@ -144,7 +144,7 @@ python gemini_translate.py --apply logs/sync_runs/<run>/manifest.json
 |---|---|---|
 | 调用方式 | 进程内逐批即时请求 | 远程异步 job |
 | 默认写回 | 只生成 preview，显式 `--apply` | `download -> check -> apply` |
-| 安全合同 | sync manifest + 源快照 + 制品哈希 + adapter 计划 | manifest/results identity + 最近一次 `check=safe` + 写回前复核 |
+| 安全合同 | sync manifest + 源快照 + 制品哈希 + adapter 计划 | manifest/results identity + 最近一次 `writeback_gate=allow` + 写回前复核 |
 | 状态恢复 | 复用已生成 preview；阻断后重新生成 | `status` / `download` / submit recovery / retry package |
 | 机器输出 | 人类可读文本 | 核心命令支持版本化 JSON envelope |
 | 费用语义 | 供应商同步计费，无 Batch 折扣 | Gemini Batch 定价；提交前可 `estimate-cost` |

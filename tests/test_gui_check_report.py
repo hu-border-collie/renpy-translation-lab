@@ -34,6 +34,23 @@ Warn reasons:
 Check failure report: C:\\pkg\\check_failures.jsonl
 """
 
+CHECK_OUTPUT_READY_WITH_WARNINGS = """
+Pending files: 1
+Pending lines: 4
+Failure items: 0
+Safety status: safe
+Writeback gate: allow
+Writeback blockers: 0
+Quality gate: needs_review
+Quality warnings: 2
+Quality blockers: 0
+Acknowledged warnings: 0
+Check status: ready_with_warnings
+Quality categories:
+- quality.typography.cjk_latin_spacing: 2
+Quality findings report: C:\\pkg\\quality_findings.jsonl
+"""
+
 APPLY_OUTPUT = """
 Safety status: safe
 Pending files: 2
@@ -74,6 +91,68 @@ class GuiCheckReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "applied")
         self.assertFalse(summary.can_apply)
+
+    def test_summarize_ready_with_warnings_still_enables_apply(self):
+        summary = summarize_check_output(
+            CHECK_OUTPUT_READY_WITH_WARNINGS,
+            exit_code=0,
+            manifest_path="C:\\pkg\\manifest.json",
+        )
+
+        self.assertTrue(summary.can_apply)
+        self.assertIn("质量报警", summary.heading)
+        self.assertIn("可交付", summary.message)
+        self.assertIn("质量", "\n".join(summary.facts))
+
+    def test_summarize_manifest_with_quality_warnings_still_enables_apply(self):
+        summary = summarize_manifest_writeback(
+            {
+                "_manifest_path": "C:\\pkg\\manifest.json",
+                "last_check_summary": {
+                    "safety_level": "safe",
+                    "check_status": "ready_with_warnings",
+                    "writeback_gate": {"decision": "allow", "can_apply": True},
+                    "quality_gate": {
+                        "decision": "needs_review",
+                        "warning_count": 3,
+                        "blocker_count": 0,
+                    },
+                    "quality_reason_counts": {
+                        "quality.typography.cjk_latin_spacing": 3
+                    },
+                    "pending_files": 1,
+                    "pending_lines": 4,
+                },
+            }
+        )
+
+        self.assertIsNotNone(summary)
+        self.assertTrue(summary.can_apply)
+        self.assertIn("质量报警", summary.heading)
+        self.assertTrue(any("cjk_latin_spacing" in item for item in summary.findings))
+
+    def test_summarize_check_envelope_uses_ready_with_warnings(self):
+        summary = summarize_check_envelope(
+            {
+                "ok": True,
+                "status": "ready_with_warnings",
+                "result": {
+                    "check": {
+                        "safety_level": "safe",
+                        "check_status": "ready_with_warnings",
+                        "writeback_gate": {"decision": "allow", "can_apply": True},
+                        "quality_gate": {"decision": "needs_review", "warning_count": 2},
+                        "pending_files": 1,
+                        "pending_lines": 4,
+                    }
+                },
+            },
+            exit_code=0,
+            manifest_path="C:\\pkg\\manifest.json",
+        )
+
+        self.assertTrue(summary.can_apply)
+        self.assertIn("质量报警", summary.heading)
 
     def test_summarize_safe_check_enables_apply(self):
         summary = summarize_check_output(
@@ -254,6 +333,26 @@ class GuiCheckReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "safe")
         self.assertTrue(summary.can_apply)
+
+    def test_manifest_writeback_after_apply_keeps_quality_alarms(self):
+        summary = summarize_manifest_writeback(
+            {
+                "_manifest_path": "C:\\pkg\\manifest.json",
+                "applied_at": "2026-06-18T12:00:00",
+                "apply_summary": {"applied_files": 1, "applied_lines": 5},
+                "last_check_summary": {
+                    "quality_gate": {
+                        "decision": "needs_review",
+                        "warning_count": 2,
+                        "blocker_count": 0,
+                    }
+                },
+            }
+        )
+
+        self.assertEqual(summary.status, "applied")
+        self.assertFalse(summary.can_apply)
+        self.assertTrue(any("写回后质量检查" in fact for fact in summary.facts))
 
     def test_summarize_manifest_writeback_after_apply(self):
         summary = summarize_manifest_writeback(

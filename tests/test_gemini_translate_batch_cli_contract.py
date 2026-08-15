@@ -799,6 +799,7 @@ class BatchCliContractTests(unittest.TestCase):
                 "failure_items": 1,
             },
             "last_check_report_path": "C:/jobs/demo/check_failures.jsonl",
+            "last_quality_findings_path": "C:/jobs/demo/quality_findings.jsonl",
         }
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -827,6 +828,10 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(
             payload["artifacts"]["check_report"],
             "C:/jobs/demo/check_failures.jsonl",
+        )
+        self.assertEqual(
+            payload["artifacts"]["quality_findings"],
+            "C:/jobs/demo/quality_findings.jsonl",
         )
         self.assertIn("check text", stderr.getvalue())
 
@@ -876,6 +881,58 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertEqual(payload["error"]["code"], "INTERNAL_ERROR")
         self.assertNotIn("semantic_exit_code", payload["error"]["details"])
+
+    def test_strict_check_ready_with_warnings_reports_needs_action(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "last_check_summary": {
+                "safety_level": "safe",
+                "check_status": "ready_with_warnings",
+                "writeback_gate": {"decision": "allow", "can_apply": True},
+                "quality_gate": {"decision": "needs_review", "warning_count": 2},
+            },
+        }
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "dispatch_command", return_value=manifest),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                [
+                    "check",
+                    "manifest.json",
+                    "--output",
+                    "json",
+                    "--strict-exit-codes",
+                ]
+            )
+
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_NEEDS_ACTION)
+        self.assertEqual(json.loads(stdout.getvalue())["status"], "ready_with_warnings")
+
+    def test_strict_check_ready_exit_code_is_ok(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "last_check_summary": {
+                "safety_level": "safe",
+                "check_status": "ready",
+                "writeback_gate": {"decision": "allow", "can_apply": True},
+                "quality_gate": {"decision": "pass", "warning_count": 0},
+            },
+        }
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "dispatch_command", return_value=manifest),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                ["check", "manifest.json", "--output", "json", "--strict-exit-codes"]
+            )
+
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_OK)
+        self.assertEqual(json.loads(stdout.getvalue())["status"], "ready")
 
     def test_strict_check_exit_code_reports_needs_action(self):
         manifest = {

@@ -709,6 +709,12 @@ def manifest_check_safety_level(manifest: dict[str, object]) -> str:
     summary = manifest.get("last_check_summary")
     if not isinstance(summary, dict):
         return ""
+    writeback_gate = summary.get("writeback_gate")
+    if isinstance(writeback_gate, dict):
+        if writeback_gate.get("decision") == "allow":
+            return "safe"
+        safety = summary.get("safety_level")
+        return safety.strip().lower() if isinstance(safety, str) else "block"
     safety = summary.get("safety_level")
     return safety.strip().lower() if isinstance(safety, str) else ""
 
