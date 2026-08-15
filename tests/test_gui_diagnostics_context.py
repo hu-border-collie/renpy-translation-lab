@@ -246,10 +246,14 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
 
         by_label = {command.label: command.command for command in commands}
         self.assertIn("预览订正结果", by_label)
+        self.assertIn("导入结构化润色提案", by_label)
         self.assertIn("写回订正（预览确认后）", by_label)
         self.assertNotIn("检查翻译结果", by_label)
         self.assertNotIn("写回翻译（仅可写回）", by_label)
         self.assertIn("preview-revisions", by_label["预览订正结果"])
+        self.assertIn(
+            "import-revision-proposals", by_label["导入结构化润色提案"]
+        )
         self.assertIn("apply-revisions", by_label["写回订正（预览确认后）"])
         self.assertIn("usage-import", by_label["导入当前结果用量"])
         self.assertIn("usage-report", by_label["查看项目模型用量"])

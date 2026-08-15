@@ -80,6 +80,25 @@ class GuiRevisionWritebackReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "safe")
         self.assertTrue(summary.can_apply)
 
+    def test_partial_proposal_import_never_enables_apply(self):
+        summary = summarize_revision_writeback_from_manifest(
+            {
+                "_manifest_path": r"C:\package\manifest.json",
+                "proposal_import": {
+                    "status": "partial",
+                    "writeback_eligible": False,
+                    "report_path": r"C:\package\proposal_import_report.json",
+                },
+                "last_revision_preview": {
+                    "summary": {"valid_items": 1, "failure_items": 1}
+                },
+            }
+        )
+        self.assertIsNotNone(summary)
+        self.assertFalse(summary.can_apply)
+        self.assertEqual(summary.status, "failed")
+        self.assertIn("partial", summary.message)
+
     def test_manifest_after_apply_blocks_apply(self):
         summary = summarize_revision_writeback_from_manifest(
             {

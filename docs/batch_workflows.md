@@ -275,6 +275,51 @@ python gemini_translate_batch.py export-revision-corpus --output json
 - 只读：不修改 `.rpy`、manifest、glossary 或 RAG；机器输出可用
   `--output json`（envelope 含三个产物路径与 item/file 计数）。
 
+### 导入人工 / Agent 润色提案
+
+权威输入必须是结构化 JSONL；自由格式 Markdown 只能作为伴生审阅报告。导入会把
+通过校验的提案转换成标准 `mode=revision` 本地候选包，并立即运行
+`preview-revisions`，自身绝不修改 `.rpy`：
+
+```powershell
+python gemini_translate_batch.py import-revision-proposals C:/review/proposals.jsonl
+python gemini_translate_batch.py import-revision-proposals C:/review/proposals.jsonl `
+  --corpus-manifest C:/review/revision_corpus_manifest.json `
+  --output json --strict-exit-codes --non-interactive
+```
+
+每行 proposal schema v1 至少包含：
+
+```json
+{
+  "schema_version": 1,
+  "occurrence_id": "identity-v2-value",
+  "identity_v2": "identity-v2-value",
+  "file_rel_path": "chapter01/revisions.rpy",
+  "source": "原文",
+  "current_translation": "当前译文",
+  "proposed_translation": "建议译文",
+  "reason": "修改理由",
+  "selected": true,
+  "disposition": "accepted",
+  "producer": {"type": "human", "tool": "optional", "model": "optional"},
+  "snapshot_digest": "该条 source/current_translation 的导出摘要",
+  "corpus_snapshot_digest": "revision_corpus_manifest.json 的 source.snapshot_digest"
+}
+```
+
+`producer.type` 只接受 `human` / `agent`。若 proposal 同目录存在
+`revision_corpus_manifest.json`，可省略逐行 `corpus_snapshot_digest`；也可用
+`--corpus-manifest` 显式指定。未知/重复/冲突 identity、项目或语料快照 stale、
+source/current translation 变化、空建议、Ren'Py 标签/变量破坏、adapter 校验失败或
+不安全写回计划都不会获得写回资格。
+
+状态固定区分 `imported`（内部导入阶段）、`previewed`、`no_op`、`partial`、
+`blocked`、`stale`。机器 envelope 同时返回稳定 `status`、diagnostics、artifacts 和
+`suggested_action`；严格退出码下 `partial` 为“需处理”，`blocked/stale` 为“阻断”。
+只有 `previewed/no_op` manifest 能进入 `apply-revisions`，`--force` 不能绕过此闸门，
+也不能绕过 preview/result hash、项目身份、源快照或 adapter writeback 校验。
+
 ## 项目版本快照与只读 reconciliation
 
 本节对应 `#265` P3 / `#330`，增加两个不调用模型、不要求 API Key 的高级命令：

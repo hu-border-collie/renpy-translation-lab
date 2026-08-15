@@ -19,6 +19,8 @@ class BatchCliContractTests(unittest.TestCase):
             return [command, "--version-id", "test-version"]
         if command == "reconcile-project-snapshots":
             return [command, "base-snapshot.json", "target-snapshot.json"]
+        if command == "import-revision-proposals":
+            return [command, "proposals.jsonl"]
         return [command]
 
     def test_core_commands_accept_json_output_after_subcommand(self):
@@ -703,6 +705,32 @@ class BatchCliContractTests(unittest.TestCase):
         )
         self.assertEqual(args.output, "json")
 
+    def test_proposal_import_machine_envelope_exposes_status_actions_and_artifacts(self):
+        args = SimpleNamespace(command="import-revision-proposals")
+        envelope = batch.build_machine_success_envelope(
+            "import-revision-proposals",
+            {
+                "status": "stale",
+                "input_count": 2,
+                "selected_count": 1,
+                "candidate_count": 0,
+                "diagnostics": [{"code": "CURRENT_TRANSLATION_STALE"}],
+                "suggested_action": "re_export_corpus_and_regenerate_proposals",
+                "paths": {"import_report": "C:/jobs/import/report.json"},
+            },
+            args,
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "stale")
+        self.assertEqual(
+            envelope["result"]["suggested_action"],
+            "re_export_corpus_and_regenerate_proposals",
+        )
+        self.assertEqual(
+            envelope["artifacts"]["import_report"],
+            "C:/jobs/import/report.json",
+        )
+
     def test_build_without_pending_work_does_not_load_latest_manifest(self):
         args = SimpleNamespace(target="")
 
@@ -1178,6 +1206,14 @@ class BatchCliContractTests(unittest.TestCase):
                                 return_value={"paths": {}, "scope": {}},
                             )
                         )
+                    elif command == "import-revision-proposals":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "import_revision_proposals",
+                                return_value={"status": "previewed", "paths": {}},
+                            )
+                        )
                     elif command == "export-project-snapshot":
                         handler_patches.append(
                             mock.patch.object(
@@ -1224,6 +1260,8 @@ class BatchCliContractTests(unittest.TestCase):
                             argv = ["merge-keywords-to-glossary", "candidates.jsonl", "--yes"]
                         elif command == "export-revision-corpus":
                             argv = ["export-revision-corpus"]
+                        elif command == "import-revision-proposals":
+                            argv = ["import-revision-proposals", "proposals.jsonl"]
                         elif command == "export-project-snapshot":
                             argv = ["export-project-snapshot", "--version-id", "test-version"]
                         elif command == "reconcile-project-snapshots":
@@ -1239,6 +1277,7 @@ class BatchCliContractTests(unittest.TestCase):
                 self.assertEqual(exit_code, 0)
                 if command in {
                     "export-revision-corpus",
+                    "import-revision-proposals",
                     "export-project-snapshot",
                     "reconcile-project-snapshots",
                 }:

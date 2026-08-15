@@ -85,6 +85,13 @@ TASK_PROJECT_GATE_COPY = {
     ),
 }
 
+REVISION_PROPOSAL_COPY = {
+    "action": "导入润色提案",
+    "tooltip": "导入结构化 JSONL 提案并生成安全预览；此步骤不会修改 .rpy。",
+    "dialog_title": "选择润色提案 JSONL",
+    "running": "正在校验提案并生成订正预览。",
+}
+
 USAGE_LEDGER_COPY = {
     "empty": "模型用量：当前项目暂无实际响应记录",
     "load_error": "模型用量账本读取失败，统计暂不可用",

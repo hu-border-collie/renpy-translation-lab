@@ -411,6 +411,25 @@ def build_cli_commands(
             )
         )
     if mode_text == "revision":
+        proposal_import = manifest.get("proposal_import")
+        proposal_path = str(
+            (
+                proposal_import.get("proposal_path")
+                if isinstance(proposal_import, dict)
+                else ""
+            )
+            or "proposal.jsonl"
+        )
+        commands.append(
+            DiagnosticsCommand(
+                label="导入结构化润色提案",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["import-revision-proposals", proposal_path],
+                ),
+            )
+        )
         if not manifest.get("submit_disabled"):
             commands.extend(
                 build_cloud_job_commands(
