@@ -624,6 +624,25 @@ def _load_glossary_map(manifest: Mapping[str, Any] | None) -> dict[str, str]:
     return load_glossary_map(glossary_path, base_dir=base_dir)
 
 
+def _contains_glossary_term(text: str, term: str) -> bool:
+    """Return whether *term* occurs as a word, not as a substring.
+
+    Short Latin glossary entries such as ``art`` must not match inside
+    ``heart`` or ``start``.
+    """
+
+    if not text or not term:
+        return False
+    if re.fullmatch(r"[A-Za-z0-9_'\-\s]+", term) and any(ch.isalpha() for ch in term):
+        return bool(
+            re.search(
+                rf"(?<![A-Za-z0-9_'\-]){re.escape(term)}(?![A-Za-z0-9_'\-])",
+                text,
+            )
+        )
+    return term in text
+
+
 def check_glossary_term_not_applied(
     subject: Mapping[str, Any],
     glossary_map: Mapping[str, str],
@@ -634,17 +653,23 @@ def check_glossary_term_not_applied(
         return []
     evidence: list[dict[str, Any]] = []
     for source, target in glossary_map.items():
-        if source not in source_text:
+        if not _contains_glossary_term(source_text, source):
             continue
         # A mechanical rule cannot prove a free but correct translation is
         # missing the glossary target.  It can, however, flag the source term
         # still visible verbatim in the translated output.
-        if source in translation and target not in translation:
+        if _contains_glossary_term(translation, source) and not _contains_glossary_term(
+            translation,
+            target,
+        ):
             evidence.append({'source': source, 'target': target})
     return evidence
 
 
-def check_speaker_label_untranslated(subject: Mapping[str, Any]) -> list[dict[str, Any]]:
+def check_speaker_label_untranslated(
+    subject: Mapping[str, Any],
+    policy: Mapping[str, Any],
+) -> list[dict[str, Any]]:
     speaker_name = str(
         subject.get('speaker_name')
         or subject.get('speaker_display_name')
@@ -658,14 +683,33 @@ def check_speaker_label_untranslated(subject: Mapping[str, Any]) -> list[dict[st
         # Whole translation is already covered by other quality/structural
         # rules; avoid duplicate speaker-specific noise.
         return []
+    allowed = allowed_latin_tokens(policy)
     normalized_speaker = ' '.join(speaker_name.split())
     for hint in SPEAKER_HINT_SUFFIXES:
-        if normalized_speaker.endswith(hint):
-            # The speaker label is not part of this dialogue string.  Report
-            # only when the translated text still contains the English hint.
-            token = hint.strip()
-            if re.search(rf'(?<![A-Za-z0-9\'\-]){re.escape(token)}(?![A-Za-z0-9\'\-])', translation):
-                return [{'speaker_name': speaker_name, 'token': token}]
+        if not normalized_speaker.endswith(hint):
+            continue
+        token = hint.strip()
+        if token.casefold() in allowed:
+            return []
+        if re.search(rf'(?<![A-Za-z0-9\'\-]){re.escape(token)}(?![A-Za-z0-9\'\-])', translation):
+            return [{'speaker_name': speaker_name, 'token': token}]
+        translated_label = str(
+            subject.get('speaker_name_translation')
+            or subject.get('speaker_display_name_translation')
+            or ''
+        ).strip()
+        if translated_label and re.search(_CJK_CLASS, translated_label):
+            return []
+        # The dialogue body is translated but the source occupation/identity
+        # label itself is still English with no translated label evidence.
+        if re.search(_CJK_CLASS, translation):
+            return [
+                {
+                    'speaker_name': speaker_name,
+                    'token': token,
+                    'reason': 'speaker_label_has_no_translation_evidence',
+                }
+            ]
     return []
 
 
@@ -723,7 +767,7 @@ RULE_CHECKERS = {
         lambda subject, policy, glossary_map: check_glossary_term_not_applied(subject, glossary_map)
     ),
     REASON_SPEAKER_LABEL_UNTRANSLATED: (
-        lambda subject, policy, glossary_map: check_speaker_label_untranslated(subject)
+        lambda subject, policy, glossary_map: check_speaker_label_untranslated(subject, policy)
     ),
     REASON_INTERJECTION_UNTRANSLATED: (
         lambda subject, policy, glossary_map: check_interjection_untranslated(subject)

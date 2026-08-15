@@ -196,6 +196,32 @@ class QualityRuleTests(unittest.TestCase):
         self.assertIn(quality.REASON_HALFWIDTH_PUNCTUATION, codes)
         self.assertIn(quality.REASON_ASCII_ELLIPSIS, codes)
 
+    def test_glossary_short_term_does_not_match_inside_other_words(self):
+        findings = quality.check_subject(
+            subject(
+                source='The art room is open.',
+                translation='心脏在跳动。',
+            ),
+            glossary_map={'art': '艺术'},
+        )
+
+        self.assertNotIn(
+            quality.REASON_GLOSSARY_TERM_NOT_APPLIED,
+            {finding['reason_code'] for finding in findings},
+        )
+
+        findings = quality.check_subject(
+            subject(
+                source='The art room is open.',
+                translation='art 房间开着。',
+            ),
+            glossary_map={'art': '艺术'},
+        )
+        self.assertIn(
+            quality.REASON_GLOSSARY_TERM_NOT_APPLIED,
+            {finding['reason_code'] for finding in findings},
+        )
+
     def test_glossary_relative_path_resolves_against_base_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / 'project'
@@ -255,6 +281,38 @@ class QualityRuleTests(unittest.TestCase):
         self.assertTrue(matching)
         self.assertIn('Church Knight', matching[0]['evidence'])
 
+    def test_untranslated_speaker_label_reports_even_with_chinese_body(self):
+        findings = quality.check_subject(
+            subject(
+                source='Welcome.',
+                translation='欢迎。',
+                speaker_name='Church Knight',
+            )
+        )
+
+        matching = [
+            finding
+            for finding in findings
+            if finding['reason_code'] == quality.REASON_SPEAKER_LABEL_UNTRANSLATED
+        ]
+        self.assertTrue(matching)
+        self.assertIn('Church Knight', matching[0]['evidence'])
+
+    def test_translated_speaker_label_evidence_suppresses_rule(self):
+        findings = quality.check_subject(
+            subject(
+                source='Welcome.',
+                translation='欢迎。',
+                speaker_name='Church Knight',
+                speaker_name_translation='教会骑士',
+            )
+        )
+
+        self.assertNotIn(
+            quality.REASON_SPEAKER_LABEL_UNTRANSLATED,
+            {finding['reason_code'] for finding in findings},
+        )
+
     def test_single_word_speaker_label_rule_is_not_missed(self):
         findings = quality.check_subject(
             subject(
@@ -313,8 +371,13 @@ class QualityRuleTests(unittest.TestCase):
             policy=policy,
         )
 
-        self.assertEqual(findings[0]['disposition'], quality.DISPOSITION_BLOCKER)
-        self.assertEqual(findings[0]['severity'], 'high')
+        blocker = next(
+            finding
+            for finding in findings
+            if finding['reason_code'] == quality.REASON_UNCLOSED_DELIMITERS
+        )
+        self.assertEqual(blocker['disposition'], quality.DISPOSITION_BLOCKER)
+        self.assertEqual(blocker['severity'], 'high')
 
     def test_multiple_hits_for_same_rule_on_same_line_are_both_reported(self):
         subjects = [
