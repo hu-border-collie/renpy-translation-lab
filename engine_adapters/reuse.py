@@ -883,9 +883,17 @@ def _validate_reuse_target_uniqueness(
 ) -> None:
     seen_targets: dict[str, str] = {}
     for candidate in candidates:
-        if candidate.status != "accepted" or not candidate.target_occurrence_id:
+        if candidate.status != "accepted":
             continue
-        target = candidate.target_occurrence_id
+        # Ambiguous candidates keep target_occurrence_id empty; their accepted
+        # target lives in decision.resolved_target_occurrence_id.  Both shapes
+        # must join the same uniqueness check so conflicts fail at decision
+        # import time instead of the later prefill gate.
+        target = candidate.target_occurrence_id or str(
+            candidate.decision.get("resolved_target_occurrence_id") or ""
+        )
+        if not target:
+            continue
         previous = seen_targets.get(target)
         if previous is not None and previous != candidate.candidate_id:
             raise VersioningArtifactError(

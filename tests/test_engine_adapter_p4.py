@@ -337,6 +337,67 @@ class TestEngineAdapterP4(unittest.TestCase):
                 base_records=records,
             )
 
+    def test_duplicate_resolved_ambiguous_targets_fail_at_decision_import(self):
+        base = self._snapshot(
+            "1.0",
+            [
+                {"key": "one", "source": "Same", "content": "shared"},
+                {"key": "two", "source": "Same", "content": "shared"},
+            ],
+        )
+        target = self._snapshot(
+            "2.0",
+            [
+                {"key": "three", "source": "Same", "content": "shared"},
+                {"key": "four", "source": "Same", "content": "shared"},
+            ],
+        )
+        records = self._records(
+            base,
+            [
+                {"key": "one", "source": "Same", "translation": "相同一"},
+                {"key": "two", "source": "Same", "translation": "相同二"},
+            ],
+        )
+        report = reconcile_project_snapshots(base, target)
+        candidate_set = reuse.build_reuse_candidates(
+            report,
+            base,
+            target,
+            records,
+        )
+        ambiguous_items = [
+            candidate
+            for candidate in candidate_set.candidates
+            if candidate.reuse_class == "ambiguous"
+        ]
+        self.assertEqual(len(ambiguous_items), 2)
+        shared_target = ambiguous_items[0].candidate_target_occurrence_ids[0]
+        decisions = [
+            reuse.ReuseDecision(
+                candidate_id=candidate.candidate_id,
+                action="accept",
+                reviewer_type="human",
+                reviewer_name="reviewer",
+                target_occurrence_id=shared_target,
+            )
+            for candidate in ambiguous_items
+        ]
+        # The duplicate resolved target must fail at decision import time,
+        # not be deferred to the later prefill gate.
+        with self.assertRaisesRegex(
+            self.versioning.VersioningArtifactError,
+            "share one target occurrence",
+        ):
+            reuse.apply_reuse_decisions(
+                candidate_set,
+                decisions,
+                reconciliation=report,
+                base_snapshot=base,
+                target_snapshot=target,
+                base_records=records,
+            )
+
     def test_freshness_and_prefill_gates_block_stale_and_reference_only(self):
         base, target, records, report = self._scenario()
         candidate_set = reuse.build_reuse_candidates(
