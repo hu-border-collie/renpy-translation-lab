@@ -219,6 +219,33 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertIn("重新检查", summary.message)
         self.assertIn("可写回", summary.message)
 
+    def test_summarize_quality_blocker_distinguishes_from_source_block(self):
+        summary = summarize_manifest_writeback(
+            {
+                "_manifest_path": "C:\\pkg\\manifest.json",
+                "last_check_summary": {
+                    "safety_level": "safe",
+                    "check_status": "blocked",
+                    "writeback_gate": {
+                        "decision": "deny",
+                        "can_apply": False,
+                        "quality_blocker_count": 1,
+                    },
+                    "quality_gate": {
+                        "decision": "needs_review",
+                        "warning_count": 0,
+                        "blocker_count": 1,
+                    },
+                },
+            }
+        )
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.status, "block")
+        self.assertFalse(summary.can_apply)
+        self.assertIn("质量规则阻断写回", summary.heading)
+        self.assertNotIn("源文件变化", summary.message)
+
     def test_summarize_check_envelope_uses_structured_counts_and_reasons(self):
         summary = summarize_check_envelope(
             {

@@ -293,6 +293,22 @@ def summarize_check_output(
             manifest_path=manifest_path,
         )
 
+    if safety_text == "safe" and (
+        isinstance(quality_blockers, int) and quality_blockers > 0
+    ):
+        return WritebackSummary(
+            status="block",
+            heading="质量规则阻断写回",
+            message=(
+                f"项目配置把 {quality_blockers} 条质量规则提升为 blocker，"
+                "当前不能写回。请先处理对应质量报警并重新检查。"
+            ),
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+
     if safety_text == "warn" or check_status_text in {"warn", "blocked", "block"}:
         return WritebackSummary(
             status="warn" if safety_text == "warn" else "block",
@@ -548,6 +564,24 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
             can_apply=True,
             manifest_path=manifest_path,
         )
+    if (
+        isinstance(quality_gate, dict)
+        and int(quality_gate.get("blocker_count") or 0) > 0
+        and safety_text == "safe"
+    ):
+        return WritebackSummary(
+            status="block",
+            heading="质量规则阻断写回",
+            message=(
+                "项目配置把质量规则提升为 blocker，当前不能写回。"
+                "请先处理对应质量报警并重新检查。"
+            ),
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+
     if safety_text == "warn":
         return WritebackSummary(
             status="warn",

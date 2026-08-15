@@ -351,6 +351,22 @@ def _strip_markup(text: str) -> str:
     return current
 
 
+def _mask_markup(text: str) -> str:
+    """Replace balanced Ren'Py tags/fields with spaces of the same length.
+
+    The returned string keeps original character offsets, so evidence spans
+    collected by lexical rules still point at the original translation.
+    """
+
+    previous = None
+    current = text or ''
+    while previous != current:
+        previous = current
+        current = _RENPY_TAG_RE.sub(lambda match: ' ' * len(match.group(0)), current)
+        current = _RENPY_FIELD_RE.sub(lambda match: ' ' * len(match.group(0)), current)
+    return current
+
+
 def _line_number(subject: Mapping[str, Any]) -> int:
     value = subject.get('line_number')
     if isinstance(value, int) and value > 0:
@@ -451,7 +467,7 @@ def check_english_suffix_adjacent(
     subject: Mapping[str, Any],
     policy: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    translation = _strip_markup(str(subject.get('translation') or ''))
+    translation = _mask_markup(str(subject.get('translation') or ''))
     allowed = allowed_latin_tokens(policy)
     evidence: list[dict[str, Any]] = []
     for match in _LATIN_TOKEN_RE.finditer(translation):
@@ -473,7 +489,7 @@ def check_cjk_latin_spacing(
     subject: Mapping[str, Any],
     policy: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    translation = _strip_markup(str(subject.get('translation') or ''))
+    translation = _mask_markup(str(subject.get('translation') or ''))
     allowed = allowed_latin_tokens(policy)
     evidence: list[dict[str, Any]] = []
     for match in _LATIN_TOKEN_RE.finditer(translation):
@@ -533,7 +549,7 @@ def check_suspicious_english_residue(
     if not re.search(_CJK_CLASS, translation):
         return []
     allowed = allowed_latin_tokens(policy)
-    cleaned = _strip_markup(translation)
+    cleaned = _mask_markup(translation)
     evidence: list[dict[str, Any]] = []
     seen: set[tuple[int, int]] = set()
     for match in _LATIN_TOKEN_RE.finditer(cleaned):

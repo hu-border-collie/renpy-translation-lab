@@ -128,7 +128,8 @@ class WritebackGateContractTests(unittest.TestCase):
 
         self.assertEqual(summary['check_status'], 'blocked')
         self.assertEqual(summary['writeback_gate']['decision'], 'deny')
-        self.assertEqual(summary['safety_level'], 'block')
+        self.assertEqual(summary['safety_level'], 'safe')
+        self.assertTrue(summary['has_warnings'])
         self.assertEqual(summary['quality_gate']['blocker_count'], 1)
 
 
@@ -483,6 +484,41 @@ class QualitySubjectCollectionTests(unittest.TestCase):
         self.assertEqual(subjects[0]['source'], 'Hello')
         self.assertEqual(subjects[0]['translation'], '你好')
         self.assertEqual(subjects[0]['speaker_name'], 'Church Knight')
+
+    def test_collect_quality_subjects_counts_unmatched_actions(self):
+        manifest = {
+            'chunks': [
+                {
+                    'key': 'chunk-1',
+                    'file_rel_path': 'script.rpy',
+                    'items': [
+                        {
+                            'id': 'item-1',
+                            'text': 'Hello',
+                            'line': 0,
+                            'start': 8,
+                            'end': 13,
+                        }
+                    ],
+                }
+            ]
+        }
+        replacements = {
+            'script.rpy': {
+                0: [
+                    (8, 13, '你好', '', '"', 'Hello', 'missing-item', 'chunk-1'),
+                    (8, 13, '你好', '', '"', 'Hello'),
+                ]
+            }
+        }
+        stats = {}
+
+        subjects = batch.collect_quality_subjects(manifest, replacements, stats)
+
+        self.assertEqual(subjects, [])
+        self.assertEqual(stats['quality_action_items'], 2)
+        self.assertEqual(stats['quality_unmatched_items'], 2)
+        self.assertEqual(stats['quality_subject_items'], 0)
 
 
 if __name__ == '__main__':

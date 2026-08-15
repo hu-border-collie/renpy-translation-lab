@@ -2538,13 +2538,10 @@ def attach_check_contract(manifest, summary, quality_findings=None):
 
     summary['check_contract_version'] = CHECK_CONTRACT_VERSION
     summary['check_fingerprint'] = build_check_fingerprint(manifest)
-    summary['safety_level'] = (
-        CHECK_SAFETY_SAFE
-        if can_apply
-        else CHECK_SAFETY_BLOCK
-        if safety['level'] == CHECK_SAFETY_SAFE
-        else safety['level']
-    )
+    # ``safety_level`` remains the legacy *structural* safety label.  Quality
+    # blockers are expressed through writeback_gate / quality_gate so the GUI
+    # can explain the actual reason instead of misreporting a source problem.
+    summary['safety_level'] = safety['level']
     summary['safety_counts'] = safety['counts']
     summary['safety_reasons'] = safety['reasons']
     summary['check_status'] = check_status
@@ -8911,15 +8908,23 @@ def collect_result_actions(manifest, validate_sources=False):
     return replacements_by_file, translated_lines_by_file, failure_entries, summary
 
 
-def collect_quality_subjects(manifest, replacements_by_file):
+def collect_quality_subjects(manifest, replacements_by_file, stats=None):
     """Build quality-check subjects from structurally validated replacements.
 
     Quality rules only inspect items that already passed translation contract
     validation and source validation.  Structural failures continue to be
     reported through the existing check failure report and writeback gate.
+
+    When *stats* is provided it receives collection counters so callers can
+    surface silently unmapped actions instead of skipping them invisibly.
     """
 
     item_index = {}
+    counters = {
+        'quality_action_items': 0,
+        'quality_subject_items': 0,
+        'quality_unmatched_items': 0,
+    }
     for chunk in manifest.get('chunks') or []:
         if not isinstance(chunk, dict):
             continue
@@ -8935,7 +8940,9 @@ def collect_quality_subjects(manifest, replacements_by_file):
     for file_key, replacements_by_line in replacements_by_file.items():
         for line_index, actions in replacements_by_line.items():
             for action in actions or []:
+                counters['quality_action_items'] += 1
                 if not isinstance(action, (tuple, list)) or len(action) < 6:
+                    counters['quality_unmatched_items'] += 1
                     continue
                 replacement = str(action[2] or '')
                 expected_text = str(action[5] or '') if len(action) > 5 else ''
@@ -8946,6 +8953,7 @@ def collect_quality_subjects(manifest, replacements_by_file):
                     item_index.get((chunk_key, item_id), (None, None)),
                 )
                 if chunk is None or item is None:
+                    counters['quality_unmatched_items'] += 1
                     continue
                 unit = translation_core.unit_from_manifest_item(
                     item,
@@ -8966,6 +8974,9 @@ def collect_quality_subjects(manifest, replacements_by_file):
                         'speaker_name': unit.speaker_name,
                     }
                 )
+    counters['quality_subject_items'] = len(subjects)
+    if isinstance(stats, dict):
+        stats.update(counters)
     return subjects
 
 
@@ -9018,6 +9029,10 @@ def print_check_summary(summary):
     quality_gate = summary.get('quality_gate')
     if isinstance(quality_gate, dict):
         print(f"Quality gate: {quality_gate.get('decision', 'unknown')}")
+        if summary.get('quality_subject_items') is not None:
+            print(f"Quality subjects: {summary.get('quality_subject_items', 0)}")
+        if summary.get('quality_unmatched_items'):
+            print(f"Quality unmatched items: {summary['quality_unmatched_items']}")
         print(f"Quality warnings: {quality_gate.get('warning_count', 0)}")
         print(f"Quality blockers: {quality_gate.get('blocker_count', 0)}")
         print(f"Acknowledged warnings: {quality_gate.get('acknowledged_count', 0)}")
@@ -9219,7 +9234,12 @@ def check_results(target=None):
         manifest,
         validate_sources=True,
     )
-    quality_subjects = collect_quality_subjects(manifest, replacements_by_file)
+    quality_collection_stats = {}
+    quality_subjects = collect_quality_subjects(
+        manifest,
+        replacements_by_file,
+        stats=quality_collection_stats,
+    )
     glossary_path = str(
         manifest.get('glossary_file')
         or os.environ.get('GLOSSARY_FILE')
@@ -9246,6 +9266,7 @@ def check_results(target=None):
             finding.get('reason_code') or 'quality.unknown',
         )
     summary['quality_findings_count'] = len(quality_findings)
+    summary.update(quality_collection_stats)
     summary['quality_reason_counts'] = quality_reason_counts
     summary['quality_findings_path'] = quality_report_path
     attach_check_contract(manifest, summary, quality_findings=quality_findings)

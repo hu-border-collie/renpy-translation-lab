@@ -154,6 +154,20 @@ class QualityRuleTests(unittest.TestCase):
         self.assertTrue(matching)
         self.assertIn('iPhone', matching[0]['evidence'])
 
+    def test_markup_stripped_evidence_spans_still_point_at_original_text(self):
+        translation = '中文{w}iPhone'
+        findings = quality.check_subject(subject(translation=translation))
+
+        residue = [
+            finding
+            for finding in findings
+            if finding['reason_code'] == quality.REASON_SUSPICIOUS_ENGLISH_RESIDUE
+        ]
+        self.assertTrue(residue)
+        evidence = json.loads(residue[0]['evidence'])
+        start, end = evidence['span']
+        self.assertEqual(translation[start:end], evidence['token'])
+
     def test_cjk_latin_spacing_ignores_renpy_tags(self):
         for translation in ('好的{w}', '他{b}突然{/b}说', '你好{color=#ff0000}'):
             with self.subTest(translation=translation):
