@@ -774,6 +774,108 @@ class TestEngineAdapterP4(unittest.TestCase):
             again.record_set_digest,
         )
 
+    def test_loader_rejects_duplicate_jsonl_rows(self):
+        from engine_adapters.coverage import digest_json as coverage_digest_json
+
+        base, _target, records, _report = self._scenario()
+        candidate_set = reuse.build_reuse_candidates(
+            _report,
+            base,
+            _target,
+            records,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            record_paths = reuse.export_translation_records(records, tmp)
+            rows = [
+                json.loads(line)
+                for line in Path(record_paths.records_path)
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            duplicated = rows + [rows[0]]
+            Path(record_paths.records_path).write_text(
+                "".join(
+                    json.dumps(row, ensure_ascii=False) + "\n"
+                    for row in duplicated
+                ),
+                encoding="utf-8",
+            )
+            manifest_path = Path(record_paths.manifest_path)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["record_count"] = len(duplicated)
+            manifest["record_digests"] = [
+                row["record_digest"] for row in duplicated
+            ]
+            manifest["record_set_digest"] = coverage_digest_json(
+                {
+                    "translation_record_set_schema_version": 1,
+                    "version_id": manifest["version_id"],
+                    "snapshot_digest": manifest["snapshot_digest"],
+                    "target_language": manifest["target_language"],
+                    "record_count": len(duplicated),
+                    "record_digests": manifest["record_digests"],
+                }
+            )
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                self.versioning.VersioningArtifactError,
+                "Duplicate translation record id",
+            ):
+                reuse.load_translation_records(manifest_path)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            reuse_paths = reuse.export_reuse_candidates(
+                candidate_set,
+                tmp,
+                target_snapshot=_target,
+            )
+            candidate_rows = [
+                json.loads(line)
+                for line in Path(reuse_paths.candidates_path)
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            duplicated = candidate_rows + [candidate_rows[0]]
+            Path(reuse_paths.candidates_path).write_text(
+                "".join(
+                    json.dumps(row, ensure_ascii=False) + "\n"
+                    for row in duplicated
+                ),
+                encoding="utf-8",
+            )
+            report_path = Path(reuse_paths.report_path)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report["candidate_count"] = len(duplicated)
+            report["candidate_digests"] = [
+                row["candidate_digest"] for row in duplicated
+            ]
+            inputs = report["inputs"]
+            report["candidate_set_digest"] = coverage_digest_json(
+                {
+                    "reuse_candidate_set_schema_version": 1,
+                    "inputs": inputs,
+                    "status": report["status"],
+                    "stale_reasons": report["stale_reasons"],
+                    "summary": report["summary"],
+                    "lineage_decisions": report["lineage_decisions"],
+                    "candidate_digests": report["candidate_digests"],
+                }
+            )
+            report_path.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                self.versioning.VersioningArtifactError,
+                "Duplicate reuse candidate id",
+            ):
+                reuse.load_reuse_candidates(report_path)
+
     def test_ambiguous_accept_rejects_changed_source_target_at_import(self):
         base = self._snapshot(
             "1.0",

@@ -509,6 +509,21 @@ def load_translation_records(path: str | os.PathLike[str]) -> TranslationRecordS
             artifact_name="translation records",
         )
     )
+    seen_record_ids: set[str] = set()
+    seen_occurrence_ids: set[str] = set()
+    for record in records:
+        if record.record_id in seen_record_ids:
+            raise VersioningArtifactError(
+                "Duplicate translation record id in JSONL: "
+                + record.record_id
+            )
+        if record.occurrence_id in seen_occurrence_ids:
+            raise VersioningArtifactError(
+                "Duplicate translation record occurrence in JSONL: "
+                + record.occurrence_id
+            )
+        seen_record_ids.add(record.record_id)
+        seen_occurrence_ids.add(record.occurrence_id)
     manifest_digests = tuple(
         _required_text(value, field_name=f"record_digests[{index}]")
         for index, value in enumerate(
@@ -1987,6 +2002,14 @@ def load_reuse_candidates(path: str | os.PathLike[str]) -> ReuseCandidateSet:
             artifact_name="reuse candidates",
         )
     )
+    seen_candidate_ids: set[str] = set()
+    for candidate in candidates:
+        if candidate.candidate_id in seen_candidate_ids:
+            raise VersioningArtifactError(
+                "Duplicate reuse candidate id in JSONL: "
+                + candidate.candidate_id
+            )
+        seen_candidate_ids.add(candidate.candidate_id)
     manifest_digests = tuple(
         _required_text(value, field_name=f"candidate_digests[{index}]")
         for index, value in enumerate(
