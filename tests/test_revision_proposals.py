@@ -380,6 +380,29 @@ class RevisionProposalImportTests(unittest.TestCase):
             batch.apply_revisions(result["paths"]["manifest"], force=True)
         self.assertEqual(self.rpy.read_bytes(), before)
 
+    def test_repreview_recomputes_proposal_writeback_eligibility(self):
+        result = batch.import_revision_proposals(
+            str(self._write_proposal(self._proposal()))
+        )
+        manifest_path = result["paths"]["manifest"]
+        self.rpy.write_text(
+            'translate schinese demo:\n'
+            '    old "Hello {name}"\n'
+            '    new "源文件已变化 {name}"\n',
+            encoding="utf-8",
+        )
+
+        repreviewed = batch.preview_revisions(manifest_path)
+
+        self.assertEqual(repreviewed["proposal_import"]["status"], "blocked")
+        self.assertFalse(repreviewed["proposal_import"]["writeback_eligible"])
+        self.assertEqual(
+            repreviewed["proposal_import"]["history"],
+            ["imported", "previewed", "blocked"],
+        )
+        with self.assertRaisesRegex(SystemExit, "proposal import"):
+            batch.apply_revisions(manifest_path, force=True)
+
     def test_duplicate_source_applies_only_selected_occurrence(self):
         self.rpy.write_text(
             'translate schinese demo:\n'

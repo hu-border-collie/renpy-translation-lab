@@ -3997,6 +3997,22 @@ def _write_proposal_import_report(package_dir, report):
     return {'import_report': json_path, 'import_report_markdown': markdown_path}
 
 
+def _proposal_status_from_preview_summary(summary):
+    """Map the latest revision preview summary to proposal eligibility state."""
+    failures = int((summary or {}).get('failure_items') or 0)
+    candidates = int((summary or {}).get('valid_items') or 0)
+    unchanged = int((summary or {}).get('unchanged_items') or 0)
+    if failures and candidates:
+        return 'partial'
+    if failures:
+        return 'blocked'
+    if candidates:
+        return 'previewed'
+    if unchanged:
+        return 'no_op'
+    return 'blocked'
+
+
 def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
     """Import structured proposals into the existing revision preview gate.
 
@@ -4198,25 +4214,7 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
     atomic_write_json(manifest_path, manifest, ensure_ascii=False, indent=2)
     previewed = preview_revisions(manifest_path, update_latest=False)
     preview_summary = dict((previewed.get('last_revision_preview') or {}).get('summary') or {})
-    failures = int(preview_summary.get('failure_items') or 0)
-    candidates = int(preview_summary.get('valid_items') or 0)
-    unchanged = int(preview_summary.get('unchanged_items') or 0)
-    if failures and candidates:
-        final_status = 'partial'
-    elif failures:
-        final_status = 'blocked'
-    elif candidates:
-        final_status = 'previewed'
-    elif unchanged:
-        final_status = 'no_op'
-    else:
-        final_status = 'blocked'
-    proposal_state = dict(previewed.get('proposal_import') or {})
-    proposal_state['status'] = final_status
-    proposal_state['history'] = ['imported', final_status]
-    proposal_state['writeback_eligible'] = final_status in {'previewed', 'no_op'}
-    previewed['proposal_import'] = proposal_state
-    previewed['last_revision_preview']['manifest_identity'] = _revision_manifest_identity(previewed)
+    final_status = _proposal_status_from_preview_summary(preview_summary)
     report.update({
         'status': final_status,
         'preview_summary': preview_summary,
@@ -8683,6 +8681,23 @@ def preview_revisions(
         'source_snapshots': _revision_source_snapshots(manifest),
         'summary': summary,
     }
+    proposal_state = manifest.get('proposal_import')
+    if isinstance(proposal_state, dict):
+        proposal_state = dict(proposal_state)
+        proposal_status = _proposal_status_from_preview_summary(summary)
+        history = list(proposal_state.get('history') or [])
+        if not history or history[-1] != proposal_status:
+            history.append(proposal_status)
+        proposal_state['status'] = proposal_status
+        proposal_state['history'] = history
+        proposal_state['writeback_eligible'] = proposal_status in {
+            'previewed',
+            'no_op',
+        }
+        manifest['proposal_import'] = proposal_state
+        manifest['last_revision_preview']['manifest_identity'] = (
+            _revision_manifest_identity(manifest)
+        )
     # A fresh preview invalidates any prior blocked/no_op/partial terminal state:
     # the user may have fixed the blocker and expects the writeback gate to reopen.
     # A prior real writeback is preserved in revision_apply_history.
