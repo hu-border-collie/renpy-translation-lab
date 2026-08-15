@@ -102,6 +102,15 @@ class QualityRuleTests(unittest.TestCase):
             {finding['reason_code'] for finding in findings},
         )
 
+    def test_escaped_square_brackets_and_whitespace_tags_are_not_broken(self):
+        for translation in ('你好[[世界]]', '你好 {image=bg room} 世界'):
+            with self.subTest(translation=translation):
+                findings = quality.check_subject(subject(translation=translation))
+                self.assertNotIn(
+                    quality.REASON_UNCLOSED_DELIMITERS,
+                    {finding['reason_code'] for finding in findings},
+                )
+
     def test_english_suffix_adjacent_reports_ping_and_s(self):
         for translation in ('迷踪步ping', '残片s'):
             with self.subTest(translation=translation):
@@ -147,6 +156,25 @@ class QualityRuleTests(unittest.TestCase):
         codes = {finding['reason_code'] for finding in findings}
         self.assertIn(quality.REASON_HALFWIDTH_PUNCTUATION, codes)
         self.assertIn(quality.REASON_ASCII_ELLIPSIS, codes)
+
+    def test_glossary_relative_path_resolves_against_base_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / 'project'
+            (base / 'nested').mkdir(parents=True)
+            glossary_path = base / 'nested' / 'glossary.json'
+            glossary_path.write_text(
+                json.dumps(
+                    {'normalize_map': {'Church Knight': '教会骑士'}},
+                    ensure_ascii=False,
+                ),
+                encoding='utf-8',
+            )
+            loaded = quality.load_glossary_map(
+                'nested/glossary.json',
+                base_dir=str(base),
+            )
+
+        self.assertEqual(loaded['Church Knight'], '教会骑士')
 
     def test_glossary_rule_flags_visible_source_term(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -230,6 +258,22 @@ class QualityRuleTests(unittest.TestCase):
         )
 
         self.assertEqual(findings[0]['disposition'], quality.DISPOSITION_BLOCKER)
+        self.assertEqual(findings[0]['severity'], 'high')
+
+    def test_multiple_hits_for_same_rule_on_same_line_are_both_reported(self):
+        subjects = [
+            subject(translation='你{w=0.5}好，他{w=0.2}们')
+        ]
+
+        findings = quality.check_quality(subjects)
+        wait_findings = [
+            finding
+            for finding in findings
+            if finding['reason_code'] == quality.REASON_WAIT_TAG_INSIDE_CJK
+        ]
+
+        self.assertEqual(len(wait_findings), 2)
+        self.assertNotEqual(wait_findings[0]['finding_id'], wait_findings[1]['finding_id'])
 
     def test_finding_contract_fields_are_present(self):
         findings = quality.check_subject(subject(translation='你{w=0.5}好'))

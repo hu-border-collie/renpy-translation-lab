@@ -132,6 +132,36 @@ class WritebackGateContractTests(unittest.TestCase):
         self.assertEqual(summary['quality_gate']['blocker_count'], 1)
 
 
+    def test_attach_check_contract_reuses_persisted_quality_gate_for_apply_recheck(self):
+        manifest = {
+            '_manifest_path': '/tmp/pkg/manifest.json',
+            '_package_dir': '/tmp/pkg',
+            'settings': {},
+            'quality_acknowledged_finding_ids': [],
+            'last_check_summary': {
+                'quality_gate': {
+                    'decision': 'needs_review',
+                    'warning_count': 3,
+                    'blocker_count': 1,
+                    'acknowledged_count': 0,
+                    'has_warnings': True,
+                }
+            },
+        }
+        summary = {'reason_counts': {}, 'valid_items': 3, 'failure_items': 0}
+
+        with mock.patch.object(
+            batch,
+            'build_check_fingerprint',
+            return_value={'fingerprint_sha256': 'fp'},
+        ):
+            summary = batch.attach_check_contract(manifest, summary)
+
+        self.assertEqual(summary['quality_gate']['blocker_count'], 1)
+        self.assertEqual(summary['writeback_gate']['decision'], 'deny')
+        self.assertEqual(summary['check_status'], 'blocked')
+
+
 class CheckFingerprintPolicyTests(unittest.TestCase):
     def test_quality_policy_change_changes_check_fingerprint(self):
         manifest = {

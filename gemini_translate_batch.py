@@ -2508,10 +2508,30 @@ def summarize_writeback_gate(safety, quality_gate):
 
 def attach_check_contract(manifest, summary, quality_findings=None):
     safety = summarize_check_safety(summary)
-    quality_gate = translation_quality.summarize_quality_gate(
-        quality_findings or [],
-        acknowledged_ids=manifest.get('quality_acknowledged_finding_ids') or [],
-    )
+    if quality_findings is not None:
+        quality_gate = translation_quality.summarize_quality_gate(
+            quality_findings,
+            acknowledged_ids=manifest.get('quality_acknowledged_finding_ids') or [],
+        )
+    else:
+        # Apply revalidation does not recompute quality findings; the preflight
+        # already proved the last check is fresh.  Reuse the persisted quality
+        # gate so configured blockers remain visible and still block writeback.
+        last_summary = manifest.get('last_check_summary')
+        persisted_quality_gate = (
+            last_summary.get('quality_gate')
+            if isinstance(last_summary, dict)
+            else None
+        )
+        if isinstance(persisted_quality_gate, dict):
+            quality_gate = dict(persisted_quality_gate)
+            quality_gate.setdefault('has_warnings', False)
+            quality_gate.setdefault('acknowledged_count', 0)
+        else:
+            quality_gate = translation_quality.summarize_quality_gate(
+                [],
+                acknowledged_ids=manifest.get('quality_acknowledged_finding_ids') or [],
+            )
     writeback_gate = summarize_writeback_gate(safety, quality_gate)
     can_apply = bool(writeback_gate.get('can_apply'))
     check_status = translation_quality.overall_check_status(writeback_gate, quality_gate)
@@ -9200,10 +9220,22 @@ def check_results(target=None):
         validate_sources=True,
     )
     quality_subjects = collect_quality_subjects(manifest, replacements_by_file)
+    glossary_path = str(
+        manifest.get('glossary_file')
+        or getattr(legacy, 'GLOSSARY_FILE', '')
+        or ''
+    )
+    quality_glossary_map = translation_quality.load_glossary_map(
+        glossary_path,
+        base_dir=manifest.get('_package_dir', ''),
+    )
+    summary['quality_glossary_path'] = glossary_path
+    summary['quality_glossary_entries'] = len(quality_glossary_map)
     quality_findings = translation_quality.check_quality(
         quality_subjects,
         manifest=manifest,
         policy=BATCH_QUALITY_POLICY,
+        glossary_map=quality_glossary_map,
     )
     quality_report_path = write_quality_findings(manifest, quality_findings)
     quality_reason_counts = {}

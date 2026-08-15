@@ -365,7 +365,9 @@ def _make_finding(
 ) -> dict[str, Any]:
     disposition = disposition_for(policy, reason_code)
     if disposition == DISPOSITION_BLOCKER:
-        severity = severity or 'high'
+        severity = 'high'
+    else:
+        severity = str(severity or 'medium')
     finding_id = hashlib.sha256(
         json.dumps(
             [
@@ -410,17 +412,26 @@ def check_wait_tag_inside_cjk(subject: Mapping[str, Any]) -> list[dict[str, Any]
 
 def check_unclosed_delimiters(subject: Mapping[str, Any]) -> list[dict[str, Any]]:
     translation = str(subject.get('translation') or '')
+    # ``[[`` and ``]]`` are Ren'Py escapes for literal square brackets and can
+    # legitimately appear as paired tokens; remove them before counting.
+    normalized = translation.replace('[[', '').replace(']]', '')
     evidence: list[dict[str, Any]] = []
-    if translation.count('{') != translation.count('}'):
-        evidence.append({'delimiter': '{}', 'opening': translation.count('{'), 'closing': translation.count('}')})
-    if translation.count('[') != translation.count(']'):
-        evidence.append({'delimiter': '[]', 'opening': translation.count('['), 'closing': translation.count(']')})
-    if not evidence:
-        # A tag-shaped token with internal whitespace or an empty field is
-        # mechanically broken even when brace counts happen to be equal.
-        malformed = re.findall(r'\{[^{}\r\n]*\s[^{}\r\n]*\}', translation)
-        for value in malformed[:3]:
-            evidence.append({'delimiter': '{}', 'token': value})
+    if normalized.count('{') != normalized.count('}'):
+        evidence.append(
+            {
+                'delimiter': '{}',
+                'opening': normalized.count('{'),
+                'closing': normalized.count('}'),
+            }
+        )
+    if normalized.count('[') != normalized.count(']'):
+        evidence.append(
+            {
+                'delimiter': '[]',
+                'opening': normalized.count('['),
+                'closing': normalized.count(']'),
+            }
+        )
     return evidence
 
 
@@ -523,24 +534,35 @@ def check_suspicious_english_residue(
     return evidence
 
 
-def _load_glossary_map(manifest: Mapping[str, Any] | None) -> dict[str, str]:
-    if not isinstance(manifest, Mapping):
+def load_glossary_map(
+    glossary_path: str | os.PathLike[str],
+    *,
+    base_dir: str = "",
+) -> dict[str, str]:
+    """Load ``normalize_map`` / ``translations`` glossary pairs.
+
+    Relative paths are resolved against *base_dir* so a project-local
+    ``glossary.json`` does not silently resolve against the process CWD.
+    """
+
+    raw_path = str(glossary_path or "").strip()
+    if not raw_path:
         return {}
-    glossary_path = manifest.get('glossary_file')
-    if not isinstance(glossary_path, str) or not glossary_path.strip():
-        glossary_path = str(os.environ.get('GLOSSARY_FILE') or '')
-    if not glossary_path or not os.path.isfile(glossary_path):
+    path = raw_path
+    if not os.path.isabs(path) and base_dir:
+        path = os.path.join(str(base_dir), path)
+    if not os.path.isfile(path):
         return {}
     try:
-        with open(glossary_path, 'r', encoding='utf-8-sig') as handle:
+        with open(path, "r", encoding="utf-8-sig") as handle:
             data = json.load(handle) or {}
     except (OSError, ValueError, TypeError):
         return {}
     if not isinstance(data, Mapping):
         return {}
-    mapping = data.get('normalize_map')
+    mapping = data.get("normalize_map")
     if not isinstance(mapping, Mapping):
-        mapping = data.get('translations') or {}
+        mapping = data.get("translations") or {}
     if not isinstance(mapping, Mapping):
         return {}
     result: dict[str, str] = {}
@@ -550,6 +572,22 @@ def _load_glossary_map(manifest: Mapping[str, Any] | None) -> dict[str, str]:
         if source and target:
             result[source] = target
     return result
+
+
+def _load_glossary_map(manifest: Mapping[str, Any] | None) -> dict[str, str]:
+    if not isinstance(manifest, Mapping):
+        return {}
+    glossary_path = manifest.get("glossary_file")
+    if not isinstance(glossary_path, str) or not glossary_path.strip():
+        glossary_path = str(os.environ.get("GLOSSARY_FILE") or "")
+    if not glossary_path:
+        return {}
+    base_dir = str(
+        manifest.get("_package_dir")
+        or manifest.get("base_dir")
+        or ""
+    )
+    return load_glossary_map(glossary_path, base_dir=base_dir)
 
 
 def check_glossary_term_not_applied(
@@ -728,18 +766,15 @@ def check_quality(
     if glossary_map is None and isinstance(manifest, Mapping):
         glossary = _load_glossary_map(manifest)
     findings: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str, int]] = set()
+    seen: set[str] = set()
     for subject in subjects:
         if not isinstance(subject, Mapping):
             continue
         for finding in check_subject(subject, policy=effective, glossary_map=glossary):
-            key = (
-                str(finding.get('item_id') or ''),
-                str(finding.get('file') or ''),
-                str(finding.get('reason_code') or ''),
-                int(finding.get('line') or 0),
-            )
-            if key in seen:
+            # ``finding_id`` already includes item/file/line/reason/evidence, so
+            # multiple independent hits on the same line are preserved.
+            key = str(finding.get('finding_id') or '')
+            if not key or key in seen:
                 continue
             seen.add(key)
             findings.append(finding)
