@@ -705,7 +705,7 @@ class TestEngineAdapterP4(unittest.TestCase):
         unchanged_history = reuse.derive_revision_history(
             stable_input,
             new_translation="稳定",
-            new_origin="revision_applied",
+            new_origin="model_initial",
         )
         self.assertEqual(unchanged_history, ())
         changed_history = reuse.derive_revision_history(
@@ -718,7 +718,26 @@ class TestEngineAdapterP4(unittest.TestCase):
             changed_history[0]["previous_record_id"],
             stable_input.record_id,
         )
+        self.assertEqual(
+            changed_history[0]["previous_record_digest"],
+            stable_input.record_digest,
+        )
         self.assertEqual(changed_history[0]["translation_text"], "稳定")
+
+        # An origin-only change (for example human confirmation without a
+        # text edit) must preserve the previous attribution too.
+        origin_history = reuse.derive_revision_history(
+            stable_input,
+            new_translation="稳定",
+            new_origin="human_confirmed",
+        )
+        self.assertEqual(len(origin_history), 1)
+        self.assertEqual(origin_history[0]["origin"], "model_initial")
+        self.assertEqual(origin_history[0]["translation_text"], "稳定")
+        self.assertEqual(
+            origin_history[0]["superseded_by_origin"],
+            "human_confirmed",
+        )
 
         rebuilt = reuse.build_translation_records(
             base,

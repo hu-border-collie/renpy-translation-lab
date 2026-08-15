@@ -286,6 +286,7 @@ class TranslationReuseWorkflowTests(unittest.TestCase):
             self.assertEqual(len(history), 1)
             self.assertEqual(history[0]["translation_text"], "译-unit-1.0-stable")
             self.assertEqual(history[0]["superseded_by_origin"], "revision_applied")
+            self.assertTrue(history[0]["previous_record_digest"])
 
 
 if __name__ == "__main__":

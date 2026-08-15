@@ -416,14 +416,21 @@ def derive_revision_history(
     """
 
     history = [dict(item) for item in previous_record.revision_history]
-    if _normalize_text(previous_record.translation_text) != _normalize_text(
-        new_translation
-    ):
+    text_changed = _normalize_text(previous_record.translation_text) != (
+        _normalize_text(new_translation)
+    )
+    origin_changed = _normalize_text(previous_record.origin) != _normalize_text(
+        new_origin
+    )
+    if text_changed or origin_changed:
         history.append(
             {
                 "origin": previous_record.origin,
                 "translation_text": previous_record.translation_text,
                 "previous_record_id": previous_record.record_id,
+                # record_id is identity-derived and identical across re-freezes
+                # of one unit; the digest pins the exact prior record content.
+                "previous_record_digest": previous_record.record_digest,
                 "superseded_by_origin": _required_text(
                     new_origin,
                     field_name="input.origin",
