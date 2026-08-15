@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Iterable
 
+import keyword_history
+
 GLOSSARY_SECTION_PRESERVE = 'preserve_terms'
 GLOSSARY_SECTION_NON_TRANSLATABLE = 'non_translatable_exact'
 GLOSSARY_SECTION_NORMALIZE = 'normalize_map'
@@ -115,11 +117,9 @@ def _history_requires_review(candidate: dict) -> bool:
     into the glossary.
     """
 
-    history = candidate.get('history_evidence')
-    if not isinstance(history, dict):
-        return True
-    status = _compact_text(history.get('status'))
-    return status != 'consistent'
+    return not keyword_history.is_complete_consistent_history_evidence(
+        candidate.get('history_evidence')
+    )
 
 
 def _default_glossary_data() -> dict:
@@ -410,7 +410,13 @@ def format_candidate_preview(candidate: dict, action: MergeAction) -> str:
         f'glossary: {action.section} -> {action.target}',
     ]
     if isinstance(history, dict):
-        status = _compact_text(history.get('status')) or 'unavailable'
+        raw_status = _compact_text(history.get('status')) or 'unavailable'
+        status = (
+            'unavailable'
+            if raw_status == keyword_history.STATUS_CONSISTENT
+            and not keyword_history.is_complete_consistent_history_evidence(history)
+            else raw_status
+        )
         first = history.get('first_occurrence')
         if isinstance(first, dict) and first:
             identity = first.get('identity_v2') or first.get('occurrence_id') or '?'
@@ -422,6 +428,8 @@ def format_candidate_preview(candidate: dict, action: MergeAction) -> str:
             )
         else:
             lines.append(f'history_first: none [{status}]')
+        if raw_status == keyword_history.STATUS_CONSISTENT and status == 'unavailable':
+            lines.append('history_note: 历史证据字段不完整，需重新导出或人工确认')
         for reason in history.get('conflict_reasons') or []:
             lines.append(f'history_note: {_compact_text(reason)}')
     else:
@@ -446,7 +454,13 @@ def format_history_evidence_preview(candidate: dict) -> str:
     history = candidate.get('history_evidence')
     if not isinstance(history, dict):
         return '无历史证据（旧版候选文件）'
-    status = _compact_text(history.get('status')) or 'unavailable'
+    raw_status = _compact_text(history.get('status')) or 'unavailable'
+    status = (
+        'unavailable'
+        if raw_status == keyword_history.STATUS_CONSISTENT
+        and not keyword_history.is_complete_consistent_history_evidence(history)
+        else raw_status
+    )
     first = history.get('first_occurrence')
     if isinstance(first, dict) and first:
         identity = first.get('identity_v2') or first.get('occurrence_id') or '?'
@@ -464,6 +478,8 @@ def format_history_evidence_preview(candidate: dict) -> str:
     ]
     if reasons:
         text += '；' + '；'.join(reasons)
+    if raw_status == keyword_history.STATUS_CONSISTENT and status == 'unavailable':
+        text += '；历史证据字段不完整，需重新导出或人工确认'
     return text
 
 
@@ -634,7 +650,9 @@ def detect_candidate_warnings(
         warnings.append('历史证据缺失（旧版或手工候选），需重新导出或人工确认')
     else:
         history_status = _compact_text(history.get('status')) or 'unavailable'
-        if history_status != 'consistent':
+        if history_status == keyword_history.STATUS_CONSISTENT and _history_requires_review(candidate):
+            warnings.append('历史证据字段不完整或 schema 不兼容，按 unavailable 处理，需重新导出或人工确认')
+        elif history_status != keyword_history.STATUS_CONSISTENT:
             first = history.get('first_occurrence')
             if isinstance(first, dict) and first:
                 warnings.append(

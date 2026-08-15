@@ -26,6 +26,38 @@ STATUS_AMBIGUOUS = "ambiguous"
 STATUS_UNMATCHED = "unmatched"
 STATUS_UNAVAILABLE = "unavailable"
 
+_HISTORY_EVIDENCE_REQUIRED_FIELDS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "review_required",
+        "candidate_source",
+        "candidate_target",
+        "match_count",
+        "occurrence_count",
+        "first_occurrence",
+        "translations",
+        "conflict_codes",
+        "conflict_reasons",
+        "occurrences",
+    }
+)
+_HISTORY_OCCURRENCE_REQUIRED_FIELDS = frozenset(
+    {
+        "occurrence_id",
+        "identity_v2",
+        "file_rel_path",
+        "line_number",
+        "locator",
+        "source",
+        "current_translation",
+        "matched_text",
+        "match_kind",
+        "match_start",
+        "match_end",
+    }
+)
+
 _INTERPOLATION_TOKEN_RE = re.compile(
     r"\{[^{}\r\n]*\}|\[[^\[\]\r\n]*\]|%\([^)\r\n]+\)[#0+\- ]*\d*(?:\.\d+)?[a-zA-Z%]?"
 )
@@ -209,6 +241,117 @@ def _occurrence_from_row(row: Mapping[str, Any], match: Mapping[str, Any]) -> di
     if speaker_name:
         occurrence["speaker_name"] = speaker_name
     return occurrence
+
+
+def _is_complete_history_occurrence(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    if not _HISTORY_OCCURRENCE_REQUIRED_FIELDS.issubset(value):
+        return False
+
+    for field in (
+        "occurrence_id",
+        "identity_v2",
+        "file_rel_path",
+        "source",
+        "current_translation",
+        "matched_text",
+        "match_kind",
+    ):
+        if not _compact_text(value.get(field)):
+            return False
+
+    if not isinstance(value.get("locator"), Mapping):
+        return False
+    line_number = value.get("line_number")
+    match_start = value.get("match_start")
+    match_end = value.get("match_end")
+    if (
+        not isinstance(line_number, int)
+        or isinstance(line_number, bool)
+        or line_number < 1
+        or not isinstance(match_start, int)
+        or isinstance(match_start, bool)
+        or match_start < 0
+        or not isinstance(match_end, int)
+        or isinstance(match_end, bool)
+        or match_end <= match_start
+    ):
+        return False
+    return True
+
+
+def is_complete_consistent_history_evidence(value: object) -> bool:
+    """Return whether evidence is complete enough for automatic glossary merge.
+
+    Only a fully formed, schema-compatible ``consistent`` record is safe for
+    confidence-based auto-accept.  Missing or malformed fields fail closed so
+    old or hand-written candidate files remain on the explicit review path.
+    """
+
+    if not isinstance(value, Mapping):
+        return False
+    if not _HISTORY_EVIDENCE_REQUIRED_FIELDS.issubset(value):
+        return False
+    if value.get("schema_version") != HISTORY_EVIDENCE_SCHEMA_VERSION:
+        return False
+    if value.get("status") != STATUS_CONSISTENT:
+        return False
+    if value.get("review_required") is not False:
+        return False
+
+    candidate_source = value.get("candidate_source")
+    candidate_target = value.get("candidate_target")
+    if not _compact_text(candidate_source) or not isinstance(candidate_target, str):
+        return False
+
+    match_count = value.get("match_count")
+    occurrence_count = value.get("occurrence_count")
+    if (
+        not isinstance(match_count, int)
+        or isinstance(match_count, bool)
+        or match_count < 1
+        or not isinstance(occurrence_count, int)
+        or isinstance(occurrence_count, bool)
+        or occurrence_count < 1
+        or match_count < occurrence_count
+    ):
+        return False
+
+    occurrences = value.get("occurrences")
+    first_occurrence = value.get("first_occurrence")
+    if (
+        not isinstance(occurrences, list)
+        or not occurrences
+        or not _is_complete_history_occurrence(first_occurrence)
+        or not all(_is_complete_history_occurrence(item) for item in occurrences)
+    ):
+        return False
+
+    first_id = _compact_text(first_occurrence.get("occurrence_id"))
+    reported_ids = {
+        _compact_text(item.get("occurrence_id"))
+        for item in occurrences
+        if isinstance(item, Mapping)
+    }
+    if first_id not in reported_ids or len(reported_ids) > occurrence_count:
+        return False
+
+    translations = value.get("translations")
+    if (
+        not isinstance(translations, list)
+        or not translations
+        or not all(isinstance(item, str) and _compact_text(item) for item in translations)
+    ):
+        return False
+    first_translation = _match_key(first_occurrence.get("current_translation"))
+    if first_translation not in {_match_key(item) for item in translations}:
+        return False
+
+    # A consistent record must not carry hidden conflict signals.
+    if value.get("conflict_codes") != [] or value.get("conflict_reasons") != []:
+        return False
+    return True
 
 
 def _unique_translations(occurrences: Sequence[Mapping[str, Any]]) -> list[str]:

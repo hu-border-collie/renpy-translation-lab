@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 import keyword_glossary_merge as merge_mod
+import keyword_history
 
 
 class KeywordGlossaryMergeTests(unittest.TestCase):
@@ -14,12 +15,23 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
             for row in rows:
                 handle.write(json.dumps(row, ensure_ascii=False) + '\n')
 
+    def _consistent_history(self, source: str, target: str) -> dict:
+        return keyword_history.build_keyword_history_evidence(
+            {'source': source, 'suggested_target': target},
+            [
+                {
+                    'identity_v2': f'test/{source}:1',
+                    'occurrence_id': f'test/{source}:1',
+                    'file_rel_path': 'test/keywords.rpy',
+                    'display_line': 1,
+                    'locator': {'line_number': 1, 'start': 0},
+                    'source': source,
+                    'current_translation': target,
+                }
+            ],
+        )
+
     def _sample_candidates(self) -> list[dict]:
-        consistent_history = {
-            'status': 'consistent',
-            'review_required': False,
-            'first_occurrence': None,
-        }
         return [
             {
                 'source': 'Void Gate',
@@ -27,7 +39,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 'category': 'place',
                 'confidence': 0.86,
                 'evidence': 'Recurring gate name.',
-                'history_evidence': consistent_history,
+                'history_evidence': self._consistent_history('Void Gate', '虚空门'),
             },
             {
                 'source': 'Crystal Key',
@@ -35,7 +47,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 'category': 'item',
                 'confidence': 0.55,
                 'evidence': 'Quest key item.',
-                'history_evidence': consistent_history,
+                'history_evidence': self._consistent_history('Crystal Key', '水晶钥匙'),
             },
             {
                 'source': 'AR',
@@ -43,7 +55,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 'category': 'term',
                 'confidence': 0.9,
                 'evidence': 'Abbreviation kept unchanged.',
-                'history_evidence': consistent_history,
+                'history_evidence': self._consistent_history('AR', 'AR'),
             },
         ]
 
@@ -254,10 +266,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                         'category': 'term',
                         'confidence': 0.95,
                         'evidence': 'Abbreviation kept unchanged.',
-                        'history_evidence': {
-                            'status': 'consistent',
-                            'review_required': False,
-                        },
+                        'history_evidence': self._consistent_history('AR', 'AR'),
                     }
                 ],
             )
@@ -321,31 +330,20 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
             self.assertFalse(summary.wrote_glossary)
 
     def test_macro_preserve_line_does_not_trigger_translate_warning(self):
+        candidate = {
+            'source': 'AR',
+            'suggested_target': 'AR',
+            'category': 'item',
+            'confidence': 0.9,
+            'history_evidence': self._consistent_history('AR', 'AR'),
+        }
         action = merge_mod.plan_merge_action(
-            {
-                'source': 'AR',
-                'suggested_target': 'AR',
-                'category': 'item',
-                'confidence': 0.9,
-                'history_evidence': {
-                    'status': 'consistent',
-                    'review_required': False,
-                },
-            },
+            candidate,
             {'preserve_terms': [], 'normalize_map': {}},
         )
         self.assertIsNotNone(action)
         warnings = merge_mod.detect_candidate_warnings(
-            {
-                'source': 'AR',
-                'suggested_target': 'AR',
-                'category': 'item',
-                'confidence': 0.9,
-                'history_evidence': {
-                    'status': 'consistent',
-                    'review_required': False,
-                },
-            },
+            candidate,
             action,
             macro_setting_text='AR 不翻译',
         )
@@ -473,6 +471,43 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
             )
             self.assertFalse(rows[0].default_checked)
             self.assertTrue(any('历史证据缺失' in warning for warning in rows[0].warnings))
+
+            summary = merge_mod.merge_keywords_to_glossary(
+                str(candidates_path),
+                str(glossary_path),
+                accept_confidence=0.8,
+                interactive=False,
+                backup=False,
+            )
+
+            self.assertEqual(summary.accepted, 0)
+            self.assertEqual(summary.skipped_user, 1)
+            self.assertEqual(
+                json.loads(glossary_path.read_text(encoding='utf-8')),
+                {'normalize_map': {}},
+            )
+
+    def test_incomplete_consistent_history_is_not_auto_accepted_by_confidence_threshold(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            candidates_path = root / 'keyword_candidates.jsonl'
+            glossary_path = root / 'glossary.json'
+            glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')
+            candidate = {
+                'source': 'Legacy Term',
+                'suggested_target': '旧术语',
+                'category': 'term',
+                'confidence': 0.99,
+                'history_evidence': {'status': 'consistent'},
+            }
+            self._write_jsonl(candidates_path, [candidate])
+
+            rows = merge_mod.build_candidate_merge_rows(
+                [candidate],
+                {'normalize_map': {}},
+            )
+            self.assertFalse(rows[0].default_checked)
+            self.assertTrue(any('字段不完整' in warning for warning in rows[0].warnings))
 
             summary = merge_mod.merge_keywords_to_glossary(
                 str(candidates_path),
