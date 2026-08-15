@@ -4099,6 +4099,8 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
             if status == 'stale'
             else 'fix_proposal_diagnostics'
             if status == 'blocked'
+            else 'no_writeback_needed'
+            if status == 'no_op'
             else 'inspect_revision_preview'
         ),
     }

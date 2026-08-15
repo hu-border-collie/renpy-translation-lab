@@ -115,7 +115,7 @@ class TestDiscoveryRunners(unittest.TestCase):
 
         shutdown.assert_called_once_with()
 
-    def test_gui_script_path_skips_qt_cleanup_before_hard_exit(self):
+    def test_gui_script_path_checks_pool_without_widget_cleanup(self):
         guard = mock.Mock(rejected_dialogs=())
         manager = mock.MagicMock()
         manager.__enter__.return_value = guard
@@ -145,7 +145,7 @@ class TestDiscoveryRunners(unittest.TestCase):
                 0,
             )
 
-        shutdown.assert_not_called()
+        shutdown.assert_called_once_with(cleanup_widgets=False)
 
     def test_gui_runner_fails_when_qt_pool_does_not_stop(self):
         guard = mock.Mock(rejected_dialogs=())

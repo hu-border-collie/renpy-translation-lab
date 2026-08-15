@@ -39,7 +39,11 @@ def main(
             resultclass=guarded_test_result_class(guard),
         )
     unexpected_dialogs = bool(guard and guard.rejected_dialogs)
-    runtime_stopped = shutdown_gui_test_runtime() if shutdown_runtime else True
+    runtime_stopped = (
+        shutdown_gui_test_runtime()
+        if shutdown_runtime
+        else shutdown_gui_test_runtime(cleanup_widgets=False)
+    )
     return 1 if unexpected_dialogs or not runtime_stopped else exit_code
 
 
@@ -51,6 +55,6 @@ def _terminate_process(exit_code: int) -> None:
 
 
 if __name__ == "__main__":
-    # The process is about to hard-exit, so calling back into Qt after the test
-    # report only adds an offscreen-platform teardown crash window on Linux.
+    # Verify that the global pool stopped, but skip widget finalization before
+    # the hard exit to avoid the offscreen-platform teardown crash on Linux.
     _terminate_process(main(shutdown_runtime=False))

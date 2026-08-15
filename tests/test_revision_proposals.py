@@ -311,6 +311,14 @@ class RevisionProposalImportTests(unittest.TestCase):
         self.assertEqual(self.rpy.read_bytes(), before)
         self.assertFalse(Path(batch.BATCH_JOBS_DIR).exists())
 
+    def test_unselected_proposals_report_no_writeback_needed(self):
+        row = self._proposal()
+        row.update(selected=False, disposition="rejected")
+        result = batch.import_revision_proposals(str(self._write_proposal(row)))
+        self.assertEqual(result["status"], "no_op")
+        self.assertEqual(result["suggested_action"], "no_writeback_needed")
+        self.assertNotIn("manifest", result["paths"])
+
     def test_broken_interpolation_token_is_blocked_and_never_writes(self):
         before = self.rpy.read_bytes()
         result = batch.import_revision_proposals(

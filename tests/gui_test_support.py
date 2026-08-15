@@ -119,13 +119,19 @@ def _modal_guard_enabled() -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
-def shutdown_gui_test_runtime(app: Any = None, *, wait_ms: int = 30000) -> bool:
-    """Drain test-owned Qt work before the GUI runner's hard process exit.
+def shutdown_gui_test_runtime(
+    app: Any = None,
+    *,
+    wait_ms: int = 30000,
+    cleanup_widgets: bool = True,
+) -> bool:
+    """Stop test-owned Qt work and optionally drain deferred widget deletion.
 
     Do not call ``QApplication.shutdown()`` here.  PySide6 can segfault while
     destroying the offscreen platform plugin on Linux even after every test
-    passed.  ``run_gui_tests.py`` deliberately finishes with ``os._exit`` after
-    this bounded cleanup, so explicit application destruction is unnecessary.
+    passed.  The script runner uses the pool-only mode before ``os._exit``;
+    embedded callers may request the bounded widget cleanup without explicitly
+    destroying the application.
     """
     try:
         from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool
@@ -143,6 +149,9 @@ def shutdown_gui_test_runtime(app: Any = None, *, wait_ms: int = 30000) -> bool:
         pool_finished = bool(pool.waitForDone(max(0, int(wait_ms))))
     except RuntimeError:
         pool_finished = True
+
+    if not cleanup_widgets:
+        return pool_finished
 
     try:
         for widget in tuple(app.topLevelWidgets()):
