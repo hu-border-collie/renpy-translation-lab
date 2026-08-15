@@ -9045,6 +9045,8 @@ def print_check_summary(summary):
             print(f"Quality subjects: {summary.get('quality_subject_items', 0)}")
         if summary.get('quality_unmatched_items'):
             print(f"Quality unmatched items: {summary['quality_unmatched_items']}")
+        if summary.get('quality_coverage_complete') is False:
+            print("Quality coverage: incomplete")
         print(f"Quality warnings: {quality_gate.get('warning_count', 0)}")
         print(f"Quality blockers: {quality_gate.get('blocker_count', 0)}")
         print(f"Acknowledged warnings: {quality_gate.get('acknowledged_count', 0)}")
@@ -9288,6 +9290,37 @@ def check_results(target=None):
         policy=BATCH_QUALITY_POLICY,
         glossary_map=quality_glossary_map,
     )
+    quality_coverage_complete = not int(
+        quality_collection_stats.get('quality_unmatched_items') or 0
+    )
+    summary['quality_coverage_complete'] = quality_coverage_complete
+    if not quality_coverage_complete:
+        evidence = json.dumps(
+            dict(quality_collection_stats),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        finding_id = hashlib.sha256(
+            f'{translation_quality.QUALITY_FINDING_SCHEMA_VERSION}:{evidence}'.encode('utf-8')
+        ).hexdigest()[:20]
+        quality_findings.append(
+            {
+                'finding_id': finding_id,
+                'schema_version': translation_quality.QUALITY_FINDING_SCHEMA_VERSION,
+                'reason_code': translation_quality.REASON_UNMATCHED_QUALITY_SUBJECT,
+                'rule_id': 'unmatched_subject',
+                'severity': 'medium',
+                'disposition': translation_quality.DISPOSITION_WARNING,
+                'item_id': '',
+                'file': '',
+                'line': 0,
+                'source': '',
+                'translation': '',
+                'evidence': evidence,
+                'suggestion': 'Inspect quality_action_items / quality_unmatched_items and rerun check.',
+                'rule_version': translation_quality.QUALITY_RULE_SCHEMA_VERSION,
+            }
+        )
     quality_report_path = write_quality_findings(manifest, quality_findings)
     quality_reason_counts = {}
     for finding in quality_findings:

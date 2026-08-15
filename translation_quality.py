@@ -52,6 +52,9 @@ REASON_GLOSSARY_TERM_NOT_APPLIED = 'quality.glossary.term_not_applied'
 REASON_SPEAKER_LABEL_UNTRANSLATED = 'quality.speaker.label_untranslated'
 REASON_INTERJECTION_UNTRANSLATED = 'quality.completeness.interjection_untranslated'
 REASON_KNOWN_GARBLED_PHRASE = 'quality.garbled.known_bad_phrase'
+# Collection diagnostic emitted by check when a validated writeback action
+# cannot be mapped back to a manifest item for mechanical inspection.
+REASON_UNMATCHED_QUALITY_SUBJECT = 'quality.collection.unmatched_subject'
 
 ALL_REASON_CODES: tuple[str, ...] = (
     REASON_WAIT_TAG_INSIDE_CJK,
