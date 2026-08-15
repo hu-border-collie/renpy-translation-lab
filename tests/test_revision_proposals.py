@@ -334,6 +334,27 @@ class RevisionProposalImportTests(unittest.TestCase):
         self.assertEqual(self.rpy.read_bytes(), before)
         self.assertFalse(Path(batch.BATCH_JOBS_DIR).exists())
 
+    def test_malformed_corpus_manifest_has_stable_machine_error(self):
+        corpus_path = self.root / "bad-corpus.json"
+        corpus_path.write_text(
+            json.dumps(
+                {
+                    "kind": "revision_corpus",
+                    "schema_version": revision_corpus.REVISION_CORPUS_SCHEMA_VERSION,
+                    "project": {"tl_dir": str(self.tl_dir)},
+                    "source": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(batch.cli_contract.MachineContractError) as caught:
+            batch.import_revision_proposals(
+                str(self._write_proposal(self._proposal())),
+                corpus_manifest_path=str(corpus_path),
+            )
+        self.assertEqual(caught.exception.code_name, "CORPUS_MANIFEST_INVALID")
+        self.assertFalse(Path(batch.BATCH_JOBS_DIR).exists())
+
     def test_unselected_proposals_report_no_writeback_needed(self):
         row = self._proposal()
         row.update(selected=False, disposition="rejected")

@@ -74,6 +74,10 @@ def load_corpus_manifest(path: str) -> dict[str, Any]:
         raise ValueError("corpus manifest must be a revision_corpus object")
     if value.get("schema_version") != revision_corpus.REVISION_CORPUS_SCHEMA_VERSION:
         raise ValueError("corpus manifest schema/version is unsupported")
+    if not isinstance(value.get("source"), Mapping):
+        raise ValueError("corpus manifest source must be an object")
+    if not isinstance(value.get("project"), Mapping):
+        raise ValueError("corpus manifest project must be an object")
     return value
 
 
@@ -135,12 +139,11 @@ def validate(
     manifest_tl_dir = _normalized_project_path(
         manifest_project.get("tl_dir") if isinstance(manifest_project, Mapping) else ""
     )
-    expected_corpus_digest = str(
-        ((corpus_manifest or {}).get("source") or {}).get("snapshot_digest") or ""
-    )
-    source_changed = bool(
-        ((corpus_manifest or {}).get("source") or {}).get("source_changed_during_scan")
-    )
+    manifest_source = (corpus_manifest or {}).get("source") or {}
+    if not isinstance(manifest_source, Mapping):
+        manifest_source = {}
+    expected_corpus_digest = str(manifest_source.get("snapshot_digest") or "")
+    source_changed = bool(manifest_source.get("source_changed_during_scan"))
     if source_changed:
         diagnostics.append(_diag("CORPUS_SNAPSHOT_INCONSISTENT", None, "corpus source changed during export"))
     if expected_corpus_digest and expected_corpus_digest != live_snapshot_digest:
