@@ -21,6 +21,8 @@ Pending lines: 18
 Failure items: 0
 Recoverable valid items: 18
 Safety status: safe
+Writeback gate: allow
+Writeback blockers: 0
 Check failure report: C:\\pkg\\check_failures.jsonl
 """
 
@@ -29,6 +31,8 @@ Pending files: 1
 Pending lines: 4
 Failure items: 2
 Safety status: warn
+Writeback gate: deny
+Writeback blockers: 2
 Warn reasons:
 - source_mismatch: 2
 Check failure report: C:\\pkg\\check_failures.jsonl
@@ -154,6 +158,18 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertTrue(summary.can_apply)
         self.assertIn("质量报警", summary.heading)
 
+    def test_summarize_legacy_safe_output_without_gate_requires_recheck(self):
+        legacy_output = CHECK_OUTPUT_SAFE.replace(
+            "Writeback gate: allow\nWriteback blockers: 0\n",
+            "",
+        )
+
+        summary = summarize_check_output(legacy_output, exit_code=0)
+
+        self.assertEqual(summary.status, "stale")
+        self.assertFalse(summary.can_apply)
+        self.assertIn("重新检查", summary.message)
+
     def test_summarize_safe_check_enables_apply(self):
         summary = summarize_check_output(
             CHECK_OUTPUT_SAFE,
@@ -200,6 +216,11 @@ class GuiCheckReportTests(unittest.TestCase):
                         "pending_lines": 4,
                         "failure_items": 2,
                         "safety_reasons": {"warn": {"source_mismatch": 2}},
+                        "writeback_gate": {
+                            "decision": "deny",
+                            "can_apply": False,
+                            "structural_blocker_count": 2,
+                        },
                     }
                 },
                 "artifacts": {"check_report": r"C:\pkg\check.jsonl"},
@@ -278,6 +299,11 @@ class GuiCheckReportTests(unittest.TestCase):
                     "pending_files": 1,
                     "pending_lines": 4,
                     "failure_items": 2,
+                    "writeback_gate": {
+                        "decision": "deny",
+                        "can_apply": False,
+                        "structural_blocker_count": 2,
+                    },
                 },
             }
         )
@@ -290,15 +316,34 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertIn("重新检查", summary.message)
         self.assertIn("可写回", summary.message)
 
+    def test_summarize_legacy_manifest_safe_without_gate_requires_recheck(self):
+        summary = summarize_manifest_writeback(
+            {
+                "_manifest_path": "C:\\pkg\\manifest.json",
+                "last_check_summary": {
+                    "safety_level": "safe",
+                    "pending_files": 2,
+                    "pending_lines": 10,
+                },
+            }
+        )
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.status, "stale")
+        self.assertFalse(summary.can_apply)
+        self.assertIn("重新检查", summary.message)
+
     def test_summarize_manifest_writeback_from_last_check(self):
         summary = summarize_manifest_writeback(
             {
                 "_manifest_path": "C:\\pkg\\manifest.json",
                 "last_check_summary": {
                     "safety_level": "safe",
+                    "check_status": "ready",
                     "pending_files": 3,
                     "pending_lines": 12,
                     "failure_items": 0,
+                    "writeback_gate": {"decision": "allow", "can_apply": True},
                 },
             }
         )
@@ -325,8 +370,10 @@ class GuiCheckReportTests(unittest.TestCase):
                 "_manifest_path": r"C:\pkg\manifest.json",
                 "last_check_summary": {
                     "safety_level": "safe",
+                    "check_status": "ready",
                     "pending_files": 2,
                     "pending_lines": 10,
+                    "writeback_gate": {"decision": "allow", "can_apply": True},
                 },
             }
         )

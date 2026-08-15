@@ -105,7 +105,9 @@ def _can_apply_from_check_fields(
         return True
     if isinstance(writeback_gate, str) and writeback_gate.strip().lower() == "deny":
         return False
-    return check_status in {"safe", "ready", "ready_with_warnings"} or safety_status == "safe"
+    # New check output always carries a writeback gate line.  Treat a missing
+    # gate as stale rather than inferring allow from the legacy safety label.
+    return False
 
 
 def _can_apply_from_manifest_gate(
@@ -117,7 +119,7 @@ def _can_apply_from_manifest_gate(
         return writeback_gate.get("decision") == "allow" and bool(
             writeback_gate.get("can_apply")
         )
-    return _can_apply_from_check_fields(writeback_gate, check_status, safety_status)
+    return False
 
 
 def _format_check_finding(finding: str) -> str:
@@ -233,6 +235,23 @@ def summarize_check_output(
             status="applied",
             heading="翻译已写回",
             message="该任务已经写回过，不会再次写回。",
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+
+    if (
+        not isinstance(writeback_gate, str)
+        or not writeback_gate.strip()
+    ) and safety_text == "safe":
+        return WritebackSummary(
+            status="stale",
+            heading="检查结果已过期",
+            message=(
+                "最近一次检查缺少 writeback_gate，可能是旧版本检查合同。\n"
+                "请点击「重新检查」后再写回。"
+            ),
             facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=False,
@@ -473,6 +492,20 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
     if isinstance(quality_reason_counts, dict):
         for name, count in sorted(quality_reason_counts.items()):
             findings.append(f"[质量报警] {name}: {count}")
+
+    if not isinstance(writeback_gate, dict) and safety_text == "safe":
+        return WritebackSummary(
+            status="stale",
+            heading="检查结果已过期",
+            message=(
+                "最近一次检查缺少 writeback_gate，可能是旧版本检查合同。\n"
+                "请点击「重新检查」后再写回。"
+            ),
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
 
     if can_apply:
         has_warnings = (

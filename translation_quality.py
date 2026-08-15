@@ -435,12 +435,18 @@ def check_unclosed_delimiters(subject: Mapping[str, Any]) -> list[dict[str, Any]
     return evidence
 
 
-def check_english_suffix_adjacent(subject: Mapping[str, Any]) -> list[dict[str, Any]]:
-    translation = str(subject.get('translation') or '')
+def check_english_suffix_adjacent(
+    subject: Mapping[str, Any],
+    policy: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    translation = _strip_markup(str(subject.get('translation') or ''))
+    allowed = allowed_latin_tokens(policy)
     evidence: list[dict[str, Any]] = []
     for match in _LATIN_TOKEN_RE.finditer(translation):
         token = match.group(0)
         if not token or match.start() == 0:
+            continue
+        if token.casefold() in allowed:
             continue
         if translation[match.start() - 1] not in '“”‘’「」『』（）：:、。！？；;,.!?()[]{} \t\r\n':
             # Direct adjacency is required for the suffix-specific rule; the
@@ -455,7 +461,7 @@ def check_cjk_latin_spacing(
     subject: Mapping[str, Any],
     policy: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    translation = str(subject.get('translation') or '')
+    translation = _strip_markup(str(subject.get('translation') or ''))
     allowed = allowed_latin_tokens(policy)
     evidence: list[dict[str, Any]] = []
     for match in _LATIN_TOKEN_RE.finditer(translation):
@@ -673,7 +679,7 @@ RULE_CHECKERS = {
     REASON_WAIT_TAG_INSIDE_CJK: lambda subject, policy, glossary_map: check_wait_tag_inside_cjk(subject),
     REASON_UNCLOSED_DELIMITERS: lambda subject, policy, glossary_map: check_unclosed_delimiters(subject),
     REASON_ENGLISH_SUFFIX_ADJACENT: (
-        lambda subject, policy, glossary_map: check_english_suffix_adjacent(subject)
+        lambda subject, policy, glossary_map: check_english_suffix_adjacent(subject, policy)
     ),
     REASON_SUSPICIOUS_ENGLISH_RESIDUE: (
         lambda subject, policy, glossary_map: check_suspicious_english_residue(subject, policy)

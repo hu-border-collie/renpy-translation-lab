@@ -150,6 +150,27 @@ class QualityRuleTests(unittest.TestCase):
         self.assertTrue(matching)
         self.assertIn('iPhone', matching[0]['evidence'])
 
+    def test_cjk_latin_spacing_ignores_renpy_tags(self):
+        for translation in ('好的{w}', '他{b}突然{/b}说', '你好{color=#ff0000}'):
+            with self.subTest(translation=translation):
+                findings = quality.check_subject(subject(translation=translation))
+                self.assertNotIn(
+                    quality.REASON_CJK_LATIN_SPACING,
+                    {finding['reason_code'] for finding in findings},
+                )
+
+    def test_english_suffix_adjacent_honors_allowlist(self):
+        policy = quality.normalize_policy({'allowed_latin_tokens': ['cos']})
+        findings = quality.check_subject(
+            subject(translation='中文cos'),
+            policy=policy,
+        )
+
+        self.assertNotIn(
+            quality.REASON_ENGLISH_SUFFIX_ADJACENT,
+            {finding['reason_code'] for finding in findings},
+        )
+
     def test_halfwidth_punctuation_and_ascii_ellipsis(self):
         findings = quality.check_subject(subject(translation='你好,世界...'))
 
