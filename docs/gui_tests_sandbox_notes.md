@@ -71,6 +71,23 @@ tempfile._mkstemp_inner
 - CI 的 GUI 测试 job 在 Linux offscreen 环境运行，不受此问题影响。
 - 与 #338 的代码改动无关：在写 cache 之前的位置并无本次改动介入。
 
+## WSL2 只读 home 环境（实测补充）
+
+- 与 Codex 沙箱的差异：当前 WSL2 环境根文件系统 `/dev/sdd` 为 `ro`，
+  仅仓库目录是单独的 `rw` 挂载，`/tmp` 可写；默认缓存路径
+  `~/.local/state/renpy-translation-lab/litellm_catalog_cache.json` 同样不可写。
+- 但 `atomic_write_text` 会**立即**失败并返回 `OSError 30 (Read-only file system)`，
+  不会像 Codex 沙箱那样挂起；`gui_qt/app.py` 的 `_save_litellm_cache()` 会捕获
+  该 `OSError` 并仅记录日志，因此 GUI 测试可以继续跑完。
+- 实测（PySide6 6.11.1 + `QT_QPA_PLATFORM=offscreen`）：
+  `test_settings_sections_controls_no_clip_or_overlap` 约 0.5 秒通过；
+  整个 `tests/test_gui_control_layout_audit.py` 3 个用例 1.136 秒全部通过，
+  无进程残留。
+- 注意：当前环境未安装 `litellm` 时，该测试不会触发缓存 `_save`（埋点调用次数为 0），
+  所以“测试通过”不能证明缓存路径可写；需要直接写入探针验证。
+- 规避：需要真实持久化 GUI 缓存时，将 `XDG_STATE_HOME` 指到可写目录，例如
+  `XDG_STATE_HOME=/tmp/renpy-translation-lab-state`；实测同一写入路径约 0.79 毫秒成功。
+
 ## 规避与修复
 
 ### 在 Codex 会话内
