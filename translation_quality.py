@@ -412,9 +412,14 @@ def check_wait_tag_inside_cjk(subject: Mapping[str, Any]) -> list[dict[str, Any]
 
 def check_unclosed_delimiters(subject: Mapping[str, Any]) -> list[dict[str, Any]]:
     translation = str(subject.get('translation') or '')
-    # ``[[`` and ``]]`` are Ren'Py escapes for literal square brackets and can
-    # legitimately appear as paired tokens; remove them before counting.
-    normalized = translation.replace('[[', '').replace(']]', '')
+    # ``[[`` / ``]]`` and ``{{`` / ``}}`` are Ren'Py escapes for literal
+    # brackets and braces; remove those paired tokens before counting.
+    normalized = (
+        translation.replace('{{', '')
+        .replace('}}', '')
+        .replace('[[', '')
+        .replace(']]', '')
+    )
     evidence: list[dict[str, Any]] = []
     if normalized.count('{') != normalized.count('}'):
         evidence.append(

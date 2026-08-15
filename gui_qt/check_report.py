@@ -80,6 +80,9 @@ def parse_check_output(output: str) -> dict[str, object]:
         parsed["quality_findings_report"] = quality_report_path
     parsed["check_status"] = extract_check_status(output)
     parsed["writeback_gate"] = extract_writeback_gate(output)
+    quality_decision = _parse_line_value(output, "Quality gate:")
+    if quality_decision:
+        parsed["quality_gate_decision"] = quality_decision
 
     current_section = ""
     for raw_line in output.splitlines():
@@ -222,7 +225,14 @@ def summarize_check_output(
     if isinstance(quality_warnings, int) or isinstance(quality_blockers, int):
         warning_count = quality_warnings if isinstance(quality_warnings, int) else 0
         blocker_count = quality_blockers if isinstance(quality_blockers, int) else 0
-        facts.append(f"质量检查：{quality_gate_label('needs_review')}（报警 {warning_count}，阻断 {blocker_count}）")
+        quality_decision = str(
+            parsed.get("quality_gate_decision")
+            or ("needs_review" if warning_count or blocker_count else "pass")
+        )
+        facts.append(
+            f"质量检查：{quality_gate_label(quality_decision)}"
+            f"（报警 {warning_count}，阻断 {blocker_count}）"
+        )
 
     findings = [
         _format_check_finding(finding)

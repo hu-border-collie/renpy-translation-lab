@@ -170,6 +170,20 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertFalse(summary.can_apply)
         self.assertIn("重新检查", summary.message)
 
+    def test_zero_quality_counts_render_pass_instead_of_needs_review(self):
+        output = CHECK_OUTPUT_SAFE + (
+            "Quality gate: pass\n"
+            "Quality warnings: 0\n"
+            "Quality blockers: 0\n"
+            "Check status: ready\n"
+        )
+
+        summary = summarize_check_output(output, exit_code=0)
+
+        self.assertTrue(summary.can_apply)
+        self.assertTrue(any("无质量报警" in fact for fact in summary.facts))
+        self.assertFalse(any("需人工复核" in fact for fact in summary.facts))
+
     def test_summarize_safe_check_enables_apply(self):
         summary = summarize_check_output(
             CHECK_OUTPUT_SAFE,

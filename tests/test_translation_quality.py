@@ -103,7 +103,11 @@ class QualityRuleTests(unittest.TestCase):
         )
 
     def test_escaped_square_brackets_and_whitespace_tags_are_not_broken(self):
-        for translation in ('你好[[世界]]', '你好 {image=bg room} 世界'):
+        for translation in (
+            '你好[[世界]]',
+            '你好 {image=bg room} 世界',
+            '按 {{ 打开菜单 }}',
+        ):
             with self.subTest(translation=translation):
                 findings = quality.check_subject(subject(translation=translation))
                 self.assertNotIn(
