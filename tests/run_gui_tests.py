@@ -17,7 +17,11 @@ def build_suite() -> unittest.TestSuite:
     return suite
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    shutdown_runtime: bool = True,
+) -> int:
     args = parse_runner_args(__doc__ or "", argv)
     ensure_tests_on_path()
     from gui_test_support import (
@@ -35,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
             resultclass=guarded_test_result_class(guard),
         )
     unexpected_dialogs = bool(guard and guard.rejected_dialogs)
-    runtime_stopped = shutdown_gui_test_runtime()
+    runtime_stopped = shutdown_gui_test_runtime() if shutdown_runtime else True
     return 1 if unexpected_dialogs or not runtime_stopped else exit_code
 
 
@@ -47,4 +51,6 @@ def _terminate_process(exit_code: int) -> None:
 
 
 if __name__ == "__main__":
-    _terminate_process(main())
+    # The process is about to hard-exit, so calling back into Qt after the test
+    # report only adds an offscreen-platform teardown crash window on Linux.
+    _terminate_process(main(shutdown_runtime=False))
