@@ -9222,6 +9222,7 @@ def check_results(target=None):
     quality_subjects = collect_quality_subjects(manifest, replacements_by_file)
     glossary_path = str(
         manifest.get('glossary_file')
+        or os.environ.get('GLOSSARY_FILE')
         or getattr(legacy, 'GLOSSARY_FILE', '')
         or ''
     )
@@ -9253,6 +9254,9 @@ def check_results(target=None):
     manifest['last_check_summary'] = summary
     manifest['last_check_report_path'] = check_report_path
     manifest['last_quality_findings_path'] = quality_report_path
+    # Keep the persisted policy snapshot in sync with the policy that produced
+    # these findings; split/retry packages and GUI readers consume the snapshot.
+    manifest['quality_policy'] = translation_quality.normalize_policy(BATCH_QUALITY_POLICY)
     manifest.pop('last_apply_failure_report_path', None)
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     print(f"Manifest: {manifest['_manifest_path']}")
