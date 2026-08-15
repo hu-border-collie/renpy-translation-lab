@@ -631,6 +631,119 @@ class TestEngineAdapterP4(unittest.TestCase):
         self.assertEqual(entry.provenance["reviewer_type"], "human")
         self.assertEqual(entry.provenance["override_reviewers"], ["bob"])
 
+    def test_accept_after_override_keeps_override_reviewer_attribution(self):
+        base, target, records, report = self._scenario()
+        candidate_set = reuse.build_reuse_candidates(
+            report,
+            base,
+            target,
+            records,
+        )
+        exact = next(
+            candidate
+            for candidate in candidate_set.candidates
+            if candidate.reuse_class == "exact_reuse"
+            and candidate.reference_translation == "稳定"
+        )
+        updated = reuse.apply_reuse_decisions(
+            candidate_set,
+            [
+                reuse.ReuseDecision(
+                    candidate_id=exact.candidate_id,
+                    action="override_translation",
+                    reviewer_type="human",
+                    reviewer_name="bob",
+                    translation_text="稳定（改）",
+                ),
+                reuse.ReuseDecision(
+                    candidate_id=exact.candidate_id,
+                    action="accept",
+                    reviewer_type="human",
+                    reviewer_name="alice",
+                ),
+            ],
+            reconciliation=report,
+            base_snapshot=base,
+            target_snapshot=target,
+            base_records=records,
+        )
+        prefill = reuse.collect_reuse_prefill(
+            updated,
+            reconciliation=report,
+            base_snapshot=base,
+            target_snapshot=target,
+            base_records=records,
+        )
+        entry = next(
+            item for item in prefill if item.candidate_id == exact.candidate_id
+        )
+        self.assertEqual(entry.translation_text, "稳定（改）")
+        self.assertEqual(entry.provenance["reviewer_name"], "bob")
+        self.assertEqual(entry.provenance["override_reviewers"], ["bob"])
+
+    def test_ambiguous_accept_rejects_changed_source_target_at_import(self):
+        base = self._snapshot(
+            "1.0",
+            [
+                {"key": "one", "source": "Same", "content": "shared"},
+                {"key": "two", "source": "Same", "content": "shared"},
+            ],
+        )
+        target = self._snapshot(
+            "2.0",
+            [
+                # Same content fingerprint keeps the group ambiguous, but the
+                # target text itself differs from the base source.
+                {"key": "three", "source": "Same edited", "content": "shared"},
+                {"key": "four", "source": "Same", "content": "shared"},
+            ],
+        )
+        records = self._records(
+            base,
+            [
+                {"key": "one", "source": "Same", "translation": "相同一"},
+                {"key": "two", "source": "Same", "translation": "相同二"},
+            ],
+        )
+        report = reconcile_project_snapshots(base, target)
+        candidate_set = reuse.build_reuse_candidates(
+            report,
+            base,
+            target,
+            records,
+        )
+        ambiguous = next(
+            candidate
+            for candidate in candidate_set.candidates
+            if candidate.reuse_class == "ambiguous"
+        )
+        target_by_source = {
+            occurrence.source_text: occurrence.occurrence_id
+            for occurrence in target.occurrences
+        }
+        changed_target = target_by_source["Same edited"]
+        self.assertIn(changed_target, ambiguous.candidate_target_occurrence_ids)
+        with self.assertRaisesRegex(
+            self.versioning.VersioningArtifactError,
+            "target source differs",
+        ):
+            reuse.apply_reuse_decisions(
+                candidate_set,
+                [
+                    reuse.ReuseDecision(
+                        candidate_id=ambiguous.candidate_id,
+                        action="accept",
+                        reviewer_type="human",
+                        reviewer_name="reviewer",
+                        target_occurrence_id=changed_target,
+                    )
+                ],
+                reconciliation=report,
+                base_snapshot=base,
+                target_snapshot=target,
+                base_records=records,
+            )
+
 
 import engine_adapters.versioning as reuse_versioning  # noqa: E402
 

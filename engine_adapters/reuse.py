@@ -1324,6 +1324,14 @@ def apply_reuse_decisions(
     lineage_decisions: list[dict[str, Any]] = [
         dict(item) for item in candidate_set.lineage_decisions
     ]
+    base_occurrences_by_id = {
+        occurrence.occurrence_id: occurrence
+        for occurrence in base_snapshot.occurrences
+    }
+    target_occurrences_by_id = {
+        occurrence.occurrence_id: occurrence
+        for occurrence in target_snapshot.occurrences
+    }
     for decision in decisions:
         candidate = updated.get(decision.candidate_id)
         if candidate is None:
@@ -1356,6 +1364,26 @@ def apply_reuse_decisions(
                         + candidate.candidate_id
                     )
                 resolved_target = decision.target_occurrence_id
+                base_occurrence = base_occurrences_by_id.get(
+                    candidate.base_occurrence_id
+                )
+                target_occurrence = target_occurrences_by_id.get(resolved_target)
+                if base_occurrence is None or target_occurrence is None:
+                    raise VersioningArtifactError(
+                        "Ambiguous acceptance references an occurrence missing "
+                        "from its snapshot: " + candidate.candidate_id
+                    )
+                if _normalize_text(base_occurrence.source_text) != _normalize_text(
+                    target_occurrence.source_text
+                ):
+                    # Matched items with changed sources are demoted to
+                    # reference-only; ambiguous accepts must not smuggle a
+                    # changed source through as direct reuse.
+                    raise VersioningArtifactError(
+                        "Ambiguous acceptance target source differs from the "
+                        "base source; reject the candidate or treat it as "
+                        "reference-only: " + candidate.candidate_id
+                    )
             elif decision.target_occurrence_id and (
                 decision.target_occurrence_id != candidate.target_occurrence_id
             ):
@@ -1372,6 +1400,23 @@ def apply_reuse_decisions(
                 "resolved_target_occurrence_id": resolved_target,
                 "overrides": list(candidate.decision.get("overrides") or []),
             }
+            if candidate.decision.get("last_reviewer_name"):
+                # An override may precede the accept; the effective translation
+                # is still the override reviewer's text, so keep their
+                # attribution instead of resetting it to the accept reviewer.
+                decision_record.update(
+                    {
+                        "last_reviewer_type": candidate.decision.get(
+                            "last_reviewer_type"
+                        ),
+                        "last_reviewer_name": candidate.decision.get(
+                            "last_reviewer_name"
+                        ),
+                        "last_decided_at": candidate.decision.get(
+                            "last_decided_at"
+                        ),
+                    }
+                )
             updated[decision.candidate_id] = replace(
                 candidate,
                 status="accepted",
