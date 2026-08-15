@@ -231,10 +231,12 @@ def _target_is_visible_in_translation(target: str, translation: str) -> bool:
         return False
     if _match_key(target) == _match_key(translation):
         return True
-    # Chinese targets and punctuation-heavy targets do not benefit from word
-    # boundaries; a compact substring check is the least surprising evidence.
+    # Chinese text has no portable word-boundary primitive.  A substring hit
+    # such as ``cart -> 车`` in ``购物车到了`` is not safe translation
+    # alignment, so only an exact Chinese translation is allowed to support a
+    # consistent result; all other Chinese hits remain human-review evidence.
     if any("\u4e00" <= char <= "\u9fff" for char in target):
-        return _match_key(target) in _match_key(translation)
+        return False
     try:
         return re.search(_boundary_pattern(target), translation, flags=re.IGNORECASE) is not None
     except re.error:

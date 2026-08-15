@@ -6764,8 +6764,10 @@ def collect_keyword_history_corpus(manifest):
     The scan reuses ``collect_revision_file_jobs`` and
     ``revision_corpus.build_corpus_items``.  It is intentionally derived at
     export time and is never persisted as a second canonical translation
-    store.  A missing source file fails closed so candidates receive an
-    ``unavailable`` evidence record rather than an apparently safe match.
+    store.  Digests are collected before scanning and after corpus construction
+    so a source change during either phase fails closed.  A missing source file
+    fails closed so candidates receive an ``unavailable`` evidence record rather
+    than an apparently safe match.
     """
 
     file_paths = _keyword_history_file_paths(manifest)
@@ -6797,8 +6799,8 @@ def collect_keyword_history_corpus(manifest):
             file_paths=file_paths,
             include_empty_files=True,
         )
-        digests_after = revision_corpus.collect_file_digests(file_path_map)
         items, diagnostics = revision_corpus.build_corpus_items(file_jobs)
+        digests_after = revision_corpus.collect_file_digests(file_path_map)
         # The revision scanner also recognizes untranslated comment/source
         # pairs.  They remain useful in the revision corpus, but are not
         # historical translation evidence for this feature.

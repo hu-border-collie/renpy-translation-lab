@@ -119,6 +119,36 @@ class KeywordHistoryEvidenceTests(unittest.TestCase):
         self.assertIn("candidate_target_conflict", evidence["conflict_codes"])
         self.assertEqual(evidence["first_occurrence"]["current_translation"], "虚空门")
 
+    def test_chinese_substring_alignment_is_human_review_only(self):
+        rows = [
+            self._row(
+                "id1",
+                "a.rpy",
+                1,
+                "cart arrived",
+                "购物车到了",
+            )
+        ]
+        evidence = keyword_history.build_keyword_history_evidence(
+            {"source": "cart", "suggested_target": "车", "category": "item"},
+            rows,
+        )
+
+        self.assertEqual(evidence["status"], keyword_history.STATUS_AMBIGUOUS)
+        self.assertTrue(evidence["review_required"])
+        self.assertIn("translation_alignment_unknown", evidence["conflict_codes"])
+
+    def test_exact_chinese_translation_remains_safe_alignment(self):
+        rows = [self._row("id1", "a.rpy", 1, "cart", "车")]
+        evidence = keyword_history.build_keyword_history_evidence(
+            {"source": "cart", "suggested_target": "车", "category": "item"},
+            rows,
+        )
+
+        self.assertEqual(evidence["status"], keyword_history.STATUS_CONSISTENT)
+        self.assertFalse(evidence["review_required"])
+        self.assertEqual(evidence["conflict_codes"], [])
+
     def test_load_corpus_items_accepts_manifest_relative_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

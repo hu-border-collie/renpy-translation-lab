@@ -49,9 +49,9 @@
         }
       ],
       "expected": {
-        "status": "consistent",
+        "status": "ambiguous",
         "match_kind": "exact",
-        "reason_code": null
+        "reason_code": "translation_alignment_unknown"
       }
     }
   ]
