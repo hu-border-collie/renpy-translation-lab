@@ -1684,7 +1684,7 @@ class ReusePackagePaths:
 
 
 def _review_excerpt(value: str, limit: int = 80) -> str:
-    normalized = " ".join(str(value or "").split())
+    normalized = " ".join(str(value or "").split()).replace("|", "\\|")
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 1] + "…"

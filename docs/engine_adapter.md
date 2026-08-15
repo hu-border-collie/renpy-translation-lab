@@ -183,6 +183,11 @@ python gemini_translate_batch.py export-reuse-results <decided-reuse-report> <ta
   `reviewer.type`（human / agent）与 `reviewer.name`；agent 决策不会伪装成人工。
   歧义候选的 accept 必须从候选目标中显式选定一个；同一目标被两个已接受候选
   竞争时导入失败。所有决策追加进候选 audit 记录并生成新 package。
+- `split_lineage` / `merge_lineage` 按设计只写入候选包的 `lineage_decisions`
+  审计记录，不会自动改写候选匹配或任何快照：跨版本 lineage 是 P3 快照 +
+  reconciliation 的输入属性，人工拆分/合并结论需要导出后更新项目 lineage
+  映射并重新导出快照 / reconciliation，再重建候选才会生效。P4 不提供跳过
+  这条链路的暗道。
 - `export-reuse-results` 是唯一的写回入口，而且只写 Batch 包内的
   `results.reuse_<time>.jsonl` 与 manifest 簿记：只有「已接受 + 输入 digest 全部
   fresh + 非 reference-only + 两版原文仍一致」的候选才会进入结果行，未覆盖的

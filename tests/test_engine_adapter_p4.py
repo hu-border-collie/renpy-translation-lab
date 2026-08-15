@@ -504,6 +504,11 @@ class TestEngineAdapterP4(unittest.TestCase):
             review_text = Path(paths.review_path).read_text(encoding="utf-8")
             self.assertIn("Translation Reuse Review", review_text)
             self.assertIn("source_modified_reference", review_text)
+            # Pipes in source/translation must not break the review table.
+            self.assertEqual(
+                reuse._review_excerpt("a | b | c"),
+                "a \\| b \\| c",
+            )
             template_rows = [
                 json.loads(line)
                 for line in Path(
