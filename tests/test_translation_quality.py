@@ -241,6 +241,23 @@ class QualityRuleTests(unittest.TestCase):
         self.assertTrue(matching)
         self.assertIn('Church Knight', matching[0]['evidence'])
 
+    def test_single_word_speaker_label_rule_is_not_missed(self):
+        findings = quality.check_subject(
+            subject(
+                source='Welcome.',
+                translation='欢迎，Bouncer。',
+                speaker_name='Bouncer',
+            )
+        )
+
+        matching = [
+            finding
+            for finding in findings
+            if finding['reason_code'] == quality.REASON_SPEAKER_LABEL_UNTRANSLATED
+        ]
+        self.assertTrue(matching)
+        self.assertIn('Bouncer', matching[0]['evidence'])
+
     def test_interjection_rule_reports_unchanged_short_interjection(self):
         findings = quality.check_subject(
             subject(source='Oh!', translation='Oh!')

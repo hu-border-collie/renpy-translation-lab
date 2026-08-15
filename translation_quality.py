@@ -178,8 +178,15 @@ _HALFWIDTH_QUOTE_RE = re.compile(r'"')
 _ASCII_ELLIPSIS_RE = re.compile(r'\.{3,}')
 _INTERJECTION_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'\-]*")
 
+# Bare hints cover single-word speaker labels (Bouncer, Sir, Boss); prefixed
+# hints cover multi-word labels such as ``Church Knight`` / ``City Guard``.
 SPEAKER_HINT_SUFFIXES: tuple[str, ...] = tuple(
-    sorted({f' {hint}' for hint in DEFAULT_SPEAKER_OCCUPATION_HINTS}, key=len, reverse=True)
+    sorted(
+        {hint for hint in DEFAULT_SPEAKER_OCCUPATION_HINTS}
+        | {f' {hint}' for hint in DEFAULT_SPEAKER_OCCUPATION_HINTS},
+        key=len,
+        reverse=True,
+    )
 )
 
 DEFAULT_POLICY: dict[str, Any] = {
