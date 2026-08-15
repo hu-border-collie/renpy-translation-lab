@@ -15220,10 +15220,22 @@ def run_machine_command(parser, args):
     return 0
 
 
+def _machine_option_tokens(argv):
+    """Return raw CLI tokens before the ``--`` positional-argument sentinel."""
+
+    tokens = []
+    for value in argv:
+        token = str(value)
+        if token == '--':
+            break
+        tokens.append(token)
+    return tokens
+
+
 def _machine_output_requested(argv):
     """Return whether raw CLI arguments explicitly request JSON output."""
 
-    tokens = [str(value) for value in argv]
+    tokens = _machine_option_tokens(argv)
     for index, token in enumerate(tokens):
         if token == '--output=json':
             return True
@@ -15252,10 +15264,7 @@ def _infer_machine_parse_command(parser, argv):
     """Identify the requested command when argparse failed before a Namespace exists."""
 
     choices = _parser_command_choices(parser)
-    for raw_value in argv:
-        value = str(raw_value)
-        if value == '--':
-            break
+    for value in _machine_option_tokens(argv):
         if value in choices:
             return value
     return 'cli'
@@ -15277,7 +15286,7 @@ def _argparse_error_message(diagnostics):
 def _machine_parse_error_args(parser, argv):
     """Build the minimal output options available before argparse succeeds."""
 
-    tokens = {str(value) for value in argv}
+    tokens = set(_machine_option_tokens(argv))
     return argparse.Namespace(
         command=_infer_machine_parse_command(parser, argv),
         output='json',

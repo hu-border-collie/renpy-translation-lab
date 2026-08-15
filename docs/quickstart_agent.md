@@ -61,7 +61,7 @@ JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning、
 - 默认退出码仍保持兼容。Agent 可同时传入 `--output json --strict-exit-codes`，让业务状态映射为稳定退出码；严格模式只与 JSON 输出组合使用。
 - 无论是否启用严格退出码，都必须读取 `status`；只有 `check` 的 `status=safe` 才能继续 `apply`。
 
-当 argparse 在生成参数对象前就失败时，只要原始参数包含精确的 `--output json` 或 `--output=json`，stdout 仍会返回一个 schema v1 错误 envelope（`error.code=ARGUMENT_PARSE_ERROR`，退出码 `2`），原生 usage 和诊断保留在 stderr。此阶段尚未解析出完整参数，因此不会使用 `--output-file` 或 `--fields`；未能可靠识别 JSON 意图的最早期语法错误继续使用普通 argparse 文本。
+当 argparse 在生成参数对象前就失败时，只要原始参数包含精确的 `--output json` 或 `--output=json`，stdout 仍会返回一个 schema v1 错误 envelope（`error.code=ARGUMENT_PARSE_ERROR`，退出码 `2`），原生 usage 和诊断保留在 stderr。此阶段尚未解析出完整参数，因此不会使用 `--output-file` 或 `--fields`；未能可靠识别 JSON 意图的最早期语法错误继续使用普通 argparse 文本。原始参数扫描遇到 `--` 后停止，其后的内容只作为 positional 数据处理。
 
 严格退出码约定：
 

@@ -170,6 +170,60 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertNotIn("\n  ", stdout.getvalue())
         self.assertTrue(stdout.getvalue().endswith("\n"))
 
+    def test_parser_error_with_json_output_reports_missing_option_value(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main(["status", "--output", "json", "--fields"])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload["command"], "status")
+        self.assertEqual(payload["error"]["code"], "ARGUMENT_PARSE_ERROR")
+        self.assertIn("argument --fields", payload["error"]["message"])
+        self.assertIn("argument --fields", stderr.getvalue())
+
+    def test_machine_option_detection_stops_at_double_dash(self):
+        text_stdout = io.StringIO()
+        text_stderr = io.StringIO()
+
+        with (
+            contextlib.redirect_stdout(text_stdout),
+            contextlib.redirect_stderr(text_stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            batch.main(["status", "--", "--output", "json"])
+
+        self.assertEqual(raised.exception.code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(text_stdout.getvalue(), "")
+        self.assertIn("usage:", text_stderr.getvalue())
+
+        machine_stdout = io.StringIO()
+        machine_stderr = io.StringIO()
+        with (
+            contextlib.redirect_stdout(machine_stdout),
+            contextlib.redirect_stderr(machine_stderr),
+        ):
+            exit_code = batch.main(
+                [
+                    "status",
+                    "--output",
+                    "json",
+                    "--",
+                    "--compact",
+                    "--unknown-flag",
+                ]
+            )
+
+        payload = json.loads(machine_stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload["error"]["code"], "ARGUMENT_PARSE_ERROR")
+        self.assertIn("\n  ", machine_stdout.getvalue())
+
     def test_earliest_machine_parse_error_uses_generic_cli_command(self):
         stdout = io.StringIO()
         stderr = io.StringIO()
