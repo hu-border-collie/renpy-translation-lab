@@ -257,13 +257,17 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
 
     def test_proposal_import_manifest_includes_reimport_command(self):
         proposal_path = r"C:\review\selected proposals.jsonl"
+        corpus_manifest_path = r"D:\exports\revision_corpus_manifest.json"
         commands = build_cli_commands(
             python_exe="python",
             batch_script_path="gemini_translate_batch.py",
             manifest_path=r"C:\logs\batch_jobs\rev1\manifest.json",
             manifest={
                 "mode": "revision",
-                "proposal_import": {"proposal_path": proposal_path},
+                "proposal_import": {
+                    "proposal_path": proposal_path,
+                    "corpus_manifest_path": corpus_manifest_path,
+                },
             },
         )
 
@@ -271,6 +275,8 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("导入结构化润色提案", by_label)
         self.assertIn("import-revision-proposals", by_label["导入结构化润色提案"])
         self.assertIn(proposal_path, by_label["导入结构化润色提案"])
+        self.assertIn("--corpus-manifest", by_label["导入结构化润色提案"])
+        self.assertIn(corpus_manifest_path, by_label["导入结构化润色提案"])
 
     def test_local_final_review_candidates_omit_cloud_submit(self):
         commands = build_cli_commands(

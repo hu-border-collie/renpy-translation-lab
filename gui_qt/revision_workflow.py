@@ -259,17 +259,21 @@ class RevisionBatchWorkflow:
 class RevisionProposalImportWorkflow:
     """One-step local proposal import that stops at the revision preview gate."""
 
-    def __init__(self, proposal_path: str):
+    def __init__(self, proposal_path: str, corpus_manifest_path: str = ""):
         self.proposal_path = proposal_path
+        self.corpus_manifest_path = corpus_manifest_path
         self.manifest_path = ""
         self._pending = True
 
     def current_step(self) -> WorkflowStep | None:
         if not self._pending:
             return None
+        args = ["import-revision-proposals", self.proposal_path]
+        if self.corpus_manifest_path:
+            args.extend(["--corpus-manifest", self.corpus_manifest_path])
         return WorkflowStep(
             key="import-revision-proposals",
-            args=["import-revision-proposals", self.proposal_path],
+            args=args,
             heading="正在导入润色提案",
             message="正在校验身份、快照和格式，并生成安全订正预览。",
         )

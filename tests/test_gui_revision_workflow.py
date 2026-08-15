@@ -162,6 +162,21 @@ class GuiRevisionWorkflowTests(unittest.TestCase):
         self.assertIn("预览已生成", update.heading)
         self.assertIsNone(workflow.current_step())
 
+    def test_proposal_import_passes_explicit_corpus_manifest(self):
+        workflow = RevisionProposalImportWorkflow(
+            r"C:\review\proposals.jsonl",
+            r"D:\exports\revision_corpus_manifest.json",
+        )
+        self.assertEqual(
+            workflow.current_step().args,
+            [
+                "import-revision-proposals",
+                r"C:\review\proposals.jsonl",
+                "--corpus-manifest",
+                r"D:\exports\revision_corpus_manifest.json",
+            ],
+        )
+
     def test_stale_proposal_import_is_not_presented_as_writable(self):
         workflow = RevisionProposalImportWorkflow("proposal.jsonl")
         update = workflow.complete_current_step(

@@ -783,6 +783,7 @@ class GuiTaskPageTests(unittest.TestCase):
 
     def test_revision_proposal_action_starts_import_workflow(self) -> None:
         proposal_path = "C:/review/proposals.jsonl"
+        corpus_manifest_path = "D:/exports/revision_corpus_manifest.json"
         with (
             mock.patch.object(
                 self.window,
@@ -791,7 +792,10 @@ class GuiTaskPageTests(unittest.TestCase):
             ),
             mock.patch(
                 "gui_qt.app.QFileDialog.getOpenFileName",
-                return_value=(proposal_path, "JSON Lines (*.jsonl)"),
+                side_effect=[
+                    (proposal_path, "JSON Lines (*.jsonl)"),
+                    (corpus_manifest_path, "JSON (*.json)"),
+                ],
             ),
             mock.patch.object(self.window, "_set_writeback_summary") as set_summary,
             mock.patch.object(self.window, "_clear_log_view") as clear_log,
@@ -804,6 +808,7 @@ class GuiTaskPageTests(unittest.TestCase):
 
         workflow = begin_workflow.call_args.args[0]
         self.assertEqual(workflow.proposal_path, proposal_path)
+        self.assertEqual(workflow.corpus_manifest_path, corpus_manifest_path)
         self.assertEqual(
             begin_workflow.call_args.kwargs["log_heading"],
             REVISION_PROPOSAL_COPY["running"],

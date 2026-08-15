@@ -89,6 +89,7 @@ REVISION_PROPOSAL_COPY = {
     "action": "导入润色提案",
     "tooltip": "导入结构化 JSONL 提案并生成安全预览；此步骤不会修改 .rpy。",
     "dialog_title": "选择润色提案 JSONL",
+    "corpus_dialog_title": "选择配套语料 manifest（没有则取消）",
     "running": "正在校验提案并生成订正预览。",
 }
 

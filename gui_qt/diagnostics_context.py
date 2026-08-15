@@ -421,13 +421,26 @@ def build_cli_commands(
             or ""
         ).strip()
         if proposal_path:
+            proposal_args = ["import-revision-proposals", proposal_path]
+            corpus_manifest_path = str(
+                (
+                    proposal_import.get("corpus_manifest_path")
+                    if isinstance(proposal_import, dict)
+                    else ""
+                )
+                or ""
+            ).strip()
+            if corpus_manifest_path:
+                proposal_args.extend(
+                    ["--corpus-manifest", corpus_manifest_path]
+                )
             commands.append(
                 DiagnosticsCommand(
                     label="导入结构化润色提案",
                     command=format_cli_command(
                         python_exe,
                         batch_script_path,
-                        ["import-revision-proposals", proposal_path],
+                        proposal_args,
                     ),
                 )
             )

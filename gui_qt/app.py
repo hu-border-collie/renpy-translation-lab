@@ -9591,13 +9591,24 @@ class MainWindow(QMainWindow):
             )
             if not selected:
                 return
+            corpus_manifest_path = ""
+            companion_manifest = Path(selected).with_name(
+                "revision_corpus_manifest.json"
+            )
+            if not companion_manifest.is_file():
+                corpus_manifest_path, _filter = QFileDialog.getOpenFileName(
+                    self,
+                    REVISION_PROPOSAL_COPY["corpus_dialog_title"],
+                    str(Path(selected).parent),
+                    "JSON (*.json);;All files (*)",
+                )
             self._set_writeback_summary(
                 idle_writeback_summary_for_work_mode(WorkMode.REVISION)
             )
             self._clear_log_view()
             self._show_workbench_log_drawer()
             self._begin_translation_workflow(
-                RevisionProposalImportWorkflow(selected),
+                RevisionProposalImportWorkflow(selected, corpus_manifest_path),
                 log_heading=REVISION_PROPOSAL_COPY["running"],
                 status_tab=1,
             )
