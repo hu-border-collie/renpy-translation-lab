@@ -303,14 +303,17 @@ python gemini_translate_batch.py import-revision-proposals C:/review/proposals.j
   "selected": true,
   "disposition": "accepted",
   "producer": {"type": "human", "tool": "optional", "model": "optional"},
+  "project_identity": {"tl_dir": "C:/game/tl/schinese"},
   "snapshot_digest": "该条 source/current_translation 的导出摘要",
   "corpus_snapshot_digest": "revision_corpus_manifest.json 的 source.snapshot_digest"
 }
 ```
 
 `producer.type` 只接受 `human` / `agent`。若 proposal 同目录存在
-`revision_corpus_manifest.json`，可省略逐行 `corpus_snapshot_digest`；也可用
-`--corpus-manifest` 显式指定。未知/重复/冲突 identity、项目或语料快照 stale、
+`revision_corpus_manifest.json`，可省略逐行 `project_identity` 和
+`corpus_snapshot_digest`；也可用 `--corpus-manifest` 显式指定。没有配套 manifest
+时，每条选中提案必须携带与当前项目匹配的 `project_identity.tl_dir`。未知/重复/冲突
+identity、项目或语料快照 stale、
 source/current translation 变化、空建议、Ren'Py 标签/变量破坏、adapter 校验失败或
 不安全写回计划都不会获得写回资格。
 

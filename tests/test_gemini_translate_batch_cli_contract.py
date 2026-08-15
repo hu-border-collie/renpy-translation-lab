@@ -712,7 +712,8 @@ class BatchCliContractTests(unittest.TestCase):
             {
                 "status": "stale",
                 "input_count": 2,
-                "selected_count": 1,
+                "requested_selected_count": 1,
+                "selected_count": 0,
                 "candidate_count": 0,
                 "diagnostics": [{"code": "CURRENT_TRANSLATION_STALE"}],
                 "suggested_action": "re_export_corpus_and_regenerate_proposals",
@@ -722,6 +723,8 @@ class BatchCliContractTests(unittest.TestCase):
         )
         self.assertTrue(envelope["ok"])
         self.assertEqual(envelope["status"], "stale")
+        self.assertEqual(envelope["result"]["requested_selected_count"], 1)
+        self.assertEqual(envelope["result"]["selected_count"], 0)
         self.assertEqual(
             envelope["result"]["suggested_action"],
             "re_export_corpus_and_regenerate_proposals",

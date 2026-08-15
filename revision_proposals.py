@@ -31,6 +31,7 @@ class ProposalValidation:
     proposals: tuple[dict[str, Any], ...]
     diagnostics: tuple[dict[str, Any], ...]
     input_count: int
+    requested_selected_count: int
     selected_count: int
     status: str
 
@@ -98,11 +99,18 @@ def diagnostics_are_stale(diagnostics: Sequence[Mapping[str, Any]]) -> bool:
     )
 
 
+def _normalized_project_path(value: Any) -> str:
+    """Normalize a project path for local identity comparisons."""
+    text = str(value or "").strip()
+    return os.path.normcase(os.path.abspath(text)) if text else ""
+
+
 def validate(
     rows: Sequence[Mapping[str, Any]],
     live_items: Mapping[str, Mapping[str, Any]],
     *,
     live_snapshot_digest: str,
+    live_project_identity: Mapping[str, Any] | None = None,
     corpus_manifest: Mapping[str, Any] | None = None,
 ) -> ProposalValidation:
     """Validate selected proposal rows against exact live identity-v2 items.
@@ -114,6 +122,14 @@ def validate(
     diagnostics: list[dict[str, Any]] = []
     selected: list[dict[str, Any]] = []
     seen: dict[str, Mapping[str, Any]] = {}
+    requested_selected_count = sum(row.get("selected") is True for row in rows)
+    live_tl_dir = _normalized_project_path(
+        (live_project_identity or {}).get("tl_dir")
+    )
+    manifest_project = (corpus_manifest or {}).get("project") or {}
+    manifest_tl_dir = _normalized_project_path(
+        manifest_project.get("tl_dir") if isinstance(manifest_project, Mapping) else ""
+    )
     expected_corpus_digest = str(
         ((corpus_manifest or {}).get("source") or {}).get("snapshot_digest") or ""
     )
@@ -124,6 +140,10 @@ def validate(
         diagnostics.append(_diag("CORPUS_SNAPSHOT_INCONSISTENT", None, "corpus source changed during export"))
     if expected_corpus_digest and expected_corpus_digest != live_snapshot_digest:
         diagnostics.append(_diag("CORPUS_SNAPSHOT_STALE", None, "corpus snapshot does not match the live project"))
+    if corpus_manifest and not manifest_tl_dir:
+        diagnostics.append(_diag("MISSING_PROJECT_IDENTITY", None, "corpus manifest project.tl_dir is required"))
+    elif manifest_tl_dir and live_tl_dir and manifest_tl_dir != live_tl_dir:
+        diagnostics.append(_diag("PROJECT_IDENTITY_STALE", None, "corpus project identity does not match the live project"))
 
     for raw in rows:
         row = dict(raw)
@@ -146,10 +166,25 @@ def validate(
         if disposition not in SELECTED_DISPOSITIONS:
             diagnostics.append(_diag("INVALID_SELECTED_DISPOSITION", row, "selected proposal has a non-accepting disposition"))
             continue
+        row_project = row.get("project_identity")
+        row_tl_dir = _normalized_project_path(
+            row_project.get("tl_dir") if isinstance(row_project, Mapping) else ""
+        )
+        if not corpus_manifest and not row_tl_dir:
+            diagnostics.append(_diag("MISSING_PROJECT_IDENTITY", row, "project_identity.tl_dir or a companion corpus manifest is required"))
+            continue
+        if manifest_tl_dir and row_tl_dir and row_tl_dir != manifest_tl_dir:
+            diagnostics.append(_diag("PROJECT_IDENTITY_CONFLICT", row, "proposal project identity conflicts with the corpus manifest"))
+            continue
+        if not corpus_manifest and live_tl_dir and row_tl_dir != live_tl_dir:
+            diagnostics.append(_diag("PROJECT_IDENTITY_STALE", row, "proposal project identity does not match the live project"))
+            continue
         producer = row.get("producer")
         producer_type = str((producer or {}).get("type") or "").strip().lower() if isinstance(producer, Mapping) else ""
+        row_invalid = False
         if producer_type not in SUPPORTED_PRODUCERS:
             diagnostics.append(_diag("INVALID_PRODUCER", row, "producer.type must be human or agent"))
+            row_invalid = True
         if not identity:
             diagnostics.append(_diag("MISSING_OCCURRENCE_ID", row, "occurrence_id/identity_v2 is required"))
             continue
@@ -173,7 +208,7 @@ def validate(
             ("source", str(live.get("source") or ""), "SOURCE_MISMATCH"),
             ("current_translation", str(live.get("current_translation") or ""), "CURRENT_TRANSLATION_STALE"),
         )
-        mismatch = False
+        mismatch = row_invalid
         for field, expected, code in expected_pairs:
             if str(row.get(field) or "") != expected:
                 diagnostics.append(_diag(code, row, f"{field} does not match the live occurrence"))
@@ -215,4 +250,11 @@ def validate(
         if diagnostics
         else "imported"
     )
-    return ProposalValidation(tuple(selected), tuple(diagnostics), len(rows), len(seen), status)
+    return ProposalValidation(
+        tuple(selected),
+        tuple(diagnostics),
+        len(rows),
+        requested_selected_count,
+        len(selected),
+        status,
+    )

@@ -246,17 +246,31 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
 
         by_label = {command.label: command.command for command in commands}
         self.assertIn("预览订正结果", by_label)
-        self.assertIn("导入结构化润色提案", by_label)
+        self.assertNotIn("导入结构化润色提案", by_label)
         self.assertIn("写回订正（预览确认后）", by_label)
         self.assertNotIn("检查翻译结果", by_label)
         self.assertNotIn("写回翻译（仅可写回）", by_label)
         self.assertIn("preview-revisions", by_label["预览订正结果"])
-        self.assertIn(
-            "import-revision-proposals", by_label["导入结构化润色提案"]
-        )
         self.assertIn("apply-revisions", by_label["写回订正（预览确认后）"])
         self.assertIn("usage-import", by_label["导入当前结果用量"])
         self.assertIn("usage-report", by_label["查看项目模型用量"])
+
+    def test_proposal_import_manifest_includes_reimport_command(self):
+        proposal_path = r"C:\review\selected proposals.jsonl"
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=r"C:\logs\batch_jobs\rev1\manifest.json",
+            manifest={
+                "mode": "revision",
+                "proposal_import": {"proposal_path": proposal_path},
+            },
+        )
+
+        by_label = {command.label: command.command for command in commands}
+        self.assertIn("导入结构化润色提案", by_label)
+        self.assertIn("import-revision-proposals", by_label["导入结构化润色提案"])
+        self.assertIn(proposal_path, by_label["导入结构化润色提案"])
 
     def test_local_final_review_candidates_omit_cloud_submit(self):
         commands = build_cli_commands(

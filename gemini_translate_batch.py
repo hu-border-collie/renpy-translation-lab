@@ -3973,7 +3973,8 @@ def _proposal_import_report_markdown(report):
         '',
         f"- Status: {report.get('status') or 'unknown'}",
         f"- Input rows: {report.get('input_count', 0)}",
-        f"- Selected rows: {report.get('selected_count', 0)}",
+        f"- Requested selected rows: {report.get('requested_selected_count', 0)}",
+        f"- Validated selected rows: {report.get('selected_count', 0)}",
         f"- Candidate rows: {report.get('candidate_count', 0)}",
         '',
     ]
@@ -4021,6 +4022,13 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
             suggested_action='fix_proposal_jsonl',
             semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
         ) from exc
+    if not rows:
+        raise cli_contract.MachineContractError(
+            'Proposal JSONL contains no proposal rows.',
+            code_name='NO_PROPOSAL_ROWS',
+            suggested_action='provide_non_empty_proposal_jsonl',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+        )
     resolved_corpus_manifest = revision_proposals.find_corpus_manifest(
         proposal_path,
         corpus_manifest_path,
@@ -4054,6 +4062,7 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
         rows,
         live_items,
         live_snapshot_digest=live_snapshot_digest,
+        live_project_identity={'tl_dir': legacy.TL_DIR},
         corpus_manifest=corpus_manifest,
     )
     diagnostics = [dict(item) for item in validation.diagnostics]
@@ -4064,17 +4073,6 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
             'row': 0,
             'occurrence_id': '',
         })
-    if corpus_manifest:
-        project = corpus_manifest.get('project') or {}
-        corpus_tl_dir = str(project.get('tl_dir') or '')
-        if corpus_tl_dir and _normalized_abs_path(corpus_tl_dir) != _normalized_abs_path(legacy.TL_DIR):
-            diagnostics.append({
-                'code': 'CORPUS_PROJECT_MISMATCH',
-                'message': 'corpus project identity does not match the active project',
-                'row': 0,
-                'occurrence_id': '',
-            })
-
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     package_dir = create_batch_package_dir(
         f'{stamp}_{guess_project_slug()}_revision_proposals'
@@ -4092,6 +4090,7 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
         'corpus_manifest_path': resolved_corpus_manifest,
         'live_snapshot_digest': live_snapshot_digest,
         'input_count': validation.input_count,
+        'requested_selected_count': validation.requested_selected_count,
         'selected_count': validation.selected_count,
         'candidate_count': len(validation.proposals),
         'diagnostics': diagnostics,
@@ -13346,7 +13345,10 @@ def build_arg_parser():
     )
     import_revision_proposals_parser.add_argument(
         'proposal',
-        help='Proposal JSONL path (schema_version=1, identity_v2, snapshots, provenance).',
+        help=(
+            'Proposal JSONL path (schema_version=1, identity_v2, project identity, '
+            'snapshots, provenance).'
+        ),
     )
     import_revision_proposals_parser.add_argument(
         '--corpus-manifest',
@@ -15014,6 +15016,9 @@ def build_machine_success_envelope(command, value, args):
         paths = dict(imported.get('paths') or {})
         result = {
             'input_count': int(imported.get('input_count') or 0),
+            'requested_selected_count': int(
+                imported.get('requested_selected_count') or 0
+            ),
             'selected_count': int(imported.get('selected_count') or 0),
             'candidate_count': int(imported.get('candidate_count') or 0),
             'diagnostics': list(imported.get('diagnostics') or []),

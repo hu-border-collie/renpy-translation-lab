@@ -36,6 +36,7 @@ class RevisionProposalContractTests(unittest.TestCase):
             "selected": True,
             "disposition": "accepted",
             "producer": {"type": "human"},
+            "project_identity": {"tl_dir": "C:/demo/game/tl/schinese"},
             "snapshot_digest": revision_corpus.item_snapshot_digest(
                 "Hello {name}", "你好 {name}"
             ),
@@ -102,6 +103,7 @@ class RevisionProposalContractTests(unittest.TestCase):
             self.live,
             live_snapshot_digest=self.corpus_digest,
             corpus_manifest={
+                "project": {"tl_dir": "C:/demo/game/tl/schinese"},
                 "source": {
                     "snapshot_digest": self.corpus_digest,
                     "source_changed_during_scan": True,
@@ -172,6 +174,42 @@ class RevisionProposalContractTests(unittest.TestCase):
         self.assertEqual(result.status, "no_op")
         self.assertFalse(result.proposals)
 
+    def test_project_identity_is_required_without_corpus_manifest(self):
+        result = proposals.validate(
+            [self.row(project_identity=None)],
+            self.live,
+            live_snapshot_digest=self.corpus_digest,
+            live_project_identity={"tl_dir": "C:/demo/game/tl/schinese"},
+        )
+        self.assertEqual(result.status, "blocked")
+        self.assertIn("MISSING_PROJECT_IDENTITY", {x["code"] for x in result.diagnostics})
+
+    def test_cross_project_proposal_is_stale_without_corpus_manifest(self):
+        result = proposals.validate(
+            [self.row(project_identity={"tl_dir": "C:/other/game/tl/schinese"})],
+            self.live,
+            live_snapshot_digest=self.corpus_digest,
+            live_project_identity={"tl_dir": "C:/demo/game/tl/schinese"},
+        )
+        self.assertEqual(result.status, "stale")
+        self.assertEqual(result.requested_selected_count, 1)
+        self.assertEqual(result.selected_count, 0)
+        self.assertIn("PROJECT_IDENTITY_STALE", {x["code"] for x in result.diagnostics})
+
+    def test_matching_corpus_manifest_supplies_project_identity(self):
+        result = proposals.validate(
+            [self.row(project_identity=None)],
+            self.live,
+            live_snapshot_digest=self.corpus_digest,
+            live_project_identity={"tl_dir": "C:/demo/game/tl/schinese"},
+            corpus_manifest={
+                "project": {"tl_dir": "C:/demo/game/tl/schinese"},
+                "source": {"snapshot_digest": self.corpus_digest},
+            },
+        )
+        self.assertEqual(result.status, "imported")
+        self.assertEqual(result.selected_count, 1)
+
     def test_jsonl_loader_reports_bad_row(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = os.path.join(temp_dir, "proposal.jsonl")
@@ -240,6 +278,7 @@ class RevisionProposalImportTests(unittest.TestCase):
             "selected": True,
             "disposition": "accepted",
             "producer": {"type": "agent", "tool": "unit-test"},
+            "project_identity": {"tl_dir": str(self.tl_dir)},
             "snapshot_digest": revision_corpus.item_snapshot_digest(
                 item["source"], item["current_translation"]
             ),
@@ -261,6 +300,16 @@ class RevisionProposalImportTests(unittest.TestCase):
         manifest = result["manifest"]
         self.assertEqual(manifest["mode"], batch.MANIFEST_MODE_REVISION)
         self.assertTrue(manifest["proposal_import"]["writeback_eligible"])
+
+    def test_empty_proposal_file_is_rejected_before_artifacts_are_created(self):
+        proposal_path = self.root / "empty.jsonl"
+        proposal_path.write_text("\n", encoding="utf-8")
+        before = self.rpy.read_bytes()
+        with self.assertRaises(batch.cli_contract.MachineContractError) as caught:
+            batch.import_revision_proposals(str(proposal_path))
+        self.assertEqual(caught.exception.code_name, "NO_PROPOSAL_ROWS")
+        self.assertEqual(self.rpy.read_bytes(), before)
+        self.assertFalse(Path(batch.BATCH_JOBS_DIR).exists())
 
     def test_broken_interpolation_token_is_blocked_and_never_writes(self):
         before = self.rpy.read_bytes()
@@ -301,6 +350,7 @@ class RevisionProposalImportTests(unittest.TestCase):
             "selected": True,
             "disposition": "accepted",
             "producer": {"type": "human"},
+            "project_identity": {"tl_dir": str(self.tl_dir)},
             "snapshot_digest": revision_corpus.item_snapshot_digest(
                 target["source"], target["current_translation"]
             ),
