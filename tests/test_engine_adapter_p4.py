@@ -513,6 +513,119 @@ class TestEngineAdapterP4(unittest.TestCase):
             ]
             self.assertEqual(len(template_rows), 5)
 
+    def test_loader_rejects_tampered_record_and_candidate_ids(self):
+        base, target, records, report = self._scenario()
+        candidate_set = reuse.build_reuse_candidates(
+            report,
+            base,
+            target,
+            records,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            record_paths = reuse.export_translation_records(records, tmp)
+            rows = [
+                json.loads(line)
+                for line in Path(record_paths.records_path)
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            rows[0]["record_id"] = rows[0]["record_id"][:-4] + "ffff"
+            Path(record_paths.records_path).write_text(
+                "".join(
+                    json.dumps(row, ensure_ascii=False) + "\n" for row in rows
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                self.versioning.VersioningArtifactError,
+                "record id does not match",
+            ):
+                reuse.load_translation_records(record_paths.manifest_path)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            reuse_paths = reuse.export_reuse_candidates(
+                candidate_set,
+                tmp,
+                target_snapshot=target,
+            )
+            candidate_rows = [
+                json.loads(line)
+                for line in Path(reuse_paths.candidates_path)
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            candidate_rows[0]["candidate_id"] = (
+                candidate_rows[0]["candidate_id"][:-4] + "ffff"
+            )
+            Path(reuse_paths.candidates_path).write_text(
+                "".join(
+                    json.dumps(row, ensure_ascii=False) + "\n"
+                    for row in candidate_rows
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                self.versioning.VersioningArtifactError,
+                "candidate id does not match",
+            ):
+                reuse.load_reuse_candidates(reuse_paths.report_path)
+
+    def test_override_after_accept_attributed_to_latest_reviewer(self):
+        base, target, records, report = self._scenario()
+        candidate_set = reuse.build_reuse_candidates(
+            report,
+            base,
+            target,
+            records,
+        )
+        exact = next(
+            candidate
+            for candidate in candidate_set.candidates
+            if candidate.reuse_class == "exact_reuse"
+            and candidate.reference_translation == "稳定"
+        )
+        updated = reuse.apply_reuse_decisions(
+            candidate_set,
+            [
+                reuse.ReuseDecision(
+                    candidate_id=exact.candidate_id,
+                    action="accept",
+                    reviewer_type="human",
+                    reviewer_name="alice",
+                ),
+                reuse.ReuseDecision(
+                    candidate_id=exact.candidate_id,
+                    action="override_translation",
+                    reviewer_type="human",
+                    reviewer_name="bob",
+                    translation_text="稳定（改）",
+                ),
+            ],
+            reconciliation=report,
+            base_snapshot=base,
+            target_snapshot=target,
+            base_records=records,
+        )
+        prefill = reuse.collect_reuse_prefill(
+            updated,
+            reconciliation=report,
+            base_snapshot=base,
+            target_snapshot=target,
+            base_records=records,
+        )
+        entry = next(
+            item for item in prefill if item.candidate_id == exact.candidate_id
+        )
+        self.assertEqual(entry.translation_text, "稳定（改）")
+        self.assertEqual(
+            entry.provenance["reviewer_name"],
+            "bob",
+        )
+        self.assertEqual(entry.provenance["reviewer_type"], "human")
+        self.assertEqual(entry.provenance["override_reviewers"], ["bob"])
+
 
 import engine_adapters.versioning as reuse_versioning  # noqa: E402
 

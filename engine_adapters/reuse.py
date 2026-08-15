@@ -134,6 +134,7 @@ class TranslationRecord:
             "translation_record_schema_version": (
                 self.translation_record_schema_version
             ),
+            "record_id": self.record_id,
             "version_id": self.version_id,
             "snapshot_digest": self.snapshot_digest,
             "occurrence_id": self.occurrence_id,
@@ -212,7 +213,12 @@ class TranslationRecord:
             "occurrence_id": normalized_occurrence,
             "unit_id": normalized_unit,
         }
-        normalized_record_id = record_id or ("transrec1:" + digest_json(identity))
+        derived_record_id = "transrec1:" + digest_json(identity)
+        if record_id and record_id != derived_record_id:
+            raise VersioningArtifactError(
+                "Translation record id does not match its identity fields."
+            )
+        normalized_record_id = record_id or derived_record_id
         if not normalized_record_id.startswith("transrec1:"):
             raise VersioningArtifactError("Invalid translation record id prefix.")
         provisional = cls(
@@ -538,6 +544,7 @@ class ReuseCandidate:
     def stable_payload(self) -> dict[str, Any]:
         return {
             "reuse_candidate_schema_version": self.reuse_candidate_schema_version,
+            "candidate_id": self.candidate_id,
             "reuse_class": self.reuse_class,
             "status": self.status,
             "reconciliation_item_id": self.reconciliation_item_id,
@@ -682,9 +689,12 @@ class ReuseCandidate:
             "target_occurrence_id": str(target_occurrence_id or ""),
             "candidate_target_occurrence_ids": list(normalized_candidates),
         }
-        normalized_candidate_id = candidate_id or (
-            "reusecand1:" + digest_json(identity)
-        )
+        derived_candidate_id = "reusecand1:" + digest_json(identity)
+        if candidate_id and candidate_id != derived_candidate_id:
+            raise VersioningArtifactError(
+                "Reuse candidate id does not match its identity fields."
+            )
+        normalized_candidate_id = candidate_id or derived_candidate_id
         if not normalized_candidate_id.startswith("reusecand1:"):
             raise VersioningArtifactError("Invalid reuse candidate id prefix.")
         provisional = cls(
@@ -1360,6 +1370,7 @@ def apply_reuse_decisions(
                 "note": decision.note,
                 "decided_at": audit_entry["at"],
                 "resolved_target_occurrence_id": resolved_target,
+                "overrides": list(candidate.decision.get("overrides") or []),
             }
             updated[decision.candidate_id] = replace(
                 candidate,
@@ -1404,9 +1415,26 @@ def apply_reuse_decisions(
                     "Cannot override a candidate without a translation record: "
                     + candidate.candidate_id
                 )
+            # Keep the decision provenance in sync with the override so the
+            # exported results attribute the final translation to the latest
+            # reviewer, not only the earlier accept decision.
+            override_entry = {
+                "reviewer_type": decision.reviewer_type,
+                "reviewer_name": decision.reviewer_name,
+                "decided_at": audit_entry["at"],
+            }
+            prior_overrides = list(candidate.decision.get("overrides") or [])
+            updated_decision = {
+                **candidate.decision,
+                "overrides": [*prior_overrides, override_entry],
+                "last_reviewer_type": decision.reviewer_type,
+                "last_reviewer_name": decision.reviewer_name,
+                "last_decided_at": audit_entry["at"],
+            }
             updated[decision.candidate_id] = replace(
                 candidate,
                 effective_translation=decision.translation_text,
+                decision=updated_decision,
                 audit=tuple([*candidate.audit, audit_entry]),
                 candidate_digest="",
             )
@@ -1624,9 +1652,22 @@ def collect_reuse_prefill(
                     "base_record_digest": candidate.base_record_digest,
                     "base_version_id": candidate.base_version_id,
                     "target_version_id": candidate.target_version_id,
-                    "reviewer_type": candidate.decision.get("reviewer_type", ""),
-                    "reviewer_name": candidate.decision.get("reviewer_name", ""),
-                    "decided_at": candidate.decision.get("decided_at", ""),
+                    "reviewer_type": (
+                        candidate.decision.get("last_reviewer_type")
+                        or candidate.decision.get("reviewer_type", "")
+                    ),
+                    "reviewer_name": (
+                        candidate.decision.get("last_reviewer_name")
+                        or candidate.decision.get("reviewer_name", "")
+                    ),
+                    "decided_at": (
+                        candidate.decision.get("last_decided_at")
+                        or candidate.decision.get("decided_at", "")
+                    ),
+                    "override_reviewers": [
+                        str(item.get("reviewer_name") or "")
+                        for item in candidate.decision.get("overrides") or []
+                    ],
                 },
             )
         )
