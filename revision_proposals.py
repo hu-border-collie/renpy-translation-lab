@@ -224,12 +224,20 @@ def validate(
             if str(row.get(field) or "") != expected:
                 diagnostics.append(_diag(code, row, f"{field} does not match the live occurrence"))
                 mismatch = True
-        proposed = str(row.get("proposed_translation") or "").strip()
-        if not proposed:
+        proposed_value = row.get("proposed_translation")
+        proposed = proposed_value.strip() if isinstance(proposed_value, str) else ""
+        if not isinstance(proposed_value, str):
+            diagnostics.append(_diag("INVALID_PROPOSED_TRANSLATION_TYPE", row, "proposed_translation must be a string"))
+            mismatch = True
+        elif not proposed:
             diagnostics.append(_diag("EMPTY_PROPOSED_TRANSLATION", row, "proposed_translation must not be empty"))
             mismatch = True
-        reason = str(row.get("reason") or "").strip()
-        if not reason:
+        reason_value = row.get("reason")
+        reason = reason_value.strip() if isinstance(reason_value, str) else ""
+        if not isinstance(reason_value, str):
+            diagnostics.append(_diag("INVALID_REASON_TYPE", row, "reason must be a string"))
+            mismatch = True
+        elif not reason:
             diagnostics.append(_diag("MISSING_REASON", row, "reason is required for every selected proposal"))
             mismatch = True
         item_digest = str(row.get("snapshot_digest") or row.get("item_snapshot_digest") or "")

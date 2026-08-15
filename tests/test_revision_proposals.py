@@ -98,6 +98,20 @@ class RevisionProposalContractTests(unittest.TestCase):
         self.assertEqual(result.selected_count, 0)
         self.assertIn("MISSING_REASON", {x["code"] for x in result.diagnostics})
 
+    def test_proposed_translation_and_reason_must_be_strings(self):
+        result = proposals.validate(
+            [self.row(proposed_translation=123, reason=["not", "text"])],
+            self.live,
+            live_snapshot_digest=self.corpus_digest,
+        )
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.selected_count, 0)
+        self.assertIn(
+            "INVALID_PROPOSED_TRANSLATION_TYPE",
+            {x["code"] for x in result.diagnostics},
+        )
+        self.assertIn("INVALID_REASON_TYPE", {x["code"] for x in result.diagnostics})
+
     def test_file_path_separator_style_is_normalized(self):
         self.live["occ-1"]["file_rel_path"] = "chapter/scene.rpy"
         result = proposals.validate(
