@@ -19,6 +19,20 @@ class BatchCliContractTests(unittest.TestCase):
             return [command, "--version-id", "test-version"]
         if command == "reconcile-project-snapshots":
             return [command, "base-snapshot.json", "target-snapshot.json"]
+        if command == "build-translation-records":
+            return [command, "snapshot.json", "manifest.json"]
+        if command == "build-reuse-candidates":
+            return [
+                command,
+                "base-snapshot.json",
+                "target-snapshot.json",
+                "reconciliation.json",
+                "records.json",
+            ]
+        if command == "import-reuse-decisions":
+            return [command, "reuse.json", "decisions.jsonl"]
+        if command == "export-reuse-results":
+            return [command, "reuse.json", "manifest.json"]
         return [command]
 
     def test_core_commands_accept_json_output_after_subcommand(self):
@@ -1194,6 +1208,38 @@ class BatchCliContractTests(unittest.TestCase):
                                 return_value={"paths": {}, "summary": {}},
                             )
                         )
+                    elif command == "build-translation-records":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "run_translation_records_export",
+                                return_value={"paths": {}},
+                            )
+                        )
+                    elif command == "build-reuse-candidates":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "run_reuse_candidates_build",
+                                return_value={"paths": {}, "summary": {}},
+                            )
+                        )
+                    elif command == "import-reuse-decisions":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "run_reuse_decisions_import",
+                                return_value={"paths": {}, "summary": {}},
+                            )
+                        )
+                    elif command == "export-reuse-results":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "run_reuse_results_export",
+                                return_value={"paths": {}},
+                            )
+                        )
                     elif command == "merge-keywords-to-glossary":
                         handler_patches.extend(
                             [
@@ -1232,6 +1278,32 @@ class BatchCliContractTests(unittest.TestCase):
                                 "base-snapshot.json",
                                 "target-snapshot.json",
                             ]
+                        elif command == "build-translation-records":
+                            argv = [
+                                "build-translation-records",
+                                "snapshot.json",
+                                "manifest.json",
+                            ]
+                        elif command == "build-reuse-candidates":
+                            argv = [
+                                "build-reuse-candidates",
+                                "base-snapshot.json",
+                                "target-snapshot.json",
+                                "reconciliation.json",
+                                "records.json",
+                            ]
+                        elif command == "import-reuse-decisions":
+                            argv = [
+                                "import-reuse-decisions",
+                                "reuse.json",
+                                "decisions.jsonl",
+                            ]
+                        elif command == "export-reuse-results":
+                            argv = [
+                                "export-reuse-results",
+                                "reuse.json",
+                                "manifest.json",
+                            ]
                         else:
                             argv = [command, "manifest.json"]
                         exit_code = batch.main(argv)
@@ -1241,6 +1313,10 @@ class BatchCliContractTests(unittest.TestCase):
                     "export-revision-corpus",
                     "export-project-snapshot",
                     "reconcile-project-snapshots",
+                    "build-translation-records",
+                    "build-reuse-candidates",
+                    "import-reuse-decisions",
+                    "export-reuse-results",
                 }:
                     # Read-only export takes an early dispatch path that must
                     # not load (or rewrite) API-key / translator config.

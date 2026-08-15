@@ -277,13 +277,25 @@ python gemini_translate_batch.py export-revision-corpus --output json
 
 ## 项目版本快照与只读 reconciliation
 
-本节对应 `#265` P3 / `#330`，增加两个不调用模型、不要求 API Key 的高级命令：
+本节对应 `#265` P3 / `#330` 与 P4 / `#354`，增加六个不调用模型、不要求
+API Key 的高级命令：
 
 ```bash
 python gemini_translate_batch.py export-project-snapshot --version-id 1.4.0
 python gemini_translate_batch.py reconcile-project-snapshots \
   C:/snapshots/1.3.0/project_snapshot.json \
   C:/snapshots/1.4.0/project_snapshot.json
+python gemini_translate_batch.py build-translation-records \
+  C:/snapshots/1.3.0/project_snapshot.json C:/batch/base/manifest.json
+python gemini_translate_batch.py build-reuse-candidates \
+  C:/snapshots/1.3.0/project_snapshot.json \
+  C:/snapshots/1.4.0/project_snapshot.json \
+  C:/reconciliations/run/reconciliation_report.json \
+  C:/records/1.3.0/translation_records.json
+python gemini_translate_batch.py import-reuse-decisions \
+  C:/reuse/run/reuse_report.json C:/reuse/decisions.jsonl
+python gemini_translate_batch.py export-reuse-results \
+  C:/reuse/decided/reuse_report.json C:/batch/target/manifest.json
 ```
 
 - `export-project-snapshot` 复用当前 Ren'Py adapter 的 discovery / inventory /
@@ -300,6 +312,10 @@ python gemini_translate_batch.py reconcile-project-snapshots \
   不会自动确认，也没有写回入口。
 - 两个命令都支持 `--output json` 及通用机器输出裁剪参数。完整 schema、digest、
   stale 与 P4/P6 边界见 [Engine Adapter 与覆盖审计](engine_adapter.md#p3-项目版本快照)。
+- P4 的四个复用命令在 P3 产物之上实现「译文记录 → 复用候选 → 人工决策 →
+  结果导出」；`export-reuse-results` 只写 Batch 包内的结果 JSONL，之后仍必须
+  `check` → `apply`。细节见
+  [P4 译文复用候选与人工确认](engine_adapter.md#p4-译文复用候选与人工确认)。
 
 ## 关键词提取流程
 

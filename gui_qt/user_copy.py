@@ -55,6 +55,10 @@ MANIFEST_MODE_LABELS = {
 VERSION_ASSET_COPY = {
     "export_snapshot": "版本资产·导出项目快照",
     "reconcile_snapshots": "版本资产·比较两个快照",
+    "build_translation_records": "版本资产·冻结译文记录",
+    "build_reuse_candidates": "版本资产·生成复用候选",
+    "import_reuse_decisions": "版本资产·导入复用决策",
+    "export_reuse_results": "版本资产·导出复用结果",
 }
 
 CONTEXT_LIBRARY_COPY = {
