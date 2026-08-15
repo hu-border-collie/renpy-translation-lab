@@ -1248,6 +1248,49 @@ class BatchCliContractTests(unittest.TestCase):
                 else:
                     load_config.assert_called_once_with(require_api_key=False)
 
+    def test_merge_keywords_yes_explicitly_overrides_history_review(self):
+        cases = (
+            (("--yes",), False, True),
+            (("--accept-confidence", "0.8"), True, False),
+        )
+        for extra_args, expected_interactive, expected_override in cases:
+            with self.subTest(extra_args=extra_args):
+                load_config = mock.Mock()
+                merge = mock.Mock(return_value=None)
+                with (
+                    mock.patch.object(batch, "initialize_batch_logging"),
+                    mock.patch.object(batch.legacy, "load_config", load_config),
+                    mock.patch.object(batch.legacy, "load_translator_settings"),
+                    mock.patch.object(batch.legacy, "load_glossary"),
+                    mock.patch.object(batch, "load_batch_settings"),
+                    mock.patch.object(batch, "print_banner"),
+                    mock.patch.object(
+                        batch.keyword_glossary_merge,
+                        "resolve_keyword_candidates_path",
+                        return_value="candidates.jsonl",
+                    ),
+                    mock.patch.object(
+                        batch.keyword_glossary_merge,
+                        "merge_keywords_to_glossary",
+                        merge,
+                    ),
+                    mock.patch.object(batch.legacy, "GLOSSARY_FILE", "glossary.json"),
+                ):
+                    exit_code = batch.main(
+                        [
+                            "merge-keywords-to-glossary",
+                            "candidates.jsonl",
+                            *extra_args,
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 0)
+                load_config.assert_called_once_with(require_api_key=False)
+                merge.assert_called_once()
+                kwargs = merge.call_args.kwargs
+                self.assertEqual(kwargs["interactive"], expected_interactive)
+                self.assertEqual(kwargs["allow_history_review"], expected_override)
+
     def test_remote_batch_commands_still_require_api_key(self):
         load_config = mock.Mock()
         with (

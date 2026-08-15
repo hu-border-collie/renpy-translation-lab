@@ -13757,7 +13757,10 @@ def build_arg_parser():
         '--accept-confidence',
         type=float,
         default=None,
-        help='Auto-accept candidates at or above this confidence without prompting.',
+        help=(
+            'Auto-accept candidates at or above this confidence without prompting; '
+            'history conflicts or missing evidence still require review unless --yes is used.'
+        ),
     )
     merge_keywords_parser.add_argument(
         '--overwrite',
@@ -13767,7 +13770,10 @@ def build_arg_parser():
     merge_keywords_parser.add_argument(
         '--yes',
         action='store_true',
-        help='Accept all non-skipped candidates without interactive prompts.',
+        help=(
+            'Accept all non-skipped candidates without interactive prompts; explicitly '
+            'override history-evidence review.'
+        ),
     )
     merge_keywords_parser.add_argument(
         '--no-backup',

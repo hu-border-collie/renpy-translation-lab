@@ -137,6 +137,28 @@ class KeywordHistoryEvidenceTests(unittest.TestCase):
 
         self.assertEqual(rows, [{"identity_v2": "id1"}])
 
+    def test_fixture_covers_possessive_and_vocative_forms(self):
+        fixture_path = Path(__file__).parent / "fixtures" / "keyword_history_forms.json"
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+        for case in fixture["cases"]:
+            with self.subTest(case=case["name"]):
+                evidence = keyword_history.build_keyword_history_evidence(
+                    case["candidate"],
+                    case["rows"],
+                )
+                expected = case["expected"]
+                self.assertEqual(evidence["status"], expected["status"])
+                self.assertEqual(
+                    evidence["occurrences"][0]["match_kind"],
+                    expected["match_kind"],
+                )
+                reason_code = expected["reason_code"]
+                if reason_code:
+                    self.assertIn(reason_code, evidence["conflict_codes"])
+                else:
+                    self.assertEqual(evidence["conflict_codes"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

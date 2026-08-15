@@ -353,7 +353,7 @@ build-keywords -> submit -> status -> download -> export-keywords
 **交互要点：**
 
 - 表格列出 `source`、`suggested_target`、`category`、`confidence`、计划写入分区（`preserve_terms` / `normalize_map`）与冲突提示。
-- 默认**不勾选**疑似 Ren'Py 启动器 / UI 噪音项；与 `macro_setting` 或现有 glossary 冲突的条目会标红提示。
+- 默认**不勾选**疑似 Ren'Py 启动器 / UI 噪音项，以及历史证据缺失、冲突或不可用的旧版 / 手工候选；与 `macro_setting` 或现有 glossary 冲突的条目会标红提示。
 - 支持全选 / 全不选 / 反选；可勾选「覆盖已有 glossary 冲突项」后再写入。
 - **预览写入**只生成摘要，不修改 glossary；**写入 glossary** 前会二次确认，并自动创建 `glossary.json.bak-<timestamp>` 备份。
 

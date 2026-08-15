@@ -107,13 +107,19 @@ def _coerce_confidence(value: object) -> float:
 
 
 def _history_requires_review(candidate: dict) -> bool:
-    """Return whether historical evidence must stay on the human-review path."""
+    """Return whether historical evidence must stay on the human-review path.
+
+    Candidates exported before historical evidence was added, or candidates
+    assembled by hand, have no trustworthy evidence status.  Treat those
+    records as unavailable so confidence thresholds cannot silently write them
+    into the glossary.
+    """
 
     history = candidate.get('history_evidence')
     if not isinstance(history, dict):
-        return False
+        return True
     status = _compact_text(history.get('status'))
-    return bool(status and status != 'consistent')
+    return status != 'consistent'
 
 
 def _default_glossary_data() -> dict:
@@ -418,6 +424,13 @@ def format_candidate_preview(candidate: dict, action: MergeAction) -> str:
             lines.append(f'history_first: none [{status}]')
         for reason in history.get('conflict_reasons') or []:
             lines.append(f'history_note: {_compact_text(reason)}')
+    else:
+        lines.extend(
+            [
+                'history_first: none [unavailable]',
+                'history_note: 缺少历史证据，需重新导出或人工确认',
+            ]
+        )
     if evidence:
         lines.append(f'evidence: {evidence}')
     if action.existing_target:
@@ -617,9 +630,11 @@ def detect_candidate_warnings(
     source = _compact_text(candidate.get('source'))
 
     history = candidate.get('history_evidence')
-    if isinstance(history, dict):
-        history_status = _compact_text(history.get('status'))
-        if history_status and history_status != 'consistent':
+    if not isinstance(history, dict):
+        warnings.append('历史证据缺失（旧版或手工候选），需重新导出或人工确认')
+    else:
+        history_status = _compact_text(history.get('status')) or 'unavailable'
+        if history_status != 'consistent':
             first = history.get('first_occurrence')
             if isinstance(first, dict) and first:
                 warnings.append(

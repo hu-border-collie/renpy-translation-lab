@@ -15,6 +15,11 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 handle.write(json.dumps(row, ensure_ascii=False) + '\n')
 
     def _sample_candidates(self) -> list[dict]:
+        consistent_history = {
+            'status': 'consistent',
+            'review_required': False,
+            'first_occurrence': None,
+        }
         return [
             {
                 'source': 'Void Gate',
@@ -22,6 +27,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 'category': 'place',
                 'confidence': 0.86,
                 'evidence': 'Recurring gate name.',
+                'history_evidence': consistent_history,
             },
             {
                 'source': 'Crystal Key',
@@ -29,6 +35,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 'category': 'item',
                 'confidence': 0.55,
                 'evidence': 'Quest key item.',
+                'history_evidence': consistent_history,
             },
             {
                 'source': 'AR',
@@ -36,6 +43,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 'category': 'term',
                 'confidence': 0.9,
                 'evidence': 'Abbreviation kept unchanged.',
+                'history_evidence': consistent_history,
             },
         ]
 
@@ -246,6 +254,10 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                         'category': 'term',
                         'confidence': 0.95,
                         'evidence': 'Abbreviation kept unchanged.',
+                        'history_evidence': {
+                            'status': 'consistent',
+                            'review_required': False,
+                        },
                     }
                 ],
             )
@@ -315,6 +327,10 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 'suggested_target': 'AR',
                 'category': 'item',
                 'confidence': 0.9,
+                'history_evidence': {
+                    'status': 'consistent',
+                    'review_required': False,
+                },
             },
             {'preserve_terms': [], 'normalize_map': {}},
         )
@@ -325,6 +341,10 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 'suggested_target': 'AR',
                 'category': 'item',
                 'confidence': 0.9,
+                'history_evidence': {
+                    'status': 'consistent',
+                    'review_required': False,
+                },
             },
             action,
             macro_setting_text='AR 不翻译',
@@ -431,6 +451,70 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 json.loads(glossary_path.read_text(encoding='utf-8')),
                 {'normalize_map': {}},
             )
+
+    def test_missing_history_is_not_auto_accepted_by_confidence_threshold(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            candidates_path = root / 'keyword_candidates.jsonl'
+            glossary_path = root / 'glossary.json'
+            glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')
+            candidate = {
+                'source': 'Legacy Term',
+                'suggested_target': '旧术语',
+                'category': 'term',
+                'confidence': 0.99,
+                'evidence': 'Legacy candidate without history export.',
+            }
+            self._write_jsonl(candidates_path, [candidate])
+
+            rows = merge_mod.build_candidate_merge_rows(
+                [candidate],
+                {'normalize_map': {}},
+            )
+            self.assertFalse(rows[0].default_checked)
+            self.assertTrue(any('历史证据缺失' in warning for warning in rows[0].warnings))
+
+            summary = merge_mod.merge_keywords_to_glossary(
+                str(candidates_path),
+                str(glossary_path),
+                accept_confidence=0.8,
+                interactive=False,
+                backup=False,
+            )
+
+            self.assertEqual(summary.accepted, 0)
+            self.assertEqual(summary.skipped_user, 1)
+            self.assertEqual(
+                json.loads(glossary_path.read_text(encoding='utf-8')),
+                {'normalize_map': {}},
+            )
+
+    def test_explicit_history_override_accepts_missing_history(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            candidates_path = root / 'keyword_candidates.jsonl'
+            glossary_path = root / 'glossary.json'
+            glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')
+            candidate = {
+                'source': 'Legacy Term',
+                'suggested_target': '旧术语',
+                'category': 'term',
+                'confidence': 0.99,
+            }
+            self._write_jsonl(candidates_path, [candidate])
+
+            summary = merge_mod.merge_keywords_to_glossary(
+                str(candidates_path),
+                str(glossary_path),
+                accept_confidence=0.8,
+                interactive=False,
+                allow_history_review=True,
+                backup=False,
+            )
+
+            self.assertEqual(summary.accepted, 1)
+            data = json.loads(glossary_path.read_text(encoding='utf-8'))
+            self.assertEqual(data['normalize_map']['Legacy Term'], '旧术语')
 
 
 if __name__ == '__main__':
