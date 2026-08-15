@@ -9029,6 +9029,10 @@ def print_check_summary(summary):
     quality_gate = summary.get('quality_gate')
     if isinstance(quality_gate, dict):
         print(f"Quality gate: {quality_gate.get('decision', 'unknown')}")
+        if summary.get('quality_glossary_path'):
+            print(f"Quality glossary entries: {summary.get('quality_glossary_entries', 0)}")
+            if not summary.get('quality_glossary_loaded'):
+                print(f"Quality glossary not loaded: {summary['quality_glossary_path']}")
         if summary.get('quality_subject_items') is not None:
             print(f"Quality subjects: {summary.get('quality_subject_items', 0)}")
         if summary.get('quality_unmatched_items'):
@@ -9246,12 +9250,30 @@ def check_results(target=None):
         or getattr(legacy, 'GLOSSARY_FILE', '')
         or ''
     )
-    quality_glossary_map = translation_quality.load_glossary_map(
-        glossary_path,
-        base_dir=manifest.get('_package_dir', ''),
-    )
+    quality_glossary_map = {}
+    quality_glossary_base = ''
+    for base_dir in (
+        str(manifest.get('_package_dir') or ''),
+        str(manifest.get('base_dir') or ''),
+    ):
+        if not base_dir:
+            continue
+        candidate = translation_quality.load_glossary_map(
+            glossary_path,
+            base_dir=base_dir,
+        )
+        if candidate:
+            quality_glossary_map = candidate
+            quality_glossary_base = base_dir
+            break
+    if not quality_glossary_map and glossary_path:
+        quality_glossary_map = translation_quality.load_glossary_map(glossary_path)
     summary['quality_glossary_path'] = glossary_path
+    summary['quality_glossary_base'] = quality_glossary_base
     summary['quality_glossary_entries'] = len(quality_glossary_map)
+    summary['quality_glossary_loaded'] = bool(
+        not glossary_path or quality_glossary_map
+    )
     quality_findings = translation_quality.check_quality(
         quality_subjects,
         manifest=manifest,

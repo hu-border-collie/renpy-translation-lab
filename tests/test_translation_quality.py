@@ -429,6 +429,27 @@ class QualityGateTests(unittest.TestCase):
         self.assertGreater(gate['warning_count'], 0)
         self.assertEqual(gate['blocker_count'], 0)
 
+    def test_acknowledged_blocker_does_not_consume_warning_budget(self):
+        findings = [
+            {
+                'finding_id': 'warning-1',
+                'disposition': quality.DISPOSITION_WARNING,
+            },
+            {
+                'finding_id': 'blocker-1',
+                'disposition': quality.DISPOSITION_BLOCKER,
+            },
+        ]
+
+        gate = quality.summarize_quality_gate(
+            findings,
+            acknowledged_ids=['warning-1', 'blocker-1'],
+        )
+
+        self.assertEqual(gate['acknowledged_count'], 1)
+        self.assertEqual(gate['blocker_count'], 1)
+        self.assertEqual(gate['decision'], quality.GATE_NEEDS_REVIEW)
+
     def test_quality_blocker_counts_as_blocker(self):
         policy = quality.normalize_policy({'rules': {'unclosed_delimiters': 'blocker'}})
         findings = quality.check_subject(

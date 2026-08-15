@@ -877,10 +877,14 @@ def summarize_quality_gate(
     acknowledged = {str(value) for value in (acknowledged_ids or [])}
     warning_count = _count_disposition(findings, DISPOSITION_WARNING)
     blocker_count = _count_disposition(findings, DISPOSITION_BLOCKER)
+    # Only warning dispositions can be acknowledged.  Acknowledging a blocker
+    # must never consume the unacknowledged-warning budget or turn a blocked
+    # batch into an apparently acknowledged state.
     acknowledged_count = sum(
         1
         for finding in findings
-        if str(finding.get('finding_id') or '') in acknowledged
+        if finding.get('disposition') == DISPOSITION_WARNING
+        and str(finding.get('finding_id') or '') in acknowledged
     )
     has_warnings = warning_count > 0 or blocker_count > 0
     unacknowledged_warnings = max(0, warning_count - acknowledged_count)

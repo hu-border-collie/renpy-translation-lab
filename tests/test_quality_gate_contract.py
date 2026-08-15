@@ -438,6 +438,87 @@ class CheckResultsQualityIntegrationTests(unittest.TestCase):
         self.assertEqual(checked['last_check_summary']['quality_glossary_entries'], 1)
 
 
+    def test_check_results_resolves_manifest_glossary_relative_to_base_dir(self):
+        import os
+        import tempfile
+        from pathlib import Path
+
+        root = Path(tempfile.mkdtemp())
+        package_dir = root / 'logs' / 'batch_jobs' / 'pkg'
+        package_dir.mkdir(parents=True)
+        glossary_path = root / 'glossary.json'
+        glossary_path.write_text(
+            json.dumps({'normalize_map': {'Hello': '你好'}}, ensure_ascii=False),
+            encoding='utf-8',
+        )
+        (package_dir / 'results.jsonl').write_text('{}\n', encoding='utf-8')
+        manifest = {
+            'mode': 'translation',
+            'base_dir': str(root),
+            'tl_dir': str(root / 'tl'),
+            'target_language': 'schinese',
+            'glossary_file': 'glossary.json',
+            'files': {},
+            'settings': {},
+            'execution': 'sync',
+            'chunks': [
+                {
+                    'key': 'chunk-1',
+                    'file_rel_path': 'script.rpy',
+                    'items': [
+                        {
+                            'id': 'item-1',
+                            'text': 'Hello',
+                            'line': 0,
+                            'line_number': 1,
+                            'start': 8,
+                            'end': 13,
+                        }
+                    ],
+                }
+            ],
+            '_manifest_path': str(package_dir / 'manifest.json'),
+            '_package_dir': str(package_dir),
+        }
+        replacements = {
+            'script.rpy': {
+                0: [(8, 13, '你好', '', '"', 'Hello', 'item-1', 'chunk-1')]
+            }
+        }
+        summary = {
+            'expected_chunks': 1,
+            'result_rows': 1,
+            'processed_chunks': 1,
+            'expected_items': 1,
+            'valid_items': 1,
+            'failure_items': 0,
+            'chunk_row_errors': 0,
+            'missing_response_chunks': 0,
+            'partial_chunks': 0,
+            'max_tokens_chunks': 0,
+            'reason_counts': {},
+        }
+
+        with (
+            mock.patch.dict(os.environ, {}, clear=False),
+            mock.patch.object(batch, 'load_manifest', return_value=manifest),
+            mock.patch.object(batch, 'require_manifest_mode'),
+            mock.patch.object(batch, 'require_manifest_project_match'),
+            mock.patch.object(
+                batch,
+                'collect_result_actions',
+                return_value=(replacements, {}, [], summary),
+            ),
+            mock.patch.object(batch, 'save_manifest', side_effect=lambda m, **kwargs: None),
+        ):
+            checked = batch.check_results(manifest['_manifest_path'])
+
+        last_summary = checked['last_check_summary']
+        self.assertEqual(last_summary['quality_glossary_entries'], 1)
+        self.assertTrue(last_summary['quality_glossary_loaded'])
+        self.assertEqual(last_summary['quality_glossary_base'], str(root))
+
+
 class QualitySubjectCollectionTests(unittest.TestCase):
     def test_collect_quality_subjects_from_validated_replacements(self):
         manifest = {
