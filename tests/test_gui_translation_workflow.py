@@ -5,9 +5,11 @@ import cli_contract
 
 from gui_qt.translation_workflow import (
     TranslationWorkflow,
+    extract_check_status,
     extract_created_package_path,
     extract_job_state,
     extract_safety_status,
+    extract_writeback_gate,
     manifest_path_for_package,
 )
 
@@ -250,6 +252,35 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
 
         self.assertEqual(update.status, "done")
         self.assertIn("不应写回", update.message)
+
+    def test_check_ready_with_warnings_is_writeback_ready(self):
+        workflow = TranslationWorkflow.resume_latest("C:\\package\\manifest.json")
+        workflow.complete_current_step(0, "State: JOB_STATE_SUCCEEDED\n")
+        workflow.complete_current_step(0, "Saved results to: C:\\package\\results.jsonl\n")
+        output = (
+            "Safety status: safe\n"
+            "Writeback gate: allow\n"
+            "Quality gate: needs_review\n"
+            "Quality warnings: 4\n"
+            "Check status: ready_with_warnings\n"
+        )
+
+        update = workflow.complete_current_step(0, output)
+
+        self.assertEqual(update.status, "done")
+        self.assertIn("可写回", update.message)
+        self.assertIn("质量报警", update.heading)
+        self.assertTrue(any("质量检查" in fact for fact in update.facts))
+
+    def test_extract_check_status_and_writeback_gate(self):
+        output = (
+            "Safety status: safe\n"
+            "Writeback gate: allow\n"
+            "Check status: ready_with_warnings\n"
+        )
+
+        self.assertEqual(extract_check_status(output), "ready_with_warnings")
+        self.assertEqual(extract_writeback_gate(output), "allow")
 
     def test_nonzero_exit_fails_current_step(self):
         workflow = TranslationWorkflow.start_new()

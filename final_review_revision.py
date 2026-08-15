@@ -177,6 +177,9 @@ def create_revision_package(batch: Any, target: str | None, finding_ids: Sequenc
         "base_dir": batch.legacy.BASE_DIR, "tl_dir": batch.legacy.TL_DIR,
         **batch._manifest_target_language_fields(),
         **batch.batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
+        **batch.translation_quality.manifest_quality_policy_fields(
+            runtime_policy=batch.BATCH_QUALITY_POLICY
+        ),
         "input_jsonl_path": "requests.jsonl", "result_jsonl_path": "results.jsonl",
         "job_name": "", "job_state": "LOCAL_CANDIDATES", "submit_disabled": True,
         "settings": {"revision_chunk_size": batch.REVISION_CHUNK_SIZE},

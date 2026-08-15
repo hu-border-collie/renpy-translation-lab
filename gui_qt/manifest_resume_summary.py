@@ -10,6 +10,7 @@ from .user_copy import (
     format_job_fact,
     format_job_state_fact,
     format_manifest_path_fact,
+    format_quality_gate_fact,
     job_state_label,
     safety_level_label,
 )
@@ -112,10 +113,14 @@ def build_manifest_workflow_display(
     retry_parent_text = retry_parent.strip() if isinstance(retry_parent, str) else ""
 
     latest_safety = ""
+    quality_gate = None
     check_summary = manifest.get("last_check_summary")
     if isinstance(check_summary, dict):
         safety_value = check_summary.get("safety_level")
         latest_safety = safety_value.strip().lower() if isinstance(safety_value, str) else ""
+        raw_quality_gate = check_summary.get("quality_gate")
+        if isinstance(raw_quality_gate, dict):
+            quality_gate = raw_quality_gate
 
     facts: list[str] = [format_manifest_path_fact(manifest_path)]
     if job_name:
@@ -138,6 +143,11 @@ def build_manifest_workflow_display(
 
     if retry_parent_text:
         facts.append(f"父任务：{retry_parent_text}")
+    if quality_gate is not None and (
+        int(quality_gate.get("warning_count") or 0) > 0
+        or int(quality_gate.get("blocker_count") or 0) > 0
+    ):
+        facts.append(format_quality_gate_fact(quality_gate))
     if extra_facts:
         facts.extend(extra_facts)
 

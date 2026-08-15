@@ -161,6 +161,24 @@
         "script_characters"
       ]
     },
+    "quality_gate": {
+      "enabled": true,
+      "rules": {
+        "renpy_wait_inside_cjk": "warning",
+        "unclosed_delimiters": "warning",
+        "english_suffix_adjacent": "warning",
+        "suspicious_english_residue": "warning",
+        "cjk_latin_spacing": "warning",
+        "halfwidth_punctuation": "warning",
+        "ascii_ellipsis": "warning",
+        "glossary_term_not_applied": "warning",
+        "speaker_label_untranslated": "warning",
+        "interjection_untranslated": "warning",
+        "known_garbled_phrase": "warning"
+      },
+      "allowed_latin_tokens": [],
+      "garbled_phrases": []
+    },
     "pricing": {
       "version": 1,
       "currency": "USD",

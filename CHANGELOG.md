@@ -13,6 +13,7 @@
 - 增加按项目归集 Batch、同步、订正、关键词与分析调用的实际模型用量账本。
 - 增加 Ren'Py Engine Adapter 的稳定扫描/occurrence/coverage 产物和写回计划校验。
 - 增加提交恢复、成本估算、翻译 A/B 对比、同步预览写回与订正预览写回等完整工作流。
+- `check` 新增确定性机械质量检查与 `quality_findings.jsonl`：标签插字、未闭合括号、中英文粘连、可疑英文残留、CJK/拉丁间距、半角标点、glossary 未满足、说话人标签与短感叹词漏译、配置错乱词黑名单等。
 - 同步初译增加局部前后文（`sync.context_before` / `sync.context_after`，默认 30/10，限定同文件与 translate block 边界）、`sync.macro_setting_file` 风格设定注入，以及不依赖 RAG 开关、不受 `top_k_terms` 截断的术语命中（`normalize_map` / 保留词 / 不可翻译词，全部实际命中进入提示词）；上下文构造事实与 macro 指纹写入 manifest 并纳入预览指纹。
 
 ### 变更
@@ -26,9 +27,10 @@
 
 ### 安全与质量边界
 
-- Batch `apply` 继续强制要求与当前 manifest/results 匹配的最近一次 `check=safe`，并在写回前重读源快照；`--force` 不绕过这些门禁。
+- Batch `apply` 改为要求与当前 manifest/results 匹配的最近一次 `writeback_gate.decision=allow`，并在写回前重读源快照；`--force` 不绕过 stale check、源快照或结构阻断。
+- `check` 结果拆分为 `writeback_gate`（结构写回安全）与 `quality_gate`（质量报警）；质量报警默认不阻止写回，但不会因 `apply` 成功自动清除，项目配置可把规则提升为 blocker，且配置变化会使旧 check stale。
 - 订正与最终审校候选必须经过 `preview-revisions -> apply-revisions` 的独立 provenance、项目身份和源快照校验。
-- 明确 `check=safe` 仅代表结构性可写回，不代表译文内容质量合格；正式交付前仍需机械质量检查与人工/LLM 语义审校。
+- `writeback_gate.decision=allow` 仅代表结构性可写回；`quality_gate` 负责机械质量报警，正式交付前仍需人工/LLM 语义审校。
 
 ## [1.0.0] - 2026-07-16
 

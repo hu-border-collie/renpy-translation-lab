@@ -709,8 +709,18 @@ def manifest_check_safety_level(manifest: dict[str, object]) -> str:
     summary = manifest.get("last_check_summary")
     if not isinstance(summary, dict):
         return ""
+    writeback_gate = summary.get("writeback_gate")
+    if isinstance(writeback_gate, dict):
+        if writeback_gate.get("decision") == "allow":
+            return "safe"
+        safety = summary.get("safety_level")
+        return safety.strip().lower() if isinstance(safety, str) else "block"
+    # Contract v3 check summaries always carry a writeback gate.  Legacy
+    # summaries are stale for apply; keep warn/block visible for remediation
+    # but never infer "safe" from the old field alone.
     safety = summary.get("safety_level")
-    return safety.strip().lower() if isinstance(safety, str) else ""
+    safety_text = safety.strip().lower() if isinstance(safety, str) else ""
+    return safety_text if safety_text in {"warn", "block"} else ""
 
 
 def existing_retry_manifest_path(manifest: dict[str, object]) -> str:

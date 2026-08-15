@@ -56,7 +56,7 @@ python -m pip install -r requirements-gui.txt
 python -m gui_qt
 ```
 
-可复现安装与哈希锁见 [依赖输入与哈希锁](docs/dependencies.md)。无论使用 GUI 还是 CLI，都应先运行环境检查；Batch 只有最近一次 `check` 对当前结果给出 `safe` 时才允许 `apply`。
+可复现安装与哈希锁见 [依赖输入与哈希锁](docs/dependencies.md)。无论使用 GUI 还是 CLI，都应先运行环境检查；Batch 只有最近一次 `check` 对当前结果给出 `writeback_gate.decision=allow` 时才允许 `apply`。
 
 ## 文档
 
@@ -80,4 +80,4 @@ python -m gui_qt
 
 ## 安全提示
 
-执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。Batch 的 `check=safe` 只表示当前结果满足结构性写回合同，不代表译文已经达到交付质量；写回后仍须做机械检查与人工/LLM 语义审校。不要把 API key、本地配置、私有游戏脚本、batch 结果或日志提交到公开仓库。详见 [项目说明 · 安全](docs/project_notes.md#安全说明)。
+执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。Batch 的 `writeback_gate.decision=allow` 只表示当前结果满足结构性写回合同，不代表译文已经达到交付质量；`quality_gate` 会给出机械质量报警，写回后仍须处理报警并做人工/LLM 语义审校。不要把 API key、本地配置、私有游戏脚本、batch 结果或日志提交到公开仓库。详见 [项目说明 · 安全](docs/project_notes.md#安全说明)。

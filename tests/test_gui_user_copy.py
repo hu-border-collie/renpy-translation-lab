@@ -3,11 +3,15 @@ import unittest
 import doctor_recommendations as doctor_rec
 
 from gui_qt.user_copy import (
+    QUALITY_DELIVERY_NOTICE,
+    check_status_label,
     doctor_mode_label,
     format_bootstrap_fact,
     format_manifest_path_fact,
+    format_quality_gate_fact,
     job_state_label,
     manifest_mode_label,
+    quality_gate_label,
     recommendation_requires_attention,
     safety_level_label,
     translate_doctor_warning,
@@ -19,6 +23,19 @@ class GuiUserCopyTests(unittest.TestCase):
         self.assertEqual(safety_level_label("safe"), "可写回")
         self.assertEqual(safety_level_label("warn"), "需处理")
         self.assertEqual(safety_level_label("block"), "禁止写回")
+
+    def test_check_status_label_distinguishes_applyable_from_deliverable(self):
+        self.assertEqual(check_status_label("ready"), "可写回（无质量报警）")
+        self.assertEqual(check_status_label("ready_with_warnings"), "可写回，有质量报警")
+        self.assertEqual(check_status_label("blocked"), "禁止写回")
+
+    def test_quality_gate_labels_and_facts(self):
+        self.assertEqual(quality_gate_label("pass"), "无质量报警")
+        self.assertEqual(quality_gate_label("needs_review"), "需人工复核")
+        self.assertIn("报警 3", format_quality_gate_fact(
+            {"decision": "needs_review", "warning_count": 3, "blocker_count": 1}
+        ))
+        self.assertIn("可写回 ≠ 可交付", QUALITY_DELIVERY_NOTICE)
 
     def test_safety_level_label_case_insensitive(self):
         self.assertEqual(safety_level_label("Safe"), "可写回")
