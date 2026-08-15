@@ -1041,6 +1041,16 @@ def build_reuse_candidates(
         raise VersioningArtifactError(
             "Translation records do not match the base snapshot digest."
         )
+    languages = {
+        str(base_records.target_language or "").strip(),
+        str(base_snapshot.target_language or "").strip(),
+        str(target_snapshot.target_language or "").strip(),
+    }
+    if len(languages) > 1:
+        raise VersioningArtifactError(
+            "Translation reuse requires one target language across base "
+            "records and both snapshots."
+        )
 
     records_by_occurrence = {
         record.occurrence_id: record for record in base_records.records
@@ -1411,6 +1421,11 @@ def apply_reuse_decisions(
                 )
             resolved_target = candidate.target_occurrence_id
             if candidate.reuse_class == "ambiguous":
+                if decision.reviewer_type != "human":
+                    raise VersioningArtifactError(
+                        "Ambiguous reuse candidates require human review: "
+                        + candidate.candidate_id
+                    )
                 if decision.target_occurrence_id not in (
                     candidate.candidate_target_occurrence_ids
                 ):
@@ -1518,10 +1533,13 @@ def apply_reuse_decisions(
             # Keep the decision provenance in sync with the override so the
             # exported results attribute the final translation to the latest
             # reviewer, not only the earlier accept decision.
+            previous_translation = candidate.effective_translation
             override_entry = {
                 "reviewer_type": decision.reviewer_type,
                 "reviewer_name": decision.reviewer_name,
                 "decided_at": audit_entry["at"],
+                "previous_translation": previous_translation,
+                "translation_text": decision.translation_text,
             }
             prior_overrides = list(candidate.decision.get("overrides") or [])
             updated_decision = {
@@ -1535,7 +1553,16 @@ def apply_reuse_decisions(
                 candidate,
                 effective_translation=decision.translation_text,
                 decision=updated_decision,
-                audit=tuple([*candidate.audit, audit_entry]),
+                audit=tuple(
+                    [
+                        *candidate.audit,
+                        {
+                            **audit_entry,
+                            "previous_translation": previous_translation,
+                            "translation_text": decision.translation_text,
+                        },
+                    ]
+                ),
                 candidate_digest="",
             )
         elif decision.action in ("split_lineage", "merge_lineage"):

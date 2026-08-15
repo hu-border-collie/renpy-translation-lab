@@ -631,6 +631,66 @@ class TestEngineAdapterP4(unittest.TestCase):
         self.assertEqual(entry.provenance["reviewer_type"], "human")
         self.assertEqual(entry.provenance["override_reviewers"], ["bob"])
 
+    def test_override_audit_records_before_and_after_text(self):
+        base, target, records, report = self._scenario()
+        candidate_set = reuse.build_reuse_candidates(
+            report,
+            base,
+            target,
+            records,
+        )
+        exact = next(
+            candidate
+            for candidate in candidate_set.candidates
+            if candidate.reuse_class == "exact_reuse"
+            and candidate.reference_translation == "稳定"
+        )
+        updated = reuse.apply_reuse_decisions(
+            candidate_set,
+            [
+                reuse.ReuseDecision(
+                    candidate_id=exact.candidate_id,
+                    action="override_translation",
+                    reviewer_type="human",
+                    reviewer_name="bob",
+                    translation_text="稳定（第一次）",
+                ),
+                reuse.ReuseDecision(
+                    candidate_id=exact.candidate_id,
+                    action="override_translation",
+                    reviewer_type="human",
+                    reviewer_name="carol",
+                    translation_text="稳定（第二次）",
+                ),
+            ],
+            reconciliation=report,
+            base_snapshot=base,
+            target_snapshot=target,
+            base_records=records,
+        )
+        updated_candidate = next(
+            candidate
+            for candidate in updated.candidates
+            if candidate.candidate_id == exact.candidate_id
+        )
+        overrides = updated_candidate.decision["overrides"]
+        self.assertEqual(len(overrides), 2)
+        self.assertEqual(overrides[0]["previous_translation"], "稳定")
+        self.assertEqual(overrides[0]["translation_text"], "稳定（第一次）")
+        self.assertEqual(
+            overrides[1]["previous_translation"],
+            "稳定（第一次）",
+        )
+        self.assertEqual(overrides[1]["translation_text"], "稳定（第二次）")
+        override_audits = [
+            item
+            for item in updated_candidate.audit
+            if item.get("action") == "override_translation"
+        ]
+        self.assertEqual(len(override_audits), 2)
+        self.assertEqual(override_audits[0]["translation_text"], "稳定（第一次）")
+        self.assertEqual(override_audits[1]["previous_translation"], "稳定（第一次）")
+
     def test_accept_after_override_keeps_override_reviewer_attribution(self):
         base, target, records, report = self._scenario()
         candidate_set = reuse.build_reuse_candidates(
@@ -680,6 +740,98 @@ class TestEngineAdapterP4(unittest.TestCase):
         self.assertEqual(entry.translation_text, "稳定（改）")
         self.assertEqual(entry.provenance["reviewer_name"], "bob")
         self.assertEqual(entry.provenance["override_reviewers"], ["bob"])
+
+    def test_ambiguous_accept_requires_human_reviewer(self):
+        base = self._snapshot(
+            "1.0",
+            [
+                {"key": "one", "source": "Same", "content": "shared"},
+                {"key": "two", "source": "Same", "content": "shared"},
+            ],
+        )
+        target = self._snapshot(
+            "2.0",
+            [
+                {"key": "three", "source": "Same", "content": "shared"},
+                {"key": "four", "source": "Same", "content": "shared"},
+            ],
+        )
+        records = self._records(
+            base,
+            [
+                {"key": "one", "source": "Same", "translation": "相同一"},
+                {"key": "two", "source": "Same", "translation": "相同二"},
+            ],
+        )
+        report = reconcile_project_snapshots(base, target)
+        candidate_set = reuse.build_reuse_candidates(
+            report,
+            base,
+            target,
+            records,
+        )
+        ambiguous = next(
+            candidate
+            for candidate in candidate_set.candidates
+            if candidate.reuse_class == "ambiguous"
+        )
+        with self.assertRaisesRegex(
+            self.versioning.VersioningArtifactError,
+            "require human review",
+        ):
+            reuse.apply_reuse_decisions(
+                candidate_set,
+                [
+                    reuse.ReuseDecision(
+                        candidate_id=ambiguous.candidate_id,
+                        action="accept",
+                        reviewer_type="agent",
+                        reviewer_name="agent-bot",
+                        target_occurrence_id=(
+                            ambiguous.candidate_target_occurrence_ids[0]
+                        ),
+                    )
+                ],
+                reconciliation=report,
+                base_snapshot=base,
+                target_snapshot=target,
+                base_records=records,
+            )
+
+    def test_reuse_requires_matching_target_languages(self):
+        base, target, records, report = self._scenario()
+        other_language = reuse.build_translation_records(
+            base,
+            [
+                reuse.TranslationInput(
+                    unit_id=record.unit_id,
+                    translation_text=record.translation_text,
+                    source_text=record.source_text,
+                )
+                for record in records.records
+            ],
+        )
+        # Forge a records set that only differs in target language.
+        from dataclasses import replace as dc_replace
+
+        mismatched = dc_replace(
+            other_language,
+            records=tuple(
+                dc_replace(record, target_language="tchinese")
+                for record in other_language.records
+            ),
+            target_language="tchinese",
+        )
+        with self.assertRaisesRegex(
+            self.versioning.VersioningArtifactError,
+            "one target language",
+        ):
+            reuse.build_reuse_candidates(
+                report,
+                base,
+                target,
+                mismatched,
+            )
 
     def test_revision_history_accumulates_deterministically(self):
         base, _target, records, _report = self._scenario()

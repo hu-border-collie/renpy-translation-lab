@@ -185,8 +185,10 @@ python gemini_translate_batch.py export-reuse-results <decided-reuse-report> <ta
 - `import-reuse-decisions` 导入逐候选决策（accept / reject /
   override_translation / split_lineage / merge_lineage），必须显式填写
   `reviewer.type`（human / agent）与 `reviewer.name`；agent 决策不会伪装成人工。
-  歧义候选的 accept 必须从候选目标中显式选定一个；同一目标被两个已接受候选
-  竞争时导入失败。所有决策追加进候选 audit 记录并生成新 package。
+  歧义候选的 accept 必须由人工（reviewer.type=human）从候选目标中显式选定
+  一个，Agent 决策不能确认歧义；同一目标被两个已接受候选竞争时导入失败。
+  所有决策追加进候选 audit 记录并生成新 package，override 的审计条目同时
+  保留覆盖前后的译文文本。
 - `split_lineage` / `merge_lineage` 按设计只写入候选包的 `lineage_decisions`
   审计记录，不会自动改写候选匹配或任何快照：跨版本 lineage 是 P3 快照 +
   reconciliation 的输入属性，人工拆分/合并结论需要导出后更新项目 lineage
