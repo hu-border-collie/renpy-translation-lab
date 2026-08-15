@@ -387,6 +387,51 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
             self.assertEqual(summary.skipped_user, 1)
             self.assertEqual(json.loads(glossary_path.read_text(encoding='utf-8')), {'normalize_map': {}})
 
+    def test_history_conflict_is_not_auto_accepted_by_confidence_threshold(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            candidates_path = root / 'keyword_candidates.jsonl'
+            glossary_path = root / 'glossary.json'
+            glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')
+            candidate = {
+                'source': 'light',
+                'suggested_target': '光',
+                'category': 'term',
+                'confidence': 0.99,
+                'history_evidence': {
+                    'status': 'ambiguous',
+                    'first_occurrence': {
+                        'file_rel_path': 'chapter01/a.rpy',
+                        'line_number': 4,
+                        'current_translation': '光',
+                    },
+                    'conflict_reasons': ['同一术语的历史 occurrence 存在多个不同现译'],
+                },
+            }
+            self._write_jsonl(candidates_path, [candidate])
+
+            rows = merge_mod.build_candidate_merge_rows(
+                [candidate],
+                {'normalize_map': {}},
+            )
+            self.assertFalse(rows[0].default_checked)
+            self.assertTrue(rows[0].warnings)
+
+            summary = merge_mod.merge_keywords_to_glossary(
+                str(candidates_path),
+                str(glossary_path),
+                accept_confidence=0.8,
+                input_func=lambda _prompt: 'n',
+                backup=False,
+            )
+
+            self.assertEqual(summary.accepted, 0)
+            self.assertEqual(summary.skipped_user, 1)
+            self.assertEqual(
+                json.loads(glossary_path.read_text(encoding='utf-8')),
+                {'normalize_map': {}},
+            )
+
 
 if __name__ == '__main__':
     unittest.main()

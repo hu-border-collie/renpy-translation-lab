@@ -57,6 +57,42 @@ def aggregate_digest(digests: Mapping[str, str]) -> str:
     return stable_text_sha256(payload)
 
 
+def load_corpus_items(path: str) -> list[dict[str, Any]]:
+    """Load JSONL corpus rows from a corpus file, directory, or manifest.
+
+    This is a read-only companion to :func:`export_revision_corpus` so other
+    evidence consumers can reuse the #320 artifact contract without creating a
+    second translation store.  Rows are returned in file order; consumers that
+    need a first occurrence should apply their own explicit stable ordering.
+    """
+
+    supplied = os.path.abspath(str(path or "").strip())
+    if os.path.isdir(supplied):
+        supplied = os.path.join(supplied, CORPUS_JSONL_NAME)
+    elif supplied.lower().endswith("manifest.json"):
+        with open(supplied, "r", encoding="utf-8-sig") as handle:
+            manifest = json.load(handle)
+        paths = manifest.get("paths") if isinstance(manifest, dict) else {}
+        relative = paths.get("jsonl") if isinstance(paths, Mapping) else ""
+        if relative:
+            supplied = (
+                relative
+                if os.path.isabs(relative)
+                else os.path.join(os.path.dirname(supplied), relative)
+            )
+
+    rows: list[dict[str, Any]] = []
+    with open(supplied, "r", encoding="utf-8-sig") as handle:
+        for line_number, raw_line in enumerate(handle, 1):
+            if not raw_line.strip():
+                continue
+            value = json.loads(raw_line)
+            if not isinstance(value, dict):
+                raise ValueError(f"Corpus row {line_number} must be an object: {supplied}")
+            rows.append(value)
+    return rows
+
+
 def _int_or_zero(value: Any) -> tuple[int, str | None]:
     """Coerce a locator value to int; report a diagnostic on failure."""
     try:

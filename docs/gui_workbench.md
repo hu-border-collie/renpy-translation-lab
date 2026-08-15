@@ -333,7 +333,7 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 如果 build 已生成 package 但还没有 job，恢复会从 submit 继续，而不是错误地直接跑 status。
 
-`export-keywords` 完成后，界面会摘要候选数量与 JSONL / Markdown 报告路径，并把四个关键词报告复制到当前 `work` 目录上级的 `extracted_keywords/`；完整原始路径仍可在诊断与运行日志复制。诊断与运行日志对关键词任务记录会显示 `export-keywords` 等命令，而不是翻译的 `check/apply`。
+`export-keywords` 完成后，界面会摘要候选数量、历史首次译法证据统计与 JSONL / Markdown 报告路径，并把四个关键词报告复制到当前 `work` 目录上级的 `extracted_keywords/`；完整原始路径仍可在诊断与运行日志复制。候选表会展示首次 occurrence、现译和冲突原因；这只是人工提示，不会自动改写脚本或 glossary。诊断与运行日志对关键词任务记录会显示 `export-keywords` 等命令，而不是翻译的 `check/apply`。
 
 ### 同步关键词
 
@@ -341,7 +341,7 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 ### 合并候选到 glossary
 
-关键词报告生成后，可在 GUI 内把 `keyword_candidates.jsonl` 中经人工审核的候选写入当前项目的 `glossary.json`，无需复制 CLI 到终端逐条 `y/n` 确认。
+关键词报告生成后，可在 GUI 内查看每条候选的首次历史译法，再把经人工审核的候选写入当前项目的 `glossary.json`，无需复制 CLI 到终端逐条 `y/n` 确认。历史证据冲突、歧义或缺失的条目默认不勾选。
 
 **入口：**
 

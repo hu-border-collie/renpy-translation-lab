@@ -14,8 +14,22 @@
     "chunk_summary_count": 2,
     "ambiguous_summary_chunks": 0,
     "parse_errors": 0,
-    "reason_counts": {},
-    "diagnostic_counts": {}
+    "reason_counts": {
+      "history_unmatched": 1
+    },
+    "diagnostic_counts": {},
+    "history_scan_status": "ready",
+    "history_occurrence_count": 2,
+    "history_file_count": 1,
+    "history_source_changed_during_scan": false,
+    "history_candidate_status_counts": {
+      "consistent": 2,
+      "conflict": 0,
+      "ambiguous": 0,
+      "unmatched": 1,
+      "unavailable": 0
+    },
+    "history_diagnostic_count": 0
   },
   "candidate_rows": [
     {
@@ -33,7 +47,25 @@
       "source_lines": [
         9
       ],
-      "occurrences": 1
+      "occurrences": 1,
+      "history_evidence": {
+        "schema_version": 1,
+        "status": "unmatched",
+        "review_required": true,
+        "candidate_source": "Aether Compass",
+        "candidate_target": "以太罗盘",
+        "match_count": 0,
+        "occurrence_count": 0,
+        "first_occurrence": null,
+        "translations": [],
+        "conflict_codes": [
+          "no_history_occurrence"
+        ],
+        "conflict_reasons": [
+          "没有找到已译历史 occurrence"
+        ],
+        "occurrences": []
+      }
     },
     {
       "source": "Void Gate",
@@ -52,7 +84,61 @@
         2,
         9
       ],
-      "occurrences": 2
+      "occurrences": 2,
+      "history_evidence": {
+        "schema_version": 1,
+        "status": "consistent",
+        "review_required": false,
+        "candidate_source": "Void Gate",
+        "candidate_target": "虚空门",
+        "match_count": 1,
+        "occurrence_count": 1,
+        "first_occurrence": {
+          "occurrence_id": "chapter01/keywords.rpy:chapter01_terms:1:43a18a7f",
+          "identity_v2": "chapter01/keywords.rpy:chapter01_terms:1:43a18a7f",
+          "file_rel_path": "chapter01/keywords.rpy",
+          "line_number": 3,
+          "locator": {
+            "line": 2,
+            "line_number": 3,
+            "start": 8,
+            "end": 13,
+            "ordinal": 1
+          },
+          "source": "Void Gate",
+          "current_translation": "虚空门",
+          "matched_text": "Void Gate",
+          "match_kind": "exact",
+          "match_start": 0,
+          "match_end": 9
+        },
+        "translations": [
+          "虚空门"
+        ],
+        "conflict_codes": [],
+        "conflict_reasons": [],
+        "occurrences": [
+          {
+            "occurrence_id": "chapter01/keywords.rpy:chapter01_terms:1:43a18a7f",
+            "identity_v2": "chapter01/keywords.rpy:chapter01_terms:1:43a18a7f",
+            "file_rel_path": "chapter01/keywords.rpy",
+            "line_number": 3,
+            "locator": {
+              "line": 2,
+              "line_number": 3,
+              "start": 8,
+              "end": 13,
+              "ordinal": 1
+            },
+            "source": "Void Gate",
+            "current_translation": "虚空门",
+            "matched_text": "Void Gate",
+            "match_kind": "exact",
+            "match_start": 0,
+            "match_end": 9
+          }
+        ]
+      }
     },
     {
       "source": "Crystal Key",
@@ -71,7 +157,61 @@
         5,
         12
       ],
-      "occurrences": 2
+      "occurrences": 2,
+      "history_evidence": {
+        "schema_version": 1,
+        "status": "consistent",
+        "review_required": false,
+        "candidate_source": "Crystal Key",
+        "candidate_target": "水晶钥匙",
+        "match_count": 1,
+        "occurrence_count": 1,
+        "first_occurrence": {
+          "occurrence_id": "chapter01/keywords.rpy:chapter01_terms:2:6010c123",
+          "identity_v2": "chapter01/keywords.rpy:chapter01_terms:2:6010c123",
+          "file_rel_path": "chapter01/keywords.rpy",
+          "line_number": 6,
+          "locator": {
+            "line": 5,
+            "line_number": 6,
+            "start": 8,
+            "end": 14,
+            "ordinal": 2
+          },
+          "source": "Crystal Key",
+          "current_translation": "水晶钥匙",
+          "matched_text": "Crystal Key",
+          "match_kind": "exact",
+          "match_start": 0,
+          "match_end": 11
+        },
+        "translations": [
+          "水晶钥匙"
+        ],
+        "conflict_codes": [],
+        "conflict_reasons": [],
+        "occurrences": [
+          {
+            "occurrence_id": "chapter01/keywords.rpy:chapter01_terms:2:6010c123",
+            "identity_v2": "chapter01/keywords.rpy:chapter01_terms:2:6010c123",
+            "file_rel_path": "chapter01/keywords.rpy",
+            "line_number": 6,
+            "locator": {
+              "line": 5,
+              "line_number": 6,
+              "start": 8,
+              "end": 14,
+              "ordinal": 2
+            },
+            "source": "Crystal Key",
+            "current_translation": "水晶钥匙",
+            "matched_text": "Crystal Key",
+            "match_kind": "exact",
+            "match_start": 0,
+            "match_end": 11
+          }
+        ]
+      }
     }
   ],
   "summary_rows": [
