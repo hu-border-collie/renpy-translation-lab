@@ -73,7 +73,7 @@ tempfile._mkstemp_inner
 
 ## WSL2 只读 home 环境（实测补充）
 
-- 与 Codex 沙箱的差异：当前 WSL2 环境根文件系统 `/dev/sdd` 为 `ro`，
+- 与 Codex 沙箱的差异：当前 WSL2 环境根文件系统为只读（`ro`），
   仅仓库目录是单独的 `rw` 挂载，`/tmp` 可写；默认缓存路径
   `~/.local/state/renpy-translation-lab/litellm_catalog_cache.json` 同样不可写。
 - 但 `atomic_write_text` 会**立即**失败并返回 `OSError 30 (Read-only file system)`，
@@ -85,8 +85,9 @@ tempfile._mkstemp_inner
   无进程残留。
 - 注意：当前环境未安装 `litellm` 时，该测试不会触发缓存 `_save`（埋点调用次数为 0），
   所以“测试通过”不能证明缓存路径可写；需要直接写入探针验证。
-- 规避：需要真实持久化 GUI 缓存时，将 `XDG_STATE_HOME` 指到可写目录，例如
+- 规避：仅需当前 WSL 会话缓存时，将 `XDG_STATE_HOME` 指到可写目录，例如
   `XDG_STATE_HOME=/tmp/renpy-translation-lab-state`；实测同一写入路径约 0.79 毫秒成功。
+  需要跨 WSL 重启持久化时，将 `XDG_STATE_HOME` 指到可写且持久的挂载点。
 
 ## 规避与修复
 
