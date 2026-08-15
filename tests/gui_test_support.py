@@ -120,7 +120,13 @@ def _modal_guard_enabled() -> bool:
 
 
 def shutdown_gui_test_runtime(app: Any = None, *, wait_ms: int = 30000) -> bool:
-    """Drain test-owned Qt work and destroy the application deterministically."""
+    """Drain test-owned Qt work before the GUI runner's hard process exit.
+
+    Do not call ``QApplication.shutdown()`` here.  PySide6 can segfault while
+    destroying the offscreen platform plugin on Linux even after every test
+    passed.  ``run_gui_tests.py`` deliberately finishes with ``os._exit`` after
+    this bounded cleanup, so explicit application destruction is unnecessary.
+    """
     try:
         from PySide6.QtCore import QCoreApplication, QEvent, QThreadPool
         from PySide6.QtWidgets import QApplication
@@ -150,7 +156,6 @@ def shutdown_gui_test_runtime(app: Any = None, *, wait_ms: int = 30000) -> bool:
             QEvent.Type.DeferredDelete,
         )
         app.processEvents()
-        app.shutdown()
     except RuntimeError:
         pass
     return pool_finished
