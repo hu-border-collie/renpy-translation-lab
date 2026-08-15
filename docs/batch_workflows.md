@@ -49,6 +49,12 @@ python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json -
 
 JSON 模式下 stdout 只包含结果文档，原有 banner、进度、prepare 子进程输出和诊断文本实时进入 stderr。`result` 提供业务摘要，`artifacts` 提供 manifest / results / 报告路径，`status` 表示 job state 或 `safe / warn / block` 等业务状态。文本模式和默认退出码保持兼容；仍须根据 `status` 判断是否可以继续写回。
 
+### Parser-level 错误
+
+如果原始参数中包含精确的 `--output json` 或 `--output=json`，但 argparse 在生成参数 Namespace 前失败（例如未知参数、缺少参数值或非法 choice），CLI 会在 stdout 输出一个 schema v1 的错误 envelope：`error.code=ARGUMENT_PARSE_ERROR`，退出码为 `2`，并把原生 argparse usage / error 诊断保留在 stderr。若已识别出合法子命令，envelope 的 `command` 使用该名称；最早期无法识别子命令时使用 `command=cli`。
+
+这种失败发生在 workflow、`--output-file` 安全探测和字段投影之前，因此错误 envelope 始终回退到 stdout，不会尝试写入不完整参数中的输出路径。机器模式的识别边界是有意收窄的：未出现精确 JSON 输出标记（包括 `--strict-exit-codes` 单独出现）、`--output` 缺少值，或 `--output` 使用非 `json` 值时，继续使用普通 argparse 文本错误和退出码 `2`。扫描遇到 `--` 后停止；其后的参数全部按 positional 数据处理，不会再触发 JSON 或 `--compact` 识别。
+
 Agent 可追加 `--strict-exit-codes`（必须与 `--output json` 同时使用），启用稳定的语义退出码：`0` 成功/继续轮询，`1` 未分类内部错误，`2` 用法错误，`3` 需要处理（例如 `warn`，或 reconciliation 的 `attention`），`4` 被安全门禁阻止或任务终止失败，`5` 输入/配置/状态失效，`6` 远端临时错误、可稍后重试。例如：
 
 ```powershell

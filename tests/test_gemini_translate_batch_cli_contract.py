@@ -125,6 +125,148 @@ class BatchCliContractTests(unittest.TestCase):
             batch.cli_contract.EXIT_USAGE,
         )
 
+    def test_parser_error_with_json_output_returns_structured_usage_error(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main(
+                ["status", "--output", "json", "--unknown-flag"]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload["schema_version"], batch.cli_contract.CLI_SCHEMA_VERSION)
+        self.assertEqual(payload["command"], "status")
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "ARGUMENT_PARSE_ERROR")
+        self.assertIn("unrecognized arguments: --unknown-flag", payload["error"]["message"])
+        self.assertEqual(
+            payload["error"]["details"]["semantic_exit_code"],
+            batch.cli_contract.EXIT_USAGE,
+        )
+        self.assertFalse(payload["error"]["details"]["workflow_started"])
+        self.assertIn("usage:", stderr.getvalue())
+        self.assertIn("unrecognized arguments: --unknown-flag", stderr.getvalue())
+
+    def test_parser_error_supports_equals_json_form_and_compact_output(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main(
+                ["status", "--output=json", "--compact", "--unknown-flag"]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload["error"]["code"], "ARGUMENT_PARSE_ERROR")
+        self.assertNotIn("\n  ", stdout.getvalue())
+        self.assertTrue(stdout.getvalue().endswith("\n"))
+
+    def test_parser_error_with_json_output_reports_missing_option_value(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main(["status", "--output", "json", "--fields"])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload["command"], "status")
+        self.assertEqual(payload["error"]["code"], "ARGUMENT_PARSE_ERROR")
+        self.assertIn("argument --fields", payload["error"]["message"])
+        self.assertIn("argument --fields", stderr.getvalue())
+
+    def test_machine_option_detection_stops_at_double_dash(self):
+        text_stdout = io.StringIO()
+        text_stderr = io.StringIO()
+
+        with (
+            contextlib.redirect_stdout(text_stdout),
+            contextlib.redirect_stderr(text_stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            batch.main(["status", "--", "--output", "json"])
+
+        self.assertEqual(raised.exception.code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(text_stdout.getvalue(), "")
+        self.assertIn("usage:", text_stderr.getvalue())
+
+        machine_stdout = io.StringIO()
+        machine_stderr = io.StringIO()
+        with (
+            contextlib.redirect_stdout(machine_stdout),
+            contextlib.redirect_stderr(machine_stderr),
+        ):
+            exit_code = batch.main(
+                [
+                    "status",
+                    "--output",
+                    "json",
+                    "--",
+                    "--compact",
+                    "--unknown-flag",
+                ]
+            )
+
+        payload = json.loads(machine_stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload["error"]["code"], "ARGUMENT_PARSE_ERROR")
+        self.assertIn("\n  ", machine_stdout.getvalue())
+
+    def test_earliest_machine_parse_error_uses_generic_cli_command(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main(["--output", "json"])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload["command"], "cli")
+        self.assertEqual(payload["error"]["code"], "ARGUMENT_PARSE_ERROR")
+
+    def test_non_json_output_value_stays_on_text_argparse_boundary(self):
+        stderr = io.StringIO()
+
+        with (
+            contextlib.redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            batch.main(["status", "--output", "xml"])
+
+        self.assertEqual(raised.exception.code, batch.cli_contract.EXIT_USAGE)
+        self.assertIn("invalid choice", stderr.getvalue())
+
+    def test_text_parser_error_preserves_argparse_system_exit(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            batch.main(["status", "--unknown-flag"])
+
+        self.assertEqual(raised.exception.code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("usage:", stderr.getvalue())
+        self.assertIn("unrecognized arguments: --unknown-flag", stderr.getvalue())
+
     def test_field_projection_does_not_change_strict_exit_code(self):
         manifest = {
             "_manifest_path": "C:/jobs/demo/manifest.json",
