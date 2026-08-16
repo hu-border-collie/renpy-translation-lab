@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -511,20 +511,12 @@ class WorkspaceSetupDialog(QDialog):
         self._finish_sdk()
 
     def _sdk_worker_active(self) -> bool:
-        """Own the worker until its real ``finished`` signal is delivered.
-
-        ``completed`` fires from inside ``run()`` while the QThread is still
-        wrapping up; treating ``not isRunning()`` as finished would let the
-        dialog close and destroy a thread that has not fully terminated.
-        """
+        # ``completed`` fires while run() is still wrapping up; dropping the
+        # reference is only safe after the real ``finished`` signal.
         return self._sdk_worker is not None
 
     def _request_sdk_worker_stop(self, origin: str) -> None:
-        """Request cooperative cancellation without blocking the UI thread.
-
-        The reject/close is deferred until QThread emits its real ``finished``
-        signal; ownership is never dropped early to fake a completed stop.
-        """
+        """Cooperatively cancel without blocking; defer the stop to ``finished``."""
         worker = self._sdk_worker
         if worker is None:
             return
@@ -569,20 +561,17 @@ class WorkspaceSetupDialog(QDialog):
         if not pending:
             return
         if pending == "close":
-            self.close()
+            # Defer so the close/accept decision is not re-entered from this
+            # finished slot or the isRunning()-false branch of a stop request.
+            QTimer.singleShot(0, self._complete_reject)
             return
         self._sdk_status_message = WORKSPACE_SETUP_STOP_COPY["cancelled"]
         self._set_sdk_status(self._sdk_status_message)
         self._sdk_progress.setVisible(False)
         self._ok_button.setEnabled(True)
 
-    def _on_reject(self) -> None:
-        if self._sdk_worker_active():
-            self._request_sdk_worker_stop("reject")
-            # Stay on the SDK page; the deferred stop re-enables controls when
-            # the thread really finishes so the user can skip or retry.
-            return
-        # If workspace already applied, still accept with skip SDK so host can persist root.
+    def _complete_reject(self) -> None:
+        """Terminal cancel decision: keep an applied workspace, else reject."""
         if self._workspace_result is not None and self._stack.currentIndex() == 1:
             self._result = WorkspaceSetupDialogResult(
                 workspace=self._workspace_result.workspace,
@@ -594,6 +583,18 @@ class WorkspaceSetupDialog(QDialog):
             self.accept()
             return
         self.reject()
+
+    def reject(self) -> None:
+        # Escape and programmatic reject() bypass the Cancel button; route
+        # them through the deferred stop so the dialog cannot close over a
+        # still-running worker.
+        if self._sdk_worker_active():
+            self._request_sdk_worker_stop("reject")
+            return
+        super().reject()
+
+    def _on_reject(self) -> None:
+        self._complete_reject()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._sdk_worker_active():
@@ -762,6 +763,9 @@ class WorkspaceSetupDialog(QDialog):
         worker.start()
 
     def _on_sdk_progress(self, phase: str, current: int, total: int) -> None:
+        if self._sdk_stop_pending:
+            # Queued ticks must not overwrite the stop copy with live numbers.
+            return
         if phase == "download" and total > 0:
             self._sdk_progress.setRange(0, 100)
             self._sdk_progress.setValue(min(100, int(100 * current / total)))

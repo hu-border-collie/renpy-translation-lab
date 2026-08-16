@@ -61,8 +61,6 @@ APP_SHUTDOWN_COPY = {
 }
 
 # Workspace setup dialog: cooperative stop of the SDK download worker.
-# The dialog never blocks the UI thread waiting for the QThread; it defers
-# the reject/close until the real ``finished`` signal is delivered.
 WORKSPACE_SETUP_STOP_COPY = {
     "cancelling": "正在取消 SDK 下载…任务真正结束后可重试或跳过。",
     "waiting_close": "正在等待 SDK 任务结束，窗口将在任务完成后自动关闭。",
